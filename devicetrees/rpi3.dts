@@ -87,6 +87,21 @@
 
 	chosen {
 		random-seed = <0x0 0x1 0x2 0x3 0x4 0x5 0x6 0x7 0x8 0x9 0xA 0xB 0xC 0xD 0xE 0xF>;
+
+		/*
+		 * arm_init() (osfmk/arm64/arm_init.c in the source this kernel was
+		 * built from) hard-requires these two directly under chosen, read
+		 * as 8-byte values (disassembly of arm_init confirms two 64-bit
+		 * ldr's into dram_base/dram_size globals via
+		 * SecureDTGetPropertyInternal). Real BCM2837 DRAM starts at
+		 * physical 0x0 - dram-size matches boot_args.memSize, i.e.
+		 * QEMU's -m size minus the 64MB VC/GPU carve-out
+		 * (DEFAULT_VCRAM_SIZE in hw/display/bcm2835_fb.c). Recompute if
+		 * -m changes: dram-size = (m_megabytes * 0x100000) - 0x4000000.
+		 */
+		dram-base = <0x0 0x0>;
+		dram-size = <0x0 0x3C000000>;
+
 		memory-map { };
 	};
 
