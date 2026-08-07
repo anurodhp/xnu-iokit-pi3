@@ -63,6 +63,19 @@
 			device_type = "interrupt-controller";
 			compatible = "brcm,bcm2836-armctrl-ic";
 			reg = <0xb200 0 0x200 0>;
+			/*
+			 * IODeviceTreeSupport.cpp's IODTFindInterruptParent()
+			 * checks for a property literally named
+			 * "interrupt-controller" (boolean marker, Linux DT
+			 * convention) - device_type above does NOT satisfy
+			 * this check, it's a separate mechanism. Phandle
+			 * lookups go through Apple's own "AAPL,phandle" (not
+			 * the standard "phandle") per gIODTPHandleKey.
+			 */
+			interrupt-controller = <0x0>;
+			AAPL,phandle = <0x1>;
+			#interrupt-cells = <2>;
+			#address-cells = <0>;
 		};
 
 		/*
@@ -81,6 +94,7 @@
 			device_type = "sdhci";
 			compatible = "brcm,bcm2835-sdhci";
 			reg = <0x300000 0 0x100 0>;
+			interrupt-parent = <0x1>;
 			interrupts = <2 30>;
 		};
 	};
