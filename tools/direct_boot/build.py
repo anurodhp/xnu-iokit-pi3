@@ -91,7 +91,16 @@ def build_boot_args(virt_base, phys_base, phys_end_after_kernel, dtb_data, comma
     # boot_args itself sits right after the kernel image, per bootxnu.c
     boot_args_phys = phys_end_after_kernel
     afdt_phys = boot_args_phys + BA_SIZE
-    struct.pack_into('<Q', buf, BA_OFF_PHYS_END, afdt_phys + len(dtb_data))
+    # topOfKernelData (phys_end) MUST be page-aligned - arm_vm_init.c's
+    # arm_vm_physmap_slide() asserts (orig_va & ARM_PGMASK) == 0 on a KVA
+    # derived directly from this field. bootxnu.c rounds up to 0x10000 for
+    # exactly this reason; omitting it produces a root-caused, reproducible
+    # boot-time assert (confirmed live via QEMU GDB stub + symbol lookup,
+    # see project memory) since afdt_phys + len(dtb_data) is essentially
+    # never page-aligned on its own.
+    phys_end = afdt_phys + len(dtb_data)
+    phys_end = (phys_end + 0xFFFF) & ~0xFFFF
+    struct.pack_into('<Q', buf, BA_OFF_PHYS_END, phys_end)
     struct.pack_into('<I', buf, BA_OFF_MACHINE_TYPE, 0)
     struct.pack_into('<Q', buf, BA_OFF_AFDT, afdt_phys)
     struct.pack_into('<I', buf, BA_OFF_AFDT_LENGTH, len(dtb_data))
