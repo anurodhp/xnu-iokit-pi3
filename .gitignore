@@ -3,6 +3,7 @@
 
 # Build intermediates
 devicetrees/rpi3.p
+__pycache__/
 
 # Downloaded precompiled binaries and local QEMU test scaffolding -
 # large, reproducible, not our source (precompiled/rpi.dtb is also known-bad,
