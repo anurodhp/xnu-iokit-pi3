@@ -1,0 +1,15 @@
+-xc++
+-std=gnu++14
+-DKERNEL
+-DKERNEL_PRIVATE
+-DXNU_KERNEL_PRIVATE
+-DAPPLE_KEXT_LEGACY_ABI=0
+-DARM64_BOARD_CONFIG_BCM2837
+-Igenerated
+-Ithird_party/xnu/pexpert
+-Ithird_party/xnu/iokit
+-Ithird_party/xnu/libkern
+-Ithird_party/xnu/osfmk
+-Ithird_party/xnu/bsd
+-Ithird_party/xnu/EXTERNAL_HEADERS
+-Ithird_party/xnu

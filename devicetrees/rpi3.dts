@@ -1,0 +1,94 @@
+/dts-v1/;
+
+/*
+ * Base tree from FlorentRevest/xnu (devicetrees/rpi3.dts), extended with an
+ * SD/MMC controller node and the BCM2836/2837 interrupt controllers.
+ *
+ * Register offsets/sizes/interrupt cells sourced from upstream Linux:
+ *   arch/arm/boot/dts/broadcom/bcm283x.dtsi   (gpio, aux, sdhci, sdhost)
+ *   arch/arm/boot/dts/broadcom/bcm2837.dtsi   (local_intc, armctrl-ic override)
+ *
+ * UNVERIFIED: the <bank irq> interrupt cell encoding below is carried over
+ * raw from the Linux DT. Nothing in the original rpi3.dts used `interrupts`
+ * at all, so there's no known-good precedent here for how the ADT-targeting
+ * dtc / IODeviceTreeSupport.cpp actually wants interrupts encoded. Confirm
+ * against the compiled ADT output before relying on it.
+ */
+
+/ {
+	#address-cells = <2>;
+	#size-cells = <2>;
+
+	cpus {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		cpu0 {
+			reg = <0xf00>;
+			cpu-id = <0x0>;
+			state = "running";
+		};
+	};
+
+	/*
+	 * BCM2836/2837 L1 interrupt controller ("local_intc" in Linux DT).
+	 * Lives at a fixed physical address outside the 0x7e000000 VC/GPU
+	 * peripheral bus window, so it's a root sibling rather than a child
+	 * of arm-io (its address wouldn't translate through arm-io's single
+	 * ranges entry below). Handles per-CPU timer/PMU/mailbox IRQs and
+	 * takes IRQ 8 from the global armctrl-ic as its "GPU interrupt" line.
+	 */
+	local-intc {
+		device_type = "interrupt-controller";
+		compatible = "brcm,bcm2836-l1-intc";
+		reg = <0x40000000 0 0x100 0>;
+	};
+
+	arm-io {
+		device_type = "bcm2837-io";
+		ranges = <0x7e000000 0 0x3f000000 0 0x1000000 0>;
+
+		#address-cells = <2>;
+		#size-cells = <2>;
+
+		gpio { reg = <0x200000 0 0xB4 0>; };
+		aux  { reg = <0x215000 0 0xE4 0>; };
+
+		/*
+		 * Global/GPU interrupt controller ("armctrl-ic"). All
+		 * VC-bus peripheral IRQs (gpio, aux, sdhci, ...) route
+		 * through here before reaching local-intc on IRQ 8.
+		 */
+		intc {
+			device_type = "interrupt-controller";
+			compatible = "brcm,bcm2836-armctrl-ic";
+			reg = <0xb200 0 0x200 0>;
+		};
+
+		/*
+		 * Arasan SDHCI controller (Linux: sdhci@7e300000,
+		 * "brcm,bcm2835-sdhci"). On stock firmware this is wired to
+		 * the onboard SDIO WiFi (GPIO34-39, ALT3) rather than the
+		 * physical SD slot. To reach the SD card instead, GPIO48-53
+		 * must be muxed to ALT3 ("emmc_gpio48" in Linux DT) instead
+		 * of ALT0 (which routes them to the "sdhost" controller at
+		 * VC offset 0x202000 / size 0x100, interrupts <2 24> - the
+		 * default owner of the physical slot, but a Broadcom-
+		 * proprietary register layout with no public reference
+		 * outside the Linux driver).
+		 */
+		sdhci {
+			device_type = "sdhci";
+			compatible = "brcm,bcm2835-sdhci";
+			reg = <0x300000 0 0x100 0>;
+			interrupts = <2 30>;
+		};
+	};
+
+	chosen {
+		random-seed = <0x0 0x1 0x2 0x3 0x4 0x5 0x6 0x7 0x8 0x9 0xA 0xB 0xC 0xD 0xE 0xF>;
+		memory-map { };
+	};
+
+	defaults { };
+};
