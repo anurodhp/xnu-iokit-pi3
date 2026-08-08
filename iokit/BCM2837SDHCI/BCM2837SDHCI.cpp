@@ -21,6 +21,18 @@ BCM2837SDHCI::init(OSDictionary *properties)
 	fRCA = 0;
 	fBlockCount = 0;
 	fBlockSize = 512;
+
+	fPendingIntStatus = 0;
+	fInterruptLock = IOLockAlloc();
+	if (fInterruptLock == NULL) {
+		return false;
+	}
+	fStatusLock = IOSimpleLockAlloc();
+	if (fStatusLock == NULL) {
+		IOLockFree(fInterruptLock);
+		fInterruptLock = NULL;
+		return false;
+	}
 	return true;
 }
 
@@ -45,18 +57,106 @@ BCM2837SDHCI::waitClear32(uint32_t offset, uint32_t mask, uint32_t timeoutUs)
 	return true;
 }
 
-bool
-BCM2837SDHCI::waitSet32(uint32_t offset, uint32_t mask, uint32_t timeoutUs)
+void
+BCM2837SDHCI::interruptOccurred(OSObject *target, void * /*refCon*/, IOService * /*nub*/, int /*source*/)
 {
-	uint32_t waited = 0;
-	while ((readReg32(offset) & mask) == 0) {
-		if (waited >= timeoutUs) {
-			return false;
-		}
-		IODelay(50);
-		waited += 50;
+	// Primary interrupt handler - runs at hardware interrupt context, same
+	// role as Linux's sdhci_irq() top half (drivers/mmc/host/sdhci.c).
+	// Deliberately minimal: no IOLog, no IOLockLock/IOLockSleep (both are
+	// documented in IOKit/IOLocks.h as "may block and so should not be
+	// called from interrupt level") - only IOSimpleLock (a real spinlock)
+	// to touch fPendingIntStatus, and IOLockWakeup, which is safe here
+	// because it's implemented as a bare thread_wakeup_prim() that never
+	// touches the IOLock passed to it (confirmed in xnu's IOLocks.cpp).
+	BCM2837SDHCI *self = OSDynamicCast(BCM2837SDHCI, target);
+	if (self == NULL) {
+		return;
 	}
-	return true;
+
+	uint32_t intmask = self->readReg32(kRegIntStatus);
+	if (intmask == 0) {
+		return;
+	}
+
+	// Ack exactly the bits we understand, mirroring sdhci_irq()'s
+	// `mask = intmask & (SDHCI_INT_CMD_MASK|SDHCI_INT_DATA_MASK|...);
+	// sdhci_writel(host, mask, SDHCI_INT_STATUS);` - not a blind
+	// write-back of the whole register.
+	uint32_t known = intmask & (kIntCmdComplete | kIntTransferDone |
+	    kIntBufWriteRdy | kIntBufReadRdy | kIntErrorMask);
+	if (known != 0) {
+		self->writeReg32(kRegIntStatus, known);
+	}
+
+	// Any remaining bit is one this driver doesn't act on (e.g.
+	// CARD_INSERT/REMOVE). Still ack it - left set with its SIGNAL_ENABLE
+	// bit on, it would just keep re-asserting the interrupt line forever,
+	// the same IRQ-storm reasoning sdhci_irq() calls out for its own
+	// trailing "unexpected" cleanup.
+	uint32_t unexpected = intmask & ~known;
+	if (unexpected != 0) {
+		self->writeReg32(kRegIntStatus, unexpected);
+	}
+
+	if (known != 0) {
+		IOInterruptState istate = IOSimpleLockLockDisableInterrupt(self->fStatusLock);
+		self->fPendingIntStatus |= known;
+		IOSimpleLockUnlockEnableInterrupt(self->fStatusLock, istate);
+
+		IOLockWakeup(self->fInterruptLock, (void *)&self->fPendingIntStatus, false);
+	}
+}
+
+bool
+BCM2837SDHCI::waitForIntStatus32(uint32_t mask, uint32_t timeoutUs, uint32_t *outStatus)
+{
+	uint64_t deadline;
+	clock_interval_to_deadline(timeoutUs, kMicrosecondScale, &deadline);
+
+	// Two different lock types are load-bearing here, not interchangeable:
+	// fStatusLock (IOSimpleLock) is the only thing interruptOccurred() may
+	// touch, since it runs at interrupt level; fInterruptLock (IOLock) is
+	// a real mutex only ever used from this thread-context side, needed
+	// because IOLockSleepDeadline() requires a lockable IOLock to
+	// atomically unlock-and-sleep on. IOLockWakeup() bridges the two - it
+	// doesn't actually take fInterruptLock (see interruptOccurred()), it
+	// just targets the same wait event address.
+	IOLockLock(fInterruptLock);
+	uint32_t matched = 0;
+	for (;;) {
+		IOInterruptState istate = IOSimpleLockLockDisableInterrupt(fStatusLock);
+		matched = fPendingIntStatus & mask;
+		if (matched != 0) {
+			fPendingIntStatus &= ~matched;
+		}
+		IOSimpleLockUnlockEnableInterrupt(fStatusLock, istate);
+
+		if (matched != 0) {
+			break;
+		}
+
+		int wr = IOLockSleepDeadline(fInterruptLock, (void *)&fPendingIntStatus, deadline, THREAD_UNINT);
+		if (wr == THREAD_TIMED_OUT) {
+			// One last check: the interrupt could have landed and called
+			// IOLockWakeup() in the narrow window between our check above
+			// and entering IOLockSleepDeadline(), in which case the bits
+			// are sitting in fPendingIntStatus even though we timed out
+			// waiting to be woken for them.
+			istate = IOSimpleLockLockDisableInterrupt(fStatusLock);
+			matched = fPendingIntStatus & mask;
+			if (matched != 0) {
+				fPendingIntStatus &= ~matched;
+			}
+			IOSimpleLockUnlockEnableInterrupt(fStatusLock, istate);
+			break;
+		}
+	}
+	IOLockUnlock(fInterruptLock);
+
+	if (outStatus != NULL) {
+		*outStatus = matched;
+	}
+	return matched != 0;
 }
 
 bool
@@ -69,12 +169,16 @@ BCM2837SDHCI::resetHost(void)
 		return false;
 	}
 
-	// Enable status reporting for the bits we poll on, but leave
-	// SIGNAL_ENABLE at 0 - no ISR hooked up (see header), so we don't
-	// want an actual IRQ line asserted, just the STATUS bits available
-	// for polling.
-	writeReg32(kRegIntEnable, 0xFFFFFFFF);
-	writeReg32(kRegSignalEnable, 0x00000000);
+	// INT_ENABLE arms status-bit reporting (readable via kRegIntStatus
+	// regardless of whether an actual IRQ line fires); SIGNAL_ENABLE is the
+	// subset that's also allowed to assert the real interrupt line to the
+	// interrupt controller. Both are set to exactly the bits interruptOccurred()
+	// understands - matches Linux's sdhci_irq() pattern of writing the same
+	// `host->ier` value to both SDHCI_INT_ENABLE and SDHCI_SIGNAL_ENABLE.
+	uint32_t enabledInts = kIntCmdComplete | kIntTransferDone |
+	    kIntBufWriteRdy | kIntBufReadRdy | kIntErrorMask;
+	writeReg32(kRegIntEnable, enabledInts);
+	writeReg32(kRegSignalEnable, enabledInts);
 
 	return true;
 }
@@ -131,17 +235,15 @@ BCM2837SDHCI::sendCommand(uint8_t cmdIndex, uint32_t arg, uint32_t respType, boo
 
 	writeReg16(kRegCommand, (uint16_t)((cmdIndex << 8) | flags));
 
-	if (!waitSet32(kRegIntStatus, kIntCmdComplete | kIntErrorMask, 1000000)) {
+	uint32_t status;
+	if (!waitForIntStatus32(kIntCmdComplete | kIntErrorMask, 1000000, &status)) {
 		IOLog("BCM2837SDHCI: CMD%u timed out (no CMD_COMPLETE/error)\n", cmdIndex);
 		return false;
 	}
-	uint32_t status = readReg32(kRegIntStatus);
 	if (status & kIntErrorMask) {
 		IOLog("BCM2837SDHCI: CMD%u error, INT_STATUS=%#x\n", cmdIndex, status);
-		writeReg32(kRegIntStatus, status); // clear (W1C)
 		return false;
 	}
-	writeReg32(kRegIntStatus, kIntCmdComplete);
 
 	if (resp != NULL) {
 		if (respType == kCmdRespLong) {
@@ -316,6 +418,22 @@ BCM2837SDHCI::start(IOService *provider)
 	// rather than guessed at, since the actual GPIO controller mapping
 	// isn't wired into this driver at all yet.
 
+	// Install the primary interrupt handler and unmask it at the
+	// controller (BCM2837InterruptController, via the "sdhci" DT node's
+	// interrupt-parent/interrupts properties) before resetHost() arms
+	// SIGNAL_ENABLE - otherwise a real interrupt could fire with nothing
+	// registered to receive it.
+	IOReturn intResult = provider->registerInterrupt(0, this, &BCM2837SDHCI::interruptOccurred);
+	if (intResult != kIOReturnSuccess) {
+		IOLog("BCM2837SDHCI: registerInterrupt failed, %#x\n", intResult);
+		return false;
+	}
+	intResult = provider->enableInterrupt(0);
+	if (intResult != kIOReturnSuccess) {
+		IOLog("BCM2837SDHCI: enableInterrupt failed, %#x\n", intResult);
+		return false;
+	}
+
 	if (!resetHost()) {
 		return false;
 	}
@@ -339,6 +457,9 @@ BCM2837SDHCI::start(IOService *provider)
 void
 BCM2837SDHCI::stop(IOService *provider)
 {
+	provider->disableInterrupt(0);
+	provider->unregisterInterrupt(0);
+
 	if (fRegMap != NULL) {
 		fRegMap->release();
 		fRegMap = NULL;
@@ -349,6 +470,14 @@ BCM2837SDHCI::stop(IOService *provider)
 void
 BCM2837SDHCI::free(void)
 {
+	if (fStatusLock != NULL) {
+		IOSimpleLockFree(fStatusLock);
+		fStatusLock = NULL;
+	}
+	if (fInterruptLock != NULL) {
+		IOLockFree(fInterruptLock);
+		fInterruptLock = NULL;
+	}
 	super::free();
 }
 
@@ -459,28 +588,30 @@ BCM2837SDHCI::readBlocksPIO(uint64_t startBlock, uint32_t nblks, void *buf)
 	}
 
 	for (uint32_t b = 0; b < nblks; b++) {
-		if (!waitSet32(kRegIntStatus, kIntBufReadRdy | kIntErrorMask, 1000000)) {
+		uint32_t status;
+		if (!waitForIntStatus32(kIntBufReadRdy | kIntErrorMask, 1000000, &status)) {
 			IOLog("BCM2837SDHCI: read block %u/%u timed out waiting BUFFER_READ_READY\n", b, nblks);
 			return false;
 		}
-		uint32_t status = readReg32(kRegIntStatus);
 		if (status & kIntErrorMask) {
 			IOLog("BCM2837SDHCI: read error, INT_STATUS=%#x\n", status);
-			writeReg32(kRegIntStatus, status);
 			return false;
 		}
-		writeReg32(kRegIntStatus, kIntBufReadRdy);
 
 		for (uint32_t w = 0; w < fBlockSize / 4; w++) {
 			*dst++ = readReg32(kRegBuffer);
 		}
 	}
 
-	if (!waitSet32(kRegIntStatus, kIntTransferDone | kIntErrorMask, 1000000)) {
+	uint32_t xferStatus;
+	if (!waitForIntStatus32(kIntTransferDone | kIntErrorMask, 1000000, &xferStatus)) {
 		IOLog("BCM2837SDHCI: read did not reach TRANSFER_COMPLETE\n");
 		return false;
 	}
-	writeReg32(kRegIntStatus, kIntTransferDone);
+	if (xferStatus & kIntErrorMask) {
+		IOLog("BCM2837SDHCI: read error at TRANSFER_COMPLETE, INT_STATUS=%#x\n", xferStatus);
+		return false;
+	}
 
 	if (nblks > 1) {
 		uint32_t r[4];
@@ -504,28 +635,30 @@ BCM2837SDHCI::writeBlocksPIO(uint64_t startBlock, uint32_t nblks, const void *bu
 	}
 
 	for (uint32_t b = 0; b < nblks; b++) {
-		if (!waitSet32(kRegIntStatus, kIntBufWriteRdy | kIntErrorMask, 1000000)) {
+		uint32_t status;
+		if (!waitForIntStatus32(kIntBufWriteRdy | kIntErrorMask, 1000000, &status)) {
 			IOLog("BCM2837SDHCI: write block %u/%u timed out waiting BUFFER_WRITE_READY\n", b, nblks);
 			return false;
 		}
-		uint32_t status = readReg32(kRegIntStatus);
 		if (status & kIntErrorMask) {
 			IOLog("BCM2837SDHCI: write error, INT_STATUS=%#x\n", status);
-			writeReg32(kRegIntStatus, status);
 			return false;
 		}
-		writeReg32(kRegIntStatus, kIntBufWriteRdy);
 
 		for (uint32_t w = 0; w < fBlockSize / 4; w++) {
 			writeReg32(kRegBuffer, *src++);
 		}
 	}
 
-	if (!waitSet32(kRegIntStatus, kIntTransferDone | kIntErrorMask, 1000000)) {
+	uint32_t xferStatus;
+	if (!waitForIntStatus32(kIntTransferDone | kIntErrorMask, 1000000, &xferStatus)) {
 		IOLog("BCM2837SDHCI: write did not reach TRANSFER_COMPLETE\n");
 		return false;
 	}
-	writeReg32(kRegIntStatus, kIntTransferDone);
+	if (xferStatus & kIntErrorMask) {
+		IOLog("BCM2837SDHCI: write error at TRANSFER_COMPLETE, INT_STATUS=%#x\n", xferStatus);
+		return false;
+	}
 
 	if (nblks > 1) {
 		uint32_t r[4];
@@ -567,10 +700,13 @@ BCM2837SDHCI::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 block, UInt64 
 
 	IOFree(bounce, (size_t)transferSize);
 
-	// Genuinely synchronous under the hood (see header - no DMA/interrupt
-	// completion yet), but IOBlockStorageDevice's contract is asynchronous:
-	// call the completion routine before returning rather than returning
-	// a result directly, same as a real async driver's caller expects.
+	// Genuinely synchronous under the hood - readBlocksPIO/writeBlocksPIO
+	// block this calling thread on waitForIntStatus32() rather than
+	// returning immediately and completing from interruptOccurred() itself
+	// (no DMA yet either) - but IOBlockStorageDevice's contract is
+	// asynchronous: call the completion routine before returning rather
+	// than returning a result directly, same as a real async driver's
+	// caller expects.
 	IOStorage::complete(completion, ok ? kIOReturnSuccess : kIOReturnIOError,
 	    ok ? transferSize : 0);
 	return kIOReturnSuccess;

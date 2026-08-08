@@ -27,9 +27,13 @@ Remaining work, roughly in the order it actually blocks progress:
    the macros already in `third_party/xnu/pexpert/pexpert/arm64/BCM2837.h`
    (`BCM2837_FSEL_REG`, `BCM2837_FSEL_ALT3`), done either in this driver's
    `start()` or in earlier platform init.
-2. **Interrupt wiring** — currently pure PIO/polling by design (see the
-   driver's header comment on why). Fine for a first working version;
-   revisit once basic reads work if performance matters.
+2. **Interrupt wiring** — done. `start()` calls `registerInterrupt()`/
+   `enableInterrupt()` against the provider; `interruptOccurred()` is a
+   primary handler mirroring Linux's `sdhci_irq()`, and command/buffer-ready
+   waits block on it via `waitForIntStatus32()` instead of busy-polling
+   `INT_STATUS`. Data movement itself is still PIO (no DMA). Like the rest
+   of this driver, never run against real hardware yet - GPIO pinmux (above)
+   has to land first before any interrupt actually has a chance to fire.
 2. **Filesystem**: XNU has no ext4 (or ext2/3) support out of the box.
    Whatever's actually going to be readable from the SD card needs to
    either be a filesystem XNU already understands (HFS+/APFS, or FAT if a

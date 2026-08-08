@@ -27,19 +27,32 @@
  *     (~25MHz/CMD-mode) clock only.
  *
  * Deliberately scoped to PIO (programmed I/O), not SDMA/ADMA: each block
- * transfer busy-waits on BUFFER_READ_READY/BUFFER_WRITE_READY per block
- * inside doAsyncReadWrite rather than using DMA + an interrupt-driven
- * completion. This is a real, correct SDHCI transfer mode (just slow) and
- * avoids needing IOKit DMA plumbing (IODMACommand/IOMemoryCursor) to get
- * a first working driver - worth revisiting once basic reads work.
+ * transfer's actual data movement is a per-block register copy loop inside
+ * readBlocksPIO/writeBlocksPIO, not a DMA engine. This is a real, correct
+ * SDHCI transfer mode (just slower than DMA) and avoids needing IOKit DMA
+ * plumbing (IODMACommand/IOMemoryCursor) to get a first working driver -
+ * worth revisiting once basic reads work. Waiting for each block/command to
+ * be ready is interrupt-driven, though (see below) - only the copy itself
+ * is PIO.
+ *
+ * Command completion and buffer-ready waits are interrupt-driven:
+ * start() calls registerInterrupt()/enableInterrupt() against the provider
+ * (the "sdhci" DT node's interrupt-parent, BCM2837InterruptController),
+ * and interruptOccurred() is a primary (hard-IRQ-equivalent) handler
+ * mirroring Linux's sdhci_irq() (drivers/mmc/host/sdhci.c) - read
+ * INT_STATUS, ack (write-1-to-clear) exactly the bits understood, stash
+ * them, wake any waiter. See waitForIntStatus32()'s implementation comment
+ * for why this needs an IOSimpleLock *and* an IOLock rather than just one.
+ * PIO data movement itself (the actual per-block register copy loop) is
+ * still unchanged - only the "wait for the next block/command to be ready"
+ * step now blocks on the interrupt instead of busy-polling the register.
  *
  * UNVERIFIED / not yet done, flagged rather than guessed:
  *   - GPIO pinmux (see above) - reads/writes will simply time out against
- *     nothing until this exists.
- *   - Interrupt wiring: this class never calls registerInterrupt against
- *     its provider. Since transfers are PIO/polled (not interrupt-driven
- *     completion), this may be unnecessary for a first working version;
- *     card-insertion/removal interrupts are unimplemented.
+ *     nothing until this exists. Consequently the interrupt path above has
+ *     never actually fired on real or emulated hardware yet either.
+ *   - Card-insertion/removal interrupts (SDHCI_INT_CARD_INSERT/REMOVE) are
+ *     unimplemented - reportMediaState() never reports a changed state.
  *   - Voltage/power sequencing (SDHCI_POWER_CONTROL) uses the standard
  *     3.3V value; BCM2837_BRINGUP-era pexpert may not have working power
  *     rail control for the SD slot at all yet (separate, deeper hardware
@@ -52,6 +65,8 @@
 #include <IOKit/storage/IOBlockStorageDevice.h>
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOLib.h>
+#include <IOKit/IOService.h>
+#include <IOKit/IOLocks.h>
 
 class BCM2837SDHCI : public IOBlockStorageDevice
 {
@@ -60,6 +75,11 @@ class BCM2837SDHCI : public IOBlockStorageDevice
 private:
 	IOMemoryMap *fRegMap;
 	volatile void *fRegBase;
+
+	// Interrupt-driven completion state (see waitForIntStatus32()).
+	IOLock       *fInterruptLock;   // block/wake coordination only - never touched from interrupt context
+	IOSimpleLock *fStatusLock;      // protects fPendingIntStatus between interruptOccurred() and waiters
+	volatile uint32_t fPendingIntStatus; // INT_STATUS bits acked but not yet consumed by a waitFor call
 
 	// SD card state, populated by cardIdentify() during start().
 	bool     fCardPresent;
@@ -107,7 +127,13 @@ private:
 		kIntTransferDone = 1U << 1,
 		kIntBufWriteRdy  = 1U << 4,
 		kIntBufReadRdy   = 1U << 5,
-		kIntErrorMask    = 0xFFFF0000, // bits 16-31 are all error conditions
+		// Linux's SDHCI_INT_ERROR_MASK (drivers/mmc/host/sdhci.h) is
+		// 0xFFFF8000, not 0xFFFF0000 - bit 15 (SDHCI_INT_ERROR) is the
+		// generic "an error occurred" summary bit, separate from the
+		// specific bits 16-31. Missing it here would have meant a real
+		// error could set only bit 15 and never be noticed by any of the
+		// waitForIntStatus32(..., kIntErrorMask, ...) checks below.
+		kIntErrorMask    = 0xFFFF8000,
 	};
 
 	// SDHCI_TRANSFER_MODE bits we actually use.
@@ -136,7 +162,22 @@ private:
 	void     writeReg32(uint32_t offset, uint32_t value);
 
 	bool     waitClear32(uint32_t offset, uint32_t mask, uint32_t timeoutUs);
-	bool     waitSet32(uint32_t offset, uint32_t mask, uint32_t timeoutUs);
+
+	// Primary (hard-IRQ-equivalent) interrupt handler, installed via
+	// registerInterrupt() in start(). Must match IOInterruptAction exactly
+	// (IOKit/IOService.h) - not a normal virtual method, since registerInterrupt
+	// takes a plain function pointer, not a bound C++ method.
+	static void interruptOccurred(OSObject *target, void *refCon, IOService *nub, int source);
+
+	// Blocks the calling thread until INT_STATUS bits matching `mask` have
+	// been observed (and acked) by interruptOccurred(), or `timeoutUs`
+	// elapses. On success, returns true and clears the matched bits from
+	// fPendingIntStatus (leaving any other pending bits, e.g. an error bit
+	// a different waiter still needs, untouched); *outStatus (if non-NULL)
+	// gets the matched bits. Replaces a waitSet32(kRegIntStatus, ...) busy
+	// loop with an actual sleep, same role as Linux's
+	// wait_for_completion(&host->cmd_done) after sdhci_send_command().
+	bool     waitForIntStatus32(uint32_t mask, uint32_t timeoutUs, uint32_t *outStatus);
 
 	// Issues one SD command, waits for completion, and reads the response
 	// into resp[0..3] (only resp[0] valid unless respType==kCmdRespLong).
