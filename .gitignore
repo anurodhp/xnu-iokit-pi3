@@ -4,6 +4,7 @@
 # Build intermediates
 devicetrees/*.p
 __pycache__/
+tools/init_binary/init.macho
 
 # Downloaded precompiled binaries and local QEMU test scaffolding -
 # large, reproducible, not our source (precompiled/rpi.dtb is also known-bad,
@@ -19,3 +20,13 @@ sdcard/*.elf
 sdcard/*.dat
 sdcard/*.dtb
 sdcard/kernel.development.bcm2837.unstripped
+
+# tools/sdhci_baremetal build output/test artifacts - regeneratable via
+# build.sh/run_qemu.sh, not source. sdcard.img in particular is a 2GiB+
+# sparse test image.
+tools/sdhci_baremetal/*.o
+tools/sdhci_baremetal/*.bin
+tools/sdhci_baremetal/*.elf
+tools/sdhci_baremetal/sdcard.img
+tools/sdhci_baremetal/mon.sock
+tools/sdhci_baremetal/*.log

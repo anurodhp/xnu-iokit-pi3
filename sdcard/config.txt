@@ -9,9 +9,10 @@ kernel=u-boot.bin
 hdmi_force_hotplug=1
 disable_overscan=1
 
-# Serial console for anything past u-boot (XNU's own console isn't wired to
-# HDMI yet - see README.md). GPIO14/15 @ 115200 8N1, needs a USB-serial
-# adapter into the header, not the HDMI cable.
+# Serial fallback in case the HDMI framebuffer handoff to XNU (see
+# README.md) doesn't work as reasoned - GPIO14/15 @ 115200 8N1, needs a
+# USB-serial adapter into the header, not the HDMI cable. Harmless to leave
+# on either way.
 enable_uart=1
 
 # gpu_mem is otherwise irrelevant to XNU (bootxnu.c hardcodes
