@@ -5,6 +5,10 @@
 -DXNU_KERNEL_PRIVATE
 -DAPPLE_KEXT_LEGACY_ABI=0
 -DARM64_BOARD_CONFIG_BCM2837
+-include
+compat/decls.h
+-Icompat
+-Ithird_party/_sdk_shim
 -Igenerated
 -Ithird_party/xnu/pexpert
 -Ithird_party/xnu/iokit

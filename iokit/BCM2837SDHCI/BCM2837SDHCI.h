@@ -163,6 +163,11 @@ private:
 
 	bool     waitClear32(uint32_t offset, uint32_t mask, uint32_t timeoutUs);
 
+	// Generic busy-poll for callers whose condition isn't a plain
+	// register/mask check (e.g. checking a bit is *set* rather than
+	// clear). Same IODelay(50)-based loop as waitClear32.
+	bool     pollUntil(bool (^predicate)(void), uint32_t timeoutUs);
+
 	// Primary (hard-IRQ-equivalent) interrupt handler, installed via
 	// registerInterrupt() in start(). Must match IOInterruptAction exactly
 	// (IOKit/IOService.h) - not a normal virtual method, since registerInterrupt

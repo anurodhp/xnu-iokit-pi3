@@ -1,0 +1,50 @@
+#!/bin/bash
+#
+# Compiles the project's IOKit kexts (iokit/*/*.cpp) standalone, using
+# Xcode 12's clang against the pinned xnu-6153.11.26 source tree.
+#
+# Xcode 12 is required (not the live/daily-driver Xcode) because it's the
+# newest Xcode that still supports macOS 10.15/11-vintage kext-adjacent
+# headers close enough to this xnu snapshot's own vintage; even so, its
+# xcodebuild/xcrun machinery cannot run at all on this host (macOS 26) -
+# it crashes trying to load a plugin that links against
+# CoreChart.framework, a private framework Apple has since removed from
+# /System/Library/PrivateFrameworks. That only blocks the *IDE* init path
+# (xcodebuild build/install, xcrun -find, and mig's wrapper script, which
+# internally shells out to `xcrun -find cc`) - the actual command-line
+# tools (clang, mig's real migcom, iig) work fine invoked directly.
+#
+# Prerequisite one-time step if generated/mach or generated/DriverKit are
+# ever wiped: regenerate them with mig/iig (see git history of this file's
+# commit, or project memory, for the exact invocations - MIGCC=<Xcode-12
+# clang path> env var bypasses mig's broken `xcrun -find cc` call).
+
+set -e
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO_ROOT"
+
+export DEVELOPER_DIR=/Applications/Xcode-12.app/Contents/Developer
+CLANGXX="$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+SDK="$DEVELOPER_DIR/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
+
+if [ ! -x "$CLANGXX" ]; then
+	echo "error: Xcode-12.app not found at $DEVELOPER_DIR" >&2
+	exit 1
+fi
+
+OUT_DIR="${1:-build/kexts}"
+mkdir -p "$OUT_DIR"
+
+KEXTS=(BCM2837InterruptController BCM2837SDHCI SMSC9514Ethernet)
+
+for kext in "${KEXTS[@]}"; do
+	echo "=== compiling $kext ==="
+	"$CLANGXX" -isysroot "$SDK" -arch arm64 -fapple-kext -mkernel \
+		$(grep -v '^-xc++$' compile_flags.txt) \
+		-c "iokit/$kext/$kext.cpp" \
+		-o "$OUT_DIR/$kext.o"
+done
+
+echo "=== done, objects in $OUT_DIR/ ==="
+ls -la "$OUT_DIR"

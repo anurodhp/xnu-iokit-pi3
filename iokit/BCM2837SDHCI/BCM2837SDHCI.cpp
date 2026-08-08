@@ -57,6 +57,20 @@ BCM2837SDHCI::waitClear32(uint32_t offset, uint32_t mask, uint32_t timeoutUs)
 	return true;
 }
 
+bool
+BCM2837SDHCI::pollUntil(bool (^predicate)(void), uint32_t timeoutUs)
+{
+	uint32_t waited = 0;
+	while (!predicate()) {
+		if (waited >= timeoutUs) {
+			return false;
+		}
+		IODelay(50);
+		waited += 50;
+	}
+	return true;
+}
+
 void
 BCM2837SDHCI::interruptOccurred(OSObject *target, void * /*refCon*/, IOService * /*nub*/, int /*source*/)
 {
