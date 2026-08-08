@@ -1,0 +1,22 @@
+# Boots FlorentRevest/u-boot (arm64) instead of a Linux kernel.
+arm_64bit=1
+kernel=u-boot.bin
+
+# u-boot's own console (CONFIG_DM_VIDEO=y, real bcm2835_video/HDMI driver -
+# confirmed compiled into precompiled/u-boot.bin via `strings`) needs the
+# GPU to actually bring HDMI up rather than skip it because nothing
+# responded to hotplug detection yet.
+hdmi_force_hotplug=1
+disable_overscan=1
+
+# Serial console for anything past u-boot (XNU's own console isn't wired to
+# HDMI yet - see README.md). GPIO14/15 @ 115200 8N1, needs a USB-serial
+# adapter into the header, not the HDMI cable.
+enable_uart=1
+
+# gpu_mem is otherwise irrelevant to XNU (bootxnu.c hardcodes
+# boot_args->mem_size to a fixed 128MB regardless of this value - see
+# README.md and devicetrees/rpi3-realhw.dts) but pinned explicitly anyway
+# so the number is documented and not left to whatever this firmware
+# version's default happens to be.
+gpu_mem=64

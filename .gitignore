@@ -2,7 +2,7 @@
 /third_party/
 
 # Build intermediates
-devicetrees/rpi3.p
+devicetrees/*.p
 __pycache__/
 
 # Downloaded precompiled binaries and local QEMU test scaffolding -
@@ -10,3 +10,12 @@ __pycache__/
 # see project memory)
 /precompiled/
 /qemu/
+
+# Same reasoning as precompiled/ above - reproducible copies/downloads
+# staged for a real SD card, not our source. Only config.txt and README.md
+# (this project's own authored content) are tracked from sdcard/.
+sdcard/*.bin
+sdcard/*.elf
+sdcard/*.dat
+sdcard/*.dtb
+sdcard/kernel.development.bcm2837.unstripped

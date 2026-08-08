@@ -97,6 +97,21 @@
 			interrupt-parent = <0x1>;
 			interrupts = <2 30>;
 		};
+
+		/*
+		 * VideoCore mailbox (Linux: mailbox@7e00b880,
+		 * "brcm,bcm2835-mbox"). Used by pexpert/arm/pe_init.c's
+		 * bcm2837_video_init() to request an HDMI framebuffer from the
+		 * GPU firmware via the property-tag protocol before
+		 * PE_create_console() runs. Size 0x40 covers both mailbox 0
+		 * (read, offset 0x00) and mailbox 1 (write, offset 0x20)
+		 * register blocks - see Linux's drivers/mailbox/bcm2835-mailbox.c.
+		 */
+		mbox {
+			device_type = "mbox";
+			compatible = "brcm,bcm2835-mbox";
+			reg = <0xb880 0 0x40 0>;
+		};
 	};
 
 	chosen {
