@@ -42,6 +42,24 @@
 		device_type = "interrupt-controller";
 		compatible = "brcm,bcm2836-l1-intc";
 		reg = <0x40000000 0 0x100 0>;
+		/*
+		 * FIX (found wiring BCM2837InterruptController's own upstream
+		 * interrupt): needed so IODTFindInterruptParent()/
+		 * IODTMapOneInterrupt() (iokit/Kernel/IODeviceTreeSupport.cpp)
+		 * can resolve "intc"'s `interrupt-parent = <0x2>` below to a
+		 * terminal controller and compute the symbol
+		 * BCM2837InterruptController::start() must register itself
+		 * under - AAPL,phandle for FindPHandle(), the
+		 * "interrupt-controller" boolean marker so the walk stops here
+		 * instead of following gIODTPlane up to root, #interrupt-cells
+		 * so "intc"'s single-cell `interrupts = <8>` below is sized
+		 * correctly (IRQ 8 = the "GPU interrupt" line per Linux's
+		 * bcm2836-l1-intc.dtsi convention, matching this node's own
+		 * header comment above).
+		 */
+		interrupt-controller = <0x0>;
+		AAPL,phandle = <0x2>;
+		#interrupt-cells = <1>;
 	};
 
 	arm-io {
@@ -93,6 +111,20 @@
 			AAPL,phandle = <0x1>;
 			#interrupt-cells = <2>;
 			#address-cells = <0>;
+			/*
+			 * FIX: intc's own upstream interrupt (cascaded from
+			 * local-intc's "GPU interrupt" line, IRQ 8 - see
+			 * local-intc's header comment above) - without this,
+			 * BCM2837InterruptController::start()'s
+			 * provider->registerInterrupt(0, ...) call (against the
+			 * "intc" nub itself) has no interrupt-parent to resolve
+			 * and fails outright (confirmed empirically: 0xe00002be).
+			 * interrupt-parent points at local-intc's AAPL,phandle
+			 * (0x2); the single cell in `interrupts` is sized by
+			 * local-intc's own #interrupt-cells=<1> above.
+			 */
+			interrupt-parent = <0x2>;
+			interrupts = <8>;
 		};
 
 		/*
