@@ -13,7 +13,9 @@ import sys
 import os
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-KERNEL_PATH = os.path.join(ROOT, "precompiled/kernel.development.bcm2837.unstripped")
+KERNEL_PATH = os.environ.get(
+    "KERNEL_PATH",
+    os.path.join(ROOT, "build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped"))
 DTB_PATH = os.path.join(ROOT, "devicetrees/rpi3.dtb")
 OUT_DIR = os.path.join(ROOT, "qemu/direct_boot")
 
@@ -228,6 +230,7 @@ def extract_elf_text(o_path):
 
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
+    print(f"KERNEL_PATH={KERNEL_PATH}")
     kernel_data = open(KERNEL_PATH, "rb").read()
     dtb_data = open(DTB_PATH, "rb").read()
 

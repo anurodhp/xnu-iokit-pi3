@@ -8,7 +8,7 @@
  * standard SDHCI). NOT YET DONE: nothing pin-muxes GPIO48-53 to ALT3 to
  * route this controller to the physical SD slot instead of the onboard
  * SDIO WiFi (GPIO34-39 by default) - see BCM2837_FSEL_* in
- * third_party/xnu/pexpert/pexpert/arm64/BCM2837.h. That has to happen
+ * third_party/xnu-7195/pexpert/pexpert/arm64/BCM2837.h. That has to happen
  * (in this driver's start(), or earlier platform init) before any command
  * on this controller reaches a real SD card.
  *

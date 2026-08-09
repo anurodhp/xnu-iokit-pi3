@@ -19,15 +19,12 @@
 
 /*
  * IOStorageFamily/IONetworkingFamily headers (third_party/_sdk_shim/IOKit/
- * {storage,network}, pulled from a newer apple-oss-distributions release
- * than this project's pinned 2019-era xnu-6153.11.26 checkout) use
- * `__exported` directly on class declarations, e.g.
+ * {storage,network}) use `__exported` directly on class declarations, e.g.
  * `class __exported IOBlockStorageDevice : public IOService`. This macro
- * normally comes from sys/cdefs.h, but xnu's own bsd/sys/cdefs.h (an
- * older vintage, found first via -Ithird_party/xnu/bsd) doesn't define it
- * yet - the SDK's newer cdefs.h does, but never gets reached since xnu's
- * copy wins the -I search first. Defining it directly here sidesteps the
- * header-resolution order problem entirely.
+ * normally comes from sys/cdefs.h; xnu-7195's own bsd/sys/cdefs.h (found
+ * first via -Ithird_party/xnu-7195/bsd) does define it, so this is a
+ * no-op against the current tree - kept guarded with #ifndef in case a
+ * future header swap regresses to a vintage that doesn't.
  */
 #ifndef __exported
 #define __exported __attribute__((__visibility__("default")))
@@ -37,5 +34,19 @@
 extern void bzero(void *, size_t);
 extern void bcopy(const void *, void *, size_t);
 extern int  bcmp(const void *, const void *, size_t);
+
+/*
+ * bsd/sys/kdebug_kernel.h's KERNEL_DEBUG_CONSTANT* macros reference
+ * KDEBUG_ENABLE_PPT unconditionally, but it's only defined in the
+ * "private" bsd/sys_private/kdebug_private.h, which kdebug_kernel.h never
+ * includes itself - a real kernel build's translation units apparently
+ * pull that header in some other way before kdebug_kernel.h is reached.
+ * Standalone kext compiles never do, so IOKit/IOTimeStamp.h's use of
+ * these macros fails to parse without this. Value matches
+ * kdebug_private.h's own (marked "obsolete" there, but still referenced).
+ */
+#ifndef KDEBUG_ENABLE_PPT
+#define KDEBUG_ENABLE_PPT (1U << 3)
+#endif
 
 #endif
