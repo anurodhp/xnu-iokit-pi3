@@ -170,7 +170,7 @@ self-contained):
    the Arasan controller to the physical SD slot (it defaults to onboard
    SDIO WiFi instead). Without this every SD command times out. Small,
    concrete: direct GPIO `FSEL` register pokes using macros already in
-   `third_party/xnu/pexpert/pexpert/arm64/BCM2837.h`
+   `third_party/xnu-7195/pexpert/pexpert/arm64/BCM2837.h`
    (`BCM2837_FSEL_REG`/`BCM2837_FSEL_ALT3`), in `BCM2837SDHCI::start()` or
    earlier platform init. **This is the actual first blocker** -- do this
    before anything else in this phase.

@@ -24,7 +24,7 @@ Remaining work, roughly in the order it actually blocks progress:
    memory for the full explanation). Without this, every command in
    `BCM2837SDHCI` will just time out. This is the actual first blocker,
    not a large amount of work - direct GPIO `FSEL` register pokes using
-   the macros already in `third_party/xnu/pexpert/pexpert/arm64/BCM2837.h`
+   the macros already in `third_party/xnu-7195/pexpert/pexpert/arm64/BCM2837.h`
    (`BCM2837_FSEL_REG`, `BCM2837_FSEL_ALT3`), done either in this driver's
    `start()` or in earlier platform init.
 2. **Interrupt wiring** — done. `start()` calls `registerInterrupt()`/
@@ -44,7 +44,7 @@ Remaining work, roughly in the order it actually blocks progress:
 3. **`IOStorageFamily` isn't in the base `xnu` source tree.** This was the
    first real surprise this session: `IOBlockStorageDevice`/
    `IOBlockStorageDriver`/`IOMedia` (the actual kernel-side C++ classes)
-   don't exist anywhere in `third_party/xnu` - only a DriverKit
+   don't exist anywhere in `third_party/xnu-7195` - only a DriverKit
    (userspace) compat stub does. The real headers had to be pulled
    separately from `apple-oss-distributions/IOStorageFamily` (cloned to
    `third_party/IOStorageFamily`, not committed - gitignored under the

@@ -3,7 +3,7 @@
 
 #include <stdint.h>
 
-/* Same encoding as third_party/xnu/pexpert/pexpert/arm64/BCM2837.h's
+/* Same encoding as third_party/xnu-7195/pexpert/pexpert/arm64/BCM2837.h's
  * BCM2837_FSEL_* (0=input,1=output,4=ALT0,5=ALT1,6=ALT2,7=ALT3,3=ALT4,2=ALT5),
  * confirmed against the real BCM2835/2837 GPFSEL 3-bit field encoding. */
 #define GPIO_FSEL_INPUT 0x0
