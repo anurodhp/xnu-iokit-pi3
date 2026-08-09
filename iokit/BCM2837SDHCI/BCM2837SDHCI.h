@@ -5,12 +5,11 @@
  * offset 0x300000, not the Broadcom-proprietary "sdhost" controller - see
  * devicetrees/rpi3.dts and project memory for why (sdhost has no public
  * register reference outside Linux's own driver; this one is close to
- * standard SDHCI). NOT YET DONE: nothing pin-muxes GPIO48-53 to ALT3 to
- * route this controller to the physical SD slot instead of the onboard
- * SDIO WiFi (GPIO34-39 by default) - see BCM2837_FSEL_* in
- * third_party/xnu-7195/pexpert/pexpert/arm64/BCM2837.h. That has to happen
- * (in this driver's start(), or earlier platform init) before any command
- * on this controller reaches a real SD card.
+ * standard SDHCI). GPIO48-53 pinmux to ALT3 (routing this controller to
+ * the physical SD slot instead of the onboard SDIO WiFi, GPIO34-39 by
+ * default) is done in start() via pinmuxSDSlot() - real-hardware
+ * correctness only, confirmed NOT required for QEMU testing (see that
+ * method's own comment for why).
  *
  * BCM2835-specific quirks confirmed from Linux's sdhci-iproc.c
  * (bcm2835_data / sdhci_bcm2835_pltfm_data), baked into this driver's
@@ -48,9 +47,19 @@
  * step now blocks on the interrupt instead of busy-polling the register.
  *
  * UNVERIFIED / not yet done, flagged rather than guessed:
- *   - GPIO pinmux (see above) - reads/writes will simply time out against
- *     nothing until this exists. Consequently the interrupt path above has
- *     never actually fired on real or emulated hardware yet either.
+ *   - GPIO pinmux is done (see above, pinmuxSDSlot()) but only ever
+ *     exercised in QEMU (where it's a no-op either way, confirmed) - not
+ *     yet verified against real hardware.
+ *   - Real ARM64 IRQ delivery through this board's interrupt cascade
+ *     (BCM2837LocalIntc -> BCM2837InterruptController) is CONFIRMED not
+ *     reaching interruptOccurred(), even though the SDHCI hardware itself
+ *     completes commands/transfers correctly (verified via direct
+ *     INT_STATUS register readback) and the whole matching/registration
+ *     chain succeeds. waitForIntStatus32() has a polling fallback
+ *     (see that function) that makes this work correctly today regardless
+ *     - root-causing real interrupt delivery (likely a pexpert/osfmk
+ *     exception-vector gap) is separate, follow-on work if genuinely
+ *     interrupt-driven I/O (not just correctness) matters.
  *   - Card-insertion/removal interrupts (SDHCI_INT_CARD_INSERT/REMOVE) are
  *     unimplemented - reportMediaState() never reports a changed state.
  *   - Voltage/power sequencing (SDHCI_POWER_CONTROL) uses the standard
@@ -189,6 +198,19 @@ private:
 	// Returns false on any error/timeout status bit or CMD_INHIBIT stuck.
 	bool     sendCommand(uint8_t cmdIndex, uint32_t arg, uint32_t respType,
 	                      bool hasData, uint32_t resp[4]);
+
+	// Pin-muxes GPIO48-53 to ALT3 ("emmc_gpio48" in Linux DT), routing
+	// this controller to the physical SD slot instead of leaving it on
+	// whatever the stock-firmware default is (see header). Maps the GPIO
+	// controller's FSEL4/FSEL5 registers directly by physical address
+	// (0x3f200000 + arm-io's translation - independent of whether an
+	// IOKit "gpio" driver/nub exists at all) rather than going through
+	// this driver's own provider, since GPIO isn't this driver's parent.
+	// Real-hardware correctness only - confirmed NOT required for QEMU
+	// testing (third_party/qemu-zhuowei's hw/gpio/bcm2835_gpio.c parents
+	// the emulated SD card onto the real SDHCI bus by default at reset,
+	// with or without this).
+	bool     pinmuxSDSlot(void);
 
 	bool     resetHost(void);
 	bool     setClock(uint32_t targetHz);
