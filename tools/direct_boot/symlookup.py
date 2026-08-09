@@ -1,6 +1,8 @@
-import struct, sys
+import struct, sys, os
 
-KERNEL_PATH = "/Users/anurodhp/Development/iokit/precompiled/kernel.development.bcm2837.unstripped"
+KERNEL_PATH = os.environ.get(
+    "KERNEL_PATH",
+    "/Users/anurodhp/Development/iokit/build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped")
 LC_SYMTAB = 0x2
 
 data = open(KERNEL_PATH, "rb").read()

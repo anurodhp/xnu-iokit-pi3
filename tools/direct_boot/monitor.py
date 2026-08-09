@@ -7,7 +7,10 @@ import struct
 import os
 
 SOCK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../qemu/mon.sock")
-KERNEL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../precompiled/kernel.development.bcm2837.unstripped")
+KERNEL_PATH = os.environ.get(
+    "KERNEL_PATH",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)),
+        "../../build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped"))
 
 
 class Monitor:
