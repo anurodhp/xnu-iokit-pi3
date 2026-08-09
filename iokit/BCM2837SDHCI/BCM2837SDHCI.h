@@ -198,6 +198,16 @@ private:
 
 public:
 	virtual bool   init(OSDictionary *properties) APPLE_KEXT_OVERRIDE;
+
+	// Defensive re-check that provider is actually named "sdhci" - see
+	// iokit/Drivers/BCM2837/BCM2837ArmIO.h (xnu-7195 tree) for why this is
+	// needed (IOService::matchInternal()'s generic IONameMatch handling
+	// was empirically observed matching a sibling personality against
+	// every node under "arm-io", not just its own; this class inherits
+	// IOBlockStorageDevice/IOService::probe(), not IODTPlatformExpert's
+	// own defensive compareNames() re-check).
+	virtual IOService *probe(IOService *provider, SInt32 *score) APPLE_KEXT_OVERRIDE;
+
 	virtual bool   start(IOService *provider) APPLE_KEXT_OVERRIDE;
 	virtual void   stop(IOService *provider) APPLE_KEXT_OVERRIDE;
 	virtual void   free(void) APPLE_KEXT_OVERRIDE;

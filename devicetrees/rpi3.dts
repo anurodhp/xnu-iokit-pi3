@@ -46,7 +46,24 @@
 
 	arm-io {
 		device_type = "bcm2837-io";
-		ranges = <0x7e000000 0 0x3f000000 0 0x1000000 0>;
+		/*
+		 * FIX (found booting BCM2837InterruptController/BCM2837SDHCI for
+		 * real): child-base was 0x7e000000, but every child node's own
+		 * "reg" below is written as a bare VC-bus *offset* (0xb200,
+		 * 0x300000, ...), not the full VC address (0x7e00b200,
+		 * 0x7e300000, ...). Standard OF ranges translation requires
+		 * child reg values to fall within [child-base, child-base+size)
+		 * - with child-base=0x7e000000, every one of these offsets was
+		 * numerically far below that window, so IODTResolveAddressing()
+		 * (iokit/Kernel/IODeviceTreeSupport.cpp) could never find a
+		 * match and every device's mapDeviceMemoryWithIndex() failed
+		 * (confirmed: "BCM2837InterruptController: failed to map
+		 * \"intc\" registers" at boot). child-base=0 makes translation
+		 * `child_reg - 0 + 0x3f000000`, e.g. intc's 0xb200 -> 0x3f00b200
+		 * - exactly the physical address BCM2837InterruptController.h's
+		 * own header comment already documented as correct.
+		 */
+		ranges = <0 0 0x3f000000 0 0x1000000 0>;
 
 		#address-cells = <2>;
 		#size-cells = <2>;

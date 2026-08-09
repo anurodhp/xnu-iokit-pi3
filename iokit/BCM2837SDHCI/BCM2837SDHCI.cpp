@@ -3,10 +3,25 @@
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/storage/IOMedia.h>
 #include <libkern/OSByteOrder.h>
+#include <string.h>
 
 #define super IOBlockStorageDevice
 
 OSDefineMetaClassAndStructors(BCM2837SDHCI, IOBlockStorageDevice);
+
+IOService *
+BCM2837SDHCI::probe(IOService *provider, SInt32 *score)
+{
+	IOService *result = super::probe(provider, score);
+	if (result == NULL) {
+		return NULL;
+	}
+	const char *name = provider->getName();
+	if (name == NULL || strcmp(name, "sdhci") != 0) {
+		return NULL;
+	}
+	return result;
+}
 
 bool
 BCM2837SDHCI::init(OSDictionary *properties)

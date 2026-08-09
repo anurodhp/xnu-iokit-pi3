@@ -3,10 +3,25 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOPlatformExpert.h>
 #include <IOKit/IODeviceTreeSupport.h>
+#include <string.h>
 
 #define super IOInterruptController
 
 OSDefineMetaClassAndStructors(BCM2837InterruptController, IOInterruptController);
+
+IOService *
+BCM2837InterruptController::probe(IOService *provider, SInt32 *score)
+{
+	IOService *result = super::probe(provider, score);
+	if (result == NULL) {
+		return NULL;
+	}
+	const char *name = provider->getName();
+	if (name == NULL || strcmp(name, "intc") != 0) {
+		return NULL;
+	}
+	return result;
+}
 
 bool
 BCM2837InterruptController::init(OSDictionary *propTable)
@@ -74,16 +89,20 @@ BCM2837InterruptController::start(IOService *provider)
 	fRegBase[kRegDisableIRQs2] = 0xFFFFFFFF;
 	fRegBase[kRegDisableBasicIRQs] = 0xFFFFFFFF;
 
-	// Publish ourselves so device-tree nubs whose `interrupts` property
-	// resolves to us can find us.
-	//
-	// UNVERIFIED: the name a nub actually looks up is whatever
-	// IODeviceTreeSupport's ADT interrupt-parent resolution computes for
-	// the "intc" node - this placeholder symbol needs to be checked
-	// against that (IODeviceTreeSupport.cpp) rather than assumed.
-	const OSSymbol *controllerName = OSSymbol::withCString("BCM2837InterruptController");
+	// Publish ourselves under the exact symbol IODTMapOneInterrupt() will
+	// look us up by: IODTInterruptControllerName() (IODeviceTreeSupport.cpp)
+	// derives "IOInterruptController<AAPL,phandle in hex>" from the "intc"
+	// node's own phandle - it is NOT a fixed/chosen name, confirmed by
+	// reading that function directly. A hardcoded string here (what this
+	// used to do) would silently make every registerInterrupt() call from
+	// a device whose interrupt-parent points at us fail to find this
+	// controller at all.
+	const OSSymbol *controllerName = IODTInterruptControllerName(provider);
+	if (controllerName == NULL) {
+		IOLog("BCM2837InterruptController: IODTInterruptControllerName failed (no AAPL,phandle on \"intc\"?)\n");
+		return false;
+	}
 	getPlatform()->registerInterruptController((OSSymbol *)controllerName, this);
-	controllerName->release();
 
 	// Cascade: we are ourselves a consumer of one interrupt on our
 	// provider (local-intc), source 0 (its "interrupts = <8 ...>" is
@@ -94,9 +113,14 @@ BCM2837InterruptController::start(IOService *provider)
 	    &BCM2837InterruptController::handleInterrupt), NULL);
 	if (err != kIOReturnSuccess) {
 		IOLog("BCM2837InterruptController: registerInterrupt on provider failed: 0x%x\n", err);
+		controllerName->release();
 		return false;
 	}
 	provider->enableInterrupt(0);
+
+	IOLog("BCM2837InterruptController: started, base=%p, registered as \"%s\"\n",
+	    (void *)fRegBase, controllerName->getCStringNoCopy());
+	controllerName->release();
 
 	return true;
 }
