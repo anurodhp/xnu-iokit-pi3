@@ -6,6 +6,14 @@ at boot time. Produces two flat binaries QEMU's `-device loader` can place
 directly into guest RAM, plus a tiny hand-generated EL2->EL1 trampoline
 (transcribed from u-boot's arch/arm/include/asm/macro.h
 armv8_switch_to_el1_m, ES_TO_AARCH64 path) to jump into XNU.
+
+NOT the boot-verification path - see run_qemu.sh's header for why (bypasses
+hw/arm/boot.c, so none of third_party/qemu-zhuowei's XNU-specific fixes
+apply here, notably secondary-core parking). Kept as the reference
+implementation of the "-device loader, flat binary" technique other tools
+still cite, and for standalone experiments that want to stay decoupled
+from the raspi3 machine model. Use qemu-zhuowei's own `-M raspi3` loader
+(see project memory) to judge whether a kernel build actually boots.
 """
 import struct
 import subprocess
