@@ -1,11 +1,11 @@
 #!/bin/bash
 #
 # Compiles the project's IOKit kexts (iokit/*/*.cpp) standalone, using
-# Xcode 12's clang against the pinned xnu-6153.11.26 source tree.
+# Xcode 12's clang against third_party/xnu-7195 (see compile_flags.txt).
 #
-# Xcode 12 is required (not the live/daily-driver Xcode) because it's the
-# newest Xcode that still supports macOS 10.15/11-vintage kext-adjacent
-# headers close enough to this xnu snapshot's own vintage; even so, its
+# Xcode 12 is required (not the live/daily-driver Xcode) because its
+# iPhoneOS SDK (iOS 14.4 vintage) lines up well with xnu-7195's own
+# Darwin 20.3 vintage; even so, its
 # xcodebuild/xcrun machinery cannot run at all on this host (macOS 26) -
 # it crashes trying to load a plugin that links against
 # CoreChart.framework, a private framework Apple has since removed from
