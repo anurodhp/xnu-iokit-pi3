@@ -3,6 +3,7 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOPlatformExpert.h>
 #include <IOKit/IODeviceTreeSupport.h>
+#include <IOKit/IOCPU.h>
 #include <string.h>
 
 #define super IOInterruptController
@@ -94,9 +95,32 @@ BCM2837LocalIntc::start(IOService *provider)
 	    (void *)fRegBase, controllerName->getCStringNoCopy());
 	controllerName->release();
 
-	// No registerInterrupt() against our own provider - local-intc is the
-	// top of this board's interrupt tree (see header), not a cascade
-	// consumer of anything else.
+	// No registerInterrupt() against our own provider via the normal
+	// DT-interrupt-parent cascade mechanism - local-intc is the top of
+	// this board's interrupt tree (see header), not a cascade consumer
+	// of anything else. But it IS the thing that should be told about a
+	// real ARM64 IRQ trap reaching this CPU at all: register directly
+	// against the platform's IOCPUInterruptController (source 0, our
+	// only CPU) so IOCPUInterruptController::handleInterrupt() (called
+	// from sleh_irq() via ml_install_interrupt_handler(), wired up by
+	// BCM2837CPU::initCPU()) actually calls back into our own
+	// handleInterrupt() - see BCM2837CPU.h for the full chain this
+	// closes.
+	IOInterruptController *cpuIC =
+	    getPlatform()->lookUpInterruptController((OSSymbol *)gPlatformInterruptControllerName);
+	if (cpuIC == NULL) {
+		IOLog("BCM2837LocalIntc: no IOPlatformInterruptController yet - real IRQ delivery will not work\n");
+		return true;
+	}
+	IOInterruptHandler cpuICHandler = OSMemberFunctionCast(
+		IOInterruptHandler, this, &BCM2837LocalIntc::handleInterrupt);
+	IOReturn err = cpuIC->registerInterrupt(provider, 0, this, cpuICHandler, NULL);
+	if (err != kIOReturnSuccess) {
+		IOLog("BCM2837LocalIntc: registerInterrupt against IOPlatformInterruptController failed: %#x\n", err);
+		return true;
+	}
+	cpuIC->enableInterrupt(provider, 0);
+	IOLog("BCM2837LocalIntc: registered against IOPlatformInterruptController\n");
 
 	return true;
 }
