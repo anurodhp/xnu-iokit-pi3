@@ -28,6 +28,11 @@ typedef long ssize_t;
 #define SYS_exit  1
 #define SYS_read  3
 #define SYS_write 4
+#define SYS_open  5
+#define SYS_close 6
+#define SYS_dup2  90
+
+#define O_RDWR 2
 
 #ifdef INIT_HOST_TEST
 /* Host-side logic testing only (see build.py) -- never compiled into the
@@ -64,6 +69,55 @@ static void sys_exit(int code) {
     for (;;) { }
 }
 
+static int sys_open(const char *path, int flags, int mode) {
+    return (int)syscall3(SYS_open, (long)path, flags, mode);
+}
+
+static int sys_close(int fd) {
+    return (int)syscall3(SYS_close, fd, 0, 0);
+}
+
+static int sys_dup2(int from, int to) {
+    return (int)syscall3(SYS_dup2, from, to, 0);
+}
+
+/* The kernel hands pid 1 an empty fd table -- on real macOS, launchd itself
+ * is the one that opens /dev/console and dup2's it onto 0/1/2 before doing
+ * anything else; there is no kernel-side setup. We're standing in for
+ * launchd, so we have to do the same thing explicitly, or every read(0)/
+ * write(1) call below is just an EBADF against a nonexistent fd -- which is
+ * exactly what happened before this fix: sys_write() ignores its return
+ * value (see put()), so the banner "printed" into the void, and
+ * read_line()'s `if (n < 0) continue;` turned the following prompt loop
+ * into a silent, fast, infinite EBADF-retry spin that looked from the
+ * outside (no console output, PC parked right after the read's `svc`) like
+ * a hang. devfs always creates /dev/console (major/minor 0,0, the real
+ * cnopen/km.c console device) via devfs_init() - not board- or
+ * mockfs-specific - so this works unconditionally once devfs is mounted. */
+/* DIAGNOSTIC: externally inspectable via QEMU monitor (nm this binary for
+ * the symbol's address, then `xp/1xw <addr>` on the guest VA) since we
+ * can't trust console output to debug console output. Remove once the
+ * console-routing question is settled. */
+volatile int g_console_open_result = -999;
+volatile long g_first_write_result = -999;
+static int g_write_call_count = 0;
+
+static void open_console(void) {
+    int fd = sys_open("/dev/console", O_RDWR, 0);
+    g_console_open_result = fd;
+    if (fd < 0) {
+        return; /* nothing we can do without a console; fall through as before */
+    }
+    if (fd != 0) {
+        sys_dup2(fd, 0);
+    }
+    sys_dup2(fd, 1);
+    sys_dup2(fd, 2);
+    if (fd > 2) {
+        sys_close(fd);
+    }
+}
+
 /* ---------------------------- tiny string helpers ----------------------- */
 
 static size_t kstrlen(const char *s) {
@@ -93,7 +147,11 @@ static void kstrncpy(char *dst, const char *src, size_t n) {
 }
 
 static void put(const char *s) {
-    sys_write(1, s, kstrlen(s));
+    ssize_t r = sys_write(1, s, kstrlen(s));
+    if (g_write_call_count == 0) {
+        g_first_write_result = r;
+    }
+    g_write_call_count++;
 }
 
 static void putn(const char *s, size_t n) {
@@ -416,6 +474,7 @@ static void banner(void) {
 }
 
 void shell_main(void) {
+    open_console();
     vfs_init();
     banner();
 
