@@ -1,23 +1,23 @@
 /*
- * Freestanding PID-1 init/shell for XNU-on-rpi3, booted via mockfs.
+ * Freestanding PID-1 init/shell for XNU-on-rpi3, exec'd as /sbin/launchd
+ * from a real msdosfs (FAT32) root on the SD card.
  *
  * No libc, no dyld: built as a fully static Mach-O with LC_UNIXTHREAD and
  * zero LC_LOAD_DYLIB commands (see build.py) so the kernel exec path jumps
  * straight to _start without ever invoking dyld. All BSD syscalls below are
  * issued directly (`svc #0x80`, number in x16, arm64 Darwin convention) --
- * numbers taken from third_party/xnu/bsd/kern/syscalls.master, not guessed.
+ * numbers taken from third_party/xnu-7195/bsd/kern/syscalls.master, not
+ * guessed. Errors come back as a positive errno in x0 with the carry flag
+ * set (not a negated value like Linux) -- syscall3() below converts that to
+ * the usual -errno convention.
  *
  * Every "command" here is a builtin dispatched by name, and the whole
  * directory tree is a virtual, in-process structure -- NOT the real VFS.
- * That's not a shortcut, it's the only option right now: mockfs (the root
- * fs pid 1 execs from) implements only lookup/read/getattr on 3 fixed
- * names (see bsd/miscfs/mockfs/mockfs_vnops.c), with no VNOP_MKDIR/
- * VNOP_CREATE at all, and devfs (auto-mounted at /dev by mockfs_mountroot)
- * supports mkdir but has no VNOP_CREATE for regular files either -- there
- * is nowhere in the real, currently-compiled-in VFS to persist a directory
- * tree or separate command binaries yet. Real dyld/Libc + real coreutils
- * are a later, separate pull once we're off this bootstrap milestone (see
- * project memory: userspace libc/dyld/launchd).
+ * The real root filesystem only backs /sbin/launchd (this binary) and
+ * /dev (devfs, for /dev/console); there is no persistent place yet to put
+ * a real directory tree or separate command binaries. Real dyld/Libc + real
+ * coreutils are a later, separate pull once we're off this bootstrap
+ * milestone (see project memory: userspace libc/dyld/launchd).
  */
 
 typedef unsigned long size_t;
@@ -29,8 +29,6 @@ typedef long ssize_t;
 #define SYS_read  3
 #define SYS_write 4
 #define SYS_open  5
-#define SYS_close 6
-#define SYS_dup2  90
 
 #define O_RDWR 2
 
@@ -43,15 +41,33 @@ static inline long syscall3(long num, long a0, long a1, long a2) {
     return host_shim_syscall3(num, a0, a1, a2);
 }
 #else
+/* ROOT CAUSE (found via QEMU-monitor PC/register sampling, x0 caught
+ * holding implausible small positive values -- e.g. 9 -- right after a
+ * 1-byte read()'s svc): the arm64 Darwin syscall ABI does NOT return errors
+ * as a negative value in x0 like Linux. Per
+ * bsd/dev/arm/systemcalls.c:arm_prepare_u64_syscall_return(), on error x0 is
+ * set to the raw positive errno AND PSTATE's carry flag (C) is set; success
+ * leaves the carry flag clear. This wrapper never checked the carry flag,
+ * so every syscall error made by this freestanding binary (no libc, so no
+ * cerror stub either) has always been silently misread as a suspiciously-
+ * large-but-technically-positive success value by every caller's `r <= 0`
+ * error check. Fixed by reading PSTATE.C via `cset` and negating x0 on
+ * error, matching the conventional -errno-on-failure contract the rest of
+ * this file's callers already assume. */
 static inline long syscall3(long num, long a0, long a1, long a2) {
     register long x0 asm("x0") = a0;
     register long x1 asm("x1") = a1;
     register long x2 asm("x2") = a2;
     register long x16 asm("x16") = num;
-    asm volatile("svc #0x80"
-                 : "+r"(x0)
+    long is_error;
+    asm volatile("svc #0x80\n"
+                 "cset %1, cs"
+                 : "+r"(x0), "=r"(is_error)
                  : "r"(x1), "r"(x2), "r"(x16)
                  : "memory", "cc");
+    if (is_error) {
+        return -x0;
+    }
     return x0;
 }
 #endif
@@ -73,49 +89,23 @@ static int sys_open(const char *path, int flags, int mode) {
     return (int)syscall3(SYS_open, (long)path, flags, mode);
 }
 
-static int sys_close(int fd) {
-    return (int)syscall3(SYS_close, fd, 0, 0);
-}
-
-static int sys_dup2(int from, int to) {
-    return (int)syscall3(SYS_dup2, from, to, 0);
-}
-
 /* The kernel hands pid 1 an empty fd table -- on real macOS, launchd itself
- * is the one that opens /dev/console and dup2's it onto 0/1/2 before doing
- * anything else; there is no kernel-side setup. We're standing in for
- * launchd, so we have to do the same thing explicitly, or every read(0)/
- * write(1) call below is just an EBADF against a nonexistent fd -- which is
- * exactly what happened before this fix: sys_write() ignores its return
- * value (see put()), so the banner "printed" into the void, and
- * read_line()'s `if (n < 0) continue;` turned the following prompt loop
- * into a silent, fast, infinite EBADF-retry spin that looked from the
- * outside (no console output, PC parked right after the read's `svc`) like
- * a hang. devfs always creates /dev/console (major/minor 0,0, the real
- * cnopen/km.c console device) via devfs_init() - not board- or
- * mockfs-specific - so this works unconditionally once devfs is mounted. */
-/* DIAGNOSTIC: externally inspectable via QEMU monitor (nm this binary for
- * the symbol's address, then `xp/1xw <addr>` on the guest VA) since we
- * can't trust console output to debug console output. Remove once the
- * console-routing question is settled. */
-volatile int g_console_open_result = -999;
-volatile long g_first_write_result = -999;
-static int g_write_call_count = 0;
-
+ * is the one that opens /dev/console onto 0/1/2 before doing anything else;
+ * there is no kernel-side setup. We're standing in for launchd, so we have
+ * to do the same thing explicitly. Opened independently three times rather
+ * than open+dup2 -- each open() picks the lowest free fd (0, then 1, then
+ * 2), same effect without relying on dup2(). Requires devfs to actually be
+ * mounted at /dev, which in turn requires a /dev directory to already exist
+ * on the root filesystem for devfs_kernel_mount() to mount onto (see
+ * bsd_init.c's devfs_kernel_mount("/dev") call) -- create one on the root
+ * image if open() ever starts failing with ENOENT again. */
 static void open_console(void) {
-    int fd = sys_open("/dev/console", O_RDWR, 0);
-    g_console_open_result = fd;
-    if (fd < 0) {
+    int fd0 = sys_open("/dev/console", O_RDWR, 0);
+    if (fd0 < 0) {
         return; /* nothing we can do without a console; fall through as before */
     }
-    if (fd != 0) {
-        sys_dup2(fd, 0);
-    }
-    sys_dup2(fd, 1);
-    sys_dup2(fd, 2);
-    if (fd > 2) {
-        sys_close(fd);
-    }
+    sys_open("/dev/console", O_RDWR, 0); /* fd 1 */
+    sys_open("/dev/console", O_RDWR, 0); /* fd 2 */
 }
 
 /* ---------------------------- tiny string helpers ----------------------- */
@@ -147,11 +137,7 @@ static void kstrncpy(char *dst, const char *src, size_t n) {
 }
 
 static void put(const char *s) {
-    ssize_t r = sys_write(1, s, kstrlen(s));
-    if (g_write_call_count == 0) {
-        g_first_write_result = r;
-    }
-    g_write_call_count++;
+    sys_write(1, s, kstrlen(s));
 }
 
 static void putn(const char *s, size_t n) {
