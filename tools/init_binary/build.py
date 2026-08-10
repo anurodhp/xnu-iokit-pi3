@@ -37,7 +37,16 @@ def main():
         "-nostdlib",
         "-static",
         "-Wall", "-Wextra",
-        "-O2",
+        # -O0, not -O2: -O2 tail-merges/interleaves the builtin-dispatch
+        # string comparisons and cmd_* handlers into one large, heavily
+        # cross-jumping function. That codegen reproducibly (3/3 runs)
+        # SIGSEGVs partway through `ls /`'s output loop, and reproducibly
+        # (3/3 runs) does NOT at -O0 - see project memory for the full
+        # empirical bisection (adding filler put() calls also avoided it,
+        # implicating code layout/demand-paging of msdosfs-backed text
+        # pages, not the C source itself). No performance requirement here
+        # (tiny bootstrap shell), so -O0 is the real fix, not a workaround.
+        "-O0",
         "-e", "__start",
         "-o", args.output,
         src,

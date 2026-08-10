@@ -5,26 +5,31 @@
 # system qemu-system-aarch64 or tools/direct_boot - both lack qemu-zhuowei's
 # local secondary-core-parking patch and will not boot correctly.
 #
-# EXPECTED BEHAVIOR: console prints a couple of early boot lines ("xnu",
-# mmap/jit debug lines) and then goes silent forever - that silence is
-# success, not a hang. There's no userland yet (mockfs shell is still
-# blocked, see project memory), so XNU reaches _processor_idle and just
-# spins with no further console output. QEMU stays pegged near 100% CPU
-# while idling (TCG executing the wfi/idle loop) - a process that drops to
-# ~0% CPU is actually stuck, not idle.
+# Boots real msdosfs root off an SD card image (qemu/fat32_test.dmg,
+# attached via `-drive ...,if=sd`) instead of mockfs/initrd - `rd=disk0`
+# selects it as the root device. `serial=3` is required for serial
+# keyboard *input* to reach the interactive shell (init.macho); without it
+# console output still appears but typed input is never polled. See
+# project memory "INTERACTIVE SHELL MILESTONE REACHED" for the full
+# writeup of this boot path.
 #
-# To confirm it's genuinely idling (not hung) from another shell:
-#   echo "info registers" | nc -U qemu/mon.sock
-# PC should land in/near _processor_idle. Re-run to see it still moving
-# within the idle loop.
+# SD_IMAGE defaults to qemu/fat32_test.dmg; override with an env var if
+# testing against a different image (e.g. qemu/sdcard_test.img).
 set -e
 cd "$(dirname "$0")"
 mkdir -p qemu
+
+SD_IMAGE="${SD_IMAGE:-qemu/fat32_test.dmg}"
+
+if [ ! -f "$SD_IMAGE" ]; then
+  echo "error: SD card image not found: $SD_IMAGE" >&2
+  exit 1
+fi
 
 ./third_party/qemu-zhuowei/aarch64-softmmu/qemu-system-aarch64 -M raspi3 -m 1024 -display none \
   -serial null -serial stdio \
   -kernel build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped \
   -dtb devicetrees/rpi3.dtb \
-  -append "debug=0x8 kextlog=0xfff -noprogress -v" \
+  -drive "file=$SD_IMAGE,if=sd,format=raw" \
+  -append "debug=0x8 kextlog=0xfff -noprogress -v rd=disk0 serial=3" \
   -monitor unix:qemu/mon.sock,server,nowait
-
