@@ -150,6 +150,20 @@ reports -> keycode table -> tty feed, once a transport exists.
 
 ## Phase 3: real SD card boot
 
+**STATUS: done, and exceeded (2026-08-09/2026-08-10)** -- all tasks below
+were completed, plus more than this phase originally scoped: real
+end-to-end SD block reads verified in QEMU, GPIO pinmux done on real
+register writes, `"intc"` interrupt-parent wiring done, `msdosfs` mounts
+the real FAT32 SD image as **root** (not just a verified-readable `IOMedia`
+as this phase's exit criteria required), and `runvm.sh` now boots
+unattended all the way to a real interactive shell prompt on top of that
+real root. See `project_xnu_rpi3_status` memory ("SD CARD MILESTONE
+REACHED", "INTERACTIVE SHELL MILESTONE REACHED") for the full writeup.
+Real ARM64 IRQ delivery through the SDHCI interrupt path is still not
+root-caused (a polling workaround is in place, see that memory) -- the one
+open item from this phase's original scope. The rest of this section is
+kept as historical record of the original plan.
+
 **Depends on**: Phase 1's kernel. Does *not* depend on Phase 2 (mockfs and
 real-SD-root are alternative roots, not sequential -- this phase can be
 worked in isolation against a Phase-1 kernel with no mockfs work present).
@@ -212,13 +226,58 @@ root-mount/exec path is Phase 4's job).
 
 ---
 
+## Phase 3.5: real VFS in the shell + partition the SD card for a real permission-bearing root (2026-08-10, next up)
+
+Two small, independent items, both cheap relative to Phase 4, both worth
+doing before committing to Phase 4's much bigger libSystem lift.
+
+**3.5a -- make the current shell's filesystem commands real.**
+`tools/init_binary/init.c`'s `ls`/`cat`/`cd`/`pwd`/`mkdir` currently
+operate on an entirely fake, hardcoded in-memory tree (`nodes[]`/
+`vfs_init()`) -- the file's own header comment says so outright. Real
+syscalls are only used for `/dev/console` I/O and execing the binary
+itself. Rewrite these five builtins to issue real `open`/`read`/
+`getdirentries`/`fstat`/`mkdir` syscalls against the actually-mounted root
+instead. Small, self-contained, no dependency on anything else in this
+phase or Phase 4.
+
+**3.5b -- two-partition SD card, HFS+ root.** Resolves the open decision
+in `docs/multiuser-userland-plan.md` §0 (no on-disk Unix permission bits
+exist on FAT32 at all -- an architectural blocker for real multi-user,
+independent of how complete the userland ends up being). **Decision**: a
+small first partition stays FAT32 (all the Pi GPU firmware/u-boot chain
+actually needs is *a* FAT32 partition to find the boot files, not the
+whole card -- standard Raspbian-style `boot=FAT32 / root=<real fs>`
+split), second partition is `hfs`. `hfs` (`bsd/hfs`) already compiles
+cleanly into the kernel (`FILESYS_DEV`/`FILESYS_DEBUG`) -- no new
+kernel-side filesystem driver work needed, only:
+1. Wire `IOFDiskPartitionScheme` (already vendored at
+   `third_party/IOStorageFamily`, not yet connected to the boot path) so
+   the kernel sees partition boundaries instead of treating the whole
+   disk as one filesystem blob.
+2. Build a real 2-partition test image (FAT32 boot + `hfs` root) and
+   verify `hfs_mountroot()` actually succeeds as root -- untested path so
+   far, only `msdosfs` has been proven end-to-end as root.
+3. Move boot-args from `rd=disk0` (whole device) to the real root
+   partition once the partition scheme resolves it.
+4. Apply the same 2-partition layout to `sdcard/`'s real-hardware image,
+   not just the QEMU test image.
+
+**Exit criteria**: `ls`/`cat`/etc. in the shell reflect the real,
+currently-mounted filesystem's actual contents; a 2-partition SD card
+(FAT32 boot + `hfs` root) boots and mounts `hfs` as root in QEMU.
+
+---
+
 ## Phase 4: real userland -- filesystem, tools, PID 1
 
 **Depends on**: Phase 3 (needs the real mountable SD volume to root from)
 and, for anything beyond the current mockfs shell's capability, on pulling
 real dyld/libSystem. Does not depend on Phase 2 surviving -- Phase 2's
 mockfs/virtual-vfs init is a bootstrap scaffold this phase fully replaces,
-not a component it builds on.
+not a component it builds on. Does not strictly depend on Phase 3.5, but
+should follow it -- no point building real coreutils against a root
+filesystem that's about to be re-partitioned/reformatted underneath them.
 
 **Plan already decided** (carried over from prior planning, restated here
 for isolation): **launchd is not available at this ABI** -- last public
@@ -271,3 +330,39 @@ the custom FreeBSD-derived PID-1 from it (not from a `mockfs` RAMDisk),
 which brings up a real dyld-linked `bash` with real `ls`/`cat`/etc as
 separate executables read from the actual SD card -- i.e., everything
 Phase 2 faked, now real and running off real storage.
+
+---
+
+## Phase 5: multi-user -- real accounts, login, enforced permissions
+
+**Depends on**: Phase 3.5 (real, permission-bearing `hfs` root -- without
+it there is nothing for per-file ownership to attach to) and Phase 4
+(needs `Libinfo` from the libSystem pull, and a real PID-1 capable of
+spawning login sessions rather than being the shell itself).
+
+Full research/detail already written to `docs/multiuser-userland-plan.md`
+-- read that file directly, this section is a pointer + build order, not a
+restatement. Headline components, all confirmed open source there: `login`/
+`getty`/`crypt()`/`su`/`pwd_mkdb`/`vipw`/`chpass`/`passwd`
+(`system_cmds`/`shell_cmds`/`Libc`), plus the `Libinfo`-backed flat-file
+resolver from Phase 4 step 4 (`getpwnam`/`getpwuid`/`getgrnam` reading
+`/etc/master.passwd`+`/etc/group` directly, FreeBSD's `pwd.c`/`pwd_mkdb` as
+the reference, zero `opendirectoryd` dependency).
+
+**Build order**: libSystem stack (Phase 4) -> `Libinfo` (file-only backend)
+-> account-provisioning tools (`pwd_mkdb`/`vipw`/`chpass`/`passwd`) ->
+custom PID-1 (Phase 4) spawning real `login`/`getty` sessions ->
+`login`/`getty`/`crypt()` -> `su` -> real shell/coreutils (Phase 4) ->
+PAM (later, OpenPAM as fallback if Apple's exact Darwin-19 tag can't be
+confirmed) -> `sudo` (deferred indefinitely -- genuinely absent from
+Apple's open-source tree; real macOS itself ships it as an independent
+binary, not from `apple-oss-distributions`; `su` covers the minimal need).
+
+**Exit criteria**: at least two distinct local accounts exist in
+`/etc/master.passwd`+`/etc/group` on the real `hfs` root, each with a real,
+separately-owned home directory; `login`/`getty` bring up a real
+authenticated session per account (password-checked via `crypt()`); files
+created by one user are inaccessible to the other per real, kernel-enforced
+`hfs` permission bits (not just session-level identity, per
+`multiuser-userland-plan.md`'s Option 3 being explicitly the *weaker*
+interpretation this phase supersedes); `su` works between accounts.

@@ -67,6 +67,27 @@ them (e.g. `chpass`/`passwd` writing a real per-user home directory with
 real permissions only matters once there's a filesystem that can hold
 that).
 
+**Decision (2026-08-10): a variant of Option 2, not Option 1.** Reformat
+the SD card to a **two-partition layout** — a small first partition stays
+FAT32 (the Pi GPU firmware/u-boot chain only needs *a* FAT32 partition to
+find `bootcode.bin`/`start.elf`/`config.txt`/the kernel, not the whole
+card — this is exactly the standard Raspbian-style `boot=FAT32 / root=ext4`
+split, just with `hfs` instead of `ext4`), and a second, real root
+partition formatted `hfs`. This avoids Option 1's loop-mounted-image
+indirection entirely and gives every file on the real root real per-file
+ownership/mode, enforced by xnu's already-correct VFS/credential layer.
+Concretely lower-risk than it looked when this decision was deferred:
+`hfs` (`bsd/hfs`) already compiles cleanly into the kernel (`FILESYS_DEV`/
+`FILESYS_DEBUG` in `config/MASTER.arm64.bcm2837`, see
+[[project_xnu_rpi3_status]]) — it's only ever been used for root-mount
+*testing*, never actually booted as root yet, but no new kernel-side
+filesystem driver work is needed to try. Prerequisite work: wire
+`IOFDiskPartitionScheme` (already vendored at `third_party/IOStorageFamily`,
+not yet connected to the boot path) so the kernel sees partition
+boundaries instead of treating the whole disk as one filesystem blob, then
+verify `hfs_mountroot()` actually succeeds as root (untested path so far —
+only `msdosfs` has been proven end-to-end as root).
+
 ---
 
 ## 1. User/group identity database
