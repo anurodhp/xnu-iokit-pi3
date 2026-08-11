@@ -1,0 +1,77 @@
+From 448b8db2677f6ebbf0e83b919ca3622b3ca60796 Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@icloud.com>
+Date: Tue, 11 Aug 2026 08:54:26 -0400
+Subject: [PATCH] fixes for xnu boot
+
+---
+ cmd/bootxnu.c | 40 +++++++++++++++++++++++++++++++++++++---
+ 1 file changed, 37 insertions(+), 3 deletions(-)
+
+diff --git a/cmd/bootxnu.c b/cmd/bootxnu.c
+index 7738364a..f734fb4c 100644
+--- a/cmd/bootxnu.c
++++ b/cmd/bootxnu.c
+@@ -5,6 +5,8 @@
+ 
+ #include <common.h>
+ #include <cpu_func.h>
++#include <dm.h>
++#include <video.h>
+ #include <xnu.h>
+ 
+ #define XNU_LOAD_OFFSET  0x4000
+@@ -65,9 +67,19 @@ static struct mach_o_load_info load_mach_o_image(void *mach_o_image)
+ 		if (lc->command == LOAD_COMMAND_SEGMENT) {
+ 			sc = (struct mach_o_segment_command *)lc;
+ 
+-			ret.end  = max_t(uintptr_t,
+-					 sc->dst + sc->dst_len, ret.end);
+-			ret.base = min_t(uintptr_t, sc->dst, ret.base);
++			/* Zero-sized segments (e.g. __PRELINK_TEXT) can sit
++			 * at a vmaddr far from the real base without
++			 * contributing any bytes - skip them or they drag
++			 * ret.base/ret.end to the wrong place and every
++			 * subsequent physical address, including the entry
++			 * point, ends up computed relative to memory that
++			 * was never actually loaded.
++			 */
++			if (sc->dst_len) {
++				ret.end  = max_t(uintptr_t,
++						 sc->dst + sc->dst_len, ret.end);
++				ret.base = min_t(uintptr_t, sc->dst, ret.base);
++			}
+ 		}
+ 		lc = ((void *)lc) + lc->command_size;
+ 	}
+@@ -143,6 +155,28 @@ int do_bootxnu(cmd_tbl_t *cmdtp, int flag, int argc, char * const argv[])
+ 	boot_args->phys_end += boot_args->afdt_length;
+ 	boot_args->phys_end = roundup(boot_args->phys_end, 0x10000);
+ 
++	// Hand off u-boot's already-initialized HDMI framebuffer so XNU's
++	// stock PE_init_platform() (pexpert/arm/pe_init.c) draws its boot
++	// console on-screen instead of over a serial port nobody has wired up.
++	{
++		struct udevice *vdev;
++
++		if (!uclass_get_device(UCLASS_VIDEO, 0, &vdev)) {
++			struct video_priv *uc_priv = dev_get_uclass_priv(vdev);
++
++			boot_args->video_information.base_addr =
++				(u64)(uintptr_t)uc_priv->fb;
++			boot_args->video_information.display = 1;
++			boot_args->video_information.bytes_per_row =
++				uc_priv->line_length;
++			boot_args->video_information.width = uc_priv->xsize;
++			boot_args->video_information.height = uc_priv->ysize;
++			boot_args->video_information.depth = VNBITS(uc_priv->bpix);
++		} else {
++			printf("## bootxnu: no video device, console will be blind\n");
++		}
++	}
++
+ 	// Jump into the XNU entry point with data cache disabled
+ 	printf("## Starting XNU at %p ...\n", xnu_entry);
+ 	dcache_disable();
+-- 
+2.50.1 (Apple Git-155)
+
