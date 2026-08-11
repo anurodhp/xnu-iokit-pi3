@@ -146,6 +146,43 @@ BCM2837RegisterBuiltinPersonalities(void)
 	// device lookup (IOFindBSDRoot()/mountroot, "rd=disk0" boot-args) to
 	// find our whole-disk IOMedia at all.
 	OSDictionary *mediaBSDClient = makePersonality("IOMedia", "IOMediaBSDClient", NULL, -1);
+	// IOFDiskPartitionScheme (real apple-oss-distributions/IOStorageFamily,
+	// vendored the same way as the above) matches generically against any
+	// IOMedia too, but its own probe() reads the provider's first sector
+	// and only claims it (nonzero score) if a real MBR signature (0x55AA)
+	// is present - so it naturally declines on the msdosfs-superfloppy
+	// whole-disk media used so far, and on its own partition children
+	// (which don't carry a nested MBR), with no isWhole() check needed
+	// here. Publishes one child IOMedia per MBR entry (disk0s1, disk0s2,
+	// ...), each of which matches IOMediaBSDClient/IOBlockStorageDriver
+	// again automatically via doNubMatching - this is what makes a real
+	// two-partition (FAT32 boot + HFS root) SD card resolve to a distinct
+	// root-mountable BSD device instead of the whole card being treated
+	// as one filesystem blob. See docs/roadmap.md Phase 3.5b.
+	//
+	// Real bug fix: without an explicit IOMatchCategory, both this and
+	// mediaBSDClient above fall into IOKit's shared default match
+	// category for the same IOMedia provider (IOService.cpp's
+	// gIODefaultMatchCategoryKey fallback) - only one client per category
+	// per provider is ever actually start()'d (copyClientWithCategory()'s
+	// exclusivity check), so IOFDiskPartitionScheme's probe() was
+	// confirmed (via temp IOLog) to succeed and find both partitions, yet
+	// never reached start() because IOMediaBSDClient had already claimed
+	// the default category first. Real apple-oss-distributions storage
+	// drivers avoid this by placing themselves in the dedicated
+	// "IOStorage" category (kIOStorageCategory, iokit/IOKit/storage/
+	// IOStorage.h) reserved exactly for this - IOMedia.cpp's own
+	// attachToChild()/handleOpen() already special-case clients tagged
+	// with it. mediaBSDClient deliberately stays in the default category
+	// (it is not a storage-interpreting driver).
+	OSDictionary *fdiskScheme = makePersonality("IOMedia", "IOFDiskPartitionScheme", NULL, -1);
+	if (fdiskScheme != NULL) {
+		OSString *storageCategory = OSString::withCString("IOStorage");
+		if (storageCategory != NULL) {
+			fdiskScheme->setObject(kIOMatchCategoryKey, storageCategory);
+			storageCategory->release();
+		}
+	}
 	// "cpu0" - closes the real ARM64-IRQ-delivery gap found investigating
 	// why BCM2837SDHCI never sees a real interrupt reach handleInterrupt()
 	// despite the hardware genuinely raising it: nothing ever called
@@ -186,6 +223,10 @@ BCM2837RegisterBuiltinPersonalities(void)
 		// mount regardless of anything else in the boot path.
 		personalities->setObject(mediaBSDClient);
 		mediaBSDClient->release();
+	}
+	if (fdiskScheme != NULL) {
+		personalities->setObject(fdiskScheme);
+		fdiskScheme->release();
 	}
 	if (cpu0 != NULL) {
 		personalities->setObject(cpu0);

@@ -226,7 +226,7 @@ root-mount/exec path is Phase 4's job).
 
 ---
 
-## Phase 3.5: real VFS in the shell + partition the SD card for a real permission-bearing root (2026-08-10, next up)
+## Phase 3.5: real VFS in the shell + partition the SD card for a real permission-bearing root (2026-08-10, 3.5b DONE, 3.5a next up)
 
 Two small, independent items, both cheap relative to Phase 4, both worth
 doing before committing to Phase 4's much bigger libSystem lift.
@@ -239,33 +239,85 @@ syscalls are only used for `/dev/console` I/O and execing the binary
 itself. Rewrite these five builtins to issue real `open`/`read`/
 `getdirentries`/`fstat`/`mkdir` syscalls against the actually-mounted root
 instead. Small, self-contained, no dependency on anything else in this
-phase or Phase 4.
+phase or Phase 4. **Not yet done** -- verified still-fake during the
+3.5b boot test (`ls` after HFS root-mount still printed the old
+hardcoded `bin/ sbin/ etc/ dev/ tmp/ var/` list, not the real HFS root's
+actual `sbin/`+`dev/` contents).
 
-**3.5b -- two-partition SD card, HFS+ root.** Resolves the open decision
-in `docs/multiuser-userland-plan.md` §0 (no on-disk Unix permission bits
-exist on FAT32 at all -- an architectural blocker for real multi-user,
-independent of how complete the userland ends up being). **Decision**: a
-small first partition stays FAT32 (all the Pi GPU firmware/u-boot chain
-actually needs is *a* FAT32 partition to find the boot files, not the
-whole card -- standard Raspbian-style `boot=FAT32 / root=<real fs>`
-split), second partition is `hfs`. `hfs` (`bsd/hfs`) already compiles
-cleanly into the kernel (`FILESYS_DEV`/`FILESYS_DEBUG`) -- no new
-kernel-side filesystem driver work needed, only:
-1. Wire `IOFDiskPartitionScheme` (already vendored at
-   `third_party/IOStorageFamily`, not yet connected to the boot path) so
-   the kernel sees partition boundaries instead of treating the whole
-   disk as one filesystem blob.
-2. Build a real 2-partition test image (FAT32 boot + `hfs` root) and
-   verify `hfs_mountroot()` actually succeeds as root -- untested path so
-   far, only `msdosfs` has been proven end-to-end as root.
-3. Move boot-args from `rd=disk0` (whole device) to the real root
-   partition once the partition scheme resolves it.
-4. Apply the same 2-partition layout to `sdcard/`'s real-hardware image,
-   not just the QEMU test image.
+**3.5b -- two-partition SD card, HFS+ root. DONE (2026-08-10).** Resolves
+the open decision in `docs/multiuser-userland-plan.md` §0 (no on-disk Unix
+permission bits exist on FAT32 at all -- an architectural blocker for real
+multi-user, independent of how complete the userland ends up being).
+**Decision**: a small first partition stays FAT32 (all the Pi GPU
+firmware/u-boot chain actually needs is *a* FAT32 partition to find the
+boot files, not the whole card -- standard Raspbian-style
+`boot=FAT32 / root=<real fs>` split), second partition is `hfs`. `hfs`
+(`bsd/hfs`) already compiled cleanly into the kernel (`FILESYS_DEV`/
+`FILESYS_DEBUG`) before this pass -- no new kernel-side filesystem driver
+work was needed. What this pass did:
+1. Vendored `IOFDiskPartitionScheme.cpp`/`.h` and `IOPartitionScheme.cpp`/
+   `.h` from `third_party/IOStorageFamily` into
+   `third_party/xnu-7195/iokit/Storage`+`iokit/IOKit/storage` (same
+   pattern as the existing `IOMedia`/`IOBlockStorageDriver`/
+   `IOMediaBSDClient` vendoring) and added both to `iokit/conf/files`.
+2. Added an `IOFDiskPartitionScheme` personality in
+   `iokit/BCM2837ArmIO/BCM2837Personalities.cpp`, matching generically
+   against any `IOMedia` (declines on its own via a real MBR-signature
+   check in its `probe()`, so it's safe alongside the existing
+   `msdosfs`-superfloppy boot path). Real bug found+fixed along the way:
+   without an explicit `IOMatchCategory`, this personality and the
+   existing `IOMediaBSDClient` one both fell into IOKit's shared default
+   match category for the same provider, so only one of them was ever
+   actually `start()`'d (`IOService::copyClientWithCategory()`'s
+   exclusivity check) even though `IOFDiskPartitionScheme::probe()`
+   itself succeeded (confirmed via temporary `IOLog` instrumentation,
+   since reverted). Fixed by tagging the `IOFDiskPartitionScheme`
+   personality with the real, vendored `kIOStorageCategory` ("IOStorage")
+   match category, exactly as real apple-oss-distributions storage
+   drivers do (`iokit/IOKit/storage/IOStorage.h`) -- `IOMediaBSDClient`
+   stays in the default category since it isn't a storage-interpreting
+   driver, so the two no longer collide.
+3. Also hit and fixed a real, pre-existing, unrelated build-system bug
+   blocking any full `make all` on this tree: `config/Private.arm64.exports`
+   (real, unmodified Apple file) declares exports for Apple Silicon
+   (T8020/M1) DART/SART/UAT IOMMU symbols (`pmap_iommu_*`,
+   `IOUnifiedAddressTranslator`, etc.) that this public xnu-7195.81.3
+   source drop never actually ships an implementation for -- confirmed by
+   reverting all local changes and reproducing the same
+   `check_all_exports` failure on a stock checkout. Commented out those
+   specific declarations (same closed-source-gap class as the earlier
+   pthread.kext/SHA2 stand-ins).
+4. Built a real 2-partition 4 GB test image (`qemu/hfs_root_test.img`,
+   gitignored): MBR partition 1 = 64 MB FAT32 boot (bootcode.bin/
+   start.elf/fixup.dat/config.txt/rpi3.dtb/kernel.img, for real-hardware
+   parity -- QEMU itself boots via `-kernel`/`-dtb` and doesn't read
+   this), partition 2 = HFS+ root (`/sbin/launchd` = the init binary,
+   `/dev` = devfs mount point, mirroring the existing msdosfs root
+   layout). Built via `hdiutil attach -imagekey diskimage-class=CRawDiskImage`
+   + `diskutil partitionDisk` so the underlying file stays a flat raw
+   image (no UDIF wrapper), directly usable by QEMU's
+   `-drive ...,format=raw`. One real gotcha hit and resolved: a first
+   512 MB attempt put QEMU's emulated SD card into SDSC (CSD v1) mode,
+   which `BCM2837SDHCI` deliberately doesn't support (SDHC/SDXC only) --
+   fixed by sizing the image at 4 GB, matching the existing working
+   images.
+5. Verified via QEMU boot (`runvm.sh`, now defaulting to this image):
+   `IOFDiskPartitionScheme` publishes `disk0s1`/`disk0s2`,
+   `rd=disk0s2` resolves as `BSD root: disk0s2, major 14, minor 2`,
+   `vfs_mountroot "hfs" result=0` / `vfs_mountroot() succeeded`, and the
+   interactive shell reaches `sh:/ %` and accepts typed input, all from
+   the real HFS+ root partition.
+6. **Not done**: applying the same 2-partition layout to `sdcard/`'s
+   real-hardware image (still the single flat FAT32 image) -- real
+   hardware boot is separately blocked on no serial cable per existing
+   project memory, so this was deprioritized; `qemu/hfs_root_test.img`'s
+   FAT32 partition 1 already contains everything needed to build that
+   real-hardware image the same way once useful.
 
 **Exit criteria**: `ls`/`cat`/etc. in the shell reflect the real,
-currently-mounted filesystem's actual contents; a 2-partition SD card
-(FAT32 boot + `hfs` root) boots and mounts `hfs` as root in QEMU.
+currently-mounted filesystem's actual contents (3.5a, still open); a
+2-partition SD card (FAT32 boot + `hfs` root) boots and mounts `hfs` as
+root in QEMU (3.5b, done).
 
 ---
 

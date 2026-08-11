@@ -1,5 +1,15 @@
 # HFS+ kernel integration notes
 
+**Update 2026-08-10**: the four diffs below were applied (already present
+in `third_party/xnu-7195` by the time of this update), and a real 2-partition
+FAT32+HFS+ SD card was built and boot-tested end to end in QEMU -
+`hfs_mountroot()` now genuinely succeeds as root. See
+`docs/roadmap.md` Phase 3.5b for the full writeup (partition-scheme wiring,
+a real `IOMatchCategory` collision bug found+fixed, and an unrelated
+pre-existing `config/Private.arm64.exports` build-system bug found+fixed
+along the way). The rest of this document is the original research pass,
+kept for history.
+
 Written by a background research/implementation pass, parallel to the main
 thread's FAT32/msdosfs work. Scope: investigate whether HFS+ kernel support
 is realistic to add to `third_party/xnu-7195` (branch `bcm2837-bringup`),
