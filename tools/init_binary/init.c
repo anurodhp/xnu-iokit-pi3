@@ -18,6 +18,12 @@
  * a real directory tree or separate command binaries. Real dyld/Libc + real
  * coreutils are a later, separate pull once we're off this bootstrap
  * milestone (see project memory: userspace libc/dyld/launchd).
+ *
+ * PID 1 (init_main(), below) does real BSD init work now: fork()s a child
+ * to run the shell, wait4()s for it, respawns on exit -- init_main() itself
+ * is pid 1, the shell is a forked child, not pid 1 as the header used to
+ * claim. See init_main()'s comment for the arm64-specific fork() ABI quirk
+ * (x1, not x0==0, marks the child) this required getting right.
  */
 
 typedef unsigned long size_t;
@@ -25,10 +31,13 @@ typedef long ssize_t;
 
 /* ---------------- raw syscalls (arm64 Darwin: svc #0x80, num in x16) ---- */
 
-#define SYS_exit  1
-#define SYS_read  3
-#define SYS_write 4
-#define SYS_open  5
+#define SYS_exit   1
+#define SYS_fork   2
+#define SYS_read   3
+#define SYS_write  4
+#define SYS_open   5
+#define SYS_wait4  7
+#define SYS_execve 59
 
 #define O_RDWR 2
 
@@ -87,6 +96,63 @@ static void sys_exit(int code) {
 
 static int sys_open(const char *path, int flags, int mode) {
     return (int)syscall3(SYS_open, (long)path, flags, mode);
+}
+
+static long sys_execve(const char *path, char *const argv[], char *const envp[]) {
+    return syscall3(SYS_execve, (long)path, (long)argv, (long)envp);
+}
+
+/* ROOT CAUSE, found by reading thread_set_child()/thread_set_parent() in
+ * osfmk/arm64/status.c before writing this rather than assuming the
+ * Linux/x86 convention: arm64 XNU's raw fork() does NOT give the child x0=0.
+ * BOTH parent and child come back from `svc #0x80` with x0 = the child's
+ * pid; the only thing that tells them apart is x1 (0 = you are the parent,
+ * 1 = you are the child). A normal cerror-wrapped libc fork() hides this by
+ * zeroing the return value itself when x1==1 -- we have no libc, so it has
+ * to be done here explicitly. Getting this wrong (e.g. testing `pid == 0`
+ * like Linux) would make the "child" branch never run. */
+static long sys_fork(int *out_is_child) {
+#ifdef INIT_HOST_TEST
+    *out_is_child = 0;
+    return -1; /* no real process model in the host-test harness */
+#else
+    register long x0 asm("x0") = 0;
+    register long x1 asm("x1") = 0;
+    register long x16 asm("x16") = SYS_fork;
+    long is_error;
+    asm volatile("svc #0x80\n"
+                 "cset %2, cs"
+                 : "+r"(x0), "+r"(x1), "=r"(is_error)
+                 : "r"(x16)
+                 : "memory", "cc");
+    if (is_error) {
+        *out_is_child = 0;
+        return -x0;
+    }
+    *out_is_child = (int)x1;
+    return x0;
+#endif
+}
+
+static long sys_wait4(int pid, long *status, int options, long *rusage) {
+#ifdef INIT_HOST_TEST
+    (void)pid; (void)status; (void)options; (void)rusage;
+    return -1; /* nothing to reap -- sys_fork() never produces a child here */
+#else
+    register long x0 asm("x0") = pid;
+    register long x1 asm("x1") = (long)status;
+    register long x2 asm("x2") = options;
+    register long x3 asm("x3") = (long)rusage;
+    register long x16 asm("x16") = SYS_wait4;
+    long is_error;
+    asm volatile("svc #0x80\n"
+                 "cset %1, cs"
+                 : "+r"(x0), "=r"(is_error)
+                 : "r"(x1), "r"(x2), "r"(x3), "r"(x16)
+                 : "memory", "cc");
+    if (is_error) return -x0;
+    return x0;
+#endif
 }
 
 /* The kernel hands pid 1 an empty fd table -- on real macOS, launchd itself
@@ -454,13 +520,12 @@ static void dispatch(int argc, char **argv) {
 
 static void banner(void) {
     put("\n");
-    put("XNU/rpi3 -- freestanding PID 1 (no dyld, no libc)\n");
+    put("XNU/rpi3 -- single-user shell (no dyld, no libc), forked by pid 1\n");
     put("booted via mockfs, exec'd in place of /sbin/launchd\n");
     put("type 'help' for available commands\n\n");
 }
 
 void shell_main(void) {
-    open_console();
     vfs_init();
     banner();
 
@@ -474,6 +539,54 @@ void shell_main(void) {
         int argc = tokenize(line, argv, MAX_ARGS);
         if (argc == 0) continue;
         dispatch(argc, argv);
+    }
+}
+
+/* -------------------------------- pid 1 body ------------------------------
+ * Real BSD-style init: fork a child to run the interactive shell, wait4()
+ * for it, and respawn if it ever exits -- same shape as classic
+ * single-user-mode init babysitting /bin/sh, just aimed at our builtin
+ * virtual shell instead (see docs/roadmap.md Phase 4 step 2). PID 1 itself
+ * never runs the shell loop directly except as a last-resort fallback if
+ * fork() itself is unavailable.
+ */
+
+/* What the forked child actually runs. Tries the real dyld-linked /bin/sh
+ * first -- doesn't exist on the root fs yet (Phase 4), so this fails with
+ * ENOENT today and falls through to the builtin virtual shell. Left wired
+ * up now so pid 1 needs no further changes once a real /bin/sh lands. */
+static void single_user_child(void) {
+    static char *const argv0[] = { (char *)"/bin/sh", 0 };
+    static char *const envp0[] = { 0 };
+    sys_execve("/bin/sh", argv0, envp0);
+    shell_main();
+}
+
+void init_main(void) {
+    open_console();
+    put("\ninit: pid 1 up, forking single-user shell\n");
+
+    for (;;) {
+        int is_child = 0;
+        long pid = sys_fork(&is_child);
+
+        if (pid < 0) {
+            put("init: fork failed -- no process model available, "
+                "running shell directly in pid 1 (no respawn)\n");
+            single_user_child();
+            sys_exit(0);
+        }
+
+        if (is_child) {
+            single_user_child();
+            sys_exit(0); /* only reached if the shell's own loop ever returns */
+        }
+
+        /* parent (real pid 1): block until the shell dies, then respawn it,
+         * exactly like init babysitting a single-user shell. */
+        long status = 0;
+        sys_wait4((int)pid, &status, 0, 0);
+        put("\ninit: shell exited, respawning\n");
     }
 }
 
@@ -492,7 +605,7 @@ __attribute__((naked)) void _start(void) {
         "add  x0, x0, _boot_stack@PAGEOFF\n"
         "add  x0, x0, %0\n"
         "and  sp, x0, #~15\n"
-        "bl   _shell_main\n"
+        "bl   _init_main\n"
         "mov  x0, #0\n"
         "mov  x16, #1\n"       /* SYS_exit */
         "svc  #0x80\n"

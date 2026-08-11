@@ -16,9 +16,9 @@ cmd = [
     "-serial", "null", "-serial", "stdio",
     "-kernel", "build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped",
     "-dtb", "devicetrees/rpi3.dtb",
-    "-drive", "file=qemu/fat32_test.dmg,if=sd,format=raw",
+    "-drive", "file=qemu/hfs_root_test.img,if=sd,format=raw",
     "-monitor", f"unix:{mon_sock},server,nowait",
-    "-append", "debug=0x8 kextlog=0xfff -noprogress -v rd=disk0 serial=3",
+    "-append", "debug=0x8 kextlog=0xfff -noprogress -v rd=disk0s2 serial=3",
 ]
 proc = subprocess.Popen(cmd, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
 os.close(slave)
