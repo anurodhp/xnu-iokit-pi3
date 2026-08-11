@@ -106,7 +106,9 @@ actual input/output console is the already-working serial UART, not a
 keyboard.** If real keyboard input is a hard requirement, it needs a DWC2
 driver as its own separate, large, unscheduled front -- decide explicitly
 whether to add that as a Phase 2b rather than silently assuming it'll
-exist.
+exist. That front now has its own scoped plan: `docs/usb-support-plan.md`
+(written 2026-08-11, driven by Ethernet's identical DWC2 dependency below --
+read that document rather than re-deriving USB scope here).
 
 **Exit criteria**: console shows the init binary's banner and prompt;
 typed input round-trips through the shell (`ls`/`cd`/`echo`/etc all work)
@@ -215,7 +217,8 @@ self-contained):
    against this tree.
 4. Ethernet (`iokit/SMSC9514Ethernet`, DWC2 dependency) is explicitly
    **not** part of this phase -- separate, larger, already deprioritized
-   in `docs/sd-and-ethernet-plan.md`.
+   in `docs/sd-and-ethernet-plan.md`, and formally gated on
+   `docs/usb-support-plan.md`.
 
 **Exit criteria**: a real `IOMedia` appears for the SD card's FAT32
 partition, kernel can read blocks from it (verified via a known-content
@@ -418,3 +421,384 @@ created by one user are inaccessible to the other per real, kernel-enforced
 `hfs` permission bits (not just session-level identity, per
 `multiuser-userland-plan.md`'s Option 3 being explicitly the *weaker*
 interpretation this phase supersedes); `su` works between accounts.
+
+---
+
+## Phase 6: networking -- USB, Ethernet, DHCP, and basic net tools
+
+Added 2026-08-11. Three strictly sequential sub-phases -- each is a hard
+gate on the next, not parallelizable, because each layer is the wire
+protocol/transport the next one runs over.
+
+**Depends on**: Phase 4 (needs the libSystem stack -- `dyld`/`Libc`/
+`Libinfo` -- and a real PID-1/coreutils environment for 6c's userspace
+tools to run in; a DHCP client and `ifconfig` are userspace binaries, not
+kernel code). Not blocked on Phase 5 (multi-user is orthogonal to
+networking).
+
+### 6a. USB host controller (DWC2)
+
+Full plan already written: `docs/usb-support-plan.md` -- read that file
+directly, this is a pointer, not a restatement. Headline: no DWC2 driver
+exists anywhere accessible to this project (`IOUSBFamily` only ships
+EHCI/OHCI/UHCI/XHCI); a real, working reference implementation is already
+vendored in-repo at `third_party/u-boot/drivers/usb/host/dwc2.c` and is the
+recommended port target; a minimal purpose-built stack (not a full
+`IOUSBController` subclass) is that document's recommended scope, matching
+the same narrow-interface pattern already used for `SMSCUSBTransport`.
+
+**Exit criteria** (restated from that document): a real, parseable USB
+device descriptor is read back from the LAN9514's Ethernet function
+(behind its own internal hub port -- the chip is a hub+Ethernet combo, not
+a plain dongle).
+
+### 6b. Ethernet (SMSC LAN9514)
+
+Full plan already written: `docs/sd-and-ethernet-plan.md`'s Ethernet
+section -- read that file directly. Headline: `iokit/SMSC9514Ethernet`'s
+chip-level protocol logic (reset sequence, MDIO/PHY access, MAC
+programming, RX/TX framing) is already ported from Linux's
+`drivers/net/usb/smsc95xx.c` and waiting behind the `SMSCUSBTransport`
+abstract interface; that section is formally gated on 6a and stays that way
+here -- do not resume this work until 6a's exit criteria are met.
+
+**Exit criteria**: `SMSCUSBTransport` has a real (6a-backed) implementation,
+`SMSC9514Ethernet` publishes a working `IOEthernetInterface`, and a raw
+frame (e.g. an ARP request) can be sent and observed on the wire (QEMU: its
+usermode/tap networking; real hardware: an actual link partner).
+
+### 6c. DHCP client + basic net tools (`ifconfig`, `ping`, etc.)
+
+**Not previously planned anywhere in this project** -- new for this
+document. Depends on 6b (a working link-layer interface publishing packets
+into the kernel's real BSD networking stack is a prerequisite for any of
+this to have something to configure or address).
+
+**Source, verified to exist and be tagged** (via `gh api
+repos/apple-oss-distributions/<name>/tags`, same standard as every other
+source citation in this project's docs -- not guessed):
+- **`network_cmds`** (tags e.g. `network_cmds-741.100.2`) -- bundles
+  `ifconfig`, `ping`/`ping6`, `netstat`, `arp`, `route`, `traceroute` and
+  the rest of the standard BSD net-tool set as one repo, matching the
+  `shell_cmds`/`file_cmds`-style bundling already used for Phase 4's
+  coreutils pull.
+- **`bootp`** (tags e.g. `bootp-534.120.2`) -- Apple's real DHCP
+  client/lease-management code (internally referred to as
+  "IPConfiguration"; there is no separate `IPConfiguration` repo -- checked,
+  404s -- `bootp` is the actual repo name, don't go looking for the other
+  name). This is a full daemon (`ipconfigd`) with an XPC-ish controller
+  architecture in its later form -- too much for this project versus the
+  option below, same reasoning as the PID-1/launchd tradeoff in Phase 4.
+- **FreeBSD's `sbin/dhclient`** (`freebsd/freebsd-src`, no separate repo --
+  it's a subdirectory of the monolithic FreeBSD source tree) -- **the
+  recommended option, verified 2026-08-11 via `gh api
+  repos/freebsd/freebsd-src/contents/sbin/dhclient`.** A fork of OpenBSD's
+  privilege-separated dhclient (confirmed by the presence of
+  `privsep.c`/`privsep.h`, OpenBSD's architecture -- FreeBSD dropped the
+  older ISC-derived dhclient years ago; no `contrib/isc-dhcp` remains in
+  the current tree, checked). BSD/ISC-licensed, plain fork/exec daemon
+  (`dhclient.c` plus `options.c`/`tables.c`/`clparse.c`/`dispatch.c`/
+  `bpf.c`/`packet.c`/`parse.c`/`privsep.c` -- roughly 200KB of C total),
+  no Apple XPC/IPC machinery, same DHCP wire protocol as `bootp` either
+  way. This is the exact same shape of decision already made for Phase 4's
+  PID-1 (FreeBSD's plain BSD process model over launchd's Mach-port/XPC
+  one) -- apply the same logic here rather than re-litigating it: prefer
+  this over `bootp` unless something concrete about `bootp` turns out to
+  be a better fit once actually read. One real port cost to account for:
+  it uses BPF (`bpf.c`) for raw packet TX/RX, which needs *some* raw-socket
+  or BPF-equivalent path to exist against this kernel's real BSD network
+  stack -- confirm what this xnu checkout actually provides
+  (`bsd/net/bpf.c` likely already exists in-tree as stock xnu source; not
+  yet checked against this project's specific fork) before assuming
+  `bpf.c` ports over unchanged.
+- Tag selection: same Darwin-19-commit-date-proximity methodology as every
+  other `apple-oss-distributions` pull in this project (see
+  `docs/multiuser-userland-plan.md`/`reference_apple_oss_distributions`
+  memory for the established method) -- don't assume a tag number without
+  checking commit dates against the anchor `xnu-6153.11.26`.
+
+**Concrete tasks, in order**:
+1. Confirm 6b's `IOEthernetInterface` is visible to the real BSD
+   networking stack as a normal `en0`-style interface (`ifconfig -a`
+   equivalent at the kernel/sysctl level, before any userspace tool
+   exists to show it).
+2. Pull `network_cmds`, build `ifconfig` first (smallest useful tool,
+   confirms real interface configuration -- link up, MTU, MAC -- works
+   end to end before anything depends on a live network).
+3. Pull FreeBSD's `sbin/dhclient` (recommended default per above -- verify
+   `bpf.c`'s BPF dependency against this xnu fork's actual `bsd/net/bpf.c`
+   first); fall back to `bootp` only if that dependency turns out to be a
+   real blocker. Get a real leased IPv4 address and default route
+   configured via whichever path is chosen.
+4. Build `ping` (from the same `network_cmds` pull) as the actual
+   end-to-end proof: a real ICMP echo round-trip over 6b's Ethernet
+   driver, through a real DHCP-assigned address, off this board.
+5. Round out with `netstat`/`arp`/`route` from the same `network_cmds`
+   pull as they become useful for debugging the above, not as upfront
+   scope.
+
+**Exit criteria**: the board DHCP-leases a real IPv4 address on boot (or
+via an explicit `ifconfig`+DHCP-client invocation), `ifconfig` shows a
+real, correctly configured interface, and `ping` to an external host
+succeeds -- the first real network traffic this project has ever sent or
+received, kernel driver through to a userspace tool a person actually
+types.
+
+---
+
+## Phase 7: closing the gap to a genuinely usable OS
+
+Added 2026-08-11, after an explicit "is this a usable OS yet" gut-check
+against Phases 1-6. Answer at the time: mostly, for a single-user embedded
+Unix appliance, but with real gaps no phase covered -- no name resolution,
+no remote access, no way to add software after the SD image is built. This
+phase closes those. All sourcing below follows the project's standing rule
+(see `feedback_source_priority_apple_freebsd_custom` memory): Apple's real
+open-source version first, FreeBSD as fallback if Apple's is too complex or
+closed, custom only if neither fits.
+
+**Depends on**: Phase 6 (needs a real configured IP interface for 7a/7b to
+have anything to resolve/listen against) and Phase 4 (libSystem stack,
+real PID-1) for all three sub-phases. 7b additionally benefits from Phase 5
+(real accounts) but doesn't strictly require it -- a single-user `sshd`
+still has real value. Sub-phases are independent of each other and can be
+done in any order once their shared dependencies land.
+
+### 7a. DNS resolution
+
+**Source, verified**: `libresolv` (`apple-oss-distributions/libresolv`,
+tagged e.g. `libresolv-96`) -- real, open, `res_init`/`res_query`/
+`gethostbyname` and friends, the actual gap Phase 6 left (`ping <ip>` works
+today's plan, `ping <hostname>` doesn't without this). Tag-match to Darwin
+19 per the established commit-date-proximity method.
+
+**Concrete tasks**: pull `libresolv` at the matched tag; wire `/etc/resolv.conf`
+parsing (populated by Phase 6's DHCP client -- FreeBSD's `dhclient-script`
+already writes `resolv.conf` from DHCP option 6, confirm this still applies
+once ported); confirm `getaddrinfo`/`gethostbyname` resolve a real hostname
+through the new Ethernet link.
+
+**Exit criteria**: `ping <hostname>` (not just `ping <ip>`) succeeds using
+a DHCP-supplied DNS server.
+
+### 7b. Remote access (`sshd`)
+
+**Source, verified**: `OpenSSH` (`apple-oss-distributions/OpenSSH`, tagged
+e.g. `OpenSSH-354.120.2`) -- real, Apple's actual shipped OpenSSH, BSD/ISC
+licensed upstream. Apple-first rule applies cleanly here; no need to check
+FreeBSD (FreeBSD also just ships upstream OpenSSH, no simplification to be
+had by switching source).
+
+**Real blocker to flag up front, not previously encountered at this
+scale**: OpenSSH needs a real crypto backend (symmetric ciphers, MACs,
+DH/ECDH key exchange, host-key signing) -- the same class of problem
+already hit and solved narrowly for SHA-2 during bring-up (`g_crypto_funcs`
+never registered because the corecrypto kext isn't available, worked
+around with a from-scratch SHA-256/384/512 implementation, see
+project memory). OpenSSH's crypto surface is much larger than SHA-2 alone
+(AES, HMAC, at minimum one of ECDSA/Ed25519/RSA for host keys, a real DH
+or ECDH implementation for key exchange). Check whether OpenSSH's own
+vendored fallback crypto (it can build against a bundled minimal crypto
+implementation when a system libcrypto isn't suitable -- verify this
+against the actual pulled tag before assuming) covers this before writing
+any of these primitives from scratch -- this is exactly the kind of case
+the sourcing rule exists for: check what's already available (OpenSSH's
+own bundled fallback) before defaulting to custom.
+
+**Exit criteria**: `sshd` accepts a real TCP connection on port 22 and
+completes a real SSH handshake + authenticated login from an external
+client, to at least the single root account (full multi-account login can
+wait on Phase 5 if that hasn't landed yet).
+
+### 7c. Self-hosting toolchain
+
+**Not free the way 7a/7b are** -- this is the largest item in this phase
+and the one place the standard Apple-then-FreeBSD order doesn't produce a
+clean "smaller" fallback, because FreeBSD's own base compiler is also
+LLVM/Clang now (`contrib/llvm-project` -- checked; FreeBSD dropped its old
+in-tree GCC years ago, so it isn't actually a simpler fallback here).
+
+**Source, verified**: two real Apple options exist, of very different
+size:
+- **`clang`** (`apple-oss-distributions/clang`) -- Apple's actual current
+  compiler. Matches "usable OS" most faithfully (same compiler regular
+  Darwin uses) but is LLVM-scale -- millions of lines, its own multi-stage
+  bootstrap, almost certainly impractical to self-host natively on-device
+  for this project.
+- **`gcc`/`gcc_42`** (`apple-oss-distributions/gcc`, tagged e.g.
+  `gcc-5666.3`; also a separate `gcc_42` repo, not yet distinguished from
+  the former) -- Apple's last GPLv2-era GCC (~4.2), from before Apple
+  switched to Clang/LLVM as default. Substantially smaller and a much more
+  realistic self-hosting target, at the cost of being a much older
+  compiler (pre-Darwin-19 vintage; verify it can still produce valid
+  binaries for this project's Darwin-19 ABI/`cctools`, don't assume).
+  **Recommended starting point over `clang`** on pure size/feasibility
+  grounds, consistent with picking the smaller/simpler option elsewhere in
+  this project (e.g. `msdosfs` over `hfs` for the original SD boot, FreeBSD
+  `init` over launchd) -- here the smaller option happens to still be an
+  Apple one, not a FreeBSD one, which is fine; the rule is "smaller/open
+  over larger/closed," not "FreeBSD over Apple" specifically.
+- **`cctools`** (`apple-oss-distributions/cctools`, tagged e.g.
+  `cctools-1035.1.102`) -- Apple's real assembler/linker (`as`/`ld`/
+  `otool`/etc.), needed regardless of which compiler frontend is chosen
+  since neither GCC nor Clang includes its own Mach-O backend for this
+  target.
+
+**Package management is deliberately not part of this sub-phase** --
+originally scoped here as "genuinely unscoped," then resolved to a real
+concrete plan built around FreeBSD's `pkg` once its custom-repo support and
+unexpected native Mach-O awareness were found. See **Phase 8** below --
+it's independent of this sub-phase (pkg installs prebuilt binaries; it
+doesn't need an on-device compiler at all) and is not blocked on 7c
+completing.
+
+**Concrete tasks, in order**:
+1. Pull `cctools` at a Darwin-19-matched tag; confirm `as`/`ld` produce
+   binaries this kernel can actually load (should be low-risk -- this
+   project's own kernel build already depends on a working Mach-O
+   toolchain host-side).
+2. Pull `gcc`/`gcc_42`, attempt a real self-hosted build (compiling a
+   trivial C program *on the Pi itself*, not cross-compiled) as the
+   concrete proof this sub-phase is trying to reach.
+3. Only if `gcc_42` turns out to be incompatible with this project's
+   actual Darwin-19 ABI, evaluate `clang` as a fallback despite its size
+   cost -- don't start there.
+
+**Exit criteria**: a C program written and compiled *on the board itself*
+(not cross-compiled on a host and copied over) runs correctly.
+
+### 7d. Text editor
+
+**Source, verified**: `vim` (`apple-oss-distributions/vim`) -- real, and
+covers this gap for free; no separate `ex`/classic-`vi` repo exists in
+this org (checked, 404s) but `vim` includes `vi`-compatible mode, so this
+isn't a real design decision, just a pull. Small enough to fold into
+whichever of 7a-7c lands first rather than its own build order.
+
+**Exit criteria**: a real file can be created and edited interactively via
+`vim`/`vi` from the console.
+
+**Overall Phase 7 exit criteria**: DNS-name-based `ping` works (7a); an
+external `ssh` client can log into the board (7b); a program written on
+the board itself can be compiled and run on the board itself (7c); a real
+file can be edited on-device (7d). Installing new software
+post-image-build is **not** part of Phase 7's exit criteria -- that's
+Phase 8, and can land before, after, or in parallel with the rest of
+Phase 7.
+
+---
+
+## Phase 8: package management (`pkg`)
+
+Added 2026-08-11, split out of what was originally Phase 7c's
+"genuinely unscoped" package-management note. Resolved during planning
+discussion into a real, concrete plan once two things were checked
+directly against `freebsd/pkg` rather than assumed:
+
+1. **Pointing `pkg` at a fully custom repository is real, first-class,
+   documented behavior**, not a workaround -- `pkg-repository.5`/
+   `pkg-repositories.8` document the `/usr/local/etc/pkg/repos/*.conf`
+   format (arbitrary `url:`), and `pkg-repo.8`/`pkg-create.8`/`pkg-key.8`
+   are the actual tools for building and signing a repository from a
+   directory of `.pkg` files -- exactly the "custom tap" shape this
+   project needs.
+2. **`pkg` already has native Mach-O awareness** -- `libpkg/pkg_abi_macho.c`
+   (17296 bytes) and `libpkg/binfmt_macho.c` (11653 bytes), checked
+   directly, are real substantial implementations, not stubs. `pkg`
+   already models Mach-O as a first-class target ABI (used elsewhere for
+   managing packages on macOS-family targets) -- nothing else evaluated
+   for this project understood this project's own binary format out of
+   the box. This meaningfully de-risks the whole phase versus building a
+   package manager from nothing.
+
+**Depends on**: Phase 4 (libSystem/real dyld-linked binaries -- `pkg`
+itself is a real executable that needs a real userland to run in) and
+Phase 6 (networking -- fetching packages from a repo needs a working IP
+stack; DNS from Phase 7a helps but isn't strictly required if the repo URL
+is an IP literal). **Not** dependent on Phase 7c -- `pkg` installs
+*prebuilt* binaries; it doesn't need or use an on-device compiler. Can be
+worked in parallel with any of Phase 7's sub-phases.
+
+**Source, verified**: `pkg` (`freebsd/pkg` on GitHub, not
+`apple-oss-distributions` -- Apple has no comparable open package manager
+with dependency resolution; `.pkg`/`installer`/`pkgutil` are closed-ish
+format tooling, not a real fallback here, so this is the sourcing rule's
+FreeBSD tier applied cleanly). License: BSD-family ("Other" per GitHub's
+detector, real permissive FreeBSD-project license, not GPL).
+
+**Real, unavoidable constraint, same as every option considered for this
+phase**: actual FreeBSD binary packages from `pkg.freebsd.org` will not
+run here -- this fork's ABI (Darwin 19 / XNU / BCM2837 / ARM64) shares
+nothing with FreeBSD's own userland ABI. Every package in this project's
+custom repo has to be built specifically for this target, from source,
+using this project's own toolchain (Phase 7c, or a host-side cross
+toolchain if that's faster to stand up first). `pkg` doesn't remove this
+cost -- no package-manager choice could -- it's just a much better-fitting
+*vehicle* for it than Homebrew (no Ruby dependency) or a hand-rolled
+format (gets real dependency resolution, signing, and Mach-O modeling for
+free).
+
+**Dependency porting cost, checked directly against `freebsd/pkg`'s
+`external/` directory** -- `pkg` vendors its own copies of everything it
+needs rather than assuming they're present on the host, which is good news
+for porting (no ambient-system-library guessing) but each still needs to
+actually build against this project's Libc/dyld:
+- `libfetch` -- HTTP/FTP client, needed for repo/package fetching over
+  Phase 6's network stack.
+- `libsqlite` (bundled SQLite) -- local installed-package database. Among
+  the most portable C codebases in existence (single amalgamated file,
+  minimal syscall surface) -- low risk relative to the others here.
+- `libucl` -- config/manifest parsing (repo catalogs, `pkg.conf`, package
+  manifests all use this format).
+- `libecc` -- elliptic-curve crypto for repo/package signature
+  verification. Small and self-contained relative to a full TLS stack --
+  **check for overlap with Phase 7b's OpenSSH crypto-backend work before
+  porting twice**, both phases need real EC crypto primitives on a kernel
+  that has no corecrypto kext (same class of gap already hit once for
+  SHA-2 during bring-up, see project memory).
+- `libblake2` -- BLAKE2 checksums for package integrity.
+- `liblua` -- embedded Lua interpreter, used for `pkg`'s install
+  scripts/triggers (`pkg-lua-script.5`/`pkg-triggers.5`). A real added
+  language runtime, but Lua's reference implementation is ANSI C, small
+  (tens of thousands of lines, not millions), and one of the most
+  commonly cross-compiled/embedded interpreters that exists -- nowhere
+  near the Ruby-for-Homebrew problem this phase's design deliberately
+  avoided.
+- `libelf`, `libyxml`, `liblinenoise`, `libder` -- smaller supporting
+  libraries (ELF introspection, XML parsing, line-editing for `pkg shell`,
+  DER encoding); lower individual risk, listed for completeness.
+- `picosat` -- embedded SAT solver `pkg` uses internally for dependency
+  resolution. Self-contained, no external deps of its own.
+
+**Concrete tasks, in order**:
+1. Port `libsqlite`, `libucl`, `libelf`, `libyxml`, `libder`, `picosat`
+   first -- self-contained, no networking or crypto dependency, lowest
+   risk, and enough to get `pkg`'s core building even before fetch/crypto
+   work lands.
+2. Resolve the `libecc` vs. Phase 7b crypto-backend overlap (see above)
+   before porting either twice; port whichever's needed first.
+3. Port `libfetch` against Phase 6's real network stack; confirm a real
+   HTTP GET against an external host succeeds standalone before wiring it
+   into `pkg` itself.
+4. Port `liblua`; confirm a trivial script runs standalone before trusting
+   `pkg`'s own Lua-based triggers.
+5. Build `pkg` itself against the above; `pkg-create`/`pkg-repo`/`pkg-key`
+   can run **host-side** (on the build machine, not the Pi) since they're
+   only needed to produce and sign the custom repo, not to consume it --
+   only the client-side `pkg install`/`pkg upgrade`/etc. paths need to run
+   on-device.
+6. Cross-build a first real package for this target (anything simple --
+   e.g. a single already-ported coreutil, repackaged) using this
+   project's own toolchain; publish it via `pkg create` + `pkg repo` to a
+   repo this project controls (e.g. a directory served over plain HTTP, or
+   a GitHub Pages/raw-content URL -- doesn't need to be anything elaborate
+   to start).
+7. Point an on-device `pkg` at that repo's URL via a custom
+   `/usr/local/etc/pkg/repos/*.conf`; `pkg install` the package for real.
+
+**Exit criteria**: a package built and published by this project (not
+upstream FreeBSD) installs successfully via `pkg install` from a
+custom-hosted repo onto the running board, and `pkg info`/`pkg delete`
+correctly reflect and can remove it -- i.e. genuinely real, if
+self-produced, package management, closing the last gap from the original
+"is this a usable OS" review.

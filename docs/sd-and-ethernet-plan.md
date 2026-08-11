@@ -81,6 +81,13 @@ Remaining work, roughly in the order it actually blocks progress:
 
 ## Ethernet (`iokit/SMSC9514Ethernet/`)
 
+**GATED on `docs/usb-support-plan.md`.** Do not resume `SMSC9514Ethernet`
+transport work until that plan's exit criteria are met (a real USB device
+descriptor read back from the LAN9514's Ethernet function, behind its own
+hub port). Everything below is unchanged from when it was written, but
+should be read as background/scope, not as a currently-actionable next
+step - the actionable next step for Ethernet is that other document.
+
 **Written this session, but genuinely can't be tested or even fully
 compile-verified yet** - the real dependency chain is longer than SD:
 
@@ -140,4 +147,5 @@ driver (see above) - even less far to test given it can't run regardless.
 4. Ethernet is a separate, larger, later project starting with DWC2 - not
    next in line after SD. `SMSC9514Ethernet`'s protocol logic is done and
    waiting, but there's a full USB host controller driver between here and
-   a working network interface.
+   a working network interface. See `docs/usb-support-plan.md` for that
+   driver's own scoped plan - Ethernet is formally gated on it.
