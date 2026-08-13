@@ -612,30 +612,63 @@ syscall or TSD dependency (a numeric-parsing/`qsort`-class tier, not yet
 surveyed), (2) a real heap allocator (`malloc`/`calloc`/`free` -- unlocks
 `strdup`/`strndup` fully linking, plus is a hard prerequisite for `stdio`).
 
-**Real `libpthread` TSD bootstrap attempted 2026-08-13, found to be a hard
-KERNEL-level wall, not a userspace/Libc gap -- do not re-attempt from the
-Libc side.** Traced the mechanism precisely: `pthread_getspecific()`
-(`third_party/libpthread/src/pthread_asm.s`) reads `TPIDRRO_EL0` directly
-in assembly; that register is EL0-**read-only** (only EL1/kernel code can
-write it), so a userspace process cannot self-bootstrap it. The real,
-one-time-per-process kernel call that's supposed to establish it is the
-`bsdthread_register`/`bsdthread_register2` syscall (`third_party/xnu-7195/bsd/kern/syscalls.master`
-#366) -- but this kernel's entire pthread function table is
-`bsd_pthread_stub.c`'s deliberate, explicitly-documented stand-in: real
-Apple pthread.kext internals (`bsdthread_create`/`bsdthread_register`/
-`psynch_*`/`workq_*`) were never open-sourced (same closed-source-gap
-class as launchd/opendirectoryd), so this project's kernel wires in a
-stub function table at boot purely to stop `pthread_init()` from
-panicking -- `stub_bsdthread_register`/`stub_bsdthread_register2` both
-return `ENOTSUP` and never touch `TPIDRRO_EL0` or any TSD storage.
-**There is no path to real TSD without first implementing real
-kernel-side thread bootstrap logic in `bsd_pthread_stub.c`** (or a real
-replacement for it) -- a large, separate, kernel-level project, not a
-Libc source-pulling problem, and out of scope for whoever's touching
-`third_party/xnu-7195/bsd/kern/` next to attempt deliberately, not as a
-side effect of Libc work. Until/unless that lands, treat the entire
-locale/wide-char/thread-safe-`strerror` tier found in the previous pass
-as **permanently blocked**, not just "not yet built."
+**CORRECTED 2026-08-13, same day: the "hard KERNEL wall" conclusion just
+above was WRONG**, caught by adversarial review -- `bsdthread_register`
+really is stubbed to `ENOTSUP` as found, but it is **not the only path**.
+A second, completely separate, **already fully real (non-stub)** kernel
+mechanism sets `TPIDRRO_EL0`: userspace issues a `platform_syscall` trap
+(`x3`=2 "set cthread self", `x0`=tsd_base, `x16`=`PLATFORM_SYSCALL_TRAP_NO`
+=`0x80000000`, `svc #0x80` -- a completely different trap path from the
+regular BSD syscall convention, dispatched by `osfmk/arm64/sleh.c`'s
+`handle_svc()` *before* it ever reaches the pthread stub table) ->
+`osfmk/arm64/machine_routines.c`'s `platform_syscall()` case 2 ->
+`thread_set_cthread_self()` -> `machine_thread_set_tsd_base()`
+(`osfmk/arm64/pcb.c`), which really does set `thread->machine.cthread_self`
+and, for the calling thread, `TPIDRRO_EL0` itself immediately via a real
+`msr` instruction -- confirmed by reading `pcb.c` directly, not assumed.
+`osfmk/arm64/cswitch.s` reloads it from `thread->machine` on every future
+context switch. Every ABI detail needed to call this from userspace was
+traced to source, not guessed: the 8-byte alignment requirement
+(`MACHDEP_CPUNUM_MASK`, `osfmk/arm64/machine_machdep.h`), and the real TSD
+block layout real Apple code expects (`_PTHREAD_STRUCT_DIRECT_TSD_OFFSET`
+= 224 bytes on LP64, `third_party/libpthread/private/pthread/private.h` --
+`TPIDRRO_EL0` masked points at `tsd[0]`, *not* the struct base).
+
+**Implemented and self-adversarially-reviewed** (`tools/userland_staging/tsd_bootstrap.c`):
+the ~20-line bootstrap (allocate an aligned TSD block, one
+`platform_syscall` call), plus an adapted `pthread_key_create`/
+`pthread_setspecific`/`pthread_getspecific` faithfully following
+`third_party/libpthread/src/pthread_tsd.c`'s real algorithm (same
+constants: `__pthread_tsd_first`=10, `_start`=256, `_end`=768, all
+cross-checked against real source) on top of real, self-contained
+`_os_tsd_get_direct`/`_os_tsd_set_direct` primitives
+(`third_party/xnu-7195/libsyscall/os/tsd.h` -- the same primitives real
+`errno.c` uses). One deliberate, clearly-flagged simplification: the real
+`os_unfair_lock` around key-table access is omitted, since this project's
+target is genuinely single-threaded (no concurrent access is possible to
+protect against, so the real algorithm's *correctness* doesn't depend on
+it here, only its safety under contention that cannot occur). Self-review
+before committing caught and fixed two real issues: a destructor-marker
+value that didn't match the real algorithm's semantics for low/reserved
+keys (inert for this file's own test, fixed anyway since this is meant to
+be faithful, not "passes by accident"), and a build-script exit-code bug
+that would report false failure on success.
+
+**Verification status, stated precisely rather than overclaimed**: clean
+compile, link with **zero undefined symbols**, still a static/dyld-free
+`LC_UNIXTHREAD` Mach-O (`nm -u`/`otool -l` confirmed). **Could not get
+true execution-based confirmation this pass** -- and confirmed *why*, not
+just "didn't try": even the simplest possible freestanding static binary
+in this project (`crt0_smoketest.c`, no `platform_syscall` involved at
+all) is killed (exit 137) by this host's own hardened-runtime/AMFI
+enforcement before `main()` ever runs, a real structural limitation of
+running any of this project's freestanding binaries directly on a modern
+macOS host, not a signal about this file specifically. **The real next
+step is a QEMU boot-test** of `tsd_bootstrap.macho` (same pattern as
+`tools/init_binary/inject_into_sd_image.sh`/`run_qemu.sh`) to confirm the
+platform_syscall round-trip and the `pthread_key_create`/`getspecific`/
+`setspecific` values for real, before building further Libc locale/wide-
+char work on top of it.
 
 See `project_xnu_rpi3_userspace_libc_dyld.md` memory for the same
 findings with more provenance detail, plus a brief `Libinfo` survey for
