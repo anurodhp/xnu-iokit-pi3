@@ -381,20 +381,47 @@ real commands, Libinfo resolver) below are **in progress, not done**:
   clean link (no undefined symbols beyond `_main`/`_exit`). Real Apple
   source is a drop-in replacement for `tools/init_binary/init.c`'s
   hand-written entry point.
-- **Not yet attempted: actually building `Libc` into a usable library.**
-  This is genuinely the large remaining item, likely its own multi-session
-  effort matching this project's usual pattern of several real bugs to
-  root-cause per new subsystem (same class of issue as
-  `IOStorageFamily`/`hfs`'s prior header-skew problems, expected here too).
-  One concrete, useful thing found while scoping it: the actual raw
-  syscall-stub source/generator (`custom/SYS.h`,
-  `xcodescripts/create-syscalls.pl`/`compile-syscalls.pl`) is **not** a
-  separate apple-oss-distributions repo -- it's `libsyscall/` inside
-  `third_party/xnu-7195` itself (already cloned, already arm64-ready per
-  `custom/SYS.h`'s `__arm64__` branch), and is the authoritative real
-  source for the syscall ABI conventions `tools/init_binary/init.c` had to
-  reverse-engineer by hand (carry-flag errno, `fork()`'s x1 child flag) --
-  worth building/reading first, before the much larger rest of `Libc`.
+- **`libsyscall` verified working (2026-08-13), real Apple stub generator,
+  not hand-written asm.** `Libc` itself (`third_party/Libc`) is an
+  Xcode-project build (`Libc.xcodeproj`, no plain `Makefile`) -- not
+  directly driveable on this host (see `tools/build_kexts.sh`'s header
+  comment: `xcodebuild` itself crashes on this machine, a CoreChart.framework
+  problem, unrelated to Libc). The syscall-stub layer is different: it's
+  `libsyscall/` inside `third_party/xnu-7195` (not a separate repo, already
+  arm64-ready), and its generator is plain Perl + `clang -c`, no Xcode
+  needed. Ran it for real:
+  `ARCHS=arm64 perl third_party/xnu-7195/libsyscall/xcodescripts/create-syscalls.pl
+  third_party/xnu-7195/bsd/kern/syscalls.master
+  third_party/xnu-7195/libsyscall/custom third_party/xnu-7195/libsyscall/Platforms
+  iPhoneOS <outdir>` produces real per-syscall `.s` files. Their arm64
+  macro expansion (`SYS.h`'s `DO_SYSCALL`) is `svc #0x80` /
+  `b.cc 2f` / `bl _cerror` -- an **independent, from-Apple's-own-tooling
+  confirmation** of the exact carry-flag-means-error convention
+  `tools/init_binary/init.c` had to reverse-engineer by hand from reading
+  `osfmk`/`bsd` source directly.
+  `tools/userland_staging/build_libsyscall_smoketest.sh` regenerates
+  `getpid`/`write`/`exit` stubs fresh from that generator every build,
+  assembles them with plain `clang -target arm64-apple-macos11`, and links
+  them against real `Csu` crt0 plus a new minimal `cerror`/`errno` stand-in
+  (`cerror_stub.c` -- Apple's real `errno.c` needs `_os_tsd_get_direct()`,
+  which reads a per-thread TSD block via `TPIDRRO_EL0` that only exists
+  once `libpthread`'s `bsdthread_create()` has run; this target has no
+  pthread bootstrap at all yet, so using the real one as-is risks reading
+  an unset/garbage register and dereferencing it -- same "stand-in for a
+  subsystem this target doesn't have yet" pattern as `bsd_pthread_stub.c`
+  on the kernel side, not a hack). Result: a fully static, zero-undefined-
+  symbol, `LC_UNIXTHREAD`/no-`LC_LOAD_DYLIB` Mach-O built entirely from
+  real Apple `Csu` + real Apple-generated syscall stubs, confirmed via
+  `nm`/`otool -l`. Not yet boot-tested in QEMU (out of scope for the
+  session that did this -- next step for whoever picks this up).
+- **`Libc` proper (the large remaining item) still not attempted** --
+  confirmed harder than just "run make": no plain build system to drive
+  outside Xcode. Realistic path forward is almost certainly compiling a
+  curated subset of `.c` files directly with `clang` (same spirit as this
+  project's kext/kernel builds, which also bypass `xcodebuild`) rather than
+  fighting `Libc.xcodeproj` itself -- expect the same header-skew class of
+  bug this project hit with `IOStorageFamily`/`hfs`, likely still a
+  multi-session effort.
 - **Not attempted**: step 4 (Libinfo resolver) -- correctly low-priority
   per the plan below, blocked on step 1 landing first regardless.
 
