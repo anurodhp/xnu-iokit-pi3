@@ -18,7 +18,11 @@ cmd = [
     "-dtb", "devicetrees/rpi3.dtb",
     "-drive", "file=qemu/hfs_root_test.img,if=sd,format=raw",
     "-monitor", f"unix:{mon_sock},server,nowait",
-    "-append", "debug=0x8 kextlog=0xfff -noprogress -v rd=disk0s2 serial=3",
+    # cpu-factor=10: see runvm.sh's own comment on this same boot-arg -
+    # scales XNU's INTERRUPT_MASKED_DEBUG watchdog timeout to tolerate
+    # QEMU/TCG's inherent wall-clock jitter (a real Apple pexpert
+    # mechanism, normally auto-applied for FPGA prototype hardware).
+    "-append", "debug=0x8 kextlog=0xfff -noprogress -v rd=disk0s2 serial=3 cpu-factor=10",
 ]
 proc = subprocess.Popen(cmd, stdin=slave, stdout=slave, stderr=slave, close_fds=True)
 os.close(slave)

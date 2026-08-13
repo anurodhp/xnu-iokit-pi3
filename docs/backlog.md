@@ -28,6 +28,85 @@ context/history, not deleted. Commits: `third_party/xnu-7195`
 `BCM2837SDHCI` real-hardware-timing/robustness items) were deliberately
 **not** attempted this pass — see the note after item 11 for why.
 
+**Status update 2026-08-13 (third pass, final integration testing)**: after
+the second pass above plus Phase 3.5a (real `init.c` syscalls) landed
+independently, a combined rebuild + repeated boot-test (kernel with all
+P0/P1 fixes + shell with real `ls`/`cd`/`pwd`/`cat`/`mkdir`) surfaced two
+new, real findings neither individual change's own testing had hit:
+
+- **[MITIGATED, see item 0 below]** A `~40%`-reproducible panic
+  (`INTERRUPT_MASKED_DEBUG`'s "Processing of an interrupt ... took N ns"
+  watchdog, always flagging `_rtclock_intr`) turned out to be QEMU/TCG
+  wall-clock timing jitter, not a guest bug - confirmed via `cpu-factor=10`
+  (a real Apple pexpert boot-arg) sharply reducing but not fully
+  eliminating the failure rate. Added to `runvm.sh`/`_pty_test.py` (QEMU
+  boot paths only, not real hardware).
+- **[NEW P0 ITEM 0 - NOT FIXED, root cause identified]** A separate, more
+  serious panic — real kernel instruction fetch abort at `pc = 0x0`, `lr`
+  inside `sleh_irq` — see item 0 below, added at the top since it's the
+  most significant open finding in the whole backlog as of this pass.
+
+New commits this pass: main repo only (`runvm.sh`, `_pty_test.py`
+`cpu-factor=10`), not yet pushed pending the adversarial review the user
+asked for once this pass was done.
+
+---
+
+## P0, item 0 — NEWLY FOUND, NOT FIXED: real interrupt handler can be NULL when a genuine hardware IRQ arrives during early boot
+
+**Found 2026-08-13, during final integration testing** of the combined
+P0/P1 fixes + Phase 3.5a real shell syscalls (neither individually
+surfaced this — it needed real, sustained interrupt-driven I/O load from
+several real filesystem operations in a row, which no single-item test
+happened to exercise this heavily).
+
+**Symptom**: `panic(cpu 0 caller ...): Kernel instruction fetch abort at
+pc 0x0000000000000000, lr 0xfffffff0073242c8`. `lr` resolves (via `nm` on
+the built kernel) to `_sleh_irq + 0x38`. Reading `sleh_irq()`
+(`osfmk/arm64/sleh.c`): its non-`USE_APPLEARMSMP` body is
+`cdp->interrupt_handler(cdp->interrupt_target, cdp->interrupt_refCon,
+cdp->interrupt_nub, cdp->interrupt_source);` — a call through a per-CPU
+function pointer. A jump to `pc=0` at exactly that call site means
+`cdp->interrupt_handler` was still `NULL` when this ARM64 IRQ exception
+fired.
+
+**Root cause (established, not yet fixed)**: `cdp->interrupt_handler` is
+only populated by `ml_install_interrupt_handler()`, called from
+`IOCPUInterruptController::enableCPUInterrupt()`
+(`third_party/xnu-7195/iokit/Kernel/IOCPU.cpp`), which
+`BCM2837CPU::initCPU()` calls near the *end* of its setup sequence (after
+`ml_processor_register()`). If a genuine hardware IRQ can be signaled to
+this core before that point in boot — plausible, since nothing in this
+driver stack currently guarantees CPU-level interrupts stay masked
+(`DAIF`/`PSTATE.I`) until `enableCPUInterrupt()` has run — `sleh_irq()`
+unconditionally calls through the still-NULL pointer. **This exact race
+was structurally impossible to hit before today**: prior to the DT
+interrupt-cell fix (this same day, see `docs/roadmap.md` Phase 3), no real
+hardware interrupt had ever successfully reached this dispatch chain at
+all, so the window was never live. Fixing the DT bug made real interrupts
+work — and, as a direct consequence, exposed this previously-dormant
+early-boot race for the first time.
+
+**Reproduction rate**: hit once in ~10 combined-integration boot-test runs
+this pass (separate from, and less frequent than, the timing-watchdog
+issue above) — infrequent enough to need real investigation (not just a
+retry) but frequent enough to be a real, live bug, not a one-off fluke;
+unlike the timing-watchdog panic, this one is a hard crash with a
+consistent, specific signature (same faulting PC/LR pattern), not a
+symptom that varies run to run.
+
+**Not fixed this pass** — needs real investigation into (a) exactly when
+CPU-level interrupt masking is first lifted relative to
+`enableCPUInterrupt()` running (grep `DAIFClr`/equivalent in
+`osfmk/arm64/start.s` and early boot asm — not yet done), and (b) the
+right fix: either delay unmasking until the handler is installed, install
+a safe default/no-op handler earlier as a guard, or serialize
+`BCM2837SDHCI`/other early-matching drivers' `registerInterrupt()` calls
+to strictly happen after `enableCPUInterrupt()` (may already be true in
+practice — the actual gap is CPU-level unmasking, not driver
+registration order, which is a different, already-partially-addressed
+class of race, see items 13/14 below).
+
 ---
 
 ## P0 — real-hardware risk (would plausibly hang, storm, or panic a real Pi)
