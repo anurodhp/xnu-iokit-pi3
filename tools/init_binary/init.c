@@ -28,18 +28,29 @@
 
 typedef unsigned long size_t;
 typedef long ssize_t;
+typedef unsigned char uint8_t;
+typedef unsigned short uint16_t;
+typedef unsigned int uint32_t;
+typedef unsigned long uint64_t;
+typedef int int32_t;
+typedef long int64_t;
 
 /* ---------------- raw syscalls (arm64 Darwin: svc #0x80, num in x16) ---- */
 
-#define SYS_exit   1
-#define SYS_fork   2
-#define SYS_read   3
-#define SYS_write  4
-#define SYS_open   5
-#define SYS_wait4  7
-#define SYS_execve 59
+#define SYS_exit           1
+#define SYS_fork            2
+#define SYS_read            3
+#define SYS_write           4
+#define SYS_open            5
+#define SYS_close           6
+#define SYS_wait4           7
+#define SYS_mkdir           136
+#define SYS_fstat64         339
+#define SYS_getdirentries64 344
+#define SYS_execve          59
 
-#define O_RDWR 2
+#define O_RDONLY 0
+#define O_RDWR   2
 
 #ifdef INIT_HOST_TEST
 /* Host-side logic testing only (see build.py) -- never compiled into the
@@ -100,6 +111,73 @@ static int sys_open(const char *path, int flags, int mode) {
 
 static long sys_execve(const char *path, char *const argv[], char *const envp[]) {
     return syscall3(SYS_execve, (long)path, (long)argv, (long)envp);
+}
+
+static long sys_close(int fd) {
+    return syscall3(SYS_close, fd, 0, 0);
+}
+
+static long sys_mkdir(const char *path, int mode) {
+    return syscall3(SYS_mkdir, (long)path, mode, 0);
+}
+
+/* REAL BUG FOUND (2026-08-13, the first time any userspace program in this
+ * project ever issued a real stat-family syscall): plain fstat (189) does
+ * NOT fill the __DARWIN_STRUCT_STAT64 layout struct kstat below is written
+ * against - confirmed empirically by dumping the raw bytes fstat(189)
+ * actually wrote for the real HFS+ root ("/"): st_mode read back as 2 (a
+ * VDIR vtype value, not a real mode) and st_nlink as 0, both nonsensical,
+ * while a byte-by-byte reinterpretation matched the OLDER, 32-bit-ino_t
+ * struct stat layout perfectly instead (root CNID 2 at offset 4, mode
+ * 0100775/0040775-shaped 0x41fd at offset 8, nlink=5 matching this root's
+ * real subdirectory count, a plausible 2026 Unix timestamp at offset 24 -
+ * far too coherent to be coincidence). Cross-checked against
+ * bsd/kern/syscalls.master: fstat=189 is a distinct syscall number from
+ * fstat64=339 (AUE_FSTAT64) - the plain, non-64 syscall fills the legacy
+ * struct, exactly like stat()/lstat() do relative to stat64()/lstat64().
+ * Fixed by calling fstat64 (339) instead, which fills exactly the
+ * __DARWIN_STRUCT_STAT64 layout struct kstat already implements -
+ * confirmed correct independently by cross-checking sizeof/offsetof
+ * against a real host arm64 Darwin compiler's actual <sys/stat.h> (144
+ * bytes total, st_mode at offset 4, st_size at offset 96 - exact match). */
+static long sys_fstat(int fd, void *statbuf) {
+    return syscall3(SYS_fstat64, fd, (long)statbuf, 0);
+}
+
+/* SAME REAL BUG CLASS as sys_fstat() above, found the same way (raw byte
+ * dump, not assumption): plain getdirentries (196) does NOT fill
+ * struct kdirent's __DARWIN_STRUCT_DIRENTRY (64-bit-ino) layout either -
+ * confirmed empirically (reclen/namlen/type read back as nonsensical
+ * values like namlen=516, type=46) and by the same fstat/fstat64 split
+ * existing in bsd/kern/syscalls.master for this syscall family too:
+ * getdirentries=196 is legacy, getdirentries64=344 (AUE_GETDIRENTRIES64)
+ * is the one that actually matches the 64-bit-ino dirent layout. Its
+ * signature also differs slightly (`off_t *position` instead of
+ * `long *basep`) but that's identical in size/ABI on this LP64 target, no
+ * wrapper change needed beyond the syscall number. Needs 4 real
+ * arguments -- no shared syscall4() helper exists in this file yet
+ * (sys_wait4() above inlines its own 4-arg asm block rather than
+ * factoring one out), so this follows that same established pattern
+ * rather than introducing a new one. */
+static long sys_getdirentries(int fd, void *buf, unsigned int count, long *basep) {
+#ifdef INIT_HOST_TEST
+    (void)fd; (void)buf; (void)count; (void)basep;
+    return -1; /* no real filesystem in the host-test harness */
+#else
+    register long x0 asm("x0") = fd;
+    register long x1 asm("x1") = (long)buf;
+    register long x2 asm("x2") = count;
+    register long x3 asm("x3") = (long)basep;
+    register long x16 asm("x16") = SYS_getdirentries64;
+    long is_error;
+    asm volatile("svc #0x80\n"
+                 "cset %1, cs"
+                 : "+r"(x0), "=r"(is_error)
+                 : "r"(x1), "r"(x2), "r"(x3), "r"(x16)
+                 : "memory", "cc");
+    if (is_error) return -x0;
+    return x0;
+#endif
 }
 
 /* ROOT CAUSE, found by reading thread_set_child()/thread_set_parent() in
@@ -210,131 +288,154 @@ static void putn(const char *s, size_t n) {
     sys_write(1, s, n);
 }
 
-/* ------------------------------- virtual VFS ----------------------------- */
+/* ------------------------------- real VFS --------------------------------
+ * Phase 3.5a (docs/roadmap.md): this used to be an entirely fake,
+ * hardcoded in-memory tree (nodes[]/vfs_init()/vfs_resolve()/vfs_path())
+ * with no connection to the real mounted filesystem -- confirmed still the
+ * case as recently as this session's own boot tests (ls after a real HFS+
+ * root mount still printed the old fake bin/sbin/etc/dev/tmp/var list).
+ * Replaced with real open/read/getdirentries/fstat/mkdir syscalls against
+ * whatever's actually mounted at "/". `cwd_path` below is now a plain
+ * absolute path string (this project's freestanding libc has no
+ * getcwd()/chdir()-syscall-backed cwd tracking to lean on -- there is in
+ * fact no raw `getcwd` syscall in bsd/kern/syscalls.master at all; real
+ * userspace getcwd() is a Libc-level directory walk via getattrlist, not a
+ * syscall -- so `cd` is kept as pure local string state, validated against
+ * the real filesystem via a real open()+fstat() each time, same tradeoff
+ * the old fake tree already made, just now checked against real files).
+ */
 
-#define MAX_NODES    64
-#define MAX_NAME     32
-#define MAX_CHILDREN 16
-#define MAX_PATH     256
+#define MAX_PATH 256
 
-typedef struct node {
-    char name[MAX_NAME];
-    int is_dir;
-    int parent;
-    const char *content;
-    int children[MAX_CHILDREN];
-    int nchildren;
-} node_t;
+static char cwd_path[MAX_PATH] = "/";
 
-static node_t nodes[MAX_NODES];
-static int node_count;
+/* Real bsd/sys/stat.h struct stat, __DARWIN_STRUCT_STAT64 expansion (the
+ * variant used whenever __DARWIN_64_BIT_INO_T is set, true for every
+ * 64-bit Darwin target including this one) with the default
+ * _DARWIN_C_SOURCE timespec-based time fields. Verified field-by-field
+ * against third_party/xnu-7195/bsd/sys/stat.h + bsd/sys/_types.h rather
+ * than guessed: dev_t/st_rdev=int32_t, mode_t/nlink_t=uint16_t,
+ * ino64_t/off_t/blkcnt_t=64-bit, uid_t/gid_t/blksize_t/st_flags/st_gen=
+ * uint32_t. Only st_mode/st_size are actually read below, but the whole
+ * layout -- including the real 4-byte alignment gap between st_rdev and
+ * the first (8-byte-aligned) timespec -- has to match, since fstat()
+ * writes the kernel's real ABI struct verbatim into whatever buffer this
+ * points at; a wrong layout would silently misread unrelated bytes as
+ * st_mode/st_size instead of erroring. */
+struct kstat {
+    int32_t  st_dev;
+    uint16_t st_mode;
+    uint16_t st_nlink;
+    uint64_t st_ino;
+    uint32_t st_uid;
+    uint32_t st_gid;
+    int32_t  st_rdev;
+    int32_t  __pad0; /* alignment gap before the 8-byte-aligned timespecs */
+    int64_t  st_atime_sec, st_atime_nsec;
+    int64_t  st_mtime_sec, st_mtime_nsec;
+    int64_t  st_ctime_sec, st_ctime_nsec;
+    int64_t  st_birthtime_sec, st_birthtime_nsec;
+    int64_t  st_size;
+    int64_t  st_blocks;
+    int32_t  st_blksize;
+    uint32_t st_flags;
+    uint32_t st_gen;
+    int32_t  st_lspare;
+    int64_t  st_qspare[2];
+};
 
-static int new_node(const char *name, int is_dir, int parent, const char *content) {
-    int idx = node_count++;
-    node_t *n = &nodes[idx];
-    kstrncpy(n->name, name, MAX_NAME);
-    n->is_dir = is_dir;
-    n->parent = parent;
-    n->content = content;
-    n->nchildren = 0;
-    if (parent >= 0 && nodes[parent].nchildren < MAX_CHILDREN) {
-        nodes[parent].children[nodes[parent].nchildren++] = idx;
+#define S_IFMT  0170000
+#define S_IFDIR 0040000
+#define S_IFREG 0100000
+
+/* Real bsd/sys/dirent.h __DARWIN_STRUCT_DIRENTRY (the 64-bit-ino variant,
+ * same reasoning as struct kstat above -- natural alignment, not the
+ * pack(4) layout that header uses for the now-unused 32-bit-ino variant;
+ * confirmed by reading where the #pragma pack(4)/#pragma pack() pair
+ * actually opens and closes in that header). d_reclen (not sizeof(struct
+ * kdirent)) is what real getdirentries() consumers advance a buffer
+ * cursor by -- this driver, like every real one, never actually depends
+ * on this struct's own total size for that. */
+struct kdirent {
+    uint64_t d_ino;
+    uint64_t d_seekoff;
+    uint16_t d_reclen;
+    uint16_t d_namlen;
+    uint8_t  d_type;
+    char     d_name[1024];
+};
+
+#define DT_DIR 4
+#define DT_REG 8
+
+/* Join `rel` onto `base` (if `rel` isn't already absolute) and normalize
+ * (collapse "." / ".." / empty segments), writing a clean absolute path
+ * into `out`. This is the real-filesystem equivalent of the old fake
+ * tree's vfs_resolve() -- same segment-walking shape, but building a path
+ * string instead of walking an in-memory node graph, since path
+ * resolution against a real mounted filesystem happens in the kernel
+ * (inside whatever syscall actually opens the result), not here. */
+static void path_join(const char *base, const char *rel, char *out, size_t outsz) {
+    char work[MAX_PATH];
+    if (rel[0] == '/') {
+        kstrncpy(work, rel, MAX_PATH);
+    } else {
+        size_t blen = kstrlen(base);
+        kstrncpy(work, base, MAX_PATH);
+        if (blen > 0 && blen + 1 < MAX_PATH && work[blen - 1] != '/') {
+            work[blen] = '/';
+            work[blen + 1] = 0;
+            blen++;
+        }
+        size_t rlen = kstrlen(rel);
+        if (blen + rlen < MAX_PATH) {
+            kmemcpy(work + blen, rel, rlen);
+            work[blen + rlen] = 0;
+        }
     }
-    return idx;
-}
 
-#define ROOT 0
+    /* Segment-stack normalize, same algorithm the old vfs_resolve() used
+     * for '.'/'..' handling, just emitting into `out` instead of walking
+     * node indices. */
+    char *seg_starts[32];
+    size_t seg_lens[32];
+    int nseg = 0;
 
-static void vfs_init(void) {
-    node_count = 0;
-    new_node("/", 1, -1, 0); /* ROOT == 0 */
-
-    int bin = new_node("bin", 1, ROOT, 0);
-    new_node("ls",    0, bin, "builtin: list directory contents\n");
-    new_node("cat",   0, bin, "builtin: print file contents\n");
-    new_node("cd",    0, bin, "builtin: change directory\n");
-    new_node("pwd",   0, bin, "builtin: print working directory\n");
-    new_node("echo",  0, bin, "builtin: print arguments\n");
-    new_node("mkdir", 0, bin, "builtin: create a directory\n");
-    new_node("help",  0, bin, "builtin: list available commands\n");
-    new_node("clear", 0, bin, "builtin: clear the screen\n");
-    new_node("exit",  0, bin, "builtin: exit the shell (halts pid 1)\n");
-    new_node("bash",  0, bin, "builtin: this shell, addressed by its other name\n");
-
-    int sbin = new_node("sbin", 1, ROOT, 0);
-    new_node("init", 0, sbin, "builtin: PID 1 -- this program\n");
-
-    int etc = new_node("etc", 1, ROOT, 0);
-    new_node("motd", 0, etc,
-        "Welcome to XNU/rpi3.\n"
-        "This is a freestanding PID-1 shell: no dyld, no libc, no real\n"
-        "filesystem yet. This tree lives entirely in this process.\n");
-
-    /* mockfs_mountroot() auto-mounts real devfs here once the kernel boots
-     * with mockfs enabled -- this placeholder just makes `ls`/`cd` sane
-     * before that lands / if it's not enabled in a given build. */
-    new_node("dev", 1, ROOT, 0);
-    new_node("tmp", 1, ROOT, 0);
-    new_node("var", 1, ROOT, 0);
-}
-
-/* Resolve a (possibly relative) path against `cwd`. Returns node index or -1. */
-static int vfs_resolve(int cwd, const char *path) {
-    int cur = (path[0] == '/') ? ROOT : cwd;
-    char buf[MAX_PATH];
-    kstrncpy(buf, path, MAX_PATH);
-
-    char *p = buf;
+    char *p = work;
     while (*p) {
         while (*p == '/') p++;
         if (!*p) break;
         char *start = p;
         while (*p && *p != '/') p++;
-        int seglen = (int)(p - start);
-        if (*p) *p++ = 0;
+        size_t seglen = (size_t)(p - start);
 
         if (seglen == 0) continue;
-        if (start[0] == '.' && start[1] == 0) continue;
-        if (start[0] == '.' && start[1] == '.' && start[2] == 0) {
-            if (nodes[cur].parent >= 0) cur = nodes[cur].parent;
+        if (seglen == 1 && start[0] == '.') continue;
+        if (seglen == 2 && start[0] == '.' && start[1] == '.') {
+            if (nseg > 0) nseg--;
             continue;
         }
-
-        if (!nodes[cur].is_dir) return -1;
-        int found = -1;
-        for (int i = 0; i < nodes[cur].nchildren; i++) {
-            int c = nodes[cur].children[i];
-            if (kstreq(nodes[c].name, start)) { found = c; break; }
+        if (nseg < 32) {
+            seg_starts[nseg] = start;
+            seg_lens[nseg] = seglen;
+            nseg++;
         }
-        if (found < 0) return -1;
-        cur = found;
     }
-    return cur;
-}
 
-/* Write the absolute path of node `idx` into buf. */
-static void vfs_path(int idx, char *buf, size_t bufsz) {
-    if (idx == ROOT) {
-        kstrncpy(buf, "/", bufsz);
-        return;
-    }
-    char stack_names[16][MAX_NAME];
-    int depth = 0;
-    int cur = idx;
-    while (cur != ROOT && depth < 16) {
-        kstrncpy(stack_names[depth], nodes[cur].name, MAX_NAME);
-        depth++;
-        cur = nodes[cur].parent;
-    }
     size_t off = 0;
-    for (int i = depth - 1; i >= 0 && off + 1 < bufsz; i--) {
-        buf[off++] = '/';
-        size_t l = kstrlen(stack_names[i]);
-        if (off + l >= bufsz) l = bufsz - off - 1;
-        kmemcpy(buf + off, stack_names[i], l);
+    out[0] = '/';
+    off = 1;
+    for (int i = 0; i < nseg; i++) {
+        if (i > 0) {
+            if (off + 1 >= outsz) break;
+            out[off++] = '/';
+        }
+        size_t l = seg_lens[i];
+        if (off + l >= outsz) l = outsz - off - 1;
+        kmemcpy(out + off, seg_starts[i], l);
         off += l;
     }
-    buf[off] = 0;
+    out[off] = 0;
 }
 
 /* ------------------------------- line input ------------------------------ */
@@ -386,7 +487,6 @@ static int tokenize(char *line, char *argv[], int max_args) {
 
 /* -------------------------------- builtins -------------------------------- */
 
-static int cwd = ROOT;
 static const char *prompt_name = "sh";
 
 static void cmd_help(void) {
@@ -402,85 +502,153 @@ static void cmd_echo(int argc, char **argv) {
 }
 
 static void cmd_pwd(void) {
-    char buf[MAX_PATH];
-    vfs_path(cwd, buf, sizeof(buf));
-    put(buf);
+    put(cwd_path);
     put("\n");
 }
 
 static void cmd_cd(int argc, char **argv) {
     const char *target = (argc > 1) ? argv[1] : "/";
-    int idx = vfs_resolve(cwd, target);
-    if (idx < 0) {
+    char resolved[MAX_PATH];
+    path_join(cwd_path, target, resolved, sizeof(resolved));
+
+    int fd = sys_open(resolved, O_RDONLY, 0);
+    if (fd < 0) {
         put(target); put(": no such directory\n");
         return;
     }
-    if (!nodes[idx].is_dir) {
+    struct kstat st;
+    long r = sys_fstat(fd, &st);
+    sys_close(fd);
+    if (r < 0) {
+        put(target); put(": stat failed\n");
+        return;
+    }
+    if ((st.st_mode & S_IFMT) != S_IFDIR) {
         put(target); put(": not a directory\n");
         return;
     }
-    cwd = idx;
+    kstrncpy(cwd_path, resolved, MAX_PATH);
 }
 
 static void cmd_ls(int argc, char **argv) {
-    int idx = (argc > 1) ? vfs_resolve(cwd, argv[1]) : cwd;
-    if (idx < 0) {
-        put(argv[1]); put(": no such file or directory\n");
+    char resolved[MAX_PATH];
+    if (argc > 1) {
+        path_join(cwd_path, argv[1], resolved, sizeof(resolved));
+    } else {
+        kstrncpy(resolved, cwd_path, MAX_PATH);
+    }
+
+    int fd = sys_open(resolved, O_RDONLY, 0);
+    if (fd < 0) {
+        put(argc > 1 ? argv[1] : resolved);
+        put(": no such file or directory\n");
         return;
     }
-    if (!nodes[idx].is_dir) {
-        put(nodes[idx].name); put("\n");
+
+    struct kstat st;
+    if (sys_fstat(fd, &st) < 0) {
+        sys_close(fd);
+        put(argc > 1 ? argv[1] : resolved);
+        put(": stat failed\n");
         return;
     }
-    for (int i = 0; i < nodes[idx].nchildren; i++) {
-        int c = nodes[idx].children[i];
-        put(nodes[c].name);
-        if (nodes[c].is_dir) put("/");
+
+    if ((st.st_mode & S_IFMT) != S_IFDIR) {
+        /* ls <file>: print the argument as given, matching normal `ls`
+         * behavior (echo back what was asked for, not the resolved path). */
+        sys_close(fd);
+        put(argc > 1 ? argv[1] : resolved);
         put("\n");
+        return;
     }
+
+    char buf[4096];
+    long basep = 0;
+    for (;;) {
+        long n = sys_getdirentries(fd, buf, sizeof(buf), &basep);
+        if (n <= 0) break; /* 0 == no more entries, <0 == error, both stop */
+
+        char *p = buf;
+        char *end = buf + n;
+        while (p < end) {
+            struct kdirent *de = (struct kdirent *)p;
+            if (de->d_reclen == 0) break; /* malformed entry, stop rather than spin */
+
+            int is_dot = (de->d_namlen == 1 && de->d_name[0] == '.');
+            int is_dotdot = (de->d_namlen == 2 && de->d_name[0] == '.' && de->d_name[1] == '.');
+            /* HFS+ reserves entries with a name ending "\r" as private
+             * metadata (e.g. ".HFS+ Private Directory Data\r") - real,
+             * confirmed via this exact debugging session's raw byte dumps,
+             * not assumed. Hide these the same way "."/".." are hidden;
+             * a normal user-facing `ls` has no reason to show them.
+             * KNOWN GAP: HFS+'s *other* reserved entry (the private
+             * metadata file, conventionally 4 leading NUL bytes then
+             * "HFS+ Private Data") is NOT filtered - a leading-NUL check
+             * was tried and empirically did not match whatever this
+             * kernel's getdirentries64 actually returns for that specific
+             * entry (still shows with a garbled name in `ls` output) -
+             * not root-caused further; cosmetic only, doesn't affect any
+             * real file/directory listing. */
+            int is_hfs_private = (de->d_namlen > 0 && de->d_name[de->d_namlen - 1] == '\r');
+            if (!is_dot && !is_dotdot && !is_hfs_private) {
+                putn(de->d_name, de->d_namlen);
+                if (de->d_type == DT_DIR) put("/");
+                put("\n");
+            }
+            p += de->d_reclen;
+        }
+    }
+    sys_close(fd);
 }
 
 static void cmd_cat(int argc, char **argv) {
     if (argc < 2) { put("usage: cat <path>\n"); return; }
-    int idx = vfs_resolve(cwd, argv[1]);
-    if (idx < 0) { put(argv[1]); put(": no such file\n"); return; }
-    if (nodes[idx].is_dir) { put(argv[1]); put(": is a directory\n"); return; }
-    if (nodes[idx].content) put(nodes[idx].content);
+    char resolved[MAX_PATH];
+    path_join(cwd_path, argv[1], resolved, sizeof(resolved));
+
+    int fd = sys_open(resolved, O_RDONLY, 0);
+    if (fd < 0) { put(argv[1]); put(": no such file\n"); return; }
+
+    struct kstat st;
+    if (sys_fstat(fd, &st) < 0) {
+        sys_close(fd);
+        put(argv[1]); put(": stat failed\n");
+        return;
+    }
+    if ((st.st_mode & S_IFMT) == S_IFDIR) {
+        sys_close(fd);
+        put(argv[1]); put(": is a directory\n");
+        return;
+    }
+
+    char buf[512];
+    for (;;) {
+        ssize_t n = sys_read(fd, buf, sizeof(buf));
+        if (n <= 0) break;
+        sys_write(1, buf, (size_t)n);
+    }
+    sys_close(fd);
 }
 
 static void cmd_mkdir(int argc, char **argv) {
     if (argc < 2) { put("usage: mkdir <path>\n"); return; }
-    char pathbuf[MAX_PATH];
-    kstrncpy(pathbuf, argv[1], MAX_PATH);
+    char resolved[MAX_PATH];
+    path_join(cwd_path, argv[1], resolved, sizeof(resolved));
 
-    /* split into parent path + new name */
-    char *last_slash = 0;
-    for (char *p = pathbuf; *p; p++) if (*p == '/') last_slash = p;
-
-    int parent;
-    const char *newname;
-    if (last_slash) {
-        *last_slash = 0;
-        newname = last_slash + 1;
-        parent = (*pathbuf) ? vfs_resolve(cwd, pathbuf) : ROOT;
-    } else {
-        parent = cwd;
-        newname = pathbuf;
+    /* Confirmed real (2026-08-13, via a temporary errno dump since removed):
+     * mkdir() against a fresh path off the real HFS+ root returns -30
+     * (EROFS) with a correctly-resolved path - the syscall itself and
+     * path_join() are both working correctly, but this project's real
+     * HFS+ root is currently mounted read-only (likely still true from
+     * whatever first got hfs_mountroot() working read-only-first, before
+     * any real write was ever attempted against it - this is plausibly
+     * the first one). Not something tools/init_binary/init.c can fix -
+     * that's a kernel/mount-path matter. */
+    long r = sys_mkdir(resolved, 0755);
+    if (r < 0) {
+        put(argv[1]);
+        put(": mkdir failed (often EROFS - this filesystem may be mounted read-only)\n");
     }
-
-    if (!*newname) { put("mkdir: bad path\n"); return; }
-    if (parent < 0 || !nodes[parent].is_dir) { put(argv[1]); put(": no such directory\n"); return; }
-    for (int i = 0; i < nodes[parent].nchildren; i++) {
-        if (kstreq(nodes[nodes[parent].children[i]].name, newname)) {
-            put(argv[1]); put(": already exists\n");
-            return;
-        }
-    }
-    if (node_count >= MAX_NODES || nodes[parent].nchildren >= MAX_CHILDREN) {
-        put("mkdir: out of space\n");
-        return;
-    }
-    new_node(newname, 1, parent, 0);
 }
 
 static void cmd_clear(void) {
@@ -490,11 +658,9 @@ static void cmd_clear(void) {
 /* ---------------------------------- shell ---------------------------------- */
 
 static void print_prompt(void) {
-    char buf[MAX_PATH];
-    vfs_path(cwd, buf, sizeof(buf));
     put(prompt_name);
     put(":");
-    put(buf);
+    put(cwd_path);
     put(" % ");
 }
 
@@ -521,12 +687,11 @@ static void dispatch(int argc, char **argv) {
 static void banner(void) {
     put("\n");
     put("XNU/rpi3 -- single-user shell (no dyld, no libc), forked by pid 1\n");
-    put("booted via mockfs, exec'd in place of /sbin/launchd\n");
+    put("booted from a real HFS+ root, exec'd in place of /sbin/launchd\n");
     put("type 'help' for available commands\n\n");
 }
 
 void shell_main(void) {
-    vfs_init();
     banner();
 
     char line[LINE_MAX];

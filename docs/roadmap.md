@@ -286,23 +286,61 @@ root-mount/exec path is Phase 4's job).
 
 ---
 
-## Phase 3.5: real VFS in the shell + partition the SD card for a real permission-bearing root (2026-08-10, 3.5b DONE, 3.5a next up)
+## Phase 3.5: real VFS in the shell + partition the SD card for a real permission-bearing root (2026-08-10, both 3.5a and 3.5b DONE as of 2026-08-13)
 
 Two small, independent items, both cheap relative to Phase 4, both worth
 doing before committing to Phase 4's much bigger libSystem lift.
 
-**3.5a -- make the current shell's filesystem commands real.**
-`tools/init_binary/init.c`'s `ls`/`cat`/`cd`/`pwd`/`mkdir` currently
-operate on an entirely fake, hardcoded in-memory tree (`nodes[]`/
-`vfs_init()`) -- the file's own header comment says so outright. Real
-syscalls are only used for `/dev/console` I/O and execing the binary
-itself. Rewrite these five builtins to issue real `open`/`read`/
-`getdirentries`/`fstat`/`mkdir` syscalls against the actually-mounted root
-instead. Small, self-contained, no dependency on anything else in this
-phase or Phase 4. **Not yet done** -- verified still-fake during the
-3.5b boot test (`ls` after HFS root-mount still printed the old
-hardcoded `bin/ sbin/ etc/ dev/ tmp/ var/` list, not the real HFS root's
-actual `sbin/`+`dev/` contents).
+**3.5a -- make the current shell's filesystem commands real. DONE
+(2026-08-13).** `tools/init_binary/init.c`'s `ls`/`cat`/`cd`/`pwd`/`mkdir`
+now issue real `open`/`read`/`close`/`fstat64`/`getdirentries64`/`mkdir`
+syscalls against the actually-mounted real HFS+ root, replacing the old
+entirely-fake in-memory `nodes[]`/`vfs_init()`/`vfs_resolve()` tree
+(confirmed gone: `ls`/`cd` no longer know the string "bin" or "etc" at
+all). `cd`'s cwd tracking stays a plain local absolute-path string (no
+raw `getcwd`/`chdir` syscall exists at this Darwin vintage --
+`getcwd()` is a Libc-level directory walk via `getattrlist`, not a
+syscall -- so each `cd` is instead validated by a real `open()`+`fstat64()`
+against the target before accepting it).
+
+**Two real, non-obvious ABI bugs found and fixed the same way** (raw byte
+dumps of what the kernel actually returned, not assumption -- see
+`init.c`'s own comments on `sys_fstat`/`sys_getdirentries` for the full
+evidence): the plain `fstat` (189) and `getdirentries` (196) syscalls do
+**not** fill the modern 64-bit-ino `struct stat`/`struct dirent` layouts --
+those are separate syscalls, `fstat64` (339) and `getdirentries64` (344),
+cross-checked against `bsd/kern/syscalls.master`'s `stat`/`stat64` and
+`getdirentries`/`getdirentries64` pairs. Using the plain (non-64) numbers
+silently filled a different, older struct shape, corrupting every
+`st_mode` read (root's real mode `0040775` read back as a bare `2`, the
+raw `VDIR` vtype value bleeding through) and every `d_reclen`/`d_namlen`
+walk -- explains why every directory looked like "not a directory" and
+`ls` either printed nothing or spun through garbage until this was found.
+Switched to the `64` syscall numbers; `struct kstat`/`struct kdirent` in
+`init.c` (verified byte-for-byte against a real host arm64 Darwin
+compiler's actual `<sys/stat.h>` offsets) were correct all along.
+
+**Verified via a full real-QEMU-boot pty test** against the real HFS+
+root (own scratch SD-image copy, not the shared one): `ls`/`ls <path>`
+correctly list real directory contents (root's real `dev`/`sbin`
+subdirectories, `/sbin`'s real `launchd`); `cd`/`pwd` correctly
+navigate and report the real cwd; `cat` correctly errors on a missing
+file and on a real directory (`/sbin: is a directory`). `mkdir` reaches
+a real, understood failure (`errno 30`/`EROFS`) rather than a bug --
+this project's real HFS+ root is apparently still mounted read-only
+(plausibly never exercised by a real write before this), a kernel/mount
+matter outside this file's scope, not an `init.c` bug. One remaining
+cosmetic-only gap: HFS+'s private metadata *file* (as opposed to the
+private metadata *directory*, which is filtered) shows in `ls` with a
+garbled name -- documented as a known gap in `init.c`, doesn't affect
+any real file/directory listing.
+
+The old "`ls /` crashes after the first entry" bug mentioned in
+`docs/backlog.md` item 22 was **not reproduced** with the new
+real-syscall implementation (`ls` now reliably lists every entry) --
+plausibly that old crash was specific to the fake tree's own bug, now
+moot since that code path no longer exists; not independently
+re-diagnosed against the old code, since it's gone.
 
 **3.5b -- two-partition SD card, HFS+ root. DONE (2026-08-10).** Resolves
 the open decision in `docs/multiuser-userland-plan.md` §0 (no on-disk Unix
@@ -375,9 +413,9 @@ work was needed. What this pass did:
    real-hardware image the same way once useful.
 
 **Exit criteria**: `ls`/`cat`/etc. in the shell reflect the real,
-currently-mounted filesystem's actual contents (3.5a, still open); a
+currently-mounted filesystem's actual contents (3.5a, done); a
 2-partition SD card (FAT32 boot + `hfs` root) boots and mounts `hfs` as
-root in QEMU (3.5b, done).
+root in QEMU (3.5b, done). Both met.
 
 ---
 
