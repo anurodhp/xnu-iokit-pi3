@@ -7,6 +7,7 @@ __pycache__/
 tools/init_binary/init.macho
 tools/userland_staging/*.o
 tools/userland_staging/*.macho
+tools/userland_staging/libsyscall_smoketest/*.o
 
 # Downloaded precompiled binaries and local QEMU test scaffolding -
 # large, reproducible, not our source (precompiled/rpi.dtb is also known-bad,
