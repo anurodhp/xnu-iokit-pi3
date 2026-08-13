@@ -348,6 +348,56 @@ root in QEMU (3.5b, done).
 
 ## Phase 4: real userland -- filesystem, tools, PID 1
 
+**STATUS 2026-08-13: step 2 (PID 1) done and confirmed on real QEMU boot**
+(`tools/init_binary/init.c`'s `init_main()` -- real `fork`/`wait4`/`execve`,
+respawn-on-exit verified across multiple cycles; see project memory
+`project_xnu_rpi3_userspace_libc_dyld.md`). Steps 1/3/4 (libSystem pull,
+real commands, Libinfo resolver) below are **in progress, not done**:
+
+- **The exact Darwin version is 20.3.0, not 19** (this phase's original
+  text below assumed Darwin 19/Catalina from an earlier, since-deleted
+  kernel tree -- `third_party/xnu-7195/config/MasterVersion` says 20.3.0,
+  i.e. macOS 11.2 Big Sur; re-verify again if the kernel tree ever moves).
+- **The "no cross-project version-manifest API exists" claim below is
+  wrong** -- `apple-oss-distributions/distribution-macOS` is exactly that
+  manifest: it's a superproject repo with one tag per macOS release
+  (`macos-112` = macOS 11.2, confirmed by its pinned `xnu` submodule commit
+  `e890dd3c` matching `xnu-7195.81.3^{commit}` exactly) whose `.gitmodules`
+  + submodule gitlinks pin the exact commit of every other
+  apple-oss-distributions repo Apple shipped together for that release.
+  `git ls-tree macos-112 -- <name>` gives an exact commit for any repo this
+  phase still needs; cross-reference against that repo's own tags to get a
+  human-readable tag name. Use this for anything still missing below
+  instead of date-proximity guessing.
+- **All of step 1's repos, plus all of step 3's `bash`/coreutils repos and
+  `Csu`, are now cloned** at their exact `macos-112`-matched tags -- see
+  `setup_third_party.sh`, which has the full pinned list and the reasoning
+  above in its header comment.
+- **Csu verified**: `tools/userland_staging/build_crt0_smoketest.sh` links
+  a trivial raw-syscall `main()` against Apple's real, unmodified `Csu`
+  (`start.s`/`crt.c`, `-static`/no-`__DYNAMIC__` path) with zero patches
+  needed -- produces a structurally-correct freestanding Mach-O
+  (`LC_UNIXTHREAD`, zero `LC_LOAD_DYLIB`), confirmed via `otool -l` and a
+  clean link (no undefined symbols beyond `_main`/`_exit`). Real Apple
+  source is a drop-in replacement for `tools/init_binary/init.c`'s
+  hand-written entry point.
+- **Not yet attempted: actually building `Libc` into a usable library.**
+  This is genuinely the large remaining item, likely its own multi-session
+  effort matching this project's usual pattern of several real bugs to
+  root-cause per new subsystem (same class of issue as
+  `IOStorageFamily`/`hfs`'s prior header-skew problems, expected here too).
+  One concrete, useful thing found while scoping it: the actual raw
+  syscall-stub source/generator (`custom/SYS.h`,
+  `xcodescripts/create-syscalls.pl`/`compile-syscalls.pl`) is **not** a
+  separate apple-oss-distributions repo -- it's `libsyscall/` inside
+  `third_party/xnu-7195` itself (already cloned, already arm64-ready per
+  `custom/SYS.h`'s `__arm64__` branch), and is the authoritative real
+  source for the syscall ABI conventions `tools/init_binary/init.c` had to
+  reverse-engineer by hand (carry-flag errno, `fork()`'s x1 child flag) --
+  worth building/reading first, before the much larger rest of `Libc`.
+- **Not attempted**: step 4 (Libinfo resolver) -- correctly low-priority
+  per the plan below, blocked on step 1 landing first regardless.
+
 **Depends on**: Phase 3 (needs the real mountable SD volume to root from)
 and, for anything beyond the current mockfs shell's capability, on pulling
 real dyld/libSystem. Does not depend on Phase 2 surviving -- Phase 2's
