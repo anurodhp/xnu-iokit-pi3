@@ -520,6 +520,64 @@ which brings up a real dyld-linked `bash` with real `ls`/`cat`/etc as
 separate executables read from the actual SD card -- i.e., everything
 Phase 2 faked, now real and running off real storage.
 
+**Progress 2026-08-13 (third Phase 4 pass): a real `libc_string.a` builds
+and links, first genuine `Libc` progress beyond `Csu`/syscall stubs.**
+Surveyed `third_party/Libc`'s layout and confirmed a real gap: this
+checkout has **no portable-C implementation of `memcpy`/`memset`/`strlen`/
+`memcmp`/`strcmp`/`strncmp`/`bcopy`/`bzero`/`memmove` for any
+architecture** (only `x86_64`/`i386` `mcount.s` profiling stubs exist, no
+arm64 source at all) -- confirmed by grep before falling back, per this
+project's standing Apple-first/FreeBSD-fallback rule (see
+`feedback_source_priority_apple_freebsd_custom` memory). Filled that gap
+with real FreeBSD source (fetched fresh by
+`tools/userland_staging/build_libc_string.sh`, not vendored -- the
+classic Chris Torek `bcopy`/`memset` reference implementations), and built
+**20 real Apple `Libc` string functions** (`third_party/Libc/string/` +
+`string/FreeBSD/`) on top: `strdup`, `strndup`, `strtok`/`__strtok_r`,
+`strsep`, `strpbrk`, `strcspn`, `strspn`, `strnstr`, `strmode`, `strerror`/
+`strerror_r`, `rindex`, `rpmatch`, `swab`, `timingsafe_bcmp`, `stpcpy`/
+`stpncpy`, `strcat`/`strncat`, plus the 9 FreeBSD-filled primitives above.
+
+Two real, minimal, documented fixes needed to get there (see
+`build_libc_string.sh`'s own header comment for the full reasoning, not
+repeated here): `-D_LIBC_NO_FEATURE_VERIFICATION` (Apple's own escape
+hatch for a generated `libc-features.h` this project's non-Xcode build
+never produces) and `-D_FORTIFY_SOURCE=0` (Apple's headers turn FORTIFY on
+by default, which is correct for *callers* of e.g. `stpcpy` but breaks
+compiling `stpcpy`'s own implementation, since its definition gets
+macro-expanded into a call to itself). Plus one genuinely hand-written
+shim (not a stub of real logic): a 3-line `sys/limits.h` defining
+`LONG_BIT=64`, a BSD-ism absent from Apple's public headers that a couple
+of FreeBSD source files expect -- fixed at 64 since arm64 is strictly
+LP64 for every target this project builds.
+
+**Verified, not just claimed**: linked `tools/userland_staging/libc_string_smoketest.c`
+(calls `bzero`/`strcat`/`strlen`/`strcmp`/`memcpy`/`strncmp`/`stpcpy`/
+`strtok` for real) against real `Csu` crt0 + `libc_string.a` --
+`nm -u`/`otool -l` confirm **zero undefined symbols**, still a fully
+static/dyld-free `LC_UNIXTHREAD` Mach-O.
+
+**Tier boundary found and correctly NOT pushed past**: the next ~35
+`Libc` string/locale/wide-char files (`strcasecmp`, `strcoll`, `strsignal`,
+all `wcs*`/`wmem*`) all cascade into `xlocale_private.h` ->
+`pthread/tsd_private.h` -- real per-thread-storage APIs
+(`_pthread_key_create`/`_pthread_getspecific`/etc.) that don't exist
+without a real `libpthread` bootstrap. Same class of dependency the prior
+Phase 4 pass already hit and correctly deferred for `cerror_stub.c`'s
+per-thread `errno`. **Not shimmed around** -- this is a real, correct
+place to stop and hand off, not a gap to paper over. `strdup`/`strndup`
+also won't fully *link* into a real program yet (they call `_malloc`,
+still Tier 2/unbuilt) even though they compile standalone today.
+
+**Next steps, in order**: (1) simple `stdlib`/`stdio` functions with no
+syscall or TSD dependency (a numeric-parsing/`qsort`-class tier, not yet
+surveyed), (2) a real heap allocator (`malloc`/`calloc`/`free` -- unlocks
+`strdup`/`strndup` fully linking, plus is a hard prerequisite for `stdio`),
+(3) real `libpthread` TSD bootstrap (unlocks locale/wide-char/`strerror`'s
+thread-safety, `errno` becoming real instead of the current
+single-threaded global stand-in). See `project_xnu_rpi3_userspace_libc_dyld.md`
+memory for the same findings with more provenance detail.
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions
