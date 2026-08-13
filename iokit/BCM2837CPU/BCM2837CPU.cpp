@@ -63,6 +63,22 @@ BCM2837CPU::initCPU(bool boot)
 		return;
 	}
 
+	// Backlog item 14: registerCPUInterruptController() used to run in
+	// this block, immediately after allocation - that call is what makes
+	// getPlatform()->lookUpInterruptController() find this controller
+	// from ANY config thread, including BCM2837LocalIntc's, which may be
+	// matching concurrently on a different config thread. If it ran
+	// before enableCPUInterrupt() (further down, after
+	// ml_processor_register()), a lookup landing in that window would
+	// find a real controller and call registerInterrupt() against it,
+	// which correctly self-heals by blocking in
+	// IOCPUInterruptController::registerInterrupt()'s thread_block() -
+	// see that function - until enabledCPUs catches up. Real per
+	// IOCPU.cpp: neither registerCPUInterruptController() nor
+	// enableCPUInterrupt() depends on the other having already run - so
+	// eliminate the window entirely rather than relying on the self-heal:
+	// only publish the controller after this CPU is actually enabled.
+	bool justCreatedIC = false;
 	if (sBCM2837CPUIC == NULL) {
 		IOCPUInterruptController *ic = OSTypeAlloc(IOCPUInterruptController);
 		if (ic == NULL) {
@@ -77,8 +93,8 @@ BCM2837CPU::initCPU(bool boot)
 			return;
 		}
 		ic->attach(this);
-		ic->registerCPUInterruptController();
 		sBCM2837CPUIC = ic;
+		justCreatedIC = true;
 	}
 
 	ml_processor_info_t procInfo;
@@ -104,6 +120,12 @@ BCM2837CPU::initCPU(bool boot)
 	ipi_handler = ipiHandler;
 
 	sBCM2837CPUIC->enableCPUInterrupt(this);
+
+	// Publish the controller only now that it's actually enabled - see
+	// the comment above at its allocation for why this moved here.
+	if (justCreatedIC) {
+		sBCM2837CPUIC->registerCPUInterruptController();
+	}
 
 	IOLog("BCM2837CPU: initCPU done, machProcessor=%p\n", (void *)machProcessor);
 }

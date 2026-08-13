@@ -33,6 +33,8 @@ BCM2837LocalIntc::init(OSDictionary *propTable)
 
 	fRegMap = NULL;
 	fRegBase = NULL;
+	fLoggedUnexpectedPending = false;
+	fLastUnexpectedPending = 0;
 
 	vectors = (IOInterruptVector *)IOMalloc(kNumVectors * sizeof(IOInterruptVector));
 	if (vectors == NULL) {
@@ -208,6 +210,27 @@ BCM2837LocalIntc::handleInterrupt(void * /*refCon*/, IOService * /*nub*/, int /*
 			disableVectorHard(kVectorGPUIRQ, vector);
 		}
 		vector->interruptActive = 0;
+	}
+
+	// Backlog item 2: this used to silently ignore any pending0 bit other
+	// than kVectorGPUIRQ. Structurally impossible to hit in QEMU
+	// (bcm2836_control_reset() zeroes the mailbox/local-timer control
+	// registers that would need to be live for one of these to assert),
+	// but real firmware may leave one enabled. A bit here that this
+	// driver doesn't service never gets cleared, so the CPU IRQ line
+	// stays asserted and sleh_irq() re-enters immediately - a silent
+	// spin with zero diagnostic trace, previously. Latch (not IOLog -
+	// this runs at real interrupt context, same reasoning as
+	// BCM2837SDHCI::interruptOccurred() avoiding IOLog there) the first
+	// occurrence so it's at least visible via a debugger/coredump instead
+	// of leaving no trace at all - implementing the actual mailbox/local-
+	// timer source handling is out of scope here (see docs/backlog.md
+	// item 3 for the related, separate LOCAL_TIMER_INT_CONTROL0
+	// question).
+	uint32_t unexpected = pending0 & ~(1U << kVectorGPUIRQ);
+	if (unexpected != 0 && !fLoggedUnexpectedPending) {
+		fLoggedUnexpectedPending = true;
+		fLastUnexpectedPending = unexpected;
 	}
 
 	return kIOReturnSuccess;

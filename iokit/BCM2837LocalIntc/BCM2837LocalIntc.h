@@ -53,6 +53,18 @@ private:
 	IOMemoryMap *fRegMap;
 	volatile uint32_t *fRegBase;
 
+	// Backlog item 2: one-shot latch + last-seen-value for the "pending0
+	// had a bit set other than the GPU IRQ" case handleInterrupt() used to
+	// silently ignore - see that function's own comment for the full
+	// reasoning (this can't self-clear since QA7's per-core IRQ Source
+	// register isn't ack'd here the way BCM2837InterruptController's
+	// peripheral pending registers are; a source setting one of these bits
+	// gets no chance to be serviced/cleared, so a real occurrence spins
+	// forever - flagging it once is strictly better than the prior total
+	// silence, without needing to implement mailbox/local-timer handling).
+	bool fLoggedUnexpectedPending;
+	uint32_t fLastUnexpectedPending;
+
 	enum {
 		kNumVectors = 32, // one bank, matches LOCAL_IRQ_PENDINGN(0)'s width
 
