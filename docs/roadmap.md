@@ -889,11 +889,10 @@ had by switching source).
 
 **Real blocker to flag up front, not previously encountered at this
 scale**: OpenSSH needs a real crypto backend (symmetric ciphers, MACs,
-DH/ECDH key exchange, host-key signing) -- the same class of problem
-already hit and solved narrowly for SHA-2 during bring-up (`g_crypto_funcs`
-never registered because the corecrypto kext isn't available, worked
-around with a from-scratch SHA-256/384/512 implementation, see
-project memory). OpenSSH's crypto surface is much larger than SHA-2 alone
+DH/ECDH key exchange, host-key signing) -- see Phase 7.5's "real
+corecrypto-backed cryptography" entry (the canonical tracking location
+for this gap, cross-referenced from Phase 8 too). OpenSSH's crypto
+surface is much larger than the already-solved SHA-2-only workaround
 (AES, HMAC, at minimum one of ECDSA/Ed25519/RSA for host keys, a real DH
 or ECDH implementation for key exchange). Check whether OpenSSH's own
 vendored fallback crypto (it can build against a bundled minimal crypto
@@ -986,6 +985,121 @@ Phase 7.
 
 ---
 
+## Phase 7.5: closed-source Apple subsystem gaps -- real kernel/OS capability limits
+
+**Added 2026-08-13.** A living list, not a single fixable item -- this
+project has repeatedly hit real Apple kernel subsystems that were never
+open-sourced, for which the only option was a deliberate stub that lets
+the kernel boot and lets callers link against the real API surface, but
+does not implement the real behavior behind it. Each one is a permanent,
+silent ceiling on what real software can actually do here, not a TODO
+that more source-pulling fixes -- distinct from this project's other
+"not yet built" gaps (which just need more implementation work) because
+**no amount of additional work on this project's own side removes these**
+short of writing a real, from-scratch replacement for a closed-source
+Apple internal subsystem, which is its own large, separate project per
+item. Positioned here (after Phase 6 networking, before Phase 8 package
+management) because both of Phase 8's package manager and Phase 7b's
+`sshd` concretely run into the crypto gap below -- read this phase before
+either.
+
+**Update this list whenever a new instance of this pattern is found** --
+same format each time: what's stubbed, what's actually closed-source
+behind it, what real capability that blocks, current workaround (if any)
+and its limits, which other phases/features are affected.
+
+### Real pthread multithreading (`bsdthread_create`/`workq_kernreturn`/`psynch_*`)
+
+**Stubbed in**: `third_party/xnu-7195/bsd/kern/bsd_pthread_stub.c` --
+every one of these takes its real arguments and unconditionally returns
+`ENOTSUP`, standing in for Apple's real pthread.kext internals (never
+open-sourced, same closed-source-gap class as launchd/opendirectoryd from
+Phase 4 -- but those two got a real structural replacement instead of a
+permanent stub: a custom PID-1 in place of launchd, a custom flat-file
+resolver in place of opendirectoryd, each fully covering the actual need
+without the original closed subsystem. This entry and the crypto one
+below don't have an equivalent "just build something structurally
+different" option -- multithreading and cryptography are lower-level
+primitives other real code calls into directly, not services that can be
+swapped for a differently-shaped replacement).
+
+**What's actually closed-source**: the kernel-side thread-bootstrap/
+scheduling logic that turns a `pthread_create()` call into a real second
+schedulable thread. `third_party/libpthread`'s userspace source (real,
+open, already cloned) is confirmed to be just a thin wrapper over these
+exact syscalls -- pulling more of it cannot help, the work happens in the
+kernel half, which doesn't exist here.
+
+**Real capability blocked**: any program that spawns additional threads.
+This includes **GCD/`libdispatch`** (also real open source, also already
+cloned at `third_party/libdispatch`+`third_party/libclosure`) -- it would
+very likely compile, but real concurrent block dispatch needs the same
+`workq` kernel mechanism, so it would hit the identical wall the moment it
+tried to actually run work on a second thread. Net effect: **this
+project's entire userland is single-threaded, indefinitely, for every
+program that ever runs on it** -- not a per-program limitation, a
+platform-wide one.
+
+**Current workaround, and its limit**: a real, working per-thread-storage
+(TSD) bootstrap was found and confirmed on-target (2026-08-13, see Phase
+4's `Libc` section and `project_xnu_rpi3_userspace_libc_dyld.md` memory)
+via a *different*, separate, non-stubbed kernel path
+(`platform_syscall`/`TPIDRRO_EL0`). That only solves "give the one thread
+that exists real per-thread storage" -- it does not and cannot create a
+second thread. Real multithreading stays fully blocked.
+
+**Real fix, if ever wanted**: implement real thread-creation/scheduling
+logic in `bsd_pthread_stub.c` (or a genuine replacement for it) --
+plausibly modeled on FreeBSD's `kern_thread.c`/`umtx` machinery the same
+way this project's other closed-Apple-subsystem substitutions have drawn
+on FreeBSD, per the project's standing Apple-first/FreeBSD-fallback rule
+-- touching `bsd/kern/` and likely `osfmk/` for the actual context-switch/
+scheduler integration. A large, separate kernel project; not scoped into
+any phase above, flagged here so it isn't silently assumed available by
+a later phase that needs it.
+
+### Real corecrypto-backed cryptography
+
+**Stubbed/missing**: `g_crypto_funcs` is never registered (the
+corecrypto kext isn't available in this public source tree) -- already
+hit and narrowly worked around once, for SHA-256/384/512 specifically
+(a real, from-scratch implementation, see project memory), needed just to
+get `bsd_init()` itself past a hard dependency during bring-up.
+
+**What's actually closed-source**: Apple's real corecrypto kext -- the
+actual AES, HMAC, RSA/ECDSA/Ed25519, DH/ECDH, and cryptographic-quality
+random number generation implementations real macOS ships. Not
+open-sourced (same class as pthread.kext above).
+
+**Real capability blocked, larger than it first looked**: the SHA-2
+workaround made it look like a narrow, already-solved problem, but it
+reappears at real scale in **two later phases already written above**:
+Phase 7b's `sshd` needs a real crypto backend for ciphers/MACs/key
+exchange/host-key signing (OpenSSH's own vendored fallback crypto may
+cover this -- not yet verified, flagged in that section); Phase 8's
+package manager needs real EC crypto (`libecc`) for repo/package
+signature verification. **Both phases need real crypto primitives beyond
+SHA-2, and should check for overlap with each other (and with this
+section) before either independently ports/writes a second crypto
+implementation.**
+
+**Current workaround, and its limit**: from-scratch SHA-256/384/512 only.
+Covers integrity/hashing needs (e.g. package checksums, if `pkg` accepts
+SHA-2 for that role instead of BLAKE2). Does **not** cover encryption,
+signing, or key exchange -- `sshd` and any TLS/signature-verification use
+case need real cipher/asymmetric-crypto implementations this project
+does not have yet.
+
+**Real fix, if ever wanted**: either a real from-scratch implementation
+of the specific primitives each consuming phase actually needs (more of
+the same pattern as the SHA-2 workaround, scoped to what's used, not a
+full corecrypto reimplementation), or vendor a real portable crypto
+library (e.g. OpenSSH's own bundled fallback, or a FreeBSD-lineage
+implementation per the project's standing source-priority rule) instead
+of targeting Apple's real (closed) API surface at all.
+
+---
+
 ## Phase 8: package management (`pkg`)
 
 Added 2026-08-11, split out of what was originally Phase 7c's
@@ -1050,10 +1164,10 @@ actually build against this project's Libc/dyld:
   manifests all use this format).
 - `libecc` -- elliptic-curve crypto for repo/package signature
   verification. Small and self-contained relative to a full TLS stack --
-  **check for overlap with Phase 7b's OpenSSH crypto-backend work before
-  porting twice**, both phases need real EC crypto primitives on a kernel
-  that has no corecrypto kext (same class of gap already hit once for
-  SHA-2 during bring-up, see project memory).
+  **see Phase 7.5's "real corecrypto-backed cryptography" entry** (the
+  canonical tracking location for this gap now) before porting -- check
+  for overlap with Phase 7b's OpenSSH crypto-backend work first, both
+  need real EC crypto primitives on a kernel with no corecrypto kext.
 - `libblake2` -- BLAKE2 checksums for package integrity.
 - `liblua` -- embedded Lua interpreter, used for `pkg`'s install
   scripts/triggers (`pkg-lua-script.5`/`pkg-triggers.5`). A real added
