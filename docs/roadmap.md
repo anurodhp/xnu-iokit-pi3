@@ -654,21 +654,31 @@ keys (inert for this file's own test, fixed anyway since this is meant to
 be faithful, not "passes by accident"), and a build-script exit-code bug
 that would report false failure on success.
 
-**Verification status, stated precisely rather than overclaimed**: clean
-compile, link with **zero undefined symbols**, still a static/dyld-free
-`LC_UNIXTHREAD` Mach-O (`nm -u`/`otool -l` confirmed). **Could not get
-true execution-based confirmation this pass** -- and confirmed *why*, not
-just "didn't try": even the simplest possible freestanding static binary
-in this project (`crt0_smoketest.c`, no `platform_syscall` involved at
-all) is killed (exit 137) by this host's own hardened-runtime/AMFI
-enforcement before `main()` ever runs, a real structural limitation of
-running any of this project's freestanding binaries directly on a modern
-macOS host, not a signal about this file specifically. **The real next
-step is a QEMU boot-test** of `tsd_bootstrap.macho` (same pattern as
-`tools/init_binary/inject_into_sd_image.sh`/`run_qemu.sh`) to confirm the
-platform_syscall round-trip and the `pthread_key_create`/`getspecific`/
-`setspecific` values for real, before building further Libc locale/wide-
-char work on top of it.
+**CONFIRMED FOR REAL via QEMU boot-test (2026-08-13, same day)**: clean
+compile, link with zero undefined symbols, static/dyld-free
+`LC_UNIXTHREAD` Mach-O (as before) -- and now genuine execution
+confirmation too, closing the gap the prior pass correctly stopped short
+of. Added a small `open_console_if_needed()` (mirrors `init.c`'s own
+`/dev/console` dance -- needed because a binary run directly as PID 1
+inherits an empty fd table) so this smoketest is self-verifying when
+booted standalone, then injected `tsd_bootstrap.macho` as `/sbin/launchd`
+on a scratch copy of the SD image (not the shared golden one) and booted
+it for real. Console output, verbatim:
+```
+tsd_bootstrap: platform_syscall confirms TPIDRRO_EL0 base set
+tier A: _os_tsd_get_direct/_os_tsd_set_direct round-trip a real value
+tier B: pthread_key_create/setspecific/getspecific work: real independent TSD slots
+tsd_bootstrap smoketest: all real
+```
+followed by a clean `exit status 0` (the subsequent
+`panic(...): initproc exited` is the expected, harmless "PID 1 returned
+with nothing to take over" case, not a crash). Real TSD is genuinely
+working end to end: the `platform_syscall` bootstrap, the real
+`TPIDRRO_EL0` round-trip, and two independent `pthread_key_create`-derived
+slots not aliasing each other -- all confirmed on-target, not just
+linked. **This directly unblocks the ~35 locale/wide-char/thread-safe-
+`strerror` Libc files found gated on TSD** -- that's the real next step,
+not further TSD verification.
 
 See `project_xnu_rpi3_userspace_libc_dyld.md` memory for the same
 findings with more provenance detail, plus a brief `Libinfo` survey for

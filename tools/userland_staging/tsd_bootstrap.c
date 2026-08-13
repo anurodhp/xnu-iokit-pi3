@@ -86,6 +86,32 @@ static long syscall3(long num, long a0, long a1, long a2) {
     return x0;
 }
 
+/* When run directly as PID 1 (e.g. temporarily swapped in for
+ * tools/init_binary/init.c to boot-test this file in isolation), the
+ * kernel hands over an empty fd table - fd 1 isn't open, so put() below
+ * would silently write nowhere. Real PID 1 (init.c) has to do this same
+ * open dance itself; mirrored here so this smoketest is self-verifying
+ * when booted standalone, not just when run as an ordinary child process
+ * that already inherited a console. Harmless/unnecessary (already-open
+ * fds 0-2 just get skipped) when run the normal way. */
+static void open_console_if_needed(void) {
+    register long x0 asm("x0") = (long) "/dev/console";
+    register long x1 asm("x1") = 2 /* O_RDWR */;
+    register long x2 asm("x2") = 0;
+    register long x16 asm("x16") = 5 /* SYS_open */;
+    asm volatile("svc #0x80" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x16) : "memory", "cc");
+    if (x0 < 0) {
+        return;
+    }
+    for (int i = 0; i < 2; i++) {
+        register long y0 asm("x0") = (long) "/dev/console";
+        register long y1 asm("x1") = 2;
+        register long y2 asm("x2") = 0;
+        register long y16 asm("x16") = 5;
+        asm volatile("svc #0x80" : "+r"(y0) : "r"(y1), "r"(y2), "r"(y16) : "memory", "cc");
+    }
+}
+
 static void put(const char *s) {
     size_t n = 0;
     while (s[n]) {
@@ -209,6 +235,7 @@ static void *my_pthread_getspecific(int key) {
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
+    open_console_if_needed();
 
     if (!tsd_bootstrap()) {
         put("tsd_bootstrap: FAILED (platform_syscall set/get mismatch)\n");
