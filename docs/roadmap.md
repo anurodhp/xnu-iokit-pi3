@@ -163,30 +163,40 @@ real root. See `project_xnu_rpi3_status` memory ("SD CARD MILESTONE
 REACHED", "INTERACTIVE SHELL MILESTONE REACHED") for the full writeup.
 
 **Real ARM64 IRQ delivery through the SDHCI interrupt path -- the one open
-item from this phase's original scope -- is now CONFIRMED reaching
-`BCM2837SDHCI::interruptOccurred()` (2026-08-13)**, once `BCM2837CPU`
-(added later, see Phase 4-adjacent history) existed to wire
-`sleh_irq -> IOCPUInterruptController -> BCM2837LocalIntc ->
-BCM2837InterruptController -> BCM2837SDHCI` end to end -- it genuinely
-didn't when this phase's polling workaround was first written. Added two
-counters (`fRealInterruptHits`/`fPollFallbackHits`) to
-`iokit/BCM2837SDHCI/BCM2837SDHCI.{cpp,h}` to tell the two paths apart from
-a real boot log rather than guessing, and confirmed via `_pty_test.py`: a
-real QEMU boot's CMD17 (single block read) data-transfer completion --
-the actual I/O-latency-sensitive path -- was resolved by a genuine
-hardware interrupt. **Not yet 100% of waits**, though: that same boot's
-very first command (CMD0, issued immediately after
-`BCM2837LocalIntc: registered against IOPlatformInterruptController`)
-still resolved via the poll fallback -- plausibly a narrow startup race
-before the interrupt chain is fully "hot" for the first command right
-after registration, not re-broken delivery, but not root-caused further
-since the existing hybrid poll+interrupt design in `waitForIntStatus32()`
-already covers it correctly either way. **Decision: keep the hybrid
-design, do not revert to a pure blocking wait** until interrupt delivery
-is confirmed for 100% of waits, not just most of them -- reverting now
-would risk a real hang on whichever wait doesn't get a real interrupt.
-This closes out Phase 3's original scope; the rest of this section is
-kept as historical record of the original plan.
+item from this phase's original scope -- remains UNCONFIRMED (status
+corrected 2026-08-13).** An earlier pass this same day added two counters
+(`fRealInterruptHits`/`fPollFallbackHits`) to
+`iokit/BCM2837SDHCI/BCM2837SDHCI.{cpp,h}` to tell genuine-interrupt
+completions apart from the pre-existing poll fallback, and initially
+reported (both here and in code comments) that a real QEMU boot's CMD17
+data-transfer completion was resolved by a genuine hardware interrupt.
+**That claim was wrong** -- an adversarial code review caught a real bug
+in the counters themselves: they credited a hit at the *consuming* side
+(whichever `waitForIntStatus32()` call happened to find
+`fPendingIntStatus` already set), but the poll fallback block is *also* a
+writer of `fPendingIntStatus`, and can leave mask-irrelevant bits set for
+a later, unrelated call to wrongly claim as "a genuine interrupt just
+arrived." Fixed the counters to credit each source unconditionally at the
+point it actually observes the register (inside `interruptOccurred()` for
+real interrupts, inside the poll block itself for polling), rebuilt, and
+re-verified: with the fix in place, `fRealInterruptHits` stayed at **0**
+for an entire boot's worth of command/data-transfer completions (multiple
+CMD17 reads across partition-scheme detection and `hfs` mount) -- every
+single one was resolved by the poll fallback. So the honest current state
+is the opposite of what was briefly claimed here: as far as this driver
+has ever actually observed, `BCM2837CPU`'s interrupt cascade
+(`sleh_irq -> IOCPUInterruptController -> BCM2837LocalIntc ->
+BCM2837InterruptController`) has not been confirmed to reach
+`BCM2837SDHCI::interruptOccurred()` at all. Whether that's a real gap
+specific to this device's interrupt line/vector, or a registration/
+enablement issue in this driver, is not root-caused. **This does not
+block Phase 3's exit criteria** -- the existing hybrid poll+interrupt
+design in `waitForIntStatus32()` already handles this correctly and has
+the whole time (a real interrupt would still win immediately via
+`IOLockWakeup()` if one ever fires) -- but the phase's originally-scoped
+"real ARM64 IRQ delivery" open item should be read as still open, not
+closed. The rest of this section is kept as historical record of the
+original plan.
 
 **Depends on**: Phase 1's kernel. Does *not* depend on Phase 2 (mockfs and
 real-SD-root are alternative roots, not sequential -- this phase can be

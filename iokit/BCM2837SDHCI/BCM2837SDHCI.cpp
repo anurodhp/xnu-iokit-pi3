@@ -41,6 +41,8 @@ BCM2837SDHCI::init(OSDictionary *properties)
 	fPendingIntStatus = 0;
 	fRealInterruptHits = 0;
 	fPollFallbackHits = 0;
+	fLoggedRealInterrupt = false;
+	fLoggedPollFallback = false;
 	fInterruptLock = IOLockAlloc();
 	if (fInterruptLock == NULL) {
 		return false;
@@ -133,6 +135,19 @@ BCM2837SDHCI::interruptOccurred(OSObject *target, void * /*refCon*/, IOService *
 	if (known != 0) {
 		IOInterruptState istate = IOSimpleLockLockDisableInterrupt(self->fStatusLock);
 		self->fPendingIntStatus |= known;
+		// Credited here, unconditionally, regardless of what any particular
+		// waitForIntStatus32() call's mask cares about right now - this is
+		// the one and only place that can honestly claim "a real ARM64 IRQ
+		// reached this driver". (Counting this at the *consuming* side in
+		// waitForIntStatus32() instead was tried first and was wrong: bits
+		// in `known` outside a given call's mask are left set in
+		// fPendingIntStatus for a *later* call to find already-pending on
+		// its very first loop iteration, with no new interrupt or poll
+		// having actually happened - that later call has no way to tell
+		// "leftover from this function's own earlier poll" apart from "a
+		// genuine interrupt fired just now". See fPollFallbackHits' own
+		// comment for the symmetric fix on the poll side.)
+		self->fRealInterruptHits++;
 		IOSimpleLockUnlockEnableInterrupt(self->fStatusLock, istate);
 
 		IOLockWakeup(self->fInterruptLock, (void *)&self->fPendingIntStatus, false);
@@ -151,31 +166,34 @@ BCM2837SDHCI::waitForIntStatus32(uint32_t mask, uint32_t timeoutUs, uint32_t *ou
 	// doesn't actually take fInterruptLock (see interruptOccurred()), it
 	// just targets the same wait event address.
 	//
-	// KEPT DELIBERATELY (no longer just a stopgap): this sleeps in short
-	// (1ms) increments and directly polls+acks the raw INT_STATUS register
-	// on every wakeup, rather than sleeping straight through to the full
+	// KEPT (status corrected 2026-08-13): this sleeps in short (1ms)
+	// increments and directly polls+acks the raw INT_STATUS register on
+	// every wakeup, rather than sleeping straight through to the full
 	// deadline as originally written back when (2026-08-09) this board's
 	// real interrupt cascade was confirmed NOT reaching interruptOccurred()
-	// at all (no BCM2837CPU/IOCPUInterruptController existed yet to wire
-	// it end to end). That's since changed: BCM2837CPU now wires
+	// at all (no BCM2837CPU/IOCPUInterruptController existed yet to wire it
+	// end to end). BCM2837CPU has since been added and does wire
 	// sleh_irq -> IOCPUInterruptController -> BCM2837LocalIntc ->
-	// BCM2837InterruptController -> here, and fRealInterruptHits vs
-	// fPollFallbackHits (added 2026-08-13) confirmed via a real QEMU boot
-	// that genuine hardware interrupts DO reach interruptOccurred() now -
-	// but not for every single wait (that same boot's very first command
-	// still needed the poll fallback; see the class header comment for the
-	// exact log evidence and a plausible explanation). Until interrupt
-	// delivery is confirmed for 100% of waits rather than "at least the
-	// data-transfer-completion path, most of the time," reverting this to
-	// a pure blocking IOLockSleepDeadline() would risk actually hanging on
-	// whichever wait doesn't get a real interrupt - keeping the hybrid is
-	// the correct choice, not unfinished cleanup. This polling fallback
-	// mirrors exactly what interruptOccurred() does, so it's a strict
-	// superset: if a real interrupt does fire, IOLockWakeup() below still
-	// wins immediately (this loop is not the only way to observe the
-	// bits); if not, the next 1ms poll tick picks it up instead. Verified
-	// end-to-end against a real (emulated) SD card this way: full init
-	// sequence + a real PIO block read returning correct data.
+	// BCM2837InterruptController -> here in principle, but a correctly-
+	// measured real QEMU boot (fRealInterruptHits/fPollFallbackHits, fixed
+	// 2026-08-13 after an adversarial review caught the earlier version
+	// crediting hits at the wrong place - see the class header comment for
+	// the full story) shows fRealInterruptHits at 0 for an entire boot's
+	// worth of command/data-transfer completions - every single one was
+	// resolved by this poll fallback, not a real interrupt. So this isn't
+	// "mostly interrupt-driven, with one edge case still polling" as an
+	// earlier (buggy-counter-driven) version of this comment claimed - as
+	// far as this driver has ever actually observed, it is currently
+	// 100% poll-driven, and the interrupt path's end-to-end reach into
+	// THIS driver's vector remains genuinely unconfirmed. Not root-caused
+	// further yet. Keeping this hybrid (not reverting to a pure blocking
+	// IOLockSleepDeadline()) is still correct either way: if a real
+	// interrupt ever does fire, IOLockWakeup() below still wins
+	// immediately (this loop is not the only way to observe the bits); if
+	// not, the next 1ms poll tick picks it up, which is what has been
+	// happening this whole time. Verified end-to-end against a real
+	// (emulated) SD card this way: full init sequence + a real PIO block
+	// read returning correct data, purely via polling.
 	IOLockLock(fInterruptLock);
 	uint32_t matched = 0;
 	uint32_t waitedUs = 0;
@@ -189,16 +207,13 @@ BCM2837SDHCI::waitForIntStatus32(uint32_t mask, uint32_t timeoutUs, uint32_t *ou
 		IOSimpleLockUnlockEnableInterrupt(fStatusLock, istate);
 
 		if (matched != 0) {
-			// Reached here without this iteration's own poll block (below)
-			// ever running - the only other writer of fPendingIntStatus is
-			// interruptOccurred(), so this is a genuine ARM64 IRQ, not this
-			// loop noticing on its own.
-			uint32_t hits = ++fRealInterruptHits;
-			if (hits == 1) {
-				IOLog("BCM2837SDHCI: real hardware interrupt observed "
-				    "(interruptOccurred() -> waitForIntStatus32(), "
-				    "no polling needed)\n");
-			}
+			// NOTE: do NOT attribute a hit-counter bump here. fPendingIntStatus
+			// can be set either by interruptOccurred() OR by this same
+			// function's own poll block below (in a *previous* call, for
+			// mask bits that call didn't care about) - by the time we're
+			// here we cannot tell which. Both real sources credit their own
+			// counters directly at the point they actually observe the
+			// register (see interruptOccurred() and the poll block below).
 			break;
 		}
 
@@ -219,18 +234,19 @@ BCM2837SDHCI::waitForIntStatus32(uint32_t mask, uint32_t timeoutUs, uint32_t *ou
 			if (known != 0) {
 				istate = IOSimpleLockLockDisableInterrupt(fStatusLock);
 				fPendingIntStatus |= known;
+				// Credited here, unconditionally on `known != 0`, not on
+				// `matched != 0` below - this call's own direct register
+				// read genuinely found real bits regardless of whether they
+				// happen to be ones *this* call's mask wants (see
+				// interruptOccurred()'s matching comment for why
+				// mask-gating the counter was the original bug).
+				fPollFallbackHits++;
 				matched = fPendingIntStatus & mask;
 				if (matched != 0) {
 					fPendingIntStatus &= ~matched;
 				}
 				IOSimpleLockUnlockEnableInterrupt(fStatusLock, istate);
 				if (matched != 0) {
-					uint32_t hits = ++fPollFallbackHits;
-					if (hits == 1) {
-						IOLog("BCM2837SDHCI: poll fallback resolved a wait "
-						    "(no interrupt arrived within one %u us tick)\n",
-						    kPollIntervalUs);
-					}
 					break;
 				}
 			}
@@ -246,6 +262,24 @@ BCM2837SDHCI::waitForIntStatus32(uint32_t mask, uint32_t timeoutUs, uint32_t *ou
 		waitedUs += kPollIntervalUs;
 	}
 	IOLockUnlock(fInterruptLock);
+
+	// One-shot logging, done here rather than at either counter's
+	// increment site: interruptOccurred() runs at interrupt level and may
+	// not IOLog (see its own comment); this function's poll block *could*
+	// safely log inline, but doing both counters' logging in the one place
+	// that's always safe keeps the two paths symmetric. Benign race on the
+	// counter reads below (no lock) - this is a one-time diagnostic message,
+	// not something correctness depends on.
+	if (!fLoggedRealInterrupt && fRealInterruptHits > 0) {
+		fLoggedRealInterrupt = true;
+		IOLog("BCM2837SDHCI: real hardware interrupt observed at least once "
+		    "(interruptOccurred() -> waitForIntStatus32())\n");
+	}
+	if (!fLoggedPollFallback && fPollFallbackHits > 0) {
+		fLoggedPollFallback = true;
+		IOLog("BCM2837SDHCI: poll fallback resolved at least one wait "
+		    "(no interrupt arrived within one %u us tick)\n", kPollIntervalUs);
+	}
 
 	if (outStatus != NULL) {
 		*outStatus = matched;
@@ -264,11 +298,12 @@ BCM2837SDHCI::pinmuxSDSlot(void)
 	// DT node/IOKit driver (GPIO isn't this driver's provider, and no
 	// IOKit driver for "gpio" exists in this project yet regardless).
 	const IOPhysicalAddress kGPIOBase = 0x3f200000;
+	const IOByteCount kGPFSEL3Offset = 0x0C; // pins 30-39
 	const IOByteCount kGPFSEL4Offset = 0x10; // pins 40-49
 	const IOByteCount kGPFSEL5Offset = 0x14; // pins 50-59
-	const IOByteCount kMapLen = (kGPFSEL5Offset - kGPFSEL4Offset) + sizeof(uint32_t);
+	const IOByteCount kMapLen = (kGPFSEL5Offset - kGPFSEL3Offset) + sizeof(uint32_t);
 
-	IODeviceMemory *devMem = IODeviceMemory::withRange(kGPIOBase + kGPFSEL4Offset, kMapLen);
+	IODeviceMemory *devMem = IODeviceMemory::withRange(kGPIOBase + kGPFSEL3Offset, kMapLen);
 	if (devMem == NULL) {
 		IOLog("BCM2837SDHCI: pinmuxSDSlot: IODeviceMemory::withRange failed\n");
 		return false;
@@ -282,22 +317,52 @@ BCM2837SDHCI::pinmuxSDSlot(void)
 
 	volatile uint32_t *fsel = (volatile uint32_t *)map->getVirtualAddress();
 
-	// GPFSEL4 (fsel[0]): GPIO48 at bits[26:24], GPIO49 at bits[29:27].
-	uint32_t fsel4 = fsel[0];
-	fsel4 = (fsel4 & ~(0x7U << 24)) | (0x7U << 24); // GPIO48 = ALT3
-	fsel4 = (fsel4 & ~(0x7U << 27)) | (0x7U << 27); // GPIO49 = ALT3
-	fsel[0] = fsel4;
+	// REAL-HARDWARE BUG FOUND (2026-08-13 adversarial review) AND FIXED:
+	// this function used to only touch GPFSEL4/5 (GPIO40-59), routing
+	// GPIO48-53 to ALT3 for the physical SD slot - but never touched
+	// GPFSEL3, so GPIO34-39 were left at the firmware's power-on default
+	// of ALT3 too, which on a real Pi 3 Model B routes the on-board
+	// BCM43438 WiFi/BT chip's SDIO lines to the SAME Arasan/EMMC
+	// controller this driver drives. With both left muxed on, CMD0/CMD8/
+	// ACMD41 broadcast to both devices and CMD2/CMD3 responses collide on
+	// the shared open-drain CMD line - real silicon would see spurious
+	// CRC errors or end up talking to the WiFi chip's RCA instead of the
+	// SD card's. Invisible in QEMU: this driver's header already notes
+	// QEMU parents the emulated SD card onto the bus at reset regardless
+	// of GPFSEL, so there was never a collision to see in emulation.
+	// Fixed by also setting GPIO34-39 to INPUT (0b000, the real
+	// "unclaimed" state - not ALT3), so the on-board WiFi/BT chip's SDIO
+	// bus is disconnected before GPIO48-53 claims the same controller for
+	// the physical slot.
+	const uint32_t kFSelInput = 0x0;
+	const uint32_t kFSelAlt3 = 0x7;
 
-	// GPFSEL5 (fsel[1]): GPIO50/51/52/53 at bits[2:0]/[5:3]/[8:6]/[11:9].
-	uint32_t fsel5 = fsel[1];
-	fsel5 = (fsel5 & ~(0x7U << 0)) | (0x7U << 0);   // GPIO50 = ALT3
-	fsel5 = (fsel5 & ~(0x7U << 3)) | (0x7U << 3);   // GPIO51 = ALT3
-	fsel5 = (fsel5 & ~(0x7U << 6)) | (0x7U << 6);   // GPIO52 = ALT3
-	fsel5 = (fsel5 & ~(0x7U << 9)) | (0x7U << 9);   // GPIO53 = ALT3
-	fsel[1] = fsel5;
+	// GPFSEL3 (fsel[0]): GPIO34 at bits[14:12] .. GPIO39 at bits[29:27].
+	uint32_t fsel3 = fsel[0];
+	fsel3 = (fsel3 & ~(0x7U << 12)) | (kFSelInput << 12); // GPIO34 = input (was WiFi/BT ALT3)
+	fsel3 = (fsel3 & ~(0x7U << 15)) | (kFSelInput << 15); // GPIO35
+	fsel3 = (fsel3 & ~(0x7U << 18)) | (kFSelInput << 18); // GPIO36
+	fsel3 = (fsel3 & ~(0x7U << 21)) | (kFSelInput << 21); // GPIO37
+	fsel3 = (fsel3 & ~(0x7U << 24)) | (kFSelInput << 24); // GPIO38
+	fsel3 = (fsel3 & ~(0x7U << 27)) | (kFSelInput << 27); // GPIO39
+	fsel[0] = fsel3;
 
-	IOLog("BCM2837SDHCI: pinmuxSDSlot: GPIO48-53 -> ALT3 (GPFSEL4=%#x GPFSEL5=%#x)\n",
-	    fsel4, fsel5);
+	// GPFSEL4 (fsel[1]): GPIO48 at bits[26:24], GPIO49 at bits[29:27].
+	uint32_t fsel4 = fsel[1];
+	fsel4 = (fsel4 & ~(0x7U << 24)) | (kFSelAlt3 << 24); // GPIO48 = ALT3
+	fsel4 = (fsel4 & ~(0x7U << 27)) | (kFSelAlt3 << 27); // GPIO49 = ALT3
+	fsel[1] = fsel4;
+
+	// GPFSEL5 (fsel[2]): GPIO50/51/52/53 at bits[2:0]/[5:3]/[8:6]/[11:9].
+	uint32_t fsel5 = fsel[2];
+	fsel5 = (fsel5 & ~(0x7U << 0)) | (kFSelAlt3 << 0);   // GPIO50 = ALT3
+	fsel5 = (fsel5 & ~(0x7U << 3)) | (kFSelAlt3 << 3);   // GPIO51 = ALT3
+	fsel5 = (fsel5 & ~(0x7U << 6)) | (kFSelAlt3 << 6);   // GPIO52 = ALT3
+	fsel5 = (fsel5 & ~(0x7U << 9)) | (kFSelAlt3 << 9);   // GPIO53 = ALT3
+	fsel[2] = fsel5;
+
+	IOLog("BCM2837SDHCI: pinmuxSDSlot: GPIO34-39 -> input, GPIO48-53 -> ALT3 "
+	    "(GPFSEL3=%#x GPFSEL4=%#x GPFSEL5=%#x)\n", fsel3, fsel4, fsel5);
 
 	// Deliberately not releasing `map`: confirmed via a live crash
 	// (backtrace through IOMemoryMap::free() ->
@@ -482,7 +547,7 @@ BCM2837SDHCI::cardIdentify(void)
 		if (!sendCommand(55, 0, kCmdRespShort, false, r55)) {
 			break;
 		}
-		if (!sendCommand(41, 0x40FF8000, kCmdRespShort, false, r41)) {
+		if (!sendCommand(41, 0x40FF8000, kCmdRespShortNoChecks, false, r41)) {
 			break;
 		}
 		acmd41Resp = r41[0];

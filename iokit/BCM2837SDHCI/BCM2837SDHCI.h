@@ -6,10 +6,13 @@
  * devicetrees/rpi3.dts and project memory for why (sdhost has no public
  * register reference outside Linux's own driver; this one is close to
  * standard SDHCI). GPIO48-53 pinmux to ALT3 (routing this controller to
- * the physical SD slot instead of the onboard SDIO WiFi, GPIO34-39 by
- * default) is done in start() via pinmuxSDSlot() - real-hardware
- * correctness only, confirmed NOT required for QEMU testing (see that
- * method's own comment for why).
+ * the physical SD slot) AND GPIO34-39 pinmux to input (explicitly
+ * disconnecting the onboard SDIO WiFi from this same controller - the
+ * firmware's power-on default leaves it at ALT3 too, which would otherwise
+ * contend on the shared bus with the physical slot; found+fixed
+ * 2026-08-13, see pinmuxSDSlot()'s own comment) is done in start() via
+ * pinmuxSDSlot() - real-hardware correctness only, confirmed NOT required
+ * for QEMU testing (see that method's own comment for why).
  *
  * BCM2835-specific quirks confirmed from Linux's sdhci-iproc.c
  * (bcm2835_data / sdhci_bcm2835_pltfm_data), baked into this driver's
@@ -52,22 +55,35 @@
  *     yet verified against real hardware.
  *   - Real ARM64 IRQ delivery through this board's interrupt cascade
  *     (BCM2837CPU/IOCPUInterruptController -> BCM2837LocalIntc ->
- *     BCM2837InterruptController) is now CONFIRMED reaching
- *     interruptOccurred() (fRealInterruptHits, added + verified 2026-08-13,
- *     once BCM2837CPU existed to wire the cascade end to end - it didn't
- *     when this was originally written). A real QEMU boot's CMD17 (single
- *     block read) data-transfer completion - the actual I/O-latency-
- *     sensitive path - was resolved by a genuine hardware interrupt, not
- *     the poll fallback. Not yet 100% of waits, though: that same boot's
- *     very first command (CMD0, issued immediately after
- *     "BCM2837LocalIntc: registered against IOPlatformInterruptController")
- *     still resolved via the poll fallback (fPollFallbackHits) - plausibly
- *     a narrow startup race before the interrupt chain is fully "hot" for
- *     the first command issued right after registration, not re-broken
- *     delivery; not root-caused further since the hybrid design already
- *     covers it correctly either way (see waitForIntStatus32()). Given
- *     that partial-but-real picture, the poll fallback is being kept
- *     deliberately rather than reverted to a pure blocking wait.
+ *     BCM2837InterruptController) to THIS driver specifically is STILL
+ *     UNCONFIRMED, corrected 2026-08-13 after an adversarial review caught
+ *     a real bug in this file's own measurement of it. An earlier version
+ *     of fRealInterruptHits/fPollFallbackHits credited a hit to
+ *     "genuine interrupt" at the *consuming* side (whichever
+ *     waitForIntStatus32() call happened to find fPendingIntStatus already
+ *     set) rather than at the true source - but the poll block below is
+ *     ALSO a writer of fPendingIntStatus, and can leave mask-irrelevant
+ *     bits set for a *later* call to wrongly claim credit for. That bug
+ *     produced a false "CMD17 data-transfer completion resolved by a
+ *     genuine hardware interrupt" claim in an earlier version of this
+ *     comment (and in docs/roadmap.md - both since corrected). Fixed the
+ *     counters to credit each source unconditionally at the point it
+ *     actually observes the register (see interruptOccurred() and the
+ *     poll block in waitForIntStatus32() for exactly where), then
+ *     re-verified on a real QEMU boot: with the fix in place,
+ *     fRealInterruptHits stayed at 0 for the ENTIRE boot (multiple CMD17
+ *     data-transfer completions across partition-scheme detection and hfs
+ *     mount, all resolved via fPollFallbackHits instead). So the honest
+ *     current state is: real interrupt delivery to this driver has not
+ *     been observed at all, not "confirmed for some waits." Whether
+ *     BCM2837CPU's IRQ cascade genuinely doesn't reach this specific
+ *     device's vector, or reaches it but something in this driver's own
+ *     registration/enablement is wrong, is unresolved - not root-caused
+ *     further yet. The hybrid poll+interrupt design in
+ *     waitForIntStatus32() already covers this correctly either way (a
+ *     real interrupt would still win immediately via IOLockWakeup() if one
+ *     ever does fire), so there's no functional risk from leaving this
+ *     open, just an open diagnostic question.
  *   - Card-insertion/removal interrupts (SDHCI_INT_CARD_INSERT/REMOVE) are
  *     unimplemented - reportMediaState() never reports a changed state.
  *   - Voltage/power sequencing (SDHCI_POWER_CONTROL) uses the standard
@@ -98,15 +114,20 @@ private:
 	IOSimpleLock *fStatusLock;      // protects fPendingIntStatus between interruptOccurred() and waiters
 	volatile uint32_t fPendingIntStatus; // INT_STATUS bits acked but not yet consumed by a waitFor call
 
-	// Diagnostic-turned-permanent counters (see waitForIntStatus32()):
-	// fRealInterruptHits counts waits satisfied by interruptOccurred()
-	// alone (a genuine ARM64 IRQ arrived before this loop's own next poll
-	// tick); fPollFallbackHits counts waits this loop had to resolve by
-	// reading INT_STATUS itself. Distinguishing these is what let Phase 3's
-	// "is real interrupt delivery reaching this driver" question actually
-	// get answered from a real boot log instead of guessed at.
+	// Diagnostic-turned-permanent counters (see waitForIntStatus32() and
+	// interruptOccurred()). fRealInterruptHits is incremented ONLY inside
+	// interruptOccurred() itself, fPollFallbackHits ONLY inside this
+	// function's own direct-register-read poll block - each credited
+	// unconditionally at its true source, not at whichever wait call later
+	// happens to consume the bits (an earlier version counted at the
+	// consuming side and was wrong - see both increment sites' comments).
+	// This is what let Phase 3's "is real interrupt delivery reaching this
+	// driver" question actually get answered from a real boot log instead
+	// of guessed at.
 	uint32_t fRealInterruptHits;
 	uint32_t fPollFallbackHits;
+	bool     fLoggedRealInterrupt; // one-shot latches for waitForIntStatus32()'s summary IOLog
+	bool     fLoggedPollFallback;
 
 	// SD card state, populated by cardIdentify() during start().
 	bool     fCardPresent;
@@ -174,8 +195,23 @@ private:
 	enum {
 		kCmdRespNone      = 0x00,
 		kCmdRespLong      = 0x01, // R2 (136-bit)
-		kCmdRespShort     = 0x02, // R1/R3/R6/R7 (48-bit)
+		kCmdRespShort     = 0x02, // R1/R6/R7 (48-bit, real CRC7 + command-index echo)
 		kCmdRespShortBusy = 0x03, // R1b
+		// R3/R4 (ACMD41's OCR response is R3): also a 48-bit short response
+		// (low 2 bits below still decode to kCmdRespShort's 0x02 once
+		// sendCommand() masks this down to the hardware field), but the SD
+		// spec defines R3/R4 with NO real CRC7 (bits [39:8] are the OCR;
+		// bits[7:1] are reserved, read as all 1s, not a computed CRC) and no
+		// command-index echo - unlike this enum's own previous comment
+		// implied by lumping R3 in with R1/R6/R7. Bit 6 here is a
+		// software-only marker (never written to hardware; sendCommand()'s
+		// flags computation masks to the low 2 bits first) so this can't be
+		// confused with kCmdRespShort by the CRC/index-enable decision.
+		// Getting this wrong makes real hardware flag CMD_CRC_ERR/
+		// CMD_INDEX_ERR on every ACMD41 (QEMU's SDHCI model doesn't check
+		// either, so this was invisible in emulation) - see project memory/
+		// docs/roadmap.md for the adversarial-review finding this fixes.
+		kCmdRespShortNoChecks = 0x02 | (1U << 6),
 		kCmdCRCCheckEn    = 1U << 3,
 		kCmdIndexCheckEn  = 1U << 4,
 		kCmdDataPresent   = 1U << 5,
