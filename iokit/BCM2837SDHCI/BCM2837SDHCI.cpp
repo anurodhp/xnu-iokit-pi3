@@ -391,6 +391,20 @@ BCM2837SDHCI::resetHost(void)
 	writeReg32(kRegIntEnable, enabledInts);
 	writeReg32(kRegSignalEnable, enabledInts);
 
+	// Backlog item 8: TIMEOUT_CONTROL was declared and never written,
+	// leaving the data-timeout counter at its reset value - the
+	// SHORTEST interval the field supports, not the longest. QEMU
+	// doesn't implement DATA_TIMEOUT_ERR at all so this was invisible in
+	// emulation; a real card that's merely slow (not actually failed)
+	// could spuriously fail where QEMU never would. 0xE is the field's
+	// maximum (TMCLK * 2^27, ~1s at typical base clocks) - the same
+	// conservative "use the longest timeout rather than compute an exact
+	// one" default Linux's sdhci.c falls back to when it isn't computing
+	// a value from the live clock rate, appropriate here since this
+	// driver's own clock rate is itself fixed/conservative (see
+	// setClock()).
+	writeReg8(kRegTimeoutControl, 0x0E);
+
 	return true;
 }
 
@@ -886,6 +900,22 @@ BCM2837SDHCI::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 block, UInt64 
 {
 	if (!fCardPresent) {
 		IOStorage::complete(completion, kIOReturnNoMedia, 0);
+		return kIOReturnSuccess;
+	}
+
+	// Backlog item 16: neither this function nor readBlocksPIO()/
+	// writeBlocksPIO() validated nblks before this fix.
+	// writeReg16(kRegBlockCount, (uint16_t)nblks) truncates any request
+	// >=65536 blocks (32MB) silently, and nothing checked
+	// block+nblks <= fBlockCount either - a request past the end of the
+	// card would have been issued to hardware as-is. Reject both here,
+	// once, before doing anything else (including the IOMalloc bounce
+	// allocation below, which a huge bogus nblks would otherwise attempt
+	// at full size for no reason).
+	if (nblks == 0 || nblks >= 65536 || block > fBlockCount || (fBlockCount - block) < nblks) {
+		IOLog("BCM2837SDHCI: doAsyncReadWrite: bad request block=%llu nblks=%llu fBlockCount=%llu\n",
+		    (unsigned long long)block, (unsigned long long)nblks, (unsigned long long)fBlockCount);
+		IOStorage::complete(completion, kIOReturnBadArgument, 0);
 		return kIOReturnSuccess;
 	}
 
