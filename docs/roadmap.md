@@ -572,11 +572,36 @@ still Tier 2/unbuilt) even though they compile standalone today.
 **Next steps, in order**: (1) simple `stdlib`/`stdio` functions with no
 syscall or TSD dependency (a numeric-parsing/`qsort`-class tier, not yet
 surveyed), (2) a real heap allocator (`malloc`/`calloc`/`free` -- unlocks
-`strdup`/`strndup` fully linking, plus is a hard prerequisite for `stdio`),
-(3) real `libpthread` TSD bootstrap (unlocks locale/wide-char/`strerror`'s
-thread-safety, `errno` becoming real instead of the current
-single-threaded global stand-in). See `project_xnu_rpi3_userspace_libc_dyld.md`
-memory for the same findings with more provenance detail.
+`strdup`/`strndup` fully linking, plus is a hard prerequisite for `stdio`).
+
+**Real `libpthread` TSD bootstrap attempted 2026-08-13, found to be a hard
+KERNEL-level wall, not a userspace/Libc gap -- do not re-attempt from the
+Libc side.** Traced the mechanism precisely: `pthread_getspecific()`
+(`third_party/libpthread/src/pthread_asm.s`) reads `TPIDRRO_EL0` directly
+in assembly; that register is EL0-**read-only** (only EL1/kernel code can
+write it), so a userspace process cannot self-bootstrap it. The real,
+one-time-per-process kernel call that's supposed to establish it is the
+`bsdthread_register`/`bsdthread_register2` syscall (`third_party/xnu-7195/bsd/kern/syscalls.master`
+#366) -- but this kernel's entire pthread function table is
+`bsd_pthread_stub.c`'s deliberate, explicitly-documented stand-in: real
+Apple pthread.kext internals (`bsdthread_create`/`bsdthread_register`/
+`psynch_*`/`workq_*`) were never open-sourced (same closed-source-gap
+class as launchd/opendirectoryd), so this project's kernel wires in a
+stub function table at boot purely to stop `pthread_init()` from
+panicking -- `stub_bsdthread_register`/`stub_bsdthread_register2` both
+return `ENOTSUP` and never touch `TPIDRRO_EL0` or any TSD storage.
+**There is no path to real TSD without first implementing real
+kernel-side thread bootstrap logic in `bsd_pthread_stub.c`** (or a real
+replacement for it) -- a large, separate, kernel-level project, not a
+Libc source-pulling problem, and out of scope for whoever's touching
+`third_party/xnu-7195/bsd/kern/` next to attempt deliberately, not as a
+side effect of Libc work. Until/unless that lands, treat the entire
+locale/wide-char/thread-safe-`strerror` tier found in the previous pass
+as **permanently blocked**, not just "not yet built."
+
+See `project_xnu_rpi3_userspace_libc_dyld.md` memory for the same
+findings with more provenance detail, plus a brief `Libinfo` survey for
+Phase 5 (kept separate, not part of Phase 4's critical path).
 
 ---
 
