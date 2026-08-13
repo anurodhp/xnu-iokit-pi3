@@ -82,15 +82,22 @@ BCM2837CPU::initCPU(bool boot)
 	if (sBCM2837CPUIC == NULL) {
 		IOCPUInterruptController *ic = OSTypeAlloc(IOCPUInterruptController);
 		if (ic == NULL) {
-			IOLog("BCM2837CPU: failed to allocate IOCPUInterruptController\n");
-			return;
+			// P0 backlog item 0 companion fix (2026-08-13, adversarial
+			// review): panic instead of silently returning. With
+			// BCM2837LocalIntc/BCM2837InterruptController now correctly
+			// blocking on IOPlatformInterruptController before publishing
+			// themselves (see their own start()'s matching comment), a
+			// failure here no longer just "degrades to no real IRQ
+			// delivery" - it hangs the whole board's interrupt controller
+			// chain forever, silently, on a config thread with no other
+			// diagnostic. Loud and immediate is strictly better than a
+			// silent permanent hang.
+			panic("BCM2837CPU: failed to allocate IOCPUInterruptController");
 		}
 		// One source (this CPU's own incoming IRQ line), one CPU - see
 		// BCM2837CPU.h for why this needs to exist at all.
 		if (ic->initCPUInterruptController(1, 1) != kIOReturnSuccess) {
-			IOLog("BCM2837CPU: initCPUInterruptController failed\n");
-			ic->release();
-			return;
+			panic("BCM2837CPU: initCPUInterruptController failed");
 		}
 		ic->attach(this);
 		sBCM2837CPUIC = ic;
@@ -112,8 +119,11 @@ BCM2837CPU::initCPU(bool boot)
 
 	kern_return_t kr = ml_processor_register(&procInfo, &theProcessor, &ipiHandler, &pmiHandler);
 	if (kr != KERN_SUCCESS) {
-		IOLog("BCM2837CPU: ml_processor_register failed: %d\n", kr);
-		return;
+		// P0 backlog item 0 companion fix - see the matching comment above,
+		// same reasoning: this CPU never becomes enabled, so the whole
+		// interrupt controller chain hangs forever downstream instead of
+		// diagnosably failing here.
+		panic("BCM2837CPU: ml_processor_register failed: %d", kr);
 	}
 
 	machProcessor = theProcessor;

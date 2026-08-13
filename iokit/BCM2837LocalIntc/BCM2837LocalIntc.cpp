@@ -98,29 +98,40 @@ BCM2837LocalIntc::start(IOService *provider)
 	// but don't rely on firmware/QEMU state being correct.
 	fRegBase[kRegGPURouting] = 0;
 
-	// Backlog item 3, investigated (not just assumed) 2026-08-13: XNU's
-	// arm64 scheduler tick is taken via FIQ (osfmk/arm64/sleh.c's
-	// sleh_fiq(), dispatching on ml_get_timer_pending() - never through
-	// this driver's own IRQ path at all), which requires this exact
-	// register - real QA7 hardware resets REG_TIMERCONTROL to 0 (masked),
-	// same as third_party/qemu-zhuowei's own bcm2836_control_reset().
-	// A live QEMU boot read this register back as already 0xF0 (FIQ
-	// enabled for all 4 generic timer comparators) by the time a shell
-	// was reached, WITHOUT any write from this repo's own source -
-	// confirmed by grepping the built kernel tree for the register/offset
-	// and finding nothing, and by checking FlorentRevest/u-boot's
-	// cmd/bootxnu.c (real hardware's actual boot chain) for the same,
-	// also finding nothing. That means QEMU's own loader is silently
-	// providing this as a courtesy real firmware has no reason to
-	// replicate - the exact "don't rely on firmware/QEMU state being
-	// correct" gap the GPU-routing write above already guards against,
-	// just not yet applied here. Write it explicitly: bits 4-7 = FIQ
-	// enable for CNTPSIRQ/CNTPNSIRQ/CNTHPIRQ/CNTVIRQ (bits 0-3, IRQ
-	// enable, deliberately left clear - this driver's own IRQ dispatch
-	// path has no handler for any of these four sources, only the GPU
-	// passthrough bit, so IRQ-routing a timer comparator here would hit
-	// the exact "unhandled pending bit, no way to clear it" spin
-	// backlog item 2 just added a diagnostic latch for).
+	// Backlog item 3 CORRECTED 2026-08-13 (adversarial review): the
+	// investigation behind this write was wrong about *why* the register
+	// read back as 0xF0 - it is NOT QEMU's loader silently providing a
+	// courtesy. osfmk/arm64/start.s (this project's own pre-MMU,
+	// per-core BCM2837 init block, confirmed via direct read - grepping
+	// only found the register offset built symbolically there, missed by
+	// the original investigation's plain-text grep) already writes this
+	// exact register to 0xF0 on every core, long before this driver's
+	// start() ever runs. So this write is a real, harmless no-op today
+	// (same value, core 0 only vs. start.s's per-core) - kept rather than
+	// removed only because a defensive re-write costs nothing and this is
+	// still the right place to guarantee it if start.s's block is ever
+	// touched. It does NOT independently prove anything about QEMU vs
+	// real firmware behavior; that claim in the original comment was
+	// false and has been removed.
+	//
+	// FLAGGED, NOT YET CHANGED - real-hardware risk found by the same
+	// review: 0xF0 FIQ-routes all four generic timer comparators
+	// (CNTPSIRQ/CNTPNSIRQ/CNTHPIRQ/CNTVIRQ), but XNU's own sleh_fiq()/
+	// rtclock_intr() path only actually owns CNTV (see
+	// ml_get_timer_pending()'s CNTV_CTL_EL0 check; CNTP is explicitly
+	// masked elsewhere in machine_routines.c). If real EL3/EL2 firmware on
+	// actual hardware leaves CNTPS or CNTHP enabled with an already-
+	// expired compare value, that FIQ would assert and never be
+	// acknowledged by anything in this stack - a real hang, unreachable in
+	// QEMU (which has no meaningful EL3/EL2 firmware state to leave
+	// dangling). The theoretically-safer value is 0x80 (CNTVIRQ only).
+	// Deliberately NOT changed here: 0xF0 (both this write and start.s's
+	// matching one) is the value this entire project's boot history to
+	// date - including every real-interrupt-driven milestone reached this
+	// session - has actually been tested with; narrowing it now would be
+	// an untested behavioral change made under time pressure, not a
+	// verified fix. Needs real investigation (or a real-hardware test)
+	// before changing, not a blind edit.
 	fRegBase[kRegTimerControl0] = 0xF0;
 
 	const OSSymbol *controllerName = IODTInterruptControllerName(provider);
@@ -128,38 +139,49 @@ BCM2837LocalIntc::start(IOService *provider)
 		IOLog("BCM2837LocalIntc: IODTInterruptControllerName failed (no AAPL,phandle on \"local-intc\"?)\n");
 		return false;
 	}
-	getPlatform()->registerInterruptController((OSSymbol *)controllerName, this);
 
-	IOLog("BCM2837LocalIntc: started, base=%p, registered as \"%s\"\n",
-	    (void *)fRegBase, controllerName->getCStringNoCopy());
-	controllerName->release();
-
-	// No registerInterrupt() against our own provider via the normal
-	// DT-interrupt-parent cascade mechanism - local-intc is the top of
-	// this board's interrupt tree (see header), not a cascade consumer
-	// of anything else. But it IS the thing that should be told about a
-	// real ARM64 IRQ trap reaching this CPU at all: register directly
-	// against the platform's IOCPUInterruptController (source 0, our
-	// only CPU) so IOCPUInterruptController::handleInterrupt() (called
-	// from sleh_irq() via ml_install_interrupt_handler(), wired up by
-	// BCM2837CPU::initCPU()) actually calls back into our own
-	// handleInterrupt() - see BCM2837CPU.h for the full chain this
-	// closes.
+	// P0 backlog item 0 fix (2026-08-13, adversarial review): register
+	// against IOPlatformInterruptController and confirm real ARM64 IRQ
+	// delivery is actually wired up BEFORE publishing ourselves as a
+	// usable interrupt controller below - not after, as this used to do.
+	// Publishing first let a downstream client (e.g. BCM2837SDHCI, via the
+	// normal blocking lookUpInterruptController()/registerInterrupt()
+	// chain) start arming real hardware interrupts before
+	// BCM2837CPU::initCPU() had installed the real handler via
+	// ml_install_interrupt_handler() - if a genuine ARM64 IRQ arrived in
+	// that window, sleh_irq() called through a still-NULL
+	// cdp->interrupt_handler and crashed (confirmed via disassembly: the
+	// panic's lr lands exactly at sleh_irq's own indirect-call return
+	// address). IOPlatformExpert::lookUpInterruptController() is
+	// unconditionally blocking - it sleeps until the name is registered,
+	// never returns NULL - so this reordering turns that existing lookup
+	// chain into a real barrier instead of a race: no new lock, no new
+	// deadlock (BCM2837CPU depends on nothing in this chain).
 	IOInterruptController *cpuIC =
 	    getPlatform()->lookUpInterruptController((OSSymbol *)gPlatformInterruptControllerName);
 	if (cpuIC == NULL) {
-		IOLog("BCM2837LocalIntc: no IOPlatformInterruptController yet - real IRQ delivery will not work\n");
-		return true;
+		// A real failure now, not "keep going anyway": without this,
+		// nothing may safely publish us as a usable interrupt controller -
+		// see the reordering comment above.
+		IOLog("BCM2837LocalIntc: no IOPlatformInterruptController - real IRQ delivery cannot be made safe\n");
+		controllerName->release();
+		return false;
 	}
 	IOInterruptHandler cpuICHandler = OSMemberFunctionCast(
 		IOInterruptHandler, this, &BCM2837LocalIntc::handleInterrupt);
 	IOReturn err = cpuIC->registerInterrupt(provider, 0, this, cpuICHandler, NULL);
 	if (err != kIOReturnSuccess) {
 		IOLog("BCM2837LocalIntc: registerInterrupt against IOPlatformInterruptController failed: %#x\n", err);
-		return true;
+		controllerName->release();
+		return false;
 	}
 	cpuIC->enableInterrupt(provider, 0);
-	IOLog("BCM2837LocalIntc: registered against IOPlatformInterruptController\n");
+
+	getPlatform()->registerInterruptController((OSSymbol *)controllerName, this);
+
+	IOLog("BCM2837LocalIntc: started, base=%p, registered as \"%s\"\n",
+	    (void *)fRegBase, controllerName->getCStringNoCopy());
+	controllerName->release();
 
 	return true;
 }

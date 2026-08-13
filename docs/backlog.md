@@ -50,9 +50,59 @@ New commits this pass: main repo only (`runvm.sh`, `_pty_test.py`
 `cpu-factor=10`), not yet pushed pending the adversarial review the user
 asked for once this pass was done.
 
+**Status update 2026-08-13 (fourth pass — item 0 FIXED)**: the adversarial
+review requested above found the *exact* mechanism behind item 0 via
+disassembly (not just theory) and a specific minimal fix, which has now
+been applied and verified: see item 0's own entry below, updated in
+place. Also corrected two misleading comments the same review caught
+(item 3's timer-register write, `IOMediaBSDClient`'s CAS-singleton "leak"
+claim) and refreshed `sdcard/`'s kernel copy, which item 1 had left stale
+even though it was marked fixed. Re-verified via 6 consecutive full boot
+tests: 0 panics (down from 3 crashes across the prior 10 runs), real
+interrupt-driven I/O confirmed intact. Commits: `third_party/xnu-7195`
+`cb5a5baf7` (pushed), main repo (this commit).
+
+The review also found the "hard kernel wall" conclusion in
+`project_xnu_rpi3_userspace_libc_dyld.md` about pthread TSD is **wrong** —
+see that memory file's own correction, added the same pass. Not yet acted
+on (out of scope for this pass, which was driver/kernel-focused) but
+important for whoever picks up Phase 4 `Libc` work next.
+
 ---
 
-## P0, item 0 — NEWLY FOUND, NOT FIXED: real interrupt handler can be NULL when a genuine hardware IRQ arrives during early boot
+## P0, item 0 — [FIXED 2026-08-13, same day] real interrupt handler could be NULL when a genuine hardware IRQ arrived during early boot
+
+**FIXED**: an adversarial review disassembled the actual panic (confirming
+`lr` lands exactly at `sleh_irq`'s indirect-call return address) and found
+the real arming mechanism the original investigation below hadn't:
+`BCM2837LocalIntc::start()` and `BCM2837InterruptController::start()` both
+published themselves as usable interrupt controllers
+(`getPlatform()->registerInterruptController()`) *before* completing
+their own upstream registration - breaking what would otherwise have been
+a natural blocking barrier via `IOPlatformExpert::lookUpInterruptController()`
+(confirmed unconditionally blocking, never returns NULL). A downstream
+client like `BCM2837SDHCI` could find and start arming real hardware
+interrupts through a controller that hadn't itself finished becoming
+safe. Fixed by reordering both `start()` functions to publish only
+*after* their own upstream registration succeeds, and making
+`BCM2837CPU::initCPU()`'s three failure paths `panic()` instead of
+silently returning (with the reorder in place, a failure there would
+otherwise hang the whole interrupt chain forever with no diagnostic).
+Re-verified via 6 consecutive full boot tests: 0 panics (down from 3
+crashes in the prior 10 runs), real interrupt-driven I/O confirmed intact
+throughout. The review also found real-hardware risk is likely *higher*
+than the ~1-in-10 QEMU rate suggests: the BCM2835 `Enable_IRQs`
+latches are not cleared by a warm reset (only a power cycle), so on real
+hardware rebooting out of a previous OS/firmware, arbitrary sources may
+already be live the instant this project's own masking runs - a
+follow-on hardening (masking both controllers pre-`spllo()`, next to the
+existing pre-MMU BCM2837 block in `osfmk/arm64/start.s`) is noted as
+still-open, lower-priority hardening, not blocking. Original investigation
+kept below for history.
+
+---
+
+**ORIGINAL (superseded by the fix above, kept for history)**
 
 **Found 2026-08-13, during final integration testing** of the combined
 P0/P1 fixes + Phase 3.5a real shell syscalls (neither individually

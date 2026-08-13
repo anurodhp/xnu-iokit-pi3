@@ -125,8 +125,20 @@ BCM2837InterruptController::start(IOService *provider)
 		IOLog("BCM2837InterruptController: IODTInterruptControllerName failed (no AAPL,phandle on \"intc\"?)\n");
 		return false;
 	}
-	getPlatform()->registerInterruptController((OSSymbol *)controllerName, this);
 
+	// P0 backlog item 0 fix (2026-08-13, adversarial review): register+
+	// enable against our own provider (local-intc) BEFORE publishing
+	// ourselves as a usable interrupt controller below - not after, as
+	// this used to do. See BCM2837LocalIntc::start()'s matching comment
+	// for the full reasoning: publishing first let a downstream client
+	// (e.g. BCM2837SDHCI) start arming real hardware interrupts through us
+	// before the upstream chain (local-intc -> IOPlatformInterruptController
+	// -> BCM2837CPU::initCPU()'s ml_install_interrupt_handler()) was
+	// actually ready, risking a real ARM64 IRQ dispatching through a
+	// still-NULL per-CPU handler pointer. Reordering costs nothing here -
+	// no new lock, no new deadlock - and turns the existing blocking
+	// lookUpInterruptController() chain into a real barrier.
+	//
 	// Cascade: we are ourselves a consumer of one interrupt on our
 	// provider (local-intc), source 0 (its "interrupts = <8 ...>" is
 	// wired up by the DT parse). When it fires, it calls the handler we
@@ -140,6 +152,8 @@ BCM2837InterruptController::start(IOService *provider)
 		return false;
 	}
 	provider->enableInterrupt(0);
+
+	getPlatform()->registerInterruptController((OSSymbol *)controllerName, this);
 
 	IOLog("BCM2837InterruptController: started, base=%p, registered as \"%s\"\n",
 	    (void *)fRegBase, controllerName->getCStringNoCopy());
