@@ -161,9 +161,31 @@ as this phase's exit criteria required), and `runvm.sh` now boots
 unattended all the way to a real interactive shell prompt on top of that
 real root. See `project_xnu_rpi3_status` memory ("SD CARD MILESTONE
 REACHED", "INTERACTIVE SHELL MILESTONE REACHED") for the full writeup.
-Real ARM64 IRQ delivery through the SDHCI interrupt path is still not
-root-caused (a polling workaround is in place, see that memory) -- the one
-open item from this phase's original scope. The rest of this section is
+
+**Real ARM64 IRQ delivery through the SDHCI interrupt path -- the one open
+item from this phase's original scope -- is now CONFIRMED reaching
+`BCM2837SDHCI::interruptOccurred()` (2026-08-13)**, once `BCM2837CPU`
+(added later, see Phase 4-adjacent history) existed to wire
+`sleh_irq -> IOCPUInterruptController -> BCM2837LocalIntc ->
+BCM2837InterruptController -> BCM2837SDHCI` end to end -- it genuinely
+didn't when this phase's polling workaround was first written. Added two
+counters (`fRealInterruptHits`/`fPollFallbackHits`) to
+`iokit/BCM2837SDHCI/BCM2837SDHCI.{cpp,h}` to tell the two paths apart from
+a real boot log rather than guessing, and confirmed via `_pty_test.py`: a
+real QEMU boot's CMD17 (single block read) data-transfer completion --
+the actual I/O-latency-sensitive path -- was resolved by a genuine
+hardware interrupt. **Not yet 100% of waits**, though: that same boot's
+very first command (CMD0, issued immediately after
+`BCM2837LocalIntc: registered against IOPlatformInterruptController`)
+still resolved via the poll fallback -- plausibly a narrow startup race
+before the interrupt chain is fully "hot" for the first command right
+after registration, not re-broken delivery, but not root-caused further
+since the existing hybrid poll+interrupt design in `waitForIntStatus32()`
+already covers it correctly either way. **Decision: keep the hybrid
+design, do not revert to a pure blocking wait** until interrupt delivery
+is confirmed for 100% of waits, not just most of them -- reverting now
+would risk a real hang on whichever wait doesn't get a real interrupt.
+This closes out Phase 3's original scope; the rest of this section is
 kept as historical record of the original plan.
 
 **Depends on**: Phase 1's kernel. Does *not* depend on Phase 2 (mockfs and

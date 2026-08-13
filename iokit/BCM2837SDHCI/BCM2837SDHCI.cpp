@@ -39,6 +39,8 @@ BCM2837SDHCI::init(OSDictionary *properties)
 	fBlockSize = 512;
 
 	fPendingIntStatus = 0;
+	fRealInterruptHits = 0;
+	fPollFallbackHits = 0;
 	fInterruptLock = IOLockAlloc();
 	if (fInterruptLock == NULL) {
 		return false;
@@ -149,29 +151,31 @@ BCM2837SDHCI::waitForIntStatus32(uint32_t mask, uint32_t timeoutUs, uint32_t *ou
 	// doesn't actually take fInterruptLock (see interruptOccurred()), it
 	// just targets the same wait event address.
 	//
-	// TEMP DIAGNOSTIC / COMPAT: this sleeps in short (1ms) increments and
-	// directly polls+acks the raw INT_STATUS register on every wakeup,
-	// rather than sleeping straight through to the full deadline as
-	// originally written. Confirmed empirically (2026-08-09) that this
-	// board's real interrupt cascade (BCM2837LocalIntc ->
-	// BCM2837InterruptController, in third_party/xnu-7195's
-	// iokit/Drivers/BCM2837/) gets registered successfully but a raw
-	// ARM64 IRQ exception never actually reaches interruptOccurred() -
-	// whether that's a pexpert/osfmk-level gap in exception-vector wiring
-	// (this file already flagged this exact class of gap as unverified
-	// before any of this session's work) hasn't been root-caused.
-	// Confirmed via direct register readback that the SDHCI hardware
-	// itself completes commands correctly regardless (INT_STATUS shows
-	// the right bits set) - only the interrupt notification is missing.
-	// This polling fallback mirrors exactly what interruptOccurred() does,
-	// so it's a strict superset: if a real interrupt does fire,
-	// IOLockWakeup() below still wins immediately (this loop is not the
-	// only way to observe the bits); if not, the next 1ms poll tick picks
-	// it up instead. Once real interrupt delivery is confirmed working
-	// end to end, this can revert to a single IOLockSleepDeadline()
-	// straight to the full deadline. Verified end-to-end against a real
-	// (emulated) SD card this way: full init sequence + a real PIO block
-	// read returning correct data.
+	// KEPT DELIBERATELY (no longer just a stopgap): this sleeps in short
+	// (1ms) increments and directly polls+acks the raw INT_STATUS register
+	// on every wakeup, rather than sleeping straight through to the full
+	// deadline as originally written back when (2026-08-09) this board's
+	// real interrupt cascade was confirmed NOT reaching interruptOccurred()
+	// at all (no BCM2837CPU/IOCPUInterruptController existed yet to wire
+	// it end to end). That's since changed: BCM2837CPU now wires
+	// sleh_irq -> IOCPUInterruptController -> BCM2837LocalIntc ->
+	// BCM2837InterruptController -> here, and fRealInterruptHits vs
+	// fPollFallbackHits (added 2026-08-13) confirmed via a real QEMU boot
+	// that genuine hardware interrupts DO reach interruptOccurred() now -
+	// but not for every single wait (that same boot's very first command
+	// still needed the poll fallback; see the class header comment for the
+	// exact log evidence and a plausible explanation). Until interrupt
+	// delivery is confirmed for 100% of waits rather than "at least the
+	// data-transfer-completion path, most of the time," reverting this to
+	// a pure blocking IOLockSleepDeadline() would risk actually hanging on
+	// whichever wait doesn't get a real interrupt - keeping the hybrid is
+	// the correct choice, not unfinished cleanup. This polling fallback
+	// mirrors exactly what interruptOccurred() does, so it's a strict
+	// superset: if a real interrupt does fire, IOLockWakeup() below still
+	// wins immediately (this loop is not the only way to observe the
+	// bits); if not, the next 1ms poll tick picks it up instead. Verified
+	// end-to-end against a real (emulated) SD card this way: full init
+	// sequence + a real PIO block read returning correct data.
 	IOLockLock(fInterruptLock);
 	uint32_t matched = 0;
 	uint32_t waitedUs = 0;
@@ -185,6 +189,16 @@ BCM2837SDHCI::waitForIntStatus32(uint32_t mask, uint32_t timeoutUs, uint32_t *ou
 		IOSimpleLockUnlockEnableInterrupt(fStatusLock, istate);
 
 		if (matched != 0) {
+			// Reached here without this iteration's own poll block (below)
+			// ever running - the only other writer of fPendingIntStatus is
+			// interruptOccurred(), so this is a genuine ARM64 IRQ, not this
+			// loop noticing on its own.
+			uint32_t hits = ++fRealInterruptHits;
+			if (hits == 1) {
+				IOLog("BCM2837SDHCI: real hardware interrupt observed "
+				    "(interruptOccurred() -> waitForIntStatus32(), "
+				    "no polling needed)\n");
+			}
 			break;
 		}
 
@@ -211,6 +225,12 @@ BCM2837SDHCI::waitForIntStatus32(uint32_t mask, uint32_t timeoutUs, uint32_t *ou
 				}
 				IOSimpleLockUnlockEnableInterrupt(fStatusLock, istate);
 				if (matched != 0) {
+					uint32_t hits = ++fPollFallbackHits;
+					if (hits == 1) {
+						IOLog("BCM2837SDHCI: poll fallback resolved a wait "
+						    "(no interrupt arrived within one %u us tick)\n",
+						    kPollIntervalUs);
+					}
 					break;
 				}
 			}

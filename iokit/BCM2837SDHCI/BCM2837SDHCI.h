@@ -51,15 +51,23 @@
  *     exercised in QEMU (where it's a no-op either way, confirmed) - not
  *     yet verified against real hardware.
  *   - Real ARM64 IRQ delivery through this board's interrupt cascade
- *     (BCM2837LocalIntc -> BCM2837InterruptController) is CONFIRMED not
- *     reaching interruptOccurred(), even though the SDHCI hardware itself
- *     completes commands/transfers correctly (verified via direct
- *     INT_STATUS register readback) and the whole matching/registration
- *     chain succeeds. waitForIntStatus32() has a polling fallback
- *     (see that function) that makes this work correctly today regardless
- *     - root-causing real interrupt delivery (likely a pexpert/osfmk
- *     exception-vector gap) is separate, follow-on work if genuinely
- *     interrupt-driven I/O (not just correctness) matters.
+ *     (BCM2837CPU/IOCPUInterruptController -> BCM2837LocalIntc ->
+ *     BCM2837InterruptController) is now CONFIRMED reaching
+ *     interruptOccurred() (fRealInterruptHits, added + verified 2026-08-13,
+ *     once BCM2837CPU existed to wire the cascade end to end - it didn't
+ *     when this was originally written). A real QEMU boot's CMD17 (single
+ *     block read) data-transfer completion - the actual I/O-latency-
+ *     sensitive path - was resolved by a genuine hardware interrupt, not
+ *     the poll fallback. Not yet 100% of waits, though: that same boot's
+ *     very first command (CMD0, issued immediately after
+ *     "BCM2837LocalIntc: registered against IOPlatformInterruptController")
+ *     still resolved via the poll fallback (fPollFallbackHits) - plausibly
+ *     a narrow startup race before the interrupt chain is fully "hot" for
+ *     the first command issued right after registration, not re-broken
+ *     delivery; not root-caused further since the hybrid design already
+ *     covers it correctly either way (see waitForIntStatus32()). Given
+ *     that partial-but-real picture, the poll fallback is being kept
+ *     deliberately rather than reverted to a pure blocking wait.
  *   - Card-insertion/removal interrupts (SDHCI_INT_CARD_INSERT/REMOVE) are
  *     unimplemented - reportMediaState() never reports a changed state.
  *   - Voltage/power sequencing (SDHCI_POWER_CONTROL) uses the standard
@@ -89,6 +97,16 @@ private:
 	IOLock       *fInterruptLock;   // block/wake coordination only - never touched from interrupt context
 	IOSimpleLock *fStatusLock;      // protects fPendingIntStatus between interruptOccurred() and waiters
 	volatile uint32_t fPendingIntStatus; // INT_STATUS bits acked but not yet consumed by a waitFor call
+
+	// Diagnostic-turned-permanent counters (see waitForIntStatus32()):
+	// fRealInterruptHits counts waits satisfied by interruptOccurred()
+	// alone (a genuine ARM64 IRQ arrived before this loop's own next poll
+	// tick); fPollFallbackHits counts waits this loop had to resolve by
+	// reading INT_STATUS itself. Distinguishing these is what let Phase 3's
+	// "is real interrupt delivery reaching this driver" question actually
+	// get answered from a real boot log instead of guessed at.
+	uint32_t fRealInterruptHits;
+	uint32_t fPollFallbackHits;
 
 	// SD card state, populated by cardIdentify() during start().
 	bool     fCardPresent;
