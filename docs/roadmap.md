@@ -680,6 +680,92 @@ linked. **This directly unblocks the ~35 locale/wide-char/thread-safe-
 `strerror` Libc files found gated on TSD** -- that's the real next step,
 not further TSD verification.
 
+**Fourth pass, same day: resumed the ~35 gated files -- 109 real Libc
+locale/string files now compile (up from 20), real TSD wired in as their
+actual dependency, and a genuinely new (non-TSD) wall found and precisely
+characterized.** `tools/userland_staging/pthread_tsd_shim.c` re-exports
+the QEMU-confirmed bootstrap under real POSIX names
+(`pthread_key_create`/`setspecific`/`getspecific`, plus
+`pthread_key_init_np`/`pthread_once` and the underscore-prefixed private
+aliases -- `third_party/Libc/fbsdcompat/reentrant.h` maps FreeBSD-lineage
+`thr_keycreate`/etc to `_pthread_key_create`/etc, real separate exported
+symbols, not just a macro rename) -- **verified by linking a standalone
+smoketest with zero undefined symbols**, independent of the deeper Libc
+chain below. `compat_stubs.c` adds `os_unfair_lock`/`OSAtomic*Barrier`
+no-ops (correct, not approximated, for this provably single-threaded
+target) and a clearly-labeled placeholder bump allocator (NOT the real
+Tier-2 `malloc` this roadmap already lists separately -- `free()` is a
+genuine no-op, documented as such, sufficient only for a short-lived
+smoketest).
+
+Getting real `third_party/Libc/locale/` source building at all needed
+**three distinct, real, non-obvious build-configuration fixes**, none of
+them guessed:
+1. **`-D__LIBC__`**: Apple's own real "I am building Libc itself" flag.
+   Without it, `collate.h`'s `#ifdef __LIBC__`-guarded prototypes
+   (`__collate_mbstowcs`/`__collate_wcsdup`) are invisible at their call
+   sites, so the compiler synthesizes a wrong implicit declaration and
+   then fails with "conflicting types" once it reaches the real,
+   correctly-typed definition later in the same file. Root-caused by
+   reading the exact "conflicting types" vs "previous **implicit**
+   declaration" compiler note, not assumed.
+2. **`-D__ct_rune_t=__darwin_ct_rune_t`**: this SDK only exposes the
+   Darwin-renamed public name (both `int` on arm64); a few FreeBSD-lineage
+   files (`runetype.c`/`tolower.c`/`toupper.c`) reference the original
+   private FreeBSD name directly -- a naming-convention gap between the
+   two lineages, not a real type mismatch.
+3. **Host SDK skew, same class as Phase 4's earlier `Csu`/libsyscall work
+   but hitting it via a different, deeper path this time** (`stdlib.h` ->
+   `malloc/_malloc_type.h`'s `__API_AVAILABLE` macros expecting newer
+   OS-version arguments than this project's target line ever hits): fixed
+   the same way `tools/build_kexts.sh` already does for the IOKit kexts --
+   Xcode 12's iPhoneOS SDK instead of the host's modern default one, since
+   Xcode 12 (~2020) is contemporaneous with this project's Darwin-20.3
+   target. iOS vs macOS doesn't matter for this pure-C code (Libc's own
+   source already branches on `TARGET_OS_IPHONE` internally).
+
+**A fourth, non-obvious linking-only requirement**: once mixing object
+files built with the iPhoneOS-SDK toolchain (locale tier) and the host's
+default toolchain (string tier, TSD shim, `Csu`), `ld` refuses outright
+("building for iOS, but linking in object file built for macOS") --
+Mach-O's platform load command is enforced at link time, not just a
+warning. Fixed by rebuilding everything going into one final link with
+the *same* toolchain/target consistently, not mixed. Also found and fixed
+a real functional bug in the process: initially linked `apple_locale/*.o`
+as a **raw glob** on the command line instead of through a proper `.a`
+archive -- with raw `.o` files every undefined symbol in every file must
+resolve unconditionally; through an archive, the linker only pulls in
+members actually referenced. Using the archive properly cut the required
+symbol set drastically.
+
+**Genuinely new wall found, distinct from TSD, precisely characterized
+rather than guessed at**: `___global_locale`/`___locale_key`/`__c_locale`
+(what `strcasecmp`'s real locale-aware path needs) all live in one
+translation unit, `xlocale.c` -- once any symbol from it is pulled in,
+*all* of its own internal helper functions' undefined references must
+also resolve, even ones the calling smoketest's code path never actually
+reaches at runtime (static-linking granularity, not a logic error). That
+pulls in `setlocale.c`/`collate.c`/`rune.c`/`ldpart.c`'s real
+locale-**file**-loading machinery, which needs **real stdio**
+(`fopen`/`fclose`/`fread`/`fileno`/`rewind`) and **real POSIX regex**
+(`regcomp`/`regexec`/`regfree`) -- both genuinely separate, large
+subsystems, correctly not attempted this pass. Raw syscalls
+(`open`/`read`/`write`/`close`/`fstat`, real numbers cross-checked against
+`syscalls.master` same as `init.c`), `___error`/errno
+(`tools/userland_staging/cerror_stub.c`, already existed), and a handful
+of simple environment/string-function gaps
+(`getenv`/`issetugid`/`getprogname`/`isascii`/`isdigit`/`memchr`/`strchr`/
+`strcpy`/`strncpy`/`strlcpy`/`strlcat`/`strnlen`/`ffs`, real FreeBSD
+source for the string ones matching the established pattern) were all
+resolved along the way. **What's left, narrowly**: real stdio, real
+regex, `strtol`, `sys_errlist`/`sys_nerr` data tables, `strtol`/
+`strftime_l`/`iswspace_l` (wide-char-adjacent), and a public
+`tolower_l`/`toupper_l` name -- the real internal `__tolower_l`/
+`__toupper_l` (double-underscore) exist and compile
+(`third_party/Libc/locale/FreeBSD/nomacros.c`) but the bare POSIX xlocale
+names calling them weren't found anywhere in this checkout under that
+exact name -- not yet root-caused, flagged rather than guessed at.
+
 See `project_xnu_rpi3_userspace_libc_dyld.md` memory for the same
 findings with more provenance detail, plus a brief `Libinfo` survey for
 Phase 5 (kept separate, not part of Phase 4's critical path).
