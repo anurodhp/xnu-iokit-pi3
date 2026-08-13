@@ -166,34 +166,24 @@ BCM2837SDHCI::waitForIntStatus32(uint32_t mask, uint32_t timeoutUs, uint32_t *ou
 	// doesn't actually take fInterruptLock (see interruptOccurred()), it
 	// just targets the same wait event address.
 	//
-	// KEPT (status corrected 2026-08-13): this sleeps in short (1ms)
-	// increments and directly polls+acks the raw INT_STATUS register on
-	// every wakeup, rather than sleeping straight through to the full
-	// deadline as originally written back when (2026-08-09) this board's
-	// real interrupt cascade was confirmed NOT reaching interruptOccurred()
-	// at all (no BCM2837CPU/IOCPUInterruptController existed yet to wire it
-	// end to end). BCM2837CPU has since been added and does wire
-	// sleh_irq -> IOCPUInterruptController -> BCM2837LocalIntc ->
-	// BCM2837InterruptController -> here in principle, but a correctly-
-	// measured real QEMU boot (fRealInterruptHits/fPollFallbackHits, fixed
-	// 2026-08-13 after an adversarial review caught the earlier version
-	// crediting hits at the wrong place - see the class header comment for
-	// the full story) shows fRealInterruptHits at 0 for an entire boot's
-	// worth of command/data-transfer completions - every single one was
-	// resolved by this poll fallback, not a real interrupt. So this isn't
-	// "mostly interrupt-driven, with one edge case still polling" as an
-	// earlier (buggy-counter-driven) version of this comment claimed - as
-	// far as this driver has ever actually observed, it is currently
-	// 100% poll-driven, and the interrupt path's end-to-end reach into
-	// THIS driver's vector remains genuinely unconfirmed. Not root-caused
-	// further yet. Keeping this hybrid (not reverting to a pure blocking
-	// IOLockSleepDeadline()) is still correct either way: if a real
-	// interrupt ever does fire, IOLockWakeup() below still wins
-	// immediately (this loop is not the only way to observe the bits); if
-	// not, the next 1ms poll tick picks it up, which is what has been
-	// happening this whole time. Verified end-to-end against a real
-	// (emulated) SD card this way: full init sequence + a real PIO block
-	// read returning correct data, purely via polling.
+	// KEPT, but now genuinely a safety net rather than the only working
+	// path (2026-08-13): this sleeps in short (1ms) increments and
+	// directly polls+acks the raw INT_STATUS register on every wakeup.
+	// Real ARM64 interrupt delivery to this driver is now CONFIRMED
+	// working (see the class header comment for the full corrected story
+	// - it took two wrong turns first: a buggy hit-counter producing a
+	// false "confirmed" claim, then a correctly-measured "genuinely 0
+	// hits" result, before the real root cause - a devicetrees/rpi3.dts
+	// interrupt-cell encoding bug, see that file's header comment - was
+	// found and fixed). A real QEMU boot with the DT fix shows
+	// fRealInterruptHits firing and fPollFallbackHits NOT appearing at all
+	// - genuinely interrupt-driven now. Keeping the hybrid anyway rather
+	// than reverting to a pure blocking IOLockSleepDeadline(): it's a
+	// strict superset (a real interrupt still wins immediately via
+	// IOLockWakeup() below), costs nothing, and is one less thing to
+	// re-verify if this ever regresses. Verified end-to-end against a real
+	// (emulated) SD card: full init sequence + a real PIO block read
+	// returning correct data, genuinely interrupt-driven.
 	IOLockLock(fInterruptLock);
 	uint32_t matched = 0;
 	uint32_t waitedUs = 0;

@@ -55,35 +55,52 @@
  *     yet verified against real hardware.
  *   - Real ARM64 IRQ delivery through this board's interrupt cascade
  *     (BCM2837CPU/IOCPUInterruptController -> BCM2837LocalIntc ->
- *     BCM2837InterruptController) to THIS driver specifically is STILL
- *     UNCONFIRMED, corrected 2026-08-13 after an adversarial review caught
- *     a real bug in this file's own measurement of it. An earlier version
- *     of fRealInterruptHits/fPollFallbackHits credited a hit to
- *     "genuine interrupt" at the *consuming* side (whichever
- *     waitForIntStatus32() call happened to find fPendingIntStatus already
- *     set) rather than at the true source - but the poll block below is
- *     ALSO a writer of fPendingIntStatus, and can leave mask-irrelevant
- *     bits set for a *later* call to wrongly claim credit for. That bug
- *     produced a false "CMD17 data-transfer completion resolved by a
- *     genuine hardware interrupt" claim in an earlier version of this
- *     comment (and in docs/roadmap.md - both since corrected). Fixed the
- *     counters to credit each source unconditionally at the point it
- *     actually observes the register (see interruptOccurred() and the
- *     poll block in waitForIntStatus32() for exactly where), then
- *     re-verified on a real QEMU boot: with the fix in place,
- *     fRealInterruptHits stayed at 0 for the ENTIRE boot (multiple CMD17
- *     data-transfer completions across partition-scheme detection and hfs
- *     mount, all resolved via fPollFallbackHits instead). So the honest
- *     current state is: real interrupt delivery to this driver has not
- *     been observed at all, not "confirmed for some waits." Whether
- *     BCM2837CPU's IRQ cascade genuinely doesn't reach this specific
- *     device's vector, or reaches it but something in this driver's own
- *     registration/enablement is wrong, is unresolved - not root-caused
- *     further yet. The hybrid poll+interrupt design in
- *     waitForIntStatus32() already covers this correctly either way (a
- *     real interrupt would still win immediately via IOLockWakeup() if one
- *     ever does fire), so there's no functional risk from leaving this
- *     open, just an open diagnostic question.
+ *     BCM2837InterruptController) to THIS driver is now CONFIRMED AND
+ *     REAL (2026-08-13), for real this time - full story, since this exact
+ *     comment was wrong twice in one day before landing here:
+ *     (1) An earlier version of fRealInterruptHits/fPollFallbackHits
+ *     credited a hit to "genuine interrupt" at the *consuming* side rather
+ *     than the true source, producing a false-positive "confirmed" claim.
+ *     Fixed the counters to credit each source unconditionally at the true
+ *     point of observation (interruptOccurred() vs the poll block in
+ *     waitForIntStatus32()).
+ *     (2) Re-measured correctly, the honest result was fRealInterruptHits
+ *     staying at 0 for an entire boot - real interrupt delivery to this
+ *     driver had genuinely never been observed, root cause unknown.
+ *     (3) Root cause found by tracing the actual DT interrupt-cell path
+ *     through real xnu source (IODeviceTreeSupport.cpp's
+ *     IODTMapOneInterrupt() + IOInterruptController.cpp's
+ *     registerInterrupt()) rather than assuming: devicetrees/rpi3.dts's
+ *     "intc" node used a 2-cell {bank, bit} interrupt encoding
+ *     (`#interrupt-cells = <2>`, sdhci's `interrupts = <2 30>`), but
+ *     IODTMapOneInterrupt() stores a device's `interrupts` property
+ *     completely unprocessed, and the base IOInterruptController::
+ *     registerInterrupt() just takes the FIRST 32-bit cell as the vector
+ *     number - nothing decodes the 2-cell {bank,bit} convention unless the
+ *     controller subclass explicitly overrides registerInterrupt() to do
+ *     so (BCM2837InterruptController never did - see that class's own
+ *     header, which had already flagged this exact gap as unverified).
+ *     So this driver's real registered vector was **2** (the bare first
+ *     cell), not 62 (bank 2 bit 30, this project's own intended
+ *     bank*32+bit numbering) - nowhere near where the real hardware
+ *     interrupt actually lands, so it was silently dropped every time.
+ *     Independently corroborated the same day by a from-scratch
+ *     adversarial review of the interrupt controllers, which reached the
+ *     identical root cause by pure static reading, without seeing this
+ *     investigation.
+ *     Fixed by making "intc" single-cell (`#interrupt-cells = <1>`) and
+ *     pre-flattening sdhci's `interrupts` to `<62>` directly (see
+ *     devicetrees/rpi3.dts's own header comment for the full trace) -
+ *     matches what "local-intc"'s own single-cell `interrupts = <8>`
+ *     already did correctly, without needing to override
+ *     IOInterruptController::registerInterrupt() at all.
+ *     **Re-verified on a real QEMU boot with the DT fix in place:
+ *     fRealInterruptHits fires, and fPollFallbackHits does NOT appear at
+ *     all for the whole boot** - real interrupt-driven I/O, not polling,
+ *     for the first time. The hybrid poll+interrupt design in
+ *     waitForIntStatus32() is kept regardless (real interrupts still win
+ *     immediately via IOLockWakeup() when they fire; the poll tick is now
+ *     just a safety net, not the only mechanism that was ever working).
  *   - Card-insertion/removal interrupts (SDHCI_INT_CARD_INSERT/REMOVE) are
  *     unimplemented - reportMediaState() never reports a changed state.
  *   - Voltage/power sequencing (SDHCI_POWER_CONTROL) uses the standard

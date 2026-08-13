@@ -163,40 +163,65 @@ real root. See `project_xnu_rpi3_status` memory ("SD CARD MILESTONE
 REACHED", "INTERACTIVE SHELL MILESTONE REACHED") for the full writeup.
 
 **Real ARM64 IRQ delivery through the SDHCI interrupt path -- the one open
-item from this phase's original scope -- remains UNCONFIRMED (status
-corrected 2026-08-13).** An earlier pass this same day added two counters
-(`fRealInterruptHits`/`fPollFallbackHits`) to
-`iokit/BCM2837SDHCI/BCM2837SDHCI.{cpp,h}` to tell genuine-interrupt
-completions apart from the pre-existing poll fallback, and initially
-reported (both here and in code comments) that a real QEMU boot's CMD17
-data-transfer completion was resolved by a genuine hardware interrupt.
-**That claim was wrong** -- an adversarial code review caught a real bug
-in the counters themselves: they credited a hit at the *consuming* side
-(whichever `waitForIntStatus32()` call happened to find
-`fPendingIntStatus` already set), but the poll fallback block is *also* a
-writer of `fPendingIntStatus`, and can leave mask-irrelevant bits set for
-a later, unrelated call to wrongly claim as "a genuine interrupt just
-arrived." Fixed the counters to credit each source unconditionally at the
-point it actually observes the register (inside `interruptOccurred()` for
-real interrupts, inside the poll block itself for polling), rebuilt, and
-re-verified: with the fix in place, `fRealInterruptHits` stayed at **0**
-for an entire boot's worth of command/data-transfer completions (multiple
-CMD17 reads across partition-scheme detection and `hfs` mount) -- every
-single one was resolved by the poll fallback. So the honest current state
-is the opposite of what was briefly claimed here: as far as this driver
-has ever actually observed, `BCM2837CPU`'s interrupt cascade
-(`sleh_irq -> IOCPUInterruptController -> BCM2837LocalIntc ->
-BCM2837InterruptController`) has not been confirmed to reach
-`BCM2837SDHCI::interruptOccurred()` at all. Whether that's a real gap
-specific to this device's interrupt line/vector, or a registration/
-enablement issue in this driver, is not root-caused. **This does not
-block Phase 3's exit criteria** -- the existing hybrid poll+interrupt
-design in `waitForIntStatus32()` already handles this correctly and has
-the whole time (a real interrupt would still win immediately via
-`IOLockWakeup()` if one ever fires) -- but the phase's originally-scoped
-"real ARM64 IRQ delivery" open item should be read as still open, not
-closed. The rest of this section is kept as historical record of the
-original plan.
+item from this phase's original scope -- is now genuinely CONFIRMED AND
+FIXED (2026-08-13), after two false starts the same day worth recording
+for the methodology lesson.** First pass added
+`fRealInterruptHits`/`fPollFallbackHits` counters to
+`iokit/BCM2837SDHCI/BCM2837SDHCI.{cpp,h}` and reported a false-positive
+"confirmed" claim caused by a real bug in the counters themselves
+(credited a hit at the *consuming* side of `fPendingIntStatus` rather than
+the true source -- see the file's own history/comments). Second pass
+fixed that bug and re-measured correctly: `fRealInterruptHits` stayed at
+**0** for an entire boot, meaning real interrupt delivery to this driver
+had genuinely never been observed -- an honest "still open, root cause
+unknown" result.
+
+**Third pass found the actual root cause** by tracing the real xnu
+DT-interrupt-parsing path (`IODeviceTreeSupport.cpp`'s
+`IODTMapOneInterrupt()` + `IOInterruptController.cpp`'s
+`registerInterrupt()`) instead of assuming: `devicetrees/rpi3.dts`'s
+`intc` node used a 2-cell `{bank, bit}` interrupt encoding
+(`#interrupt-cells = <2>`, `sdhci`'s `interrupts = <2 30>`), but
+`IODTMapOneInterrupt()` stores a device's `interrupts` property
+completely unprocessed as raw cell data, and the base
+`IOInterruptController::registerInterrupt()` just takes the **first**
+32-bit cell as the vector number -- nothing in generic IOKit decodes a
+multi-cell `{bank,bit}` convention unless the controller subclass
+explicitly overrides `registerInterrupt()` to do so, and
+`BCM2837InterruptController` never did (its own header had already
+flagged this exact gap as unverified before this fix). So `BCM2837SDHCI`'s
+real registered vector was **2** (the bare first cell), not **62**
+(bank 2 bit 30, this project's own intended `bank*32+bit` numbering) --
+nowhere near where the real hardware interrupt actually lands, silently
+dropped every time. **Independently corroborated the same day** by a
+from-scratch adversarial review of the interrupt-controller kexts, which
+reached the identical root cause by pure static analysis without seeing
+this investigation -- strong convergent evidence, not just one read of
+the code. That review also predicted this bug's most severe real-hardware
+consequence: the wrong vector (2) is a real GPU IRQ line (System Timer
+compare-match), owned by VideoCore firmware on real hardware -- enabling
+it as if it were the SDHCI line would very likely have caused a real
+interrupt storm on actual silicon, invisible in QEMU (which doesn't model
+that timer at all). This DT bug being fixed now heads off a real-hardware
+landmine, not just a QEMU-only diagnostic gap.
+
+**Fix**: made `intc` single-cell (`#interrupt-cells = <1>`) and
+pre-flattened `sdhci`'s `interrupts` to `<62>` directly, matching what
+`local-intc`'s own single-cell `interrupts = <8>` already did correctly --
+avoids needing to override `IOInterruptController::registerInterrupt()`
+(large, sharing/locking-sensitive base-class code) at all. Recompiled the
+device tree with the correct ADT-emitting `dtc`
+(`third_party/dtc-AppleDeviceTree/dtc`, **not** the stock Homebrew `dtc`
+that happens to be on `$PATH` -- confirmed by checking the existing
+`.dtb`'s magic bytes are Apple ADT format, not standard FDT). **Re-verified
+on a real QEMU boot: `fRealInterruptHits` now fires, and
+`fPollFallbackHits` does not appear at all for the whole boot** -- genuine
+interrupt-driven I/O, not polling, confirmed for the first time in this
+project. The hybrid poll+interrupt design in `waitForIntStatus32()` is
+kept anyway (real interrupts still win immediately via `IOLockWakeup()`;
+costs nothing to keep as a safety net). This closes Phase 3's IRQ-delivery
+item for real. The rest of this section is kept as historical record of
+the original plan.
 
 **Depends on**: Phase 1's kernel. Does *not* depend on Phase 2 (mockfs and
 real-SD-root are alternative roots, not sequential -- this phase can be

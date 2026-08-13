@@ -170,8 +170,23 @@ BCM2837LocalIntc::handleInterrupt(void * /*refCon*/, IOService * /*nub*/, int /*
 		IOInterruptVector *vector = &vectors[kVectorGPUIRQ];
 		vector->interruptActive = 1;
 		OSMemoryBarrier();
-		if (!vector->interruptDisabledSoft && vector->interruptRegistered) {
-			vector->handler(vector->target, vector->refCon, vector->nub, vector->source);
+		if (!vector->interruptDisabledSoft) {
+			if (vector->interruptRegistered) {
+				vector->handler(vector->target, vector->refCon, vector->nub, vector->source);
+			}
+		} else {
+			// Same lazy hard-disable pattern as
+			// BCM2837InterruptController::dispatchBank() (Apple's own
+			// GenericInterruptController reference), found missing via
+			// adversarial review 2026-08-13. disableVectorHard() is a
+			// documented no-op at this L1 level (see that function) -
+			// this call is still correct to make (matches the interface
+			// contract, harmless), but real recovery from a stuck GPU IRQ
+			// line still requires masking at the "intc" level below us,
+			// not here - not fixed further, just no longer silently
+			// missing the attempt.
+			vector->interruptDisabledHard = 1;
+			disableVectorHard(kVectorGPUIRQ, vector);
 		}
 		vector->interruptActive = 0;
 	}

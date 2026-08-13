@@ -8,11 +8,37 @@
  *   arch/arm/boot/dts/broadcom/bcm283x.dtsi   (gpio, aux, sdhci, sdhost)
  *   arch/arm/boot/dts/broadcom/bcm2837.dtsi   (local_intc, armctrl-ic override)
  *
- * UNVERIFIED: the <bank irq> interrupt cell encoding below is carried over
- * raw from the Linux DT. Nothing in the original rpi3.dts used `interrupts`
- * at all, so there's no known-good precedent here for how the ADT-targeting
- * dtc / IODeviceTreeSupport.cpp actually wants interrupts encoded. Confirm
- * against the compiled ADT output before relying on it.
+ * ROOT CAUSE FOUND AND FIXED (2026-08-13): the <bank irq> 2-cell interrupt
+ * encoding this file used to carry over raw from the Linux DT was flagged
+ * above as UNVERIFIED, and was in fact wrong - this is very likely why
+ * BCM2837SDHCI never observed a real hardware interrupt despite BCM2837CPU's
+ * IRQ cascade being otherwise correctly wired (see iokit/BCM2837SDHCI's own
+ * "fRealInterruptHits stayed at 0" finding). Traced the real mechanism
+ * directly in xnu source (iokit/Kernel/IODeviceTreeSupport.cpp's
+ * IODTMapOneInterrupt() + iokit/Kernel/IOInterruptController.cpp's
+ * registerInterrupt()): IODTMapOneInterrupt() stores a device's `interrupts`
+ * property as a RAW, unmodified OSData blob (all `#interrupt-cells` words,
+ * verbatim) - it does NOT combine multi-cell specifiers into anything. The
+ * base IOInterruptController::registerInterrupt() then does
+ * `vectorNumber = *(IOInterruptVectorNumber *)vectorData->getBytesNoCopy()`
+ * - i.e. it blindly takes the FIRST 32-bit cell as the vector number and
+ * nothing else, unless the concrete controller subclass overrides
+ * registerInterrupt() to do its own multi-cell decode (BCM2837InterruptController
+ * does not - see its own header comment, which already flagged this exact
+ * gap as unverified). With `#interrupt-cells = <2>` and sdhci's
+ * `interrupts = <2 30>`, this meant BCM2837SDHCI's real registered vector
+ * number was **2** (the bare first cell) - landing in BCM2837InterruptController's
+ * bank-1 range, nowhere near the real hardware bit (bank 2, bit 30 = flat
+ * vector 62, per that driver's own bank*32+bit numbering) - so even if the
+ * real interrupt line fires, it dispatches to a vector nothing ever
+ * registered against, and is silently dropped. Fixed by making `intc`
+ * single-cell (`#interrupt-cells = <1>`) and pre-flattening every consumer's
+ * `interrupts` property to the already-combined vector number instead -
+ * matches what `local-intc`'s own single-cell `interrupts = <8>` already
+ * did correctly (single-cell is exactly what the base class's naive
+ * first-cell-as-vector-number behavior needs), and avoids having to
+ * override IOInterruptController::registerInterrupt() (large, sharing/
+ * locking-sensitive base-class code) just to teach it a 2-cell convention.
  */
 
 / {
@@ -109,7 +135,15 @@
 			 */
 			interrupt-controller = <0x0>;
 			AAPL,phandle = <0x1>;
-			#interrupt-cells = <2>;
+			// Single-cell, pre-flattened vector numbers - see the file
+			// header comment ("ROOT CAUSE FOUND AND FIXED") for why this
+			// changed from <2> (bank, bit) - the base IOInterruptController
+			// registerInterrupt() only ever reads a multi-cell specifier's
+			// first word as the vector number, so a 2-cell {bank,bit}
+			// convention silently registered every consumer against the
+			// wrong vector (bank value only) without a custom decode this
+			// controller never implemented.
+			#interrupt-cells = <1>;
 			#address-cells = <0>;
 			/*
 			 * FIX: intc's own upstream interrupt (cascaded from
@@ -144,7 +178,12 @@
 			compatible = "brcm,bcm2835-sdhci";
 			reg = <0x300000 0 0x100 0>;
 			interrupt-parent = <0x1>;
-			interrupts = <2 30>;
+			// Pre-flattened: real bank 2 ("pending_2", GPU IRQs 32-63),
+			// bit 30 -> BCM2837InterruptController's own
+			// kVectorBank2Base(32) + 30 = vector 62. Was <2 30> (raw
+			// 2-cell bank/bit) - see "intc" node's own comment above for
+			// why that never actually worked.
+			interrupts = <62>;
 		};
 
 		/*

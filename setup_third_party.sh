@@ -12,7 +12,7 @@
 #     third-party (not personal-fork) upstream -- kept as patch files in
 #     third_party-patches/ and applied after cloning upstream, rather than
 #     standing up a whole personal fork for a single commit each.
-#   - hfs, IOStorageFamily, IOUSBFamily, msdosfs: unmodified Apple
+#   - hfs, IOStorageFamily, IOUSBFamily, IONetworkingFamily, msdosfs: unmodified Apple
 #     open-source reference sources, pinned to an exact tag, no patching.
 #   - dyld/Libc/libpthread/.../Csu (Phase 4 libSystem+userland stack) and
 #     bash/shell_cmds/.../misc_cmds (Phase 4 real commands): unmodified
@@ -48,6 +48,7 @@ u-boot|https://github.com/FlorentRevest/u-boot.git|master|u-boot.patch
 hfs|https://github.com/apple-oss-distributions/hfs.git|hfs-556.100.11|
 IOStorageFamily|https://github.com/apple-oss-distributions/IOStorageFamily.git|IOStorageFamily-218.1.4|
 IOUSBFamily|https://github.com/apple-oss-distributions/IOUSBFamily.git|IOUSBFamily-630.4.5|
+IONetworkingFamily|https://github.com/apple-oss-distributions/IONetworkingFamily.git|IONetworkingFamily-151.40.1|
 msdosfs|https://github.com/apple-oss-distributions/msdosfs.git|msdosfs-229.1.4|
 dyld|https://github.com/apple-oss-distributions/dyld.git|dyld-832.7.3|
 Libc|https://github.com/apple-oss-distributions/Libc.git|Libc-1439.40.11|

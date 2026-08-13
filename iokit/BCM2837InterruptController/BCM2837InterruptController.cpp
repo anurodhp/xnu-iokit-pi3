@@ -179,8 +179,23 @@ BCM2837InterruptController::dispatchBank(uint32_t pending, IOInterruptVectorNumb
 		vector->interruptActive = 1;
 		OSMemoryBarrier();
 
-		if (!vector->interruptDisabledSoft && vector->interruptRegistered) {
-			vector->handler(vector->target, vector->refCon, vector->nub, vector->source);
+		if (!vector->interruptDisabledSoft) {
+			if (vector->interruptRegistered) {
+				vector->handler(vector->target, vector->refCon, vector->nub, vector->source);
+			}
+		} else {
+			// Lazy hard-disable, matching Apple's own reference pattern
+			// (iokit/Examples/drvGenericInterruptController/
+			// GenericInterruptController.cpp's handleInterrupt()) - found
+			// missing via adversarial review 2026-08-13. Without this, a
+			// client that soft-disables a still-asserted level source (see
+			// getVectorType() - these are all level-triggered) never gets
+			// its handler called again to clear the condition at the
+			// device, the pending bit never actually clears in hardware,
+			// and the CPU IRQ line stays asserted - sleh_irq() would
+			// re-enter immediately on return, a real livelock.
+			vector->interruptDisabledHard = 1;
+			disableVectorHard(vectorNumber, vector);
 		}
 
 		vector->interruptActive = 0;
