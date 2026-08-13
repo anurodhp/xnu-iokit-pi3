@@ -69,6 +69,13 @@ private:
 		kNumVectors = 32, // one bank, matches LOCAL_IRQ_PENDINGN(0)'s width
 
 		kRegGPURouting     = 0x0C / sizeof(uint32_t),
+		// Core0 Timers interrupt control (QA7 rev3.4 REG_TIMERCONTROL) -
+		// gates whether each of the 4 ARM generic timer comparator
+		// sources (CNTPSIRQ/CNTPNSIRQ/CNTHPIRQ/CNTVIRQ, bits 0-3) is
+		// masked, routed as IRQ (bits 0-3 set), or routed as FIQ (bits
+		// 4-7 set) - see start()'s own comment for why this is written
+		// explicitly (backlog item 3).
+		kRegTimerControl0  = 0x40 / sizeof(uint32_t),
 		kRegIRQPending0    = 0x60 / sizeof(uint32_t), // core 0 only - see header
 
 		kVectorGPUIRQ = 8, // bit 8 of LOCAL_IRQ_PENDINGN(n) - real HW bit position

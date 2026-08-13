@@ -98,6 +98,31 @@ BCM2837LocalIntc::start(IOService *provider)
 	// but don't rely on firmware/QEMU state being correct.
 	fRegBase[kRegGPURouting] = 0;
 
+	// Backlog item 3, investigated (not just assumed) 2026-08-13: XNU's
+	// arm64 scheduler tick is taken via FIQ (osfmk/arm64/sleh.c's
+	// sleh_fiq(), dispatching on ml_get_timer_pending() - never through
+	// this driver's own IRQ path at all), which requires this exact
+	// register - real QA7 hardware resets REG_TIMERCONTROL to 0 (masked),
+	// same as third_party/qemu-zhuowei's own bcm2836_control_reset().
+	// A live QEMU boot read this register back as already 0xF0 (FIQ
+	// enabled for all 4 generic timer comparators) by the time a shell
+	// was reached, WITHOUT any write from this repo's own source -
+	// confirmed by grepping the built kernel tree for the register/offset
+	// and finding nothing, and by checking FlorentRevest/u-boot's
+	// cmd/bootxnu.c (real hardware's actual boot chain) for the same,
+	// also finding nothing. That means QEMU's own loader is silently
+	// providing this as a courtesy real firmware has no reason to
+	// replicate - the exact "don't rely on firmware/QEMU state being
+	// correct" gap the GPU-routing write above already guards against,
+	// just not yet applied here. Write it explicitly: bits 4-7 = FIQ
+	// enable for CNTPSIRQ/CNTPNSIRQ/CNTHPIRQ/CNTVIRQ (bits 0-3, IRQ
+	// enable, deliberately left clear - this driver's own IRQ dispatch
+	// path has no handler for any of these four sources, only the GPU
+	// passthrough bit, so IRQ-routing a timer comparator here would hit
+	// the exact "unhandled pending bit, no way to clear it" spin
+	// backlog item 2 just added a diagnostic latch for).
+	fRegBase[kRegTimerControl0] = 0xF0;
+
 	const OSSymbol *controllerName = IODTInterruptControllerName(provider);
 	if (controllerName == NULL) {
 		IOLog("BCM2837LocalIntc: IODTInterruptControllerName failed (no AAPL,phandle on \"local-intc\"?)\n");
