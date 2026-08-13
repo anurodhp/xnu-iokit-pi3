@@ -80,6 +80,18 @@ BCM2837InterruptController::start(IOService *provider)
 		IOLog("BCM2837InterruptController: failed to map \"intc\" registers\n");
 		return false;
 	}
+	// Backlog item 26: confirm the mapping actually covers the highest
+	// offset this driver touches (kRegDisableBasicIRQs = 0x24) before
+	// trusting it - "intc"'s own reg property declares 0x200 bytes, so
+	// this should always pass; catches a misconfigured DT rather than a
+	// runtime condition.
+	if (fRegMap->getLength() < (kRegDisableBasicIRQs * sizeof(uint32_t)) + sizeof(uint32_t)) {
+		IOLog("BCM2837InterruptController: \"intc\" register mapping too small (%llu bytes)\n",
+		    (unsigned long long)fRegMap->getLength());
+		fRegMap->release();
+		fRegMap = NULL;
+		return false;
+	}
 	fRegBase = (volatile uint32_t *)fRegMap->getVirtualAddress();
 
 	// Mask everything at the hardware before we start trusting the
@@ -88,6 +100,17 @@ BCM2837InterruptController::start(IOService *provider)
 	fRegBase[kRegDisableIRQs1] = 0xFFFFFFFF;
 	fRegBase[kRegDisableIRQs2] = 0xFFFFFFFF;
 	fRegBase[kRegDisableBasicIRQs] = 0xFFFFFFFF;
+
+	// Backlog item 9: explicitly clear FIQ_CONTROL (bit 7 = FIQ enable,
+	// bits 6:0 = routed source) rather than leaving it at whatever
+	// firmware left it. This driver only ever handles sources via the
+	// normal IRQ path (handleInterrupt() below) - if firmware left some
+	// source FIQ-routed, it would arrive at sleh_fiq() instead and get
+	// misclassified as a timer tick (sleh_fiq() has no other case for an
+	// unrecognized FIQ source). QEMU already resets this to 0, so this is
+	// a no-op there; real firmware behavior is unverified, hence writing
+	// it explicitly rather than assuming.
+	fRegBase[kRegFIQControl] = 0;
 
 	// Publish ourselves under the exact symbol IODTMapOneInterrupt() will
 	// look us up by: IODTInterruptControllerName() (IODeviceTreeSupport.cpp)
@@ -142,6 +165,18 @@ BCM2837InterruptController::stop(IOService *provider)
 void
 BCM2837InterruptController::free(void)
 {
+	// Backlog item 27: if start() fails after fRegMap is already set (e.g.
+	// a later registerInterrupt()/registerInterruptController() step
+	// fails), IOKit calls free() to tear down the never-started instance,
+	// not stop() - stop()'s own fRegMap release (further down this file)
+	// never runs in that path. Safe to also release here regardless: on
+	// the normal stop()-then-free() path, stop() already NULLed fRegMap,
+	// so this is a no-op there.
+	if (fRegMap != NULL) {
+		fRegMap->release();
+		fRegMap = NULL;
+	}
+
 	if (vectors != NULL) {
 		for (int i = 0; i < kNumVectors; i++) {
 			if (vectors[i].interruptLock != NULL) {
@@ -251,6 +286,10 @@ BCM2837InterruptController::getVectorType(IOInterruptVectorNumber /*vectorNumber
 void
 BCM2837InterruptController::disableVectorHard(IOInterruptVectorNumber vectorNumber, IOInterruptVector * /*vector*/)
 {
+	if (!vectorInRange(vectorNumber)) {
+		IOLog("BCM2837InterruptController: disableVectorHard: vectorNumber %d out of range\n", (int)vectorNumber);
+		return;
+	}
 	if (vectorNumber < kVectorBank2Base) {
 		fRegBase[kRegDisableIRQs1] = (1U << (vectorNumber - kVectorBank1Base));
 	} else if (vectorNumber < kVectorBasicBase) {
@@ -263,6 +302,10 @@ BCM2837InterruptController::disableVectorHard(IOInterruptVectorNumber vectorNumb
 void
 BCM2837InterruptController::enableVector(IOInterruptVectorNumber vectorNumber, IOInterruptVector * /*vector*/)
 {
+	if (!vectorInRange(vectorNumber)) {
+		IOLog("BCM2837InterruptController: enableVector: vectorNumber %d out of range\n", (int)vectorNumber);
+		return;
+	}
 	if (vectorNumber < kVectorBank2Base) {
 		fRegBase[kRegEnableIRQs1] = (1U << (vectorNumber - kVectorBank1Base));
 	} else if (vectorNumber < kVectorBasicBase) {

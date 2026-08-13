@@ -77,6 +77,18 @@ BCM2837LocalIntc::start(IOService *provider)
 		IOLog("BCM2837LocalIntc: failed to map \"local-intc\" registers\n");
 		return false;
 	}
+	// Backlog item 26: confirm the mapping is actually big enough to cover
+	// the highest offset this driver touches (kRegIRQPending0 = 0x60)
+	// before trusting it - "local-intc"'s own reg property declares 0x100
+	// bytes, so this should always pass; catches a misconfigured DT rather
+	// than a runtime condition.
+	if (fRegMap->getLength() < (kRegIRQPending0 * sizeof(uint32_t)) + sizeof(uint32_t)) {
+		IOLog("BCM2837LocalIntc: \"local-intc\" register mapping too small (%llu bytes)\n",
+		    (unsigned long long)fRegMap->getLength());
+		fRegMap->release();
+		fRegMap = NULL;
+		return false;
+	}
 	fRegBase = (volatile uint32_t *)fRegMap->getVirtualAddress();
 
 	// Force GPU IRQ routing to core 0 (bits[2:0]=0), matching Linux's own
@@ -138,6 +150,13 @@ BCM2837LocalIntc::stop(IOService *provider)
 void
 BCM2837LocalIntc::free(void)
 {
+	// Backlog item 27 - see BCM2837InterruptController::free()'s matching
+	// comment for the full reasoning (same start()-failure-path leak).
+	if (fRegMap != NULL) {
+		fRegMap->release();
+		fRegMap = NULL;
+	}
+
 	if (vectors != NULL) {
 		for (int i = 0; i < kNumVectors; i++) {
 			if (vectors[i].interruptLock != NULL) {

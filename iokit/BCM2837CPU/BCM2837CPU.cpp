@@ -15,6 +15,29 @@ OSDefineMetaClassAndStructors(BCM2837CPU, IOCPU);
 // away the mechanism sleh_irq() actually depends on.
 static IOCPUInterruptController *sBCM2837CPUIC = NULL;
 
+// Defensive name re-check (backlog item 13) - every other DT-matched
+// driver in this tree (BCM2837ArmIO, BCM2837InterruptController,
+// BCM2837LocalIntc, BCM2837SDHCI) already re-verifies provider->getName()
+// in probe() rather than trusting IONameMatch alone; this class was the
+// one exception. Cheap insurance: if this were ever to over-match against
+// a sibling DT node, initCPU() would call enableCPUInterrupt() an extra
+// time, driving enabledCPUs past numCPUs and permanently wedging
+// IOCPUInterruptController::registerInterrupt()'s thread_block() wait for
+// every future caller (see IOCPU.cpp).
+IOService *
+BCM2837CPU::probe(IOService *provider, SInt32 *score)
+{
+	IOService *result = super::probe(provider, score);
+	if (result == NULL) {
+		return NULL;
+	}
+	const char *name = provider->getName();
+	if (name == NULL || strcmp(name, "cpu0") != 0) {
+		return NULL;
+	}
+	return result;
+}
+
 bool
 BCM2837CPU::start(IOService *provider)
 {
@@ -113,5 +136,22 @@ BCM2837CPU::haltCPU(void)
 const OSSymbol *
 BCM2837CPU::getCPUName(void)
 {
-	return OSSymbol::withCString("cpu0");
+	// Cached rather than allocating a fresh retained OSSymbol on every
+	// call (backlog item 17) - OSSymbol::withCString() returns a ref the
+	// caller doesn't release, and getCPUName() has no documented "caller
+	// owns this" contract that would make repeated allocation correct.
+	if (fCPUName == NULL) {
+		fCPUName = OSSymbol::withCString("cpu0");
+	}
+	return fCPUName;
+}
+
+void
+BCM2837CPU::free(void)
+{
+	if (fCPUName != NULL) {
+		fCPUName->release();
+		fCPUName = NULL;
+	}
+	super::free();
 }

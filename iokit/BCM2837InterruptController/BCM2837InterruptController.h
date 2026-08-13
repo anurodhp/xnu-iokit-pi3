@@ -71,6 +71,13 @@ private:
 
 	void dispatchBank(uint32_t pending, IOInterruptVectorNumber base);
 
+	// Backlog item 26: bounds check shared by enableVector()/
+	// disableVectorHard() - see their own comments for why.
+	static inline bool vectorInRange(IOInterruptVectorNumber vectorNumber)
+	{
+		return vectorNumber >= 0 && vectorNumber < kNumVectors;
+	}
+
 public:
 	virtual bool init(OSDictionary *propTable) APPLE_KEXT_OVERRIDE;
 
