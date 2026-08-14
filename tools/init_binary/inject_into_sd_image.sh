@@ -12,6 +12,17 @@
 # onto (see project memory), fixed here the same way: create it host-side
 # rather than teaching pwtool to mkdir its own lock directory.
 #
+# If the image has no /etc/master.passwd yet, also provisions a real
+# root account (password "darwin") directly onto the mounted volume via
+# tools/pwtool/hash_password_host.c (a real host-built hasher, reusing
+# crypt_des.c). This closes the chicken-and-egg gap left by removing
+# init.c's implicit-root-on-no-accounts fallback (see init.c's
+# LOGIN_NO_ACCOUNTS handling): there is no other way to get a FIRST
+# account onto a fresh image, since pwtool.c itself only runs on the
+# booted target and needs a shell -- which now needs a login -- which
+# needs an account. Only ever runs on a genuinely account-less image;
+# never overwrites an existing /etc/master.passwd.
+#
 # Usage: tools/init_binary/inject_into_sd_image.sh [SD_IMAGE] [HFS_PARTITION_INDEX]
 #   SD_IMAGE:             defaults to qemu/hfs_root_test.img (runvm.sh's default)
 #   HFS_PARTITION_INDEX:  1-based fdisk slice number for the HFS+ root
@@ -62,6 +73,26 @@ echo "+ wrote $(wc -c < tools/pwtool/pwtool.macho) bytes to $MNT/sbin/pwtool"
 
 mkdir -p "$MNT/etc"
 echo "+ ensured $MNT/etc exists (pwtool lock-file/master.passwd/group directory)"
+
+if [ ! -f "$MNT/etc/master.passwd" ]; then
+    echo "+ no $MNT/etc/master.passwd -- provisioning real root account (password: darwin)"
+    HASHTOOL="$(mktemp -t hash_password_host)"
+    clang -Wall -Wextra -I tools/pwtool -o "$HASHTOOL" \
+        tools/pwtool/hash_password_host.c tools/libinfo_custom/crypt_des.c
+    ROOTHASH=$("$HASHTOOL" darwin)
+    rm -f "$HASHTOOL"
+    if [ -z "$ROOTHASH" ]; then
+        echo "error: root password hash generation failed" >&2
+        exit 1
+    fi
+    printf 'root:%s:0:0::0:0::/:/bin/sh\n' "$ROOTHASH" > "$MNT/etc/master.passwd"
+    printf 'root:*:0:\n' > "$MNT/etc/group"
+    chmod 600 "$MNT/etc/master.passwd"
+    chmod 644 "$MNT/etc/group"
+    echo "+ wrote $MNT/etc/master.passwd and $MNT/etc/group (root:darwin, uid/gid 0)"
+else
+    echo "+ $MNT/etc/master.passwd already exists -- leaving accounts as-is"
+fi
 
 diskutil unmount "$MNT"
 hdiutil detach "$DISK"

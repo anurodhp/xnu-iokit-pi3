@@ -668,13 +668,19 @@ static int tokenize(char *line, char *argv[], int max_args) {
 #define MASTER_PASSWD_PATH "/etc/master.passwd"
 
 /* Current session identity. uid/gid start at whatever the kernel handed
- * this process (root, pid 1's child) -- do_login() either drops them for
- * real via a real setuid()/setgid() (see drop_privileges() below) or, in
- * the deliberate no-account-database-yet bootstrap case, leaves them
- * alone and current_user stays "root", matching this project's prior,
- * already-verified boot behavior exactly (see this section's own
- * do_login() comment for why that fallback exists and what it does NOT
- * weaken). */
+ * this process (root, pid 1's child) until do_login() drops them for real
+ * via a real setuid()/setgid() (see drop_privileges() below) -- do_login()
+ * never returns into a shell without a successful, real authentication;
+ * these initial values are only ever observed before the first login
+ * prompt is answered. SECURITY: an earlier version of this file granted an
+ * implicit, unauthenticated root shell whenever /etc/master.passwd didn't
+ * exist yet (a deliberate bootstrap convenience). That fallback has been
+ * REMOVED -- a missing/unprovisioned account database now refuses all
+ * logins (see LOGIN_NO_ACCOUNTS handling in do_login() below), the same
+ * fail-closed treatment LOGIN_AUTH_BROKEN already got. The first account
+ * (root) must be provisioned onto the image from the host before first
+ * boot -- see tools/init_binary/inject_into_sd_image.sh -- not created
+ * from an implicit in-VM shell. */
 static char current_user[64] = "root";
 static unsigned int current_uid = 0;
 static unsigned int current_gid = 0;
@@ -763,17 +769,20 @@ static int drop_privileges(unsigned int uid, unsigned int gid) {
  *                            dummy one for a nonexistent name) so a
  *                            timing difference doesn't leak which case
  *                            occurred either.
- *   LOGIN_NO_ACCOUNTS     -- pwpath doesn't exist at all -- the real
- *                            bootstrap case (no account has ever been
- *                            provisioned via pwtool on this image). NOT a
- *                            fail-open bug: the caller's own decision
- *                            about what to do with this code is what
- *                            determines behavior, and do_login() below
- *                            only ever uses it to preserve this project's
- *                            EXISTING, already-verified pre-Phase-5 boot
- *                            behavior (implicit root, no login prompt) --
- *                            it does not affect what happens once a real
- *                            account database DOES exist.
+ *   LOGIN_NO_ACCOUNTS     -- pwpath doesn't exist at all -- no account has
+ *                            ever been provisioned onto this image (should
+ *                            not happen for a properly-provisioned image;
+ *                            see tools/init_binary/inject_into_sd_image.sh,
+ *                            which writes root's /etc/master.passwd entry
+ *                            onto the image from the host before first
+ *                            boot). do_login() below treats this exactly
+ *                            like LOGIN_AUTH_BROKEN -- refuse all logins,
+ *                            fail closed. There is deliberately no
+ *                            implicit/unauthenticated shell for this case
+ *                            (a prior version of this file had one; it was
+ *                            removed as a real security hole -- an
+ *                            unprovisioned or wiped account database must
+ *                            never grant access).
  *   LOGIN_AUTH_BROKEN     -- pwpath exists but failed to load/parse (real
  *                            corruption or I/O error) -- the caller must
  *                            NOT fall back to LOGIN_NO_ACCOUNTS-style
@@ -792,19 +801,13 @@ static int attempt_login(const char *pwpath, const char *name, const char *passw
                           struct li_passwd **out_pw) {
     *out_pw = 0;
 
-    /* REAL BUG FOUND AND FIXED DURING THIS PASS'S OWN HOST-TEST WRITING
-     * (tools/init_binary/host_test.c's test #5): an earlier version of
-     * this function treated ANY sys_open() failure -- not just ENOENT --
-     * as LOGIN_NO_ACCOUNTS, meaning a real /etc/master.passwd that exists
-     * but is unreadable for some other reason (permission bits corrupted,
-     * a real I/O error, anything) would be silently treated as "no
-     * account system provisioned yet" and fall back to an implicit root
-     * shell -- a genuine fail-open bug, the exact class this whole file's
-     * design is supposed to avoid. Fixed to check the real errno: only a
-     * genuine ENOENT (the file truly doesn't exist) is the bootstrap
-     * case; every other open failure is now LOGIN_AUTH_BROKEN (refuse ALL
-     * logins), matching pwtool.c's own already-correct
-     * pt_load_pw_or_bootstrap() logic exactly. */
+    /* Distinguish "file genuinely doesn't exist" (LOGIN_NO_ACCOUNTS) from
+     * any other open failure (LOGIN_AUTH_BROKEN, e.g. permission bits
+     * corrupted, a real I/O error). Both codes now get refused by
+     * do_login() below -- neither ever grants access -- but the
+     * distinction is kept because the two cases warrant different
+     * messages (unprovisioned image vs. damaged account database), and
+     * matches pwtool.c's own pt_load_pw_or_bootstrap() ENOENT check. */
     int fd = sys_open(pwpath, O_RDONLY, 0);
     if (fd < 0) {
         if (fd == -LOGIN_ENOENT) {
@@ -837,9 +840,10 @@ static int attempt_login(const char *pwpath, const char *name, const char *passw
 #define LOGIN_MAX_ATTEMPTS 5
 
 /* Interactive login prompt loop -- real do_login() as opposed to
- * attempt_login()'s pure decision logic above. Returns 1 if the caller
- * should proceed into a shell (either a real authenticated session, or
- * the documented bootstrap fallback), 0 if the caller should give up
+ * attempt_login()'s pure decision logic above. Returns 1 only if the
+ * caller should proceed into a shell for a REAL authenticated session
+ * (LOGIN_OK) -- there is no other path to 1. Returns 0 if the caller
+ * should give up
  * (single_user_child() responds to 0 by exiting so init_main()'s existing
  * respawn loop gives a fresh login prompt, same real shape getty/login
  * respawning has on real BSD). */
@@ -863,12 +867,10 @@ static int do_login(void) {
 
         if (rc == LOGIN_NO_ACCOUNTS) {
             put("init: no "); put(MASTER_PASSWD_PATH);
-            put(" -- no accounts provisioned yet (run pwtool). "
-                "Falling back to an implicit root shell.\n");
-            current_uid = 0;
-            current_gid = 0;
-            kstrncpy(current_user, "root", sizeof(current_user));
-            return 1;
+            put(" -- this image has no accounts provisioned "
+                "(see tools/init_binary/inject_into_sd_image.sh). "
+                "Refusing all logins.\n");
+            return 0;
         }
         if (rc == LOGIN_AUTH_BROKEN) {
             put("init: "); put(MASTER_PASSWD_PATH);
