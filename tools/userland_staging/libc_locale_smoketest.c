@@ -1,13 +1,27 @@
-/* Smoketest: proves the newly-unblocked (real TSD) Libc locale/ctype
- * functions actually work, not just link. strcasecmp()/strncasecmp() are
- * real Apple Libc source (third_party/Libc/string/FreeBSD/strcasecmp.c)
- * that internally goes through __current_locale() -> real TSD
- * (pthread_getspecific against ___locale_key, see xlocale_private.h) and
- * real per-locale ctype tables (tolower_l), all gated on TSD until this
- * session's bootstrap work (see docs/roadmap.md Phase 4).
+/* Smoketest: exercises the newly-unblocked (real TSD) Libc locale/ctype
+ * functions. strcasecmp()/strncasecmp() are real Apple Libc source
+ * (third_party/Libc/string/FreeBSD/strcasecmp.c) that internally goes
+ * through __current_locale() -> real TSD (against ___locale_key, see
+ * xlocale_private.h) and real per-locale ctype tables (tolower_l).
+ *
+ * MUST call pthread_tsd_shim_bootstrap_for_libc() first (see that
+ * function's own comment in pthread_tsd_shim_libc_bootstrap.c) - an
+ * earlier version of this file didn't, and an earlier version of its own
+ * comment claimed this "exercises the full real chain", which an
+ * adversarial review correctly called out as not actually true without
+ * the eager bootstrap: real Libc's fast TSD-read path
+ * (_pthread_getspecific_direct -> raw TPIDRRO_EL0 read) bypasses this
+ * project's shim functions entirely, and __locale_key was never
+ * initialized without __xlocale_init() having run. Both are true now
+ * that this file calls the combined bootstrap explicitly - "verified"
+ * below means "linked and, once boot-tested under QEMU, ran" - compiling
+ * and linking cleanly on the host is necessary but not sufficient proof
+ * by itself (see docs/roadmap.md Phase 4 for what boot-testing has and
+ * hasn't confirmed for this specific smoketest).
  */
 typedef unsigned long size_t;
 
+extern int pthread_tsd_shim_bootstrap_for_libc(void);
 extern int strcasecmp(const char *, const char *);
 extern int strncasecmp(const char *, const char *, size_t);
 
@@ -30,6 +44,11 @@ static void put(const char *s) {
 
 int main(int argc, char **argv) {
     (void)argc; (void)argv;
+
+    if (!pthread_tsd_shim_bootstrap_for_libc()) {
+        put("libc_locale_smoketest: FAILED (bootstrap)\n");
+        return 1;
+    }
 
     int ok = 1;
     /* Real, locale-aware, case-insensitive comparison - exercises the

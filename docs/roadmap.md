@@ -729,37 +729,122 @@ resolve unconditionally; through an archive, the linker only pulls in
 members actually referenced. Using the archive properly cut the required
 symbol set drastically.
 
-**Genuinely new wall found, distinct from TSD, precisely characterized
-rather than guessed at**: `___global_locale`/`___locale_key`/`__c_locale`
-(what `strcasecmp`'s real locale-aware path needs) all live in one
-translation unit, `xlocale.c` -- once any symbol from it is pulled in,
-*all* of its own internal helper functions' undefined references must
-also resolve, even ones the calling smoketest's code path never actually
-reaches at runtime (static-linking granularity, not a logic error). That
-pulls in `setlocale.c`/`collate.c`/`rune.c`/`ldpart.c`'s real
+**Wall found this pass, distinct from TSD (status as of the fourth pass --
+see the fifth pass immediately below for how this actually resolved)**:
+`___global_locale`/`___locale_key`/`__c_locale` (what `strcasecmp`'s real
+locale-aware path needs) all live in one translation unit, `xlocale.c` --
+once any symbol from it is pulled in, *all* of its own internal helper
+functions' undefined references must also resolve, even ones the calling
+smoketest's code path never actually reaches at runtime (static-linking
+granularity, not a logic error). That pulls in
+`setlocale.c`/`collate.c`/`rune.c`/`ldpart.c`'s real
 locale-**file**-loading machinery, which needs **real stdio**
-(`fopen`/`fclose`/`fread`/`fileno`/`rewind`) and **real POSIX regex**
-(`regcomp`/`regexec`/`regfree`) -- both genuinely separate, large
-subsystems, correctly not attempted this pass. Raw syscalls
-(`open`/`read`/`write`/`close`/`fstat`, real numbers cross-checked against
-`syscalls.master` same as `init.c`), `___error`/errno
-(`tools/userland_staging/cerror_stub.c`, already existed), and a handful
-of simple environment/string-function gaps
+(`fopen`/`fclose`/`fread`/`fileno`/`rewind`) -- at the time, believed to
+also need real POSIX regex (`regcomp`/`regexec`/`regfree`); the fifth pass
+below found the actual `strcasecmp` link path doesn't reach regex at all.
+Raw syscalls (`open`/`read`/`write`/`close`/`fstat`, real numbers
+cross-checked against `syscalls.master` same as `init.c`),
+`___error`/errno (`tools/userland_staging/cerror_stub.c`, already
+existed), and a handful of simple environment/string-function gaps
 (`getenv`/`issetugid`/`getprogname`/`isascii`/`isdigit`/`memchr`/`strchr`/
 `strcpy`/`strncpy`/`strlcpy`/`strlcat`/`strnlen`/`ffs`, real FreeBSD
 source for the string ones matching the established pattern) were all
-resolved along the way. **What's left, narrowly**: real stdio, real
-regex, `strtol`, `sys_errlist`/`sys_nerr` data tables, `strtol`/
-`strftime_l`/`iswspace_l` (wide-char-adjacent), and a public
-`tolower_l`/`toupper_l` name -- the real internal `__tolower_l`/
-`__toupper_l` (double-underscore) exist and compile
-(`third_party/Libc/locale/FreeBSD/nomacros.c`) but the bare POSIX xlocale
-names calling them weren't found anywhere in this checkout under that
-exact name -- not yet root-caused, flagged rather than guessed at.
+resolved along the way.
 
 See `project_xnu_rpi3_userspace_libc_dyld.md` memory for the same
 findings with more provenance detail, plus a brief `Libinfo` survey for
 Phase 5 (kept separate, not part of Phase 4's critical path).
+
+**Fifth pass, same day: adversarial review of the fourth pass's commit
+(`9a2ec1d`) found real bugs in code that had been called "verified" --
+every one fixed, then the full chain re-linked for real with zero
+undefined symbols.** Findings and fixes, in order of severity:
+
+1. **`pthread_once` treated the real 16-byte `pthread_once_t` as a plain
+   `long`.** Real `PTHREAD_ONCE_INIT` sig is `0x30B1BCBA` (from the SDK's
+   `pthread_impl.h`), never 0, so the old `== 0` check never fired and
+   `init_routine()` silently never ran -- a correctly-linking function
+   that was dead code at runtime. Fixed with the real
+   `struct { long __sig; char __opaque[8]; }` layout and a sentinel (1)
+   distinct from both BSS-zero and the real init signature.
+2. **Lazy bootstrap doesn't cover real Libc's fast TSD path.**
+   `_pthread_getspecific_direct()` -> `_os_tsd_get_direct()` reads
+   `TPIDRRO_EL0` directly, bypassing this shim's own functions entirely,
+   so first-call lazy bootstrapping never triggers for that path. Fixed
+   by requiring eager bootstrap (`pthread_tsd_shim_bootstrap()`) as
+   literally the first line of `main()` in both smoketests -- not
+   optional, not lazy.
+3. **`__xlocale_init()` was never called.** `__locale_key` stayed at
+   `(pthread_key_t)-1` -- meaning all locale-TSD reads/writes targeted
+   slot -1 (8 bytes before the real block) and only "worked" because that
+   memory happened to be zero. Fixed via a new
+   `pthread_tsd_shim_libc_bootstrap.c` (`pthread_tsd_shim_bootstrap_for_libc()`)
+   that calls the real, traced-safe `__xlocale_init()` explicitly after
+   TSD bootstrap.
+4. **Cross-toolchain platform-tag mismatch.** Some files were still built
+   with the host's default `-target arm64-apple-macos11` while the locale
+   tier used Xcode 12's `-target arm64-apple-ios14.4`; `ld` refuses
+   outright ("building for iOS, but linking in object file built for
+   macOS") -- Mach-O's platform load command is enforced at link time.
+   Fixed by rebuilding *everything* in `build_libc_locale.sh` (string
+   tier, locale tier, TSD shim, compat stubs, syscalls, stdio) with the
+   same toolchain.
+5. **Real files that were never wired into any build script** --
+   `pthread_tsd_shim_smoketest.macho` had no script at all. Added
+   `build_pthread_tsd_shim_smoketest.sh` (and, this pass, fixed a real bug
+   in *that* new script: it never `mkdir -p libc_build` before writing
+   into it).
+6. **`compat_stubs.c`'s `realloc()` had a real OOB read** -- it copied the
+   NEW (requested) size from the OLD block unconditionally, reading past
+   the end of the old allocation whenever growing. Fixed by storing each
+   block's real size in a header at alloc time and copying
+   `min(old_size, new_size)`.
+7. **`-w` was hiding real, `-Werror`-class implicit-function-declaration
+   and incompatible-pointer-type errors** for `_pthread_key_create`/
+   `_pthread_once`/`_pthread_getspecific`, `_getprogname`/`_write`,
+   `_fstat`/`_read`/`_close`, `_open`. Removed `-w`, added a real,
+   force-included prototypes header (`libc_build_prototypes.h`) --
+   surfaced (and fixed) a genuine bug this uncovered: `pthread_key_t` is
+   `unsigned long` (8 bytes), but the shim's key parameters were `int`/
+   `int*`, silently truncating every key write to 4 bytes.
+8. **`__LIBC__`'s side effects weren't fully explored** -- it also gates
+   `xlocale/_ctype.h` from providing inline `ctype_l` functions to
+   requiring real externalized definitions from
+   `third_party/Libc/locale/isctype.c`. Wired that file in, and removed
+   this project's own hand-written `isascii`/`isdigit` stand-ins (now a
+   real duplicate-symbol conflict with `isctype.c`'s definitions).
+
+**Then, with all eight fixed, the actual stdio wall flagged in the fourth
+pass above was closed for real** -- not stubbed. The real call sites
+(`collate.c`/`rune.c`/`setrunelocale.c`) turned out to need exactly 5
+stdio functions: `fdopen`/`fread`/`fileno`/`rewind`/`fclose`. New file
+`libc_locale_stdio.c` implements all 5 as a minimal, real, opaque-handle
+subset (`struct __libc_locale_FILE { int fd; int eof; int error; }`,
+deliberately typed `void*` at the interface to avoid colliding with real
+`stdio.h`'s own `FILE` typedef, since every real caller only ever passes
+it opaquely -- confirmed via grep before choosing this), built on the
+project's own `_read`/`_close` raw syscalls plus a new real `lseek`
+syscall (`SYS_lseek`=199, cross-checked against `syscalls.master`) for
+`rewind()`. Regex was never actually needed by this link path --
+`strcasecmp`'s real dependency chain doesn't reach `regcomp`/`regexec`.
+
+**Result, verified this pass by two clean full rebuilds from a deleted
+`libc_build/`, not assumed:** `pthread_tsd_shim_smoketest.macho` and
+`libc_locale_smoketest.macho` both link with **zero undefined symbols**
+(`nm -u`, empty output), no `LC_LOAD_DYLIB` (still fully dyld-free), and a
+present `LC_UNIXTHREAD` entry point. 113 real Apple/FreeBSD Libc
+locale/string files plus the full stdio subset all compile and link
+clean under one consistent toolchain. **What's still open, honestly**:
+true *runtime* correctness (does `strcasecmp`'s locale-aware path actually
+produce the right answer under QEMU) is unverified -- QEMU boot-testing is
+out of scope for this pass, reserved for the coordinator/parent session.
+`strtol`, `sys_errlist`/`sys_nerr`, `strftime_l`/`iswspace_l`
+(wide-char-adjacent), and a public `tolower_l`/`toupper_l` name (the real
+internal `__tolower_l`/`__toupper_l`, double-underscore, exist and compile
+in `third_party/Libc/locale/FreeBSD/nomacros.c`, but no bare POSIX xlocale
+name calling them was found under that exact name in this checkout) remain
+unaddressed -- not on the critical path for the `strcasecmp` smoketest,
+flagged rather than guessed at.
 
 ---
 

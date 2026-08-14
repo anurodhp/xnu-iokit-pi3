@@ -20,6 +20,13 @@ const char *getprogname(void) {
     return "libc_locale_smoketest";
 }
 
+/* Real Apple private alias - third_party/Libc/locale/FreeBSD/collate.c
+ * calls _getprogname() (underscore-prefixed), not the public getprogname()
+ * directly. Same pattern as pthread_tsd_shim.c's _pthread_* aliases. */
+const char *_getprogname(void) {
+    return getprogname();
+}
+
 char *getenv(const char *name) {
     (void)name;
     return 0;
@@ -29,10 +36,11 @@ int issetugid(void) {
     return 0;
 }
 
-int isascii(int c) {
-    return (c & ~0x7F) == 0;
-}
-
-int isdigit(int c) {
-    return c >= '0' && c <= '9';
-}
+/* isascii()/isdigit() are NOT stubbed here (an earlier version of this
+ * file did) - third_party/Libc/locale/isctype.c is the real "externalized"
+ * (compiled, non-inline) definition of the whole ctype_l family
+ * (isascii/isdigit/tolower_l/toupper_l/etc), which real ctype.h switches
+ * to providing as real linkable symbols instead of header-inlines once
+ * __LIBC__ is defined (needed anyway for collate.h's real prototypes -
+ * see docs/roadmap.md Phase 4). Hand-rolling isascii/isdigit here would
+ * now collide (duplicate symbol) with isctype.o's real definitions. */
