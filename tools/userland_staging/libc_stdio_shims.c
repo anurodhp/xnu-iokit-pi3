@@ -93,15 +93,17 @@ int _pthread_mutex_destroy(void *m) {
  * choice - found by actually trying it and letting the linker report it,
  * not guessed. */
 
-long long OSAtomicIncrement64(volatile long long *value) {
-    return ++(*value);
-}
-
-long long OSAtomicDecrement64(volatile long long *value) {
-    return --(*value);
-}
-
-/* ---- os_once (real semantics, single-threaded target) --------------------
+/* OSAtomicIncrement64/OSAtomicDecrement64 no-op stand-ins RETIRED
+ * 2026-08-14: tools/userland_staging/build_libplatform.sh now builds real
+ * Apple libplatform (third_party/libplatform/src/os/atomic.c provides the
+ * genuine OSAtomicIncrement64/OSAtomicDecrement64, real C11-atomics-backed,
+ * not this file's own ++/-- stand-ins) and every stdio smoketest links
+ * against it - keeping both here is a real duplicate-symbol link error,
+ * not a style choice (found by actually linking, not guessed). See
+ * build_libplatform.sh's own header comment for what real work that tier
+ * took.
+ *
+ * ---- os_once (real semantics, single-threaded target) --------------------
  * third_party/Libc/stdio/FreeBSD/makebuf.c's __getevp() (reads the
  * STDBUF/STDBUF1 buffer-size-override env vars, a real but non-essential
  * feature) calls this once-only-init API from <os/once_private.h> - an

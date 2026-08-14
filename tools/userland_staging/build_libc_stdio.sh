@@ -51,6 +51,12 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     echo "error: Xcode-12.app not found at $XCODE12 (see tools/build_kexts.sh for the same dependency)" >&2
     exit 1
 fi
+# New real dependency as of build_libplatform.sh (see its header comment):
+# libc_locale_for_stdio.a pulls in real os_unfair_lock/OSAtomic users.
+if [ ! -f "$OUT/libplatform.a" ]; then
+    echo "error: $OUT/libplatform.a not found -- run build_libplatform.sh first" >&2
+    exit 1
+fi
 
 cat > "$OUT/compat_include/spinlock.h" <<'EOF'
 /* Apple-internal header, not part of the public iPhoneOS SDK. Confirmed
@@ -214,7 +220,7 @@ echo "wrote $OUT/libc_locale_for_stdio.a (libc_locale.a minus its now-redundant 
     "$OUT/libc_stdio_smoketest.o" \
     "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_stdio.a" \
     "$OUT/pthread_tsd_shim.o" "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
-    "$OUT/compat_stubs.o" "$OUT/cerror_stub.o"
+    "$OUT/compat_stubs.o" "$OUT/cerror_stub.o" "$OUT/libplatform.a"
 # libc_stdio.a is listed twice deliberately: real ld64, unlike a symbol-
 # table-indexed linker, only pulls archive members in a single left-to-
 # right pass, so libc_locale_for_stdio.a's collate.o/setrunelocale.o

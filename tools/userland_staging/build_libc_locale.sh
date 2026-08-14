@@ -47,6 +47,14 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     echo "error: Xcode-12.app not found at $XCODE12 (see tools/build_kexts.sh for the same dependency)" >&2
     exit 1
 fi
+# New real dependency as of build_libplatform.sh: this tier's real
+# xlocale.c/collate.c/setrunelocale.c etc call real os_unfair_lock/OSAtomic,
+# no longer the compat_stubs.c no-ops - build_libplatform.sh must run
+# first (see its own header comment for why).
+if [ ! -f "$OUT/libplatform.a" ]; then
+    echo "error: $OUT/libplatform.a not found -- run build_libplatform.sh first" >&2
+    exit 1
+fi
 
 cat > "$OUT/compat_include/sys/limits.h" <<'EOF'
 /* See build_libc_string.sh's identical file for the full reasoning
@@ -194,7 +202,7 @@ echo "wrote $OUT/libc_locale.a"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o libc_locale_smoketest.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
-    "$OUT/libc_locale_smoketest.o" "$OUT/libc_locale.a"
+    "$OUT/libc_locale_smoketest.o" "$OUT/libc_locale.a" "$OUT/libplatform.a"
 echo "wrote libc_locale_smoketest.macho"
 
 otool -l libc_locale_smoketest.macho | grep -q LC_LOAD_DYLIB && \

@@ -59,6 +59,12 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     echo "error: Xcode-12.app not found at $XCODE12 (see tools/build_kexts.sh for the same dependency)" >&2
     exit 1
 fi
+# New real dependency as of build_libplatform.sh (see its header comment):
+# libc_locale_for_stdio.a pulls in real os_unfair_lock/OSAtomic users.
+if [ ! -f "$OUT/libplatform.a" ]; then
+    echo "error: $OUT/libplatform.a not found -- run build_libplatform.sh first" >&2
+    exit 1
+fi
 
 # Same real flags as build_libc_stdio.sh (see that script's own CFLAGS
 # comment for why VARIANT_DARWINEXTSN is deliberately NOT set) plus
@@ -141,7 +147,7 @@ echo "wrote $OUT/libc_gen.a"
     "$OUT/libc_gen_smoketest.o" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/pthread_tsd_shim.o" "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
-    "$OUT/compat_stubs.o" "$OUT/cerror_stub.o"
+    "$OUT/compat_stubs.o" "$OUT/cerror_stub.o" "$OUT/libplatform.a"
 echo "wrote libc_gen_smoketest.macho"
 
 otool -l libc_gen_smoketest.macho | grep -q LC_LOAD_DYLIB && \

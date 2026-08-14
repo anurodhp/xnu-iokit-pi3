@@ -983,6 +983,118 @@ above), `libpthread`/`libplatform`/`libdispatch`/`libclosure`/`libmalloc`/
 `tools/libinfo_custom`)/`removefile`/`copyfile`, and `dyld` itself -- all
 still cloned-but-unbuilt per this section's earlier status notes.
 
+**Eighth pass, 2026-08-14 (later same day): real `libplatform`
+(`os_unfair_lock`/`os_once`/`OSAtomic*Barrier`), real-QEMU-boot-verified,
+retiring `compat_stubs.c`'s no-op lock/atomic stand-ins.**
+`tools/userland_staging/build_libplatform.sh` builds real, unmodified
+`third_party/libplatform` (pinned `libplatform-254.80.2`, already cloned
+by `setup_third_party.sh` -- no new pin needed): `os/lock.c` (real
+`os_unfair_lock_lock`/`_unlock`/`_trylock`, real `_os_once`/`os_once_t`,
+plus the legacy `OSSpinLock`/handoff-lock paths, none stubbed), `os/atomic.c`,
+and `atomics/arm64/OSAtomic.c` (real `OSAtomicIncrement32Barrier`/
+`OSAtomicDecrement32Barrier`/64-bit variants). Deliberately out of scope:
+`src/init.c`/`atomics/init.c` (the dyld-driven `_libplatform_init()`
+constructor + commpage-PFZ/CPU-feature detection -- needs a `_simple_getenv`
+subsystem this project hasn't pulled in, and confirmed by linking that
+nothing in the built scope actually calls it) and `setjmp`/`ucontext`/
+`cachecontrol`/duplicate `string` primitives (`libc_string.a` already
+covers those). This tier now sits ahead of the locale tier in build order
+(`string -> platform -> locale -> stdio -> gen`, updated in each script's
+own guard check) since real `xlocale.c`/`collate.c`/`setrunelocale.c`
+call real `os_unfair_lock`/`OSAtomic`, not the retired stand-ins.
+
+Real work this took, none of it guessed (see `build_libplatform.sh`'s own
+header comment for the full list with exact line/file references):
+- `lock_private.h`'s `OS_UNFAIR_LOCK_ADAPTIVE_SPIN` uses
+  `__API_AVAILABLE(..., bridgeos(4.0))` -- bridgeOS wasn't yet an
+  `Availability.h` platform macro in this project's pinned Xcode-12/
+  iPhoneOS14.4 SDK vintage. Fixed via the exact real Apple SDK convention
+  for this situation (`__API_AVAILABLE_PLATFORM_<name>(x)` remapping,
+  confirmed against this SDK's own `AvailabilityInternal.h` for a platform
+  it does define), not a blanket macro suppression.
+- `SWITCH_OPTION_OSLOCK_DEPRESS`/`_WAIT`: real values (4, 5) exist in this
+  project's own kernel checkout's `mach/thread_switch.h` but are shadowed
+  by the (older-vintage) SDK's own copy via `-isysroot` lookup order --
+  same SDK-vintage-gap class as prior passes, defined directly with the
+  verified real values.
+- `sys/ulock.h` (`UL_UNFAIR_LOCK`/`ULF_*`/`__ulock_wait`/`__ulock_wake`):
+  real content only exists in this project's own kernel checkout
+  (`bsd/sys/ulock.h`, gated `#if PRIVATE`), not the public SDK.
+- Two real Mach traps this project had never needed before
+  (`thread_switch` trap -61, `mach_timebase_info_trap` trap -89) --
+  Mach traps aren't covered by the BSD-syscall Perl generator
+  `build_libsyscall_smoketest.sh` already uses (separate trap table,
+  `osfmk/kern/syscall_sw.c`). Real trap numbers cross-checked against
+  `osfmk/mach/syscall_sw.h`; real arm64 call sequence (`mov x16,#-N` /
+  `svc #0x80` / `ret`, **no** carry-flag check -- that convention is
+  BSD-syscall-only) copied by hand from `osfmk/mach/arm/syscall_sw.h`'s
+  own `kernel_trap` macro (`libplatform_mach_traps.s`).
+- `__ulock_wait`/`__ulock_wake` (BSD syscalls 515/516) and `thread_selfid`
+  (372): all three `NO_SYSCALL_STUB` in `syscalls.master` -- hand-written
+  raw wrappers, this project's established carry-flag pattern
+  (`libplatform_syscalls.c`).
+- Real Apple `mach_absolute_time` (`libsyscall/wrappers/mach_absolute_time.s`,
+  commpage-backed) assembles and links as-is; needed `-DPRIVATE=1` on
+  that specific compile once traced to `osfmk/machine/cpu_capabilities.h`'s
+  real userland dispatch branch being itself gated behind `#ifdef PRIVATE`
+  -- without it the commpage offset macros silently never got defined at
+  all (no error, just absent constants), caught via the resulting
+  assembler "immediate must be an integer" errors and traced back to the
+  real cause rather than patched at the assembly-error site.
+- **Real correctness bug found and fixed before it ever reached a boot
+  test**: `os_unfair_lock`/`os_once`'s notion of "current thread" (TSD
+  slot `__TSD_MACH_THREAD_SELF`) had never been populated on this target
+  (no real `pthread_start()` to do it) -- would read as `0 ==
+  OS_LOCK_NO_OWNER`, making the real lock algorithm's owner-identity
+  check silently degenerate (every caller would look like it's already
+  the owner). Bootstrapped for real via `thread_selfid()` (a different,
+  also-real, non-zero-per-thread value; deliberately not `mach_thread_self`'s
+  own Mach trap, since the value is only ever compared for equality, never
+  dereferenced as an actual port -- avoids a second unnecessary Mach-trap
+  investigation, documented as a deliberate substitution in
+  `libplatform_thread_self.c`, not a guess).
+- Two real cross-tier integration bugs found only by actually relinking
+  the existing locale/stdio/gen smoketests against real `libplatform.a`
+  (not just building it in isolation): `once_private.h`'s `os_once()`
+  wrapper is `__header_always_inline` with C99 "extern inline" linkage --
+  at `-O0` a call site that isn't fully inlined leaves a real external
+  reference to a non-underscore-prefixed `os_once` symbol nothing
+  provides (fixed by calling the always-out-of-line `_os_once()` directly
+  in the new smoketest); and the Seventh-pass stdio tier's own
+  `libc_stdio_shims.c` had already added its own no-op
+  `OSAtomicIncrement64`/`OSAtomicDecrement64` stand-ins (needed at the
+  time, before this tier existed) -- real duplicate-symbol link errors
+  once both were linked together, resolved by retiring those two
+  functions from `libc_stdio_shims.c` in favor of the real ones now in
+  `libplatform.a`, leaving that file's other real stand-ins (`os_once`,
+  `pthread_mutex_*`) untouched since they don't collide with anything
+  `libplatform.a` actually exports.
+
+**Real QEMU boot verification, genuine PASS:**
+```
+root@sh:/ % exec /sbin/libplatform_smoketest
+PASS: real os_unfair_lock lock/unlock
+PASS: real os_once runs exactly once
+PASS: real OSAtomicIncrement32Barrier/OSAtomicDecrement32Barrier
+ALL PASS: libplatform smoketest
+exec: /sbin/libplatform_smoketest exited, status=0
+```
+Tested on a scratch copy of the boot image (`qemu/libplatform_verify_test.img`,
+deleted after verification), not the live default image. All four
+existing smoketests (`libc_locale_smoketest`, `libc_stdio_smoketest`,
+`libc_gen_smoketest`, and the new `libplatform_smoketest`) rebuild and
+relink clean end-to-end in the new tier order with zero undefined symbols.
+
+This target remains provably single-threaded (no real contention is
+possible yet), so only `os_unfair_lock`'s real *uncontended* fast path is
+exercised by this smoketest -- the real contended slow path
+(`__ulock_wait`/`__ulock_wake`) is genuinely unreachable dead code until
+real threading (`libpthread`) lands, not a hidden test gap.
+
+Still not attempted: `printf`/`scanf` family, `libpthread`/`libdispatch`/
+`libclosure`/`libmalloc`/`libunwind`/`Libinfo`(-the-Apple-repo)/
+`removefile`/`copyfile`, and `dyld` itself.
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions
