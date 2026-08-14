@@ -846,6 +846,43 @@ name calling them was found under that exact name in this checkout) remain
 unaddressed -- not on the critical path for the `strcasecmp` smoketest,
 flagged rather than guessed at.
 
+**Sixth pass, 2026-08-14: real QEMU boot verification of both smoketests
+(closes the "runtime correctness unverified" gap the fifth pass left
+open).** Added a real `exec <path> [args...]` builtin to
+`tools/init_binary/init.c`'s shell (`cmd_exec()`) -- fork + execve + wait4
+a real on-disk binary and decode its real BSD wait status
+(`bsd/sys/wait.h` encoding: low 7 bits 0 means exited normally, next byte
+is the real exit code), since nothing in this shell could previously run
+anything off disk besides `/sbin/launchd` itself. Copied
+`pthread_tsd_shim_smoketest.macho` and `libc_locale_smoketest.macho` onto
+`qemu/hfs_root_test.img`'s real HFS+ root at `/sbin/tsd_smoketest` and
+`/sbin/locale_smoketest` (same `hdiutil`/`diskutil` mechanism
+`tools/init_binary/inject_into_sd_image.sh` already uses for
+`/sbin/launchd`), then drove a real interactive QEMU boot
+(`tools/init_binary/_pty_test.py`) typing `exec /sbin/tsd_smoketest` and
+`exec /sbin/locale_smoketest` at the real shell prompt. **Real console
+output, both passed:**
+```
+pthread_tsd_shim_smoketest: real pthread_key_create/setspecific/getspecific (public + private-alias names) all work
+exec: /sbin/tsd_smoketest exited, status=0
+...
+libc_locale_smoketest: real strcasecmp/strncasecmp work through real TSD+locale
+exec: /sbin/locale_smoketest exited, status=0
+```
+No `FAILED` lines from either binary's own self-checks. Cross-checked the
+new `cmd_exec()` status-decoding itself isn't just reporting a fake 0: a
+control run (`exec /sbin/nope`, a path that doesn't exist) produced
+`/sbin/nope: exec failed` + `exited, status=127` on the real console,
+confirming the fork/execve/wait4/status-decode path genuinely
+distinguishes pass from fail rather than always printing success.
+**This closes Phase 4's TSD/locale runtime-correctness gap for real**: the
+platform_syscall TSD bootstrap, `pthread_key_create`/`setspecific`/
+`getspecific` (public + private-alias names), `pthread_once`,
+`__xlocale_init`, and `strcasecmp`/`strncasecmp`'s real locale-aware path
+(`__current_locale()` -> TSD -> `tolower_l()` against the real "C" locale
+ctype table) all now have genuine on-target confirmation, not just a
+clean host link.
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions

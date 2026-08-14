@@ -490,7 +490,7 @@ static int tokenize(char *line, char *argv[], int max_args) {
 static const char *prompt_name = "sh";
 
 static void cmd_help(void) {
-    put("available commands: ls cat cd pwd echo mkdir help clear exit bash\n");
+    put("available commands: ls cat cd pwd echo mkdir help clear exit bash exec\n");
 }
 
 static void cmd_echo(int argc, char **argv) {
@@ -655,6 +655,69 @@ static void cmd_clear(void) {
     put("\x1b[2J\x1b[H");
 }
 
+/* decimal, no libc -- needed to report a real child exit status/code from
+ * cmd_exec() below (this codebase has no itoa/printf anywhere yet). */
+static void putint(long v) {
+    char buf[24];
+    unsigned long uv;
+    int neg = 0;
+    if (v < 0) { neg = 1; uv = (unsigned long)(-v); } else { uv = (unsigned long)v; }
+    int i = 0;
+    if (uv == 0) buf[i++] = '0';
+    while (uv) { buf[i++] = (char)('0' + (uv % 10)); uv /= 10; }
+    if (neg) buf[i++] = '-';
+    for (int a = 0, b = i - 1; a < b; a++, b--) {
+        char t = buf[a]; buf[a] = buf[b]; buf[b] = t;
+    }
+    putn(buf, (size_t)i);
+}
+
+/* `exec <path> [args...]`: fork + execve + wait4 a real on-disk binary, for
+ * driving tools/userland_staging's smoketests interactively from this
+ * shell -- see docs/roadmap.md Phase 4. Real BSD wait status encoding
+ * (bsd/sys/wait.h, unchanged since 4.4BSD): low 7 bits == 0 means the
+ * child exited normally (as opposed to being signaled), in which case the
+ * next byte up is the real exit() code -- decoded here rather than
+ * printing the raw status, since that's what a caller actually wants to
+ * know. */
+static void cmd_exec(int argc, char **argv) {
+    if (argc < 2) { put("usage: exec <path> [args...]\n"); return; }
+    char resolved[MAX_PATH];
+    path_join(cwd_path, argv[1], resolved, sizeof(resolved));
+
+    int is_child = 0;
+    long pid = sys_fork(&is_child);
+    if (pid < 0) {
+        put("exec: fork failed\n");
+        return;
+    }
+    if (is_child) {
+        static char *child_argv[MAX_ARGS + 1];
+        int i;
+        for (i = 0; i + 1 < argc && i < MAX_ARGS; i++) child_argv[i] = argv[i + 1];
+        child_argv[i] = 0;
+        static char *const envp0[] = { 0 };
+        sys_execve(resolved, child_argv, envp0);
+        /* only reached if execve() itself failed (e.g. ENOENT/ENOEXEC) */
+        put(resolved);
+        put(": exec failed\n");
+        sys_exit(127);
+    }
+
+    long status = 0;
+    sys_wait4((int)pid, &status, 0, 0);
+    put("exec: "); put(resolved); put(" ");
+    if ((status & 0x7f) == 0) {
+        put("exited, status=");
+        putint((status >> 8) & 0xff);
+        put("\n");
+    } else {
+        put("terminated by signal ");
+        putint(status & 0x7f);
+        put("\n");
+    }
+}
+
 /* ---------------------------------- shell ---------------------------------- */
 
 static void print_prompt(void) {
@@ -674,6 +737,7 @@ static void dispatch(int argc, char **argv) {
     else if (kstreq(cmd, "cat")) cmd_cat(argc, argv);
     else if (kstreq(cmd, "mkdir")) cmd_mkdir(argc, argv);
     else if (kstreq(cmd, "clear")) cmd_clear();
+    else if (kstreq(cmd, "exec")) cmd_exec(argc, argv);
     else if (kstreq(cmd, "exit")) sys_exit(0);
     else if (kstreq(cmd, "bash")) {
         prompt_name = "bash";
