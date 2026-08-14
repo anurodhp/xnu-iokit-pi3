@@ -12,6 +12,8 @@ tools/userland_staging/libsyscall_smoketest/*.o
 # FreeBSD source files fetched fresh each run, not vendored - see that
 # script's own header comment for why/which files).
 tools/userland_staging/libc_build/
+tools/libinfo_custom/host_test
+tools/libinfo_custom/*.o
 
 # Downloaded precompiled binaries and local QEMU test scaffolding -
 # large, reproducible, not our source (precompiled/rpi.dtb is also known-bad,

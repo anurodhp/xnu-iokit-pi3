@@ -137,6 +137,34 @@ this pass. Also not checked: whether `pwd_mkdb`'s hashed-db output format
 Darwin-19 vintage's `Libc` (`Libc/db/` exists per the tree listing above,
 presumably fine, not independently confirmed).
 
+**DECISION SUPERSEDED (2026-08-14): not using `file_module.c` after
+all.** A later session (Phase 4 `Libc` work) found `file_module.c` itself
+has a real `pthread_mutex` dependency woven through Libinfo's broader
+`si_module`/`search_module` dispatch framework — the same class of
+complexity (real threading-adjacent code, TSD/locking) this project
+already made a deliberate custom-implementation call about elsewhere in
+Phase 4. Rather than porting Apple's real module-dispatch framework just
+to reach `file_module.c`, built a fully custom resolver instead —
+`tools/libinfo_custom/{libinfo_custom.h,libinfo_custom.c}` — with the real
+on-disk `/etc/master.passwd`/`/etc/group` format and real `struct passwd`/
+`struct group` field layout (matching this project's own already-cloned
+`third_party/Libinfo/lookup.subproj/{pwd.h,grp.h}` field-for-field) but
+this project's own parsing/lookup code, faithfully adapted from FreeBSD's
+real `pw_scan.c`/`getpwent.c`/`getgrent.c` (fetched fresh as reference)
+rather than a port of Apple's. **This doesn't change this section's
+core finding** — flat-file-only auth with zero `opendirectoryd`
+dependency is still exactly right, just implemented as custom code
+instead of Apple's real `file_module.c`. Verified via a real host-run
+test harness: 29 checks pass (correct field parsing for multiple real
+accounts/groups, malformed-line tolerance, not-found cases, and a
+regression test for a real overflow/truncation bug found and fixed during
+self-review — see `docs/roadmap.md`'s Phase 5 section for the full
+writeup). `pwd_mkdb`'s hash-format question above is now moot for this
+resolver specifically (it reads `/etc/master.passwd` directly, no
+Berkeley-DB-hashed intermediate `pwd.db`/`spwd.db` involved) but still
+matters for whether real `pwd_mkdb` itself needs porting later for
+account-provisioning tooling (`vipw`/`chpass`), still unresolved.
+
 ## 2. Authentication / login
 
 All confirmed open source, all in `apple-oss-distributions/system_cmds`

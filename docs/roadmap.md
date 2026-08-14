@@ -806,6 +806,64 @@ created by one user are inaccessible to the other per real, kernel-enforced
 `multiuser-userland-plan.md`'s Option 3 being explicitly the *weaker*
 interpretation this phase supersedes); `su` works between accounts.
 
+**PROGRESS 2026-08-14: the custom flat-file resolver (the "Libinfo-backed
+flat-file resolver" referenced above -- correcting that name, see below)
+is implemented and verified.** `tools/libinfo_custom/{libinfo_custom.h,
+libinfo_custom.c}` -- real `li_getpwnam`/`li_getpwuid`/`li_getgrnam`/
+`li_getgrgid` reading `/etc/master.passwd`/`/etc/group` directly, real
+field layout matching `struct passwd`/`struct group` from this project's
+own already-cloned `third_party/Libinfo/lookup.subproj/{pwd.h,grp.h}`
+(field-for-field, so future real code can call these normally), real
+parsing logic faithfully adapted from FreeBSD's actual
+`lib/libc/gen/{pw_scan.c,getpwent.c,getgrent.c}` (fetched fresh as
+reference, not vendored -- confirmed real field order directly from that
+source: master.passwd is `name:passwd:uid:gid:class:change:expire:gecos:
+dir:shell`, group is `name:passwd:gid:member,member,...`).
+
+**Correction to this section's own earlier text**: this is NOT
+"Libinfo-backed" -- it doesn't use Apple's real Libinfo at all. This
+session found Libinfo's real `file_module.c` backend has a real
+`pthread_mutex` dependency woven through Libinfo's broader module-dispatch
+framework (same complexity class already avoided elsewhere in Phase 4,
+see `project_xnu_rpi3_userspace_libc_dyld.md`), so the resolver is fully
+custom code instead -- real API-compatible surface, real on-disk format,
+but this project's own implementation, not a port of Apple's.
+Freestanding, no libc dependency (raw `open`/`read`/`close` syscalls, own
+string/number helpers) -- deliberately does not link against or depend on
+`tools/userland_staging/`'s concurrent Libc work, so this piece is usable
+regardless of how far that work has gotten.
+
+**Verified for real, not just compiled**: a host-side test harness
+(`tools/libinfo_custom/host_test.c`, same `LIBINFO_HOST_TEST` shim pattern
+`tools/init_binary/`'s own documented host-test harness established --
+real freestanding Mach-O binaries get killed by this host's hardened
+runtime before `main()` runs, confirmed this session, so this compiles as
+a normal dynamically-linked host executable instead) writes real test
+`master.passwd`/`group` files and confirms 29 real checks pass: correct
+field values for multiple accounts/groups, malformed lines correctly
+skipped without aborting the whole file, group membership lists parsed
+correctly including empty and multi-member cases, not-found cases
+correctly return `NULL`. Also confirmed the same source compiles cleanly
+for the real freestanding arm64 target (`-ffreestanding`, no
+`LIBINFO_HOST_TEST`) -- not yet QEMU-boot-tested in that form.
+
+**Self-review before committing caught and fixed one real bug**: the
+numeric field parser (`li_strtoul10`) had no overflow guard and no bounds
+check before narrowing to the 32-bit `li_uid_t`/`li_gid_t` -- a corrupted
+or malicious oversized numeric field (e.g. a 30-digit "uid") would have
+silently wrapped into an arbitrary, potentially-privileged uid instead of
+being rejected. Fixed to match FreeBSD's own real overflow/range checks;
+a regression test for exactly this case is now in `host_test.c`. Also
+documented (not yet fixed) a known capacity limit: files with more than
+64 accounts, or a group line with more than 32 members, silently truncate
+rather than erroring -- acceptable for this project's current scale,
+flagged for revisit if that assumption changes.
+
+**Not yet done** (later Phase 5 steps per the build order above,
+deliberately out of scope for this pass): account-provisioning tools
+(`pwd_mkdb`/`vipw`/`chpass`/`passwd`), `crypt()` password verification,
+wiring this resolver into a real `login`/`su`.
+
 ---
 
 ## Phase 6: networking -- USB, Ethernet, DHCP, and basic net tools
