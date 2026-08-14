@@ -164,14 +164,26 @@ static unsigned long li_strtoul10(const char *p, int *ok) {
 static char li_pw_filebuf[LI_FILE_BUF_SIZE];
 static char li_gr_filebuf[LI_FILE_BUF_SIZE];
 
-/* Returns real byte count read into buf (NUL-terminated, truncated with
- * the last partial line dropped if the real file is >= bufsize - 1 bytes
- * -- documented limit, not a silent-corruption bug: a truncated final
- * line would fail li_pw_parse_line's field-count check and just be
- * skipped like any other malformed line, never partially/incorrectly
- * loaded), or a negative raw errno-style value on a real open/read
- * failure. */
-static long li_load_file(const char *path, char *buf, li_size_t bufsize) {
+/* Returns real byte count read into buf (NUL-terminated), or a negative
+ * raw errno-style value on a real open/read failure. *truncated is set
+ * to 1 iff the real file is >= bufsize - 1 bytes, i.e. there may be more
+ * real file content than fit in buf -- distinct from a real file that
+ * happens to end exactly at EOF with no trailing newline, which is NOT
+ * truncation and must still have its last line parsed normally. Callers
+ * use this to discard only a genuinely-incomplete final line, not to
+ * reject every file whose last line lacks a trailing '\n'.
+ *
+ * CORRECTED 2026-08-14 (adversarial review): an earlier version of this
+ * function's own doc comment claimed a truncated final line would "fail
+ * li_pw_parse_line's field-count check and just be skipped" -- false,
+ * and disproven with a real fixture (a file cut mid-shell-field was
+ * silently ACCEPTED with truncated pw_shell/pw_dir/pw_gecos, because a
+ * partial line ending at the buffer's own NUL terminator looks exactly
+ * like a real last-line-with-no-trailing-newline to the old code). Fixed
+ * by threading real truncation state out to the caller instead of
+ * assuming the parser would catch it. */
+static long li_load_file(const char *path, char *buf, li_size_t bufsize, int *truncated) {
+    *truncated = 0;
     long fd = li_sys_open(path, LI_O_RDONLY, 0);
     if (fd < 0) {
         return fd;
@@ -179,7 +191,8 @@ static long li_load_file(const char *path, char *buf, li_size_t bufsize) {
     li_size_t total = 0;
     for (;;) {
         if (total + 1 >= bufsize) {
-            break; /* leave room for the NUL terminator */
+            *truncated = 1; /* buffer full - unknown whether more file remains unread */
+            break;
         }
         long r = li_sys_read((int)fd, buf + total, bufsize - 1 - total);
         if (r < 0) {
@@ -187,7 +200,7 @@ static long li_load_file(const char *path, char *buf, li_size_t bufsize) {
             return r;
         }
         if (r == 0) {
-            break; /* EOF */
+            break; /* real EOF - buf holds the complete file, not truncated */
         }
         total += (li_size_t)r;
     }
@@ -195,6 +208,29 @@ static long li_load_file(const char *path, char *buf, li_size_t bufsize) {
     buf[total] = 0;
     return (long)total;
 }
+
+/* li_pw_load()/li_gr_load()'s shared per-line loop shape (each still
+ * keeps its own copy below, calling its own parse_one -- deliberately not
+ * unified behind a function pointer: this is freestanding C with no
+ * portable way to cast between differently-typed parse-function pointers
+ * without real UB risk, and two short, direct copies is a fine trade for
+ * avoiding that). Real fixes applied to both copies (adversarial review,
+ * 2026-08-14):
+ *  - the entry count is reset to 0 unconditionally, before attempting the
+ *    load, not only on the success path (P1: the old code only reset the
+ *    count when the load succeeded, so a *failed* reload left the count
+ *    and the entire previous table untouched, silently continuing to
+ *    serve stale data - or, worse, if the failure happened mid-read after
+ *    partially overwriting the static file buffer with new bytes,
+ *    entries built from a mix of old and new buffer content with no
+ *    reliable NUL boundaries between them).
+ *  - a line with no trailing '\n' is only accepted as real, complete data
+ *    if the file was NOT truncated (real EOF, genuinely the last line) --
+ *    if truncated, it's discarded rather than parsed with wrong/cut-off
+ *    field data (P2, see li_load_file's corrected doc comment above).
+ *  - a trailing '\r' (CRLF line endings) is trimmed from each line before
+ *    parsing, so a CRLF-formatted file doesn't silently poison the last
+ *    field (e.g. shell becoming "/bin/sh\r") on every single line. */
 
 /* -------------------------------- passwd table --------------------------- */
 
@@ -218,7 +254,21 @@ static int li_pw_parse_line(char *line, struct li_passwd *pw) {
     char *p;
     int ok;
 
-    if (!(pw->pw_name = li_strsep(&bp, ':'))) return 0;
+    /* Empty name rejected (P3, adversarial review 2026-08-14): the
+     * fetched real pw_scan.c reference actually *tolerates* an empty
+     * name structurally (it only gates whether the _PWF_NAME bit gets
+     * set, a flag this module doesn't use at all) - that tolerance in
+     * the real code exists to support the historical '+'/'-' NIS-
+     * include-line convention, which this module deliberately does not
+     * implement (see li_gr_parse_line's matching comment below). Without
+     * that convention, an empty name serves no purpose here and is a
+     * real liability: a stray leading colon would silently create a
+     * nameless, uid-0-if-otherwise-unset entry, and li_getpwnam("")
+     * would match it. Rejected explicitly, mirroring the group parser's
+     * existing (and, per the real getgrent.c reference, unconditional)
+     * empty-gr_name rejection below - a deliberate deviation from the
+     * letter of the passwd reference, for a documented reason. */
+    if (!(pw->pw_name = li_strsep(&bp, ':')) || pw->pw_name[0] == 0) return 0;
     if (!(pw->pw_passwd = li_strsep(&bp, ':'))) return 0;
 
     if (!(p = li_strsep(&bp, ':'))) return 0;
@@ -231,11 +281,32 @@ static int li_pw_parse_line(char *line, struct li_passwd *pw) {
 
     if (!(pw->pw_class = li_strsep(&bp, ':'))) return 0;
 
+    /* P4 (adversarial review 2026-08-14): the real reference's
+     * `pw->pw_change = atol(p)` is unconditional and atol() has no error
+     * signal at all, so real pw_scan.c silently coerces a garbled (but
+     * non-empty) change/expire field to 0 rather than rejecting the
+     * line. This module already deviates from atol()'s total
+     * permissiveness for uid/gid (real security-relevant fields) above,
+     * so for consistency a non-empty-but-non-numeric change/expire field
+     * is treated as a real parse error here too, not silently coerced --
+     * only a genuinely EMPTY field (a real, valid "no value set" case,
+     * matching _PWF_CHANGE/_PWF_EXPIRE's own real semantics) defaults to
+     * 0 without going through li_strtoul10 at all. */
     if (!(p = li_strsep(&bp, ':'))) return 0;
-    pw->pw_change = p[0] ? (li_time_t)li_strtoul10(p, &ok) : 0; /* ok unchecked: empty is valid (0) */
+    if (p[0]) {
+        pw->pw_change = (li_time_t)li_strtoul10(p, &ok);
+        if (!ok) return 0;
+    } else {
+        pw->pw_change = 0;
+    }
 
     if (!(p = li_strsep(&bp, ':'))) return 0;
-    pw->pw_expire = p[0] ? (li_time_t)li_strtoul10(p, &ok) : 0;
+    if (p[0]) {
+        pw->pw_expire = (li_time_t)li_strtoul10(p, &ok);
+        if (!ok) return 0;
+    } else {
+        pw->pw_expire = 0;
+    }
 
     if (!(pw->pw_gecos = li_strsep(&bp, ':'))) return 0;
     if (!(pw->pw_dir = li_strsep(&bp, ':'))) return 0;
@@ -255,18 +326,28 @@ static int li_pw_parse_line(char *line, struct li_passwd *pw) {
 }
 
 int li_pw_load(const char *path) {
-    long n = li_load_file(path, li_pw_filebuf, LI_FILE_BUF_SIZE);
+    li_pw_count = 0; /* P1: reset unconditionally, before the load can fail -
+                       * a failed reload must not leave a stale (or, if the
+                       * failure was mid-read, possibly corrupted) previous
+                       * table being served. */
+    int truncated = 0;
+    long n = li_load_file(path, li_pw_filebuf, LI_FILE_BUF_SIZE, &truncated);
     if (n < 0) {
         return -1;
     }
-    li_pw_count = 0;
     char *p = li_pw_filebuf;
     while (*p && li_pw_count < LI_MAX_PASSWD_ENTRIES) {
         char *line_end = p;
         while (*line_end && *line_end != '\n') line_end++;
         int had_nl = (*line_end == '\n');
+        if (!had_nl && truncated) {
+            break; /* P2: final, genuinely-incomplete line - discard, don't guess */
+        }
         if (had_nl) {
             *line_end = 0;
+        }
+        if (line_end > p && line_end[-1] == '\r') {
+            line_end[-1] = 0; /* trim CRLF's trailing \r */
         }
         if (*p != 0) { /* skip blank lines */
             if (li_pw_parse_line(p, &li_pw_table[li_pw_count])) {
@@ -335,18 +416,25 @@ static int li_gr_parse_line(char *line, struct li_group *gr) {
 }
 
 int li_gr_load(const char *path) {
-    long n = li_load_file(path, li_gr_filebuf, LI_FILE_BUF_SIZE);
+    li_gr_count = 0; /* P1: see li_pw_load's matching comment */
+    int truncated = 0;
+    long n = li_load_file(path, li_gr_filebuf, LI_FILE_BUF_SIZE, &truncated);
     if (n < 0) {
         return -1;
     }
-    li_gr_count = 0;
     char *p = li_gr_filebuf;
     while (*p && li_gr_count < LI_MAX_GROUP_ENTRIES) {
         char *line_end = p;
         while (*line_end && *line_end != '\n') line_end++;
         int had_nl = (*line_end == '\n');
+        if (!had_nl && truncated) {
+            break; /* P2: see li_pw_load's matching comment */
+        }
         if (had_nl) {
             *line_end = 0;
+        }
+        if (line_end > p && line_end[-1] == '\r') {
+            line_end[-1] = 0; /* trim CRLF's trailing \r */
         }
         if (*p != 0) {
             if (li_gr_parse_line(p, &li_gr_table[li_gr_count])) {

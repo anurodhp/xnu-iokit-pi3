@@ -69,7 +69,10 @@ int main(void) {
         "alice:$6$abcd$hashvalue:501:20:staff:0:0:Alice Example:/home/alice:/bin/sh\n"
         "this:is:not:enough:fields\n"
         "bob:*:502:20::0:0:Bob Example:/home/bob:/bin/csh\n"
-        "evil:*:99999999999999999999999999:20:::: :/home/evil:/bin/sh\n");
+        "evil:*:99999999999999999999999999:20:::: :/home/evil:/bin/sh\n"
+        ":*:600:20::0:0:No Name::/bin/sh\n"
+        "carol:*:503:20:staff:notanumber:0:Carol Example:/home/carol:/bin/sh\n"
+        "dave:*:504:20:staff:0:0:Dave Example:/home/dave:/bin/sh\r\n");
 
     /* Real /etc/group shape: name:passwd:gid:member,member -- includes an
      * empty-member-list group and a multi-member group. */
@@ -79,10 +82,25 @@ int main(void) {
         "empty_group:*:99:\n");
 
     int pw_n = li_pw_load(pw_path);
-    check(pw_n == 3, "li_pw_load: 3 valid entries loaded, 2 malformed lines skipped");
+    check(pw_n == 4, "li_pw_load: 4 valid entries loaded, 4 malformed lines skipped (P3/P4 regressions included)");
     check(li_getpwnam("evil") == 0,
         "li_getpwnam(\"evil\"): oversized/overflowing uid field correctly rejected the whole line, "
         "not silently wrapped into a real (potentially privileged) uid");
+    check(li_getpwnam("") == 0,
+        "P3 regression: li_getpwnam(\"\") returns NULL - empty pw_name line correctly rejected, "
+        "not silently accepted as a nameless uid-600 entry");
+    check(li_getpwuid(600) == 0,
+        "P3 regression: the empty-name line's uid (600) has no entry at all - whole line rejected");
+    check(li_getpwnam("carol") == 0,
+        "P4 regression: garbled (non-empty, non-numeric) change field correctly rejects the whole line, "
+        "not silently coerced to pw_change=0");
+
+    struct li_passwd *dave = li_getpwnam("dave");
+    check(dave != 0, "CRLF regression: li_getpwnam(\"dave\") found despite trailing \\r\\n line ending");
+    if (dave) {
+        check(strcmp(dave->pw_shell, "/bin/sh") == 0,
+            "CRLF regression: dave pw_shell == \"/bin/sh\" exactly, trailing \\r trimmed, not \"/bin/sh\\r\"");
+    }
 
     struct li_passwd *root = li_getpwnam("root");
     check(root != 0, "li_getpwnam(\"root\") found");
@@ -139,6 +157,52 @@ int main(void) {
     }
 
     check(li_getgrnam("nosuchgroup") == 0, "li_getgrnam(\"nosuchgroup\") correctly returns NULL");
+
+    /* P1 regression: a good load, then a failed reload (nonexistent
+     * path), must NOT leave the previous (now-stale) table being served. */
+    int reload_rc = li_pw_load("/tmp/libinfo_custom_test_does_not_exist");
+    check(reload_rc == -1, "P1: li_pw_load on a nonexistent path returns -1");
+    check(li_getpwnam("root") == 0,
+        "P1 regression: after a FAILED reload, the previous (stale) table is no longer served - "
+        "li_getpwnam(\"root\") (present in the earlier good load) now correctly returns NULL");
+    int gr_reload_rc = li_gr_load("/tmp/libinfo_custom_test_does_not_exist");
+    check(gr_reload_rc == -1, "P1: li_gr_load on a nonexistent path returns -1");
+    check(li_getgrnam("wheel") == 0,
+        "P1 regression: li_gr_load's stale table is also cleared after a failed reload");
+
+    /* P2 regression: a file bigger than LI_FILE_BUF_SIZE (16384), where
+     * the buffer cuts off in the middle of the final entry's shell field.
+     * The earlier, COMPLETE entry must still parse correctly; the final,
+     * genuinely-truncated entry must be discarded, not accepted with
+     * wrong/cut-off field data. */
+    {
+        const char *trunc_path = "/tmp/libinfo_custom_test_truncated.passwd";
+        FILE *f = fopen(trunc_path, "w");
+        if (!f) {
+            check(0, "P2 regression: could not create truncation fixture");
+        } else {
+            fputs("first:*:700:20:staff:0:0:First Real Entry:/home/first:/bin/sh\n", f);
+            /* Pad well past LI_FILE_BUF_SIZE with a long-but-otherwise-
+             * well-formed shell field on the final line, so the buffer
+             * limit (not a real end-of-file) is what cuts it off. */
+            fputs("second:*:701:20:staff:0:0:Second Entry:/home/second:/bin/", f);
+            for (int i = 0; i < 20000; i++) {
+                fputc('x', f);
+            }
+            fputc('\n', f);
+            fclose(f);
+
+            int trunc_n = li_pw_load(trunc_path);
+            check(trunc_n == 1,
+                "P2: truncated file loads exactly 1 entry (the earlier complete one)");
+            check(li_getpwnam("first") != 0,
+                "P2: the complete entry before the truncation point parses correctly");
+            check(li_getpwnam("second") == 0,
+                "P2 regression: the final, buffer-truncated entry is discarded, "
+                "not accepted with a cut-off pw_shell");
+            unlink(trunc_path);
+        }
+    }
 
     unlink(pw_path);
     unlink(gr_path);

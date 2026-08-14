@@ -681,22 +681,13 @@ linked. **This directly unblocks the ~35 locale/wide-char/thread-safe-
 not further TSD verification.
 
 **Fourth pass, same day: resumed the ~35 gated files -- 109 real Libc
-locale/string files now compile (up from 20), real TSD wired in as their
-actual dependency, and a genuinely new (non-TSD) wall found and precisely
-characterized.** `tools/userland_staging/pthread_tsd_shim.c` re-exports
-the QEMU-confirmed bootstrap under real POSIX names
-(`pthread_key_create`/`setspecific`/`getspecific`, plus
-`pthread_key_init_np`/`pthread_once` and the underscore-prefixed private
-aliases -- `third_party/Libc/fbsdcompat/reentrant.h` maps FreeBSD-lineage
-`thr_keycreate`/etc to `_pthread_key_create`/etc, real separate exported
-symbols, not just a macro rename) -- **verified by linking a standalone
-smoketest with zero undefined symbols**, independent of the deeper Libc
-chain below. `compat_stubs.c` adds `os_unfair_lock`/`OSAtomic*Barrier`
-no-ops (correct, not approximated, for this provably single-threaded
-target) and a clearly-labeled placeholder bump allocator (NOT the real
-Tier-2 `malloc` this roadmap already lists separately -- `free()` is a
-genuine no-op, documented as such, sufficient only for a short-lived
-smoketest).
+locale/string files compiled (up from 20), real TSD wired in as their
+actual dependency, and a new (non-TSD) wall found.** Real, correct
+findings from this pass are kept below (the build-config discoveries all
+held up); its overclaims were caught by adversarial review and corrected
+in the fifth pass further down -- **do not trust "verified"/"exercises
+the full real chain" language from this pass in isolation, read the fifth
+pass for what was actually true.**
 
 Getting real `third_party/Libc/locale/` source building at all needed
 **three distinct, real, non-obvious build-configuration fixes**, none of
@@ -811,14 +802,26 @@ flat-file resolver" referenced above -- correcting that name, see below)
 is implemented and verified.** `tools/libinfo_custom/{libinfo_custom.h,
 libinfo_custom.c}` -- real `li_getpwnam`/`li_getpwuid`/`li_getgrnam`/
 `li_getgrgid` reading `/etc/master.passwd`/`/etc/group` directly, real
-field layout matching `struct passwd`/`struct group` from this project's
-own already-cloned `third_party/Libinfo/lookup.subproj/{pwd.h,grp.h}`
-(field-for-field, so future real code can call these normally), real
 parsing logic faithfully adapted from FreeBSD's actual
 `lib/libc/gen/{pw_scan.c,getpwent.c,getgrent.c}` (fetched fresh as
 reference, not vendored -- confirmed real field order directly from that
 source: master.passwd is `name:passwd:uid:gid:class:change:expire:gecos:
 dir:shell`, group is `name:passwd:gid:member,member,...`).
+
+**ABI-compatibility claim CORRECTED 2026-08-14 (adversarial review)**:
+only `struct li_passwd` is actually byte-exact with the real `struct
+passwd` in this project's already-cloned
+`third_party/Libinfo/lookup.subproj/pwd.h` (independently verified).
+`struct li_group` is **not** byte-compatible with the real `struct group`
+in that same header's `grp.h` -- `gr_mem` here is a fixed-size inline
+`char*[33]` array (`sizeof` 296 on this LP64 target), not the real
+struct's plain `char**` (`sizeof` 32 total), since this module has no
+real heap allocator yet (Tier-2 `malloc` is separate, not-yet-built Libc
+work). Real code can call this module's own functions directly and get
+correct values, but must not cast a `struct li_group*` to a real `struct
+group*` or vice versa -- only `struct li_passwd*` is safe to treat as
+ABI-equivalent to a real `struct passwd*`. See `libinfo_custom.h`'s own
+header comment for the full, corrected claim.
 
 **Correction to this section's own earlier text**: this is NOT
 "Libinfo-backed" -- it doesn't use Apple's real Libinfo at all. This
@@ -839,7 +842,7 @@ regardless of how far that work has gotten.
 real freestanding Mach-O binaries get killed by this host's hardened
 runtime before `main()` runs, confirmed this session, so this compiles as
 a normal dynamically-linked host executable instead) writes real test
-`master.passwd`/`group` files and confirms 29 real checks pass: correct
+`master.passwd`/`group` files and confirms 39 real checks pass: correct
 field values for multiple accounts/groups, malformed lines correctly
 skipped without aborting the whole file, group membership lists parsed
 correctly including empty and multi-member cases, not-found cases
@@ -858,6 +861,44 @@ documented (not yet fixed) a known capacity limit: files with more than
 64 accounts, or a group line with more than 32 members, silently truncate
 rather than erroring -- acceptable for this project's current scale,
 flagged for revisit if that assumption changes.
+
+**A dedicated adversarial review of this commit (2026-08-14) found and
+fixed four more real bugs before it was pushed** (self-review is real but
+not exhaustive -- exactly why this project's standing rule is an
+*independent* review pass for significant changes, not just the author's
+own second look):
+- A failed reload (`li_pw_load`/`li_gr_load` on a bad path, after an
+  earlier successful load) left the *previous* table's entries being
+  served as if still current -- worse, a failure partway through a read
+  could leave the static file buffer holding a mix of old and new bytes
+  with no reliable boundaries between them. Fixed: both functions now
+  reset their entry count unconditionally before attempting a load, so a
+  failed reload always leaves an empty (not stale, not corrupted) table.
+- The passwd parser accepted an empty name (unlike the group parser,
+  which already correctly rejected an empty name) -- a stray leading
+  colon created a real, matchable nameless entry. Fixed to reject, same
+  as group.
+- A malformed (non-empty, non-numeric) `change`/`expire` field silently
+  became `0` instead of rejecting the line -- inconsistent with this
+  module's own stricter-than-`atol()` handling of every other numeric
+  field. Fixed to reject.
+- A file larger than the internal read buffer had its final, genuinely
+  cut-off line silently *accepted* with truncated field data -- directly
+  contradicting what this file's own code comment claimed ("fails the
+  field-count check and gets skipped"), disproven with a real fixture.
+  Fixed: `li_load_file()` now reports real truncation to its callers,
+  which discard only the incomplete final line rather than guessing.
+
+Also fixed while addressing the above (cheap, folded in): CRLF line
+endings no longer leave a trailing `\r` poisoning the last field. Left
+deliberately unfixed and clearly documented instead (see
+`libinfo_custom.h`): an embedded NUL byte truncates parsing of the rest
+of that line's file (inherent to C-string-based parsing, not a quick
+fix), and a literal negative uid/gid (the real BSD convention for
+`nobody`, conventionally `-2`) is rejected outright rather than
+special-cased, a deliberate simplicity/safety tradeoff. All fixes
+verified via new regression tests in `host_test.c`, one per bug, run
+alongside the original 29 -- 39 checks total, all passing.
 
 **Not yet done** (later Phase 5 steps per the build order above,
 deliberately out of scope for this pass): account-provisioning tools
