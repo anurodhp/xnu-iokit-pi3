@@ -49,4 +49,27 @@ int _pthread_setspecific(unsigned long key, const void *value);
 void *_pthread_getspecific(unsigned long key);
 int _pthread_once(void *once_control, void (*init_routine)(void));
 
+/* libc_stdio_syscalls.c / libc_stdio_shims.c (Phase 4 stdio tier,
+ * build_libc_stdio.sh) - real Apple third_party/Libc/stdio/FreeBSD/
+ * fdopen.c, freopen.c, and _flock_stub.c call these underscore-prefixed
+ * private aliases with zero prototype in scope in this checkout, same
+ * implicit-int-declaration gap already documented above for the locale
+ * tier's _open/_read/etc. Signatures match the real public fcntl(2)/
+ * dup2(2)/pthread_mutex_*() they alias. */
+int _fcntl(int fd, int cmd, long arg);
+int _dup2(int from, int to);
+int _pthread_mutex_lock(void *mutex);
+int _pthread_mutex_trylock(void *mutex);
+int _pthread_mutex_unlock(void *mutex);
+int _pthread_mutex_destroy(void *mutex);
+
+/* libc_gen_shims.c (Phase 4 gen tier, build_libc_gen.sh) - real Apple
+ * third_party/Libc/gen/FreeBSD/{closedir,rewinddir,seekdir,telldir}.c
+ * reference this global directly (not a function call, so C's implicit-
+ * int fallback doesn't even apply - this is a hard "undeclared
+ * identifier" without a real extern decl in scope). See
+ * libc_gen_shims.c's own header comment for why 0 is the real answer on
+ * this single-threaded target. */
+extern int __isthreaded;
+
 #endif

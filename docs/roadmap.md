@@ -883,6 +883,106 @@ platform_syscall TSD bootstrap, `pthread_key_create`/`setspecific`/
 ctype table) all now have genuine on-target confirmation, not just a
 clean host link.
 
+**Seventh pass, 2026-08-14 (later same day): real stdio (FILE*) and gen/
+(POSIX wrapper) tiers, both real-QEMU-boot-verified.** Extends the
+`tools/userland_staging/build_libc_*.sh` curated-Libc-build pattern with
+two new tiers:
+
+- `build_libc_stdio.sh` -> `libc_build/libc_stdio.a`: real Apple
+  `third_party/Libc/stdio/FreeBSD/*.c` FILE*-infrastructure layer -- real
+  `fopen`/`fclose`/`fread`/`fwrite`/`fgets`/`fputs`/`getc`/`putc`/`rewind`/
+  `fseek`/`ungetc`/`fdopen`, the real `__sF`/`__sglue` global stream table
+  backing stdin/stdout/stderr, real buffering (`makebuf.c`/`refill.c`).
+  64 of 68 real source files compile; the `printf`/`scanf` family is
+  deliberately out of scope (real `vfprintf.c`'s "xprintf domain"
+  extensibility system -- `xprintf_comp.c`/`xprintf_domain.c`/
+  `xprintf_exec.c`/etc -- is a genuinely separate, much larger subsystem,
+  already flagged as such in an earlier pass's `libc_locale_stdio.c`
+  comment); `tmpfile`/`perror`/`open_wmemstream` also skipped, each on one
+  additional missing syscall/header (`_sigprocmask`, `_writev`,
+  `malloc_private.h`) not otherwise needed by this tier.
+- `build_libc_gen.sh` -> `libc_build/libc_gen.a`: real Apple/FreeBSD
+  `third_party/Libc/gen/` POSIX wrapper layer -- real `opendir`/`readdir`/
+  `closedir`/`rewinddir`/`seekdir`/`telldir`/`dirfd`, real `getcwd`
+  (its full directory-walking fallback, not just a fast-path stub),
+  `err`/`errx`/`warn`/`warnx`, `basename`/`dirname`, `uname`, `confstr`,
+  plus `stdlib/FreeBSD/merge.c` (`mergesort`, a real dependency of
+  `opendir`'s duplicate-entry removal). All 15 curated files compile,
+  zero skipped.
+
+New real syscalls added (each cross-checked against
+`bsd/kern/syscalls.master` the same way every prior raw syscall in this
+project is, not guessed): `__getdirentries64` (#344), `openat` (#463),
+`fstatfs`/`fstatfs64` (#346), `sysctl`/`sysctlbyname` (#202/#274),
+`lseek`, `_fcntl`/`_dup2` (#92/#90), `stat64`/`lstat64` (#338/#340), plus
+public `open`/`fcntl`/`fstat` aliases onto the existing private
+`_open`/`_fcntl`/`_fstat`. New no-op-but-correct shims for this
+single-threaded target (same reasoning already established for
+`os_unfair_lock`/TSD): real `pthread_mutex_*`/`pthread_once`-adjacent
+`os_once`, `__isthreaded=0`, `exit()`+`__cleanup` wiring (so real stdio
+buffers genuinely flush on exit -- confirmed via `findfp.c`'s own real
+`__sinit()` assignment, not faked), `isatty()=0` (real "no tty layer
+ported yet" answer, not a guess).
+
+Two real, previously-undetected header/build-config gaps found and fixed
+along the way (both are genuine Xcode-12/iOS-14.4 SDK vintage gaps, same
+class as prior passes' `os/assumes.h`/`mach-o/dyld_priv.h` stand-ins, not
+guesses): `FLOCKFILE`/`FUNLOCKFILE` and `os_once_t`/`os_once()` are called
+throughout the stdio tier but defined nowhere in this checkout or the SDK;
+`getdirentries64_flags_t`/`GETDIRENTRIES64_EOF`/
+`GETDIRENTRIES64_EXTENDED_BUFSIZE` and the `_GENERIC_DIRSIZ` macro are
+called by the gen tier but likewise absent -- the former three pulled
+verbatim from this project's own `third_party/xnu-7195/bsd/sys/dirent.h`
+kernel source (not approximated), the latter is the standard BSD formula.
+Also found and fixed a real `-DVARIANT_DARWINEXTSN` symbol-aliasing bug:
+`fopen.c`/`fdopen.c` each self-`#define _DARWIN_UNLIMITED_STREAMS` under
+that flag, which flips their exported symbol to a `$DARWIN_EXTSN`-suffixed
+alias real Darwin's dyld resolves at load time -- meaningless (and
+actively harmful) for this project's fully static, no-dyld link, so this
+tier's CFLAGS deliberately omit `VARIANT_DARWINEXTSN` (present in the
+locale tier's CFLAGS, but never actually exercised there).
+
+**Real QEMU boot verification, both tiers, both genuine PASSes:**
+```
+root@sh:/ % exec /sbin/stdio_smoketest
+PASS: real fopen/fwrite/fclose/fgets round-trip via stdout, stderr, stdin's own __sF table
+exec: /sbin/stdio_smoketest exited, status=0
+root@sh:/ % exec /sbin/gen_smoketest
+PASS: real getcwd/opendir/readdir/closedir round-trip against /tmp
+exec: /sbin/gen_smoketest exited, status=0
+```
+The stdio smoketest's first real run genuinely FAILED (`fopen(write)
+returned NULL`) -- not a fabricated pass. Root-caused to a real
+provisioning gap, same class as the `/etc` and `/dev` gaps prior passes
+already found: fresh images have no `/tmp` directory, so `fopen(...,
+"w")`'s real `O_CREAT` open genuinely got `ENOENT`. Fixed in
+`tools/init_binary/inject_into_sd_image.sh` (`mkdir -p "$MNT/tmp"`, same
+mechanism as the `/etc`/`/dev` fixes), re-verified PASS after.
+
+Also self-caught one real bug before it ever reached a boot test: an
+early version of the `sysctl(2)` raw-syscall wrapper only forwarded 4 of
+the real kernel syscall's 6 positional arguments (dropping `new`/`newlen`
+off the actual `svc` call entirely), leaving whatever was already sitting
+in `x4`/`x5` to be read by the kernel as the "new value" pointer/length --
+a genuine uninitialized-register hazard, not a cosmetic C-parameter
+oversight. Fixed to always forward real (0/0-for-every-current-caller)
+values before it was ever linked into a smoketest.
+
+Both `.a` archives (`libc_stdio.a`, `libc_gen.a`) supersede the earlier
+locale tier's own small hand-rolled `fdopen`/`fread`/`fileno`/`rewind`/
+`fclose` shim (`libc_locale_stdio.c`, written before real stdio existed)
+for any build that links both tiers together -- `build_libc_stdio.sh`
+builds a `libc_locale_for_stdio.a` with that one now-redundant object
+dropped from a copy of `libc_locale.a`, rather than removing it from
+`libc_locale.a` itself (the locale tier's own standalone smoketest still
+needs it and doesn't link the stdio tier at all).
+
+Still not attempted: `printf`/`scanf` family (the "xprintf domain" wall
+above), `libpthread`/`libplatform`/`libdispatch`/`libclosure`/`libmalloc`/
+`libunwind`/`Libinfo`(-the-Apple-repo, distinct from this project's own
+`tools/libinfo_custom`)/`removefile`/`copyfile`, and `dyld` itself -- all
+still cloned-but-unbuilt per this section's earlier status notes.
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions

@@ -74,6 +74,12 @@ echo "+ wrote $(wc -c < tools/pwtool/pwtool.macho) bytes to $MNT/sbin/pwtool"
 mkdir -p "$MNT/etc"
 echo "+ ensured $MNT/etc exists (pwtool lock-file/master.passwd/group directory)"
 
+mkdir -p "$MNT/tmp"
+echo "+ ensured $MNT/tmp exists (real fopen()-family O_CREAT target dir -- same"
+echo "  class of gap as /etc and /dev above; found via a real QEMU boot-test"
+echo "  FAIL when tools/userland_staging/libc_stdio_smoketest.macho's real"
+echo "  fopen(\"/tmp/...\", \"w\") returned NULL on a fresh image with no /tmp)"
+
 if [ ! -f "$MNT/etc/master.passwd" ]; then
     echo "+ no $MNT/etc/master.passwd -- provisioning real root account (password: darwin)"
     HASHTOOL="$(mktemp -t hash_password_host)"
