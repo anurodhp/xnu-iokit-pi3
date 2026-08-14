@@ -1095,6 +1095,120 @@ Still not attempted: `printf`/`scanf` family, `libpthread`/`libdispatch`/
 `libclosure`/`libmalloc`/`libunwind`/`Libinfo`(-the-Apple-repo)/
 `removefile`/`copyfile`, and `dyld` itself.
 
+**Ninth pass, 2026-08-14 (later same day): real `printf`/`scanf`
+("xprintf") family, real-QEMU-boot-verified -- closes the wall the
+Seventh pass deliberately left open.** `tools/userland_staging/
+build_libc_printf.sh` builds `libc_build/libc_printf.a`: real Apple/
+FreeBSD `stdio/FreeBSD/{vfprintf,vfscanf,vfwprintf,vfwscanf,printf-pos,
+xprintf,xprintf_*}.c` (the real xprintf engine + all eight built-in
+conversion-domain handlers) plus every public `printf*`/`scanf*`/
+`wprintf*`/`wscanf*` wrapper (`printf`/`fprintf`/`sprintf`/`snprintf`/
+`asprintf`/`dprintf`/their `v*` variants/`scanf`/`fscanf`/`sscanf`/wide-char
+equivalents) -- 40 files, zero skipped. Plus real David Gay `gdtoa`
+(`third_party/Libc/gdtoa/`), file selection read directly from Apple's own
+`xcodescripts/libc.xcconfig` (`FreeBSD_INCLUDED_SOURCE_FILE_NAMES_arm64` /
+`FreeBSD_EXCLUDED_SOURCE_GDTOA`) rather than guessed -- 21 of 23 compiled;
+`_ldbl_util.c` is genuinely arm64-inapplicable (operates on a two-word
+`union IEEEl2bits` long-double layout arm64 doesn't have -- real compile
+errors confirmed this, not guessed) and `gdtoa-strtoIg.c` has a real
+pre-existing bug in this exact checkout (calls `strtodg()` with 5 args
+against `gdtoa.h`'s own 6-arg prototype) that nothing in this tier's real
+undefined-symbol surface ever needs anyway.
+
+`xprintf_domain.c`/`xprintf_comp.c`/`xprintf_exec.c`/`xprintf_all_in_one.c`
+(the newer, separate "%{domain}" runtime-extensible printf API) stay out
+of scope -- confirmed by `vfprintf.c`'s own `#if 0 // xprintf pending API
+review` guard around its only use of that API.
+
+Real new work, each hit as a real compile/link error first:
+- `os_crash()` (real macro: `os/assumes.h`) backs `vfprintf.c`'s real CVE
+  mitigation for `%n` on a non-immutable format string. Real Apple's
+  header pulls in a full ASL-logging + `__builtin_os_log_format`-based
+  "pack" encoding subsystem this target doesn't have; this tier's own
+  `compat_include_printf/os/assumes.h` shadows it (kept in a **separate**
+  `-I` dir from the locale/stdio tiers' shared, deliberately-empty
+  stand-in, so the two scripts' independent every-run header regeneration
+  can never flip this tier's `os_crash` between real and undefined
+  depending on build order) with a single real function
+  (`libc_printf_mach_stub.c`) that writes a real diagnostic via a real
+  `write(2)` syscall and then really, unconditionally terminates the
+  process -- the only behavior `%n`'s security check actually depends on.
+- `vm_region_64()`/`mach_task_self()` back the read-only-format-string
+  check `os_crash()` gates on. Real Mach IPC (MIG-compiled RPCs, not
+  single raw traps like the BSD syscall layer) isn't ported on this target
+  -- same class of gap as "no USB host controller driver" in
+  architecture.md, not fakeable in scope here. Real, **fail-closed** stand-in:
+  `vm_region_64()` always reports `KERN_FAILURE`, so `%n` is safely,
+  loudly disabled (aborts) rather than this stub fabricating a "yes it's
+  read-only" answer it has no way to actually verify -- the alternative
+  would have been a real, silent security regression.
+- `abort()`/`abort_report_np()`/`__assert_rtn()`: real Apple source needs
+  real signal delivery (`sigaction`/`pthread_kill`/`pthread_sigmask`),
+  `pthread_workqueue`, and the `_simple` ASL string builder, none ported.
+  Project-owned real versions (same file) keep the one load-bearing
+  behavior (diagnostic + unconditional process termination) via the same
+  raw syscalls as `os_crash`.
+- `__xprintf_domain_init`/`__xprintf_domain_once`/`pthread_rwlock_rdlock`/
+  `unlock` satisfy `xprintf.c`'s `__v2printf()` -- real, load-bearing code
+  on this tier's actual call path (`__xvprintf()` calls it), but its real
+  control flow (read directly, not guessed) returns immediately for every
+  call this tier ever makes (always `XPRINTF_PLAIN`) before ever touching
+  these -- confirmed dead-but-linked, given correct fail-safe single-
+  threaded-no-op bodies rather than fake always-succeeds ones.
+- `_Block_copy`/`_Block_release` (real libclosure Blocks-runtime ABI, not
+  ported) satisfy `libc_gen.a`'s `err.o`: real `errx()` shares that object
+  file with Block-based `err_set_exit_b()`/`err_set_exit()`, and archive
+  linking pulls a whole `.o` per referenced symbol -- confirmed nothing in
+  this tier's real call graph ever registers a custom err exit handler.
+- `__fpclassifyd()`/`nan()`/`nanf()`/`nanl()` (`libc_printf_fp_shims.c`):
+  genuinely Libm functions (`third_party/Libm` isn't cloned into this
+  project at all, correctly out of Phase 4 step 1's library list) but
+  small/self-contained enough to write for real rather than skip the whole
+  hex-float (`%a`/`%A`) tier -- `__fpclassifyd` is real IEEE754 binary64
+  bit-pattern inspection (no FP hardware instructions needed);
+  `nan`/`nanf`/`nanl` are real quiet-NaN-producing compiler builtins with
+  one honest, documented simplification (the caller's tag string doesn't
+  thread through into the NaN's payload bits -- "some NaN" instead of "the
+  specific NaN this tag encodes", never inspected by anything in this
+  tier's real call graph).
+- `locale/iswctype.c` (self-`#define _EXTERNALIZE_WCTYPE_INLINES_TOP_`,
+  the real Apple mechanism documented in `include/wctype.h`'s own
+  "//Begin-Libc" comment) for real, externally-linkable
+  `iswspace_l`/etc -- without it the header's inline-only definitions
+  never emit a symbol at all. `stdlib/FreeBSD/strtoimax.c`/`strtoumax.c`
+  for real `strtoimax_l`/`strtoumax_l` (`vfscanf.c`'s `%j` conversion).
+
+**Real crash found and root-caused via a raw-syscall-only checkpoint
+bisection** (not fabricated as a pass): the first QEMU boot test of the
+full smoketest produced zero output and `terminated by signal 11`, with
+nothing usable in the serial log to go on. Bisected by linking
+progressively larger/smaller test mains against the exact same archive
+set: a trivial `main(){return 0;}` and a `main()` that only calls a raw
+`write(2)`-based diagnostic both passed clean against the full
+`libc_printf.a`/`libc_stdio.a`/`libc_gen.a`/`libplatform.a` link, ruling
+out an archive/link-order problem; a reduced test calling only
+`snprintf()` reproduced the crash *inside* `snprintf()` itself. Root
+cause: `snprintf.c` calls `__current_locale()` directly, which reads a TSD
+slot that stays flat-out uninitialized without an explicit, one-time
+`pthread_tsd_shim_bootstrap_for_libc()` call as the first thing `main()`
+does -- a real, already-documented project convention
+(`pthread_tsd_shim_libc_bootstrap.c`'s own header comment, itself the
+product of an earlier adversarial-review finding) the smoketest had
+simply never called. Fixed in the smoketest, not in Libc source.
+
+**Real QEMU boot verification, genuine PASS (after the above fix):**
+```
+root@sh:/ % exec /sbin/printf_smoketest
+PASS: real snprintf/sscanf round-trip (%d/%s/%f/%x): '42 hello 3.50 0xff' -> 42,hello,3.50
+exec: /sbin/printf_smoketest exited, status=0
+```
+Tested on a scratch copy of the boot image, deleted after verification,
+not the live default image.
+
+Still not attempted: `libpthread`/`libdispatch`/`libclosure`/`libmalloc`/
+`libunwind`/`Libinfo`(-the-Apple-repo)/`removefile`/`copyfile`, and `dyld`
+itself.
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions
