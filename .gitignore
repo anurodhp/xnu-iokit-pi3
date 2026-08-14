@@ -13,7 +13,17 @@ tools/userland_staging/libsyscall_smoketest/*.o
 # script's own header comment for why/which files).
 tools/userland_staging/libc_build/
 tools/libinfo_custom/host_test
+tools/libinfo_custom/crypt_des_host_test
 tools/libinfo_custom/*.o
+
+# Phase 5 provisioning tool -- build artifact, rebuild via
+# tools/pwtool/build.py (same reasoning as init.macho above)
+tools/pwtool/pwtool.macho
+tools/pwtool/host_test
+tools/pwtool/*.o
+
+# Phase 5 login host test binary, same reasoning
+tools/init_binary/host_test
 
 # Downloaded precompiled binaries and local QEMU test scaffolding -
 # large, reproducible, not our source (precompiled/rpi.dtb is also known-bad,

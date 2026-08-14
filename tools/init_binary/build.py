@@ -19,6 +19,7 @@ import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+LIBINFO_DIR = os.path.join(os.path.dirname(HERE), "libinfo_custom")
 DEFAULT_OUT = os.path.join(HERE, "init.macho")
 
 
@@ -27,7 +28,17 @@ def main():
     ap.add_argument("-o", "--output", default=DEFAULT_OUT)
     args = ap.parse_args()
 
-    src = os.path.join(HERE, "init.c")
+    srcs = [
+        os.path.join(HERE, "init.c"),
+        # Phase 5: real login/su -- init.c's own #include lines pull in
+        # libinfo_custom.h/crypt_des.h by relative path
+        # ("../libinfo_custom/..."), but the corresponding .c
+        # implementations still need to be compiled+linked in as sibling
+        # translation units, same as tools/pwtool/build.py already does
+        # for the same two files.
+        os.path.join(LIBINFO_DIR, "libinfo_custom.c"),
+        os.path.join(LIBINFO_DIR, "crypt_des.c"),
+    ]
     cmd = [
         "clang",
         "-target", "arm64-apple-macos11",
@@ -49,8 +60,7 @@ def main():
         "-O0",
         "-e", "__start",
         "-o", args.output,
-        src,
-    ]
+    ] + srcs
     print("+ " + " ".join(cmd))
     subprocess.run(cmd, check=True)
 

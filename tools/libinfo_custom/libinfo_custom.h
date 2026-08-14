@@ -144,4 +144,26 @@ struct li_passwd *li_getpwuid(li_uid_t uid);
 struct li_group  *li_getgrnam(const char *name);
 struct li_group  *li_getgrgid(li_gid_t gid);
 
+/* Read-only iteration accessors -- added for Phase 5's provisioning tools
+ * (tools/pwtool/pwtool.c), which need to re-emit every currently-loaded
+ * entry (to safely rewrite the whole flat file with one entry added or
+ * changed) rather than look up a single known name/uid. Pure additions,
+ * no change to any existing parsing/lookup behavior above -- returns NULL
+ * for an out-of-range index rather than reading out of bounds. */
+int li_pw_entry_count(void);
+struct li_passwd *li_pw_at(int index);
+int li_gr_entry_count(void);
+struct li_group *li_gr_at(int index);
+
+/* Explicit "start from an empty table" reset -- added for pwtool.c's real
+ * bootstrap case (the very first account/group ever provisioned on a
+ * fresh image, where /etc/master.passwd or /etc/group doesn't exist yet
+ * at all: not an error, just "zero entries so far"). Equivalent to what
+ * li_pw_load()/li_gr_load() already do internally before attempting a
+ * real load (the P1 fix's "reset unconditionally" behavior), exposed
+ * directly rather than making callers fake it by loading a path they've
+ * confirmed doesn't exist. */
+void li_pw_reset(void);
+void li_gr_reset(void);
+
 #endif /* _LIBINFO_CUSTOM_H */

@@ -463,3 +463,38 @@ struct li_group *li_getgrgid(li_gid_t gid) {
     }
     return 0;
 }
+
+/* ---------------------- read-only iteration accessors ---------------------
+ * See libinfo_custom.h's comment. Bounds-checked, not just trusting the
+ * caller -- an out-of-range index (including on an unloaded/empty table)
+ * returns NULL rather than reading past li_pw_table/li_gr_table. */
+
+void li_pw_reset(void) {
+    li_pw_count = 0;
+}
+
+void li_gr_reset(void) {
+    li_gr_count = 0;
+}
+
+int li_pw_entry_count(void) {
+    return li_pw_count;
+}
+
+struct li_passwd *li_pw_at(int index) {
+    if (index < 0 || index >= li_pw_count) {
+        return 0;
+    }
+    return &li_pw_table[index];
+}
+
+int li_gr_entry_count(void) {
+    return li_gr_count;
+}
+
+struct li_group *li_gr_at(int index) {
+    if (index < 0 || index >= li_gr_count) {
+        return 0;
+    }
+    return &li_gr_table[index];
+}
