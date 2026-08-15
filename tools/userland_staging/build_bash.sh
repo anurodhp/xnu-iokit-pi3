@@ -219,12 +219,31 @@ fail=0
 for f in $CORE_FILES; do
     base=$(basename "$f" .c)
     errfile="$BOUT/obj/${base}.err"
-    if $CLANG $CFLAGS "$BASHSRC/$f" -o "$BOUT/obj/${base}.o" >"$errfile" 2>&1; then
+    # shell.c specifically: real bash's own main() never calls this
+    # project's pthread_main_thread_bootstrap() (see bash_main_wrapper.c's
+    # header for the full real bug this fixes -- real bash's link never
+    # pulled in the real pthread_once/etc implementation at all, and even
+    # if it had, real pthread_tsd.c's pthread_getspecific() has no
+    # defensive self-bootstrap the way the old shim did). Renaming main
+    # via -D lets bash_main_wrapper.c be the real process entry point
+    # instead, bootstrapping for real before calling into real bash.
+    if [ "$base" = "shell" ]; then
+        FCFLAGS="$CFLAGS -Dmain=bash_shell_real_main"
+    else
+        FCFLAGS="$CFLAGS"
+    fi
+    if $CLANG $FCFLAGS "$BASHSRC/$f" -o "$BOUT/obj/${base}.o" >"$errfile" 2>&1; then
         ok=$((ok + 1)); rm -f "$errfile"
     else
         fail=$((fail + 1)); echo "  gap (core): $f -- $(grep -m1 'error:' "$errfile")"
     fi
 done
+errfile="$BOUT/obj/bash_main_wrapper.err"
+if $CLANG $CFLAGS bash_main_wrapper.c -o "$BOUT/obj/bash_main_wrapper.o" >"$errfile" 2>&1; then
+    ok=$((ok + 1)); rm -f "$errfile"
+else
+    fail=$((fail + 1)); echo "  gap (wrapper): bash_main_wrapper.c -- $(grep -m1 'error:' "$errfile")"
+fi
 for f in $EXTRA_FILES; do
     # Unique per-file object naming (not just basename): two real Apple
     # checkouts both happen to ship a file literally named sigaction.c
@@ -268,6 +287,59 @@ for n in $SYS_STUB_NAMES; do
 done
 
 if [ "$fail" -eq 0 ]; then
+    # Two real bugs found+fixed via QEMU debugging of the Eighteenth
+    # pass's real bash SIGSEGV (docs/roadmap.md's Nineteenth pass has the
+    # full writeup with real evidence -- summary only here):
+    #
+    # Bug A: libc_locale.a bundles pthread_tsd_shim.o (the pre-libpthread
+    # stand-in), which exports the same 4 public POSIX names
+    # (pthread_once/pthread_key_create/pthread_setspecific/
+    # pthread_getspecific) as libpthread.a's real pthread_tsd.o/
+    # pthread_main_thread_bootstrap.o. ld64 scans static archives in a
+    # single left-to-right pass; real Libc source compiled INTO
+    # libc_locale.a itself (strsignal.c's real thr_once/thr_keycreate)
+    # demands _pthread_getspecific WHILE libc_locale.a is being scanned,
+    # so it's satisfied locally from pthread_tsd_shim.o regardless of
+    # where libpthread.a sits on the link line (confirmed empirically --
+    # reordering alone did not change which _pthread_once got linked).
+    # Since pthread_tsd_shim.o bundles all 4 names together, that pulls in
+    # its OLD naive pthread_once too, with zero duplicate-symbol error
+    # (libpthread.a's real pthread_main_thread_bootstrap.o was never
+    # independently referenced by anything, so never loaded at all).
+    # Fixed in pthread_tsd_shim.c itself: its 4 public POSIX function
+    # DEFINITIONS are now __attribute__((weak)) -- a consumer linking only
+    # libc_locale.a still gets these as before (zero regression); a
+    # consumer that ALSO links libpthread.a (this one) gets the real
+    # strong ones instead. Archive-member removal (the same pattern
+    # already used for libmalloc.a in build_libpthread.sh) was tried
+    # first and rejected: libc_locale.a's copy is genuinely load-bearing
+    # for OTHER real symbols (pthread_tsd_shim_bootstrap, needed by real
+    # libmalloc.a's _get_zone; the underscore-prefixed aliases needed by
+    # real strsignal.c/localtime.c) that every OTHER standalone smoketest
+    # (stdio/gen/printf/malloc) still depends on and doesn't separately
+    # link libpthread.a to get elsewhere -- removing the member outright
+    # broke all of them, confirmed by hitting exactly that regression.
+    #
+    # Bug B: even with Bug A fixed, libpthread.a's real
+    # pthread_main_thread_bootstrap.o still never entered the link at
+    # all -- nothing in bash's own code (real, unmodified Apple source)
+    # calls pthread_main_thread_bootstrap() or references any other
+    # symbol unique to that object file, so Bug A's weak-symbol fix had
+    # no strong definition to override with. Fixed via bash_main_wrapper.c
+    # (new, in $BOUT/obj/*.o below) + shell.c compiled with
+    # -Dmain=bash_shell_real_main above: the wrapper's real main() calls
+    # pthread_main_thread_bootstrap() first (forcing that object's real
+    # pthread_once/etc into the link AND actually running the bootstrap,
+    # which real pthread_tsd.c's pthread_getspecific() needs -- unlike
+    # the old shim, it has no defensive self-bootstrap), then calls real
+    # bash's own main() under its new name.
+    #
+    # Both verified via disassembly: bash.macho's real _pthread_once now
+    # disassembles to _os_once's real cmpxchg sequence (not the naive
+    # shim's cmp x8,#0x1 pattern), and real _main correctly calls
+    # _pthread_main_thread_bootstrap before _bash_shell_real_main. Real
+    # bash STILL crashes after both fixes, on a separate, real, precisely
+    # captured bug (Nineteenth pass) -- not yet fixed, see docs/roadmap.md.
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
         -o bash.macho \
         ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \

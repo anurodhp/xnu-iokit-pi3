@@ -352,6 +352,20 @@ if ar t "$OUT/libmalloc.a" 2>/dev/null | grep -q '^pthread_tsd_shim\.o$'; then
     echo "retired old pthread_tsd_shim.o from libmalloc.a (superseded by real pthread_tsd.c)"
 fi
 
+# NOTE: libc_locale.a's copy of pthread_tsd_shim.o is deliberately NOT
+# retired the way libmalloc.a's is above -- see pthread_tsd_shim.c's own
+# header comment for why a real duplicate-archive-member bug (found while
+# root-causing the Eighteenth pass's real bash SIGSEGV, docs/roadmap.md)
+# was fixed with __attribute__((weak)) on that file's 4 public POSIX
+# functions instead of archive surgery: libc_locale.a's own pthread_tsd_shim.o
+# is a genuine, still-load-bearing dependency for OTHER real symbols
+# (pthread_tsd_shim_bootstrap, needed by libmalloc.a's real _get_zone; the
+# underscore-prefixed _pthread_once/_pthread_setspecific/etc FreeBSD-compat
+# aliases, needed by real Libc source like strsignal.c/localtime.c) that
+# archive removal would have broken for every standalone smoketest that
+# doesn't separately link libpthread.a -- confirmed by hitting exactly
+# that regression here before switching approaches.
+
 # Real smoketest: pthread_main_thread_bootstrap() + pthread_self()/
 # pthread_equal()/pthread_main_np() consistency, real os_unfair_lock-
 # backed pthread_mutex lock/unlock, real pthread_key_create/

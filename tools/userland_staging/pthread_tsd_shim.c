@@ -135,6 +135,53 @@ static unsigned long g_key_destructors[TSD_DYNAMIC_END];
  * parameter of type 'int *'") once `-w` was removed and this file's
  * prototypes became visible to real callers - exactly the class of bug
  * `-w` had been hiding. */
+/* REAL BUG found while root-causing the Eighteenth pass's real bash
+ * SIGSEGV (docs/roadmap.md): this file gets compiled into libc_locale.a,
+ * which every real consumer of the curated libc stack links; once
+ * build_libpthread.sh's real pthread_tsd.c/pthread_main_thread_bootstrap.c
+ * also exist and export the SAME 4 public POSIX names, a consumer that
+ * links BOTH libc_locale.a and libpthread.a (real bash's build in
+ * particular) got this file's NAIVE versions instead of the real ones,
+ * with zero duplicate-symbol error -- ld64 resolves archives lazily and
+ * left-to-right, and libc_locale.a's own internal Libc source (e.g.
+ * strsignal.c) demands these symbols WHILE libc_locale.a itself is being
+ * scanned, satisfying them locally before libpthread.a (already fully
+ * scanned by then, or not yet reached, depending on link order -- order
+ * turned out not to matter) ever gets a chance. Confirmed via disassembly:
+ * real bash's linked `pthread_once` matched this file's
+ * `once->sig != PTHREAD_ONCE_SIG_DONE` check byte-for-byte, not real
+ * libpthread's `_os_once` cmpxchg/callout sequence -- and confirmed via a
+ * standalone repro (pthread_once_deep_repro.c) that real libpthread's
+ * implementation does NOT corrupt a caller's stack the way real bash's
+ * (wrongly-linked) build did, isolating the bug to which implementation
+ * gets linked, not to real pthread_once()/_os_once() logic itself.
+ *
+ * Simply removing this file's definitions (or stripping pthread_tsd_shim.o
+ * from libc_locale.a's archive, the first fix attempted) breaks every
+ * standalone smoketest tier (locale/stdio/gen/printf/malloc) that does
+ * NOT separately link libpthread.a and still genuinely needs SOME
+ * implementation of these 4 functions (real Libc source calls them
+ * unconditionally) plus this file's OTHER, still-load-bearing exports
+ * (pthread_tsd_shim_bootstrap, needed by real libmalloc's _get_zone; the
+ * underscore-prefixed _pthread_once/_pthread_setspecific/etc FreeBSD-compat
+ * aliases below, needed by real strsignal.c/localtime.c) -- confirmed by
+ * hitting exactly that regression before switching approaches.
+ *
+ * Fixed correctly with __attribute__((weak)) on just these 4 functions:
+ * when a consumer links ONLY libc_locale.a (no libpthread.a), these weak
+ * definitions are the only ones available and behave exactly as before --
+ * zero regression. When a consumer links BOTH (real bash), the linker
+ * prefers libpthread.a's REAL strong definitions and silently discards
+ * these weak ones -- real correctness restored, real bash gets the real,
+ * QEMU-verified _os_once-based pthread_once instead of this naive stand-in.
+ * The underscore-prefixed aliases below (_pthread_once et al) are
+ * deliberately NOT marked weak -- libpthread.a's real pthread.c doesn't
+ * export FreeBSD-compat aliases under those exact names at all, so they
+ * remain this file's sole, still-necessary provider regardless of what
+ * else is linked; since they simply call through to the (now correctly
+ * overridable) public names above, they automatically forward to whichever
+ * implementation actually won at link time. */
+__attribute__((weak))
 int pthread_key_create(unsigned long *key, void (*destructor)(void *)) {
     pthread_tsd_shim_bootstrap();
     for (unsigned long k = TSD_DYNAMIC_START; k < TSD_DYNAMIC_END; k++) {
@@ -163,6 +210,7 @@ int pthread_key_init_np(int key, void (*destructor)(void *)) {
     return 0;
 }
 
+__attribute__((weak))
 int pthread_setspecific(unsigned long key, const void *value) {
     pthread_tsd_shim_bootstrap();
     if (key < TSD_FIRST || key >= TSD_DYNAMIC_END) {
@@ -183,6 +231,7 @@ int pthread_setspecific(unsigned long key, const void *value) {
     return 22 /* EINVAL */;
 }
 
+__attribute__((weak))
 void *pthread_getspecific(unsigned long key) {
     pthread_tsd_shim_bootstrap();
     return _os_tsd_get_direct(key);
@@ -219,6 +268,7 @@ struct pthread_once_shim {
  * and so both run init_routine() on their first call. */
 #define PTHREAD_ONCE_SIG_DONE 1
 
+__attribute__((weak))
 int pthread_once(void *once_control, void (*init_routine)(void)) {
     struct pthread_once_shim *once = (struct pthread_once_shim *)once_control;
     if (once->sig != PTHREAD_ONCE_SIG_DONE) {

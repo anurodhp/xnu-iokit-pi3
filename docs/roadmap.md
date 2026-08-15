@@ -2243,6 +2243,150 @@ function/call/register, not vague.**
   standing convention); `stack_probe.c`/`build_stack_probe.sh` and this
   writeup committed here.
 
+**Nineteenth pass, 2026-08-15: found and FIXED two real, previously-
+unknown bugs that were shadowing the real `pthread_once` implementation
+in real bash's link -- but real bash still crashes after both fixes, on
+a DIFFERENT, precisely-captured, real fault: the kernel never maps
+bash.macho's own entry page at all. Not fixed this pass; exact evidence
+below for whoever continues.**
+
+- **Bug A -- real, confirmed via `ld -why_load` and disassembly, FIXED**:
+  `tools/userland_staging/libc_build/libc_locale.a` bundles
+  `pthread_tsd_shim.o` (the pre-`libpthread`-tier stand-in, `pthread_tsd_shim.c`)
+  alongside the real, later-built `libpthread.a`'s
+  `pthread_tsd.o`/`pthread_main_thread_bootstrap.o`. Both export the same
+  4 public POSIX names (`pthread_once`/`pthread_key_create`/
+  `pthread_setspecific`/`pthread_getspecific`). `ld64` resolves static
+  archives in a single left-to-right pass: real Libc source compiled
+  *into* `libc_locale.a` itself (`strsignal.c`'s real `thr_once`/
+  `thr_keycreate` calls, per `pthread_tsd_shim.c`'s own header) demands
+  `_pthread_getspecific` *while `libc_locale.a` is being scanned*, so
+  `ld64` satisfies it from within that same archive
+  (`pthread_tsd_shim.o`) regardless of where `libpthread.a` sits on the
+  link line -- confirmed empirically: reordering `libpthread.a` earlier
+  on `build_bash.sh`'s link line, by itself, changed nothing. Because
+  `pthread_tsd_shim.o` bundles all 4 names in one translation unit,
+  pulling it in for `getspecific` silently dragged in its OLD, naive,
+  non-`_os_once`-based `pthread_once` too -- with **zero** duplicate-
+  symbol error, because `libpthread.a`'s real
+  `pthread_main_thread_bootstrap.o` (containing the real `pthread_once`)
+  was never independently referenced by anything in bash's own code, so
+  it was never loaded into the link at all. Confirmed via disassembly:
+  bash.macho's real `_pthread_once` matched `pthread_tsd_shim.c`'s
+  `once->sig != PTHREAD_ONCE_SIG_DONE` check byte-for-byte, not real
+  `_os_once`'s cmpxchg/callout sequence -- and confirmed via a new,
+  standalone repro (`pthread_once_deep_repro.c`, real QEMU-verified PASS
+  at 1200 real recursion frames, linked directly against `libpthread.a`
+  alone) that the REAL implementation does not corrupt a caller's stack
+  the way real bash's (wrongly-linked) build did -- isolating the
+  Eighteenth pass's `compat_mode()` corruption to *which* implementation
+  got linked, not to real `pthread_once()`/`_os_once()` logic itself.
+  Two fix attempts were tried and rejected before landing on the real
+  one -- both are worth recording so a future pass doesn't repeat them:
+  (1) reordering the link line -- doesn't work, per above; (2) `ar d`-
+  stripping `pthread_tsd_shim.o` from `libc_locale.a` outright (same
+  pattern already used, correctly, for `libmalloc.a`'s copy) -- this
+  broke every OTHER standalone smoketest (stdio/gen/printf/malloc) that
+  doesn't separately link `libpthread.a` and still genuinely needs
+  `pthread_tsd_shim.o`'s OTHER real exports (`pthread_tsd_shim_bootstrap`,
+  needed by real `libmalloc.a`'s `_get_zone`; the underscore-prefixed
+  `_pthread_once`/`_pthread_setspecific`/etc FreeBSD-compat aliases,
+  needed by real `strsignal.c`/`localtime.c`) -- `libc_locale.a`'s copy
+  is genuinely load-bearing for those, unlike `libmalloc.a`'s. **Real
+  fix**: `__attribute__((weak))` on just the 4 public POSIX function
+  *definitions* in `pthread_tsd_shim.c` (not the underscore aliases,
+  which libpthread.a doesn't export under those names at all and which
+  simply forward to whichever definition wins). A consumer linking only
+  `libc_locale.a` still gets these weak fallbacks, unchanged behavior,
+  zero regression; a consumer also linking `libpthread.a` gets the real
+  strong ones instead, with the weak ones silently discarded -- exactly
+  the right tool for "provide a default, let a real implementation
+  override it when present," and it required editing precisely one file
+  instead of restructuring the archive/link graph.
+- **Bug B -- real, confirmed via disassembly, FIXED**: even with Bug A
+  fixed, `libpthread.a`'s `pthread_main_thread_bootstrap.o` still never
+  entered bash's link at all -- `ld -why_load` showed nothing in bash's
+  own code references `pthread_main_thread_bootstrap()` or any other
+  symbol unique to that object file (real bash's `shell.c:main()` is
+  real, unmodified Apple source with zero knowledge of this project's
+  bootstrap machinery), so Bug A's weak-symbol fix had nothing to
+  override *with* -- the weak definitions won by default, same
+  observable bug, different mechanism. Every other real consumer in this
+  project's history explicitly calls a bootstrap function as the first
+  thing in `main()` (see `pthread_smoketest.c`,
+  `libc_locale_smoketest.c`, etc.) -- real bash's own source obviously
+  can't do this itself. **Real fix**: `bash_main_wrapper.c` (new) is a
+  small, real `int main(int argc, char **argv, char **envp)` that calls
+  `pthread_main_thread_bootstrap()` (aborting cleanly via a raw
+  write+exit if it fails, not silently continuing) and then calls real
+  bash's own `main()`, renamed to `bash_shell_real_main` at compile time
+  via `-Dmain=bash_shell_real_main` applied to `shell.c` specifically
+  (`build_bash.sh`). This both forces `pthread_main_thread_bootstrap.o`
+  into the link for real (satisfying Bug A's override) and actually RUNS
+  the real bootstrap before any Libc/locale/TSD-backed code executes --
+  necessary because, unlike `pthread_tsd_shim.c`'s old functions (each
+  defensively self-bootstrapping on first call), real `pthread_tsd.c`'s
+  `pthread_getspecific()` calls `_pthread_getspecific_direct()` directly,
+  a raw `TPIDRRO_EL0`-relative read with no defensive fallback -- reading
+  through a NULL-based index on a never-bootstrapped thread (a real
+  hazard real Libc's own `xlocale_private.h` documents, see
+  `pthread_tsd_shim.c`'s header on `pthread_tsd_shim_bootstrap()`).
+  Verified via disassembly: bash.macho's real `_main` now correctly
+  calls `_pthread_main_thread_bootstrap`, checks its result, then calls
+  `_bash_shell_real_main`; `_pthread_once` now correctly disassembles to
+  `_os_once`'s real cmpxchg sequence, comparing against real
+  `_PTHREAD_ONCE_SIG_init` (`0x30B1BCBA`), not the naive `cmp x8,#0x1`
+  shim pattern from before.
+- **Real bash STILL crashes after both fixes -- a THIRD, different, real
+  bug, precisely captured, not fixed this pass.** Root-caused via the
+  same real fault-PC-capture technique as the Eighteenth pass (temporary
+  kernel `panic()` in `handle_user_abort()`, gated this time on
+  `proc_selfname()` matching `"bash"` specifically -- an unconditional
+  gate, tried first, caused the VM to sit in what looked like a genuine
+  hang for several minutes, because ordinary/harmless early-boot user
+  faults from `init.macho` itself would have hit it first; gating by
+  process name avoided that entirely). Captured, real:
+  **`PC=0x100002138 LR=0x0 FAR=0x100002138 ESR=0x82000007`** --
+  PC equals FAR exactly (an instruction-fetch fault, not a data access),
+  `LR=0` (no `bl` has ever executed -- this is the literal first
+  instruction fetch of the process), ESR decodes to EC=0x20
+  (Instruction Abort from EL0) with IFSC=0x07 (translation fault, level
+  3 -- the page genuinely isn't mapped, not a permission problem).
+  Cross-checked directly against `bash.macho`'s own `LC_UNIXTHREAD`
+  load command via `otool -l`: **`pc 0x0000000100002138`** -- an exact,
+  precise match to both PC and FAR. In other words: the kernel's exec
+  loader accepts and starts executing bash.macho (`exec_activate_image`
+  reports reading its header successfully, no earlier failure), but the
+  entry page itself is never actually mapped, so the very first
+  instruction fetch faults, before a single instruction has run.
+  `bash.macho`'s segment/load-command structure was checked against a
+  known-working smoketest (`pthread_smoketest.macho`) via `otool -l` and
+  is structurally near-identical (`__PAGEZERO`/`__TEXT`/`__DATA`/
+  `__LINKEDIT`, one extra `__DATA` section, nothing else different) --
+  ruling out a gross Mach-O structural difference as the cause. The one
+  clear, real difference between bash.macho and every prior working
+  binary is **size**: bash.macho is ~1.2MB, by a wide margin the largest
+  static Mach-O this project has ever exec'd (every prior smoketest has
+  been well under 100KB) -- a real, concrete, testable hypothesis for
+  whoever continues (check `exec_activate_image`/`load_segment`'s real
+  handling of a `__TEXT` segment this large -- `bsd/kern/mach_loader.c`
+  -- for a page-count/size limit, an integer truncation, or a real
+  demand-paging path this project's kernel has never exercised at this
+  scale), not yet confirmed.
+- **Diagnostic instrumentation fully reverted before committing** (same
+  discipline as the Eighteenth pass) -- `osfmk/arm64/sleh.c` is back to
+  real, unmodified upstream; only the two real userland fixes
+  (`pthread_tsd_shim.c`'s weak attributes, `bash_main_wrapper.c` +
+  `build_bash.sh`'s `-Dmain` rename) ship.
+- **Commit**: this pass is entirely userland-side (no kernel source
+  changes ship) -- `tools/userland_staging/pthread_tsd_shim.c`,
+  `build_libpthread.sh` (a dropped, rejected `ar d` attempt's leftover
+  comment cleanup), `build_bash.sh`, `bash_main_wrapper.c` (new),
+  `pthread_once_deep_repro.c`/`build_pthread_once_deep_repro.sh` (new
+  diagnostic tool, same spirit as `stack_probe.c`), and this
+  writeup, committed together in the main repo. `third_party/xnu-7195`
+  has no net changes this pass (diagnostic added and fully reverted).
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions
