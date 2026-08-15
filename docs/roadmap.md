@@ -1675,6 +1675,134 @@ attempted: `libunwind`, `Libinfo`(-the-Apple-repo), `removefile`/
 `copyfile`, `dyld` itself, and the still-open eleventh-pass item
 (relinking locale/stdio/gen/printf/malloc against real `libpthread.a`).
 
+**Fourteenth pass (2026-08-15): real `removefile`/`copyfile`, both built
+and QEMU-verified; plus a real project-wide errno bug found and fixed.**
+
+- **`build_removefile.sh` -> `libc_build/libremovefile.a`**: all 5 real
+  Apple `.c` files (`removefile.c`, `removefile_rename_unlink.c`,
+  `removefile_sunlink.c`, `removefile_tree_walker.c`,
+  `removefile_random.c`, tag `removefile-49.40.3`), 0 skipped. Real
+  `removefile()` is not a thin `unlink()` wrapper even for a single
+  file -- it unconditionally opens a real FTS(3) stream
+  (`__removefile_tree_walker`), so this tier's real new dependency is
+  `third_party/Libc/gen/fts.c`, the *modern* FTS implementation that
+  reads directories via real `getattrlistbulk(2)` (syscall #461, not
+  NO_SYSCALL_STUB -- generated fresh via the same real Apple Perl
+  generator every other tier uses) plus real Blocks (`libclosure.a`) and
+  real `os_assert()`. Also newly wired: `mkdir`/`geteuid`/`chflags`/
+  `fchdir`/`fsync`/`fstatat64` (auto-generated real stubs) and hand-
+  written raw wrappers for the NO_SYSCALL_STUB set (`unlink`/`rmdir`/
+  `unlinkat`/`rename`), plus real `qsort`/`qsort_b`/`heapsort`/
+  `heapsort_r`/`rand`/`random` (all real Apple/FreeBSD source, needed by
+  `fts.c`'s sort step). One real, documented last-resort port: `flsl`
+  (no `.c` source anywhere in this Libc checkout, only a header
+  declaration -- ported from the standard BSD definition via
+  `__builtin_clzl`, a real compiler builtin, not guessed) and
+  `getiopolicy_np` (same "no real source in this checkout" situation --
+  built for real on the real `iopolicysys(2)` syscall using this
+  project's own kernel source for the real cmd/struct layout; its only
+  call site is gated behind `SF_DATALESS`, which this target's HFS+
+  driver never sets, so it's real, correct, linked, but provably
+  unreachable, not untested).
+- **`build_copyfile.sh` -> `libc_build/libcopyfile.a`**: real
+  `copyfile.c` (5026 lines, one translation unit) + `xattr_flags.c`
+  (tag `copyfile-173.40.2`), both compiling and linking whole -- 2/2,
+  0 skipped. Built with this project's established `-target
+  arm64-apple-ios14.4` toolchain, which means `TARGET_OS_IPHONE` is
+  real and true for this compile -- copyfile.c's *own* real `#if
+  !TARGET_OS_IPHONE ... #else` branch already provides a complete,
+  Apple-authored no-op quarantine fallback, so the otherwise-unavailable
+  `libquarantine.dylib` dependency is a non-issue purely as a
+  consequence of the target triple this whole Phase 4 effort already
+  committed to, not a workaround invented here. Real xattr/ACL/clonefile
+  syscalls (`getxattr`/`setxattr`/`removexattr`/`listxattr` + f-variants,
+  `clonefileat`/`fclonefileat`, `chmod`/`fchmod`/`getattrlist`/
+  `open_dprotected_np`, the `*_extended` ACL-aware stat/chmod family)
+  are all real, wired, and will genuinely return `ENOTSUP`/`EINVAL` from
+  the real kernel at runtime since real HFS+ here doesn't implement ACL/
+  xattr storage -- C doesn't dead-code-eliminate a runtime `if (flags &
+  COPYFILE_ACL)` check, so these had to link even though this tier's own
+  smoketest only exercises `COPYFILE_DATA`. Real `posix1e` ACL source
+  (`third_party/Libc/posix1e/*.c`, all 15 files including `acl.c` and
+  `acl_translate.c`), real `filesec.c`, `chmodx_np.c`/`statx_np.c`, real
+  FreeBSD `realpath.c`, and real `uuid/uuidsrc/{copy,parse,unparse,
+  pack}.c` are all compiled in for real rather than stubbed. A small,
+  real, documented `dispatch_once`/`dispatch_once_t` compat shim was
+  added for `xattr_flags.c`'s one call site (`nameInDefaultList`'s lazy
+  init) -- real public, stable ABI (`typedef long dispatch_once_t`), not
+  an internal GCD object layout, so this doesn't reopen the
+  `libdispatch`-is-a-monolith finding above; this target is also
+  provably single-threaded, so a plain check-and-set is genuinely
+  correct here, not a corner cut. Real, honest last-resort stand-ins
+  (never fabricating success) for functions with no directory/XPC/
+  sandbox service to back them on this target: `getpwnam`/`getpwuid`/
+  `getgrnam`/`getgrgid` (real "no such user" NULL), `mbr_uid_to_uuid`/
+  `mbr_gid_to_uuid`/`mbr_uuid_to_id` (real "cannot resolve" failure --
+  this target has no directory service at all, not even the custom one
+  from Phase 5, wired into this API), `_xpc_runtime_is_app_sandboxed`
+  (real "not sandboxed" -- this target has no App Sandbox concept). All
+  of these are on ACL-text-parsing paths (`acl_from_text`/`acl_to_text`/
+  `uuid_to_name`) this tier's own `COPYFILE_DATA`-only smoketest never
+  reaches.
+- **A real, project-wide bug found and fixed while debugging removefile's
+  own QEMU boot test**: `removefile`'s smoketest called real
+  `removefile(REMOVEFILE_RECURSIVE)`, got a real success return, but a
+  post-delete `stat() == 0 || errno != ENOENT` check still failed --
+  `stat()` genuinely failed (the directory really was gone) but `errno`
+  read back as `0`, not `ENOENT`. Root cause: this project's hand-written
+  raw-syscall helpers (the `syscall3`/`syscall4`/`syscall6`-style
+  functions in `libc_gen_syscalls.c`, `libc_locale_syscalls.c`,
+  `libc_stdio_syscalls.c`, `libc_locale_stdio.c`, and the two new files
+  this pass added) returned the raw negative kernel error code directly
+  on the carry-flag error path instead of calling `cerror_nocancel()`
+  (the real Apple `errno.c` stand-in, `cerror_stub.c` -- already linked
+  into every one of these binaries) the way the real Apple-*generated*
+  syscall stubs do (confirmed independently: `_mkdir.s`'s own real
+  assembly is `b.cc 2f` / `bl _cerror`). Every affected wrapper still
+  correctly signaled failure to any `< 0`/`!= 0` check (so this had
+  never visibly broken anything before), but never actually set the
+  global errno, so any real caller inspecting `errno` after a failed
+  call -- an extremely common real pattern -- got a stale or zero value.
+  Fixed in all five files by routing the error path through
+  `cerror_nocancel()`. (Checked, not touched: `pthread_bsdthread_create_
+  syscall.c`, `pthread_psynch_syscalls.c`, and `libplatform_syscalls.c`
+  already used a *different*, also-correct convention -- manually
+  extracting `errno = (int)-r` at each call site -- so they were never
+  actually buggy, just stylistically inconsistent; left alone rather
+  than churned for uniformity's sake.) Re-verified every downstream
+  tier (`string`/`platform`/`locale`/`stdio`/`gen`/`printf`/`malloc`/
+  `pthread`/`closure`) still builds and its existing smoketest still
+  passes after this fix, since the shared syscall files touch all of
+  them.
+- Also fixed: `libc_printf_mach_stub.c`'s `_Block_copy`/`_Block_release`
+  identity-passthrough stand-ins (real placeholders from the
+  eleventh/twelfth pass, predating `libclosure`) retired now that real
+  `libclosure.a` exists -- linking both produced a real duplicate-symbol
+  error. `build_libc_printf.sh` now links `libclosure.a`.
+- **QEMU verification, both genuine PASS** (scratch image copy via
+  `tools/init_binary/inject_into_sd_image.sh`, deleted after):
+  ```
+  PASS: real directory tree built (mkdir/fopen/fwrite)
+  PASS: real removefile(REMOVEFILE_RECURSIVE) returned 0
+  PASS: real stat confirms the whole tree is actually gone
+  ALL PASS: removefile smoketest
+  ```
+  ```
+  PASS: real source file written
+  PASS: real copyfile(COPYFILE_DATA) returned 0
+  PASS: copied content matches source byte-for-byte
+  ALL PASS: copyfile smoketest
+  ```
+- Adversarial review before commit caught one real, if currently-inert,
+  type mismatch in this pass's own `mbr_uuid_to_id` stand-in (`long*`
+  instead of the real `id_t*`/4-byte width) -- fixed.
+
+Still not attempted: `libunwind`, `Libinfo`(-the-Apple-repo), `dyld`
+itself, and the still-open eleventh-pass item (relinking locale/stdio/
+gen/printf/malloc against real `libpthread.a` specifically -- distinct
+from the errno fix above, which touched those tiers' syscall files but
+didn't relink them against `libpthread.a`'s mutex/TSD primitives).
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions
