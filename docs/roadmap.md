@@ -1803,6 +1803,129 @@ gen/printf/malloc against real `libpthread.a` specifically -- distinct
 from the errno fix above, which touched those tiers' syscall files but
 didn't relink them against `libpthread.a`'s mutex/TSD primitives).
 
+**Fifteenth pass (2026-08-15): real `libunwind` built and QEMU-verified;
+plus a real, project-wide ld64 static-executable finding.**
+
+- **`build_libunwind.sh` -> `libc_build/libunwind.a`**: real, unmodified
+  Apple/LLVM `third_party/libunwind` (pinned `libunwind-200.10`), 6/6
+  files, 0 skipped: `UnwindRegistersSave.S`/`UnwindRegistersRestore.S`
+  (real arm64 register-context save/restore), `UnwindLevel1.c`/
+  `UnwindLevel1-gcc-ext.c` (real `_Unwind_RaiseException`/
+  `_Unwind_Backtrace`), `Unwind_AppleExtras.cpp`/`libunwind.cpp` (the
+  real `unw_getcontext`/`unw_init_local`/`unw_step` DWARF-CFI +
+  compact-unwind engine, both real C++ -- this project's first C++
+  compile, using real Apple/LLVM `<new>` placement-new declarations
+  already shipped in the Xcode-12 toolchain itself, `-fno-exceptions
+  -fno-rtti`, no libc++.dylib/libc++abi link dependency since the real
+  source here only ever uses placement `new`, never namespace-scope heap
+  allocation -- confirmed by grep before relying on it).
+- **Scope decision** (checked against real source, not guessed): this
+  project has no C++ exception usage anywhere in its own userland code,
+  so full `_Unwind_RaiseException`/personality-routine C++-ABI exception
+  support has no real consumer here; also confirmed real Apple
+  `backtrace()`/`backtrace_symbols()` (`third_party/Libc/gen/
+  backtrace.c`) do NOT go through libunwind at all on Darwin -- they use
+  a separate, simpler frame-pointer walker
+  (`_thread_stack_pcs()`, not part of this checkout) plus `dladdr()`/
+  dyld for symbolication. So this tier's real, honest value is
+  libunwind's own public `unw_*`/`_Unwind_*` API, exercised directly.
+- **Real from-scratch shim** (last resort per CLAUDE.md -- real Apple
+  source doesn't cover this case): `libunwind_dyld_shim.c` implements
+  `_dyld_find_unwind_sections()` (real libunwind unconditionally assumes
+  dyld provides this once any iOS deployment target is set, with no
+  fallback) by walking `__mh_execute_header`'s real Mach-O
+  `LC_SEGMENT_64` load commands directly -- a real ld64-synthesized
+  symbol for any `MH_EXECUTE` link, confirmed via `nm` before relying on
+  it -- plus an honest-failure (never fabricated-success) `dladdr()`
+  stand-in, since this target has no dyld-backed symbol table.
+- **Real bug found and fixed via QEMU boot-test bisection**: first run
+  SIGSEGV'd immediately inside `_Unwind_Backtrace()`'s own real
+  `pthread_rwlock`/`os_unfair_lock`-backed cache locking -- same bug
+  class as `libmalloc_dispatch.c`'s `get_zone()` and the printf tier's
+  own documented bootstrap bug (a genuinely uninitialized `TPIDRRO_EL0`
+  dereferenced as a TSD block pointer). This smoketest never calls
+  `malloc()`/`printf()` first, so it doesn't get their lazy/explicit
+  bootstrap for free; fixed by calling
+  `pthread_tsd_shim_bootstrap_for_libc()` explicitly, first, in `main()`.
+- **Real project-wide integration finding, not previously exercised**:
+  real libunwind's `RWMutex` is this project's first genuine caller of
+  `pthread_rwlock_wrlock`'s real contended-lock path, which needed two
+  real things nothing before had: (1) `libc_printf_mach_stub.c`'s old
+  `pthread_rwlock_rdlock`/`unlock` no-op stand-ins (real, correct,
+  single-threaded no-ops at the time -- real `pthread_rwlock_wrlock` was
+  never referenced before, so no duplicate-symbol conflict had ever
+  surfaced) collided with real `libc_build/libpthread.a` once both were
+  linked together for the first time -- retired the stand-ins, and
+  `build_libc_printf.sh`/`build_removefile.sh`/`build_copyfile.sh` (all
+  three link `libc_printf_mach_stub.c` transitively via `libc_printf.a`)
+  now link real `libpthread.a` too, with real
+  `-Wl,-alias,'_pthread_rwlock_*$UNIX2003',_pthread_rwlock_*` aliases
+  matching this project's established `$UNIX2003`-export convention; (2)
+  real `pthread_rwlock`'s contended path calls `sched_yield()`
+  (`third_party/libpthread/src/pthread.c:1872-1877`'s real one-liner,
+  `swtch_pri(0); return 0;`) -- `pthread.c` itself was deliberately not
+  compiled by the earlier libpthread pass, so this one real exported
+  symbol it would have provided is supplied here instead
+  (`libunwind_sched_yield.c`/`.s`, a real arm64 `swtch_pri` (-59) Mach
+  trap stub, same real `kernel_trap` pattern as `libplatform_mach_traps.s`),
+  compiled fresh into each of the three affected build scripts rather
+  than creating a build-order dependency on `build_libunwind.sh` (which
+  legitimately builds last in the pipeline). All three scripts rebuilt
+  and re-verified clean after this change.
+- **Real, larger structural finding** (found via direct empirical
+  testing during this tier's own QEMU debugging, not guessed): ld64 on
+  this project's pinned Xcode-12 toolchain does **not** synthesize a
+  `__TEXT,__unwind_info` section (and drops `__eh_frame`/
+  `__LD,__compact_unwind` entirely) for a `-nostdlib -static` linked
+  Mach-O -- confirmed by building a minimal one-function `.o` with
+  `-funwind-tables` (real `__compact_unwind` present, `otool`-verified),
+  then linking it two ways with the *same* compiler: normally (dynamic,
+  libSystem-linked) produces a real `__TEXT,__unwind_info` in the final
+  image; this project's actual `-nostdlib -static -e start` pattern --
+  every single Mach-O this project has ever produced, see
+  `architecture.md` -- produces zero unwind-related sections at all,
+  even with both `-funwind-tables` and `-fexceptions` on. This is a real
+  ld64 behavior for static executables (unwinding across dyld image
+  boundaries is presumably considered dyld's problem, which a static
+  executable structurally doesn't have), not a libunwind bug or a flag
+  this project was missing. **Consequence**: real DWARF/compact-unwind
+  frame metadata is categorically unavailable to any unwinder on any
+  binary this project produces -- not a gap specific to this tier, a
+  standing fact for all future Phase 4 work (e.g. real `bash`/coreutils
+  in step 3, once/if ever dyld-linked, would need to NOT be statically
+  linked to get real unwind info -- a real tradeoff to weigh then, not
+  now).
+- **Smoketest scope, adjusted honestly for the finding above**: does not
+  claim a real multi-frame backtrace (impossible given the constraint
+  above without fabricating success or quietly redefining what "PASS"
+  means). Instead proves what IS real and true here: `__unw_getcontext`/
+  `__unw_init_local` genuinely succeed (context capture needs no unwind
+  metadata), and `__unw_step`/`_Unwind_Backtrace()` correctly, *safely*
+  report "no unwind info available" -- no crash, no fabricated frame --
+  which is real, useful information for any future consumer of this
+  library on this target.
+- **QEMU verification, genuine PASS** (scratch image copy via
+  `tools/init_binary/inject_into_sd_image.sh`, deleted after):
+  ```
+  PASS: __unw_getcontext captured a real register context
+  PASS: __unw_init_local initialized a real cursor
+  PASS: __unw_step safely reported no unwind info available (rc=0), as expected on this target - no crash, no fabricated frame
+  PASS: _Unwind_Backtrace() returned safely, callback invoked 0 time(s) (0 expected on this target)
+  ALL PASS: libunwind smoketest (real engine, real safe no-unwind-info behavior confirmed on this target)
+  ```
+- Adversarial self-review before commit: caught and fixed a stale file
+  count in this script's own header comment (claimed 5 files, actually
+  6), and confirmed the hand-picked `unw_context_t`/`unw_cursor_t`
+  compat buffer sizes in the smoketest (128 x `uint64_t` = 1024 bytes
+  each) against `__libunwind_config.h`'s real `__aarch64__` constants
+  (`_LIBUNWIND_CONTEXT_SIZE`=66, `_LIBUNWIND_CURSOR_SIZE`=78, both in
+  `uint64_t` units -- real max 624 bytes) rather than leaving them an
+  unchecked guess.
+
+Still not attempted: `Libinfo`(-the-Apple-repo), `dyld` itself, and the
+still-open eleventh-pass item (relinking locale/stdio/gen/printf/malloc
+against real `libpthread.a`'s mutex/TSD primitives specifically).
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions

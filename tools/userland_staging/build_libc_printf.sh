@@ -257,13 +257,36 @@ if [ ! -f "$OUT/libclosure.a" ]; then
     echo "error: $OUT/libclosure.a not found -- run build_libclosure.sh first" >&2
     exit 1
 fi
+# New real dependency as of build_libunwind.sh (later Phase 4 pass):
+# libc_printf_mach_stub.c's own pthread_rwlock_rdlock/unlock no-op
+# stand-ins were retired once real libpthread.a's pthread_rwlock_wrlock
+# was genuinely exercised for the first time (libunwind's RWMutex) - see
+# that file's updated header comment. Real pthread_rwlock's contended
+# path also needs real sched_yield() (libunwind_sched_yield.c/.s - not
+# libunwind-specific despite the filename, just added there first; see
+# that file's own header comment for the real Apple pthread.c one-liner
+# it copies), compiled fresh here too rather than depending on
+# build_libunwind.sh's own output ordering (this tier legitimately builds
+# before libunwind in the pipeline).
+if [ ! -f "$OUT/libpthread.a" ]; then
+    echo "error: $OUT/libpthread.a not found -- run build_libpthread.sh first" >&2
+    exit 1
+fi
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    libunwind_sched_yield.s -o "$OUT/libc_printf_sched_yield_trap.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    libunwind_sched_yield.c -o "$OUT/libc_printf_sched_yield.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o libc_printf_smoketest.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/libc_printf_smoketest.o" \
     "$OUT/libc_printf.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_gen.a" "$OUT/libc_printf.a" "$OUT/libc_stdio.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
+    "$OUT/libpthread.a" "$OUT/libc_printf_sched_yield_trap.o" "$OUT/libc_printf_sched_yield.o" \
     "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" "$OUT/libclosure.a" \
+    -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
+    -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
+    -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
     -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
     -Wl,-alias,___kill,'_kill$UNIX2003' \
     -Wl,-alias,___kill,_kill \

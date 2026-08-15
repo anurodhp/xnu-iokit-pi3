@@ -257,6 +257,20 @@ echo "wrote $OUT/libremovefile.a"
     -DVARIANT_STATIC -DVARIANT_CANCELABLE -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \
     -I $LIBC/include -I $REMOVEFILE \
     removefile_smoketest.c -o "$OUT/removefile_smoketest.o"
+# New real dependency as of build_libunwind.sh (later Phase 4 pass):
+# libc_printf_mach_stub.c's pthread_rwlock_rdlock/unlock no-op stand-ins
+# (linked in transitively via libc_printf.a above) were retired in favor
+# of real libpthread.a - see that file's updated header comment and
+# build_libunwind.sh's own header comment for the real sched_yield()
+# dependency this drags in too.
+if [ ! -f "$OUT/libpthread.a" ]; then
+    echo "error: $OUT/libpthread.a not found -- run build_libpthread.sh first" >&2
+    exit 1
+fi
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    libunwind_sched_yield.s -o "$OUT/removefile_sched_yield_trap.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    libunwind_sched_yield.c -o "$OUT/removefile_sched_yield.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o removefile_smoketest.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
@@ -265,7 +279,11 @@ echo "wrote $OUT/libremovefile.a"
     "$OUT/libc_printf.a" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
+    "$OUT/libpthread.a" "$OUT/removefile_sched_yield_trap.o" "$OUT/removefile_sched_yield.o" \
     "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
+    -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
+    -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
     -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
     -Wl,-alias,___kill,'_kill$UNIX2003' \
     -Wl,-alias,___kill,_kill \

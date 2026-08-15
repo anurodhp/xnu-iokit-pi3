@@ -136,35 +136,21 @@ void abort_report_np(const char *fmt __unused, ...)
  * stdio/FreeBSD/xprintf_private.h: xprintf_domain_init() used in xprintf.c
  * is actually a MACRO, "pthread_once(&__xprintf_domain_once,
  * __xprintf_domain_init)", not a function of that name - real pthread_once
- * itself already exists, real Apple, in pthread_tsd_shim.c) +
- * pthread_rwlock_rdlock/unlock satisfy xprintf.c's __v2printf() - real,
- * load-bearing code (unlike __v3printf, __v2printf is genuinely on this
- * tier's call path: __xvprintf() calls it whenever the target FILE isn't
- * unbuffered/raw). BUT real control flow (confirmed by reading
- * __v2printf's own source, not guessed) short-circuits before ever
- * touching these for this project's only real call pattern: every call
- * this tier ever makes goes through __xvprintf(XPRINTF_PLAIN, NULL, ...)
- * (see vfprintf.c), and __v2printf's
- * `if (pc == XPRINTF_PLAIN) { ...; return __vfprintf(...); }` returns
- * immediately in that case (the surrounding #ifdef XPRINTF_DEBUG block
- * containing the only other XPRINTF_PLAIN-reachable domain_init() call is
- * compiled out - XPRINTF_DEBUG is never defined here) - so these symbols
- * are only ever needed to satisfy the static linker for __v2printf's
- * non-XPRINTF_PLAIN branches (the runtime-extensible "%{domain}"
- * registration API), which this project's real call graph never reaches.
- * Real semantics preserved as a fail-safe: if something ever DID reach
- * them, the rwlock stubs are correct single-threaded no-ops (same pattern
- * as compat_stubs.c's os_unfair_lock), not silently-wrong behavior. Real
- * pthread_rwlock_t (not void*) used for the parameter type since a real
- * prototype for these is already visible via <pthread.h> - a mismatched
- * signature would be a real conflicting-types error, not just style. */
+ * itself already exists, real Apple, in pthread_tsd_shim.c).
+ *
+ * pthread_rwlock_rdlock/unlock USED to be stood in here as no-ops (same
+ * reasoning as the __v2printf dead-code analysis still documented at
+ * length in this project's git history/docs/roadmap.md's printf-tier
+ * entry) - retired as of build_libunwind.sh (real libunwind's RWMutex is
+ * this project's first genuine caller of real pthread_rwlock_wrlock's
+ * contended path), same pattern as this file's own retired
+ * _Block_copy/_Block_release stand-ins below: real libc_build/libpthread.a
+ * now provides real pthread_rwlock_rdlock/wrlock/unlock, and duplicate-
+ * symbol at link time is exactly how that was confirmed (not guessed). */
 #include <pthread.h>
 
 pthread_once_t __xprintf_domain_once = PTHREAD_ONCE_INIT;
 void __xprintf_domain_init(void) {}
-
-int pthread_rwlock_rdlock(pthread_rwlock_t *lock __unused) { return 0; }
-int pthread_rwlock_unlock(pthread_rwlock_t *lock __unused) { return 0; }
 
 /* _Block_copy()/_Block_release() used to be stood in here (identity-
  * passthrough placeholders) for the same reason as the domain/rwlock
