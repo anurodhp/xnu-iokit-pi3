@@ -2135,6 +2135,114 @@ bash boots to a prompt, real readline/regex/networking are all
 legitimate, separately-scoped next real gaps, not required for a first
 working interactive session.
 
+**Eighteenth pass, 2026-08-15: root-caused (1) and FIXED the real
+stack-size bug for real, real-QEMU-verified; found and precisely
+localized a SECOND, separate real bug that's the actual cause of real
+bash's SIGSEGV -- not fixed this pass, but pinned down to an exact
+function/call/register, not vague.**
+
+- **Root cause of the Seventeenth pass's stack-size hypothesis, CONFIRMED
+  real via kernel source, not guessed**: `bsd/arm/vmparam.h`'s
+  `DFLSSIZ`/`MAXSSIZ` macros are guarded by a real, intentional
+  `#if (TARGET_OS_OSX) || (KERNEL && !CONFIG_EMBEDDED)` split -- real
+  macOS desktop values (8MB soft / 64MB hard) on one side, real iOS-app
+  values (1MB / 1MB) on the other. This board's kernel build sets
+  `CONFIG_EMBEDDED` (a real, correct, unavoidable constraint -- BCM2837
+  is embedded-only upstream, see CLAUDE.md), so this port has silently
+  been running with a **1MB process stack limit** the whole time, a real
+  mismatch between what `CONFIG_EMBEDDED` assumes about its userland (a
+  small single-purpose iOS app) and what this port's userland actually
+  runs (a desktop-shaped interactive shell/parser). Traced via
+  `bsd/kern/kern_exec.c`'s real stack-allocation math
+  (`mach_vm_protect()`'s guard-region sizing from
+  `proc_limitgetcur(RLIMIT_STACK)`, which is seeded from `DFLSSIZ` at
+  proc0 bring-up) -- not inferred from the crash alone.
+- **Fixed** in `third_party/xnu-7195/bsd/arm/vmparam.h`: a real,
+  minimal, `#ifndef`-gated override (the header's own designed escape
+  hatch, not a source hack) sets `DFLSSIZ`/`MAXSSIZ` to the real macOS
+  desktop values specifically `#if defined(BCM2837)`, leaving every
+  other real Apple platform's values in this shared header untouched.
+- **Empirically verified with a new, purpose-built diagnostic tool**,
+  `tools/userland_staging/stack_probe.c`/`build_stack_probe.sh` (real
+  stack-resident recursion, reports real depth via real `write(2)`, not
+  a smoketest with a pass/fail): before the fix, crashed with **zero**
+  depth output at all (well under 500 real 4KB-buffer stack frames,
+  consistent with a ~1MB real limit); after, reaches **~2000 frames
+  (~8MB)** before the natural, expected recursion-exhaustion SIGSEGV --
+  matching the new 8MB `DFLSSIZ` almost exactly. Real, reproduced QEMU
+  transcript, not simulated.
+- **Real bash still crashes after this fix** -- proving the Seventeenth
+  pass's crash was NOT (solely) the stack-size bug, a real, separate
+  cause. Root-caused via a **real fault-PC capture**, closing exactly the
+  "next step" this pass's own prior entry called out as unfinished: a
+  temporary `panic()` (not `kprintf()`, which was confirmed -- via a
+  known-real stack-overflow control case that ALSO produced zero
+  `kprintf()` output from `osfmk/arm64/sleh.c`'s `handle_user_abort()`
+  and `osfmk/kern/exception.c`'s `exception_triage()`, both real, normal
+  EL0-fault-delivery choke points -- to be silently unreachable from that
+  exact call context, not a logic error) placed at
+  `handle_user_abort()`'s real fault-classification point, gated on a
+  genuine unresolved VM fault, captured the real user-mode state:
+  **`PC=0x1000be1ec` (`_strcasecmp+0x44`), `LR=0x100010d84`
+  (`_compat_mode+0x68`), `FAR=0xfffffffffffffff8` (i.e. address `-8`,
+  ESR decodes to a real translation fault, not a permission fault)**.
+  Cross-referenced against `bash.macho`'s own disassembly
+  (`otool -tV`), confirmed exactly: real `third_party/Libc/gen/
+  get_compat.c`'s `compat_mode(const char *function, const char *mode)`
+  -- reached via bash's real `shell.c` `main()`,
+  `if (!COMPAT_MODE("bin/sh", "Unix2003"))`, right after
+  `code = setjmp(top_level)` -- calls
+  `strcasecmp("unix2003", mode)`, and `mode` is NULL/near-NULL at the
+  point of that call.
+  - **The call site itself is correct**: disassembly of `bash.macho`'s
+    real `_main` at `0x1000636fc`-`0x100063704` shows `x1` correctly
+    loaded as the real address of the `"Unix2003"` string literal
+    (`0x1000f9be0`) immediately before `bl _compat_mode` -- confirmed by
+    cross-checking that exact value against the panic's own captured
+    `x1=0x1000f9be0` register dump, a real, precise match.
+  - **`compat_mode()`'s own prologue is also correct**: it immediately
+    saves that same `x1` (the `mode` argument) to its own stack frame
+    (`stur x1, [x29, #-0x18]`) before doing anything else.
+  - **The ONLY thing that runs between that save and the later reload**
+    (`ldur x1, [x29, #-0x18]`, immediately before the crashing
+    `strcasecmp` call) **is a single real call**:
+    `pthread_once(&threadsafe, check_env_var)` -- real
+    `third_party/libpthread` source, linked via `libc_build/
+    libpthread.a` (see the earlier libpthread pass). This strongly and
+    specifically implicates real `pthread_once()`'s stack-frame handling
+    as corrupting `compat_mode()`'s caller-frame local (a real, though
+    not yet 100%-isolated-to-a-single-instruction, stack-corruption bug)
+    -- not guessed, but not yet proven down to the exact clobbering
+    instruction inside `pthread_once()` either. This is genuinely the
+    first time in this project's history that real `pthread_once()` (not
+    the narrower `_os_once()` path the libplatform/libpthread smoketests
+    exercised) has been called from a stack frame this deep/this shaped,
+    so it's plausible this is a real, previously-unexercised bug in
+    either `pthread_once()`'s own real Apple source as ported here, or
+    (less likely, given the call-site/prologue evidence above) in how
+    this project's specific compile flags lay out `compat_mode()`'s
+    stack frame around that call.
+  - **Diagnostic instrumentation was fully reverted before committing**
+    (`osfmk/arm64/sleh.c`/`osfmk/kern/exception.c` are back to real,
+    unmodified upstream) -- the temporary `panic()`-on-every-user-
+    `EXC_BAD_ACCESS` used to capture this evidence would be a severe
+    regression if left in (it would panic the whole kernel on any future
+    ordinary user-mode segfault, not just this one); only the real,
+    permanent `vmparam.h` fix ships.
+- **Not fixed this pass** (real, precisely-scoped next step for whoever
+  continues this): find the exact instruction inside real `pthread_once`
+  (or its real `check_env_var`/`getenv`/`sigprocmask`-adjacent callees)
+  that corrupts `compat_mode()`'s saved stack slot, most likely via a
+  focused disassembly of `pthread_once.o`'s real compiled output (not a
+  fresh multi-hour bisection from scratch -- the exact call site, saved
+  register, and stack offset are already known and documented above)
+  or a hardware watchpoint on that exact stack address (`x29-0x18`
+  inside `compat_mode()`'s frame) via QEMU's gdbstub.
+- **Commit**: `vmparam.h` fix committed separately in
+  `third_party/xnu-7195` (its own repo, own history, per this project's
+  standing convention); `stack_probe.c`/`build_stack_probe.sh` and this
+  writeup committed here.
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions
