@@ -236,13 +236,30 @@ if [ ! -f "$OUT/libplatform.a" ]; then
     echo "error: $OUT/libplatform.a not found -- run build_libplatform.sh first" >&2
     exit 1
 fi
+# New real dependency as of build_libmalloc.sh: real malloc/free instead
+# of compat_stubs.c's now-retired placeholder bump allocator (real
+# xprintf/vfprintf code genuinely calls them). Also required
+# libc_printf_mach_stub.c to retire its own mach_task_self_/abort()/
+# __assert_rtn() stand-ins, which real duplicate-symbol errors surfaced
+# once now-real equivalents from libmalloc.a were in the same link (see
+# that file's own updated comments).
+if [ ! -f "$OUT/libmalloc.a" ]; then
+    echo "error: $OUT/libmalloc.a not found -- run build_libmalloc.sh first" >&2
+    exit 1
+fi
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o libc_printf_smoketest.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/libc_printf_smoketest.o" \
     "$OUT/libc_printf.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_gen.a" "$OUT/libc_printf.a" "$OUT/libc_stdio.a" \
-    "$OUT/pthread_tsd_shim.o" "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
-    "$OUT/compat_stubs.o" "$OUT/cerror_stub.o" "$OUT/libplatform.a"
+    "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
+    "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
+    -Wl,-alias,___kill,'_kill$UNIX2003' \
+    -Wl,-alias,___kill,_kill \
+    -Wl,-alias,_write,'_write$UNIX2003' \
+    -Wl,-alias,__mal_semwait_sleep,'_sleep$UNIX2003' \
+    -Wl,-alias,___kdebug_trace,_kdebug_trace
 echo "wrote libc_printf_smoketest.macho"
 
 otool -l libc_printf_smoketest.macho | grep -q LC_LOAD_DYLIB && \

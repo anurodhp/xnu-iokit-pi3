@@ -57,6 +57,13 @@ if [ ! -f "$OUT/libplatform.a" ]; then
     echo "error: $OUT/libplatform.a not found -- run build_libplatform.sh first" >&2
     exit 1
 fi
+# New real dependency as of build_libmalloc.sh: this smoketest links real
+# malloc/free (real fopen()/FILE* allocation genuinely calls them)
+# instead of compat_stubs.c's now-retired placeholder bump allocator.
+if [ ! -f "$OUT/libmalloc.a" ]; then
+    echo "error: $OUT/libmalloc.a not found -- run build_libmalloc.sh first" >&2
+    exit 1
+fi
 
 cat > "$OUT/compat_include/spinlock.h" <<'EOF'
 /* Apple-internal header, not part of the public iPhoneOS SDK. Confirmed
@@ -219,8 +226,14 @@ echo "wrote $OUT/libc_locale_for_stdio.a (libc_locale.a minus its now-redundant 
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/libc_stdio_smoketest.o" \
     "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_stdio.a" \
-    "$OUT/pthread_tsd_shim.o" "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
-    "$OUT/compat_stubs.o" "$OUT/cerror_stub.o" "$OUT/libplatform.a"
+    "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
+    "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
+    -Wl,-alias,___kill,'_kill$UNIX2003' \
+    -Wl,-alias,___kill,_kill \
+    -Wl,-alias,_write,'_write$UNIX2003' \
+    -Wl,-alias,__mal_semwait_sleep,'_sleep$UNIX2003' \
+    -Wl,-alias,___kdebug_trace,_kdebug_trace
 # libc_stdio.a is listed twice deliberately: real ld64, unlike a symbol-
 # table-indexed linker, only pulls archive members in a single left-to-
 # right pass, so libc_locale_for_stdio.a's collate.o/setrunelocale.o

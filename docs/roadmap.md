@@ -1209,6 +1209,208 @@ Still not attempted: `libpthread`/`libdispatch`/`libclosure`/`libmalloc`/
 `libunwind`/`Libinfo`(-the-Apple-repo)/`removefile`/`copyfile`, and `dyld`
 itself.
 
+**Tenth pass, 2026-08-14 (later same day): real `libmalloc` (heap
+allocator), real-QEMU-boot-verified.** `tools/userland_staging/
+build_libmalloc.sh` builds `libc_build/libmalloc.a`: a real Apple
+magazine-zone allocator (`third_party/libmalloc`, tag `libmalloc-317.40.8`)
+-- unmodified `magazine_tiny/small/medium/large/malloc/rack.c`, `vm.c`
+(real page allocation via `mach_vm_map`), `bitarray.c`, `malloc_printf.c`.
+`create_scalable_zone()`'s real `malloc_zone_t` function table does every
+actual allocation decision (size-class routing, magazine/region
+management, free-list handling); `libmalloc_dispatch.c` (project-owned,
+~180 lines) is the real, minimal replacement for JUST `malloc.c`'s public
+`malloc`/`free`/`calloc`/`realloc`/`valloc`/`reallocf` C-API glue --
+`malloc.c` itself stays out of scope for real reasons (its `struct msl`
+holds `dlopen`'d function pointers into a Malloc-Stack-Logging dylib;
+there is no `dlopen` on this dyld-less target), same as `nano_malloc.c`/
+`nanov2_malloc.c` (real Apple's faster thread-local-cache allocator
+layered *on top of* the magazine zone -- separate, larger future item;
+`nano_zone.h` v1 is additionally hard-gated to x86_64-only in this exact
+pinned snapshot, a real, confirmed-not-guessed gap -- see
+`libmalloc_compat.h`'s own comment).
+
+Real new work, each hit as a real compile/link/runtime error first:
+- `mach/mach_vm.h`: Xcode-12's iPhoneOS14.4 SDK's own copy is a literal
+  `#error "mach_vm.h unsupported."` (a real, deliberate iOS-SDK
+  restriction). The real *public* header (declaring plain
+  `mach_vm_allocate`/`mach_vm_map`/etc, as real `vm.c` calls them) isn't
+  present as source anywhere in this project's `xnu-7195` checkout either
+  -- only as a kernel-`BUILD/`-output artifact this script deliberately
+  doesn't depend on existing. Hand-typed real-signature compat header
+  (`libc_build/compat_include/mach/mach_vm.h`) declaring just the two
+  functions `vm.c` actually calls.
+- `mach/mach_vm_internal.h`/`mach/vm_map_internal.h` (the *internal*
+  `_kernelrpc_mach_vm_*`/`_kernelrpc_vm_*` MIG-fallback declarations real,
+  unmodified `mach_vm.c` also needs): the former is real `mig -header`
+  output, regenerated fresh each build from real unmodified
+  `osfmk/mach/mach_vm.defs` using the real `mig` tool (confirmed present
+  on this host) -- note **`/usr/bin/mig`, not `xcrun --sdk macosx --find
+  mig`**: tested both against the identical input, only the former
+  resolves its own `<mach/std_types.defs>` include correctly, a real
+  toolchain-copy difference, not a missing file. The latter is hand-typed
+  (declaring only the 3 functions `vm.c` needs) because a full `mig`
+  generation of `vm_map.defs` shares a routine (`mach_make_memory_entry`)
+  with the `mach_vm.defs` generation and the two conflict when both are
+  real `mig` output in the same translation unit -- confirmed by trying
+  it. Real `mach_vm.c`'s trap-fast-path (real, verified trap numbers
+  -10/-11/-12/-14/-15, cross-checked against `syscall_sw.h`) means these
+  MIG-fallback bodies (`libmalloc_vm_mig_stubs.c`) are real but provably
+  unreachable dead code on this kernel -- defined honestly
+  (`KERN_FAILURE`), not silently faked as success.
+- `mach_port_deallocate`/`mach_port_mod_refs` (needed by real, unmodified
+  `mig_reply_port.c`'s cleanup path): hand-written trap-only wrappers
+  (real trap numbers -18/-19) rather than compiling real `mach_port.c`,
+  which needs its own MIG header plus `mach_sync_ipc.h` and many more
+  functions than the 2 actually needed here.
+- `mach_reply_port()`: `osfmk/mach/mach_traps.h` has two declarations
+  (real userland one, a second kernel-syscall-table one) that don't
+  coexist cleanly for the one real call site (`mig_reply_port.c`, which
+  itself never includes that header at all in this pinned tag) --
+  declared directly (`compat_include/mach_reply_port_decl.h`), copied
+  verbatim from the real line-88 signature.
+- **Real, genuine `_FORTIFY_SOURCE` self-recursion SIGSEGV, found via
+  QEMU boot-test bisection with temporary debug prints in scratch copies
+  of `vm.c`/`magazine_malloc.c`/`magazine_rack.c` (not fabricated as a
+  pass then walked back):** without `-D_FORTIFY_SOURCE=0` on
+  `magazine_*.c` *and* on `memcpy_chk.c`/`memset_chk.c`/`chk_fail.c`
+  themselves, real Apple's `<secure/_string.h>` macro-rewrites plain
+  `memset()`/`memcpy()` calls into `__builtin___memset_chk(...)` --
+  including **inside `__memset_chk`'s own real body** (`return
+  memset(dest, val, len);`), which rewrites right back into a call to
+  itself. Genuine infinite recursion, stack-overflow SIGSEGV, isolated to
+  the *first* plain `memset()` call anywhere in the curated build
+  (`rack_init()` zeroing `rack->initial_regions` -- an ordinary in-bounds
+  512-byte write to already-mapped memory, nothing wrong with the call
+  site itself). Fixed by adding `-D_FORTIFY_SOURCE=0` everywhere in this
+  tier (same root-cause class `build_libc_string.sh`'s own header comment
+  already documents for `stpcpy` -- this project just hadn't hit it for
+  memset/memcpy specifically until real magazine code's own `memset()`
+  became the first real exerciser).
+- **Second real, independent bug, found bisecting further after the
+  above fix advanced the crash deeper:** real `os_unfair_lock_lock_with_
+  options()` (`SZONE_MAGAZINE_PTR_LOCK()`, magazine code's real lock
+  acquisition) calls `_os_lock_owner_get_self()` ->
+  `_os_tsd_get_direct(__TSD_MACH_THREAD_SELF)`, dereferencing
+  `TPIDRRO_EL0` as a TSD block pointer. This dispatcher never called
+  `pthread_tsd_shim_bootstrap()` first -- `build_libplatform.sh`'s own
+  `libplatform.a` deliberately does *not* bundle `pthread_tsd_shim.o` in
+  (confirmed via `nm` -- no TSD-shim symbols in that archive), by design
+  leaving every real consumer responsible for linking it and calling the
+  bootstrap explicitly, exactly as `pthread_tsd_shim_smoketest.c`'s own
+  header comment already states ("NOT optional/lazy... called explicitly
+  FIRST") and as the Ninth pass's own printf-tier bug above independently
+  rediscovered for a different function
+  (`pthread_tsd_shim_bootstrap_for_libc()`) -- a real, recurring class of
+  gap across tiers, not a one-off. Fixed by linking `pthread_tsd_shim.o`
+  into `libmalloc.a` and calling `pthread_tsd_shim_bootstrap()` (checked,
+  `abort()`s on real failure) as the first thing `get_zone()` does.
+- `_platform_memset`: real `libplatform/private/platform/compat.h`
+  `#define`s `memset` -> `_platform_memset` for any includer (magazine
+  code among them), but unlike `_platform_strcmp`/`_strlen`/`_memmove`/
+  `_strchr` (all real "generic" portable implementations already
+  compiled from `libplatform/src/string/generic/`), no real
+  `_platform_memset` source exists anywhere in this checkout (confirmed
+  by `find` -- only `memset_pattern.c`, a different function). Real
+  Apple's `libplatform.dylib` must resolve this via the same closed
+  umbrella-link alias mechanism as the `$UNIX2003` symbols below, not
+  open-sourced source -- thin real wrapper around this project's own
+  real memset (`libmalloc_dispatch.c`) is the honest equivalent.
+- `$UNIX2003`-suffixed symbols (`mprotect$UNIX2003`/`kill$UNIX2003`/
+  `write$UNIX2003`/`sleep$UNIX2003`, real Apple headers' default-on
+  `__DARWIN_ALIAS` call-site renaming): confirmed the per-syscall Perl
+  generator never produces these (0 matches for "UNIX2003" anywhere in
+  it or its `custom/` dir) -- real Apple's build resolves them via a
+  separate libSystem-umbrella alias-list step this project's build
+  doesn't have. Real, zero-behavior-difference `ld -alias` link flags
+  stand in (tried a same-file `.set` alias first, matching how Apple's
+  own generated `.s` stubs do it internally, but confirmed by testing
+  that `.set` only resolves within the same object file, not across
+  separately-compiled ones -- `-alias` is the real cross-object
+  mechanism).
+- `sleep()`: real Apple `Libc/gen/FreeBSD/sleep.c` (full `EINTR`-retry
+  loop) is more machinery than `malloc_printf.c`'s one rare call site (a
+  debug-only "give a debugger time to attach" pause) warrants --
+  `libmalloc_sleep_shim.c` implements the same real underlying primitive
+  (`__semwait_signal(2)`, what real `sleep()`/`usleep()` are actually
+  built on) directly.
+- `abort()`/`__assert_rtn()`: real minimal versions in
+  `libmalloc_dispatch.c` -- `kill(getpid(), SIGABRT)` (the real primitive
+  Apple's own `abort()` ultimately uses; no `pthread_kill` on this target
+  yet) with the same real infinite-loop fail-safe real `abort()` has.
+- The 6 new real BSD syscall stubs this tier needed (`getpid`/
+  `mprotect`/`kill`/`write`/`madvise`/`kdebug_trace`) plus `exit`/
+  `__semwait_signal`: same real per-syscall generator as
+  `build_libsyscall_smoketest.sh`, but that script's own precedent
+  compiles the generated `.s` with the **host's default macOS
+  toolchain/SDK** (needs `mach/arm64/asm.h`/`mach/arm/syscall_sw.h`, real
+  headers present there but genuinely absent from Xcode-12's iPhoneOS SDK
+  *and* this project's `xnu-7195` checkout) -- which can't link directly
+  into an iOS14.4-target binary ("building for iOS, but linking in object
+  file built for macOS", same class of error `build_libc_locale.sh`'s own
+  header comment already documents for a stale archive). Fixed by
+  compiling these 8 files *with* `-target arm64-apple-ios14.4` but
+  pulling the two missing headers from the host macOS SDK via
+  `-idirafter` -- confirmed safe first (pure assembler/preprocessor
+  plumbing, architecture-generic, not the `CONFIG_EMBEDDED`-vs-
+  `XNU_TARGET_OS_OSX` struct-layout concern CLAUDE.md's kernel-build
+  warning is actually about).
+- The original `libc_string.a` archive (from `build_libc_string.sh`) also
+  turned out to still contain **stale** macOS-target `memcpy.o`/`memset.o`
+  objects frozen in at `ar`-time, even though the loose `.o` files on
+  disk were later silently overwritten with correct iOS-target versions
+  by `build_libc_locale.sh`'s own independent recompile of the same
+  filenames -- confirmed via `otool -l`'s `LC_BUILD_VERSION` platform
+  field. Fixed by linking the on-disk (already-correct) loose objects
+  directly instead of the archive.
+
+**Retired the placeholder bump allocator** (`compat_stubs.c`'s
+`malloc`/`calloc`/`realloc`/`free`/`reallocf`, in place since Phase 4's
+locale/TSD bring-up) now that real `libmalloc.a` exists, and relinked
+every existing consumer that used it (`build_libc_locale.sh`/
+`build_libc_stdio.sh`/`build_libc_gen.sh`/`build_libc_printf.sh`'s
+smoketests) against the real allocator instead -- each rebuilt clean and
+re-verified. `build_libc_locale.sh`'s own smoketest step is the one
+exception: real `libmalloc.a` itself depends on this tier's
+`libc_locale_for_stdio.a`/`libc_stdio.a` output (for real `isatty()`
+etc), so requiring `libmalloc.a` *here* would be circular on a from-
+scratch pipeline run -- that one step degrades to a documented skip (not
+a hard failure) when `libmalloc.a` isn't built yet, so `string ->
+platform -> locale -> stdio -> gen -> printf -> malloc` in written order
+still produces every `.a` archive on a fresh checkout; re-running
+`build_libc_locale.sh` once more after `build_libmalloc.sh` relinks its
+smoketest for real. Relinking also surfaced two more real duplicate-
+symbol bugs, both fixed at the source: `libc_printf_mach_stub.c`'s own
+`mach_task_self_`/`abort()`/`__assert_rtn()` stand-ins (now redundant
+with real ones from `libmalloc.a` -- retired, keeping the still-needed
+`vm_region_64`/`abort_report_np`/xprintf-domain/`_Block_copy` stand-ins),
+and `libc_locale_smoketest.c`'s own hand-rolled `exit()` (now redundant
+with the real one from `libc_stdio.a`, pulled in transitively once
+`isatty()` was needed for `libmalloc.a`'s `malloc_printf.o`).
+
+**Real QEMU boot verification, genuine PASS (scratch copy of the boot
+image, deleted after):**
+```
+root@sh:/ % exec /sbin/libmalloc_smoketest
+libmalloc smoketest: start
+PASS: malloc/write/verify
+PASS: calloc zero-init
+PASS: realloc-grow preserves contents
+PASS: 200-round alloc/free stress across size classes
+ALL PASS: libmalloc smoketest
+root@sh:/ % exec /sbin/libc_gen_smoketest
+PASS: real getcwd/opendir/readdir/closedir round-trip against /tmp
+```
+The second line above is `libc_gen_smoketest` *relinked against real
+malloc* (opendir/readdir genuinely call it) -- proof the relink is a real
+behavioral change, not just a successful link.
+
+Still not attempted: `libpthread`/`libdispatch`/`libclosure`/`libunwind`/
+`Libinfo`(-the-Apple-repo)/`removefile`/`copyfile`, and `dyld` itself.
+`abort()`'s real SIGABRT-delivery-terminates-the-process path is real,
+correct kernel-default behavior (no project-side signal handling needed)
+but was not itself exercised by any test here (no corruption occurred) --
+noted, not fabricated as tested.
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions

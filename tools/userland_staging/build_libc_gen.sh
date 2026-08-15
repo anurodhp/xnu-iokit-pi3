@@ -65,6 +65,14 @@ if [ ! -f "$OUT/libplatform.a" ]; then
     echo "error: $OUT/libplatform.a not found -- run build_libplatform.sh first" >&2
     exit 1
 fi
+# New real dependency as of build_libmalloc.sh (see its header comment):
+# this smoketest links real malloc/free (opendir/readdir etc genuinely
+# call them) instead of compat_stubs.c's now-retired placeholder bump
+# allocator.
+if [ ! -f "$OUT/libmalloc.a" ]; then
+    echo "error: $OUT/libmalloc.a not found -- run build_libmalloc.sh first" >&2
+    exit 1
+fi
 
 # Same real flags as build_libc_stdio.sh (see that script's own CFLAGS
 # comment for why VARIANT_DARWINEXTSN is deliberately NOT set) plus
@@ -146,8 +154,14 @@ echo "wrote $OUT/libc_gen.a"
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/libc_gen_smoketest.o" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
-    "$OUT/pthread_tsd_shim.o" "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
-    "$OUT/compat_stubs.o" "$OUT/cerror_stub.o" "$OUT/libplatform.a"
+    "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
+    "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
+    -Wl,-alias,___kill,'_kill$UNIX2003' \
+    -Wl,-alias,___kill,_kill \
+    -Wl,-alias,_write,'_write$UNIX2003' \
+    -Wl,-alias,__mal_semwait_sleep,'_sleep$UNIX2003' \
+    -Wl,-alias,___kdebug_trace,_kdebug_trace
 echo "wrote libc_gen_smoketest.macho"
 
 otool -l libc_gen_smoketest.macho | grep -q LC_LOAD_DYLIB && \

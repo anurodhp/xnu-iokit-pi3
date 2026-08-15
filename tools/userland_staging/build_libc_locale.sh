@@ -196,20 +196,43 @@ echo "wrote $OUT/libc_locale.a"
 # this script linked apple_locale/*.o as a raw glob instead of an
 # archive, which forces every undefined symbol in every file to resolve
 # unconditionally - a real bug, fixed here).
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    -Wno-nullability-completeness -include libc_build_prototypes.h \
-    libc_locale_smoketest.c -o "$OUT/libc_locale_smoketest.o"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
-    -o libc_locale_smoketest.macho \
-    ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
-    "$OUT/libc_locale_smoketest.o" "$OUT/libc_locale.a" "$OUT/libplatform.a"
-echo "wrote libc_locale_smoketest.macho"
+#
+# Real malloc/calloc/free dependency as of build_libmalloc.sh (real
+# xlocale.c genuinely calls them): compat_stubs.c's placeholder bump
+# allocator that used to satisfy this is retired (see that file's own
+# header comment). build_libmalloc.sh itself depends on THIS script's
+# libc_locale_for_stdio.a/libc_stdio.a output (for real getenv/isatty/
+# __error-adjacent glue), so requiring libmalloc.a here in turn would be
+# circular on a from-scratch pipeline run -- this step degrades to a
+# skip (not a hard failure) if libmalloc.a isn't built yet, so a fresh
+# checkout can still run string -> platform -> locale -> stdio -> gen ->
+# printf -> malloc in written order and get every .a archive; re-running
+# this script (or just this smoketest step) after build_libmalloc.sh
+# relinks it against the real allocator.
+if [ -f "$OUT/libmalloc.a" ]; then
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+        -Wno-nullability-completeness -include libc_build_prototypes.h \
+        libc_locale_smoketest.c -o "$OUT/libc_locale_smoketest.o"
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
+        -o libc_locale_smoketest.macho \
+        ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
+        "$OUT/libc_locale_smoketest.o" "$OUT/libc_locale.a" "$OUT/libmalloc.a" "$OUT/libc_stdio.a" "$OUT/libplatform.a" \
+        -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
+        -Wl,-alias,___kill,'_kill$UNIX2003' \
+        -Wl,-alias,___kill,_kill \
+        -Wl,-alias,_write,'_write$UNIX2003' \
+        -Wl,-alias,__mal_semwait_sleep,'_sleep$UNIX2003' \
+        -Wl,-alias,___kdebug_trace,_kdebug_trace
+    echo "wrote libc_locale_smoketest.macho"
 
-otool -l libc_locale_smoketest.macho | grep -q LC_LOAD_DYLIB && \
-    echo "WARNING: LC_LOAD_DYLIB present -- no longer dyld-free" >&2
-otool -l libc_locale_smoketest.macho | grep -q LC_UNIXTHREAD || \
-    echo "WARNING: no LC_UNIXTHREAD -- kernel exec won't know where to start" >&2
-if nm -u libc_locale_smoketest.macho | grep -q .; then
-    echo "WARNING: undefined symbols present:" >&2
-    nm -u libc_locale_smoketest.macho >&2
+    otool -l libc_locale_smoketest.macho | grep -q LC_LOAD_DYLIB && \
+        echo "WARNING: LC_LOAD_DYLIB present -- no longer dyld-free" >&2
+    otool -l libc_locale_smoketest.macho | grep -q LC_UNIXTHREAD || \
+        echo "WARNING: no LC_UNIXTHREAD -- kernel exec won't know where to start" >&2
+    if nm -u libc_locale_smoketest.macho | grep -q .; then
+        echo "WARNING: undefined symbols present:" >&2
+        nm -u libc_locale_smoketest.macho >&2
+    fi
+else
+    echo "skip: libc_locale_smoketest.macho (needs libc_build/libmalloc.a -- run build_libmalloc.sh, then re-run this script, to relink it)"
 fi

@@ -30,15 +30,23 @@
  * verify (which would be a real, silent security regression: it would
  * make the CVE-class %n-on-writable-format-string mitigation a no-op).
  * mach_task_self_ itself is never actually consulted given the above (kr
- * is always failure regardless of the target argument), so it's a plain
- * MACH_PORT_NULL, not a real task port.
+ * is always failure regardless of the target argument).
+ *
+ * mach_task_self_ RETIRED FROM THIS FILE 2026-08-14: build_libmalloc.sh
+ * now links real third_party/xnu-7195/libsyscall/mach/mach_init.c
+ * (unmodified), which defines the real mach_task_self_ populated via a
+ * real task_self_trap() Mach trap - a strictly better real answer than
+ * this file's old permanent MACH_PORT_NULL placeholder, and a duplicate-
+ * symbol link error once both were linked together (real bug, found by
+ * actually relinking this smoketest against libmalloc.a). vm_region_64()
+ * below still never actually dereferences it as a real port (see this
+ * comment's own reasoning above), so this is a pure improvement, not a
+ * behavior change.
  */
 #include <mach/kern_return.h>
 #include <mach/mach_types.h>
 #include <mach/vm_region.h>
 #include <mach/vm_types.h>
-
-mach_port_t mach_task_self_ = 0 /* MACH_PORT_NULL */;
 
 kern_return_t vm_region_64(
     vm_map_t target_task __unused,
@@ -106,57 +114,21 @@ void _libc_printf_os_crash(const char *diagnostic)
     __builtin_unreachable();
 }
 
-/* abort()/__assert_rtn()/abort_report_np() - real Apple source
- * (stdlib/FreeBSD/abort.c, gen/FreeBSD/assert.c) needs real signal
- * delivery (sigaction/pthread_kill/pthread_sigmask), pthread_workqueue,
- * and the _simple ASL string builder - none ported on this target (same
- * "no real libpthread port" gap build_libc_stdio.sh's own header comment
- * already documents for FLOCKFILE/mutexes). Real, load-bearing behavior
- * these three functions must have (print a diagnostic, then really,
- * unconditionally terminate the process) doesn't depend on any of that -
- * same project-owned-shim pattern as _libc_printf_os_crash immediately
- * above, reusing its exact syscalls. abort()/abort_report_np() drop the
- * caller's format string/varargs for the same reason os_crash does (no
- * real vsnprintf available to a function THIS tier itself is bootstrapping
- * printf on top of); __assert_rtn keeps its real file/line/expr text
- * since those are plain strings, not a format string to interpret. */
+/* abort()/__assert_rtn() RETIRED FROM THIS FILE 2026-08-14:
+ * build_libmalloc.sh's libmalloc_dispatch.c now provides real
+ * equivalents (real kill(getpid(), SIGABRT) for abort(), matching
+ * abort()'s real underlying primitive on a target with no libpthread's
+ * pthread_kill yet) - found as a real duplicate-symbol link error once
+ * this smoketest was relinked against libmalloc.a, same class of fix as
+ * mach_task_self_ above. abort_report_np() stays here (libmalloc.a
+ * doesn't provide it) using the same real _libc_printf_os_crash syscall
+ * path documented above. */
 #include <stdarg.h>
-
-void abort(void) __attribute__((noreturn));
-void abort(void)
-{
-    _libc_printf_os_crash("abort() called");
-}
 
 void abort_report_np(const char *fmt, ...) __attribute__((noreturn));
 void abort_report_np(const char *fmt __unused, ...)
 {
     _libc_printf_os_crash("abort_report_np() called");
-}
-
-void __assert_rtn(const char *func, const char *file, int line, const char *failedexpr) __attribute__((noreturn));
-void __assert_rtn(const char *func, const char *file, int line, const char *failedexpr)
-{
-    static char msgbuf[256];
-    int p = 0;
-    const char *parts[8];
-    int nparts = 0;
-    parts[nparts++] = "Assertion failed: (";
-    parts[nparts++] = failedexpr ? failedexpr : "?";
-    parts[nparts++] = "), function ";
-    parts[nparts++] = func ? func : "?";
-    parts[nparts++] = ", file ";
-    parts[nparts++] = file ? file : "?";
-    parts[nparts++] = ", line ???";
-    (void)line; /* real line number omitted: no snprintf/itoa available yet at this bootstrap point */
-    for (int i = 0; i < nparts && p < (int)sizeof(msgbuf) - 1; i++) {
-        const char *s = parts[i];
-        while (*s && p < (int)sizeof(msgbuf) - 1) {
-            msgbuf[p++] = *s++;
-        }
-    }
-    msgbuf[p] = '\0';
-    _libc_printf_os_crash(msgbuf);
 }
 
 /* __xprintf_domain_init()/__xprintf_domain_once (real names - double

@@ -68,7 +68,10 @@ int main(int argc, char **argv) {
     return 0;
 }
 
-void exit(int code) {
-    syscall3(1 /* SYS_exit */, code, 0, 0);
-    for (;;) { }
-}
+/* exit() no longer hand-rolled here: once linked against real
+ * libc_build/libmalloc.a's malloc_printf.o (which needs real isatty()
+ * from libc_stdio.a), libc_stdio_process_shims.o's own real exit() is
+ * already in the link and collides with a duplicate definition here -
+ * removed in favor of the real one (same real syscall underneath,
+ * just also handles atexit()/stdio-flush semantics this hand-rolled
+ * version never did). */
