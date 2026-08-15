@@ -1551,6 +1551,68 @@ is real, valuable follow-up work, not completed here given this pass's
 own scope. Still not attempted: `libdispatch`/`libclosure`/`libunwind`/
 `Libinfo`(-the-Apple-repo)/`removefile`/`copyfile`, and `dyld` itself.
 
+**Twelfth pass, 2026-08-14 (later same day): real `libclosure` (Blocks
+runtime), QEMU-verified.** `tools/userland_staging/build_libclosure.sh`
+builds `libc_build/libclosure.a` from real, unmodified
+`third_party/libclosure` (pinned `libclosure-78`, re-verified against
+`apple-oss-distributions/distribution-macOS` tag `macos-112`'s
+`git ls-tree macos-112 -- libclosure` = commit `86c3a9ea6bef05f...`,
+matching this checkout's HEAD exactly). Real `runtime.cpp` (the actual
+`Block_copy`/`Block_release`/`Block_object_assign`/`Block_object_dispose`
+logic, refcounting via a real `__sync_bool_compare_and_swap` compiler
+builtin -- confirmed by disassembly to lower to real arm64 `ldaxr`/
+`stlxr`, zero libcall) + real `data.c` (the plain, `!HAVE_OBJC`-gated
+`_NSConcreteStackBlock`/`_NSConcreteMallocBlock`/etc symbol table --
+correct branch for this project, which has no ObjC runtime, not a skip).
+3/3 files compiled, 0 skipped.
+
+One real cross-tier dependency found: `runtime.cpp`'s `#define memmove
+_platform_memmove` needs `_platform_memmove`'s real generic
+implementation, which lives in
+`third_party/libplatform/src/string/generic/memmove.c` -- compiled here
+deliberately WITHOUT `-DVARIANT_STATIC` (confirmed by actually enabling
+it: that flag makes the same file also emit plain `memcpy`/`memmove`
+symbols, which collide with `libc_string.a`'s own real ones -- a genuine
+duplicate-symbol link error, reproduced directly, not assumed). Also:
+`os_assumes`/`os_assert` (used by `runtime.cpp` in a way that falls back
+to calling real external functions of those names if not already
+macro-defined) are predefined as command-line function-like macros
+(`os_assumes(x)=(x)`, matching Apple's real value-passthrough shape for a
+build with no `os_log` subsystem; `os_assert(x)` is a real assert via
+`__builtin_trap()`, not a silent no-op) rather than adding a second,
+conflicting `os/assumes.h` compat header alongside the existing empty
+stand-in from the locale tier.
+
+Real smoketest (`libclosure_smoketest.c`): a real compiler-emitted
+stack block (`-fblocks`) capturing a plain variable, `Block_copy`d to
+the heap, called, verified, `Block_release`d; a second block captures a
+`__block`-qualified byref variable, exercising the real
+`BLOCK_HAS_COPY_DISPOSE`/`_Block_object_assign`/`_Block_object_dispose`
+path the first block doesn't touch. Linked against real `libmalloc.a`/
+`libplatform.a` (same dependency set as `build_libmalloc.sh`'s own
+smoketest). `otool -l`: `LC_UNIXTHREAD`, no `LC_LOAD_DYLIB`. `nm -u`:
+zero undefined symbols. Real QEMU boot (scratch copy of the boot image,
+deleted after), genuine PASS:
+```
+libclosure smoketest: start
+PASS: simple Block_copy/call/release
+PASS: __block byref copy/dispose round-trip
+ALL PASS: libclosure smoketest
+```
+
+Adversarial review before commit caught two overclaiming issues in an
+earlier draft of this pass's own build-script comments (the disassembly
+claim and the `VARIANT_STATIC` duplicate-symbol claim were both written
+before actually being checked) -- both were then genuinely verified (not
+just softened) before commit, per the process above.
+
+Not done in this pass: relinking the locale/stdio/gen/printf/malloc
+tiers' smoketests against real `libpthread.a` (still open from the
+eleventh pass, above). Still not attempted: `libdispatch` (this
+project's next natural step -- it depends on `libclosure`, now done),
+`libunwind`, `Libinfo`(-the-Apple-repo), `removefile`/`copyfile`, and
+`dyld` itself.
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions
