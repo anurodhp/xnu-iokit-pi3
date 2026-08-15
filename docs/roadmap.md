@@ -2403,6 +2403,200 @@ types.
 
 ---
 
+## Phase 6.5: dynamic linking (`dyld`) -- exercise it for real
+
+Added 2026-08-15, at the user's explicit request, after a "why not dyld"
+question during Phase 4's userland work. Deliberately placed after Phase 6
+(networking), not inside Phase 4 -- see **current state** below for why
+revisiting it only makes sense once there's a real multi-process workload
+to justify the cost, and networking is what's expected to finally produce
+one (a DHCP client daemon, `ping`/`ifconfig` invocations, and whatever
+network-facing tools follow all being separate real processes that could
+plausibly share one real libSystem's code pages).
+
+**Current state (as of Phase 4, 2026-08-15): investigated once already and
+explicitly scoped OUT for now** -- not skipped without looking, see commit
+`8d35b9b` and `docs/roadmap.md`'s own Phase 4 write-up (the dyld
+investigation preceding the real-static-`bash` work). Two real, confirmed
+reasons, not guesses:
+1. **Nothing in this project has ever been built as a real `.dylib`.**
+   Every one of Phase 4's twelve-plus real library ports (`libplatform`,
+   `libmalloc`, `libpthread`, `libclosure`, `libunwind`, the curated `Libc`
+   tiers, `removefile`/`copyfile`, real static `bash`) is a static archive
+   (`.a`), linked directly into each Mach-O via `Csu`'s `-nostdlib -static`
+   path. `otool -l` on every single one of them shows zero
+   `LC_LOAD_DYLIB`. dyld's entire job -- finding, mapping, and binding
+   `LC_LOAD_DYLIB` dependencies at process launch -- has no consumer here
+   yet, and building it wouldn't be a small addition: it needs a real
+   `MH_DYLIB`-producing link path (bind/rebase/lazy-binding opcode
+   emission), which this project's build tooling has never exercised in
+   either direction.
+2. **The kernel's `LC_LOAD_DYLINKER` launch path has never been
+   exercised.** `bsd_init()`/`load_init_program()`'s real Mach-O loader
+   code for interpreting a binary's dynamic-linker load command and
+   handing off to it is presumably present (real, unmodified xnu source)
+   but has literally never run on this fork -- every binary this project
+   has ever booted, from `tools/init_binary/init.macho` through real
+   static `bash.macho`, takes the `LC_UNIXTHREAD` static-entry path
+   instead.
+
+**Why this phase exists anyway, and why it's placed here specifically**:
+the actual argument for dyld on a memory-constrained rpi3 (1GB) is real --
+sharing one physical copy of a library's code pages across N concurrently
+running processes is a genuine win, but *only* once N is meaningfully
+greater than 1 at the same time. Phase 4 alone never produces that
+(one shell exec's one command at a time); Phase 6 is the first phase where
+several genuinely independent real processes -- a DHCP client daemon
+sitting resident, `ifconfig`/`ping`/`netstat` invoked repeatedly, a real
+interactive `bash` alongside them -- would plausibly be resident together,
+finally giving dyld's RAM-sharing case something real to measure against
+rather than a hypothetical.
+
+**Depends on**: Phase 6 (needs a real concurrent multi-process workload to
+motivate and evaluate against -- see above) and Phase 4 (needs the curated
+libSystem-equivalent stack already built there as the thing to eventually
+turn into real `.dylib`s).
+
+**Concrete tasks, in order** (not yet started -- this is a planning
+placeholder, not in-progress work):
+1. Re-confirm the two blockers above are still accurate against
+   whatever's landed in Phases 4-6 by then (Phase 4's static libc stack in
+   particular may have grown further since this was written).
+2. Get this project's build pipeline to produce ONE real `MH_DYLIB` --
+   almost certainly the curated `Libc`-equivalent archive first, since
+   everything else already links against it -- and confirm `ld64` on this
+   toolchain can actually emit correct bind/rebase/lazy-binding opcodes
+   for a freestanding arm64 target (unconfirmed either way; may itself be
+   a real blocker requiring investigation, same spirit as the Phase 4
+   dyld/libdispatch investigations).
+3. Build the minimal real subset of `third_party/dyld` needed to load
+   that one `.dylib` at process launch via the kernel's real
+   `LC_LOAD_DYLINKER` path (unexercised until this point) -- not a full
+   dyld shared-cache implementation, matching this project's established
+   "curated real subset, not the whole subsystem" pattern.
+4. Relink 2-3 of Phase 6's real concurrent processes (e.g. the DHCP client
+   daemon + `ifconfig` + real `bash`) against the real `.dylib` instead of
+   their Phase 4 static archives, and measure real resident-memory
+   savings with several of them running at once (QEMU monitor / kernel
+   `vm_stat`-equivalent -- confirm what's real and available on this
+   fork) versus the static baseline. This measurement is the actual point
+   of the phase -- confirm the win is real, don't assume it.
+
+**Exit criteria**: at least one real `.dylib` is built and loaded via a
+genuinely exercised `LC_LOAD_DYLINKER` kernel path, at least one real
+process links against it dynamically instead of statically, and a real,
+measured RAM comparison (not a theoretical one) shows the expected
+savings with multiple dyld-linked processes resident at once.
+
+---
+
+## Phase 6.6: Grand Central Dispatch (`libdispatch`) -- exercise it for real
+
+Added 2026-08-15, at the user's explicit request, placed immediately after
+Phase 6.5 (dynamic linking). Two independent reasons it belongs after
+dyld rather than back in Phase 4 where the rest of the libSystem stack was
+built:
+1. **Real dyld may change how tractable this even is.** Phase 4's
+   libdispatch attempt (below) hit a real *source-organization* blocker,
+   not a semantic one -- `third_party/dyld` being real and loaded by then
+   means it's worth re-checking whether Apple's real `libdispatch.dylib`
+   binary (or a closer-to-shipped source configuration) sidesteps the
+   umbrella-header problem in a way recompiling raw `third_party/libdispatch`
+   from scratch didn't -- genuinely unknown until tried, not assumed to
+   help.
+2. **A concurrent multi-process workload (same Phase 6 justification as
+   6.5) is also the first place GCD's actual value proposition -- offloading
+   work items instead of managing threads by hand -- would have any real
+   callers.** Before that, nothing in this project needs it.
+
+**Current state (as of Phase 4, 2026-08-15): NOT built at all -- a
+deliberate, investigated non-attempt, not a partial result.** See commit
+`954d11a`. Unlike `libpthread` (which shipped real single-thread-correct
+mutex/cond/TSD primitives even though real thread creation is
+unavailable -- see Phase 4's outcome-B writeup), `libdispatch` has **zero**
+API surface anywhere in this project: no `dispatch_queue_t`, no
+`dispatch_sync`/`dispatch_async`, nothing. The real, cited blocker: even
+the smallest real leaf function (`dispatch_once`, 71 lines) needs
+`dispatch_once_gate_t`, defined in `queue_internal.h`, which has no
+standalone include guards and is only ever reachable through
+`internal.h`'s single umbrella include of 14 subsystem headers
+(voucher/firehose/event/mach/io/source) bundled together. Hand-extracting
+just the needed structs was considered and rejected at the time -- past
+that point it stops being "real Apple source + a thin shim" (this
+project's standing convention) and becomes reimplementing GCD's internal
+object layout by hand, a real correctness risk for something whose real
+source exists in the checkout, just isn't separable at file/struct grain.
+
+**Real, already-confirmed structural fact this phase can build on** (not
+guessed, checked directly in the kernel source 2026-08-15): `kevent`/
+`kevent64`/`kevent_qos`/`kevent_id` are real syscalls in this project's
+own `third_party/xnu-7195/bsd/kern/syscalls.master`, backed by real,
+apparently-unmodified `bsd/kern/kern_event.c` -- **`kqueue` is stock,
+open-sourced xnu code, unlike `pthread.kext`, which was never
+open-sourced and is the reason `libpthread`'s `pthread_create()` hard-fails
+with a real kernel `ENOTSUP`.** This means libdispatch's real
+kqueue-based event-source machinery (timers, FD readiness, signal
+delivery) is NOT structurally blocked the way real multi-threading is --
+it has just never been exercised by any userland code in this project.
+Confirm this holds by then (kernel source could still change) before
+assuming it as a free win.
+
+**What real concurrency will and won't be possible, regardless of solving
+the header problem**: the same constraint documented for `libpthread`
+still applies here -- `bsdthread_create`/`psynch_*` unconditionally return
+`ENOTSUP` (`bsd_pthread_stub.c`), so GCD's real worker-thread pool for
+`dispatch_async` cannot exist any more than raw `pthread_create()` can.
+A real libdispatch port here would need the same honest framing the
+`libpthread` fork used: real `dispatch_queue`/`dispatch_sync`/
+`dispatch_once`/kqueue-backed dispatch *sources* (genuinely useful and
+correct single-threaded -- a real timer or FD-readiness event firing a
+real block via a real run-loop-style pump is legitimate, valuable, and
+achievable without real threads) are in scope; a real concurrent
+thread-pool `dispatch_async` is not, until/unless a future kernel-side
+pass ever implements real `bsdthread_create` support (no such plan exists
+currently -- pthread.kext was never open-sourced by Apple at all, so this
+would mean writing that subsystem from scratch, a large separate effort
+outside this phase's scope).
+
+**Depends on**: Phase 6.5 (see reasons above), Phase 4's `libclosure.a`
+(GCD's block-based API surface needs it, already real and QEMU-verified)
+and `libplatform.a`/`libpthread.a` (real locks/TSD it will build on).
+
+**Concrete tasks, in order** (not yet started -- planning placeholder):
+1. Re-attempt the `third_party/libdispatch` source-separability problem
+   with fresh eyes, informed by whatever Phase 6.5 learned about real
+   dyld/`.dylib` builds on this toolchain -- confirm whether that changes
+   anything before repeating the Phase 4 conclusion unchanged.
+2. If still blocked at that grain, do the real, scoped-down honest port
+   instead: `dispatch_once` (needs a real gate/wait primitive -- this
+   project already has the pieces via `__ulock_wait`/`__ulock_wake`, wired
+   for `os_unfair_lock` in Phase 4's `libplatform` work), `dispatch_sync`
+   (executes for real on the calling thread, no thread pool needed, a
+   completely real and correct implementation), and real `dispatch_queue_t`
+   object lifecycle (retain/release via `libclosure`'s block/refcount
+   machinery).
+3. Build a real kqueue-backed dispatch *source* path (a real timer or a
+   real FD-readiness event, e.g. off Phase 6's real Ethernet interface or
+   a real serial-console FD) driven by an explicit pump this project's
+   `init.c`/main-loop calls -- not a hidden manager thread (none possible
+   here) -- proving `kevent`'s real, previously-unexercised syscalls
+   actually work end to end on this kernel fork.
+4. Document `dispatch_async`'s real, honest semantics on this target
+   (synchronous-on-calling-thread, or a real explicitly-pumped deferred
+   queue -- match whatever Phase 4's investigation-in-progress at the time
+   finds most defensible, same decision framework given to that fork
+   originally) as prominently as the code itself, so no caller is misled
+   about GCD's normal concurrency guarantee not holding here.
+
+**Exit criteria**: real `dispatch_once`/`dispatch_sync`/`dispatch_queue_t`
+object lifecycle QEMU-verified working, at least one real kqueue-backed
+dispatch source firing a real block via a real (documented, non-hidden)
+event pump, and `dispatch_async`'s real single-thread-honest semantics
+clearly documented in code and in this file -- not a claim of real GCD
+concurrency this target still structurally cannot provide.
+
+---
+
 ## Phase 7: closing the gap to a genuinely usable OS
 
 Added 2026-08-11, after an explicit "is this a usable OS yet" gut-check
