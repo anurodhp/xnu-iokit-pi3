@@ -1411,6 +1411,146 @@ correct kernel-default behavior (no project-side signal handling needed)
 but was not itself exercised by any test here (no corruption occurred) --
 noted, not fabricated as tested.
 
+**Eleventh pass, 2026-08-14 (later same day): real `libpthread`
+(single-thread-correct primitives; `pthread_create` real but
+kernel-blocked), QEMU-verified, one real bug found+fixed via boot
+test.** `tools/userland_staging/build_libpthread.sh` builds
+`libc_build/libpthread.a` from real, unmodified `third_party/libpthread`
+(pinned `libpthread-454.80.2`).
+
+**Real, load-bearing constraint that shaped this whole tier** (read from
+kernel source, not assumed): `third_party/xnu-7195/bsd/kern/
+bsd_pthread_stub.c` -- this project's pthread.kext stand-in (real
+pthread.kext was never open-sourced, same as launchd/opendirectoryd) --
+unconditionally returns `ENOTSUP` for `bsdthread_create`/
+`bsdthread_register`/every `psynch_*` entry. Real `pthread_create()` can
+therefore never spawn a second schedulable thread on this target, full
+stop -- a kernel-level fact, not a userland gap this tier works around.
+Given that, this pass builds **outcome (B)**: everything genuinely
+single-thread-correct, for real, plus a real (not fabricated)
+`pthread_create()` that performs the real `bsdthread_create(2)` syscall
+and returns the real kernel `ENOTSUP` -- honest documented failure, not
+a fake success or a hand-waved errno.
+
+**Compiled real, unmodified Apple source (6/6, 0 skipped):**
+`pthread_tsd.c` (real `pthread_key_create`/`setspecific`/`getspecific`/
+`pthread_once`'s TSD-key half), `pthread_mutex.c`, `pthread_cond.c`,
+`pthread_rwlock.c` (real algorithms, running under their real
+compiled-in DEFAULT policy -- FIRSTFIT, ulock off; the real uncontended
+fast path is what's exercised/verified, the real psynch/FAIRSHARE
+contended slow path is real code but structurally unreachable, see
+above), `pthread_atfork.c`, `pthread_cwd.c` (per-thread cwd).
+**Deliberately not built**: `pthread.c` itself (2587 lines) bundles
+three separate things -- main-thread bootstrap/signature scheme,
+`pthread_create`'s real stack/mach-vm allocation machinery (dead code
+here regardless, per the kernel constraint -- and it also hits a REAL
+header conflict: this project's own MIG-regenerated
+`malloc_mig/mach_vm.h` and the real SDK's `<mach/vm_map.h>` both define
+`mach_make_memory_entry`'s structs, confirmed by reproducing the
+"conflicting types" error, not skipped preemptively), and trivial
+one-liners. The one-liners (`pthread_equal`/`pthread_main_np`/
+`pthread_main_thread_np`/`pthread_once`) are reimplemented in the new
+`pthread_main_thread_bootstrap.c`, faithfully copied from pthread.c's
+real bodies (each cites its origin line) -- not reinvented. Also
+deliberately out of scope: `qos.c`/`pthread_cancelable.c`/
+`pthread_dependency.c` (all need real `bsdthread_register`/a real second
+thread/`os_workgroup`, all structurally unreachable) and `kern/*.c`
+(that's the KERNEL-side pthread.kext internals `bsd_pthread_stub.c`
+stands in for, not userland).
+
+**Real, hand-written `NO_SYSCALL_STUB` syscalls** (Apple hand-writes
+these in libpthread's own internal sources, not this project's public
+headers -- same class as `__ulock_wait`/`__ulock_wake` in
+`build_libplatform.sh`): `bsdthread_create` (360), and the full
+`psynch_mutexwait`/`mutexdrop`/`cvbroad`/`cvsignal`/`cvwait`/
+`rw_rdlock`/`rw_wrlock`/`rw_unlock`/`cvclrprepost` family (301-308,312)
+-- real numbers/signatures cross-checked against `syscalls.master`,
+kept even though practically unreachable (see FIRSTFIT/ulock note
+above) since `-O0` keeps the real code paths referencing them linked in
+regardless. Real Apple-generator-produced (not hand-written)
+`gettimeofday`/`__pthread_chdir`/`__pthread_fchdir` via the same Perl
+generator `build_libsyscall_smoketest.sh` already established.
+
+**Real gaps found and fixed** (full detail in `build_libpthread.sh`'s
+own header comment): `-D__POSIX_LIB__` (from this project's own
+`pthread.xcconfig`, not guessed) needed to stop the public and private
+`sched.h`/`posix_sched.h` from both defining `struct sched_param`;
+SDK-vintage gaps for `mach/thread_policy.h`'s QOS additions and `os/
+alloc_once_private.h` (same class as `build_libplatform.sh`'s bridgeos
+gap); `-ffreestanding` silently substitutes clang's own resource-dir
+`limits.h` for the real SDK's, dropping `PTHREAD_STACK_MIN` (confirmed
+via `-H` include-stack tracing, not guessed); the real iPhoneOS SDK's
+own `<mach/mach_vm.h>` is literally `"#error mach_vm.h unsupported."`
+(read directly) -- worked around with a small hand-declared,
+struct-free header for just the functions actually called, linking
+against the real implementations already built into `libmalloc.a`;
+`_os_xbs_chrooted` and `_os_once_acquire` both have no real definition
+anywhere in this project's pinned checkouts (real cross-repo
+version-skew -- `libpthread-454.80.2` expects newer libplatform/build
+infra than what's pinned) -- the former is a compile-time constant `0`
+(real value for this target: never chrooted), the latter's real
+`pthread_once()` is reimplemented using this project's own real,
+already-QEMU-verified `_os_once()` instead (older but real, same
+single-execution-gate semantics). `abort_with_reason()`'s real path
+needs a full signal-delivery subsystem this project hasn't built
+(separate, larger Phase 4 scope) -- provides the real EFFECT
+(unconditional termination) via this project's own real exit syscall
+instead of the real SIGABRT mechanism, last resort per CLAUDE.md's
+source-priority rule, after confirming the real blocker. Retired
+`build_libmalloc.sh`'s now-conflicting `pthread_tsd_shim.o` member from
+the already-built `libmalloc.a` (`ar d`, a normal archive operation).
+
+**Real bug found by QEMU boot test, NOT caught by native `ld`/host
+testing** (isolated via bisection -- a minimal `pthread_create`-only
+smoketest crashed identically, immediately after `PASS: bootstrap`,
+confirming it wasn't cumulative corruption from earlier real-mutex/TSD/
+once tests): real libpthread source (anything including
+`"internal.h"`) `#undef`'s `errno` and redefines it as
+`*_pthread_errno_address_direct()` -- a real TSD-slot-1-relative
+dereference, not a plain global. This project's bootstrap never
+populated TSD slot 1, so `__bsdthread_create`'s own real `errno = ...`
+on its real kernel-`ENOTSUP` error path dereferenced a NULL pointer --
+genuine `SIGSEGV`, confirmed via `exec: /sbin/pthread_smoketest
+terminated by signal 11` in a real QEMU boot log. Fixed for real: TSD
+slot 1 now points at `_main_thread`'s own real `err_no` field
+(`types_internal.h`: `"errno_t err_no; // thread-local errno"` -- the
+exact real field this mechanism exists to expose), set during
+`pthread_main_thread_bootstrap()`.
+
+**Adversarial self-review before commit also caught a real documentation
+bug** (not a functional one): an earlier draft of this tier's own
+build-script header claimed `__pthread_mutex_use_ulock` was forced to
+`true`. That was never actually implemented -- the real default
+(`_PTHREAD_MTX_OPT_ULOCK_DEFAULT` = `false`) is what actually runs, and
+the smoketest's real PASS is genuine either way (it exercises the real
+uncontended fast path, which is policy-independent) -- but the comment
+and a smoketest print string both overclaimed which real code path was
+active. Corrected in both places before commit.
+
+**Real QEMU boot verification, genuine PASS (scratch copy of the boot
+image, deleted after; also caught the mid-development `errno`-TSD crash
+above on an earlier, now-fixed revision -- not fabricated as
+one-shot-clean):**
+```
+root@sh:/ % exec /sbin/pthread_smoketest
+PASS: bootstrap
+PASS: pthread_self/pthread_equal/pthread_main_np
+PASS: real (FIRSTFIT-policy) pthread_mutex lock/unlock x2
+PASS: real pthread_key_create/setspecific/getspecific
+PASS: real pthread_once runs exactly once
+PASS: pthread_create is real code, real kernel-level failure (ENOTSUP), as documented
+ALL PASS: libpthread smoketest
+```
+
+**Not done in this pass** (documented follow-up, not silently skipped):
+the locale/stdio/gen/printf tiers' own smoketests still link against
+`tsd_bootstrap.c`/`pthread_tsd_shim.c`/`pthread_tsd_shim_libc_bootstrap.c`
+directly rather than this real `libpthread.a` -- relinking all four
+against the real tier (mirroring the malloc-tier relink pattern above)
+is real, valuable follow-up work, not completed here given this pass's
+own scope. Still not attempted: `libdispatch`/`libclosure`/`libunwind`/
+`Libinfo`(-the-Apple-repo)/`removefile`/`copyfile`, and `dyld` itself.
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions
