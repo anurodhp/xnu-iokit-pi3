@@ -166,20 +166,12 @@ void __xprintf_domain_init(void) {}
 int pthread_rwlock_rdlock(pthread_rwlock_t *lock __unused) { return 0; }
 int pthread_rwlock_unlock(pthread_rwlock_t *lock __unused) { return 0; }
 
-/* _Block_copy()/_Block_release() (libclosure's real Blocks runtime ABI,
- * not ported - same class of gap as full Mach IPC above) satisfy
- * libc_gen.a's err.o - real errx() (used by this tier's own
- * __printf_arginfo_n/etc internal-invariant checks) links from the same
- * object file as err_set_exit_b()/err_set_exit() (real Apple's
- * Block-based exit-handler registration API for err/errx), and archive
- * linking pulls a whole .o per referenced symbol, not per-function.
- * err_set_exit_b/err_set_exit are never called anywhere in this tier's
- * real call graph (confirmed by grep - nothing here registers a custom
- * err exit handler) - same "real, correctly-typed stub for unreachable
- * code in an otherwise-needed object file" pattern as the domain/rwlock
- * stubs above. Real Blocks semantics (retain-count-aware copy) don't
- * matter here since nothing ever constructs a real block for these to
- * act on; identity-passthrough is a defensible real behavior for the
- * "no actual Blocks runtime exists" case, not a silent wrong answer. */
-void *_Block_copy(const void *aBlock) { return (void *)aBlock; }
-void _Block_release(const void *aBlock __unused) {}
+/* _Block_copy()/_Block_release() used to be stood in here (identity-
+ * passthrough placeholders) for the same reason as the domain/rwlock
+ * stubs above - err.o's err_set_exit_b()/err_set_exit() reference them
+ * even though nothing in this tier's real call graph ever calls those.
+ * Retired once real libclosure.a (build_copyfile.sh, later Phase 4 pass)
+ * provided the genuine Blocks runtime - linking both produced a real
+ * duplicate-symbol error, and the real implementation is strictly
+ * better (actual retain-count-aware copy) for any future caller that
+ * does construct a real block. */

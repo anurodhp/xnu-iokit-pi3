@@ -5,7 +5,19 @@
  * same way tools/init_binary/init.c's raw syscalls are, not guessed.
  * Carry-flag errno convention (see init.c's own header comment for the
  * real root cause) applies here too.
- */
+ *
+ * Error path now calls cerror_nocancel() (real Apple errno.c stand-in,
+ * cerror_stub.c) instead of returning the raw negative error code
+ * directly - matches the real Perl-generated syscall stubs' own
+ * behavior (`bl _cerror` on the carry-flag path). A prior version of
+ * this helper (and every other hand-written raw-syscall helper in this
+ * project's userland_staging tiers) skipped that step: still correctly
+ * signaled failure to any `< 0`/`!= 0` caller, but never actually set
+ * the global errno, so a caller inspecting errno after failure got a
+ * stale/zero value. Found via a real QEMU boot-test failure while
+ * bringing up the removefile tier (see removefile_syscalls.c's own
+ * header comment) - fixed everywhere this pattern was found. */
+extern long cerror_nocancel(int err);
 
 typedef unsigned long size_t;
 typedef long ssize_t;
@@ -23,7 +35,7 @@ static inline long syscall3(long num, long a0, long a1, long a2) {
                  : "r"(x1), "r"(x2), "r"(x16)
                  : "memory", "cc");
     if (is_error) {
-        return -x0;
+        return cerror_nocancel((int)x0);
     }
     return x0;
 }

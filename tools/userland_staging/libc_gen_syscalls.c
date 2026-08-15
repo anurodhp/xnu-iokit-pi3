@@ -19,6 +19,23 @@ typedef unsigned long size_t;
 typedef long ssize_t;
 typedef long off_t;
 
+/* Real Apple convention (confirmed independently by this project's own
+ * Perl-generated syscall stubs, e.g. libsyscall_smoketest's _mkdir.s:
+ * `b.cc 2f / bl _cerror`): on the carry-flag error path, the raw x0
+ * error code must be handed to cerror_nocancel() (real Apple errno.c
+ * stand-in, cerror_stub.c - sets the global errno and returns -1), not
+ * returned directly as a raw negative value. A prior version of this
+ * file's syscall3/4/6 skipped that step entirely - every hand-written
+ * wrapper here still correctly signaled "failure" (any nonzero/negative
+ * return still fails a `!= 0`/`< 0` check), but never actually set
+ * errno, so any real caller inspecting errno after a failed stat()/
+ * lstat()/etc call (an extremely common real pattern) got a stale or
+ * zero value instead of the real error code - found via a genuine QEMU
+ * boot-test failure while building the removefile tier (a real,
+ * unrelated caller's `errno != ENOENT` check misfired because errno had
+ * never been set), not by inspection alone. */
+extern long cerror_nocancel(int err);
+
 static inline long syscall3(long num, long a0, long a1, long a2) {
     register long x0 asm("x0") = a0;
     register long x1 asm("x1") = a1;
@@ -31,7 +48,7 @@ static inline long syscall3(long num, long a0, long a1, long a2) {
                  : "r"(x1), "r"(x2), "r"(x16)
                  : "memory", "cc");
     if (is_error) {
-        return -x0;
+        return cerror_nocancel((int)x0);
     }
     return x0;
 }
@@ -49,7 +66,7 @@ static inline long syscall4(long num, long a0, long a1, long a2, long a3) {
                  : "r"(x1), "r"(x2), "r"(x3), "r"(x16)
                  : "memory", "cc");
     if (is_error) {
-        return -x0;
+        return cerror_nocancel((int)x0);
     }
     return x0;
 }
@@ -69,7 +86,7 @@ static inline long syscall6(long num, long a0, long a1, long a2, long a3, long a
                  : "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5), "r"(x16)
                  : "memory", "cc");
     if (is_error) {
-        return -x0;
+        return cerror_nocancel((int)x0);
     }
     return x0;
 }

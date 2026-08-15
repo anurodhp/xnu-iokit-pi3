@@ -247,13 +247,23 @@ if [ ! -f "$OUT/libmalloc.a" ]; then
     echo "error: $OUT/libmalloc.a not found -- run build_libmalloc.sh first" >&2
     exit 1
 fi
+# New real dependency as of build_copyfile.sh (later Phase 4 pass):
+# libc_printf_mach_stub.c's own _Block_copy/_Block_release identity-
+# passthrough stand-ins were retired once real libclosure.a existed (a
+# real duplicate-symbol conflict otherwise) - see that file's own header
+# comment. err.o (libc_gen.a) still references them transitively via
+# err_set_exit_b/err_set_exit, so libclosure.a must be linked here now.
+if [ ! -f "$OUT/libclosure.a" ]; then
+    echo "error: $OUT/libclosure.a not found -- run build_libclosure.sh first" >&2
+    exit 1
+fi
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o libc_printf_smoketest.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/libc_printf_smoketest.o" \
     "$OUT/libc_printf.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_gen.a" "$OUT/libc_printf.a" "$OUT/libc_stdio.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
-    "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" "$OUT/libclosure.a" \
     -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
     -Wl,-alias,___kill,'_kill$UNIX2003' \
     -Wl,-alias,___kill,_kill \

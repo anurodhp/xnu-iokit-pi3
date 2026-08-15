@@ -7,7 +7,13 @@
  * raw syscall in this project is) - duplicated here as the PUBLIC symbol
  * name real Libc source expects, rather than exporting that file's
  * static helper.
+ *
+ * Error path calls cerror_nocancel() (real Apple errno.c stand-in,
+ * cerror_stub.c) instead of returning the raw negative error code -
+ * real bug found+fixed project-wide, see removefile_syscalls.c's own
+ * header comment for the QEMU boot-test failure that surfaced it.
  */
+extern long cerror_nocancel(int err);
 
 typedef long off_t;
 
@@ -23,7 +29,7 @@ static inline long syscall3(long num, long a0, long a1, long a2) {
                  : "r"(x1), "r"(x2), "r"(x16)
                  : "memory", "cc");
     if (is_error) {
-        return -x0;
+        return cerror_nocancel((int)x0);
     }
     return x0;
 }

@@ -39,6 +39,13 @@ extern ssize_t _read(int fd, void *buf, size_t n);
 extern int _close(int fd);
 extern void *malloc(size_t);
 extern void free(void *);
+/* cerror_nocancel: real Apple errno.c stand-in (cerror_stub.c) - error
+ * path now goes through it instead of returning the raw negative error
+ * code, matching the real Perl-generated syscall stubs' own convention.
+ * Same real bug class found+fixed project-wide, see
+ * removefile_syscalls.c's own header comment for the QEMU boot-test
+ * failure that surfaced it. */
+extern long cerror_nocancel(int err);
 
 static inline long syscall3(long num, long a0, long a1, long a2) {
     register long x0 asm("x0") = a0;
@@ -52,7 +59,7 @@ static inline long syscall3(long num, long a0, long a1, long a2) {
                  : "r"(x1), "r"(x2), "r"(x16)
                  : "memory", "cc");
     if (is_error) {
-        return -x0;
+        return cerror_nocancel((int)x0);
     }
     return x0;
 }
