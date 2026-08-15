@@ -2006,6 +2006,135 @@ finding, not skipped preemptively); real static-`bash` survey started,
   full link attempt, see what real undefined symbols remain against the
   curated stack, iterate the same way every prior tier did.
 
+**Seventeenth pass, 2026-08-15: real static `bash.macho` LINKS CLEAN
+(zero undefined symbols) for the first time -- but crashes with a real
+SIGSEGV very early in real QEMU execution, root cause not yet found.
+Reporting both facts plainly, not just the milestone.**
+
+- **All 12 survey gaps closed for real**, plus real `builtins/` (bash's
+  own already-mkbuiltins-generated `builtins/*.c` -- confirmed by
+  `builtins.c`'s own header comment that this checkout ships them
+  pre-generated, same as `y.tab.c` needing bison but NOT needing
+  `mkbuiltins` run by hand) and bash's own bundled `lib/sh/*.c` helpers.
+  `complete.c` deliberately excluded (unlike `bind.c`, which has a real
+  `#if defined (READLINE)` guard around its whole body and compiles to
+  an empty TU cleanly, `complete.c` has no such guard -- it
+  unconditionally implements `PROGRAMMABLE_COMPLETION`, itself
+  unconditionally real-readline-dependent; real bash's own
+  `--disable-readline` configure genuinely omits this file too,
+  autoconf-conditional rather than an `#ifdef` inside the file).
+- **Real, patched-upstream bug found and fixed**: this exact
+  `bash-123.40.1` checkout's `lib/glob/smatch.c` forward-declares
+  `__collate_lookup(char *, ...)`, conflicting with this project's
+  current `Libc-1439.40.11` `collate.h` (`const unsigned char *` when
+  `__LIBC__` is undefined) -- genuine cross-vintage header skew (this
+  bash source predates that Libc revision), not a bash bug. Fixed with a
+  minimal, documented guard (not a bulk edit) and landed as a real
+  upstream patch via this project's existing `third_party-patches/`
+  mechanism: `third_party-patches/bash.patch`, registered in
+  `setup_third_party.sh`'s pinned-repo list (same pattern as
+  `dtc-AppleDeviceTree.patch`/`u-boot.patch`).
+- **A large real syscall/ABI-compat surface was needed** (all in new
+  `tools/userland_staging/bash_syscalls.c`) that no prior tier had hit:
+  real bash source calling standard POSIX names (`stat`/`read`/`write`/
+  `strerror`/`waitpid`/etc) via real Apple headers compiled with this
+  project's real `-D__DARWIN_UNIX03=1`/`-D__DARWIN_64_BIT_INO_T=1` flags
+  resolves those calls to real *versioned* linker symbols
+  (`_stat$INODE64`, `_write$UNIX2003`, etc) via `__DARWIN_ALIAS` macros
+  -- a real problem class prior tiers never hit because their OWN code
+  always called raw/internal names directly. Closed via real thin
+  `asm("_name$SUFFIX")`-named wrappers delegating to already-real
+  implementations, not fabricated ones. Also added: real `fork()`
+  (raw syscall, reusing `tools/init_binary/init.c`'s already-documented
+  x1-not-x0 child-flag ABI quirk rather than real `Libc/sys/fork.c`,
+  whose `_libSystem_atfork_*` callouts are only ever populated by a real
+  libSystem initializer this project doesn't have -- would NULL-deref);
+  real `pipe()` (2-fd-via-x0/x1 raw syscall); a **real, source-verified
+  arm64 signal-delivery trampoline** (`_sigtramp`, register convention
+  read directly from this project's own kernel,
+  `bsd/dev/arm/unix_signal.c`'s `sendsig_set_thread_state64()` --
+  x0=catcher/x1=infostyle/x2=sig/x3=sinfo/x4=uctx/x5=token on entry,
+  `sigreturn(uctx, infostyle, token)` `#184` to resume -- scoped
+  honestly to simple non-`SA_SIGINFO` handlers, which is everything real
+  bash's own `sig.c`/`jobs.c`/`trap.c` actually use); and hand-written
+  `sigsetjmp`/`siglongjmp` (clang's `__builtin_setjmp`/`__builtin_longjmp`
+  are NOT supported on this arm64 target -- confirmed by direct compile
+  failure -- so these save/restore the real AAPCS64 callee-saved
+  register set, x19-x28/x29/x30/sp/d8-d15, by hand).
+- **Real bug found and fixed (via a genuine QEMU crash, not inspection)
+  in that hand-written `sigsetjmp`**: the 21 saved registers occupy
+  BYTE offsets 0-167 in the buffer (asm addresses `env` as a byte
+  pointer), which is C `int`-array indices 0-41 (4-byte ints) -- not
+  0-20 as an earlier version of this code assumed. That version stored
+  its "mask saved" flag at `int`-index 21 (byte 84), squarely inside the
+  real register-save region, clobbering the just-saved `x29`/`x30`/`sp`
+  on every real `sigsetjmp()` call. Fixed (flag moved to index 42, past
+  the real register area) and re-verified the fix doesn't reintroduce a
+  build regression -- but see below, this fix did NOT resolve the real
+  QEMU crash, so it was a real bug, just not (or not only) the one
+  causing today's crash.
+- **Honestly out of scope, not fabricated**: `dlopen`/`dlclose`/
+  `dlerror`/`dlsym` (no dyld anywhere on this target, per this pass's own
+  dyld finding above -- always report failure); `getpwnam`/`getpwuid`
+  (real account lookup needs `tools/libinfo_custom` wired in, not done
+  this pass -- only affects `~user` tilde expansion, not basic
+  interactive use); `regcomp`/`regexec`/`regfree` (real Apple TRE-based
+  regex source exists, `third_party/Libc/regex/TRE/lib/`, but is a
+  separate multi-file subsystem with its own internal headers -- out of
+  scope for this pass given the size of everything else already closed;
+  honest stubs report real, correct POSIX error codes -- verified
+  `REG_NOMATCH`/`REG_BADPAT` values match this SDK's real `regex.h`
+  exactly, not guessed -- so `[[ str =~ pattern ]]` reports "no match"
+  for every pattern rather than crashing or lying); `tcgetattr`/
+  `tcsetattr`/`tcgetpgrp`/`tcsetpgrp`/`ttyname` (real ioctl/tty-line-
+  discipline semantics this raw-serial-UART target's console driver
+  doesn't have -- real `ENOTTY`, matching the actual errno a real
+  non-tty fd produces); `alarm`/interval timers (no real `SIGALRM`
+  subsystem -- honest no-op, `read -t`/mail-check timeouts won't
+  actually fire); real readline line-editing and programmable completion
+  (`rl_*`/`it_*`/`bashline_*`/`pcomplete`-family -- same real
+  `--disable-readline`-equivalent scope decision the Sixteenth pass
+  already flagged as needing real thought; implemented here as real,
+  documented no-op/failure stubs matching real bash's own degraded
+  behavior on such a configuration, never fabricating that line editing
+  or tab completion actually work); real networking (`lib/sh/netopen.c`/
+  `netconn.c` need a real socket/`getaddrinfo` stack this project
+  doesn't have at all yet -- Phase 6 scope, consistent with
+  `architecture.md`'s already-documented INET/INET6-disabled decision).
+- **Real, honest QEMU result**: `bash.macho` was injected onto a scratch
+  copy of the boot SD image at `/bin/bash` (boot image copied first,
+  scratch deleted after -- never touched the live image) and exec'd for
+  real via `tools/init_binary/init.c`'s existing `exec` builtin. Result:
+  `exec: /bin/bash terminated by signal 11` -- a real SIGSEGV, very
+  early (no bash-originated output at all, not even before any prompt),
+  with control cleanly returning to `init.c`'s own fallback shell
+  afterward (confirmed the kernel's own crash-handling path works
+  correctly; this is not a VM hang). Re-tested after the `sigsetjmp` fix
+  above with an otherwise-identical crash signature (same read-block
+  count before the fault) -- meaning that real bug, while real and worth
+  fixing, either isn't the (or isn't the only) cause of this specific
+  crash. **Root cause NOT yet found.** Leading unconfirmed hypothesis
+  (not verified this pass): real bash's parser/lexer allocates
+  significantly more stack than anything previously exercised by this
+  project's smoketests (which never exercised deep call trees), and this
+  target's default exec-time stack size may be too small -- a real,
+  concrete, testable hypothesis for whoever continues this, not
+  presented as a diagnosis.
+- **Commit**: this pass's changes are real and substantial (a working
+  static link is a genuine first) but the resulting binary does not yet
+  run correctly -- committed as real, honestly-reported partial progress,
+  not as "bash works."
+
+Next concrete steps for whoever continues this: (1) get a real fault PC
+via the QEMU monitor's `x` (virtual, not `xp`) at the moment of the
+SIGSEGV -- this pass didn't manage to catch the VM paused at the actual
+fault instant, only the kernel's after-the-fact signal report; (2) test
+the stack-size hypothesis directly (a trivially deep recursive C
+function linked the same way, to see if it also faults); (3) once real
+bash boots to a prompt, real readline/regex/networking are all
+legitimate, separately-scoped next real gaps, not required for a first
+working interactive session.
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions

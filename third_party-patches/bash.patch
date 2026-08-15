@@ -1,0 +1,50 @@
+From 67e789a8467264985749b2ca7d534f0f81608f28 Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@icloud.com>
+Date: Sat, 15 Aug 2026 12:04:03 -0400
+Subject: [PATCH] smatch.c: fix real __collate_lookup prototype conflict vs
+ newer Libc collate.h
+
+This bash-123.40.1 checkout's own forward declaration of
+__collate_lookup(char*,...) conflicts with third_party/Libc's current
+Libc-1439.40.11 collate.h, which declares it const-correct
+(const unsigned char*) when __LIBC__ is undefined. Genuine cross-vintage
+header skew (this bash source predates that Libc revision), not a bash
+bug -- guarded the redundant declaration behind collate.h's own include
+guard so it's a no-op whenever collate.h isn't in scope.
+---
+ bash-3.2/lib/glob/smatch.c | 18 ++++++++++++++++++
+ 1 file changed, 18 insertions(+)
+
+diff --git a/bash-3.2/lib/glob/smatch.c b/bash-3.2/lib/glob/smatch.c
+index 02d70f8..f84c779 100644
+--- a/bash-3.2/lib/glob/smatch.c
++++ b/bash-3.2/lib/glob/smatch.c
+@@ -45,7 +45,25 @@
+ #define STREQN(a, b, n) ((a)[0] == (b)[0] && strncmp(a, b, n) == 0)
+ 
+ #ifdef __APPLE__
++#if !defined (_COLLATE_H_)
++/* This bash-3.2 checkout's own forward declaration of __collate_lookup
++ * predates a real Libc header change: third_party/Libc/locale/FreeBSD/
++ * collate.h (pulled in transitively via <xlocale.h> above on newer Libc
++ * checkouts than this bash source shipped against, when __LIBC__ is NOT
++ * defined -- the case here, this file isn't building Libc itself)
++ * declares it as `const unsigned char *`, not this file's original
++ * `char *` -- a real, genuine C prototype conflict (verified: identical
++ * signature drift, not a different function), caused by cross-vintage
++ * skew between this ~2007 bash-123.40.1 source and this project's
++ * current Libc-1439.40.11 pin. Guarded on collate.h's real include guard
++ * so this stays a no-op if collate.h isn't in scope, or the moment
++ * upstream Apple ships a bash revision whose own declaration matches. */
+ void __collate_lookup(char *, int *, int *, int *);
++#endif /* !_COLLATE_H_ */
++/* __collate_lookup_l has NO real conflict: collate.h only declares it
++ * under #ifdef __LIBC__ (see above, not defined here), so its non-__LIBC__
++ * branch never declares this symbol at all -- this file's own forward
++ * declaration is genuinely the only one in scope, kept unconditional. */
+ void __collate_lookup_l(wchar_t *, int *, int *, int *, locale_t);
+ #endif /* __APPLE__ */
+ 
+-- 
+2.50.1 (Apple Git-155)
+

@@ -62,7 +62,7 @@ Libinfo|https://github.com/apple-oss-distributions/Libinfo.git|Libinfo-542.40.3|
 removefile|https://github.com/apple-oss-distributions/removefile.git|removefile-49.40.3|
 copyfile|https://github.com/apple-oss-distributions/copyfile.git|copyfile-173.40.2|
 Csu|https://github.com/apple-oss-distributions/Csu.git|Csu-88|
-bash|https://github.com/apple-oss-distributions/bash.git|bash-123.40.1|
+bash|https://github.com/apple-oss-distributions/bash.git|bash-123.40.1|bash.patch
 shell_cmds|https://github.com/apple-oss-distributions/shell_cmds.git|shell_cmds-216.60.1|
 file_cmds|https://github.com/apple-oss-distributions/file_cmds.git|file_cmds-321.40.3|
 text_cmds|https://github.com/apple-oss-distributions/text_cmds.git|text_cmds-106|

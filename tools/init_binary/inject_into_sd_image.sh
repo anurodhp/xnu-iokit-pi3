@@ -74,6 +74,18 @@ echo "+ wrote $(wc -c < tools/pwtool/pwtool.macho) bytes to $MNT/sbin/pwtool"
 mkdir -p "$MNT/etc"
 echo "+ ensured $MNT/etc exists (pwtool lock-file/master.passwd/group directory)"
 
+if [ -f tools/userland_staging/bash.macho ]; then
+    mkdir -p "$MNT/bin"
+    cp tools/userland_staging/bash.macho "$MNT/bin/bash"
+    chmod 755 "$MNT/bin/bash"
+    echo "+ wrote $(wc -c < tools/userland_staging/bash.macho) bytes to $MNT/bin/bash"
+    echo "  (real static bash-3.2 -- see docs/roadmap.md Phase 4's Seventeenth"
+    echo "  pass: links clean but currently SIGSEGVs very early on real exec,"
+    echo "  root cause not yet found -- injected for whoever continues that)"
+else
+    echo "= tools/userland_staging/bash.macho not built -- run build_bash.sh first if wanted, skipping"
+fi
+
 mkdir -p "$MNT/tmp"
 echo "+ ensured $MNT/tmp exists (real fopen()-family O_CREAT target dir -- same"
 echo "  class of gap as /etc and /dev above; found via a real QEMU boot-test"
