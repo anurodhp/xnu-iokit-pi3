@@ -1613,6 +1613,68 @@ project's next natural step -- it depends on `libclosure`, now done),
 `libunwind`, `Libinfo`(-the-Apple-repo), `removefile`/`copyfile`, and
 `dyld` itself.
 
+**Thirteenth pass (2026-08-14): `libdispatch` investigated, deliberately
+NOT built this pass -- real finding, not a skip for convenience.**
+`third_party/libdispatch` is cloned+pinned (`libdispatch-1271.40.12`,
+matches `distribution-macOS` tag `macos-112`). Surveyed `src/` looking
+for the smallest genuinely-real, genuinely-separable entry point,
+following this project's usual per-file curated-build pattern (the same
+one that worked cleanly for `libplatform`/`libmalloc`/`libpthread`/
+`libclosure`):
+
+- `queue.c` alone is 8134 lines with 116 real hits for
+  `voucher`/`firehose`/`_dispatch_workq`/`kevent` -- confirmed too large
+  and too OS-integrated (real kqueue + real workqueue threads + real Mach
+  voucher IPC + real firehose tracing buffers) to curate file-by-file the
+  way earlier tiers did.
+- The obvious "smallest real leaf," `dispatch_once` (`once.c`, 71 lines),
+  looked separable at first -- its own logic only needs
+  `_dispatch_once_gate_broadcast`/`_dispatch_lock_value_for_self`
+  (`shims/lock.c`+`shims/lock.h`, 705+714 real lines, itself genuinely
+  tractable: uses the exact same real `__ulock_wait`/`__ulock_wake`
+  primitives `build_libplatform.sh` already wired up for
+  `os_unfair_lock`) and `_dispatch_client_callout`
+  (`inline_internal.h`). Traced where `dispatch_once_gate_t` itself is
+  actually *defined*, expecting a small local struct -- it's in
+  `queue_internal.h`, which is not includable standalone (no include
+  guards for that use, confirmed by reading the file directly) and is
+  itself only ever pulled in via `src/internal.h`'s single umbrella
+  `#include` block, which unconditionally also pulls in
+  `source_internal.h`/`voucher_internal.h`/`event/event_internal.h`/
+  `firehose/firehose_internal.h`/`mach_internal.h`/`io_internal.h` (14
+  subsystem headers total, read directly, not inferred) as one unit.
+  **There is no real per-file granularity inside `libdispatch/src` below
+  "the whole internal object/queue/voucher/event runtime as one
+  compilation unit"** -- unlike every prior Phase 4 tier, where Apple's
+  own file boundaries (`string/*.c`, `locale/FreeBSD/*.c`, `os/lock.c`,
+  `src/*.c` in libmalloc) lined up with genuinely separable real
+  functionality.
+- Hand-extracting just the handful of struct/macro definitions
+  `dispatch_once_gate_t`/`dispatch_lock` actually need out of
+  `queue_internal.h` into a project-owned compat header was considered
+  and rejected: at that point it stops being "real Apple source with a
+  thin compat shim" (this project's established, source-priority-rule-
+  compliant pattern) and becomes "reimplementing GCD's internal object
+  layout by hand," which is both a correctness risk (silently drifting
+  from the real ABI/semantics `dispatch_once_gate_t`'s real callers
+  assume) and a violation of the "custom only as a last resort" rule for
+  something Apple's real source for is right here in the tree, just not
+  separable at this grain.
+
+**Conclusion**: `libdispatch` is not a "next incremental tier" the way
+`libclosure`→`libplatform`→`libmalloc` were -- it is a monolith by
+design, and a real build means compiling a large, coupled slice of
+`internal.h`'s full subsystem set together (real kevent-workqueue
+integration in particular is itself contingent on real threading, which
+this target structurally does not have -- see `libpthread`'s pass above)
+rather than one `build_libdispatch.sh` in the existing per-file style.
+Deferred as its own separately-scoped future effort, not attempted
+partially. No code changes, no new build script, nothing to relink;
+`docs/roadmap.md` is the only file touched this pass. Still not
+attempted: `libunwind`, `Libinfo`(-the-Apple-repo), `removefile`/
+`copyfile`, `dyld` itself, and the still-open eleventh-pass item
+(relinking locale/stdio/gen/printf/malloc against real `libpthread.a`).
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions
