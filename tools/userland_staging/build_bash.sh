@@ -117,10 +117,10 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
     -include libc_build_prototypes.h -include $BOUT/pthread_rwlock_internal_alias.h \
     -D_LIBC_NO_FEATURE_VERIFICATION -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
     -DVARIANT_STATIC -DVARIANT_CANCELABLE -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \
-    -DHAVE_CONFIG_H -DSHELL=1 -DPROGRAM='\"bash\"' -UREADLINE \
-    -DCONF_MACHTYPE='\"arm64-apple-darwin20.3.0\"' -DCONF_HOSTTYPE='\"arm64\"' \
-    -DCONF_OSTYPE='\"darwin20.3.0\"' -DCONF_VENDOR='\"apple\"' \
-    -DPACKAGE='\"bash\"' -DLOCALEDIR='\"/usr/share/locale\"' \
+    -DHAVE_CONFIG_H -DSHELL=1 -DPROGRAM=\"bash\" -UREADLINE \
+    -DCONF_MACHTYPE=\"arm64-apple-darwin20.3.0\" -DCONF_HOSTTYPE=\"arm64\" \
+    -DCONF_OSTYPE=\"darwin20.3.0\" -DCONF_VENDOR=\"apple\" \
+    -DPACKAGE=\"bash\" -DLOCALEDIR=\"/usr/share/locale\" \
     -I $BASHSRC -I $BASHSRC/include -I $BASHSRC/builtins -I $BASHSRC/lib -I $BASHTOP \
     -I $BOUT/compat_include -I $OUT/compat_include \
     -I $LIBC/include -I $LIBC/darwin -I $LIBC/fbsdcompat -I $LIBC/locale -I $LIBC/locale/FreeBSD -I $LIBC/stdtime/FreeBSD -I $LIBC/gen \

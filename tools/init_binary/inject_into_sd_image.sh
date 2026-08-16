@@ -86,6 +86,17 @@ else
     echo "= tools/userland_staging/bash.macho not built -- run build_bash.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/uname.macho ]; then
+    mkdir -p "$MNT/usr/bin"
+    cp tools/userland_staging/uname.macho "$MNT/usr/bin/uname"
+    chmod 755 "$MNT/usr/bin/uname"
+    echo "+ wrote $(wc -c < tools/userland_staging/uname.macho) bytes to $MNT/usr/bin/uname"
+    echo "  (real, unmodified Apple uname -- Phase 4 step 3's first real command,"
+    echo "  see docs/roadmap.md)"
+else
+    echo "= tools/userland_staging/uname.macho not built -- run build_uname.sh first if wanted, skipping"
+fi
+
 mkdir -p "$MNT/tmp"
 echo "+ ensured $MNT/tmp exists (real fopen()-family O_CREAT target dir -- same"
 echo "  class of gap as /etc and /dev above; found via a real QEMU boot-test"

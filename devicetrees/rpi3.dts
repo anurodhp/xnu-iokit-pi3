@@ -45,6 +45,24 @@
 	#address-cells = <2>;
 	#size-cells = <2>;
 
+	/* Real, unmodified Apple IODTPlatformExpert::getMachineName()
+	 * (iokit/Kernel/IOPlatformExpert.cpp) reads this exact property
+	 * (gIODTModelKey == "model") off the root node's provider and
+	 * returns false -- not a stub, real deprecated-but-still-live
+	 * logic -- when it's absent, which is exactly what
+	 * bsd/kern/kern_mib.c's real HW_MACHINE sysctl handler treats as a
+	 * hard EINVAL (this board takes that file's non-XNU_TARGET_OS_OSX
+	 * branch, since BCM2837 builds embedded/iPhoneOS, not macOS -- see
+	 * CLAUDE.md). Found via a real QEMU boot-test: `uname`'s real,
+	 * unmodified Apple source (third_party/shell_cmds/uname/uname.c)
+	 * calls uname(2)'s real sysctl(CTL_HW, HW_MACHINE, ...) path and
+	 * got a genuine EINVAL back, confirmed via a scratch sysctl_probe
+	 * that isolated it to this exact MIB (KERN_OSTYPE/HOSTNAME/
+	 * OSRELEASE/VERSION all real-succeeded). Not a userland bug --
+	 * this synthetic device tree was simply missing a property real
+	 * hardware's firmware-provided DT always carries. */
+	model = "BCM2837";
+
 	cpus {
 		#address-cells = <1>;
 		#size-cells = <0>;

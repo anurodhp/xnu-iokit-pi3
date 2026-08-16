@@ -18,6 +18,26 @@ with open(cmds_file) as f:
     commands = [l.rstrip("\n") for l in open(cmds_file) if not l.startswith("#")]
     commands = [l.rstrip("\n") for l in commands]
 
+# NOTE (2026-08-15): two or more concurrent QEMU/TCG instances on this
+# host (e.g. multiple parallel forks each boot-testing their own scratch
+# image at once) starve each other for CPU badly enough that a boot which
+# normally reaches kernel text in a few seconds instead never gets there
+# at all inside this harness's own 240s loop -- reproduced with a
+# genuinely unmodified, previously-known-good image/kernel/dtb, purely by
+# having 2 other unrelated QEMU processes running at 100% CPU each at the
+# same time; the hang vanished immediately once those exited. Real
+# resource contention, not a boot regression. The fix is a CALLER-SIDE
+# convention, not something this script enforces itself: wrap whatever
+# invokes this script with a shared `mkdir qemu/.qemu_test_lock` /
+# poll-retry / `rmdir` (trap-protected) around the whole run, so only one
+# QEMU instance boots at a time project-wide. Deliberately NOT locking
+# inside this script itself -- an earlier version of this file did that
+# and self-deadlocked the moment a caller ALSO wrapped it in the same
+# outer lock (mkdir already held by the caller's own shell, this
+# script's own mkdir attempt then waits forever for a lock its own
+# parent process is holding). One lock, acquired once, at the outermost
+# caller -- see CLAUDE.md's "Boot / test commands" section.
+
 master, slave = pty.openpty()
 cmd = [
     "./third_party/qemu-zhuowei/aarch64-softmmu/qemu-system-aarch64",

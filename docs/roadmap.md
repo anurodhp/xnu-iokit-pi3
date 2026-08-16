@@ -2387,6 +2387,144 @@ below for whoever continues.**
   writeup, committed together in the main repo. `third_party/xnu-7195`
   has no net changes this pass (diagnostic added and fully reverted).
 
+**Twentieth pass, 2026-08-16: root-caused and FIXED the Nineteenth pass's
+open "entry page never mapped" bug -- it turned out to be TWO separate,
+real bugs, neither one actually in the kernel's page-in path the
+Nineteenth pass suspected. Also found (not yet fixed) a fourth,
+different bug: bash now runs real code but hangs indefinitely partway
+through interactive startup with the kernel provably idle, not crashed.**
+
+- **Bug 1 (test infrastructure, not a kernel/userland bug) -- real,
+  confirmed via `xxd`/`strings`, FIXED**: `devicetrees/rpi3.dtb` had been
+  regenerated with the *wrong* `dtc` -- the host's Homebrew `dtc`
+  (`/opt/homebrew/bin/dtc`), which emits a standard Linux FDT blob (magic
+  `d00dfeed`), instead of this project's patched
+  `third_party/dtc-AppleDeviceTree/dtc`, which emits Apple's
+  proprietary `IODeviceTree` binary format (no magic number, a raw
+  node/property count header -- see that tool's own `-h` output).
+  Apple's `IODTPlatformExpert` can't parse a standard FDT, so XNU never
+  produced any serial output past the QEMU loader's own "xnu" banner --
+  every single QEMU boot test since the DTB was last regenerated (for
+  this same day's earlier `model = "BCM2837"` property addition, needed
+  by `uname`'s `HW_MACHINE` sysctl -- see the git history around
+  `devicetrees/rpi3.dts`) hung identically, indistinguishable from the
+  known concurrent-QEMU-contention issue `_pty_test_phase5.py` already
+  documents. This is almost certainly what the session's "several stuck
+  processes" were: QEMU instances that never reached kernel text, sitting
+  in `_pty_test_phase5.py`'s 240s wait loop with zero output, for a
+  completely different reason than that script's own contention note.
+  **Fix**: regenerate with the correct tool --
+  `third_party/dtc-AppleDeviceTree/dtc -I dts -O dtb -o
+  devicetrees/rpi3.dtb devicetrees/rpi3.dts`. No source change; the
+  fixed `.dtb` binary ships in this commit. Lesson for next time: verify
+  a regenerated `.dtb`'s first bytes are NOT `d00dfeed` before trusting a
+  boot test's silence as a real bug.
+- **Bug 2 (test harness usage, this session's own mistake) -- FIXED**:
+  the login test `cmds` file (`tools/userland_staging/bash_diag_cmds.txt`,
+  and identically `ps_qemu_test_cmds.txt` from Phase 4 step 3's ps work)
+  had `login: root` as its first line. `_pty_test_phase5.py` sends each
+  `cmds` line VERBATIM as the typed response once the prompt suffix is
+  seen -- it does not strip the prompt text itself. So `init.c`'s
+  `do_login()` genuinely received the literal 12-character username
+  `"login: root"` (confirmed via a temporary `DIAGLOGIN` print of the raw
+  `name`/`pass` buffers), which of course doesn't match any real account,
+  producing a real (if misleadingly-labeled) "Login incorrect". The
+  correct `cmds` file content is just the bare reply values (`root` /
+  `darwin` / ...), matching how `phase5_cmds.txt` (the one cmds file that
+  predates this mistake) is actually formatted. This explains why the
+  Nineteenth pass's own "entry page never mapped" diagnosis, captured via
+  a *different*, non-cmds-file method (a proc-name-gated panic), was
+  never actually contradicted by a login-flow test -- no login-flow test
+  had ever passed to compare against.
+- **Bug 3 (real, in `tools/userland_staging/build_bash.sh`) -- root
+  cause of the Nineteenth pass's actual SIGSEGV, confirmed via
+  disassembly, FIXED**: `CFLAGS` is built as one `"..."`-quoted shell
+  string containing, among others,
+  `-DCONF_HOSTTYPE='\"arm64\"'`. Inside a double-quoted string, `\"` is a
+  real escaped double-quote, but the surrounding `'` characters are
+  *not* shell-special there -- they end up as two literal single-quote
+  characters embedded in `$CFLAGS`'s value. When `$CFLAGS` is later
+  expanded unquoted on the `clang` command line, word-splitting does not
+  re-parse those embedded quote characters as shell syntax (a variable's
+  expanded content is never re-quoted), so clang's argv genuinely
+  contains the 27-byte token `-DCONF_HOSTTYPE='"arm64"'` -- literal single
+  quotes and all. Clang's `-D name=value` splits on the first `=`, so
+  `CONF_HOSTTYPE` gets defined to the token text `'"arm64"'` (9
+  characters: `'`, `"`, `a`, `r`, `m`, `6`, `4`, `"`, `'`). Substituted
+  into `conftypes.h`/`variables.c`'s `set_if_not ("HOSTTYPE",
+  CONF_HOSTTYPE)`, the C lexer sees `'"arm64"'` -- a single-quote begins a
+  *character constant*, not a string, containing `"arm64"` (7 raw
+  characters) before the closing `'`. This is a real (if archaic) GNU
+  multi-character-constant literal; clang packs the *last* 4 characters
+  (`m`, `6`, `4`, `"`) into a 32-bit integer and emits `mov`/`movk` to
+  materialize it -- exactly the `mov x8, #0x3422 / movk x8, #0x6d36, lsl
+  #16` pattern found at the real crash site. That integer, `0x6d363422`,
+  then gets passed as `make_variable_value()`'s `char *value` argument
+  and dereferenced (`variables.c:1868`'s `else if (*value)`), a garbage
+  pointer well below `__PAGEZERO`'s top (`0x100000000`) -- an
+  always-unmapped guard region, hence the fault. `CONF_OSTYPE`/
+  `CONF_MACHTYPE`/`CONF_VENDOR`/`PROGRAM`/`PACKAGE`/`LOCALEDIR` all used
+  the identical broken quoting pattern and were equally corrupted
+  (`OSTYPE`'s and `MACHTYPE`'s calls share the exact same garbage value
+  via a spilled stack slot -- confirmed via disassembly, not guessed).
+  Real call chain that reaches the crash, resolved via a temporary
+  frame-pointer walk in `handle_user_abort()` (`x29`/`x30` pairs,
+  `copyin()`-read from kernel, gated on `proc_selfname() == "bash"`, same
+  discipline as the Eighteenth/Nineteenth passes' fault-capture
+  technique): `bash_shell_real_main` -> `shell_initialize` ->
+  `initialize_shell_variables` -> `set_machine_vars` -> `set_if_not` ->
+  `bind_variable_internal` -> `make_variable_value` (crash). **Fix**:
+  drop the redundant single quotes entirely -- `-DCONF_HOSTTYPE=\"arm64\"`
+  (verified in isolation first: `CFLAGS="-DFOO=\"bar\""` unquoted-expanded
+  really does define `FOO` to the string `"bar"`, not a char constant).
+  Verified post-fix via disassembly: all three calls in `set_machine_vars`
+  now correctly `adrp`/`add` real string-literal addresses
+  (`"arm64"`/`"darwin20.3.0"`/`"arm64-apple-darwin20.3.0"`), and a full
+  QEMU boot no longer produces `DIAG20`/SIGSEGV at all (confirmed with
+  the diagnostic still in place, then again after reverting it).
+- **Bug 4 -- real, precisely characterized, NOT fixed this pass**: with
+  bugs 1-3 fixed, `exec /bin/bash` no longer crashes, executes real code
+  across a wide spread of its own text segment (dozens of distinct
+  `DIAG20` exec-fault addresses, all `result=0x0`/success, confirming
+  demand-paging itself works fine at this binary's size -- the
+  Nineteenth pass's "largest Mach-O ever exec'd" size hypothesis is
+  false, or at least not the operative bug), then goes completely and
+  reproducibly silent partway through interactive startup: identical
+  output byte-for-byte across a 240s and an independent 480s run (no
+  crash message, no further disk I/O, no prompt). QEMU-monitor `info
+  registers`, sampled 4 times a few seconds apart via the monitor socket,
+  shows the CPU cycling through `_processor_idle`/`_mach_absolute_time`/
+  `_setPop`/`_thread_invoke` in EL1 each time (resolved against
+  `third_party/xnu-7195/BUILD/obj/.../mach.development.bcm2837.unstripped`'s
+  own `nm` output) -- this is the kernel's own genuine idle loop, the
+  same signature as this project's very first boot-to-idle milestone, NOT
+  a busy-spin. In other words: the kernel has nothing runnable. bash's
+  single thread is blocked on something that never wakes it -- most
+  likely a real syscall this project's userland stub layer or kernel
+  mishandles by blocking instead of failing/returning immediately, given
+  `bash_syscalls.c`'s own header notes `tcsetpgrp`/`tcgetattr` are
+  stubbed to return `ENOTTY` (non-blocking) but real bash's job-control
+  startup path (`initialize_job_control()` et al.) may call raw
+  `ioctl()` directly rather than through those wrappers, and this
+  project's raw `ioctl()` is a real, unfiltered syscall reaching whatever
+  the kernel's console/tty driver does for an unrecognized command --
+  not yet checked whether that path can block instead of erroring.
+  Whoever continues: instrument syscall entry/exit (or the specific
+  `ioctl`/`read`/`wait4` handlers) gated on `proc_selfname() == "bash"`,
+  same technique as this pass, to find the exact blocking call.
+- **Diagnostics used this pass, all reverted before commit** (same
+  discipline as prior passes): `osfmk/arm64/sleh.c` grew a
+  `proc_selfname()`-gated `printf` in `handle_user_abort()` (widened
+  across three iterations: exec-faults only -> any-fault -> plus an
+  `x29`/`x30` frame-pointer walk) and a temporary `DIAGLOGIN` print of
+  the raw login `name`/`pass` buffers in `tools/init_binary/init.c`
+  (echoes a plaintext password -- confirmed removed, not shipped).
+  `third_party/xnu-7195` has zero net diff after this pass.
+- **Commit**: `devicetrees/rpi3.dtb` (regenerated, correct format),
+  `tools/userland_staging/build_bash.sh` (quoting fix),
+  `tools/userland_staging/bash_diag_cmds.txt` (new, correctly-formatted
+  login test asset), and this writeup.
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions
