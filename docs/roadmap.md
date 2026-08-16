@@ -2658,6 +2658,60 @@ verified correct via QEMU against real `/etc/master.passwd`/`/etc/group`:
 real byte-exact file contents, correct `wc` line/word/byte counts,
 correct `ENOENT` handling for a missing file.
 
+**Tier 3 (cont'd): `tail`, DONE, QEMU-verified 2026-08-16.** By far the
+deepest dependency chain of any Tier 1-3 command -- pulled in `forward.c`/
+`reverse.c`/`misc.c`/`read.c` alongside `tail.c` itself, and needed:
+- **Real, newly-generated raw syscalls** this project had never built
+  before: `kqueue`/`kevent` (real, standard syscalls -- not
+  `NO_SYSCALL_STUB` -- generated the same Perl way as `getlogin`) and
+  `mmap`/`munmap`'s private `__mmap`/`__munmap` (both `NO_SYSCALL_STUB`,
+  matching the `___getlogin` pattern). `tail -f`'s follow mode is
+  therefore now backed by REAL kqueue-based file-change notification,
+  not a stub -- not yet QEMU-verified in follow mode specifically, but
+  link-complete and using the real mechanism, not a placeholder.
+- **Real Apple `mmap(2)`/`munmap(2)` public wrappers couldn't compile
+  as-is**: both need a private `stack_logging_internal.h` (optional VM
+  allocation stack-logging hook) that doesn't exist anywhere in this
+  checkout (confirmed via `find`/`grep`, not guessed -- it lives in a
+  separate, not-pulled Apple project). `simple_cmds_mmap_compat.c`
+  reimplements the real, documented `mmap(2)`/`munmap(2)` contract
+  exactly (`MAP_PRIVATE`/`MAP_SHARED` validation, `len==0` rejection,
+  the real `MAP_UNIX03` flag the kernel's mmap syscall handler expects)
+  without the stack-logging call -- Apple's real file is what's
+  genuinely unbuildable here, not too complex to bother with, so a
+  narrow custom fallback is the correct move per `CLAUDE.md`'s
+  source-priority rule.
+- **`_nanosleep`** (private, called by `Libc/gen/FreeBSD/usleep.c`,
+  itself needed by `forward.c`'s follow-mode poll interval): genuinely
+  undefined anywhere in this checkout (only callers exist). Real public
+  `nanosleep()` is Mach-IPC-based (`host_get_clock_service` +
+  `semaphore_create` + `clock_get_time`), a materially larger subsystem
+  this project hasn't built (same class of gap as `ps_task_info_stub.c`'s
+  header on `task_for_pid`). `simple_cmds_nanosleep_compat.c` is a real,
+  working spin-wait against `mach_absolute_time()`/`mach_timebase_info()`
+  (both already linked) instead -- honestly documented as CPU-burning
+  rather than blocking, not fabricated as the ideal implementation.
+- Also needed: `Libc/stdio/FreeBSD/_flock_stub.c` (real `_flockfile`/
+  `_funlockfile`, aliased to the public names), `freopen.c` (needed a
+  real, missing `FLOCKFILE`/`FUNLOCKFILE` macro pair added to
+  `libc_build_prototypes.h`, and `_fcntl`'s prototype widened from a
+  fixed 3-arg signature to the real variadic one -- `freopen.c`
+  genuinely calls it with 2 args for `F_GETFL`, a real, valid, previously
+  unexercised real `fcntl(2)` usage pattern), `strtoll.c`, and a freshly
+  generated `_ftruncate` raw syscall (standard, not `NO_SYSCALL_STUB`,
+  needed by `freopen.c`'s truncate-on-reopen path).
+- Note for later: `libc_build_prototypes.h`'s new `FLOCKFILE`/
+  `FUNLOCKFILE` macros trigger a (harmless) `-Wmacro-redefined` warning
+  when rebuilding `ps`/other tiers that already carry their own
+  no-op-valued `stdio_flockfile_compat.h` copies of the same macro names
+  -- the two don't currently collide in practice (no rebuilt tier's own
+  sources actually call `FLOCKFILE`/`FUNLOCKFILE`), but worth
+  consolidating into one shared compat header next time either tier's
+  build script is touched, rather than leaving two silently-diverging
+  definitions of the same macro pair.
+`tail`/`tail -n 1` both verified via QEMU against real
+`/etc/master.passwd`, exit 0, real content.
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions

@@ -1,4 +1,4 @@
 root
 darwin
-exec /bin/wc /etc/master.passwd
-exec /bin/head /etc/master.passwd
+exec /bin/tail /etc/master.passwd
+exec /bin/tail -n 1 /etc/master.passwd

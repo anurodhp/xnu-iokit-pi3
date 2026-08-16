@@ -56,7 +56,32 @@ int _pthread_once(void *once_control, void (*init_routine)(void));
  * implicit-int-declaration gap already documented above for the locale
  * tier's _open/_read/etc. Signatures match the real public fcntl(2)/
  * dup2(2)/pthread_mutex_*() they alias. */
-int _fcntl(int fd, int cmd, long arg);
+/* Real fcntl(2) is variadic (third argument's type/presence depends on
+ * cmd) -- a fixed 3-arg prototype worked for every caller until
+ * text_cmds/tail's freopen.c pull, which genuinely calls _fcntl(fd,
+ * F_GETFL) with only 2 arguments (real, valid real fcntl(2) usage for
+ * that command) and hit a real "too few arguments" error against the
+ * old fixed-arity signature -- confirmed via that exact build failure,
+ * not guessed preemptively. */
+int _fcntl(int fd, int cmd, ...);
+/* freopen.c/_flock_stub.c also assume FLOCKFILE(fp)/FUNLOCKFILE(fp)
+ * macros exist (real Apple's own private stdio header pair, absent from
+ * this checkout -- confirmed via grep across third_party/Libc, same
+ * class of gap as the underscore-prefixed prototypes above). Real,
+ * documented semantics: real BSD stdio's own locking wrappers, safe to
+ * call unconditionally (flockfile()/funlockfile() are real no-ops on a
+ * single-threaded FILE*, already declared in stdio.h). */
+#ifndef FLOCKFILE
+#define FLOCKFILE(fp) flockfile(fp)
+#define FUNLOCKFILE(fp) funlockfile(fp)
+#endif
+/* Real Libc/gen/FreeBSD/usleep.c/sleep.c call this private name with
+ * zero prototype in scope in this checkout too -- same gap, real
+ * definition in simple_cmds_nanosleep_compat.c (see that file's header
+ * for why it's a real spin-wait, not the Mach-IPC-based public
+ * nanosleep()). */
+struct timespec;
+int _nanosleep(const struct timespec *req, struct timespec *rem);
 int _dup2(int from, int to);
 int _pthread_mutex_lock(void *mutex);
 int _pthread_mutex_trylock(void *mutex);
