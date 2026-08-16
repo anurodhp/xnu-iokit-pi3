@@ -114,7 +114,7 @@ fi
 # /usr/bin, on a real system). Generic loop instead of one if-block per
 # command -- this list only grows as more tiers land.
 mkdir -p "$MNT/bin"
-for cmd in true false yes pwd basename dirname echo printf hostname logname cat wc head tail mkdir touch rm; do
+for cmd in true false yes pwd basename dirname echo printf hostname logname cat wc head tail mkdir touch rm which env; do
     if [ -f "tools/userland_staging/${cmd}.macho" ]; then
         cp "tools/userland_staging/${cmd}.macho" "$MNT/bin/${cmd}"
         chmod 755 "$MNT/bin/${cmd}"

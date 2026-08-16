@@ -65,7 +65,7 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
 # this project's other tiers already take with e.g. libclosure/libmalloc
 # stand-ins -- confirmed no duplicate-symbol conflicts, zero of these
 # tier-1 sources define their own err/getopt).
-COMMON_EXTRA="$LIBC/gen/FreeBSD/err.c $LIBC/stdlib/FreeBSD/getopt.c simple_cmds_read_compat.c"
+COMMON_EXTRA="$LIBC/gen/FreeBSD/err.c $LIBC/stdlib/FreeBSD/getopt.c simple_cmds_read_compat.c simple_cmds_getenv_compat.c"
 for f in $COMMON_EXTRA; do
     base=$(basename "$f" .c)
     out="$OUT/simple_obj/common_${base}.o"
@@ -94,7 +94,7 @@ fi
 # syscall depending on whether the public Libc wrapper calls a private
 # name -- e.g. `___getlogin`/`___mmap`/`___munmap` vs plain `_kevent`/
 # `_kqueue`, which have no private wrapper layer at all).
-SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access"
+SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access _getuid _execve"
 if [ ! -f "$OUT/simple_getlogin_trap.o" ]; then
     mkdir -p "$OUT/sys_asm_compat/mach/arm64"
     cat > "$OUT/sys_asm_compat/mach/arm64/asm.h" <<'EOF'
@@ -128,7 +128,7 @@ LINK_COMMON="$OUT/libc_printf.a $OUT/libc_gen.a $OUT/libc_stdio.a $OUT/libc_loca
     $OUT/simple_obj/sys__kevent.o $OUT/simple_obj/sys__kqueue.o $OUT/simple_obj/sys__ftruncate.o \
     $OUT/simple_obj/sys__mkdir.o $OUT/simple_obj/sys__utimes.o $OUT/simple_obj/sys____chmod.o $OUT/simple_obj/sys__sigprocmask.o \
     $OUT/simple_obj/sys__fchmodat.o $OUT/simple_obj/sys__fstatat64.o $OUT/simple_obj/sys__mkdirat.o $OUT/simple_obj/sys__umask.o \
-    $OUT/simple_obj/sys__access.o \
+    $OUT/simple_obj/sys__access.o $OUT/simple_obj/sys__getuid.o $OUT/simple_obj/sys__execve.o \
     $OUT/libclosure.a $OUT/libmalloc.a $OUT/cerror_stub.o $OUT/libplatform.a"
 LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_close,_close\$UNIX2003 \
@@ -163,6 +163,7 @@ LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_pthread_rwlock_rdlock\$UNIX2003,__pthread_rwlock_rdlock \
     -Wl,-alias,_pthread_rwlock_wrlock\$UNIX2003,__pthread_rwlock_wrlock \
     -Wl,-alias,_pthread_rwlock_unlock\$UNIX2003,__pthread_rwlock_unlock \
+    -Wl,-alias,_strchr,_index \
     -Wl,-alias,_fstatat64,_fstatat\$INODE64 \
     -Wl,-alias,_closedir,_closedir\$UNIX2003 \
     -Wl,-alias,_opendir,_opendir\$INODE64\$UNIX2003 \
@@ -198,6 +199,8 @@ CMD_LIST=(
     "mkdir:$FILE_CMDS/mkdir/mkdir.c:$XNU/libsyscall/wrappers/unix03/chmod.c|$LIBC/util/mkpath_np.c|$LIBC/gen/FreeBSD/setmode.c|simple_cmds_sigprocmask_compat.c"
     "touch:$FILE_CMDS/touch/touch.c:$XNU/libsyscall/wrappers/unix03/chmod.c|simple_cmds_time_compat.c|$LIBC/sys/gettimeofday.c|ps_commpage_gettimeofday_stub.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c|simple_cmds_lutimes_compat.c"
     "rm:$FILE_CMDS/rm/rm.c:$LIBC/gen/get_compat.c|ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c|simple_cmds_rpmatch_compat.c|simple_cmds_undelete_stub.c|$LIBC/gen/strtofflags.c"
+    "which:$SHELL_CMDS/which/which.c:"
+    "env:$SHELL_CMDS/env/env.c:$SHELL_CMDS/env/envopts.c|$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c"
 )
 
 built=0
@@ -262,7 +265,7 @@ for spec in "${CMD_LIST[@]}"; do
         -o "${name}.macho" \
         ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
         "$wrapper_obj" "$obj" $extra_objs \
-        "$OUT/simple_obj/common_err.o" "$OUT/simple_obj/common_getopt.o" $common_read_compat \
+        "$OUT/simple_obj/common_err.o" "$OUT/simple_obj/common_getopt.o" "$OUT/simple_obj/common_simple_cmds_getenv_compat.o" $common_read_compat \
         $extra_libs \
         $LINK_COMMON $LINK_ALIASES 2>"$OUT/simple_obj/${name}_link.err"; then
         echo "  skip: $name (link)"

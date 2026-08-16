@@ -2897,6 +2897,61 @@ works internally -- this gap is specifically about what child processes
    audited for what it assumes about `crt.c`'s real argv/envp handoff
    -- check `third_party/Csu/crt.c`'s own envp plumbing first).
 
+**DONE, QEMU-verified 2026-08-16.** Both halves landed, plus a real,
+previously-latent third bug found in between them:
+1. `init.c`'s `cmd_exec()` now builds a real, non-empty envp
+   (`build_envp()`) before every exec: `PATH=/bin:/usr/bin`,
+   `HOME=<real logged-in-user's home dir>`, `USER=<real logged-in
+   user>`, `TZ=UTC` (matches Phase 4.6's real timezone-database item).
+   Honest, scoped fix, explicitly NOT a full dynamic shell
+   `export`/`set` variable system -- this shell has no such builtins.
+2. **Real bug found while wiring the `getenv()` side**: `getenv()`
+   still returned `NULL` even with a real, correct envp reaching
+   `execve()`. Root cause was neither side originally suspected --
+   `third_party/Csu/start.s`'s real arm64 entry point (`start:`) calls
+   `bl _main` **directly**, completely bypassing `crt.c`'s own real
+   `_start()` C function (the one that does `environ = envp;`). That
+   function turns out to be real, genuine dead code on this target:
+   its own header comment says "this file is not needed for executables
+   targeting 10.5 or later -- start calls main() directly", and its
+   body is gated behind `#if __DYNAMIC__ && OLD_LIBSYSTEM_SUPPORT`
+   (confirmed via an empty `-E` preprocessor output, not assumed --
+   neither macro is ever defined in this project's builds). On real
+   modern Darwin, **dyld itself** populates `environ` before jumping to
+   `main()`; this project has no dyld, so nothing ever did. This bug
+   has been latent since this project's very first Csu/crt0 work --
+   every prior command only ever needed `argc`/`argv` (which the asm
+   sets up directly, correctly, independent of `crt.c`), so `environ`
+   staying permanently `NULL` never mattered until this exact work
+   item. **Real fix**: one store instruction in `start.s`, right before
+   `bl _main` -- `str x2, [x9]` into the real `_environ` global (`x2`
+   already holds `envp` at that point, untouched by the preceding
+   env-array NULL-scan loop) -- doing exactly what dyld's own
+   `ProgramVars` registration would have done for this one global.
+   Committed in `third_party/Csu`'s own repo (separate from this one,
+   see `CLAUDE.md`).
+3. `getenv()`/`setenv()`/`unsetenv()`/`putenv()`: real Apple
+   `Libc/stdlib/FreeBSD/getenv.c` hits a genuine parse error in this
+   checkout (`os/lock_private.h:288`, a real header-compatibility gap,
+   not a design issue) for a lock this single-threaded target doesn't
+   need anyway (see Phase 7.5's pthread entry) -- real, correct,
+   from-scratch POSIX semantics in `simple_cmds_getenv_compat.c`
+   instead, per `CLAUDE.md`'s source-priority rule (Apple's real file is
+   what's unbuildable here, not too complex to bother with).
+4. Real `which` and `env` (`third_party/shell_cmds/{which,env}/`) both
+   built and QEMU-verified as the natural capstone: `which cat` exits 0,
+   `which nonexistent-cmd-xyz` exits 1, `env` (no args) prints the real
+   `PATH`/`HOME`/`USER`/`TZ` table with no crash (was a real `execve()`-
+   needs-real-`environ` chain: `env.c`'s own exec path needed
+   `Libc/gen/FreeBSD/exec.c`, which needed a private `_execve` forwarder
+   and `_NSGetEnviron()`, both now real). Also found and fixed a real,
+   independent reproducibility bug in `build_libc_string.sh`: 9 FreeBSD
+   string functions (`strchr`/`memchr`/`strcpy`/etc, needed by `index(3)`
+   for `env`) were being silently re-archived from stale `.o` files via
+   an unconditional glob, never actually re-fetchable from a clean
+   checkout since they'd been dropped from the script's own declared
+   file list at some point.
+
 ### Real POSIX regex (`regcomp`/`regexec`/`regfree`)
 
 **Currently worked around by**: `simple_cmds_rpmatch_compat.c` (a real,

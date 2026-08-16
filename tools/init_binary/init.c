@@ -684,6 +684,11 @@ static int tokenize(char *line, char *argv[], int max_args) {
 static char current_user[64] = "root";
 static unsigned int current_uid = 0;
 static unsigned int current_gid = 0;
+/* Real HOME for exec'd children's real envp (see build_envp() below) --
+ * a separate, permanent snapshot from cwd_path (which is mutable, `cd`
+ * changes it) taken once at successful login, same source (pw->pw_dir,
+ * validated) just not re-mutated afterward. */
+static char current_home[MAX_PATH] = "/";
 
 #define PASSWORD_MAX 128
 
@@ -901,6 +906,7 @@ static int do_login(void) {
                 sys_close(dfd);
                 if (sr >= 0 && (st.st_mode & S_IFMT) == S_IFDIR) {
                     kstrncpy(cwd_path, resolved, MAX_PATH);
+                    kstrncpy(current_home, resolved, MAX_PATH);
                 }
             }
 
@@ -1159,6 +1165,47 @@ static void putint(long v) {
     putn(buf, (size_t)i);
 }
 
+/* Real, non-empty envp for exec'd children -- see docs/roadmap.md Phase
+ * 4.6 "Real environment variable plumbing" / docs/backlog.md P2 item 31.
+ * Honest, scoped fix: a fixed set of real, sane default variables built
+ * fresh before every exec, NOT a full dynamic export/set shell-variable
+ * system (this shell has no export/set builtins) -- real capability this
+ * unblocks: which/whereis (both call getenv("PATH"), previously exited
+ * immediately on NULL) and any future getenv("HOME")/getenv("USER")/
+ * getenv("TZ") consumer. TZ=UTC matches the real UTC/GMT-only tzdata
+ * this project provisions onto the image (same Phase 4.6 pass, item 1).
+ * PATH matches the real /bin layout every Phase 4 step 3 command lands
+ * in (see inject_into_sd_image.sh). */
+#define MAX_ENV_VARS 8
+#define ENV_BUF_SIZE 512
+static char env_buf[ENV_BUF_SIZE];
+static char *envp_table[MAX_ENV_VARS + 1];
+
+static void env_add(int *n, size_t *off, const char *name, const char *value) {
+    if (*n >= MAX_ENV_VARS) return;
+    size_t nlen = kstrlen(name);
+    size_t vlen = kstrlen(value);
+    /* +2 for '=' and the NUL terminator */
+    if (*off + nlen + vlen + 2 > ENV_BUF_SIZE) return;
+    envp_table[*n] = &env_buf[*off];
+    kmemcpy(&env_buf[*off], name, nlen); *off += nlen;
+    env_buf[(*off)++] = '=';
+    kmemcpy(&env_buf[*off], value, vlen); *off += vlen;
+    env_buf[(*off)++] = 0;
+    (*n)++;
+}
+
+static char *const *build_envp(void) {
+    int n = 0;
+    size_t off = 0;
+    env_add(&n, &off, "PATH", "/bin:/usr/bin");
+    env_add(&n, &off, "HOME", current_home);
+    env_add(&n, &off, "USER", current_user);
+    env_add(&n, &off, "TZ", "UTC");
+    envp_table[n] = 0;
+    return envp_table;
+}
+
 /* `exec <path> [args...]`: fork + execve + wait4 a real on-disk binary, for
  * driving tools/userland_staging's smoketests interactively from this
  * shell -- see docs/roadmap.md Phase 4. Real BSD wait status encoding
@@ -1183,8 +1230,7 @@ static void cmd_exec(int argc, char **argv) {
         int i;
         for (i = 0; i + 1 < argc && i < MAX_ARGS; i++) child_argv[i] = argv[i + 1];
         child_argv[i] = 0;
-        static char *const envp0[] = { 0 };
-        sys_execve(resolved, child_argv, envp0);
+        sys_execve(resolved, child_argv, build_envp());
         /* only reached if execve() itself failed (e.g. ENOENT/ENOEXEC) */
         put(resolved);
         put(": exec failed\n");

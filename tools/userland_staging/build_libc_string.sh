@@ -86,15 +86,39 @@ echo "apple_string: $ok compiled, $skip skipped (locale/pthread-TSD/wide-char - 
 # Real FreeBSD source, fetched fresh each run (see freebsd_string/*.c for
 # the exact upstream URLs baked into this list - not vendored/committed as
 # a full clone, just the handful of files this project actually needs).
+# strchr/strchrnul/ffs/memchr/strcpy/strlcat/strlcpy/strncpy/strnlen added
+# to this declared list here -- all were previously present in this dir
+# only as stale leftover .o's from an older revision of this script
+# (never re-declared after being trimmed down to 9 names), silently
+# re-archived below below via the unconditional `freebsd_string/*.o` glob
+# without any of them actually being reproducible from a clean checkout.
+# Found while adding `env`, which needs strchr's real `index` alias --
+# every one of these is real, already in use, just wasn't being rebuilt.
 mkdir -p "$OUT/freebsd_string"
-for f in bcopy memcpy memmove memset bzero memcmp strlen strcmp strncmp; do
+for f in bcopy memcpy memmove memset bzero memcmp strlen strcmp strncmp \
+         strchr strchrnul ffs memchr strcpy strlcat strlcpy strncpy strnlen; do
     dst="$OUT/freebsd_string/${f}.c"
     if [ ! -f "$dst" ]; then
         curl -sf -o "$dst" "https://raw.githubusercontent.com/freebsd/freebsd-src/main/lib/libc/string/${f}.c"
     fi
     clang $CFLAGS -I "$OUT/freebsd_string" -I "$OUT/compat_include" "$dst" -o "$OUT/freebsd_string/${f}.o"
 done
-echo "freebsd_string: 9 compiled (memcpy/memmove/memset/memcmp/strlen/strcmp/strncmp/bcopy/bzero)"
+echo "freebsd_string: 18 compiled (memcpy/memmove/memset/memcmp/strlen/strcmp/strncmp/bcopy/bzero/strchr/strchrnul/ffs/memchr/strcpy/strlcat/strlcpy/strncpy/strnlen)"
+
+# index(3) -- real BSD semantics are exactly strchr(3) under its legacy
+# pre-ANSI name. Real FreeBSD strchr.c (above) expresses this the normal
+# way, `__weak_reference(strchr, index);`, but this project's own
+# `Libc/fbsdcompat/sys/cdefs.h` deliberately defines `__weak_reference` as
+# a no-op (see that file) -- so the alias never actually gets created and
+# needs an explicit real definition instead. Not a stub: identical
+# behavior to real index(3), just spelled as a normal function instead of
+# relying on a weak-symbol mechanism this project's static-archive-only
+# linker setup doesn't use.
+cat > "$OUT/freebsd_string/index.c" <<'EOF'
+#include <string.h>
+char *index(const char *s, int c) { return strchr(s, c); }
+EOF
+clang $CFLAGS -I "$OUT/compat_include" "$OUT/freebsd_string/index.c" -o "$OUT/freebsd_string/index.o"
 
 rm -f "$OUT/libc_string.a"
 ar rcs "$OUT/libc_string.a" "$OUT"/apple_string/*.o "$OUT"/freebsd_string/*.o

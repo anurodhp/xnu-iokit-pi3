@@ -99,6 +99,10 @@ int _sigprocmask(int how, void *set, void *oset);
 int _pthread_rwlock_rdlock(void *l);
 int _pthread_rwlock_wrlock(void *l);
 int _pthread_rwlock_unlock(void *l);
+/* Real Libc/gen/FreeBSD/exec.c calls this private alias with zero
+ * prototype in scope too -- same gap, real definition in
+ * simple_cmds_execve_compat.c (see that file's header). */
+int _execve(const char *path, char *const argv[], char *const envp[]);
 int _dup2(int from, int to);
 int _pthread_mutex_lock(void *mutex);
 int _pthread_mutex_trylock(void *mutex);

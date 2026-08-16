@@ -27,6 +27,16 @@ const char *_getprogname(void) {
     return getprogname();
 }
 
+/* Real Phase 4.6 update (docs/roadmap.md "Real environment variable
+ * plumbing"): now `__attribute__((weak))`, same real technique the
+ * Nineteenth pass's `pthread_tsd_shim.c` fix already established for
+ * this exact situation (a default stub inside an archive, overridden by
+ * a real strong definition when a consumer also links one directly) --
+ * a consumer that provides a real getenv() reading a real `environ`
+ * (see `simple_cmds_getenv_compat.c`) gets that instead; every other
+ * consumer that doesn't (this stub's original callers, unchanged) still
+ * gets this exact fallback, zero regression. */
+__attribute__((weak))
 char *getenv(const char *name) {
     (void)name;
     return 0;

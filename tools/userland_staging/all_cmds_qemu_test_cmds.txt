@@ -1,0 +1,11 @@
+root
+darwin
+exec /bin/which env
+exec /bin/env
+exec /bin/true
+exec /bin/false
+exec /bin/echo hello
+exec /bin/cat /etc/group
+exec /usr/bin/uname -a
+exec /bin/ps -ax
+whoami

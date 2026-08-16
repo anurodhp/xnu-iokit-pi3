@@ -521,7 +521,19 @@ this pass even if the change itself is cheap.
     provisioned file). Full writeup: `docs/roadmap.md`'s Phase 4.6. Real
     `TZ` variable support still needs item 31 below (`getenv()` stub).
 
-31. **No real environment-variable plumbing.** `getenv()` always returns
+31. **[FIXED 2026-08-16]** Real, non-empty `envp` now built by `init.c`'s
+    `cmd_exec()` and correctly read via a real `getenv()`
+    (`simple_cmds_getenv_compat.c`). Found a real, previously-latent
+    third bug along the way: `third_party/Csu/start.s`'s arm64 entry
+    point calls `main()` directly, bypassing `crt.c`'s own `_start()`
+    (the function that sets `environ`) entirely -- that function is
+    real, documented dead code without dyld (which this project doesn't
+    have). Fixed with one real store instruction in `start.s`. `which`/
+    `env` both built and QEMU-verified as the capstone. Full writeup:
+    `docs/roadmap.md`'s Phase 4.6. Original problem description below,
+    kept for context.
+
+    **No real environment-variable plumbing.** `getenv()` always returns
     `NULL`; `init.c`'s `cmd_exec()` always execs children with an empty
     `envp`. Blocks `which`/`whereis` (both exit immediately on
     `getenv("PATH") == NULL`, confirmed real/honest behavior, not a
