@@ -196,7 +196,7 @@ CMD_LIST=(
     "head:$TEXT_CMDS/head/head.c:"
     "tail:$TEXT_CMDS/tail/tail.c:$TEXT_CMDS/tail/forward.c|$TEXT_CMDS/tail/reverse.c|$TEXT_CMDS/tail/misc.c|$TEXT_CMDS/tail/read.c|$LIBC/stdio/FreeBSD/_flock_stub.c|$LIBC/stdio/FreeBSD/freopen.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/gen/FreeBSD/usleep.c|simple_cmds_nanosleep_compat.c|simple_cmds_mmap_compat.c"
     "mkdir:$FILE_CMDS/mkdir/mkdir.c:$XNU/libsyscall/wrappers/unix03/chmod.c|$LIBC/util/mkpath_np.c|$LIBC/gen/FreeBSD/setmode.c|simple_cmds_sigprocmask_compat.c"
-    "touch:$FILE_CMDS/touch/touch.c:$XNU/libsyscall/wrappers/unix03/chmod.c|simple_cmds_time_compat.c|$LIBC/sys/gettimeofday.c|ps_commpage_gettimeofday_stub.c|simple_cmds_mktime_compat.c|simple_cmds_lutimes_compat.c"
+    "touch:$FILE_CMDS/touch/touch.c:$XNU/libsyscall/wrappers/unix03/chmod.c|simple_cmds_time_compat.c|$LIBC/sys/gettimeofday.c|ps_commpage_gettimeofday_stub.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c|simple_cmds_lutimes_compat.c"
     "rm:$FILE_CMDS/rm/rm.c:$LIBC/gen/get_compat.c|ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c|simple_cmds_rpmatch_compat.c|simple_cmds_undelete_stub.c|$LIBC/gen/strtofflags.c"
 )
 

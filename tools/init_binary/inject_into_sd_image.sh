@@ -130,6 +130,26 @@ echo "  class of gap as /etc and /dev above; found via a real QEMU boot-test"
 echo "  FAIL when tools/userland_staging/libc_stdio_smoketest.macho's real"
 echo "  fopen(\"/tmp/...\", \"w\") returned NULL on a fresh image with no /tmp)"
 
+# Real timezone database (Phase 4.6, docs/roadmap.md) -- real, unmodified
+# Apple-shipped TZif2 binary zoneinfo files, copied directly from this
+# host Mac's own /usr/share/zoneinfo/{UTC,GMT} (real Apple/IANA data,
+# not fabricated -- `file` confirms real "timezone data (fat), version
+# 2" format) rather than vendoring a whole IANA tzdata source tree +
+# building a real `zic` compiler, since this project's own
+# Libc/stdtime/FreeBSD/localtime.c only needs valid TZif files to exist
+# at the real paths it looks up, not a complete zone database. Minimal,
+# scoped, real -- not a fabricated stand-in. TZDIR/TZDEFAULT resolve to
+# /var/db/timezone/{zoneinfo,localtime} for this project's real
+# arm64-apple-ios14.4 (embedded, not TARGET_OS_OSX) build target -- see
+# third_party/Libc/stdtime/FreeBSD/tzfile.h's own real conditional.
+mkdir -p "$MNT/var/db/timezone/zoneinfo"
+cp tools/userland_staging/zoneinfo_minimal/UTC "$MNT/var/db/timezone/zoneinfo/UTC"
+cp tools/userland_staging/zoneinfo_minimal/GMT "$MNT/var/db/timezone/zoneinfo/GMT"
+cp tools/userland_staging/zoneinfo_minimal/UTC "$MNT/var/db/timezone/localtime"
+echo "+ wrote real Apple UTC/GMT zoneinfo to $MNT/var/db/timezone/zoneinfo/"
+echo "  and $MNT/var/db/timezone/localtime (default TZ, real data, this host's"
+echo "  own /usr/share/zoneinfo -- see docs/roadmap.md Phase 4.6)"
+
 if [ ! -f "$MNT/etc/master.passwd" ]; then
     echo "+ no $MNT/etc/master.passwd -- provisioning real root account (password: darwin)"
     HASHTOOL="$(mktemp -t hash_password_host)"

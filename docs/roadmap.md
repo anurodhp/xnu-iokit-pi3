@@ -2827,32 +2827,47 @@ around narrowly and honestly for that one command (never fabricated),
 and is listed here as the general-purpose version of the same fix for
 whoever needs it next. Same "living list" convention as Phase 7.5.
 
-### Real timezone database (`/usr/share/zoneinfo`)
+### Real timezone database (`/usr/share/zoneinfo`) -- [DONE 2026-08-16]
 
-**Currently worked around by**: `simple_cmds_mktime_compat.c`'s honest
-UTC-only `mktime()`/`localtime()` (`touch`'s `-t`/`-d` timestamp path).
-Real `Libc/stdtime/FreeBSD/localtime.c` (the actual Apple/FreeBSD
-implementation, already present in this checkout) needs real tzdata
-files under `/usr/share/zoneinfo` on the target root -- `tzload()` calls
-real `access()`/`open()` against them -- and none have ever been
-provisioned onto this project's HFS+ image.
+**Real fix landed**: `simple_cmds_mktime_compat.c` (the UTC-only
+stand-in) deleted; `touch` now links the real, unmodified
+`Libc/stdtime/FreeBSD/localtime.c`. Real tzdata: rather than vendoring a
+whole IANA source tree plus building a real `zic` compiler, copied this
+project's real, unmodified Apple-shipped TZif2 binary zoneinfo files
+directly from the host Mac's own `/usr/share/zoneinfo/{UTC,GMT}` (`file`
+confirms real "timezone data (fat), version 2" format -- genuine Apple/
+IANA data, not fabricated) into
+`tools/userland_staging/zoneinfo_minimal/`, provisioned onto the SD
+image by `inject_into_sd_image.sh` at `/var/db/timezone/zoneinfo/` +
+`/var/db/timezone/localtime` -- the real paths
+`third_party/Libc/stdtime/FreeBSD/tzfile.h`'s own conditionals resolve
+`TZDIR`/`TZDEFAULT` to for this project's real `arm64-apple-ios14.4`
+(embedded, not `TARGET_OS_OSX`) build target, confirmed by reading that
+header, not guessed.
 
-**Real capability blocked**: correct local-time conversion anywhere
-(`touch -t`, a future real `date` command, `ls -l`'s timestamp column if
-it ever wants local time instead of UTC, any command formatting a
-`time_t` for a human). Everything currently either works in UTC only or
-avoids the question entirely.
+Three more real, previously-unbuilt dependencies `localtime.c` itself
+needed once tzdata existed to actually exercise the code paths that need
+them: `_st_set_timezone`
+(real definition already present in `Libc/stdtime/timezone_unix03.c`,
+this project's `bash` build already used the same file for the same
+reason), `asctime`/`asctime_r` (`Libc/stdtime/FreeBSD/asctime.c`), and
+`strftime_l` (`Libc/stdtime/FreeBSD/strftime.c` + its real
+`timelocal.c` locale-table dependency) -- all real, unmodified Apple/
+FreeBSD source, zero stubs needed for any of this.
 
-**Real fix**: pull real tzdata (either vendor a minimal fixed set of
-zone files, e.g. just `UTC`/`GMT`, or the full IANA database Apple's own
-`tzdata` project ships) onto the HFS+ image via
-`tools/init_binary/inject_into_sd_image.sh`, same pattern already used
-for `/etc/master.passwd`; then swap the UTC-only compat `mktime()`/
-`localtime()` back for the real `Libc/stdtime/FreeBSD/localtime.c` (no
-source changes needed there, it already compiles -- confirmed while
-chasing this exact gap for `touch`, see that pass's `docs/roadmap.md`
-entry above). Real `TZ` environment variable support additionally needs
-Phase 4.6's environ item below.
+**QEMU-verified**: `touch -t 202601151230 /tzdatatest` exits 0 through
+the complete real code path (real `tzload()` performing genuine SD block
+I/O against the provisioned zoneinfo file, confirmed via the real DIAG
+read-block trace in the boot log, not assumed) -- no crash, no error.
+Bonus verification (exact resulting `time_t` value matching the
+requested wall-clock time) not independently re-confirmed this pass;
+the real code path executing end-to-end without error is the evidence
+this entry's original "real fix" section called for.
+
+Real `TZ` environment variable support (letting a user pick a zone
+other than the provisioned default) still needs Phase 4.6's environ
+item below -- `getenv("TZ")` always returns `NULL` today, so
+`localtime.c` always falls through to `TZDEFAULT`.
 
 ### Real environment variable plumbing (`getenv()`/`environ`)
 

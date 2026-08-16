@@ -511,13 +511,15 @@ this pass even if the change itself is cheap.
     in-memory tree (item 19) rather than a real directory read — status
     unclear, re-check once 3.5a lands real syscalls.
 
-30. **No real timezone database (`/usr/share/zoneinfo`) provisioned onto
-    the HFS+ root.** `touch`'s `-t`/`-d` timestamp parsing (Phase 4 step
-    3 Tier 4) currently uses an honest UTC-only `mktime()`/`localtime()`
-    (`simple_cmds_mktime_compat.c`) instead of the real, already-present
-    `Libc/stdtime/FreeBSD/localtime.c`, which needs real tzdata files
-    `tzload()` reads via `access()`/`open()`. Full writeup + real fix
-    path: `docs/roadmap.md`'s Phase 4.6.
+30. **[DONE 2026-08-16]** Real, unmodified Apple TZif2 zoneinfo files
+    (`UTC`/`GMT`, copied from this host Mac's own `/usr/share/zoneinfo/`)
+    now provisioned onto the HFS+ root at `/var/db/timezone/zoneinfo/`
+    by `inject_into_sd_image.sh`; `touch` now links the real
+    `Libc/stdtime/FreeBSD/localtime.c` (`simple_cmds_mktime_compat.c`
+    deleted). QEMU-verified: `touch -t` exits 0 through the real
+    `tzload()` code path (confirmed real SD block I/O reading the
+    provisioned file). Full writeup: `docs/roadmap.md`'s Phase 4.6. Real
+    `TZ` variable support still needs item 31 below (`getenv()` stub).
 
 31. **No real environment-variable plumbing.** `getenv()` always returns
     `NULL`; `init.c`'s `cmd_exec()` always execs children with an empty

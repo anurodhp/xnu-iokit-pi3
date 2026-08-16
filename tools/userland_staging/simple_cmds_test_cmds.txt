@@ -1,7 +1,4 @@
 root
 darwin
-exec /bin/mkdir /rmtest
-exec /bin/touch /rmtest/f1
-exec /bin/rm /rmtest/f1
-exec /bin/cat /rmtest/f1
-exec /bin/rm -r /rmtest
+exec /bin/touch -t 202601151230 /tzdatatest
+exec /bin/touch /tzdatatest2
