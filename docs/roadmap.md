@@ -2525,6 +2525,17 @@ through interactive startup with the kernel provably idle, not crashed.**
   `tools/userland_staging/bash_diag_cmds.txt` (new, correctly-formatted
   login test asset), and this writeup.
 
+**`uname` (Phase 4 step 3): fully working, QEMU-verified 2026-08-16.**
+Builds clean (`build_uname.sh`, 4 files, `uname_main_wrapper.c`'s
+bootstrap-then-real-`main` pattern same as `bash_main_wrapper.c`'s). With
+the corrected `devicetrees/rpi3.dtb` (`model = "BCM2837"` property, this
+same pass) and a correctly-formatted login `cmds` file
+(`uname_diag_cmds.txt`), both `uname` and `uname -a` exit status 0 with
+real output: `Darwin` / `Darwin 20.3.0 Darwin Kernel Version 20.3.0: ...
+BCM2837`. The scratch `sysctl_probe.c` diagnostic that found the missing
+`model` property (its own header said "delete when the real bug is
+found+fixed") has been deleted per that comment.
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions

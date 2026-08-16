@@ -1,0 +1,5 @@
+root
+darwin
+exec /usr/bin/uname
+exec /usr/bin/uname -a
+whoami
