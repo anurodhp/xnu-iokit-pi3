@@ -2817,6 +2817,151 @@ kernel port, zero fabricated behavior anywhere in the chain.
 
 ---
 
+## Phase 4.6: userland gaps found while porting Tier 1-4 (real, buildable -- just not done yet)
+
+**Added 2026-08-16.** Distinct from Phase 7.5 below: every item here is
+**real, open-source, and buildable with more work on this project's own
+side** -- not a closed-source Apple ceiling. Each was found as a genuine
+missing dependency while porting a real command (Tier 1-4 above), worked
+around narrowly and honestly for that one command (never fabricated),
+and is listed here as the general-purpose version of the same fix for
+whoever needs it next. Same "living list" convention as Phase 7.5.
+
+### Real timezone database (`/usr/share/zoneinfo`)
+
+**Currently worked around by**: `simple_cmds_mktime_compat.c`'s honest
+UTC-only `mktime()`/`localtime()` (`touch`'s `-t`/`-d` timestamp path).
+Real `Libc/stdtime/FreeBSD/localtime.c` (the actual Apple/FreeBSD
+implementation, already present in this checkout) needs real tzdata
+files under `/usr/share/zoneinfo` on the target root -- `tzload()` calls
+real `access()`/`open()` against them -- and none have ever been
+provisioned onto this project's HFS+ image.
+
+**Real capability blocked**: correct local-time conversion anywhere
+(`touch -t`, a future real `date` command, `ls -l`'s timestamp column if
+it ever wants local time instead of UTC, any command formatting a
+`time_t` for a human). Everything currently either works in UTC only or
+avoids the question entirely.
+
+**Real fix**: pull real tzdata (either vendor a minimal fixed set of
+zone files, e.g. just `UTC`/`GMT`, or the full IANA database Apple's own
+`tzdata` project ships) onto the HFS+ image via
+`tools/init_binary/inject_into_sd_image.sh`, same pattern already used
+for `/etc/master.passwd`; then swap the UTC-only compat `mktime()`/
+`localtime()` back for the real `Libc/stdtime/FreeBSD/localtime.c` (no
+source changes needed there, it already compiles -- confirmed while
+chasing this exact gap for `touch`, see that pass's `docs/roadmap.md`
+entry above). Real `TZ` environment variable support additionally needs
+Phase 4.6's environ item below.
+
+### Real environment variable plumbing (`getenv()`/`environ`)
+
+**Currently stubbed**: `getenv()` (`libc_locale_env_stubs.c`) always
+returns `NULL`; `tools/init_binary/init.c`'s `cmd_exec()` always execs
+every child with `envp = { NULL }` (a real, deliberately empty
+environment, not a bug -- see that function's own comment history).
+
+**Real capability blocked**: `which`/`whereis` (both call `getenv("PATH")`,
+exit immediately on `NULL` -- real, honest, degraded behavior, not a
+crash, confirmed while scoping Tier 2), `env`(1) itself (meaningless
+with no real environment to print or modify), real shell variable
+export round-tripping through `exec` (bash's own environment already
+works internally -- this gap is specifically about what child processes
+*receive*), and `TZ` for the timezone item above.
+
+**Real fix, two real halves**:
+1. **Kernel/`init.c` side**: `init.c`'s shell needs a real variable
+   table (`NAME=VALUE` pairs, `export`/`set` builtins or equivalent) and
+   `cmd_exec()` needs to build a real, non-empty, NUL-terminated `envp`
+   array from it instead of the current fixed `{ NULL }` -- this is the
+   larger, PID-1-side half of the work.
+2. **`getenv()` side**: once a real `envp` reaches a child's `main()`
+   via `crt.c`, `getenv()`/`environ` need to actually read it (real
+   Apple `Libc/gen/*.c` `environ`-handling source likely already covers
+   this correctly, confirmed present in this checkout but not yet
+   audited for what it assumes about `crt.c`'s real argv/envp handoff
+   -- check `third_party/Csu/crt.c`'s own envp plumbing first).
+
+### Real POSIX regex (`regcomp`/`regexec`/`regfree`)
+
+**Currently worked around by**: `simple_cmds_rpmatch_compat.c` (a real,
+locale-correct but narrowly-scoped C-locale-only `rpmatch()`
+replacement, `rm -i`'s y/n prompt only). Real Apple `Libc/regex/`
+source is likely already present in this checkout (not yet confirmed --
+check before assuming it needs a FreeBSD fallback, per the standing
+source-priority rule) but has never been compiled into any tier.
+
+**Real capability blocked**: `rm -i`'s real locale-aware behavior in any
+locale other than `C` (moot until Phase 4.6's environ/locale-data gaps
+are closed anyway), real bash `[[ str =~ pattern ]]` (already a
+documented bash stub, see `project_xnu_rpi3_bash_stubs.md`), and any
+future `grep`/`sed`/sh pattern-matching command that wants real
+extended regex rather than glob-only matching.
+
+**Real fix**: confirm `third_party/Libc/regex/`'s real source compiles
+against this project's curated headers (likely needs its own tier, e.g.
+`build_libc_regex.sh`, modeled on `build_libc_printf.sh`'s gdtoa
+precedent for "one self-contained real subsystem, one dedicated build
+script") and link it into `libc_gen.a` or a new `libc_regex.a` for reuse
+across every future consumer, rather than re-solving this per-command.
+
+### Real `setattrlist(2)` wiring
+
+**Currently worked around by**: `simple_cmds_lutimes_compat.c`'s honest
+`ENOSYS` for the symlink case (`touch -h`). The real kernel syscall
+itself is genuinely implemented in this project's own
+`third_party/xnu-7195/bsd/vfs/vfs_attrlist.c` (real, open, unmodified
+Apple source, already part of this from-source kernel) -- this is
+purely a userland-side "never generated the raw syscall stub or written
+a public wrapper" gap, not a kernel gap, the narrowest/cheapest item on
+this whole list to close.
+
+**Real capability blocked**: `touch -h` (symlink mtime/atime without
+following it), and any future command wanting extended-attribute
+metadata (`ls`'s `-@`/xattr display, real Finder-info-adjacent tools --
+none currently planned, but the syscall is genuinely general-purpose).
+
+**Real fix**: generate the `setattrlist` raw syscall stub (same Perl
+generator every other Tier 1-4 syscall used -- check `NO_SYSCALL_STUB`
+status in `syscalls.master` first) and swap it into
+`simple_cmds_lutimes_compat.c`'s symlink branch, or just build real
+`Libc/emulated/lutimes.c` directly once the syscall exists.
+
+### Real Mach IPC (`task_for_pid`/`mach_msg` MIG RPC / clock service)
+
+**Currently stubbed in two independent places**, same root cause:
+`ps_task_info_stub.c` (real `tasks.c` needs `task_for_pid`/`task_info`/
+`task_threads`/`thread_info` -- CPU%/RSS/VSZ/thread-state columns print
+honest zeros instead) and `simple_cmds_nanosleep_compat.c` (real public
+`nanosleep()` needs `host_get_clock_service`/`semaphore_create`/
+`clock_get_time` -- a real spin-wait against `mach_absolute_time()`
+substitutes instead, CPU-burning rather than blocking). Both are
+**real, open-source Mach/BSD kernel mechanisms already present in this
+project's own `third_party/xnu-7195`** (`osfmk/kern/ipc_*`,
+`osfmk/kern/clock.c`) -- what's missing is the userland-side real
+`mach_msg()` trap plumbing and MIG-generated RPC stubs, a genuinely
+large, separate subsystem (same scale of effort as Phase 7.5's
+pthread/GCD gap, but NOT closed-source the way those are -- the
+kernel-side implementation is real and already in this checkout, it's
+"not yet built," not "cannot be built").
+
+**Real capability blocked**: real `ps` resource columns (CPU%/RSS/VSZ),
+real blocking sleep anywhere (`tail -f`'s poll interval currently burns
+a full CPU core while waiting, `sleep`(1) if ever ported would have the
+same problem), and eventually anything wanting real Mach port-based IPC
+between two of this project's own processes.
+
+**Real fix, scoped smaller than "build all of Mach IPC" first**: a
+minimal real `mach_msg()` trap wrapper plus hand-written (not
+MIG-generated) request/reply structs for exactly the 2-3 real calls
+needed (`host_get_clock_service`, `clock_get_time`,
+`semaphore_create`/`semaphore_wait`) would unblock real blocking sleep
+without needing the full general MIG-stub-generation machinery
+`task_for_pid`/`task_info` would additionally need -- worth doing as two
+separate, independently-valuable passes rather than one large one.
+
+---
+
 ## Phase 5: multi-user -- real accounts, login, enforced permissions
 
 **Depends on**: Phase 3.5 (real, permission-bearing `hfs` root -- without

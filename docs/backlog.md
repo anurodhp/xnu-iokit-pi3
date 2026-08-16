@@ -511,6 +511,51 @@ this pass even if the change itself is cheap.
     in-memory tree (item 19) rather than a real directory read — status
     unclear, re-check once 3.5a lands real syscalls.
 
+30. **No real timezone database (`/usr/share/zoneinfo`) provisioned onto
+    the HFS+ root.** `touch`'s `-t`/`-d` timestamp parsing (Phase 4 step
+    3 Tier 4) currently uses an honest UTC-only `mktime()`/`localtime()`
+    (`simple_cmds_mktime_compat.c`) instead of the real, already-present
+    `Libc/stdtime/FreeBSD/localtime.c`, which needs real tzdata files
+    `tzload()` reads via `access()`/`open()`. Full writeup + real fix
+    path: `docs/roadmap.md`'s Phase 4.6.
+
+31. **No real environment-variable plumbing.** `getenv()` always returns
+    `NULL`; `init.c`'s `cmd_exec()` always execs children with an empty
+    `envp`. Blocks `which`/`whereis` (both exit immediately on
+    `getenv("PATH") == NULL`, confirmed real/honest behavior, not a
+    crash), `env`(1), and `TZ`. Two real halves needed (PID-1-side
+    variable table + `envp` construction, then `getenv()`/`environ`
+    read-side) — see `docs/roadmap.md`'s Phase 4.6 for the full split.
+
+32. **No real POSIX regex (`regcomp`/`regexec`/`regfree`) built.**
+    `rm -i`'s `rpmatch()` currently uses a real but narrowly-scoped
+    C-locale-only replacement (`simple_cmds_rpmatch_compat.c`) instead
+    of pulling Apple's real regex implementation (likely already present
+    in this checkout, not yet confirmed/built). Blocks real bash
+    `[[ =~ ]]` and any future `grep`/`sed`-style command. See
+    `docs/roadmap.md`'s Phase 4.6.
+
+33. **`setattrlist(2)` never wired to userland**, even though the real
+    kernel-side implementation already exists unmodified in this
+    project's own `third_party/xnu-7195/bsd/vfs/vfs_attrlist.c` — purely
+    a missing raw-syscall-stub-generation gap, the cheapest item in this
+    batch to close. Currently worked around with an honest `ENOSYS` in
+    `simple_cmds_lutimes_compat.c` (blocks `touch -h` on symlinks only).
+    See `docs/roadmap.md`'s Phase 4.6.
+
+34. **No real Mach IPC (`mach_msg()` trap + MIG RPC) in userland**, real
+    open-source kernel-side implementation already present in this
+    project's `third_party/xnu-7195` (`osfmk/kern/ipc_*`/`clock.c`) but
+    never exercised from a userland binary. Blocks real `ps` CPU%/RSS/VSZ
+    columns (`ps_task_info_stub.c`) and real blocking sleep anywhere
+    (`simple_cmds_nanosleep_compat.c` currently spin-waits, burning a
+    full core instead of blocking — used by `tail -f`'s poll interval).
+    NOT closed-source like Phase 7.5's pthread/corecrypto gaps — "not
+    yet built," not "cannot be built." See `docs/roadmap.md`'s Phase 4.6
+    for a smaller-scoped first real fix (hand-written trap wrappers for
+    just `host_get_clock_service`/`clock_get_time`/`semaphore_*`, without
+    needing full MIG-stub generation).
+
 ---
 
 ## P3 — hygiene / cleanup
