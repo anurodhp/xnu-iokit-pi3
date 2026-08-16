@@ -29,6 +29,7 @@ XNU="../../third_party/xnu-7195"
 PTHREAD="../../third_party/libpthread"
 SHELL_CMDS="../../third_party/shell_cmds"
 TEXT_CMDS="../../third_party/text_cmds"
+FILE_CMDS="../../third_party/file_cmds"
 OUT="libc_build"
 mkdir -p "$OUT/simple_obj"
 
@@ -55,7 +56,7 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
     -I $LIBC/fbsdcompat \
     -I $LIBC/stdtime/FreeBSD \
     -I $OUT/compat_include \
-    -I $XNU/bsd -I $XNU/osfmk -I $XNU/libsyscall \
+    -I $XNU/bsd -I $XNU/osfmk -I $XNU/libsyscall -I $XNU/libsyscall/wrappers \
     -I $PTHREAD/include -I $PTHREAD/private"
 
 # Real err()/getopt() -- every tier-1 command needs at least one of the
@@ -92,7 +93,7 @@ fi
 # syscall depending on whether the public Libc wrapper calls a private
 # name -- e.g. `___getlogin`/`___mmap`/`___munmap` vs plain `_kevent`/
 # `_kqueue`, which have no private wrapper layer at all).
-SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate"
+SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask"
 if [ ! -f "$OUT/simple_getlogin_trap.o" ]; then
     mkdir -p "$OUT/sys_asm_compat/mach/arm64"
     cat > "$OUT/sys_asm_compat/mach/arm64/asm.h" <<'EOF'
@@ -124,6 +125,8 @@ LINK_COMMON="$OUT/libc_printf.a $OUT/libc_gen.a $OUT/libc_stdio.a $OUT/libc_loca
     $OUT/pthread_tsd_shim_libc_bootstrap.o $OUT/libpthread.a $OUT/simple_sched_yield_trap.o $OUT/simple_sched_yield.o \
     $OUT/simple_obj/sys____getlogin.o $OUT/simple_obj/sys____mmap.o $OUT/simple_obj/sys____munmap.o \
     $OUT/simple_obj/sys__kevent.o $OUT/simple_obj/sys__kqueue.o $OUT/simple_obj/sys__ftruncate.o \
+    $OUT/simple_obj/sys__mkdir.o $OUT/simple_obj/sys__utimes.o $OUT/simple_obj/sys____chmod.o $OUT/simple_obj/sys__sigprocmask.o \
+    $OUT/simple_obj/sys__fchmodat.o $OUT/simple_obj/sys__fstatat64.o $OUT/simple_obj/sys__mkdirat.o $OUT/simple_obj/sys__umask.o \
     $OUT/libclosure.a $OUT/libmalloc.a $OUT/cerror_stub.o $OUT/libplatform.a"
 LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_close,_close\$UNIX2003 \
@@ -154,7 +157,11 @@ LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,__flockfile,_flockfile \
     -Wl,-alias,__funlockfile,_funlockfile \
     -Wl,-alias,_mmap,_mmap\$UNIX2003 \
-    -Wl,-alias,_munmap,_munmap\$UNIX2003"
+    -Wl,-alias,_munmap,_munmap\$UNIX2003 \
+    -Wl,-alias,_pthread_rwlock_rdlock\$UNIX2003,__pthread_rwlock_rdlock \
+    -Wl,-alias,_pthread_rwlock_wrlock\$UNIX2003,__pthread_rwlock_wrlock \
+    -Wl,-alias,_pthread_rwlock_unlock\$UNIX2003,__pthread_rwlock_unlock \
+    -Wl,-alias,_fstatat64,_fstatat\$INODE64"
 
 # Bash array, one element per command: "name:srcfile:extra1|extra2|..."
 # (srcfile is the FULL real source path -- not just relative to
@@ -181,6 +188,8 @@ CMD_LIST=(
     "wc:$TEXT_CMDS/wc/wc.c:"
     "head:$TEXT_CMDS/head/head.c:"
     "tail:$TEXT_CMDS/tail/tail.c:$TEXT_CMDS/tail/forward.c|$TEXT_CMDS/tail/reverse.c|$TEXT_CMDS/tail/misc.c|$TEXT_CMDS/tail/read.c|$LIBC/stdio/FreeBSD/_flock_stub.c|$LIBC/stdio/FreeBSD/freopen.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/gen/FreeBSD/usleep.c|simple_cmds_nanosleep_compat.c|simple_cmds_mmap_compat.c"
+    "mkdir:$FILE_CMDS/mkdir/mkdir.c:$XNU/libsyscall/wrappers/unix03/chmod.c|$LIBC/util/mkpath_np.c|$LIBC/gen/FreeBSD/setmode.c|simple_cmds_sigprocmask_compat.c"
+    "touch:$FILE_CMDS/touch/touch.c:$XNU/libsyscall/wrappers/unix03/chmod.c|simple_cmds_time_compat.c|$LIBC/sys/gettimeofday.c|ps_commpage_gettimeofday_stub.c|simple_cmds_mktime_compat.c|simple_cmds_lutimes_compat.c"
 )
 
 built=0

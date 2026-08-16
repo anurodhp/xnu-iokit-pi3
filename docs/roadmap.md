@@ -2712,6 +2712,50 @@ deepest dependency chain of any Tier 1-3 command -- pulled in `forward.c`/
 `tail`/`tail -n 1` both verified via QEMU against real
 `/etc/master.passwd`, exit 0, real content.
 
+**Tier 4 (first two): `mkdir`/`touch` (`file_cmds`, write-side syscalls),
+DONE, QEMU-verified 2026-08-16.** First tier to exercise real write-side
+syscalls (`mkdir`/`mkdirat`/`chmod`/`fchmodat`/`utimes`) via a real Apple
+command binary rather than `init.c`'s own builtins. New raw syscalls
+generated: `mkdir`/`mkdirat`/`fchmodat`/`fstatat64`/`umask`/`utimes`
+(all standard) and the private `__chmod`/`__sigprocmask` (both needed a
+thin public-name forwarder or `$UNIX2003`-style alias, same recurring
+pattern). `Libc/util/mkpath_np.c` and `Libc/gen/FreeBSD/setmode.c`
+(bundles `getmode` too) compiled in for `mkdir`; the latter needed a new
+`_sigprocmask` private-name alias
+(`simple_cmds_sigprocmask_compat.c`) and `localtime.c`'s own internal
+`_pthread_rwlock_*` names (already documented for `bash` in
+`pthread_rwlock_internal_alias.h`, fixed here via a linker alias instead
+of a thin asm-name C wrapper -- same real target).
+
+`touch` deliberately does NOT pull real `Libc/stdtime/FreeBSD/
+localtime.c` for `mktime()`/`localtime()`, even though both are
+link-required (the latter surprisingly even by `Libc/sys/gettimeofday.c`
+itself, gated behind `if (tzp)` -- unreachable for `touch`'s own
+`gettimeofday(&tv[0], NULL)` call, confirmed by reading `touch.c`, but
+still link-required regardless of runtime reachability). Real
+`localtime.c` needs a genuine timezone database (`tzload()` calling
+`access()`/`open()` against real `/usr/share/zoneinfo` files) that has
+never been provisioned onto this target's HFS+ root -- structurally
+unusable here, not a build-plumbing gap, so per `CLAUDE.md`'s
+source-priority rule a real last-resort implementation is correct:
+`simple_cmds_mktime_compat.c` is the textbook Gregorian-calendar
+`mktime()`/`localtime()` pair, honestly UTC-only (no DST, no timezone
+database to interpret local time against -- same real result any Darwin
+process gets today if `TZ` resolves to UTC). Only reached by `touch -t`/
+`-d` (explicit timestamp) or the unreachable `gettimeofday(tzp!=NULL)`
+path -- default `touch file` never calls either. `simple_cmds_lutimes_
+compat.c` similarly handles the common (regular file) case for real via
+`lstat`+`utimes`, honest `ENOSYS` only for the genuinely-symlink case
+(`touch -h`, needs real `setattrlist(2)`, not built) -- default `touch`
+never reaches that branch either (`touch.c` only assigns `utimes_f =
+lutimes` under `-h`).
+
+Verified via QEMU: `mkdir /testdir1` exits 0; `touch
+/testdir1/newfile` exits 0 (conclusive proof the directory really
+exists -- `touch` on a path inside a nonexistent directory fails
+`ENOENT`); `cat` on the new empty file exits 0 with no output, as
+expected.
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions

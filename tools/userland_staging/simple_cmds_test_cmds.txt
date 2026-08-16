@@ -1,4 +1,7 @@
 root
 darwin
-exec /bin/tail /etc/master.passwd
-exec /bin/tail -n 1 /etc/master.passwd
+exec /bin/mkdir /testdir1
+ls /
+exec /bin/touch /testdir1/newfile
+ls /testdir1
+exec /bin/cat /testdir1/newfile

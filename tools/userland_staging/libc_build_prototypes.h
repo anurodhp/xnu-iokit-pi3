@@ -82,6 +82,23 @@ int _fcntl(int fd, int cmd, ...);
  * nanosleep()). */
 struct timespec;
 int _nanosleep(const struct timespec *req, struct timespec *rem);
+/* Real Libc/gen/FreeBSD/setmode.c calls this private alias with zero
+ * prototype in scope in this checkout too -- same gap, real definition
+ * in simple_cmds_sigprocmask_compat.c (see that file's header). `void *`
+ * for the sigset_t pointers, same "avoid a struct-definition fight
+ * against whatever headers happen to already be in scope" pattern the
+ * pthread_mutex_* prototypes above already use in this exact file. */
+int _sigprocmask(int how, void *set, void *oset);
+/* Real Libc/stdtime/FreeBSD/localtime.c's _RWLOCK_* macros call these
+ * private internal rwlock names -- same real gap build_bash.sh's own
+ * pthread_rwlock_internal_alias.h already documents and fixes for bash
+ * (libpthread.a only ever exports the $UNIX2003-suffixed symbol; here
+ * fixed via a linker alias in build_simple_cmds.sh's LINK_ALIASES
+ * instead of a thin asm-name C wrapper -- same real target, different
+ * mechanism). */
+int _pthread_rwlock_rdlock(void *l);
+int _pthread_rwlock_wrlock(void *l);
+int _pthread_rwlock_unlock(void *l);
 int _dup2(int from, int to);
 int _pthread_mutex_lock(void *mutex);
 int _pthread_mutex_trylock(void *mutex);
