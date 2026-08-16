@@ -107,6 +107,23 @@ else
     echo "= tools/userland_staging/ps.macho not built -- run build_ps.sh first if wanted, skipping"
 fi
 
+# Real Phase 4 step 3 "remaining commands" tiers (docs/roadmap.md) --
+# each build_*_cmds.sh script writes one <name>.macho per real command
+# it built; every one of them lands in /bin, matching real BSD/macOS
+# layout (all of shell_cmds' Tier 1/2 set below is genuinely /bin, not
+# /usr/bin, on a real system). Generic loop instead of one if-block per
+# command -- this list only grows as more tiers land.
+mkdir -p "$MNT/bin"
+for cmd in true false yes pwd basename dirname; do
+    if [ -f "tools/userland_staging/${cmd}.macho" ]; then
+        cp "tools/userland_staging/${cmd}.macho" "$MNT/bin/${cmd}"
+        chmod 755 "$MNT/bin/${cmd}"
+        echo "+ wrote $(wc -c < "tools/userland_staging/${cmd}.macho") bytes to $MNT/bin/${cmd}"
+    else
+        echo "= tools/userland_staging/${cmd}.macho not built -- run build_simple_cmds.sh first if wanted, skipping"
+    fi
+done
+
 mkdir -p "$MNT/tmp"
 echo "+ ensured $MNT/tmp exists (real fopen()-family O_CREAT target dir -- same"
 echo "  class of gap as /etc and /dev above; found via a real QEMU boot-test"

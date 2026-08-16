@@ -1,0 +1,7 @@
+root
+darwin
+exec /bin/true
+exec /bin/false
+exec /bin/pwd
+exec /bin/basename /usr/bin/foo
+exec /bin/dirname /usr/bin/foo

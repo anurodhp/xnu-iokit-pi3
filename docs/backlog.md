@@ -312,6 +312,48 @@ strongly ordered regardless) - no rebuild+boot-test could actually
 confirm or refute it, so there was no way to close the verification loop
 this pass even if the change itself is cheap.
 
+29. **Real, reproducible kernel PANIC (not a hang) from sustained fast
+    console output — found 2026-08-16 while QEMU-verifying the real
+    `yes` command (Phase 4 step 3, `docs/roadmap.md`).** `yes.macho`
+    (real, unmodified Apple `shell_cmds/yes/yes.c` — a tight `puts("y")`
+    loop, nothing unusual) reliably panics the kernel within seconds of
+    starting: `"Processing of an interrupt (type = 2, handler address =
+    0xfffffff00732d170, vector = 0) took 397932291 nanoseconds (timeout =
+    354986666 ns)"` — the real `INTERRUPT_MASKED_DEBUG` watchdog (the
+    same mechanism `cpu-factor=10` already tunes for ordinary QEMU/TCG
+    jitter, per `CLAUDE.md`'s "Boot / test commands" section) firing for
+    real, not a timing false-positive: ~400ms with interrupts
+    provably masked is a genuine, large stall, not jitter. A single
+    ordinary userspace process writing to its own stdout as fast as
+    possible should never be able to mask interrupts for hundreds of
+    milliseconds, on any real system — and the handler address resolves
+    (via `nm` against this session's kernel build, not guessed) to
+    `_rtclock_intr+0x0` exactly, i.e. the real-time-clock/timer
+    interrupt's own handler, not the console/UART path as first
+    suspected. The panic message's own semantics ("processing of an
+    interrupt ... took N ns") means `rtclock_intr()` itself, once
+    entered, took ~400ms to return — real per-tick scheduler/timer
+    bookkeeping inside that handler is what's slow under this specific
+    load, not something masking interrupts before it ran. Leading
+    hypothesis, not confirmed: `yes`'s extremely tight `write()` loop
+    (one syscall per line, no batching, real `puts()`+`fflush` per
+    iteration) drives an unusually high trap/context-switch rate, and
+    something per-tick inside `rtclock_intr`'s real scheduling
+    accounting scales with that rate in a way this project has never
+    exercised before (no prior Phase 4 command loops anywhere near this
+    fast). Not root-caused or fixed this pass — flagging as P0 because
+    it's a real userspace-triggerable kernel panic, not merely a
+    slow/ugly path, and because real hardware's timer tick rate is not
+    obviously immune to the same mechanism (unlike most of this
+    section's QEMU-vs-real-hardware caveats, which lean on QEMU-specific
+    timing slop).
+    `yes.macho` still ships (the bug is not in `yes` itself, which is
+    real, correct, unmodified source) but should not be treated as
+    "verified safe to run" the way this project's other Phase 4 step 3
+    commands are — anyone hitting this again should start from the exact
+    panic string above and `nm`/`atos` the handler address against the
+    current kernel build rather than re-diagnosing from scratch.
+
 ---
 
 ## P1 — real correctness bugs (not hardware-specific, will eventually bite)

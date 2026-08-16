@@ -2560,6 +2560,24 @@ tooling: `ps_qemu_test_cmds.txt`'s first line was literally the text
 strip prompt text) -- see the Twentieth pass's bash-testing entry above
 for the full mechanism; this file had the identical bug independently.
 
+**Phase 4 step 3, "remaining commands," Tier 1 (simplest/lowest-dependency
+first): DONE, QEMU-verified 2026-08-16.** `true`/`false`/`pwd`/`basename`/
+`dirname`/`yes` (real, unmodified `shell_cmds/*`), via a new
+`build_simple_cmds.sh` + `generic_main_wrapper.c` (one shared
+TSD-bootstrap wrapper body, parameterized by `-DREAL_MAIN=.../-DCMD_NAME=
+"..."` per binary, instead of hand-duplicating bash/uname/ps's nearly
+identical 30-line wrapper six more times). All six link clean and exit
+correctly (`true`->0, `false`->1, `pwd`->`/`, `basename /usr/bin/foo`->
+`foo`, `dirname /usr/bin/foo`->`/usr/bin`). `basename`/`dirname` needed no
+new Libc work -- `Libc/gen/FreeBSD/{basename,dirname}.c` were already in
+`libc_gen.a` from an earlier tier (confirmed via `nm`, not assumed).
+**`yes` reliably panics the kernel** (`_rtclock_intr` interrupt-processing
+watchdog, real, not a QEMU-timing false-positive) -- real, unmodified
+source, not a bug in the port; see `docs/backlog.md` P0 item 29 for the
+full writeup. Ships anyway (the bug is in the kernel's timer/scheduler
+path under sustained fast syscall load, not in `yes.c`) but is flagged,
+not silently treated as "verified safe."
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions
