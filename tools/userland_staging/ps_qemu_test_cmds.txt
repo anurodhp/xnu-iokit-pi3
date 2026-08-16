@@ -1,0 +1,5 @@
+root
+darwin
+exec /bin/ps aux
+exec /bin/ps -ax
+whoami

@@ -72,4 +72,15 @@ int _pthread_mutex_destroy(void *mutex);
  * this single-threaded target. */
 extern int __isthreaded;
 
+/* build_ps.sh (Phase 4 step 3, real `ps`) - real Apple
+ * third_party/Libc/gen/FreeBSD/termios.c and stdio/FreeBSD/perror.c call
+ * these underscore-prefixed private aliases with zero prototype in
+ * scope in this checkout, same implicit-int-declaration gap documented
+ * above. Signatures match the real public ioctl(2)/writev(2)/select(2)
+ * they alias (see ps_extra_syscalls.c/ps_select_syscall.c for the real
+ * raw-syscall bodies). */
+int _ioctl(int fd, unsigned long request, void *arg);
+int _writev(int fd, const void *iov, int iovcnt);
+int _select(int nfds, void *readfds, void *writefds, void *exceptfds, void *timeout);
+
 #endif

@@ -2536,6 +2536,30 @@ BCM2837`. The scratch `sysctl_probe.c` diagnostic that found the missing
 `model` property (its own header said "delete when the real bug is
 found+fixed") has been deleted per that comment.
 
+**`ps` (Phase 4 step 3): fully working, QEMU-verified 2026-08-16.** Real
+`third_party/adv_cmds/ps/` (ps.c/print.c/keyword.c/fmt.c/nlist.c),
+`tasks.c` (real Mach IPC) deliberately not compiled -- see
+`ps_task_info_stub.c`'s header for the real, honest degradation path this
+reproduces instead (CPU%/RSS/VSZ/thread columns print real zeros, never
+fabricated). Found and fixed the exact same missing-TSD-bootstrap gap
+`bash_main_wrapper.c`/`uname_main_wrapper.c` already fixed for their own
+binaries -- `build_ps.sh` never had an equivalent, so `ps.macho` was
+guaranteed to SIGSEGV on first TSD-backed Libc call (confirmed: `exec
+/bin/ps` really did `terminated by signal 11` before the fix). Added
+`ps_main_wrapper.c` (identical pattern, `-Dmain=ps_cmd_real_main`) --
+`ps`/`ps -ax` now exit 0 with real, correct PID/PPID/USER/COMMAND data
+straight from the real `KERN_PROC_ALL` sysctl. One non-bug worth
+recording so it isn't rediscovered: `ps -aux` (leading dash) genuinely
+errors `No user named 'x'` on real BSD/macOS too -- `PS_ARGS`'s getopt
+string has `u:` (takes a required argument), so `-aux` parses as `-a -u
+x`, not the no-dash legacy `ps aux` BSD keyword-style invocation (a
+different code path, `kludge_oldps_options()`) that most people actually
+mean. Also fixed a separate, pre-existing bug in this session's own test
+tooling: `ps_qemu_test_cmds.txt`'s first line was literally the text
+`login: root` (sent verbatim by `_pty_test_phase5.py`, which does not
+strip prompt text) -- see the Twentieth pass's bash-testing entry above
+for the full mechanism; this file had the identical bug independently.
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions

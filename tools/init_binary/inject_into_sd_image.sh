@@ -97,6 +97,16 @@ else
     echo "= tools/userland_staging/uname.macho not built -- run build_uname.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/ps.macho ]; then
+    mkdir -p "$MNT/bin"
+    cp tools/userland_staging/ps.macho "$MNT/bin/ps"
+    chmod 755 "$MNT/bin/ps"
+    echo "+ wrote $(wc -c < tools/userland_staging/ps.macho) bytes to $MNT/bin/ps"
+    echo "  (real, unmodified Apple ps -- Phase 4 step 3, see docs/roadmap.md)"
+else
+    echo "= tools/userland_staging/ps.macho not built -- run build_ps.sh first if wanted, skipping"
+fi
+
 mkdir -p "$MNT/tmp"
 echo "+ ensured $MNT/tmp exists (real fopen()-family O_CREAT target dir -- same"
 echo "  class of gap as /etc and /dev above; found via a real QEMU boot-test"
