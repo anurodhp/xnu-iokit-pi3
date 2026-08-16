@@ -2578,6 +2578,30 @@ full writeup. Ships anyway (the bug is in the kernel's timer/scheduler
 path under sustained fast syscall load, not in `yes.c`) but is flagged,
 not silently treated as "verified safe."
 
+**Tier 2 (first two): `echo`/`printf`, DONE, QEMU-verified 2026-08-16.**
+Both needed `-I $OUT/compat_include` added to `build_simple_cmds.sh`'s
+CFLAGS (missing from the initial version -- `echo`'s real `<wchar.h>`
+include chain needs the same `System/machine/cpu_capabilities.h` compat
+shim every other tier already relies on). `printf` additionally needed
+`Libc/stdlib/FreeBSD/atoi.c` compiled in and two more `$UNIX2003` link
+aliases (`_fwrite`, `_strtod`) -- both real functions were already built
+into `libc_printf.a`/`libc_stdio.a` from earlier tiers, just missing
+their versioned-symbol alias, same class of fix `build_ps.sh`/
+`build_uname.sh` needed repeatedly. `printf %s\n`/`printf %d\n` both
+verified correct (`%s` -> real string with real newline; `%d` -> real
+`42`, initially mislooked-like-missing in the raw serial capture because
+the kernel's own concurrent `DIAG` kprintf output merged onto the same
+line with no intervening newline -- a serial-interleaving artifact, not
+a printf bug, confirmed by looking at the unfiltered log). Remaining
+Tier 2 commands (`hostname`/`logname`) need a new raw syscall
+(`getlogin`/`sethostname` family, `NO_SYSCALL_STUB` in
+`syscalls.master`) not yet generated for any prior tier -- next up.
+`which`/`whereis`/`env`/`id` all depend on `getenv()`/real `environ`
+being wired through (this project's `getenv()` is currently a stub that
+always returns `NULL`, and `init.c`'s `cmd_exec()` always execs with an
+empty `envp`) -- deliberately deferred to their own tier once that gap
+is closed, not silently skipped.
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions

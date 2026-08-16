@@ -53,6 +53,7 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
     -I $LIBC/include -I $LIBC/locale -I $LIBC/locale/FreeBSD -I $LIBC/darwin -I $LIBC/gen \
     -I $LIBC/fbsdcompat \
     -I $LIBC/stdtime/FreeBSD \
+    -I $OUT/compat_include \
     -I $XNU/bsd -I $XNU/osfmk -I $XNU/libsyscall \
     -I $PTHREAD/include -I $PTHREAD/private"
 
@@ -101,9 +102,11 @@ LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_pthread_rwlock_rdlock\$UNIX2003,_pthread_rwlock_rdlock \
     -Wl,-alias,_pthread_rwlock_unlock\$UNIX2003,_pthread_rwlock_unlock \
     -Wl,-alias,_getopt\$UNIX2003,_getopt \
-    -Wl,-alias,_strerror,_strerror\$UNIX2003"
+    -Wl,-alias,_strerror,_strerror\$UNIX2003 \
+    -Wl,-alias,_fwrite,_fwrite\$UNIX2003 \
+    -Wl,-alias,_strtod,_strtod\$UNIX2003"
 
-CMD_LIST="true:true: false:false: yes:yes: pwd:pwd: basename:basename: dirname:dirname:"
+CMD_LIST="true:true: false:false: yes:yes: pwd:pwd: basename:basename: dirname:dirname: echo:echo: printf:printf:$LIBC/stdlib/FreeBSD/atoi.c"
 
 built=0
 failed=0
