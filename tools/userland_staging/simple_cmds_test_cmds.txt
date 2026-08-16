@@ -1,5 +1,3 @@
 root
 darwin
-exec /bin/echo hello world
-exec /bin/printf %s\n hi-printf
-exec /bin/printf %d\n 42
+exec /bin/logname

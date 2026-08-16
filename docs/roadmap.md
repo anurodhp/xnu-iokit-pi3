@@ -2602,6 +2602,33 @@ always returns `NULL`, and `init.c`'s `cmd_exec()` always execs with an
 empty `envp`) -- deliberately deferred to their own tier once that gap
 is closed, not silently skipped.
 
+**Tier 2 (rest): `hostname`/`logname`, DONE, QEMU-verified 2026-08-16.**
+`hostname` needed only `Libc/gen/FreeBSD/{get,set}hostname.c` (both real
+`sysctl(KERN_HOSTNAME)` wrappers, no new syscall) -- printed an honest
+empty line (real, correct behavior: nothing has ever called
+`sethostname()` on this target). `logname` needed a genuinely new raw
+syscall this project had never generated before: `getlogin`/`setlogin`
+(#49/#50 in `syscalls.master`, `NO_SYSCALL_STUB`) via the same Perl
+generator bash/ps/uname's own tiers already use, plus the
+`mach/arm/asm.h` and `mach/arm/syscall_sw.h` compat-include dance
+`build_bash.sh`'s `SYS_STUB_NAMES` block already solved (this script's
+first attempt at the raw `.s` compile skipped straight to `-c` without
+matching that exact `-I` set and hit the identical missing-header error
+`build_bash.sh` already worked around -- fixed by copying its real
+`SYSCLANG_FLAGS` include list exactly, not rediscovering it from
+scratch). `logname` exits 1 with a real, honest `getlogin: Undefined
+error: 0` -- this project's PID-1 never calls `setlogin()` (no
+`getty`/real `login(1)` session-establishment concept in the current
+single-user model), so the kernel's real session login-name is
+genuinely empty; real BSD/macOS produces the identical confusing
+"Undefined error: 0" in the equivalent no-session-login-name situation,
+not a bug introduced by this port. Also found and fixed a real bug in
+`build_simple_cmds.sh` itself while adding `hostname`'s two-file `extra`
+list: the top-level `CMD_LIST` was a single space-separated string, so a
+command's own multi-file extra-sources field silently got split into
+bogus extra top-level entries by the *same* space-splitting loop --
+switched to a real bash array with `|`-separated extras per entry.
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions
