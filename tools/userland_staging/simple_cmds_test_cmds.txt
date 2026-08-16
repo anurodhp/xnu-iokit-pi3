@@ -1,4 +1,6 @@
 root
 darwin
-exec /bin/touch -t 202601151230 /tzdatatest
-exec /bin/touch /tzdatatest2
+exec /bin/echo sanity-check-ok
+exec /bin/cat /etc/group
+exec /bin/touch -t 202601151230 /sanitytest
+exec /usr/bin/uname -a
