@@ -1,7 +1,7 @@
 root
 darwin
-exec /bin/mkdir /testdir1
-ls /
-exec /bin/touch /testdir1/newfile
-ls /testdir1
-exec /bin/cat /testdir1/newfile
+exec /bin/mkdir /rmtest
+exec /bin/touch /rmtest/f1
+exec /bin/rm /rmtest/f1
+exec /bin/cat /rmtest/f1
+exec /bin/rm -r /rmtest

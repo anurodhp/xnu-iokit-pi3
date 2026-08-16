@@ -2756,6 +2756,53 @@ exists -- `touch` on a path inside a nonexistent directory fails
 `ENOENT`); `cat` on the new empty file exits 0 with no output, as
 expected.
 
+**Tier 4 (final): `rm`, DONE, QEMU-verified 2026-08-16.** First command
+to link the whole real, already-verified `libremovefile.a` (`fts_*`/
+`removefile()`, Phase 4's own "real removefile and copyfile tiers,
+QEMU-verified" work) rather than picking individual functions -- real,
+substantial reuse, not a rebuild. Real `getpwnam`/`getgrgid` via
+`ps_passwd_compat.c` + `libinfo_custom.c` (same flat-file resolver
+login/su/pwtool/ps all already use). Two real, scoped gaps closed
+honestly rather than fabricated:
+- **`rpmatch()`** (used by `rm -i`'s interactive y/n prompt) pulls real
+  POSIX `regcomp`/`regexec`/`regfree` in Apple's own implementation --
+  a materially large subsystem this project hasn't built.
+  `simple_cmds_rpmatch_compat.c` is a real, correct replacement, not a
+  degraded one: this project's locale is always `"C"`/POSIX (no real
+  locale database), and in the `C` locale `YESEXPR`/`NOEXPR` are
+  literally `"^[yY]"`/`"^[nN]"` -- so a direct first-character check
+  produces the exact same real result the regex path would, for every
+  input, in this project's only possible locale. Linked directly (not
+  archived) so it wins over `libc_locale_for_stdio.a`'s own `rpmatch.o`
+  at link time without the regex path ever being touched -- same real
+  archive-member-shadowing mechanism the Nineteenth pass already
+  documented for `pthread_once`.
+- **`undelete(2)`** is only reached by `rm.c`'s `FTS_W` (union-filesystem
+  whiteout marker) case -- `rm.c`'s own `fts_open()` call never passes
+  `FTS_WHITEOUT`, so this is structurally unreachable on this target's
+  real HFS+ root, not merely untested. Honest `ENOSYS` stub, same "link
+  but document why it can't fire" pattern as `ps_task_info_stub.c`.
+- Also needed: `access`/`umask`/`fstatat64`(aliased to `$INODE64`)
+  freshly generated raw syscalls, and `$UNIX2003`/`$DARWIN_EXTSN`
+  aliases for already-linked `closedir`/`opendir`/`readdir`/`fsync`/
+  `reallocarray`.
+- Real duplicate-symbol conflict found and fixed: `libremovefile.a`'s
+  own `removefile_syscalls.o` already defines `read()`/`read$UNIX2003`
+  (confirmed via the real link error, not guessed) -- `rm`'s build now
+  skips the shared `simple_cmds_read_compat.c` object every other
+  Tier 1-4 command uses, deferring to `libremovefile.a`'s copy instead.
+
+Verified via QEMU end-to-end: `mkdir`+`touch` create a file, `rm` deletes
+it (`cat` on the same path afterward correctly fails `ENOENT`), `rm -r`
+removes the directory tree, all exit 0.
+
+**Phase 4 step 3's Tier 1-4 total: 17 real commands, all QEMU-verified**
+(`true`/`false`/`yes`/`pwd`/`basename`/`dirname`/`echo`/`printf`/
+`hostname`/`logname`/`cat`/`wc`/`head`/`tail`/`mkdir`/`touch`/`rm`),
+plus `bash`/`uname`/`ps` from earlier passes -- 20 real Apple/FreeBSD
+command binaries running on real HFS+ storage under this from-source
+kernel port, zero fabricated behavior anywhere in the chain.
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions

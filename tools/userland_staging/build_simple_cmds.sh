@@ -57,7 +57,8 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
     -I $LIBC/stdtime/FreeBSD \
     -I $OUT/compat_include \
     -I $XNU/bsd -I $XNU/osfmk -I $XNU/libsyscall -I $XNU/libsyscall/wrappers \
-    -I $PTHREAD/include -I $PTHREAD/private"
+    -I $PTHREAD/include -I $PTHREAD/private \
+    -I ../../third_party/removefile"
 
 # Real err()/getopt() -- every tier-1 command needs at least one of the
 # two; harmless to always link both (unused-but-linked, same tolerance
@@ -93,7 +94,7 @@ fi
 # syscall depending on whether the public Libc wrapper calls a private
 # name -- e.g. `___getlogin`/`___mmap`/`___munmap` vs plain `_kevent`/
 # `_kqueue`, which have no private wrapper layer at all).
-SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask"
+SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access"
 if [ ! -f "$OUT/simple_getlogin_trap.o" ]; then
     mkdir -p "$OUT/sys_asm_compat/mach/arm64"
     cat > "$OUT/sys_asm_compat/mach/arm64/asm.h" <<'EOF'
@@ -127,6 +128,7 @@ LINK_COMMON="$OUT/libc_printf.a $OUT/libc_gen.a $OUT/libc_stdio.a $OUT/libc_loca
     $OUT/simple_obj/sys__kevent.o $OUT/simple_obj/sys__kqueue.o $OUT/simple_obj/sys__ftruncate.o \
     $OUT/simple_obj/sys__mkdir.o $OUT/simple_obj/sys__utimes.o $OUT/simple_obj/sys____chmod.o $OUT/simple_obj/sys__sigprocmask.o \
     $OUT/simple_obj/sys__fchmodat.o $OUT/simple_obj/sys__fstatat64.o $OUT/simple_obj/sys__mkdirat.o $OUT/simple_obj/sys__umask.o \
+    $OUT/simple_obj/sys__access.o \
     $OUT/libclosure.a $OUT/libmalloc.a $OUT/cerror_stub.o $OUT/libplatform.a"
 LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_close,_close\$UNIX2003 \
@@ -161,7 +163,12 @@ LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_pthread_rwlock_rdlock\$UNIX2003,__pthread_rwlock_rdlock \
     -Wl,-alias,_pthread_rwlock_wrlock\$UNIX2003,__pthread_rwlock_wrlock \
     -Wl,-alias,_pthread_rwlock_unlock\$UNIX2003,__pthread_rwlock_unlock \
-    -Wl,-alias,_fstatat64,_fstatat\$INODE64"
+    -Wl,-alias,_fstatat64,_fstatat\$INODE64 \
+    -Wl,-alias,_closedir,_closedir\$UNIX2003 \
+    -Wl,-alias,_opendir,_opendir\$INODE64\$UNIX2003 \
+    -Wl,-alias,_readdir,_readdir\$INODE64 \
+    -Wl,-alias,_fsync,_fsync\$UNIX2003 \
+    -Wl,-alias,_reallocarray,_reallocarray\$DARWIN_EXTSN"
 
 # Bash array, one element per command: "name:srcfile:extra1|extra2|..."
 # (srcfile is the FULL real source path -- not just relative to
@@ -190,6 +197,7 @@ CMD_LIST=(
     "tail:$TEXT_CMDS/tail/tail.c:$TEXT_CMDS/tail/forward.c|$TEXT_CMDS/tail/reverse.c|$TEXT_CMDS/tail/misc.c|$TEXT_CMDS/tail/read.c|$LIBC/stdio/FreeBSD/_flock_stub.c|$LIBC/stdio/FreeBSD/freopen.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/gen/FreeBSD/usleep.c|simple_cmds_nanosleep_compat.c|simple_cmds_mmap_compat.c"
     "mkdir:$FILE_CMDS/mkdir/mkdir.c:$XNU/libsyscall/wrappers/unix03/chmod.c|$LIBC/util/mkpath_np.c|$LIBC/gen/FreeBSD/setmode.c|simple_cmds_sigprocmask_compat.c"
     "touch:$FILE_CMDS/touch/touch.c:$XNU/libsyscall/wrappers/unix03/chmod.c|simple_cmds_time_compat.c|$LIBC/sys/gettimeofday.c|ps_commpage_gettimeofday_stub.c|simple_cmds_mktime_compat.c|simple_cmds_lutimes_compat.c"
+    "rm:$FILE_CMDS/rm/rm.c:$LIBC/gen/get_compat.c|ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c|simple_cmds_rpmatch_compat.c|simple_cmds_undelete_stub.c|$LIBC/gen/strtofflags.c"
 )
 
 built=0
@@ -232,11 +240,30 @@ for spec in "${CMD_LIST[@]}"; do
         extra_objs="$extra_objs $ef_out"
     done
 
+    # Per-command extra whole archives (e.g. rm needs all of
+    # libremovefile.a's fts_*/removefile symbols, not one function at a
+    # time) -- keyed by name here rather than a 5th CMD_LIST field, since
+    # this is rare (one command so far).
+    extra_libs=""
+    common_read_compat="$OUT/simple_obj/common_simple_cmds_read_compat.o"
+    case "$name" in
+        rm)
+            # libremovefile.a's own removefile_syscalls.o already defines
+            # read()/read$UNIX2003 -- a real, genuine duplicate-symbol
+            # conflict against the shared compat object every other
+            # command uses, confirmed via the real link error, not
+            # guessed preemptively. Use its copy instead.
+            extra_libs="$OUT/libremovefile.a"
+            common_read_compat=""
+            ;;
+    esac
+
     if ! "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
         -o "${name}.macho" \
         ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
         "$wrapper_obj" "$obj" $extra_objs \
-        "$OUT/simple_obj/common_err.o" "$OUT/simple_obj/common_getopt.o" "$OUT/simple_obj/common_simple_cmds_read_compat.o" \
+        "$OUT/simple_obj/common_err.o" "$OUT/simple_obj/common_getopt.o" $common_read_compat \
+        $extra_libs \
         $LINK_COMMON $LINK_ALIASES 2>"$OUT/simple_obj/${name}_link.err"; then
         echo "  skip: $name (link)"
         cat "$OUT/simple_obj/${name}_link.err" >&2
