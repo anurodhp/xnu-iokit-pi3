@@ -1,0 +1,79 @@
+#!/bin/bash
+# Creates a fresh 2-partition (FAT32 boot + HFS+ root) SD card image from
+# scratch and fully provisions it -- the same recipe used by hand to build
+# qemu/hfs_root_test.img (see docs/roadmap.md Phase 3.5b item 4): a flat
+# raw file (no UDIF wrapper, so QEMU's -drive ...,format=raw can read it
+# directly) attached via hdiutil's CRawDiskImage class and partitioned
+# with diskutil partitionDisk.
+#
+# 4 GB is load-bearing, not arbitrary: a first attempt at 512 MB put
+# QEMU's emulated SD card into SDSC (CSD v1) mode, which BCM2837SDHCI
+# deliberately doesn't implement (SDHC/SDXC only) -- see docs/roadmap.md.
+#
+# Usage: tools/make_sd_image.sh [OUTPUT_IMAGE] [SIZE_MB]
+#   OUTPUT_IMAGE: defaults to qemu/hfs_root_test.img (runvm.sh's default)
+#   SIZE_MB:      defaults to 4096 (4 GB, see above -- don't go below it)
+set -e
+cd "$(dirname "$0")/.."
+mkdir -p qemu
+
+OUT="${1:-qemu/hfs_root_test.img}"
+SIZE_MB="${2:-4096}"
+
+if [ -e "$OUT" ]; then
+    echo "error: $OUT already exists -- remove it first (this script never overwrites)" >&2
+    exit 1
+fi
+
+echo "+ creating ${SIZE_MB} MB flat raw image at $OUT"
+mkfile -n "${SIZE_MB}m" "$OUT"
+
+DISK=$(hdiutil attach -nomount -imagekey diskimage-class=CRawDiskImage "$OUT" | awk 'NR==1{print $1}')
+if [ -z "$DISK" ]; then
+    echo "error: hdiutil attach did not report a device node" >&2
+    rm -f "$OUT"
+    exit 1
+fi
+echo "+ attached as $DISK"
+
+cleanup() {
+    diskutil unmountDisk "$DISK" >/dev/null 2>&1 || true
+    hdiutil detach "$DISK" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+echo "+ partitioning: MBR, partition 1 = 64M FAT32 boot, partition 2 = HFS+ root (rest)"
+diskutil partitionDisk "$DISK" MBR \
+    "MS-DOS FAT32" BOOT 64M \
+    "JHFS+" ROOT R
+
+BOOT_SLICE="${DISK}s1"
+ROOT_SLICE="${DISK}s2"
+
+BOOT_MNT=$(diskutil info "$BOOT_SLICE" | awk -F': +' '/Mount Point/{print $2}')
+ROOT_MNT=$(diskutil info "$ROOT_SLICE" | awk -F': +' '/Mount Point/{print $2}')
+if [ -z "$BOOT_MNT" ] || [ -z "$ROOT_MNT" ]; then
+    echo "error: could not determine mount points after partitioning" >&2
+    exit 1
+fi
+
+echo "+ populating boot partition ($BOOT_MNT) from sdcard/ (real-hardware parity;"
+echo "  QEMU itself boots via -kernel/-dtb and ignores this)"
+cp sdcard/bootcode.bin sdcard/start.elf sdcard/fixup.dat sdcard/config.txt \
+   sdcard/rpi3.dtb sdcard/u-boot.bin "$BOOT_MNT/"
+
+echo "+ creating base root directory structure on ($ROOT_MNT)"
+mkdir -p "$ROOT_MNT/sbin" "$ROOT_MNT/bin" "$ROOT_MNT/usr/bin" \
+         "$ROOT_MNT/dev" "$ROOT_MNT/etc" "$ROOT_MNT/tmp" \
+         "$ROOT_MNT/var/db/timezone/zoneinfo"
+
+diskutil unmount "$BOOT_MNT"
+diskutil unmount "$ROOT_MNT"
+hdiutil detach "$DISK"
+trap - EXIT
+
+echo "+ base image ready: $OUT (disk0s1 = FAT32 boot, disk0s2 = HFS+ root)"
+echo "+ provisioning userland (launchd/pwtool/bin/*, timezone data, root account)"
+tools/init_binary/inject_into_sd_image.sh "$OUT" 2
+
+echo "done -- $OUT is a fresh, fully provisioned, bootable SD image"
