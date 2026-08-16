@@ -2796,6 +2796,18 @@ Verified via QEMU end-to-end: `mkdir`+`touch` create a file, `rm` deletes
 it (`cat` on the same path afterward correctly fails `ENOENT`), `rm -r`
 removes the directory tree, all exit 0.
 
+**`chmod` deliberately NOT attempted this pass** (real Tier 4 candidate,
+same `file_cmds` directory as `mkdir`/`rm`): its `chmod_acl.c` pulls in
+real POSIX.1e/Darwin ACLs (`acl_get_file`/`acl_set_file`/the whole
+`acl_*` family) plus `<membership.h>` (UUID-based user/group identity
+lookups) -- a materially large, separate subsystem this project hasn't
+built any part of yet, unlike this tier's other real-but-narrow gaps
+(regex, setattrlist, timezone database). Flagging and stopping here
+rather than rushing a real ACL implementation, following this project's
+own standing "go one at a time, be willing to stop and report clearly"
+discipline (see `docs/backlog.md`'s own P0 section for the same
+precedent).
+
 **Phase 4 step 3's Tier 1-4 total: 17 real commands, all QEMU-verified**
 (`true`/`false`/`yes`/`pwd`/`basename`/`dirname`/`echo`/`printf`/
 `hostname`/`logname`/`cat`/`wc`/`head`/`tail`/`mkdir`/`touch`/`rm`),
