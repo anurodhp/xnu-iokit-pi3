@@ -28,6 +28,7 @@ LIBC="../../third_party/Libc"
 XNU="../../third_party/xnu-7195"
 PTHREAD="../../third_party/libpthread"
 SHELL_CMDS="../../third_party/shell_cmds"
+TEXT_CMDS="../../third_party/text_cmds"
 OUT="libc_build"
 mkdir -p "$OUT/simple_obj"
 
@@ -62,7 +63,7 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
 # this project's other tiers already take with e.g. libclosure/libmalloc
 # stand-ins -- confirmed no duplicate-symbol conflicts, zero of these
 # tier-1 sources define their own err/getopt).
-COMMON_EXTRA="$LIBC/gen/FreeBSD/err.c $LIBC/stdlib/FreeBSD/getopt.c"
+COMMON_EXTRA="$LIBC/gen/FreeBSD/err.c $LIBC/stdlib/FreeBSD/getopt.c simple_cmds_read_compat.c"
 for f in $COMMON_EXTRA; do
     base=$(basename "$f" .c)
     out="$OUT/simple_obj/common_${base}.o"
@@ -131,6 +132,7 @@ LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_lstat,_lstat\$INODE64 \
     -Wl,-alias,_stat,_stat\$INODE64 \
     -Wl,-alias,__err,_err \
+    -Wl,-alias,__warn,_warn \
     -Wl,-alias,_fputs,_fputs\$UNIX2003 \
     -Wl,-alias,_mprotect,_mprotect\$UNIX2003 \
     -Wl,-alias,_pthread_rwlock_rdlock\$UNIX2003,_pthread_rwlock_rdlock \
@@ -138,26 +140,37 @@ LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_getopt\$UNIX2003,_getopt \
     -Wl,-alias,_strerror,_strerror\$UNIX2003 \
     -Wl,-alias,_fwrite,_fwrite\$UNIX2003 \
-    -Wl,-alias,_strtod,_strtod\$UNIX2003"
+    -Wl,-alias,_strtod,_strtod\$UNIX2003 \
+    -Wl,-alias,_fdopen,_fdopen\$UNIX2003 \
+    -Wl,-alias,_read,_read\$UNIX2003 \
+    -Wl,-alias,_connect,_connect\$UNIX2003 \
+    -Wl,-alias,_fstatfs,_fstatfs\$INODE64 \
+    -Wl,-alias,_fopen,_fopen\$UNIX2003"
 
-# Bash array, one element per command: "name:srcdir:extra1|extra2|..."
-# ('|'-separated, not space-separated, so a multi-file extra list can't
-# collide with the outer per-command split -- a real bug this script had
-# at first: a space-separated top-level CMD_LIST string silently split a
-# command's own multi-file "extra" field into bogus extra top-level
-# entries, confirmed via a real, reproducible garbled-path link failure
-# for hostname's two-file gethostname.c/sethostname.c extra list).
+# Bash array, one element per command: "name:srcfile:extra1|extra2|..."
+# (srcfile is the FULL real source path -- not just relative to
+# $SHELL_CMDS -- so this list can span multiple third_party/*_cmds
+# top-level dirs, not just shell_cmds. extras are '|'-separated, not
+# space-separated, so a multi-file extra list can't collide with the
+# outer per-command split -- a real bug this script had at first: a
+# space-separated top-level CMD_LIST string silently split a command's
+# own multi-file "extra" field into bogus extra top-level entries,
+# confirmed via a real, reproducible garbled-path link failure for
+# hostname's two-file gethostname.c/sethostname.c extra list).
 CMD_LIST=(
-    "true:true:"
-    "false:false:"
-    "yes:yes:"
-    "pwd:pwd:"
-    "basename:basename:"
-    "dirname:dirname:"
-    "echo:echo:"
-    "printf:printf:$LIBC/stdlib/FreeBSD/atoi.c"
-    "hostname:hostname:$LIBC/gen/FreeBSD/gethostname.c|$LIBC/gen/FreeBSD/sethostname.c"
-    "logname:logname:$LIBC/gen/FreeBSD/getlogin.c"
+    "true:$SHELL_CMDS/true/true.c:"
+    "false:$SHELL_CMDS/false/false.c:"
+    "yes:$SHELL_CMDS/yes/yes.c:"
+    "pwd:$SHELL_CMDS/pwd/pwd.c:"
+    "basename:$SHELL_CMDS/basename/basename.c:"
+    "dirname:$SHELL_CMDS/dirname/dirname.c:"
+    "echo:$SHELL_CMDS/echo/echo.c:"
+    "printf:$SHELL_CMDS/printf/printf.c:$LIBC/stdlib/FreeBSD/atoi.c"
+    "hostname:$SHELL_CMDS/hostname/hostname.c:$LIBC/gen/FreeBSD/gethostname.c|$LIBC/gen/FreeBSD/sethostname.c"
+    "logname:$SHELL_CMDS/logname/logname.c:$LIBC/gen/FreeBSD/getlogin.c"
+    "cat:$TEXT_CMDS/cat/cat.c:cat_socket_stub.c"
+    "wc:$TEXT_CMDS/wc/wc.c:"
+    "head:$TEXT_CMDS/head/head.c:"
 )
 
 built=0
@@ -165,7 +178,7 @@ failed=0
 for spec in "${CMD_LIST[@]}"; do
     name="${spec%%:*}"
     rest="${spec#*:}"
-    srcdir="${rest%%:*}"
+    src="${rest%%:*}"
     extra_raw="${rest#*:}"
     extra="${extra_raw//|/ }"
 
@@ -173,7 +186,6 @@ for spec in "${CMD_LIST[@]}"; do
     obj="$OUT/simple_obj/${name}.o"
     wrapper_obj="$OUT/simple_obj/${name}_wrapper.o"
 
-    src="$SHELL_CMDS/$srcdir/$name.c"
     if [ ! -f "$src" ]; then
         echo "error: $src not found" >&2
         failed=$((failed + 1))
@@ -205,7 +217,7 @@ for spec in "${CMD_LIST[@]}"; do
         -o "${name}.macho" \
         ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
         "$wrapper_obj" "$obj" $extra_objs \
-        "$OUT/simple_obj/common_err.o" "$OUT/simple_obj/common_getopt.o" \
+        "$OUT/simple_obj/common_err.o" "$OUT/simple_obj/common_getopt.o" "$OUT/simple_obj/common_simple_cmds_read_compat.o" \
         $LINK_COMMON $LINK_ALIASES 2>"$OUT/simple_obj/${name}_link.err"; then
         echo "  skip: $name (link)"
         cat "$OUT/simple_obj/${name}_link.err" >&2

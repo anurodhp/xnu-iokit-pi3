@@ -2629,6 +2629,35 @@ command's own multi-file extra-sources field silently got split into
 bogus extra top-level entries by the *same* space-splitting loop --
 switched to a real bash array with `|`-separated extras per entry.
 
+**Tier 3: `cat`/`wc`/`head` (real file I/O, `text_cmds`), DONE,
+QEMU-verified 2026-08-16.** First tier to pull from `third_party/text_cmds`
+rather than `shell_cmds` -- generalized `build_simple_cmds.sh`'s
+`CMD_LIST` to take a full source path per entry instead of assuming
+everything lives under `$SHELL_CMDS`. `cat.c` has one feature this
+project genuinely can't support (`udom_open()`'s AF_UNIX-domain-socket
+read path, real networking, Phase 6) -- `cat_socket_stub.c` provides
+honest `ENOSYS` stand-ins for `socket`/`connect`/`shutdown`, same
+"stub the symbol so it links, document why it can't fire" pattern as
+`ps_task_info_stub.c`'s `mach_state_order()`; that code path is
+structurally unreachable on this target regardless (no socket special
+files can exist on the real HFS+ root without a real network stack to
+create one). This tier also needed a real public `read()` -- every
+prior tier only ever *wrote* a file; `simple_cmds_read_compat.c`
+forwards to the already-real private `_read` raw syscall wrapper
+(`libc_locale_syscalls.c`, confirmed present via `nm`, not assumed) and
+is shared across all Tier 1-3 binaries via `COMMON_EXTRA`, not
+duplicated per-command. Also needed `$UNIX2003`/`$INODE64` aliases for
+`fstatfs`/`fopen`/`fdopen`/`connect` -- same recurring class of fix as
+every prior tier. Along the way, discovered `Libc/gen/FreeBSD/err.c`
+already privately defines `__err`/`__warn` (confirmed via `nm`) -- an
+alias (`-Wl,-alias,__warn,_warn`) is simpler and correct instead of
+duplicating `ps_err_warn_compat.c`'s hand-written `warn()` forwarder
+(which would have collided with `common_err.o`'s own `_err` alias via a
+genuine duplicate-symbol link error, caught immediately). All three
+verified correct via QEMU against real `/etc/master.passwd`/`/etc/group`:
+real byte-exact file contents, correct `wc` line/word/byte counts,
+correct `ENOENT` handling for a missing file.
+
 ---
 
 ## Phase 5: multi-user -- real accounts, login, enforced permissions

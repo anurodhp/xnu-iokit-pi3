@@ -1,3 +1,4 @@
 root
 darwin
-exec /bin/logname
+exec /bin/wc /etc/master.passwd
+exec /bin/head /etc/master.passwd
