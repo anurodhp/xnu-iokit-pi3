@@ -1,3 +1,5 @@
+Resolved items moved to `docs/historic/backlog.md` — see there for fix history.
+
 # Backlog
 
 Open items found but not yet fixed, mostly surfaced by two adversarial
@@ -7,217 +9,11 @@ Organized by how much it matters, not by discovery order. File:line
 references are as of commit `86b1653`; re-check before trusting them if
 this list is stale.
 
-Items already fixed *before* this backlog was written (real IRQ delivery
-to `BCM2837SDHCI` via the DT interrupt-cell bug, the broken hit-counter,
-ACMD41 CRC/index flags, GPIO pinmux WiFi collision, the `pmap.c`
-real-hardware panic regression, missing lazy hard-disable in both
-interrupt controllers, `SMSC9514Ethernet`'s missing `IONetworkingFamily`
-clone, `BCM2837InterruptController` mirror drift) are **not** repeated
-here — see `docs/roadmap.md`'s Phase 3 section and
-`iokit/BCM2837SDHCI/BCM2837SDHCI.h`'s header comment for that history.
-
-**Status update 2026-08-13 (second pass)**: a dedicated pass through this
-list fixed items 1, 2, 3, 8, 9, 12, 13, 14, 16, 17, 26, 27 — each rebuilt
-+ boot-tested individually via `_pty_test.py`, no regressions, real
-interrupt delivery reconfirmed after every change. Each is marked
-`[FIXED 2026-08-13]` in place below with a one-line pointer to what
-changed; the original problem description is left intact underneath for
-context/history, not deleted. Commits: `third_party/xnu-7195`
-`228f4d203`..`8eddfacc2` (pushed to `xnu-pi3-macos11`), main repo
-`f2ae010`..`5d2b46f` (not pushed). Items 4, 5, 6, 7, 10, 11 (all
-`BCM2837SDHCI` real-hardware-timing/robustness items) were deliberately
-**not** attempted this pass — see the note after item 11 for why.
-
-**Status update 2026-08-13 (third pass, final integration testing)**: after
-the second pass above plus Phase 3.5a (real `init.c` syscalls) landed
-independently, a combined rebuild + repeated boot-test (kernel with all
-P0/P1 fixes + shell with real `ls`/`cd`/`pwd`/`cat`/`mkdir`) surfaced two
-new, real findings neither individual change's own testing had hit:
-
-- **[MITIGATED, see item 0 below]** A `~40%`-reproducible panic
-  (`INTERRUPT_MASKED_DEBUG`'s "Processing of an interrupt ... took N ns"
-  watchdog, always flagging `_rtclock_intr`) turned out to be QEMU/TCG
-  wall-clock timing jitter, not a guest bug - confirmed via `cpu-factor=10`
-  (a real Apple pexpert boot-arg) sharply reducing but not fully
-  eliminating the failure rate. Added to `runvm.sh`/`_pty_test.py` (QEMU
-  boot paths only, not real hardware).
-- **[NEW P0 ITEM 0 - NOT FIXED, root cause identified]** A separate, more
-  serious panic — real kernel instruction fetch abort at `pc = 0x0`, `lr`
-  inside `sleh_irq` — see item 0 below, added at the top since it's the
-  most significant open finding in the whole backlog as of this pass.
-
-New commits this pass: main repo only (`runvm.sh`, `_pty_test.py`
-`cpu-factor=10`), not yet pushed pending the adversarial review the user
-asked for once this pass was done.
-
-**Status update 2026-08-13 (fourth pass — item 0 FIXED)**: the adversarial
-review requested above found the *exact* mechanism behind item 0 via
-disassembly (not just theory) and a specific minimal fix, which has now
-been applied and verified: see item 0's own entry below, updated in
-place. Also corrected two misleading comments the same review caught
-(item 3's timer-register write, `IOMediaBSDClient`'s CAS-singleton "leak"
-claim) and refreshed `sdcard/`'s kernel copy, which item 1 had left stale
-even though it was marked fixed. Re-verified via 6 consecutive full boot
-tests: 0 panics (down from 3 crashes across the prior 10 runs), real
-interrupt-driven I/O confirmed intact. Commits: `third_party/xnu-7195`
-`cb5a5baf7` (pushed), main repo (this commit).
-
-The review also found the "hard kernel wall" conclusion in
-`project_xnu_rpi3_userspace_libc_dyld.md` about pthread TSD is **wrong** —
-see that memory file's own correction, added the same pass. Not yet acted
-on (out of scope for this pass, which was driver/kernel-focused) but
-important for whoever picks up Phase 4 `Libc` work next.
-
----
-
-## P0, item 0 — [FIXED 2026-08-13, same day] real interrupt handler could be NULL when a genuine hardware IRQ arrived during early boot
-
-**FIXED**: an adversarial review disassembled the actual panic (confirming
-`lr` lands exactly at `sleh_irq`'s indirect-call return address) and found
-the real arming mechanism the original investigation below hadn't:
-`BCM2837LocalIntc::start()` and `BCM2837InterruptController::start()` both
-published themselves as usable interrupt controllers
-(`getPlatform()->registerInterruptController()`) *before* completing
-their own upstream registration - breaking what would otherwise have been
-a natural blocking barrier via `IOPlatformExpert::lookUpInterruptController()`
-(confirmed unconditionally blocking, never returns NULL). A downstream
-client like `BCM2837SDHCI` could find and start arming real hardware
-interrupts through a controller that hadn't itself finished becoming
-safe. Fixed by reordering both `start()` functions to publish only
-*after* their own upstream registration succeeds, and making
-`BCM2837CPU::initCPU()`'s three failure paths `panic()` instead of
-silently returning (with the reorder in place, a failure there would
-otherwise hang the whole interrupt chain forever with no diagnostic).
-Re-verified via 6 consecutive full boot tests: 0 panics (down from 3
-crashes in the prior 10 runs), real interrupt-driven I/O confirmed intact
-throughout. The review also found real-hardware risk is likely *higher*
-than the ~1-in-10 QEMU rate suggests: the BCM2835 `Enable_IRQs`
-latches are not cleared by a warm reset (only a power cycle), so on real
-hardware rebooting out of a previous OS/firmware, arbitrary sources may
-already be live the instant this project's own masking runs - a
-follow-on hardening (masking both controllers pre-`spllo()`, next to the
-existing pre-MMU BCM2837 block in `osfmk/arm64/start.s`) is noted as
-still-open, lower-priority hardening, not blocking. Original investigation
-kept below for history.
-
----
-
-**ORIGINAL (superseded by the fix above, kept for history)**
-
-**Found 2026-08-13, during final integration testing** of the combined
-P0/P1 fixes + Phase 3.5a real shell syscalls (neither individually
-surfaced this — it needed real, sustained interrupt-driven I/O load from
-several real filesystem operations in a row, which no single-item test
-happened to exercise this heavily).
-
-**Symptom**: `panic(cpu 0 caller ...): Kernel instruction fetch abort at
-pc 0x0000000000000000, lr 0xfffffff0073242c8`. `lr` resolves (via `nm` on
-the built kernel) to `_sleh_irq + 0x38`. Reading `sleh_irq()`
-(`osfmk/arm64/sleh.c`): its non-`USE_APPLEARMSMP` body is
-`cdp->interrupt_handler(cdp->interrupt_target, cdp->interrupt_refCon,
-cdp->interrupt_nub, cdp->interrupt_source);` — a call through a per-CPU
-function pointer. A jump to `pc=0` at exactly that call site means
-`cdp->interrupt_handler` was still `NULL` when this ARM64 IRQ exception
-fired.
-
-**Root cause (established, not yet fixed)**: `cdp->interrupt_handler` is
-only populated by `ml_install_interrupt_handler()`, called from
-`IOCPUInterruptController::enableCPUInterrupt()`
-(`third_party/xnu-7195/iokit/Kernel/IOCPU.cpp`), which
-`BCM2837CPU::initCPU()` calls near the *end* of its setup sequence (after
-`ml_processor_register()`). If a genuine hardware IRQ can be signaled to
-this core before that point in boot — plausible, since nothing in this
-driver stack currently guarantees CPU-level interrupts stay masked
-(`DAIF`/`PSTATE.I`) until `enableCPUInterrupt()` has run — `sleh_irq()`
-unconditionally calls through the still-NULL pointer. **This exact race
-was structurally impossible to hit before today**: prior to the DT
-interrupt-cell fix (this same day, see `docs/roadmap.md` Phase 3), no real
-hardware interrupt had ever successfully reached this dispatch chain at
-all, so the window was never live. Fixing the DT bug made real interrupts
-work — and, as a direct consequence, exposed this previously-dormant
-early-boot race for the first time.
-
-**Reproduction rate**: hit once in ~10 combined-integration boot-test runs
-this pass (separate from, and less frequent than, the timing-watchdog
-issue above) — infrequent enough to need real investigation (not just a
-retry) but frequent enough to be a real, live bug, not a one-off fluke;
-unlike the timing-watchdog panic, this one is a hard crash with a
-consistent, specific signature (same faulting PC/LR pattern), not a
-symptom that varies run to run.
-
-**Not fixed this pass** — needs real investigation into (a) exactly when
-CPU-level interrupt masking is first lifted relative to
-`enableCPUInterrupt()` running (grep `DAIFClr`/equivalent in
-`osfmk/arm64/start.s` and early boot asm — not yet done), and (b) the
-right fix: either delay unmasking until the handler is installed, install
-a safe default/no-op handler earlier as a guard, or serialize
-`BCM2837SDHCI`/other early-matching drivers' `registerInterrupt()` calls
-to strictly happen after `enableCPUInterrupt()` (may already be true in
-practice — the actual gap is CPU-level unmasking, not driver
-registration order, which is a different, already-partially-addressed
-class of race, see items 13/14 below).
-
 ---
 
 ## P0 — real-hardware risk (would plausibly hang, storm, or panic a real Pi)
 
-1. **[FIXED 2026-08-13]** `devicetrees/rpi3-realhw.dts`/`.dtb` regenerated
-   from `rpi3.dts` (confirmed the only real difference is `dram-size`),
-   recompiled with the correct ADT `dtc`; `sdcard/`'s local (gitignored)
-   copy refreshed too. Still genuinely unverified on real hardware (no
-   serial cable) - this just means a real attempt is no longer silently
-   doomed by a stale image. Original problem description below, kept for
-   context.
-
-   **`sdcard/`'s real-hardware image is stale and would boot none of this
-   session's fixes.** `sdcard/rpi3.dtb` is a copy of `devicetrees/rpi3-realhw.dtb`,
-   which is missing the `arm-io` `ranges` fix, `local-intc`'s
-   `AAPL,phandle`/`interrupt-controller` marker, and `intc`'s
-   `interrupt-parent` wiring that `devicetrees/rpi3.dts` (the QEMU-verified
-   tree) already has — each independently documented in `rpi3.dts` as
-   confirmed-fatal without it. `sdcard/kernel.development.bcm2837.unstripped`
-   predates the driver work entirely. Regenerate `rpi3-realhw.dts` from
-   `rpi3.dts` (the two should only differ in `dram-size`), recompile with
-   `third_party/dtc-AppleDeviceTree/dtc` (**not** stock `dtc`), and copy the
-   current kernel build into `sdcard/` before ever attempting a real boot.
-
-2. **[FIXED 2026-08-13]** Latches (not `IOLog` - real interrupt context)
-   the first occurrence of an unexpected pending bit into
-   `fLastUnexpectedPending`, inspectable via debugger/coredump. Does NOT
-   implement actual mailbox/local-timer source handling or masking (no
-   safe non-interrupt-context hook exists in this class to log from more
-   visibly) - converts total silence into *something* discoverable, not a
-   full fix. Original problem description below, kept for context.
-
-   **`BCM2837LocalIntc::handleInterrupt()` silently drops every pending bit
-   except bit 8 (GPU IRQ).** `iokit/BCM2837LocalIntc/BCM2837LocalIntc.cpp`
-   (`handleInterrupt`) reads `LOCAL_IRQ_PENDING0` once and only services the
-   GPU passthrough bit. If firmware ever leaves a mailbox or local-timer
-   source routed to this core (plausible on real hardware, structurally
-   impossible in QEMU since `bcm2836_control_reset()` zeroes those there),
-   the pending bit is never cleared, the CPU IRQ line stays asserted, and
-   `sleh_irq()` re-enters forever — a silent hang with no panic.
-
-3. **[FIXED 2026-08-13]** Investigated first, per this item's own framing:
-   read the register live via the QEMU monitor post-boot, found it
-   already `0xF0` (correctly FIQ-enabled) despite zero writers anywhere
-   in this repo *or* in `u-boot`'s `bootxnu.c` (real hardware's actual
-   boot chain) - QEMU's loader was silently providing this, real firmware
-   won't. `BCM2837LocalIntc::start()` now writes it explicitly. Original
-   problem description below, kept for context.
-
-   **Nothing in this repo programs QA7's `LOCAL_TIMER_INT_CONTROL0`
-   (`0x40000040`).** Repo-wide grep for that address / `timercontrol`
-   finds zero writers — not the kexts, not `pexpert/`, not `osfmk/arm64/`.
-   XNU arm64 takes the scheduler tick via **FIQ** (`sleh_fiq()`), not IRQ,
-   and the generic timer's FIQ output is gated by this exact register in
-   both QEMU and real hardware. Worth a runtime check (read back
-   `0x40000040`, or confirm via QEMU monitor that `sleh_fiq` is ever
-   entered) before assuming the "steady-state idle" boot claims generalize
-   to real hardware — if this needs a write and doesn't have one, a real
-   Pi would likely hang shortly after console init with no diagnostic.
-
-4. **NOT ATTEMPTED this pass** - see the note after item 11 for why (real
+1. **NOT ATTEMPTED this pass** - see the note after item 6 for why (real
    fix needs `IOCommandGate`/workloop integration, higher risk/effort than
    the rest of this batch).
 
@@ -229,7 +25,7 @@ class of race, see items 13/14 below).
    silent data corruption or a hang, not a clean error. Survives today
    only because nothing currently issues overlapping I/O.
 
-5. **NOT ATTEMPTED this pass** - see the note after item 11.
+2. **NOT ATTEMPTED this pass** - see the note after item 6.
 
    **No error recovery anywhere in `BCM2837SDHCI`.** Every error path is
    `IOLog(); return false;`. The SDHCI spec requires `SOFTWARE_RESET_CMD`/
@@ -239,7 +35,7 @@ class of race, see items 13/14 below).
    every subsequent command dies after a 1s busy-wait — the classic
    bring-up cliff QEMU's SD model never reproduces.
 
-6. **NOT ATTEMPTED this pass** - see the note after item 11.
+3. **NOT ATTEMPTED this pass** - see the note after item 6.
 
    **`BCM2837SDHCI`'s SD clock never leaves ~490 kHz / 1-bit.**
    `setClock()` always writes divisor `0xFF` regardless of the requested
@@ -248,32 +44,13 @@ class of race, see items 13/14 below).
    cost; on real hardware this is roughly 60 KB/s — mounting HFS+ and
    exec'ing a binary at that rate will look indistinguishable from a hang.
 
-7. **NOT ATTEMPTED this pass** - see the note after item 11.
+4. **NOT ATTEMPTED this pass** - see the note after item 6.
 
    **No power-on ramp / 74-clock delay before `CMD0`**, and power is
    enabled *after* the clock in `start()` rather than before. Spec
    requires supply ramp + ≥1ms + 74 clocks first. Untested by QEMU.
 
-8. **[FIXED 2026-08-13]** `resetHost()` now writes `0x0E` (the field's
-   maximum, ~1s at typical base clocks). Original problem description
-   below, kept for context.
-
-   **`kRegTimeoutControl` (`0x2E`) is declared and never written.** The
-   data-timeout counter is left at its reset (shortest) value. QEMU
-   doesn't implement `DATA_TIMEOUT_ERR` at all, so a real card that's
-   merely slow could spuriously fail where QEMU never would.
-
-9. **[FIXED 2026-08-13]** `BCM2837InterruptController::start()` now writes
-   `FIQ_CONTROL = 0` explicitly. Original problem description below, kept
-   for context.
-
-   **`kRegFIQControl` (intc `+0x0C`) is declared, never written.**
-   `BCM2837InterruptController::start()` masks all IRQs but leaves
-   `FIQ_CONTROL` at whatever firmware left it. QEMU resets it to 0; real
-   firmware may not. Any source left FIQ-routed arrives at `sleh_fiq()`
-   and gets misclassified as a timer tick.
-
-10. **NOT ATTEMPTED this pass** - see the note after item 11.
+5. **NOT ATTEMPTED this pass** - see the note after item 6.
 
     **No memory barriers anywhere in `iokit/`.** `grep -rn "dsb\|dmb\|isb\|OSSynchronizeIO"` across the whole driver tree returns nothing —
     the only ordering primitive present (`OSMemoryBarrier()` in both
@@ -286,33 +63,35 @@ class of race, see items 13/14 below).
     `BCM2837InterruptController::enableVector()`/`disableVectorHard()`,
     before the next `IRQ_PENDING` read.
 
-11. **GPIO pinmux for the SD slot is still only ever exercised in QEMU**,
+6. **GPIO pinmux for the SD slot is still only ever exercised in QEMU**,
     where it's a documented no-op (the emulated card is parented onto the
     bus regardless of GPFSEL). This session's GPIO34-39-to-input fix (for
     the WiFi-collision bug) is logically sound but genuinely untested on
     real silicon — first real-hardware boot is the only way to close this.
 
-**Why items 4-7, 10 weren't attempted this pass**: all real, all in
-`BCM2837SDHCI.cpp`'s hot I/O path, and all meaningfully higher risk than
-the rest of this batch - #4 needs real `IOCommandGate`/workloop
-integration (an architectural change, not a local fix), #5 needs a
-careful CMD12/reset state machine that could interact with the
-just-verified interrupt-delivery path in subtle ways, #6 changes real
-signal timing (clock divisor/bus width) which is exactly the kind of
-change that's hardest to trust from QEMU alone since QEMU has no timing
-cost to begin with, and #7 similarly touches power/clock sequencing.
-Following this backlog's own explicit guidance ("go one at a time,
-rebuild+boot-test after each, be willing to stop partway through and
+**Why items 1-5 weren't attempted this pass** (note: these numbers refer
+to this same set of items by their position in this list — see
+`docs/historic/backlog.md` for the original item numbers 4-7, 10 this note
+was first written against): all real, all in `BCM2837SDHCI.cpp`'s hot I/O
+path, and all meaningfully higher risk than the rest of this batch - #1
+needs real `IOCommandGate`/workloop integration (an architectural change,
+not a local fix), #2 needs a careful CMD12/reset state machine that could
+interact with the just-verified interrupt-delivery path in subtle ways,
+#3 changes real signal timing (clock divisor/bus width) which is exactly
+the kind of change that's hardest to trust from QEMU alone since QEMU has
+no timing cost to begin with, and #4 similarly touches power/clock
+sequencing. Following this backlog's own explicit guidance ("go one at a
+time, rebuild+boot-test after each, be willing to stop partway through and
 report clearly rather than rushing all four") - after a productive pass
-through 12 lower-risk items, this was the right place to stop and hand
-off clearly rather than push into higher-risk territory in the same
-sitting. #10 (memory barriers) is lower-risk but was deferred alongside
+through several lower-risk items, this was the right place to stop and
+hand off clearly rather than push into higher-risk territory in the same
+sitting. #5 (memory barriers) is lower-risk but was deferred alongside
 these since it's genuinely unverifiable from QEMU (which makes all MMIO
 strongly ordered regardless) - no rebuild+boot-test could actually
 confirm or refute it, so there was no way to close the verification loop
 this pass even if the change itself is cheap.
 
-29. **Real, reproducible kernel PANIC (not a hang) from sustained fast
+7. **Real, reproducible kernel PANIC (not a hang) from sustained fast
     console output — found 2026-08-16 while QEMU-verifying the real
     `yes` command (Phase 4 step 3, `docs/roadmap.md`).** `yes.macho`
     (real, unmodified Apple `shell_cmds/yes/yes.c` — a tight `puts("y")`
@@ -358,68 +137,7 @@ this pass even if the change itself is cheap.
 
 ## P1 — real correctness bugs (not hardware-specific, will eventually bite)
 
-12. **[FIXED 2026-08-13]** `IOMediaBSDClientGlobals_getInstance()` now uses
-    a lock-free CAS singleton (`OSCompareAndSwapPtr`) instead of a bare
-    check-then-assign. Verified: all 3 `IOMediaBSDClient` instances
-    (disk0, disk0s1, disk0s2) still match correctly, root device still
-    resolves the same as before. Original problem description below, kept
-    for context.
-
-    **`IOMediaBSDClient`'s lazy-singleton globals have an unguarded
-    first-use race.** `third_party/xnu-7195/iokit/Storage/IOMediaBSDClient.cpp`
-    (`IOMediaBSDClientGlobals_getInstance()`) does a bare
-    `if (ptr == NULL) ptr = new ...` with no lock. The code comment already
-    concedes the gap but rationalizes it as "expected to happen serially" —
-    no longer true since `IOFDiskPartitionScheme` now produces 3 near-
-    simultaneous `IOMedia` nubs (whole disk + 2 partitions), each spawning
-    an `IOMediaBSDClient::init()` on a potentially different config thread.
-    Two racing constructions means two major numbers / split minor tables —
-    nodes from the losing instance are silently orphaned. Intermittent,
-    would look exactly like "root device sometimes not found." Fix: make
-    the allocation happen from a known-serial point, or guard with a lock.
-
-13. **[FIXED 2026-08-13]** Added `probe()` re-checking `provider->getName()
-    == "cpu0"`, matching every other DT-matched driver. Original problem
-    description below, kept for context.
-
-    **`BCM2837CPU` has no defensive `probe()` name re-check.** Every other
-    DT-matched driver in this tree (`BCM2837ArmIO`, `BCM2837InterruptController`,
-    `BCM2837LocalIntc`, `BCM2837SDHCI`) re-verifies `provider->getName()`
-    in `probe()` as a defensive guard; `BCM2837CPU` doesn't. If it were
-    ever to over-match (see item 20 for why the originally-cited reason for
-    these guards was probably a misdiagnosis, but the guards themselves are
-    still good practice), duplicate instantiation would drive
-    `enabledCPUs` past `numCPUs`, permanently wedging
-    `IOCPUInterruptController::registerInterrupt()`'s `thread_block()` wait
-    for every future caller. Cheap to add for consistency alone.
-
-14. **[FIXED 2026-08-13]** Reordered `BCM2837CPU::initCPU()` so
-    `registerCPUInterruptController()` runs after `enableCPUInterrupt()`.
-    Investigated while fixing: `IOPlatformExpert::lookUpInterruptController()`
-    is unconditionally *blocking* (loops on `IOLockSleep()`, never returns
-    NULL) - this item's original framing (a lookup finding NULL) doesn't
-    match the real API contract, so the "race" mostly self-healed via
-    `IOCPUInterruptController::registerInterrupt()`'s own blocking wait
-    even before this fix; still a real hardening (removes an unnecessary
-    block-then-wake cycle). Verified via 3 boot-test runs: 2/3 clean with
-    real interrupt delivery confirmed, 1/3 stalled matching a pre-existing
-    documented flake pattern at the same point under the *original* code -
-    not attributed to this change (see the commit for the structural
-    reasoning), but noted in case it recurs. Original problem description
-    below, kept for context.
-
-    **Ordering race: `BCM2837LocalIntc::start()` can block indefinitely** if
-    it runs after `BCM2837CPU::initCPU()`'s `registerCPUInterruptController()`
-    call but before its later `enableCPUInterrupt()` call.
-    `lookUpInterruptController()` succeeds in that window while
-    `enabledCPUs == 0`, and `IOCPUInterruptController::registerInterrupt()`
-    (`third_party/xnu-7195/iokit/Kernel/IOCPU.cpp`) blocks on
-    `thread_block()` until the later wakeup. `BCM2837CPU.h` acknowledges
-    matching-order isn't strictly guaranteed but only reasons about
-    `cpusRunning()`, not this specific window. Fix: reorder `initCPU()` so
-    `registerCPUInterruptController()` happens after `enableCPUInterrupt()`.
-
-15. **`tools/init_binary/init.c` (PID 1) has a few real rough edges**,
+1. **`tools/init_binary/init.c` (PID 1) has a few real rough edges**,
     lowest priority since it's bootstrap scaffolding Phase 4 will replace:
     - `read_line()`: a `sys_read` error/EOF makes `shell_main()`'s
       `if (n < 0) continue;` an unthrottled tight loop re-printing the
@@ -437,26 +155,7 @@ this pass even if the change itself is cheap.
       moved to real HFS+ (`d7c6934d8`). Cosmetic, but it's the first thing
       a human sees.
 
-16. **[FIXED 2026-08-13]** `doAsyncReadWrite()` now rejects `nblks==0`,
-    `nblks>=65536`, and `block+nblks > fBlockCount` up front, before the
-    bounce-buffer allocation. Original problem description below, kept
-    for context.
-
-    **`BCM2837SDHCI::doAsyncReadWrite()`/PIO paths truncate `nblks` with no
-    bounds check.** `writeReg16(kRegBlockCount, (uint16_t)nblks)` silently
-    truncates requests ≥65536 blocks (32MB); nothing validates
-    `block + nblks <= fBlockCount`, and no `kIOMaximumBlockCountReadKey` is
-    advertised. Unlikely to be hit today, silent corruption if it is.
-
-17. **[FIXED 2026-08-13]** Cached in a new `fCPUName` member, released in
-    a new `free()` override. Original problem description below, kept for
-    context.
-
-    **`BCM2837CPU::getCPUName()` leaks an `OSSymbol` on every call** —
-    `OSSymbol::withCString("cpu0")` returns a retained ref the caller
-    doesn't release. Called rarely; cache it in a member instead.
-
-18. **`SMSC9514Ethernet` has several real logic bugs**, all currently
+2. **`SMSC9514Ethernet` has several real logic bugs**, all currently
     unreachable since the class has no personality and is never
     instantiated (no urgency, but worth fixing before it's wired up):
     - `smsc95xx_reset()`-equivalent code does blind register writes to
@@ -482,12 +181,12 @@ this pass even if the change itself is cheap.
 
 ## P2 — known gaps / incomplete work (not bugs, just unfinished)
 
-19. **Phase 3.5a still not done**: `tools/init_binary/init.c`'s `ls`/`cat`/
+1. **Phase 3.5a still not done**: `tools/init_binary/init.c`'s `ls`/`cat`/
     `cd`/`pwd`/`mkdir` operate on a hardcoded in-memory fake tree, not real
     `open`/`read`/`getdirentries` syscalls against the actually-mounted
     root. Small, self-contained, no dependency on Phase 4.
 
-20. **Phase 4's `Libc` build is unstarted** (`Csu`/crt0 and real syscall
+2. **Phase 4's `Libc` build is unstarted** (`Csu`/crt0 and real syscall
     stubs are verified working — see `tools/userland_staging/` — but `Libc`
     itself, the actual C library, is not). Confirmed to be an Xcode-project
     build (`Libc.xcodeproj`, no plain Makefile) against a broken local
@@ -496,7 +195,7 @@ this pass even if the change itself is cheap.
     dependency) before `stdio`/`malloc`/locale. Expect the same
     header-skew-per-subsystem fight `IOStorageFamily`/`hfs` needed.
 
-21. **`build_kexts.sh` only standalone-compiles 3 of 8 driver sources**
+3. **`build_kexts.sh` only standalone-compiles 3 of 8 driver sources**
     (`BCM2837InterruptController`, `BCM2837SDHCI`, `SMSC9514Ethernet`) —
     `BCM2837CPU`, `BCM2837LocalIntc`, `BCM2837ArmIO`, `BCM2837Personalities`,
     `BCM2837PlatformExpert` are never syntax-checked outside a full kernel
@@ -504,44 +203,14 @@ this pass even if the change itself is cheap.
     Cheap to extend the `KEXTS` array (note `BCM2837Personalities.cpp`
     actually lives in `iokit/BCM2837ArmIO/`, not a same-named directory).
 
-22. **`ls /` crash mentioned in old project memory needs re-verification.**
+4. **`ls /` crash mentioned in old project memory needs re-verification.**
     An earlier session flagged `ls /` as crashing (real SIGSEGV-looking
     panic) after printing one entry. Recent boots in this session ran `ls`
     without incident, but that was likely still against the fake
-    in-memory tree (item 19) rather than a real directory read — status
+    in-memory tree (item 1 above) rather than a real directory read — status
     unclear, re-check once 3.5a lands real syscalls.
 
-30. **[DONE 2026-08-16]** Real, unmodified Apple TZif2 zoneinfo files
-    (`UTC`/`GMT`, copied from this host Mac's own `/usr/share/zoneinfo/`)
-    now provisioned onto the HFS+ root at `/var/db/timezone/zoneinfo/`
-    by `inject_into_sd_image.sh`; `touch` now links the real
-    `Libc/stdtime/FreeBSD/localtime.c` (`simple_cmds_mktime_compat.c`
-    deleted). QEMU-verified: `touch -t` exits 0 through the real
-    `tzload()` code path (confirmed real SD block I/O reading the
-    provisioned file). Full writeup: `docs/roadmap.md`'s Phase 4.6. Real
-    `TZ` variable support still needs item 31 below (`getenv()` stub).
-
-31. **[FIXED 2026-08-16]** Real, non-empty `envp` now built by `init.c`'s
-    `cmd_exec()` and correctly read via a real `getenv()`
-    (`simple_cmds_getenv_compat.c`). Found a real, previously-latent
-    third bug along the way: `third_party/Csu/start.s`'s arm64 entry
-    point calls `main()` directly, bypassing `crt.c`'s own `_start()`
-    (the function that sets `environ`) entirely -- that function is
-    real, documented dead code without dyld (which this project doesn't
-    have). Fixed with one real store instruction in `start.s`. `which`/
-    `env` both built and QEMU-verified as the capstone. Full writeup:
-    `docs/roadmap.md`'s Phase 4.6. Original problem description below,
-    kept for context.
-
-    **No real environment-variable plumbing.** `getenv()` always returns
-    `NULL`; `init.c`'s `cmd_exec()` always execs children with an empty
-    `envp`. Blocks `which`/`whereis` (both exit immediately on
-    `getenv("PATH") == NULL`, confirmed real/honest behavior, not a
-    crash), `env`(1), and `TZ`. Two real halves needed (PID-1-side
-    variable table + `envp` construction, then `getenv()`/`environ`
-    read-side) — see `docs/roadmap.md`'s Phase 4.6 for the full split.
-
-32. **No real POSIX regex (`regcomp`/`regexec`/`regfree`) built.**
+5. **No real POSIX regex (`regcomp`/`regexec`/`regfree`) built.**
     `rm -i`'s `rpmatch()` currently uses a real but narrowly-scoped
     C-locale-only replacement (`simple_cmds_rpmatch_compat.c`) instead
     of pulling Apple's real regex implementation (likely already present
@@ -549,7 +218,7 @@ this pass even if the change itself is cheap.
     `[[ =~ ]]` and any future `grep`/`sed`-style command. See
     `docs/roadmap.md`'s Phase 4.6.
 
-33. **`setattrlist(2)` never wired to userland**, even though the real
+6. **`setattrlist(2)` never wired to userland**, even though the real
     kernel-side implementation already exists unmodified in this
     project's own `third_party/xnu-7195/bsd/vfs/vfs_attrlist.c` — purely
     a missing raw-syscall-stub-generation gap, the cheapest item in this
@@ -557,7 +226,7 @@ this pass even if the change itself is cheap.
     `simple_cmds_lutimes_compat.c` (blocks `touch -h` on symlinks only).
     See `docs/roadmap.md`'s Phase 4.6.
 
-34. **No real Mach IPC (`mach_msg()` trap + MIG RPC) in userland**, real
+7. **No real Mach IPC (`mach_msg()` trap + MIG RPC) in userland**, real
     open-source kernel-side implementation already present in this
     project's `third_party/xnu-7195` (`osfmk/kern/ipc_*`/`clock.c`) but
     never exercised from a userland binary. Blocks real `ps` CPU%/RSS/VSZ
@@ -574,7 +243,7 @@ this pass even if the change itself is cheap.
 
 ## P3 — hygiene / cleanup
 
-23. **Two headers overclaim a nonexistent IOKit matching-engine bug.**
+1. **Two headers overclaim a nonexistent IOKit matching-engine bug.**
     `iokit/BCM2837ArmIO/BCM2837ArmIO.h` and
     `iokit/BCM2837InterruptController/BCM2837InterruptController.h` both
     assert (one claims "empirically confirmed via instance-pointer-tagged
@@ -589,41 +258,20 @@ this pass even if the change itself is cheap.
     harmless belt-and-braces, worth keeping; just correct the stated
     reason in both header comments.
 
-24. **Stray nested git repo at `iokit/.git/`** (own `config`/`HEAD`, no
+2. **Stray nested git repo at `iokit/.git/`** (own `config`/`HEAD`, no
     remote configured) inside a directory the parent repo tracks normally.
     Makes `git status` run from inside `iokit/` misleading/wrong. Probably
     a leftover from early scaffolding before the top-level repo existed —
     verify there's no uncommitted work in it, then remove it.
 
-25. **~30 `TEMP DIAGNOSTIC` `printf`/`IOLog` calls remain in HEAD**, several
+3. **~30 `TEMP DIAGNOSTIC` `printf`/`IOLog` calls remain in HEAD**, several
     on hot paths (`bsd/msdosfs/msdosfs_vnops.c` on every read/blockmap,
     `iokit/Kernel/IOService.cpp` on every `registerService`/`startMatching`).
     At real mini-UART baud rates (115200) each line costs milliseconds of
-    synchronous busy-wait — combined with item 6's slow clock, this would
+    synchronous busy-wait — combined with P0 item 3's slow clock, this would
     make a working real-hardware boot look like a hang. Prune once no
     longer needed for active debugging.
 
-26. **[FIXED 2026-08-13]** Added `vectorInRange()` bounds check to
-    `BCM2837InterruptController::enableVector()`/`disableVectorHard()`,
-    and `fRegMap->getLength()` validation to both controllers' `start()`.
-    Original problem description below, kept for context.
-
-    **Missing bounds/length validation in both interrupt controllers**:
-    `registerInterrupt()`/`enableVector()`/`disableVectorHard()` never
-    range-check `vectorNumber` against `kNumVectors` (a malformed DT gives
-    an OOB `&vectors[n]` write), and neither controller validates
-    `fRegMap->getLength()` before indexing straight to a fixed offset.
-
-27. **[FIXED 2026-08-13]** Both controllers' `free()` now releases
-    `fRegMap` if still set (covers the start()-fails-after-mapping path
-    `stop()` never runs for). Original problem description below, kept
-    for context.
-
-    **Resource leak on `start()` failure path** in both interrupt
-    controllers: if `start()` fails after `fRegMap` is set, `stop()` is
-    never called (IOKit convention) and `free()` doesn't release `fRegMap`
-    either. Move the release into `free()`.
-
-28. **`BCM2837CPU::quiesceCPU()`/`haltCPU()` are silent no-ops** — correctly
+4. **`BCM2837CPU::quiesceCPU()`/`haltCPU()` are silent no-ops** — correctly
     hedged as fine for now (single core, no sleep/shutdown ever attempted),
     but will need real implementations before any power-management work.
