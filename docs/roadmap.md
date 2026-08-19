@@ -14,15 +14,29 @@ narrative itself flagged as still-open.
 
 ## Current status
 
-Actively on **Phase 4, step 3** ("real commands"): as of 2026-08-16, 20
+Actively on **Phase 4, step 3** ("real commands"): as of 2026-08-19, 21
 real Apple/FreeBSD command binaries (`bash`, `uname`, `ps`, plus the Tier
 1-4 set -- `true`/`false`/`yes`/`pwd`/`basename`/`dirname`/`echo`/`printf`/
-`hostname`/`logname`/`cat`/`wc`/`head`/`tail`/`mkdir`/`touch`/`rm`) build,
-link, and run QEMU-verified against the real HFS+ root, using a curated
-real Apple/FreeBSD libc stack (string, platform, locale, stdio, gen,
-printf/scanf, malloc, pthread, closure, removefile/copyfile, libunwind --
-all real, QEMU-verified ports, see `docs/historic/roadmap.md`'s Phase 4 for
-the full per-tier build history).
+`hostname`/`logname`/`cat`/`wc`/`head`/`tail`/`mkdir`/`touch`/`rm`/`env`)
+build, link, and run QEMU-verified against the real HFS+ root, using a
+curated real Apple/FreeBSD libc stack (string, platform, locale, stdio,
+gen, printf/scanf, malloc, pthread, closure, removefile/copyfile,
+libunwind -- all real, QEMU-verified ports, see
+`docs/historic/roadmap.md`'s Phase 4 for the full per-tier build history).
+
+`env.macho` (real Apple `shell_cmds/env/env.c`+`envopts.c`) had existed on
+disk since Phase 4.6 item 2 (2026-08-16) but was never actually
+boot-tested that day -- confirmed for real 2026-08-19: rebuilt clean off
+today's tree (byte-identical output, only the same benign
+`$UNIX2003`/`$DARWIN_EXTSN` alias link warnings as before) and QEMU-verified
+in all three real modes via `exec /bin/env` at the shell: bare `env`
+prints the real `PATH=/bin:/usr/bin`/`HOME=/`/`USER=root`/`TZ=UTC` table
+`init.c`'s `build_envp()` sets; `env FOO=barbaz /bin/env` adds `FOO` on
+top of the inherited table before exec'ing; `env -i /bin/env` and
+`env -i FOO=onlyfoo /bin/env` correctly clear the environment first (the
+former printing nothing, the latter printing only `FOO=onlyfoo`). No bug
+found or fix needed -- the environ/getenv plumbing landed 2026-08-16
+already covered `env`(1) correctly.
 
 Real static `bash.macho` links clean and, after fixing three real bugs
 found the same day (a stale/wrong-format `.dtb`, a test-harness login-line

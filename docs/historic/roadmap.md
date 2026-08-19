@@ -3151,6 +3151,63 @@ infinite tight loop printing `exit`, never terminating.**
   only, committed as this writeup plus `docs/roadmap.md`'s updated
   Current status/Known bugs sections.
 
+**Twenty-second pass, 2026-08-19: real `env`(1) QEMU-verified for the
+first time.** `env.macho` was built 2026-08-16 (item 4 of the environ/
+getenv writeup above) the same day as the environ/`getenv()` plumbing it
+depends on, but the session ended before it was ever actually booted and
+run -- the "`env` (no args) prints the real ... table" line in item 4
+above described a link-time/read-the-code expectation, not a real
+QEMU-observed transcript. Closed that gap for real this pass:
+
+- Reran `tools/userland_staging/build_simple_cmds.sh` in full (no
+  single-target mode; it always rebuilds all 19 of its `CMD_LIST`
+  commands). `env.macho` came out byte-identical (435552 bytes) to the
+  2026-08-16 build, same benign `$UNIX2003`/`$DARWIN_EXTSN` alias link
+  warnings (`_connect`/`_fsync`/`_mmap`/`_munmap`/`_reallocarray`), same
+  static-Mach-O invariant (`LC_UNIXTHREAD` present, no `LC_LOAD_DYLIB`,
+  confirmed via `otool -l`).
+- Ran `tools/init_binary/inject_into_sd_image.sh` to refresh
+  `qemu/hfs_root_test.img`'s `/bin/env` (and every other Tier 1-4
+  command, `/sbin/launchd`, `/sbin/pwtool`) with the rebuilt binaries.
+- Booted via a `_pty_test_phase5.py`-style PTY harness (same kernel/dtb/
+  boot-args as `runvm.sh`) driving a real login (`root`/`darwin`) then
+  four `exec` commands at the shell prompt, since this project's `init.c`
+  shell has no PATH-searching dispatcher -- external binaries only run via
+  the `exec <path> [args...]` builtin, same pattern bash/uname/ps testing
+  already used:
+  - `exec /bin/env` -> printed exactly `PATH=/bin:/usr/bin`, `HOME=/`,
+    `USER=root`, `TZ=UTC` (the real four vars `init.c`'s `build_envp()`
+    builds), `exit status=0`.
+  - `exec /bin/env FOO=barbaz /bin/env` -> real `env NAME=VALUE utility`
+    form: sets `FOO=barbaz` on top of the inherited table, execs `env`
+    again, which printed all five vars including `FOO=barbaz`.
+  - `exec /bin/env -i /bin/env` -> real `-i` (clear environment) form:
+    printed nothing (correct -- child got a genuinely empty `environ`),
+    `exit status=0`.
+  - `exec /bin/env -i FOO=onlyfoo /bin/env` -> `-i` plus one `NAME=VALUE`:
+    printed exactly `FOO=onlyfoo` and nothing else, confirming `-i`
+    really does clear the inherited table rather than just suppressing
+    printing.
+  All four outcomes match real Apple/FreeBSD `env(1)` semantics exactly
+  (`envopts.c`'s `-i` handling, `env.c`'s `NAME=VALUE` prefix-then-exec
+  loop, `Libc/gen/FreeBSD/exec.c`'s real `execve()` path through this
+  project's `simple_cmds_execve_compat.c`). No bug found, no fix needed --
+  the 2026-08-16 environ/`getenv()`/`_NSGetEnviron()` plumbing already
+  covered `env`(1) correctly; this pass only supplied the missing real
+  evidence.
+- Incidental, out-of-scope observation for whoever next touches
+  `bsd/kern/kern_exec.c`: the QEMU transcript from this pass shows
+  unconditional (not boot-arg-gated) `printf("TEMP DIAGNOSTIC: ...")`
+  lines firing on every `exec_activate_image()` call (and
+  `load_init_program()`), committed in `third_party/xnu-7195` as of
+  commit `d7c6934d8` ("Switch root from mockfs to real msdosfs...",
+  2026-08-09-era). Same class of stray-debug-print hygiene issue this
+  project's own `CLAUDE.md`/session history has flagged before (the
+  `msdosfs_vnops.c`/`sdhci.c` prints that were gated behind default-off
+  flags) -- this one in `kern_exec.c` was never gated at all. Not touched
+  this pass (out of scope for the `env` task); flagging here rather than
+  silently leaving it for a future session to rediscover.
+
 ---
 
 *(End of archived material. Phase 4.6 items 3-5, and Phases 5 through 8 in
