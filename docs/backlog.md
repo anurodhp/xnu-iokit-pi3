@@ -264,13 +264,22 @@ this pass even if the change itself is cheap.
     a leftover from early scaffolding before the top-level repo existed —
     verify there's no uncommitted work in it, then remove it.
 
-3. **~30 `TEMP DIAGNOSTIC` `printf`/`IOLog` calls remain in HEAD**, several
-    on hot paths (`bsd/msdosfs/msdosfs_vnops.c` on every read/blockmap,
-    `iokit/Kernel/IOService.cpp` on every `registerService`/`startMatching`).
-    At real mini-UART baud rates (115200) each line costs milliseconds of
-    synchronous busy-wait — combined with P0 item 3's slow clock, this would
-    make a working real-hardware boot look like a hang. Prune once no
-    longer needed for active debugging.
+3. **`iokit/Kernel/IOService.cpp` still fires unconditional `TEMP
+    DIAGNOSTIC` prints on every `registerService`/`startMatching`** (136
+    lines in a single partial boot capture). At real mini-UART baud rates
+    (115200) each line costs milliseconds of synchronous busy-wait —
+    combined with P0 item 3's slow clock, this would make a working
+    real-hardware boot look like a hang. Prune once no longer needed for
+    active debugging.
+
+    `bsd/msdosfs/msdosfs_vnops.c`'s `TEMP DIAGNOSTIC` read/blockmap prints
+    and `third_party/qemu-zhuowei`'s `hw/sd/sdhci.c` per-command/per-block
+    `DIAG` prints (the dominant source of console noise — 471 lines in the
+    same capture, entirely a QEMU emulator-side trace, never runs on real
+    hardware) were both gated behind a default-off flag **[FIXED
+    2026-08-19]** (`xnu-7195` commit `89d131a6b`, `qemu-zhuowei` commit
+    `05daaa2`, both local/unpushed) rather than pruned outright, so they're
+    a one-line flip away if that SD path needs debugging again.
 
 4. **`BCM2837CPU::quiesceCPU()`/`haltCPU()` are silent no-ops** — correctly
     hedged as fine for now (single core, no sleep/shutdown ever attempted),
