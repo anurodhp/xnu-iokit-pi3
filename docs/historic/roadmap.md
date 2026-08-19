@@ -3208,6 +3208,202 @@ QEMU-observed transcript. Closed that gap for real this pass:
   this pass (out of scope for the `env` task); flagging here rather than
   silently leaving it for a future session to rediscover.
 
+**Twenty-third pass, 2026-08-19: `bash -i`'s infinite `exit`-flood bug
+FIXED for real, QEMU-verified with a genuine multi-round-trip interactive
+transcript.** Picked up exactly where the Twenty-first pass left off
+(real bug found, not root-caused to an exact instruction, live
+QEMU-monitor PC sampling ruled impractical that pass). This pass solved
+the "how do I get real evidence" problem the Twenty-first pass flagged by
+NOT touching the QEMU monitor at all -- instead, temporary instrumentation
+(`fprintf(stderr, "DIAGDBG ...")`, always paired with an explicit
+`fflush(stderr)`) was added directly at each suspect call site in real
+bash source (`eval.c`, `sig.c`, `builtins/exit.c`, `input.c`, `shell.c`,
+`y.tab.c`) and in `tools/userland_staging/bash_syscalls.c`, then read
+straight out of the serial console log captured by a custom PTY test
+harness (modeled on `tools/init_binary/_pty_test_phase5.py`, kept as a
+disposable scratch script, not committed). All instrumentation was
+removed before the final commit -- confirmed via
+`grep -rn "DIAGDBG\|TEMP DIAGNOSTIC (bash -i" third_party/bash/
+tools/userland_staging/bash_syscalls.c` returning nothing.
+
+- **Environment note**: no orphaned `qemu-system-aarch64` processes were
+  found at the start of this pass (the Twenty-first pass's own cleanup
+  advice was followed this time -- every test script explicitly
+  `proc.kill()` + `proc.wait(timeout=...)`s its QEMU child, and `ps aux`
+  was checked before and after every boot in this pass).
+- **Bug 1 root-caused, first real evidence**: instrumented
+  `sigsetjmp()`/`siglongjmp()` in `bash_syscalls.c` to print the `env`
+  pointer and return value (`rc`) on every call, and `reader_loop()`'s
+  own `code = setjmp(top_level)` line in `eval.c` to print `code` right
+  after. First real QEMU transcript (`exec /bin/bash -i` with nothing
+  further typed, captured for exactly one full "exit" cycle) showed:
+  `rc` reliably printed `3` (== `EXITPROG`) on the "returned via longjmp"
+  branch -- proving the raw asm register-restore itself (`ldp`s from the
+  jmp_buf) genuinely worked and the return value made it back correctly
+  -- but `env` on that SAME call came back as a small, obviously-bogus
+  pointer (`0x66a10`) instead of `top_level`'s real address
+  (`0x1001081c8`), and -- the actually damning evidence -- `reader_loop`'s
+  own `code = setjmp(top_level)` print was NEVER once observed with a
+  nonzero value across ~105,000 flood iterations sampled, only ever `0`.
+  Disassembling the compiled `sigsetjmp()` (`otool -tV` on
+  `bash_build/obj/bash_syscalls_c.o`) showed exactly why: clang's normal
+  -O0 codegen gives `sigsetjmp()` its own 0x30-byte stack frame, spills
+  the `env` parameter to `[sp+0x10]` within that frame, and -- critically
+  -- saves ITS OWN x29/x30 (the link back to `reader_loop()`) at
+  `[sp+0x20]`, all BEFORE calling the raw-asm register-capture helper
+  (`__bash_setjmp_asm`) via a plain `bl`. That helper's own `mov x8, sp`
+  captured `sigsetjmp()`'s current sp -- technically the mathematically
+  "correct" address to later restore SP to, but NOT a protected one: the
+  instant the initial `sigsetjmp()` call returned 0 back to
+  `reader_loop()`, that whole 0x30-byte frame (env's spill slot AND the
+  x29/x30 pair needed to eventually return to `reader_loop()`) became
+  ordinary free stack space, immediately overwritten by every function
+  bash called next (`read_command()`, the bison parser, `getc_with_restart()`,
+  ...). By the time `siglongjmp()` fired many frames deeper and restored
+  that exact SP value, the DATA sitting there was long gone -- `rc`
+  survived only because it's written fresh into that same slot
+  immediately after the asm call returns (nothing else runs in between),
+  but `env` (read back later, for the mask-restore logic) and,
+  critically, `sigsetjmp()`'s own saved x29/x30 (needed for `sigsetjmp()`
+  to `ret` back into `reader_loop()`) did not. This is why `code` was
+  never observed nonzero: the eventual `ret` at the end of `sigsetjmp()`
+  was using a garbage link register pulled from stomped memory, not
+  genuinely returning into `reader_loop()`'s `code = setjmp(...)` call
+  site at all -- explaining, mechanistically, why the whole `while`
+  loop's control-flow bookkeeping never saw a real `EXITPROG`, even
+  though `exit_builtin()` visibly fired every single time.
+- **Bug 1 fix**: rewrote `sigsetjmp`/`siglongjmp` as the raw asm entry
+  points themselves (no intervening C wrapper function at all -- see
+  `tools/userland_staging/bash_syscalls.c`'s updated header comment for
+  the full before/after explanation and the exact byte-offset jmp_buf
+  layout). The register-capture instructions are now the literal first
+  thing that runs on entry, before any nested call, so the x29/x30/sp
+  captured are genuinely `reader_loop()`'s own -- exactly the technique a
+  real libc implementation uses, and the reason a real C-wrapper-around-
+  an-asm-helper split doesn't work for a jump that has to survive many
+  intervening stack frames. The nested `sigprocmask()` call needed for
+  `savemask` now happens strictly AFTER the register capture has already
+  landed safely in the jmp_buf itself (not a local stack slot), so it has
+  no cross-longjmp lifetime dependency. Re-tested immediately after this
+  fix (still with instrumentation in place, before Bug 2 was found):
+  `exec /bin/bash -i` with nothing typed now produced exactly ONE `exit`
+  line, `code = setjmp(top_level)` correctly showed `3` on the resumed
+  call, and the process genuinely terminated (`exec: /bin/bash exited,
+  status=0`, control correctly returned to `init.c`'s own shell) --
+  proof Bug 1 alone was real and now fixed, even before Bug 2 was found.
+- **Bug 2 found while trying to get a fuller interactive transcript**:
+  extending the test to type a real command (`echo HELLO_INTERACTIVE_98765`)
+  after `exec /bin/bash -i` showed the fixed process reaching a shell that
+  still exited (cleanly, once) almost instantly, before the typed command
+  could ever be consumed -- meaning something was STILL causing an
+  immediate EOF-at-prompt, just no longer looping on it. Added
+  instrumentation to `getc_with_restart()` (`input.c`) and `yy_stream_get()`/
+  `yy_getc()`/`shell_getc()` (`y.tab.c`) to trace the exact character-read
+  path -- and found NONE of them ever fired. `yy_getc()`'s own
+  instrumentation (comparing `bash_input.getter` against `&yy_stream_get`
+  directly) proved the installed getter function was a DIFFERENT address
+  entirely -- meaning bash's interactive input was never going through the
+  plain-stdio path this project's `build_bash.sh` intends
+  (`-UREADLINE`) at all. Traced to `third_party/bash/config.h:47`:
+  `#define READLINE 1`, unconditional, with no guard -- silently
+  overriding `build_bash.sh`'s `-UREADLINE` compile flag, since a
+  `#define` inside a header `#include`d by every translation unit is
+  processed fresh by the preprocessor in each file and simply wins over
+  an earlier, unrelated command-line `-U`. With `READLINE` effectively
+  still on, `y.tab.c`'s `with_input_from_stdin()` compiled to the
+  `#if defined (READLINE)` branch (`yy_readline_get()`, which calls the
+  real `readline()` API), not the intended
+  `with_input_from_stream(stdin, ...)`/`yy_stream_get()` branch. Since
+  real GNU readline's line-editing engine is deliberately not built for
+  this target (`build_bash.sh`'s own documented reasoning: raw serial
+  UART, no termcap/terminfo, no real tty ioctls), the only `readline()`
+  satisfying the link is `bash_syscalls.c`'s honest stand-in,
+  `char *readline(const char *prompt) { return (char *)0; }` -- and
+  `yy_readline_get()` treats a NULL return as immediate EOF, every single
+  call, with zero real console reads ever attempted. That's what fed
+  `handle_eof_input_unit()` -> `exit_builtin()` on bash's very first
+  interactive read attempt, independent of Bug 1.
+- **Bug 2 fix**: disabled `READLINE` in `third_party/bash/config.h`
+  itself (commented out the `#define`, matching what a real
+  `./configure --disable-readline` run would actually produce), rather
+  than continuing to rely on a command-line flag config.h silently
+  overrides. This is a real, if narrow, upstream-adjacent gap in this
+  exact bash-3.2 checkout: rebuilding immediately surfaced a genuine
+  pre-existing inconsistency in `variables.c`, never previously exercised
+  because Apple's own real bash build always ships readline on --
+  `no_line_editing` and `rl_prefer_env_winsize` are both used
+  unconditionally in `sv_winsize()` but were only DECLARED (`extern`)
+  inside `#if defined (READLINE)` guards, even though `no_line_editing`
+  itself is defined unconditionally in `shell.c` and
+  `rl_prefer_env_winsize`'s real backing storage already existed
+  unconditionally as one of `bash_syscalls.c`'s existing readline
+  stand-ins. Fixed by un-guarding just those two `extern` declarations
+  (matching their real, unconditional definition sites) -- confirmed via
+  a clean rebuild (`146 compiled clean, 0 gaps`, zero undefined symbols
+  in `nm -u bash.macho`).
+- **Final verification, both fixes together, real QEMU transcript**
+  (temporary instrumentation fully removed by this point): a fresh PTY
+  test logged in (`root`/`darwin`), ran `exec /bin/bash -i`, and this
+  time got a real, visible `bash-3.2# ` `PS1` prompt (bash's real default
+  root-user prompt) for the first time ever in this project's history.
+  Typed two real commands in a row (`echo HELLO_INTERACTIVE_98765`,
+  `echo ROUNDTRIP_TWO_55555`) -- each produced its correct real output and
+  a fresh prompt afterward, proving the read-execute-loop cycle genuinely
+  works, not just a single command. Then typed `exit` explicitly:
+  printed `exit` exactly once (real bash-3.2 `exit_builtin()` behavior
+  for a non-login shell) and the process genuinely terminated
+  (`exec: /bin/bash exited, status=0`), with control correctly returned
+  to `init.c`'s own shell prompt. Full transcript:
+  ```
+  root@sh:/ % exec /bin/bash -i
+  exec /bin/bash -i
+  bash-3.2# echo HELLO_INTERACTIVE_98765
+  HELLO_INTERACTIVE_98765
+  bash-3.2# echo ROUNDTRIP_TWO_55555
+  ROUNDTRIP_TWO_55555
+  bash-3.2# exit
+  exit
+  exec: /bin/bash exited, status=0
+  root@sh:/ %
+  ```
+  No infinite loop, no flood, no crash, no stray `qemu-system-aarch64`
+  processes left behind afterward (checked via `ps aux`). This is a
+  complete, real interactive shell session by any reasonable definition:
+  visible prompt, real character-level `getc_with_restart()`-driven reads
+  (confirmed via the removed instrumentation mid-pass: one real
+  `read(fd=0, n=128) = 29, errno=0` blocking syscall per typed line,
+  29 bytes matching `echo HELLO_INTERACTIVE_98765\n` exactly), multiple
+  real round trips, and clean process termination on an explicit `exit`.
+  One behavioral note for whoever next touches this: because this
+  target's console has no real tty line discipline (documented,
+  pre-existing, unrelated to this pass), Ctrl-D-style raw EOF at the
+  console does not trigger bash's EOF-at-prompt handling the way it
+  would on a real terminal -- `getc_with_restart()`'s raw `read(2)` now
+  correctly BLOCKS waiting for real data instead of ever returning a
+  spurious EOF, so an explicit typed `exit` (or killing the process) is
+  the only way to end an interactive session on this target. That is a
+  real, understood consequence of the project's own documented
+  `tcgetattr`/`tcsetattr` `ENOTTY` stand-ins, not a new bug.
+- **Opportunistic follow-up (kernel hygiene, not part of the bash fix
+  itself)**: gated the unconditional `printf("TEMP DIAGNOSTIC: ...")`
+  calls in `bsd/kern/kern_exec.c`'s `exec_activate_image()` and
+  `load_init_program()` (flagged as a loose end by the Twenty-second
+  pass above) behind `#if DEBUG` -- matching this file's own existing
+  convention (already used at several other points in the same file),
+  not the `if (DEBUG)` runtime-conditional pattern `msdosfs_vnops.c` uses
+  elsewhere in this tree (that file defines its own local
+  `#ifndef DEBUG / #define DEBUG 0` fallback; `kern_exec.c` does not, so
+  a bare runtime `if (DEBUG)` reference is a real, hard compile error --
+  `error: use of undeclared identifier 'DEBUG'` -- confirmed by hitting
+  it on a real, full `tools/build_xnu_7195.sh` rebuild before switching
+  to the `#if DEBUG` preprocessor form, which this build's
+  `KERNEL_CONFIGS=DEVELOPMENT` variant already has a real, if implicitly
+  zero, value for in every other `#if DEBUG` site in this same file).
+  Full kernel rebuild succeeded clean after the fix; the exact same QEMU
+  boot process this pass's own verification already exercised (multiple
+  full boots, both partitions, real HFS+ root mount, real `exec`) is
+  itself the re-verification that this change didn't regress anything.
+
 ---
 
 *(End of archived material. Phase 4.6 items 3-5, and Phases 5 through 8 in

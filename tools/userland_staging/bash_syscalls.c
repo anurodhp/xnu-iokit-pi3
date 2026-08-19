@@ -280,59 +280,131 @@ unsigned sleep_u2003(unsigned seconds) {
     return 0;
 }
 
-/* sigsetjmp/siglongjmp: real register-context save/restore via clang's
- * portable __builtin_setjmp/__builtin_longjmp (guaranteed-correct across
- * this target's arm64 calling convention, same mechanism real libc
- * implementations are built on at the codegen level) plus a real
- * sigprocmask() save/restore for the signal-mask half of the real
- * POSIX contract -- bash's sig.c/unwind_prot.c genuinely rely on the
- * mask being restored on a real trap/signal longjmp, not just registers.
- * sigjmp_buf is a real opaque int[49] per the Xcode-12 iPhoneOS SDK's
- * own setjmp.h (arm64 branch) -- only this file ever reads/writes it, so
- * the exact real Apple internal layout doesn't need to match, just be
- * internally self-consistent and large enough (196 real bytes here vs.
- * the 40 bytes __builtin_setjmp needs + 4 for the saved mask). */
-
-/* clang's __builtin_setjmp/__builtin_longjmp aren't supported on this
- * arm64 target (confirmed by direct compile failure -- "not supported
- * for the current target"). Real hand-written AAPCS64 register save/
- * restore instead: the real ARM64 calling convention's full
- * callee-saved set is x19-x28 (10 GPRs), x29 (frame pointer), x30 (link
- * register), sp, and d8-d15 (8 FP/SIMD callee-saved regs) -- 21 8-byte
- * slots (168 bytes), well within the real 196-byte sigjmp_buf (int[49])
- * this SDK's setjmp.h defines for arm64. The asm below addresses `env`
- * as a BYTE pointer (x0) writing byte offsets 0-167 for the 21 8-byte
- * registers -- that's C int-array indices 0-41 (4-byte ints), NOT 0-20.
- * A first version of this file used int-index 21 for the "mask saved"
- * flag, believing the register area ended there -- a real bug (found via
- * a genuine QEMU crash, not inspection: bash SIGSEGV'd on its very first
- * sigsetjmp() call) that clobbered the just-saved x29/x30/sp slots
- * (byte offset 80-95 = int-index 20-23) with the mask-flag write.
- * Fixed: mask-saved flag at int-index 42 (byte 168, right after the
- * register area), saved sigset_t at int-index 43 (byte 172). */
-extern int __bash_setjmp_asm(void *buf);
-extern void __bash_longjmp_asm(void *buf, int val) __attribute__((noreturn));
+/* sigsetjmp/siglongjmp: real register-context save/restore, hand-written
+ * AAPCS64 asm (clang's __builtin_setjmp/__builtin_longjmp aren't
+ * supported on this arm64 target -- confirmed by direct compile failure,
+ * "not supported for the current target") plus a real sigprocmask()
+ * save/restore for the signal-mask half of the real POSIX contract --
+ * bash's sig.c/unwind_prot.c genuinely rely on the mask being restored
+ * on a real trap/signal longjmp, not just registers. sigjmp_buf is a
+ * real opaque int[49] per the Xcode-12 iPhoneOS SDK's own setjmp.h
+ * (arm64 branch) -- only this file ever reads/writes it, so the exact
+ * real Apple internal layout doesn't need to match, just be internally
+ * self-consistent and large enough (196 real bytes here vs. the 168
+ * bytes the 21 callee-saved registers need + 8 for the mask bookkeeping).
+ *
+ * Byte layout: x19-x28 (10 GPRs) at 0-79, x29/x30 at 80-95, sp at 96-103,
+ * d8-d15 (8 FP/SIMD regs) at 104-167, mask-saved flag at 168 (int-index
+ * 42), saved sigset_t at 172 (int-index 43).
+ *
+ * REAL BUG FOUND AND FIXED (2026-08-19, the `bash -i` infinite
+ * `exit`-flood investigation -- see docs/roadmap.md/docs/historic/
+ * roadmap.md Phase 4 for the full writeup): an earlier version of this
+ * file split the work into a C function (`sigsetjmp()`/`siglongjmp()`)
+ * that called a separate raw-asm helper (`__bash_setjmp_asm`/
+ * `__bash_longjmp_asm`) to do the actual register save/restore. That's
+ * broken for a MULTI-FRAME-SURVIVING jump: a real C function always gets
+ * its own compiler-generated stack frame, so `__bash_setjmp_asm` was
+ * being called one level too deep -- it captured x29/x30 as they stood
+ * INSIDE `sigsetjmp()`'s own frame (return address = back into
+ * `sigsetjmp()`, not into `sigsetjmp()`'s caller), and spilled `env`
+ * itself into that same now-doomed frame. The moment the initial
+ * `sigsetjmp()` call returned 0 to its real caller (bash's `reader_loop()`
+ * in eval.c, via the `setjmp(top_level)` macro), that frame was popped
+ * and its stack memory became fair game for every function called
+ * afterward (parsing, `read_command()`, `getc_with_restart()`, ...) --
+ * bash's own EOF handling calls `siglongjmp()` many stack frames deeper,
+ * by which point `sigsetjmp()`'s old frame (env's spill slot AND its own
+ * saved x29/x30 needed to eventually `ret` back to `reader_loop()`) had
+ * long since been overwritten with unrelated data. Root-caused via a
+ * real QEMU boot test with temporary instrumentation (removed before
+ * this commit) printing `env`/`rc` on every sigsetjmp/siglongjmp call:
+ * `rc` (freshly written right after the asm call returns, before
+ * anything else can run) reliably showed the correct value (3 ==
+ * EXITPROG), but `env` -- reloaded from the clobbered stack spill slot
+ * -- came back as garbage, and reader_loop()'s own `code = setjmp(...)`
+ * assignment was NEVER observed to receive the nonzero EXITPROG value
+ * (control was, in effect, returning to a corrupted x29/x30 pulled from
+ * that same stomped memory instead of genuinely back into
+ * `reader_loop()`), producing exactly the observed infinite retry: each
+ * "misrouted" return happened to unwind back through bash's own intact,
+ * deeper call frames into another read/EOF/exit cycle instead of
+ * terminating.
+ *
+ * Real fix: `sigsetjmp`/`siglongjmp` are now themselves the raw asm
+ * entry points (no intervening C wrapper function, hence no doomed
+ * extra frame). `sigsetjmp`'s register-capture instructions are the
+ * very first thing that runs on entry -- before any `bl` -- so x29/x30/sp
+ * captured are genuinely the CALLER's (`reader_loop()`'s), exactly like
+ * a real libc implementation. The nested `sigprocmask()` call needed for
+ * `savemask` is done AFTER the register capture already safely landed in
+ * the jmp_buf itself (not a local stack slot), and any transient stack
+ * space it uses is fully consumed before this function returns -- no
+ * cross-longjmp lifetime dependency on it. `siglongjmp` similarly calls
+ * `sigprocmask()` (if needed) before doing its own final register
+ * restore + `ret`, which lands directly back at the real, original
+ * `reader_loop()` call site using the x29/x30 pulled straight from the
+ * jmp_buf -- no intermediate "return through a dead C frame" step. */
+extern int sigsetjmp(int *env, int savemask);
+extern void siglongjmp(int *env, int val) __attribute__((noreturn));
 asm(
     ".text\n"
     ".align 2\n"
-    ".globl ___bash_setjmp_asm\n"
-    "___bash_setjmp_asm:\n"
-    "  mov x8, sp\n"
+    ".globl _sigsetjmp\n"
+    "_sigsetjmp:\n"
+    /* x0 = env, w1 = savemask. Capture the real caller's (reader_loop's)
+     * register state FIRST, before any nested call can clobber x30. */
     "  stp x19, x20, [x0, #0]\n"
     "  stp x21, x22, [x0, #16]\n"
     "  stp x23, x24, [x0, #32]\n"
     "  stp x25, x26, [x0, #48]\n"
     "  stp x27, x28, [x0, #64]\n"
     "  stp x29, x30, [x0, #80]\n"
+    "  mov x8, sp\n"
     "  str x8,  [x0, #96]\n"
     "  stp d8,  d9,  [x0, #104]\n"
     "  stp d10, d11, [x0, #120]\n"
     "  stp d12, d13, [x0, #136]\n"
     "  stp d14, d15, [x0, #152]\n"
-    "  mov x0, #0\n"
+    "  cbz w1, 1f\n"
+    /* savemask != 0: sigprocmask(how=1, set=NULL, oset=&env[43]) -- same
+     * how/set/oset arguments the original C implementation used. Only
+     * `env` (x0) needs to survive the call -- x29/x30/sp etc are already
+     * safely stored in the jmp_buf itself above. */
+    "  sub sp, sp, #16\n"
+    "  str x0, [sp]\n"
+    "  add x2, x0, #172\n"
+    "  mov x1, #0\n"
+    "  mov w0, #1\n"
+    "  bl _sigprocmask\n"
+    "  ldr x0, [sp]\n"
+    "  add sp, sp, #16\n"
+    "  ldr x29, [x0, #80]\n"
+    "  ldr x30, [x0, #88]\n"
+    "  mov w9, #1\n"
+    "  str w9, [x0, #168]\n"
+    "  mov w0, #0\n"
     "  ret\n"
-    ".globl ___bash_longjmp_asm\n"
-    "___bash_longjmp_asm:\n"
+    "1:\n"
+    "  str wzr, [x0, #168]\n"
+    "  mov w0, #0\n"
+    "  ret\n"
+    ".globl _siglongjmp\n"
+    "_siglongjmp:\n"
+    /* x0 = env, w1 = val. */
+    "  ldr w8, [x0, #168]\n"
+    "  cbz w8, 2f\n"
+    "  sub sp, sp, #16\n"
+    "  str x0, [sp]\n"
+    "  str w1, [sp, #8]\n"
+    "  add x1, x0, #172\n"
+    "  mov x2, #0\n"
+    "  mov w0, #3\n"
+    "  bl _sigprocmask\n"
+    "  ldr x0, [sp]\n"
+    "  ldr w1, [sp, #8]\n"
+    "  add sp, sp, #16\n"
+    "2:\n"
     "  ldp x19, x20, [x0, #0]\n"
     "  ldp x21, x22, [x0, #16]\n"
     "  ldp x23, x24, [x0, #32]\n"
@@ -349,23 +421,6 @@ asm(
     "  csinc w0, w1, wzr, ne\n"
     "  ret\n"
 );
-int sigsetjmp(int *env, int savemask) {
-    int rc = __bash_setjmp_asm((void *)env);
-    if (rc != 0) return rc; /* returning from a real siglongjmp -- mask already restored below */
-    if (savemask) {
-        env[42] = 1;
-        sigprocmask(1, (void *)0, (void *)&env[43]);
-    } else {
-        env[42] = 0;
-    }
-    return 0;
-}
-void siglongjmp(int *env, int val) {
-    if (env[42]) {
-        sigprocmask(3, (void *)&env[43], (void *)0);
-    }
-    __bash_longjmp_asm((void *)env, val);
-}
 
 /* Real portable strstr -- this project's Libc-1439.40.11 checkout has no
  * strstr.c at all under any architecture (confirmed by find), same real

@@ -56,27 +56,70 @@ also genuinely slow (~90s, all real block reads, not a hang) on this
 target's mostly-polled SD read path -- a real, separate perf
 characteristic worth profiling later, not a correctness bug.
 
-Forcing real interactivity via `exec /bin/bash -i` (the natural way to get
-a visible prompt) does NOT work and exposes a second, different, real,
-100%-reproducible bug: bash enters an infinite tight loop printing
-`exit\n` via its own EOF-triggered `exit_builtin()` (real bash-3.2
-behavior when `read()` on `stdin` reports EOF at an interactive prompt),
-never actually terminating the process -- confirmed via multiple clean
-QEMU boots showing tens of thousands of identical `exit\n` lines/second
-with the guest at ~100% host CPU (genuinely busy, not idle). Source-traced
-to bash's interactive input path (`with_input_from_stdin()` ->
-`with_input_from_stream(stdin, ...)` -> real libc `getc(stdin)`) -- a
-different, never-before-exercised code path from the non-interactive one
-(`with_input_from_buffered_stream()`, a raw-fd read) -- combined with
-`jump_to_top_level(EXITPROG)` -> `longjmp`/`siglongjmp` (this project's
-own hand-rolled arm64 implementation in `bash_syscalls.c`) apparently not
-completing a real process termination. Not root-caused to an exact
-instruction (live QEMU-monitor PC sampling was attempted but the monitor
-socket proved unreliable to reconnect to mid-session); see
-`docs/historic/roadmap.md`'s newest Phase 4 entry for the full evidence
-trail and concrete next steps. **`-i` must not be used as a workaround --
-it trades a non-bug for a real, worse, CPU-spinning one.** This remains
-the project's most immediate open item.
+**`bash -i`'s infinite `exit`-flood bug is FIXED and QEMU-verified for real
+as of 2026-08-19** (Twenty-third pass) -- real interactive bash now boots
+to a genuine `bash-3.2# ` `PS1` prompt, reads and executes multiple real
+typed commands in a row with correct output, and exits cleanly (once,
+not in a loop) on an explicit `exit`. Two independent, real, compounding
+bugs were found and fixed, both root-caused via a live QEMU boot with
+temporary instrumentation (removed before commit) rather than guessed:
+
+1. **`sigsetjmp`/`siglongjmp` double-frame corruption**
+   (`tools/userland_staging/bash_syscalls.c`): the previous implementation
+   split the work into a C wrapper function (`sigsetjmp()`/`siglongjmp()`)
+   that called a separate raw-asm register-save/restore helper. Because a
+   real C function always gets its own compiler-generated stack frame,
+   that asm helper was being invoked one level too deep -- it captured
+   x29/x30 as they stood *inside* `sigsetjmp()`'s own frame (return
+   address = back into `sigsetjmp()`, not into `sigsetjmp()`'s real
+   caller, `reader_loop()` in `eval.c`), and spilled the `env` parameter
+   into that same frame. The instant the initial `sigsetjmp()` call
+   returned 0, that frame was popped and its memory became fair game for
+   every function bash called afterward (parsing, `read_command()`, ...);
+   by the time bash's own EOF handling called `siglongjmp()` many stack
+   frames deeper, `sigsetjmp()`'s old frame -- including its own saved
+   x29/x30 needed to eventually return to `reader_loop()` -- had long
+   since been overwritten. Fixed by rewriting `sigsetjmp`/`siglongjmp` as
+   the raw asm entry points directly (no intervening C wrapper, hence no
+   doomed extra frame) -- register capture is the very first thing that
+   runs on entry, before any nested call, so x29/x30/sp captured are
+   genuinely the real caller's, exactly like a real libc implementation.
+2. **`READLINE` silently forced on** (`third_party/bash/config.h`): this
+   vendored config.h unconditionally `#define`d `READLINE 1`, silently
+   overriding `build_bash.sh`'s deliberate `-UREADLINE` compile flag (a
+   `#define` inside a header included by every translation unit wins over
+   an earlier command-line `-U`). With `READLINE` still effectively on,
+   `y.tab.c`'s interactive input path compiled to `yy_readline_get()`
+   (calling the real `readline()` API) instead of the intended plain-stdio
+   `yy_stream_get()`/`getc_with_restart()` path -- and since real GNU
+   readline's line-editing engine is deliberately not built for this
+   target (no termcap/terminfo, raw serial UART), `bash_syscalls.c`'s
+   stand-in `readline()` always returns NULL, which `yy_readline_get()`
+   treats as immediate EOF on *every* call, with zero real console reads
+   ever happening. That's what fed `handle_eof_input_unit()` ->
+   `exit_builtin()` every time `bash -i` tried to read its very first
+   interactive line. Fixed by disabling `READLINE` in config.h itself
+   (matching the project's own documented scope decision), which in turn
+   exposed one small, genuine pre-existing gap in this exact bash-3.2
+   checkout under a real `--disable-readline`-style build (never
+   previously exercised, since Apple's own build always ships readline
+   on): `variables.c` used `no_line_editing`/`rl_prefer_env_winsize`
+   unconditionally but only declared them inside `#if defined (READLINE)`
+   -- fixed by un-guarding just those two declarations.
+
+Either bug alone would have caused *a* problem, but together they explain
+the exact observed symptom precisely: bug 2 made every attempted
+interactive read return EOF immediately and unconditionally (explaining
+the *high rate* of the flood -- no real blocking read ever happened), and
+bug 1 made the resulting `jump_to_top_level(EXITPROG)` fail to actually
+unwind back to `reader_loop()`'s loop-exit check (explaining why it never
+terminated -- control was landing on stomped register state that
+happened, deterministically, to unwind back into another read/EOF/exit
+cycle instead). See `docs/historic/roadmap.md`'s newest Phase 4 entry
+(search "Twenty-third pass") for the full evidence trail, including the
+exact instrumented QEMU transcripts that pinned down each bug in turn.
+**`-i` is now the correct, working way to get a real interactive
+prompt** -- the earlier "don't use `-i`" guidance is retired.
 
 Phase 4.6 items 1 (real timezone database) and 2 (real `environ`/`getenv`
 plumbing) are DONE and QEMU-verified (2026-08-16). Items 3-5 (POSIX regex,
@@ -92,22 +135,9 @@ rest of Phase 5 (login/su/PAM) hasn't been started.
 Currently open, real bugs the roadmap narrative flagged as not-yet-fixed
 (see `docs/backlog.md` for the full, authoritative list and detail):
 
-- **`bash -i` loops forever printing `exit`, never terminates**, spinning
-  at ~100% host CPU -- real bash's own EOF-at-prompt handling
-  (`exit_builtin()`) fires repeatedly instead of once. Likely needs (a) a
-  fix to why `getc(stdin)` (bash's real interactive-input path, distinct
-  from the non-interactive raw-fd path that already works) reports
-  immediate EOF, and/or (b) a fix to this project's hand-rolled
-  `siglongjmp()` (`tools/userland_staging/bash_syscalls.c`) not completing
-  a real process exit via `jump_to_top_level(EXITPROG)` -- this is the
-  first time in this project's testing history the *restore* half of that
-  hand-rolled `sigsetjmp`/`siglongjmp` is actually exercised (all earlier
-  verification only exercised the initial "returns 0" call). Not
-  root-caused to an exact instruction yet. **Do not invoke bash with `-i`
-  as a workaround for the (non-bug) missing prompt below it.** Plain
-  `exec /bin/bash` (no `-i`) genuinely works non-interactively -- see
-  Current status above and `docs/historic/roadmap.md`'s newest Phase 4
-  entry for the full writeup.
+- **`bash -i` loops forever printing `exit`** -- FIXED 2026-08-19 (see
+  Current status above and `docs/historic/roadmap.md`'s "Twenty-third
+  pass"). Real interactive bash now works correctly.
 - **`yes` reliably panics the kernel** (`_rtclock_intr` interrupt-processing
   watchdog, under sustained fast syscall load) -- a real kernel bug, not a
   port bug in `yes.c` itself. Ships anyway, flagged. See `docs/backlog.md`
