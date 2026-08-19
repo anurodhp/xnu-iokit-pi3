@@ -27,11 +27,42 @@ the full per-tier build history).
 Real static `bash.macho` links clean and, after fixing three real bugs
 found the same day (a stale/wrong-format `.dtb`, a test-harness login-line
 bug, and a shell-quoting bug that corrupted `CONF_HOSTTYPE` into a garbage
-pointer), now executes real code -- but it still does not reach an
-interactive prompt: it hangs indefinitely partway through interactive
-startup with the kernel provably idle (not crashed). Root cause not yet
-found; the leading hypothesis is a blocking syscall in bash's job-control/
-tty startup path. This is the project's most immediate open item.
+pointer), executes real code. The 2026-08-16 "hangs indefinitely, kernel
+provably idle" report was **re-investigated 2026-08-19 and found to be a
+misdiagnosis**: `exec /bin/bash` (no `-i`) genuinely works -- it runs
+non-interactively (real `isatty(stdin)`/`isatty(stderr)` honestly return
+false, since this console has no real tty ioctls), which is *correct*
+POSIX behavior, not a bug; it prints no `PS1` prompt by design, then
+legitimately blocks on a real, correct `read()` waiting for the next
+line -- this is what earlier sessions' PC-sampling correctly saw as
+"kernel idle, not crashed". Feeding it a real command after `exec /bin/bash`
+(no visible prompt needed) proves it fully alive: `echo` produced real,
+correct output. Demand-paging the ~1.2MB binary in for the first time is
+also genuinely slow (~90s, all real block reads, not a hang) on this
+target's mostly-polled SD read path -- a real, separate perf
+characteristic worth profiling later, not a correctness bug.
+
+Forcing real interactivity via `exec /bin/bash -i` (the natural way to get
+a visible prompt) does NOT work and exposes a second, different, real,
+100%-reproducible bug: bash enters an infinite tight loop printing
+`exit\n` via its own EOF-triggered `exit_builtin()` (real bash-3.2
+behavior when `read()` on `stdin` reports EOF at an interactive prompt),
+never actually terminating the process -- confirmed via multiple clean
+QEMU boots showing tens of thousands of identical `exit\n` lines/second
+with the guest at ~100% host CPU (genuinely busy, not idle). Source-traced
+to bash's interactive input path (`with_input_from_stdin()` ->
+`with_input_from_stream(stdin, ...)` -> real libc `getc(stdin)`) -- a
+different, never-before-exercised code path from the non-interactive one
+(`with_input_from_buffered_stream()`, a raw-fd read) -- combined with
+`jump_to_top_level(EXITPROG)` -> `longjmp`/`siglongjmp` (this project's
+own hand-rolled arm64 implementation in `bash_syscalls.c`) apparently not
+completing a real process termination. Not root-caused to an exact
+instruction (live QEMU-monitor PC sampling was attempted but the monitor
+socket proved unreliable to reconnect to mid-session); see
+`docs/historic/roadmap.md`'s newest Phase 4 entry for the full evidence
+trail and concrete next steps. **`-i` must not be used as a workaround --
+it trades a non-bug for a real, worse, CPU-spinning one.** This remains
+the project's most immediate open item.
 
 Phase 4.6 items 1 (real timezone database) and 2 (real `environ`/`getenv`
 plumbing) are DONE and QEMU-verified (2026-08-16). Items 3-5 (POSIX regex,
@@ -47,11 +78,22 @@ rest of Phase 5 (login/su/PAM) hasn't been started.
 Currently open, real bugs the roadmap narrative flagged as not-yet-fixed
 (see `docs/backlog.md` for the full, authoritative list and detail):
 
-- **`bash` hangs partway through interactive startup**, kernel goes idle
-  rather than crashing -- most likely a blocking syscall in the job-control/
-  tty path (e.g. a raw `ioctl()` call bash makes directly rather than
-  through the project's stubbed `tcgetattr`/`tcsetpgrp` wrappers). Not
-  root-caused yet.
+- **`bash -i` loops forever printing `exit`, never terminates**, spinning
+  at ~100% host CPU -- real bash's own EOF-at-prompt handling
+  (`exit_builtin()`) fires repeatedly instead of once. Likely needs (a) a
+  fix to why `getc(stdin)` (bash's real interactive-input path, distinct
+  from the non-interactive raw-fd path that already works) reports
+  immediate EOF, and/or (b) a fix to this project's hand-rolled
+  `siglongjmp()` (`tools/userland_staging/bash_syscalls.c`) not completing
+  a real process exit via `jump_to_top_level(EXITPROG)` -- this is the
+  first time in this project's testing history the *restore* half of that
+  hand-rolled `sigsetjmp`/`siglongjmp` is actually exercised (all earlier
+  verification only exercised the initial "returns 0" call). Not
+  root-caused to an exact instruction yet. **Do not invoke bash with `-i`
+  as a workaround for the (non-bug) missing prompt below it.** Plain
+  `exec /bin/bash` (no `-i`) genuinely works non-interactively -- see
+  Current status above and `docs/historic/roadmap.md`'s newest Phase 4
+  entry for the full writeup.
 - **`yes` reliably panics the kernel** (`_rtclock_intr` interrupt-processing
   watchdog, under sustained fast syscall load) -- a real kernel bug, not a
   port bug in `yes.c` itself. Ships anyway, flagged. See `docs/backlog.md`
@@ -122,12 +164,15 @@ need a real implementation later:
 
 ## Remaining future work
 
-- **Phase 4 (userland)**: fix bash's interactive-startup hang (the
-  immediate next blocker); Phase 4.6 items 3-5 (real POSIX regex, real
-  `setattrlist(2)` wiring, real Mach IPC for `ps` stats + blocking sleep)
-  remain not started; real Apple `Libinfo` (the actual repo, distinct from
-  the working custom flat-file resolver) is still unbuilt; `chmod` needs a
-  real ACL subsystem.
+- **Phase 4 (userland)**: fix bash's `-i` infinite `exit`-print loop (the
+  immediate next blocker, see Known bugs) so bash can reach a real visible
+  prompt; Phase 4.6 items 3-5 (real POSIX regex, real `setattrlist(2)`
+  wiring, real Mach IPC for `ps` stats + blocking sleep) remain not
+  started; real Apple `Libinfo` (the actual repo, distinct from the
+  working custom flat-file resolver) is still unbuilt; `chmod` needs a
+  real ACL subsystem. Separately worth profiling: bash.macho's first-touch
+  demand-paging takes ~90s on this target's mostly-polled SD read path --
+  slow but not a correctness bug.
 - **Phase 5 (multi-user)**: the custom account resolver is done; still
   needed: account-provisioning tools (`pwd_mkdb`/`vipw`/`chpass`/
   `passwd`), `crypt()` password verification, wiring the resolver into a

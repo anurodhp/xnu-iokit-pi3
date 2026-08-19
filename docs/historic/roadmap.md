@@ -2976,6 +2976,180 @@ previously-latent third bug found in between them:
    checkout since they'd been dropped from the script's own declared
    file list at some point.
 
+**Twenty-first pass, 2026-08-19: re-investigated the "bash hangs
+indefinitely, kernel provably idle" bug left open by the Twentieth pass.
+Found it to be a real misdiagnosis of two DIFFERENT, more nuanced
+findings: (1) plain `exec /bin/bash` (no `-i`) genuinely works and was
+never actually hung -- it just never got a chance to prove it, since the
+prior test methodology only waited for a prompt that non-interactive bash
+never prints by design; (2) forcing a real interactive prompt via
+`exec /bin/bash -i` exposes a NEW, distinct, 100%-reproducible bug: an
+infinite tight loop printing `exit`, never terminating.**
+
+- **Environment note before any of this**: found and killed several
+  orphaned `qemu-system-aarch64` processes at the start of this pass (one
+  running continuously since 2026-08-16, ~79 hours of 100% CPU, holding
+  `qemu/mon.sock`; several more appeared mid-session). Root cause for the
+  mid-session ones: this pass's own custom PTY test scripts spawn
+  `qemu-system-aarch64` via `subprocess.Popen` and rely on an explicit
+  `proc.terminate()` at the end of a clean run -- if the wrapping process
+  is itself killed by an external timeout (this session hit the harness's
+  own background-task timeout once, and separately deleted a monitor
+  socket file out from under a still-running instance once, see below),
+  the child `qemu-system-aarch64` is orphaned rather than reaped, and
+  being TCG-emulated it burns a full host core indefinitely. Not a
+  project/kernel bug -- a test-tooling hygiene issue for whoever writes
+  ad-hoc PTY-driven QEMU test scripts in the future: always verify no
+  stray `qemu-system-aarch64` remains after a background test run,
+  independent of whether the wrapping script "should" have cleaned up.
+- **Bug 1 -- REAL MISDIAGNOSIS, not an actual hang, confirmed via a
+  corrected test**: reproduced the exact `bash_diag_cmds.txt` scenario
+  (`root`/`darwin`/`exec /bin/bash`) via a custom PTY harness modeled on
+  `_pty_test_phase5.py`. Console output showed continuous real SD block
+  reads (`DIAG sdhci_send_command`/`read_block_from_card`) for the entire
+  240s test window -- summing the `blkcnt=` fields across one full run
+  gives exactly 2481 512-byte blocks = 1,270,272 bytes, matching
+  `bash.macho`'s real 1,202,936-byte size (rounded to sector/extent
+  boundaries) almost exactly. This is genuine, one-time, sequential
+  demand-paging of the whole binary, not a redundant-re-read bug -- just
+  slow (this target's SD read path is mostly polled per prior phases'
+  notes; only the very first read of a boot session shows a real
+  hardware-interrupt confirmation). A second, longer test (with a longer
+  timeout and a 4th scripted command, `echo BASH_ALIVE_TEST_12345`, sent
+  blind after `exec /bin/bash`) showed the echo's real output appearing
+  in the console ~90 real seconds after `exec /bin/bash` was typed --
+  proving bash was alive, executing real commands, the entire time it
+  "looked" hung. Cross-checked against real bash-3.2 source
+  (`shell.c:534-545`): interactivity requires `isatty(fileno(stdin)) &&
+  isatty(fileno(stderr))`, and this project's `isatty()`
+  (`third_party/Libc/gen/FreeBSD/isatty.c`) falls through to this
+  project's own `tcgetattr()` stub in `bash_syscalls.c`, which honestly
+  always returns `ENOTTY` (documented, deliberate -- no real tty
+  line-discipline exists yet) -- so `interactive_shell` is correctly never
+  set, `reader_loop()` (`eval.c`) runs identically either way (executes
+  whatever `read_command()` returns, prompt or not), and non-interactive
+  bash simply never prints `PS1` while still fully, correctly executing
+  every command it's given. The prior session's "kernel provably idle"
+  PC-sampling was real and accurate -- it just correctly caught bash
+  legitimately blocked in a real, correct `read()` waiting for more
+  stdin, not a bug.
+- **Bug 2 -- REAL, newly found, 100%-reproducible, NOT fixed this pass**:
+  forcing real interactivity via `exec /bin/bash -i` (the obvious "fix"
+  for the missing prompt) does not work. Confirmed across four
+  independent clean QEMU boots (a fixed-delay-timing test that turned out
+  mistimed and is not evidence either way; then three correctly
+  prompt-gated tests, all identical): after `exec /bin/bash -i` and the
+  usual demand-paging period, the console output becomes an unbroken
+  stream of the literal 5-byte line `exit` -- one run captured 95,666
+  consecutive `exit` lines with *zero* other bytes over a clean 20-real-
+  second window (786KB), and the `qemu-system-aarch64` host process sat
+  at 100% CPU throughout (confirmed via `ps -o pcpu=`), proving the guest
+  is genuinely busy in a tight loop, not idle. Source-traced the literal
+  string: real bash-3.2's `builtins/exit.def`'s `exit_builtin()`
+  unconditionally does `fprintf (stderr, login_shell ? "logout\n" :
+  "exit\n")` as its very first action, for every real POSIX-mandated
+  reason a shell would exit (typing `exit`, or -- the relevant case here
+  -- hitting real EOF at an interactive prompt via
+  `y.tab.c:handle_eof_input_unit()`, real bash's documented "Ctrl-D at an
+  empty line looks like you typed exit" UX). `exit_builtin()` then calls
+  `exit_or_logout()` -> `jump_to_top_level (EXITPROG)`
+  (`sig.c:439`) -> `longjmp (top_level, EXITPROG)`. Because real bash's
+  own `bashjmp.h`/`posixjmp.h` `#define`s `longjmp`/`setjmp` to
+  `siglongjmp`/`sigsetjmp` whenever `HAVE_POSIX_SIGSETJMP` is set
+  (confirmed set in `third_party/bash/config.h:702`), this resolves to
+  THIS PROJECT'S OWN hand-rolled arm64 `sigsetjmp`/`siglongjmp`
+  (`tools/userland_staging/bash_syscalls.c`, added for the Seventeenth/
+  Eighteenth passes' real bash SIGSEGV work) rather than a real Apple
+  libc implementation -- there isn't one linked in for this target.
+  Manually traced what SHOULD happen on a correct `longjmp`: control
+  should unwind directly back to `reader_loop()`'s own
+  `code = setjmp (top_level)` (armed fresh every `while` iteration,
+  `eval.c:77`), whose `switch` sets `EOF_Reached = EOF` for the
+  `EXITPROG` case and lets the `while (EOF_Reached == 0)` loop exit
+  normally, returning control to `shell.c:main()`'s
+  `reader_loop(); exit_shell(...)` -- which should genuinely call real
+  `exit()` -> `_exit()` and terminate the process for good, printing
+  `exit\n` exactly ONCE. Manually traced what happens if `siglongjmp()`
+  instead silently fails to transfer control (behaves as a no-op/returns
+  normally): `exit_or_logout()`'s "/*NOTREACHED*/" code is in fact
+  reached, returning all the way back up through `exit_builtin()` to
+  `y.tab.c`'s bison-generated EOF-reduction action (`case 5`,
+  `global_command = NULL; handle_eof_input_unit(); YYACCEPT;`), back to
+  `read_command()` returning 0 with `global_command == NULL`, which
+  `reader_loop()`'s own dispatch (`eval.c:132-158`) silently does nothing
+  with (neither the `read_but_dont_execute` branch nor the
+  `current_command = global_command` branch fires, since neither
+  condition is met) -- `EOF_Reached` is never actually set on this path,
+  so the `while` loop simply continues, re-arms `setjmp` fresh, calls
+  `read_command()` again, hits EOF again, and `exit_builtin()` fires
+  again -- an exact, mechanistic match for the observed infinite
+  `exit\n` flood, with NO other assumption needed beyond "this project's
+  hand-rolled `siglongjmp()` doesn't complete a real control transfer in
+  this specific call context". This would be the first time in this
+  project's history the *restore* half of that hand-rolled
+  `sigsetjmp`/`siglongjmp` pair is actually exercised at runtime -- the
+  Twentieth pass's own earlier fix to this same file only verified the
+  *initial* `sigsetjmp()` call path (fixed a byte-offset bug that
+  previously corrupted `x29`/`x30`/`sp` on the very first call); the
+  longjmp-back path was never subsequently exercised by anything in this
+  project's test history until real bash's own EOF handling exercised it
+  here for the first time. Checked and ruled out one specific hypothesis
+  along the way: a `sigjmp_buf` size mismatch between this project's
+  assumed `int[49]`/196-byte layout and Apple's real one -- confirmed via
+  the real Xcode-12 iPhoneOS SDK's own
+  `usr/include/setjmp.h` that `_JBLEN = ((14 + 8 + 2) * 2) = 48` and
+  `sigjmp_buf` is `int[_JBLEN + 1] = int[49]` on real arm64 Darwin, an
+  exact match -- not the bug.
+- **A second, independent, real difference also found (not yet confirmed
+  as causal, a real candidate contributing to *why* EOF is hit
+  immediately and repeatedly, distinct from Bug 2's *why it doesn't
+  terminate*)**: real bash's interactive input path
+  (`parse.y:with_input_from_stdin()`, compiled `-UREADLINE` per this
+  project's `build_bash.sh`, so the plain non-readline body applies) is
+  `with_input_from_stream (stdin, "stdin")` -- i.e. it reads via the real
+  global C-library `stdin` `FILE*` and `getc()`
+  (`parse.y:yy_stream_get()` -> `getc_with_restart()`), which is a
+  COMPLETELY DIFFERENT code path from non-interactive mode's
+  `with_input_from_buffered_stream()` (a raw-fd read via
+  `default_buffered_input`, proven working by Bug 1's non-interactive
+  test above). This project's own `libc_stdio_smoketest.c` -- the only
+  existing test of `fgets`/`FILE*` read behavior in this project's whole
+  history -- only ever tested `fopen`/`fread` against a real *regular
+  file* it created itself, never a `getc()` read against the pre-existing
+  global `stdin` (fd 0, the console) inherited across `fork`/`execve`.
+  Real reading through `stdin`'s own `FILE*` may be an entirely
+  unexercised path in this project until this exact pass -- worth
+  checking directly (e.g. a tiny standalone `getc(stdin)` smoke test)
+  before assuming Bug 2's `siglongjmp` theory is the *only* thing wrong;
+  it is possible both a stdio-level spurious-EOF bug on `stdin` AND the
+  `siglongjmp` non-completion bug are real and both need fixing, since
+  either one alone doesn't fully explain a HIGH-RATE flood (thousands of
+  `exit` lines/second): a `siglongjmp` failure alone, paired with a
+  correctly-*blocking* `getc(stdin)`, would only re-print `exit` at the
+  rate of the pty actually delivering more bytes (never, in these tests,
+  since nothing was typed after `exec /bin/bash -i`) -- so `stdin`'s
+  `getc()` returning EOF *immediately and repeatedly*, not just once, is
+  also required to explain the observed flood rate, independent of
+  whether `siglongjmp` is also broken.
+- **What was NOT achieved this pass**: a live QEMU-monitor PC sample from
+  inside the infinite loop, which would have settled the exact
+  instruction/function definitively. Multiple attempts were made; the
+  monitor `unix:qemu/mon.sock` socket proved unreliable to reconnect to
+  mid-run in this environment (a `stop` + `info registers` + `x/12i $pc`
+  sequence sent from the test harness itself left both the Python client
+  and the QEMU monitor listener stuck -- a self-inflicted contention
+  issue, not evidence of anything about the guest). Whoever continues
+  should sample the PC directly via `runvm.sh` + the monitor socket by
+  hand (per `CLAUDE.md`'s own guidance: `x` not `xp`), reproducing via
+  `login: root` / `Password: darwin` / `exec /bin/bash -i`, waiting for
+  the `exit` flood, then querying the monitor from a **separate**,
+  already-open terminal rather than from inside an automated test
+  script's own control loop.
+- **Do not ship `-i` as a workaround** -- it trades a working (if
+  prompt-less) non-interactive shell for a genuinely broken, CPU-spinning
+  one. No source changes were made this pass; this is root-cause research
+  only, committed as this writeup plus `docs/roadmap.md`'s updated
+  Current status/Known bugs sections.
 
 ---
 
