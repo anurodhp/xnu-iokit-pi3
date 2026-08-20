@@ -3820,6 +3820,213 @@ list them or just beep), vi-mode editing (`set -o vi`), and
 links clean." `docs/roadmap.md`'s "Current status"/"Known stubbings"/
 "Remaining future work" updated accordingly.
 
+**Twenty-fifth pass ("command-sweep" session), 2026-08-20: 32 more real
+commands across six blocks -- 28 -> 60 real command binaries.** Worked
+autonomously block-after-block per explicit instruction, committing
+after each QEMU-verified block, stopping only when every remaining
+candidate needed a whole unbuilt subsystem rather than a syscall or two.
+Git commits `c1db9d7`, `2eb99af`, `3dd3e5e`, `a58c1b6`, `5a4841e`,
+`77ed760` (none pushed).
+
+*Block 1 -- `cp`/`mv` (real `file_cmds/cp` + `file_cmds/mv`), the pair
+the prior pass had explicitly surveyed-and-deferred.* New plumbing: six
+plain raw syscalls generated the normal way (`chflags`/`chown`/`mknod`/
+`mkfifo`/`futimes`/`readlink`, folded into `build_simple_cmds.sh`'s
+shared `SYS_STUBS_NEEDED`), plus three hand-written `NO_SYSCALL_STUB`
+raw syscalls in a new `cp_mv_syscalls.c` (`lchown`, `sigaction`,
+`setattrlist` -- same carry-flag asm pattern `removefile_syscalls.c`/
+`copyfile_syscalls.c` already established, public symbol implemented
+directly rather than fighting Apple's real private-wrapper layering).
+Real Apple `Libc/emulated/lchmod.c`+`lchflags.c` now call that real
+`setattrlist` directly -- Phase 4.6 item 4 closed for real, not just for
+`touch -h`'s narrow `lutimes` case. `mv.c`'s cross-filesystem-rename
+fallback needed real `fork()`/`vfork()`/`waitpid()` library calls for
+the first time in this tier; real `Libc/sys/fork.c`'s atfork-
+notification machinery depends on a `libSystem_initializer()` this
+no-dyld target never runs, so these are real, narrow, last-resort raw-
+syscall ports instead, reusing the exact "x1, not x0, encodes
+parent-vs-child" real ABI convention `tools/init_binary/init.c`'s own
+`sys_fork()` had already root-caused and documented. `execl` comes from
+real `Libc/gen/FreeBSD/exec.c` (already proven via `env`'s tier).
+
+Adversarial edge-case testing (`cp -i`/`mv -i` interactive y/n prompts,
+`cp -R` with a symlink inside, `cp`/`mv` against a nonexistent source,
+not just the happy path) found a real bug affecting *every* command in
+this tier, not just `cp`/`mv`: `libc_locale_env_stubs.c`'s
+`getprogname()` unconditionally returned a hardcoded
+`"libc_locale_smoketest"` literal, a stale leftover from before this
+tier's real Csu/`crt.c` `argv[0]`/`__progname` plumbing existed. Fixed
+to return the real `__progname`; rebuilding `libc_locale.a` to pick up
+the fix also surfaced an unrelated stale-build-artifact bug (a leftover
+macOS-target `index.o` silently pulled in via a wildcard glob in
+`build_libc_locale.sh`'s `freebsd_string` directory, a real "building
+for iOS but linking object built for macOS" link error) -- removed. All
+27 then-existing commands rebuilt and re-verified against both fixes,
+zero regressions. QEMU-verified: plain `cp` (byte-identical `wc -c`),
+`cp -p` (the real `setattrlist` path), `cp -R` with a real symlink
+(`copy_link`'s `readlink`/`symlink` path), `cp`/`mv` onto a nonexistent
+source (honest `ENOENT`, now correctly prefixed), `mv` same-filesystem
+rename (content verified moved, source genuinely gone), `mv` of a
+directory, and `cp -i`/`mv -i` answering both `y` and `n` (real
+`rpmatch`, real stdin read through bash's fork+exec+pipe path). Not
+exercised: `mv`'s real fork/exec cross-filesystem (`EXDEV`) fallback
+itself -- this image only has one mounted filesystem at boot. Found,
+not fixed (out of scope, flagged for whoever next touches bash's real
+exec path): `argv[0]` passed by bash's real `execve()` to a spawned
+child is empty, not the invoked command name -- exposed by the
+`getprogname()` fix rather than caused by it (previously masked behind
+the wrong hardcoded string).
+
+*Block 2 -- nine pure-stdio `text_cmds` (`rev`/`fold`/`paste`/`expand`/
+`unexpand`/`comm`/`colrm`/`lam`/`rs`, zero new syscalls) plus four
+`file_cmds` (`rmdir`/`mkfifo`/`mknod`/`chflags`, reusing Block 1's new
+syscalls).* Deliberately excluded `text_cmds`' `nl` and (in a later
+block) `shell_cmds`' `xargs`, both real-source-confirmed via `grep` to
+call `regcomp`/`regexec` -- the Phase 4.6 item 3 wall this whole sweep
+stops at rather than attempting piecemeal. QEMU-verified each against
+its own real algorithm, not just "didn't crash": `comm`'s three-column
+set-difference output hand-checked against a known input; `fold -w`
+wrapping at the exact byte width; `expand`/`unexpand` round-tripping
+tabs<->spaces; `colrm` removing the right column range. One real,
+unresolved anomaly found and documented rather than hidden: `rs -T` on
+a small piped 2x3 matrix dropped the first row in one test -- possibly
+a genuine upstream `rs` quirk with small-input array-dimension guessing
+(real, documented behavior of that heuristic) rather than a port bug,
+not chased further given `rs`'s low practical value.
+
+*Block 3 -- seven `shell_cmds` (`seq`/`jot`/`test`/`kill`/`tee`/
+`mktemp`/`hexdump`) and four `file_cmds` (`stat`/`cksum`/`pathchk`/
+`du`).* This project has no libm at all and no `strstr.c` source
+(confirmed absent, not guessed) -- `block3_last_resort_compat.c` is a
+narrow, real (not approximated) last-resort port: `floor()`/`fabs()`
+via clang's own compiler builtins (real IEEE-754 hardware ops, same
+class as this project's existing `flsl()`/`reallocarray()` precedents,
+not software approximations), `ilogb()` via exact IEEE-754
+exponent-field extraction, `strstr()` the textbook single-pass search,
+and a narrow honest `confstr()` covering exactly the one
+`_CS_DARWIN_USER_TEMP_DIR` key `mktemp -t` needs (this project's own
+`/tmp/` convention -- an earlier version of this file had the real SDK
+constant wrong, 65538 instead of the real 65537, caught by grepping the
+pinned Xcode-12 SDK's own `unistd.h` rather than trusting the first
+guess). `du_fnmatch_libc_wrapper.c` scopes real `Libc/gen/FreeBSD/
+fnmatch.c`'s need for `collate.h`'s `__LIBC__`-only prototypes to just
+that one translation unit (`#define __LIBC__` then `#include` the real
+`.c`) rather than risking unrelated macro-branch changes tier-wide by
+adding the flag globally. Reused real Apple/FreeBSD `arc4random.c`/
+`random.c`/`siglist.c`/`signal.c`/`getbsize.c`/`setmode.c` throughout.
+QEMU-verified against expected output, not just exit codes: `seq -w`
+zero-padding, `jot`'s reps/start sequence, `kill -0` distinguishing a
+real PID from a nonexistent one, `tee` duplicating to both file and
+stdout (independently confirmed via `cat`), `stat`'s real `stat64`
+field formatting (uid/gid printing as raw numbers when the owning id
+has no `/etc/master.passwd` entry -- honest BSD fallback, not a bug),
+`cksum`'s real CRC + exact byte count. Real, documented, not-fixed
+anomaly: `hexdump` (every format flag tried) prints only the final
+byte-count line, never actual hex+ASCII data rows -- narrowed to
+`hexdump`'s own `freopen(argv,"r",stdin)` + `getc()`/`ungetc()` idiom
+specifically (not a general `freopen` bug, since Block 2's `fold`/
+`expand`/`unexpand` -- linking the identical real `freopen.c` --
+correctly read real file-argument content in the same session), most
+likely a latent bug in this project's ported `getc()`/`ungetc()`
+interaction with a freshly-`freopen`'d stream. Ships anyway (real,
+unmodified, links, runs, doesn't crash), same tolerance as `yes`'s
+documented kernel-panic bug. Also `pathchk ""` exits 0 instead of
+POSIX's specified error -- real unmodified upstream behavior, not
+chased further.
+
+*Block 4 -- real `chmod`/`chown`, re-examining `docs/roadmap.md`'s own
+flagged "chmod needs real ACLs" claim per this pass's standing
+instruction to verify claims against source rather than trust them.*
+Turned out false for the common mode-bit case: real Apple `posix1e/
+acl.c` (`acl_get_file`/`acl_set_file`/`acl_from_text`/etc) was already
+compiled into `libcopyfile.a` back in Block 1 (real `copyfile()`'s own
+ACL-preserving-copy path needed it) -- confirmed present via `nm`
+before attempting this, not assumed. Real, unmodified `chmod.c` + its
+real `chmod_acl.c` sibling link and run against that already-built
+archive; only new glue is one small honest-failure stand-in
+(`chmod_mbr_compat.c`'s `mbr_identifier_to_uuid()`, same "no directory
+service at all" gap `copyfile_syscalls.c`'s `mbr_*()` family already
+documents, reached only by the ACL-by-name path). QEMU-verified via a
+real `stat -f %Lp` readback after each: `chmod 600`, `755`, and a
+redundant `+x` (correctly staying 755) all independently confirmed, not
+just "no error"; `chown` by name, by numeric `uid:gid`, and against a
+nonexistent user (honest "illegal user name" failure) all correct. Not
+exercised: real ACL-specific flags (`-N`/`+a`) -- HFS+ has no real ACL
+storage on this target, so those would need confirming as honest
+`ENOTSUP`/`EINVAL` failures specifically, not assumed to "just work."
+
+*Block 5 -- `nice`/`renice`/`nohup`.* New raw syscalls: `setpriority`
+(hand-written, `NO_SYSCALL_STUB`) plus normal/generatable `getpriority`
+and `dup2` (the latter needed only by `nohup`'s real stdout-to-stderr
+`dup2`, never generated by any prior tier despite `libc_stdio.a`
+carrying a dangling reference to a private `__dup2` that had simply
+never been exercised until now). `nohup.c`'s real `vproc.h`/
+`vproc_priv.h` dependency (`_vprocmgr_detach_from_console()`, a real
+launchd-client function) has no equivalent at all in this project (no
+launchd-managed daemons) -- real, honest stand-in returns `NULL`
+("detach succeeded"), correct rather than fabricated since there is no
+real console-session concept on this target to fail to detach from;
+compat headers generated via heredoc inside `build_simple_cmds.sh`
+itself (matching `build_copyfile.sh`'s existing forwarding-header
+precedent), not checked in as loose files under a build-intermediate
+directory. QEMU-verified: `nice -n 5`/default-niceness both fork+exec a
+real child successfully; `renice -p 1` (this project's own real running
+PID 1/init) succeeds silently (a real `getpriority`/`setpriority`
+round-trip against a live process); `renice -p 99999` fails honestly;
+`nohup echo` correctly detects a real tty stdout via `isatty()` and
+redirects to `nohup.out` (matching real `nohup`'s documented behavior),
+independently confirmed via a separate `cat`.
+
+*Block 6 -- `chroot`/`apply` (`shell_cmds`) and `vis`/`unvis`
+(`text_cmds`).* New raw syscalls: `chdir`, `chroot`, `setgroups`,
+`setgid`, `setuid` (all normal/generatable) and `sigsuspend`
+(hand-written, `NO_SYSCALL_STUB`, `sigset_t` passed by value in a
+register per the real syscall prototype). Also defines a real
+`__unix_conforming = 1` global (this project's build already forces
+`-D__DARWIN_UNIX03=1` everywhere, so "always conforming" is the exact
+answer real `Libc/compat-43/sigcompat.c`/`gen/nanosleep.c` both read,
+not approximated) and a real no-op `pthread_testcancel` (same
+justification as `ps_err_warn_compat.c`'s identical stand-in, kept in
+its own file since that one also redefines `err()`/`warn()`/`flsl()`,
+which collide with this tier's shared objects -- confirmed via a real
+link error, not guessed). `sort` and `md5` surveyed and deliberately
+skipped: `sort`'s real source calls both `pthread_create` (no real
+pthread multithreading exists project-wide, `bsd_pthread_stub.c`'s
+documented permanent ceiling) *and* `regcomp`, hitting two walls at
+once; `md5` needs a whole unbuilt CommonCrypto-shaped digest API
+distinct from this project's existing from-scratch SHA-2. Found and
+fixed a real, easy environment gap while verifying `apply`: real,
+unmodified `apply.c` defaults to `_PATH_BSHELL` ("/bin/sh") as its
+command interpreter, which this image never provisioned (only
+`/bin/bash` existed) -- confirmed via `apply`'s own honest "/bin/sh: No
+such file or directory" failure, not guessed in advance; fixed by
+having `inject_into_sd_image.sh` also write the same real `bash.macho`
+to `/bin/sh` (matching how `/bin/sh` is commonly just bash on real
+systems, not a distinct binary). QEMU-verified: `chroot / /bin/echo`
+succeeds end-to-end (real `chroot(2)`+`execvp` chain); `apply echo
+hello world` runs the command once per argument via the now-real
+`/bin/sh`, producing `hello` then `world` on separate lines; `vis`
+correctly encodes a real control byte (`0x01`) as its C1-style `^A`
+escape while leaving printable bytes (including an embedded tab)
+alone; `unvis` decodes that output back byte-for-byte -- confirmed
+against the *raw captured bytes*, not the terminal's rendering (which
+doesn't visibly display an unprintable control byte), so a
+blank-looking terminal line wasn't mistaken for a failure.
+
+**Explicit stopping point for this sweep**: every further
+`shell_cmds`/`file_cmds`/`text_cmds` candidate surveyed at this point
+needs a real subsystem this project hasn't built at all, not one or two
+more syscalls -- `xargs`/`nl` need POSIX regex (Phase 4.6 item 3);
+`sort` needs both regex and real pthread multithreading; `md5` needs a
+CommonCrypto-shaped API; `install` needs `posix_spawn`; `df` needs real
+`sysctl(2)`; `ipcs`/`ipcrm` need System V IPC; `compress`/`gzip` need
+zlib; `who`/`w`/`lastcomm` need real `utmp` accounting formats;
+`killall` needs process enumeration (`sysctl(KERN_PROC)`); `su` was
+explicitly flagged in the original plan as needing careful judgment
+against this project's own existing `do_login()`/`cmd_su()` rather than
+a naive port. `docs/roadmap.md`'s "Current status"/"Known bugs"/"Known
+stubbings"/"Remaining future work" all updated accordingly.
+
 ---
 
 *(End of archived material. Phase 4.6 items 3-5, and Phases 5 through 8 in

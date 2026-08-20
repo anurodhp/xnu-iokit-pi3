@@ -218,13 +218,15 @@ this pass even if the change itself is cheap.
     `[[ =~ ]]` and any future `grep`/`sed`-style command. See
     `docs/roadmap.md`'s Phase 4.6.
 
-6. **`setattrlist(2)` never wired to userland**, even though the real
-    kernel-side implementation already exists unmodified in this
-    project's own `third_party/xnu-7195/bsd/vfs/vfs_attrlist.c` — purely
-    a missing raw-syscall-stub-generation gap, the cheapest item in this
-    batch to close. Currently worked around with an honest `ENOSYS` in
-    `simple_cmds_lutimes_compat.c` (blocks `touch -h` on symlinks only).
-    See `docs/roadmap.md`'s Phase 4.6.
+6. **[RESOLVED 2026-08-20]** ~~`setattrlist(2)` never wired to
+    userland~~ — real raw syscall wired in `tools/userland_staging/
+    cp_mv_syscalls.c` (Block 1 of the 2026-08-20 command-sweep session),
+    used for real by `cp -p`'s `lchmod`/`lchflags` path and `chmod`'s ACL
+    machinery, QEMU-verified. `simple_cmds_lutimes_compat.c`'s
+    `touch -h`-on-symlinks `ENOSYS` case could now be closed too (the
+    real syscall it needs exists) but hasn't been revisited yet — small,
+    low-priority follow-up. See `docs/roadmap.md`'s Phase 4.6 and
+    `docs/historic/roadmap.md`'s "Twenty-fifth pass" Block 1 entry.
 
 7. **No real Mach IPC (`mach_msg()` trap + MIG RPC) in userland**, real
     open-source kernel-side implementation already present in this

@@ -14,16 +14,26 @@ narrative itself flagged as still-open.
 
 ## Current status
 
-Actively on **Phase 4, step 3** ("real commands"): as of 2026-08-20, 28
-real Apple/FreeBSD command binaries (`bash`, `uname`, `ps`, plus the Tier
-1-5 set -- `true`/`false`/`yes`/`pwd`/`basename`/`dirname`/`echo`/`printf`/
-`hostname`/`logname`/`cat`/`wc`/`head`/`tail`/`mkdir`/`touch`/`rm`/`env`/
-`which`/`sleep`/`printenv`/`cut`/`uniq`/`ln`/`id`) build, link, and run
-QEMU-verified against the real HFS+ root, using a curated real
-Apple/FreeBSD libc stack (string, platform, locale, stdio, gen,
-printf/scanf, malloc, pthread, closure, removefile/copyfile, libunwind --
-all real, QEMU-verified ports, see `docs/historic/roadmap.md`'s Phase 4
-for the full per-tier build history).
+Actively on **Phase 4, step 3** ("real commands"): as of 2026-08-20
+(end of day, "command-sweep" session), **60** real Apple/FreeBSD command
+binaries build, link, and run QEMU-verified against the real HFS+ root,
+using a curated real Apple/FreeBSD libc stack (string, platform, locale,
+stdio, gen, printf/scanf, malloc, pthread, closure, removefile/copyfile,
+libunwind -- all real, QEMU-verified ports, see `docs/historic/
+roadmap.md`'s Phase 4 for the full per-tier build history): `bash`,
+`uname`, `ps`, the original Tier 1-5 set (`true`/`false`/`yes`/`pwd`/
+`basename`/`dirname`/`echo`/`printf`/`hostname`/`logname`/`cat`/`wc`/
+`head`/`tail`/`mkdir`/`touch`/`rm`/`env`/`which`/`sleep`/`printenv`/
+`cut`/`uniq`/`ln`/`id`), and 32 more added in one long same-day
+"command-sweep" session across six blocks: `cp`/`mv` (Block 1);
+`rev`/`fold`/`paste`/`expand`/`unexpand`/`comm`/`colrm`/`lam`/`rs`/
+`rmdir`/`mkfifo`/`mknod`/`chflags` (Block 2); `seq`/`jot`/`test`/`kill`/
+`tee`/`mktemp`/`hexdump`/`stat`/`cksum`/`pathchk`/`du` (Block 3);
+`chmod`/`chown` (Block 4); `nice`/`renice`/`nohup` (Block 5); and
+`chroot`/`apply`/`vis`/`unvis` (Block 6). Full per-block build/debug
+narrative (every new raw syscall, every real-source dependency chased
+down, every QEMU transcript) is in `docs/historic/roadmap.md`'s newest
+Phase 4 entry -- this section only summarizes.
 
 `which`/`sleep`/`printenv`/`cut`/`uniq`/`ln`/`id` were added and
 QEMU-verified 2026-08-19/20 (Twenty-fourth pass, see
@@ -280,6 +290,52 @@ Currently open, real bugs the roadmap narrative flagged as not-yet-fixed
   watchdog, under sustained fast syscall load) -- a real kernel bug, not a
   port bug in `yes.c` itself. Ships anyway, flagged. See `docs/backlog.md`
   P0 item 29.
+- **`bash`'s real fork+exec of an external command passes an empty
+  `argv[0]`** to the child -- found 2026-08-20 while QEMU-verifying `cp`/
+  `mv` (Block 1): a real fix to `libc_locale_env_stubs.c`'s `getprogname()`
+  (previously hardcoded to return `"libc_locale_smoketest"` unconditionally
+  for every command in this tier, a stale leftover from before this
+  tier's real `argv[0]`/`__progname` plumbing existed) now correctly
+  returns the real `__progname` Csu/`crt.c` computes from `argv[0]` --
+  which exposed that `argv[0]` itself is empty for children bash spawns,
+  not "libc_locale_smoketest" wrongly. Every `err(3)`/`warn(3)` call in
+  every command run *from bash* now prints an empty prefix (e.g.
+  `": /nonexistent-src-file: No such file or directory"`) instead of the
+  command's own name -- cosmetic only (the error text itself is correct
+  and honest), but a real bug in bash's own real `execve()` call
+  sequence, not in `getprogname()` or in any individual command. Not
+  root-caused or fixed this pass (out of this sweep's scope, and
+  possibly interacts with the same-day, separately-landed "bash is the
+  default login shell" work) -- see `docs/historic/roadmap.md`'s Block 1
+  entry for the exact evidence trail.
+- **Also every command in `build_simple_cmds.sh`'s tier (28 commands as
+  of 2026-08-19) had this same wrong-`getprogname()` bug silently masking
+  the argv[0] issue above** -- fixed as part of the same Block 1 pass,
+  see `docs/historic/roadmap.md`.
+- **`hexdump`** (all format flags, including plain/`-c`/`-C`) prints only
+  the final byte-count address line, never the actual hex+ASCII data
+  rows, against a real non-empty file -- found and narrowed down (not
+  fully root-caused) during Block 3: specific to hexdump's own
+  `freopen(argv, "r", stdin)` + `getc()`/`ungetc()` read idiom, not a
+  general `freopen` bug (Block 2's `fold`/`expand`/`unexpand`, linking
+  the identical real `freopen.c`, correctly read real file-argument
+  content in the same session). Most likely a latent bug in this
+  project's ported `getc()`/`ungetc()` interaction with a freshly
+  `freopen`'d stream -- a real but nontrivial `libc_stdio` question.
+  Ships anyway (real, unmodified source, links, runs, doesn't crash),
+  same tolerance as `yes`'s documented kernel-panic bug. See
+  `docs/historic/roadmap.md`'s Block 3 entry.
+- **`pathchk ""`** (empty pathname) exits 0 instead of POSIX's specified
+  "shall report an error" -- real, unmodified upstream FreeBSD source;
+  low practical impact, not investigated further.
+- **`rs -T`** (transpose) dropped the first row of a small piped 2x3
+  matrix in one observed test (`printf '1 2 3\n4 5 6\n' | rs -T` printed
+  only `4\n5\n6\n`) -- not confirmed as a port bug (real upstream `rs`'s
+  array-dimension auto-guessing heuristics, active whenever neither `-g`
+  nor `-c` is given, are documented as sensitive to small/irregular
+  input shapes) vs. a genuine regression; not investigated further given
+  `rs`'s low practical value. See `docs/historic/roadmap.md`'s Block 2
+  entry.
 
 ## Known stubbings / stand-ins
 
@@ -322,9 +378,25 @@ need a real implementation later:
   permanent stand-in rather than a capability gap.
 - **`cat_socket_stub.c`** -- honest `ENOSYS` for `cat`'s `AF_UNIX`-socket
   read path; no real networking exists yet (Phase 6).
-- **`chmod` not attempted at all** -- needs real POSIX.1e/Darwin ACLs
-  (`acl_get_file`/`acl_set_file`) plus `<membership.h>` UUID-based user/
-  group lookups, a subsystem not started.
+- **`chmod`/`chown`: DONE 2026-08-20 (Block 4) for the common mode-bit/
+  ownership case** -- this entry's own premise (real ACLs needed even
+  for plain `chmod`) turned out false on inspection: real Apple
+  `posix1e/acl.c` (`acl_get_file`/`acl_set_file`/etc) was already
+  compiled into `libcopyfile.a` back in the `cp`/`mv` block (real
+  `copyfile()`'s own ACL-preserving-copy path needed it), so real,
+  unmodified `chmod.c`+`chmod_acl.c` link and run against that already-
+  built archive with only one small new stand-in
+  (`chmod_mbr_compat.c`'s `mbr_identifier_to_uuid()`, reached only by
+  the ACL-by-name path, not plain mode bits). QEMU-verified: `chmod
+  600`/`755`/`+x` and `chown` by name/numeric-id/nonexistent-user all
+  independently confirmed correct. What's still genuinely unverified:
+  real ACL-specific flags (`-N`/`+a`) -- HFS+ has no real ACL storage on
+  this target, so those need confirming as honest `ENOTSUP`/`EINVAL`
+  failures specifically, not assumed to "just work" the way the common
+  case does. `<membership.h>` UUID-based lookups remain unbuilt (no
+  directory service at all, same gap `copyfile_syscalls.c`'s `mbr_*()`
+  stand-ins already document) -- only reachable from ACL-by-name, not
+  plain `chmod`/`chown`.
 - **Bash's own remaining honest failure stand-ins** (`bash_syscalls.c`):
   `dlopen`/`dlclose`/`dlsym`/`dlerror` always fail (no dyld at all);
   `alarm`/interval timers are silent no-ops (no `SIGALRM` subsystem);
@@ -354,16 +426,44 @@ need a real implementation later:
 
 - **Phase 4 (userland)**: interactive bash, real termios/tty, and real
   readline (tab completion + history) are all DONE (see Current status
-  above). Remaining: multi-candidate Tab completion and vi-mode editing
-  are unverified (not known-broken, just not exercised yet); `~user`/
-  `%group`/service-name completion candidates are always empty (no real
-  account/group enumeration API, see Known stubbings); Phase 4.6 items
-  3-5 (real POSIX regex, real `setattrlist(2)` wiring, real Mach IPC for
-  `ps` stats + blocking sleep) remain not started; real Apple `Libinfo`
-  (the actual repo, distinct from the working custom flat-file resolver)
-  is still unbuilt; `chmod` needs a real ACL subsystem. Separately worth
-  profiling: bash.macho's first-touch demand-paging takes ~90s on this
-  target's mostly-polled SD read path -- slow but not a correctness bug.
+  above). 60 real command binaries now build/link/run QEMU-verified
+  (step 3), up from 28 as of this same day's earlier "Twenty-fourth
+  pass" -- see Current status above for the full added list. Phase 4.6
+  item 4 (`setattrlist(2)` userland wiring) is now DONE for real
+  (Block 1, cp -p's real `lchmod`/`lchflags` path), not just touch -h's
+  narrow `lutimes` case. Remaining: multi-candidate Tab completion and
+  vi-mode editing are unverified (not known-broken, just not exercised
+  yet); `~user`/`%group`/service-name completion candidates are always
+  empty (no real account/group enumeration API, see Known stubbings);
+  Phase 4.6 items 3 and 5 (real POSIX regex, real Mach IPC for `ps`
+  stats + blocking sleep) remain not started -- item 3 is this session's
+  own explicit stopping point (see below); real Apple `Libinfo` (the
+  actual repo, distinct from the working custom flat-file resolver) is
+  still unbuilt. Separately worth profiling: bash.macho's first-touch
+  demand-paging takes ~90s on this target's mostly-polled SD read path
+  -- slow but not a correctness bug.
+  **The command-sweep's own natural stopping point (2026-08-20, after
+  six blocks/32 new commands in one session)**: every remaining
+  `shell_cmds`/`file_cmds`/`text_cmds` candidate surveyed needs a real
+  subsystem this project hasn't built at all, not just one or two more
+  syscalls -- `sort`/`xargs`/`nl`/`grep`/`sed`/`ed` need POSIX regex
+  and/or real pthread multithreading (both documented permanent-or-
+  Phase-4.6-scoped ceilings); `md5` needs a whole CommonCrypto-shaped
+  digest API distinct from this project's existing from-scratch SHA-2;
+  `install` needs `posix_spawn` (an unbuilt process-creation API, plus
+  its own real `strip(1)` subprocess helper); `df` needs real `sysctl(2)`
+  (a variable-length-MIB syscall never built here); `ipcs`/`ipcrm`/`dd`
+  need real System V IPC / more involved I/O-conversion logic not
+  surveyed in depth; `compress`/`gzip` need zlib; `who`/`w`/`lastcomm`
+  need real `utmp`/accounting-file formats this project doesn't write;
+  `killall` needs process enumeration (real `sysctl(KERN_PROC)` again);
+  `su` was flagged in the original plan as needing careful judgment
+  against this project's own existing `do_login()`/`cmd_su()` in
+  `init.c` rather than a naive port. None of these are a quick "one more
+  raw syscall" the way this session's 32 commands were -- each is its
+  own dedicated-pass-sized subsystem, matching this file's own standing
+  guidance not to rush a real architectural gap into a command-sweep
+  pass.
 - **Phase 5 (multi-user)**: the custom account resolver, real DES
   `crypt()` password verification, and a real `login`/`su` (wired into
   `tools/init_binary/init.c`'s `do_login()`/`cmd_su()`, real bash now the
