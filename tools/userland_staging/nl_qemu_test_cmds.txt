@@ -1,0 +1,12 @@
+root
+darwin
+printf 'apple\n\nbanana\ncherry123\ndate456\n' > /tmp/nl_test.txt
+nl /tmp/nl_test.txt
+nl -ba /tmp/nl_test.txt
+# nl's -b p<regex> compiles with regcomp(..., REG_NEWLINE|REG_NOSUB) --
+# no REG_EXTENDED, so this is real POSIX *basic* regex: '+' is a literal
+# character there, not a quantifier (that's an ERE-only meaning). Real,
+# correct BRE semantics, not a bug -- '[0-9]' (no quantifier needed for
+# this test) is the right pattern here.
+nl -b p'[0-9]' /tmp/nl_test.txt
+echo NL_TEST_DONE

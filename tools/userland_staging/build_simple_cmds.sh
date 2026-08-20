@@ -464,6 +464,13 @@ CMD_LIST=(
     # libc_gen.a before attempting this -- a normal new-command port,
     # nothing new to build.
     "sed:$TEXT_CMDS/sed/main.c:$TEXT_CMDS/sed/compile.c|$TEXT_CMDS/sed/process.c|$TEXT_CMDS/sed/misc.c|$LIBC/stdlib/FreeBSD/atoi.c"
+    # nl: real, unmodified single-file nl.c -- like sed, only needs
+    # libc_regex.a on top of LINK_COMMON (plain regcomp/regexec/regfree
+    # for its per-section numbering-trigger patterns); no rename/unlink/
+    # fchmod-class extras (grepped first, not guessed: no file-rewrite
+    # path in this program at all, it only ever reads stdin/its input
+    # file and writes stdout).
+    "nl:$TEXT_CMDS/nl/nl.c:$LIBC/stdio/FreeBSD/freopen.c|$LIBC/stdio/FreeBSD/_flock_stub.c|$LIBC/stdlib/FreeBSD/strtoul.c"
 )
 
 built=0
@@ -588,6 +595,9 @@ for spec in "${CMD_LIST[@]}"; do
             # libremovefile.a -- no further conflict from adding it).
             extra_libs="$OUT/libc_regex.a $OUT/libremovefile.a $OUT/libcopyfile.a"
             common_read_compat=""
+            ;;
+        nl)
+            extra_libs="$OUT/libc_regex.a"
             ;;
         cp|mv|mktemp|du|chmod)
             # Same real duplicate-symbol reasoning as rm|ln above
