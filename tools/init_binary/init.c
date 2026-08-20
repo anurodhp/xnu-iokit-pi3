@@ -88,6 +88,18 @@ typedef long int64_t;
 #define SYS_fstat64         339
 #define SYS_getdirentries64 344
 #define SYS_execve          59
+#define SYS_sysctl          202
+
+/* CTL_KERN/KERN_HOSTNAME: real values from
+ * third_party/xnu-7195/bsd/sys/sysctl.h (470/504), not guessed. Real
+ * XNU has no dedicated sethostname(2) trap -- syscalls 87/88 (old get/
+ * sethostname) are `nosys` in bsd/kern/syscalls.master -- gethostname(3)/
+ * sethostname(3) both go through sysctl(2) against this exact MIB on
+ * real Darwin too (confirmed by reading third_party/Libc/gen/FreeBSD/
+ * sethostname.c, the same real source tools/userland_staging/
+ * build_simple_cmds.sh's `hostname` command links). */
+#define CTL_KERN     1
+#define KERN_HOSTNAME 10
 
 /* Phase 5: real login/su, numbers cross-checked against
  * third_party/xnu-7195/bsd/kern/syscalls.master the same way every other
@@ -342,6 +354,82 @@ static long sys_getdirentries(int fd, void *buf, unsigned int count, long *basep
     if (is_error) return -x0;
     return x0;
 #endif
+}
+
+/* Real sysctl(2) call, 6 real arguments -- same "dedicated inline asm,
+ * no shared helper" pattern sys_getdirentries() above already uses for
+ * >3-arg syscalls. Only ever called here to set kern.hostname (see
+ * set_default_hostname() below); a general sysctl() wrapper for other
+ * MIBs already exists separately for userland commands
+ * (tools/userland_staging/libc_gen_syscalls.c) but this freestanding
+ * binary has no access to that, hence its own narrow copy. */
+static long sys_sysctl(int *name, unsigned int namelen, void *oldp,
+                        size_t *oldlenp, void *newp, size_t newlen) {
+#ifdef INIT_HOST_TEST
+    (void)name; (void)namelen; (void)oldp; (void)oldlenp; (void)newp; (void)newlen;
+    return -1;
+#else
+    register long x0 asm("x0") = (long)name;
+    register long x1 asm("x1") = namelen;
+    register long x2 asm("x2") = (long)oldp;
+    register long x3 asm("x3") = (long)oldlenp;
+    register long x4 asm("x4") = (long)newp;
+    register long x5 asm("x5") = (long)newlen;
+    register long x16 asm("x16") = SYS_sysctl;
+    long is_error;
+    asm volatile("svc #0x80\n"
+                 "cset %1, cs"
+                 : "+r"(x0), "=r"(is_error)
+                 : "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5), "r"(x16)
+                 : "memory", "cc");
+    if (is_error) return -x0;
+    return x0;
+#endif
+}
+
+/* Sets a real hostname at boot -- previously nothing did this at all, so
+ * real XNU's kern.hostname global (bsd/kern/bsd_init.c, plain zeroed BSS)
+ * stayed empty every boot until a human ran `hostname NAME` interactively,
+ * and never persisted across reboots either way.
+ *
+ * Real FreeBSD/NetBSD/OpenBSD convention: an rc script reads /etc/hostname
+ * (a single line, the hostname) and calls hostname(1) with its contents --
+ * NOT a hardcoded value baked into a binary. This project has no rc-script
+ * infrastructure (init.c IS the boot sequence), so init.c itself reads
+ * /etc/hostname directly here, matching that same real convention as
+ * closely as this project's architecture allows. Falls back to a
+ * compiled-in default ("strudel") only if the file is missing, so the
+ * device still isn't nameless out of the box -- inject_into_sd_image.sh
+ * provisions a real /etc/hostname the same way it already provisions
+ * /etc/master.passwd, so a real user can just edit that file and reboot
+ * rather than needing to rebuild this binary. */
+static void set_default_hostname(void) {
+    static char name[64];
+    size_t namelen;
+
+    int fd = sys_open("/etc/hostname", O_RDONLY, 0);
+    if (fd >= 0) {
+        ssize_t n = sys_read(fd, name, sizeof(name) - 1);
+        sys_close(fd);
+        while (n > 0 && (name[n - 1] == '\n' || name[n - 1] == '\r')) {
+            n--;
+        }
+        namelen = (n > 0) ? (size_t)n : 0;
+    } else {
+        namelen = 0;
+    }
+
+    if (namelen == 0) {
+        static const char fallback[] = "strudel";
+        __builtin_memcpy(name, fallback, sizeof(fallback) - 1);
+        namelen = sizeof(fallback) - 1;
+    }
+
+    int mib[2] = { CTL_KERN, KERN_HOSTNAME };
+    long r = sys_sysctl(mib, 2, 0, 0, name, namelen);
+    if (r < 0) {
+        put("init: warning: sethostname() failed\n");
+    }
 }
 
 /* ROOT CAUSE, found by reading thread_set_child()/thread_set_parent() in
@@ -1524,6 +1612,7 @@ static void single_user_child(void) {
 void init_main(void) {
     open_console();
     remount_root_rw();
+    set_default_hostname();
     put("\ninit: pid 1 up, forking single-user shell\n");
 
     for (;;) {

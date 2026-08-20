@@ -345,6 +345,19 @@ candidate Tab completion (2+ matches), vi-mode editing, and full
 See `docs/historic/roadmap.md`'s newest Phase 4 entry for the full
 investigation, exact commands, and transcripts.
 
+**Real default hostname, 2026-08-20.** Nothing previously set one --
+real XNU's `kern.hostname` global stayed empty every boot. `init.c`'s
+new `set_default_hostname()` reads `/etc/hostname` (matching real
+FreeBSD/NetBSD/OpenBSD's rc-script convention, adapted since this
+project has no rc scripts -- init.c IS the boot sequence) and calls the
+same real `sysctl(2)` `{CTL_KERN, KERN_HOSTNAME}` MIB the real
+`hostname(1)` command uses, falling back to a compiled-in `"strudel"`
+default only if the file is missing. `inject_into_sd_image.sh` now
+provisions a real `/etc/hostname` (`strudel`) the same way it already
+provisions `/etc/master.passwd` -- edit that file and reboot to rename,
+no rebuild needed. QEMU-verified: `hostname` at a real logged-in prompt
+prints `strudel`.
+
 ## Known bugs
 
 Currently open, real bugs the roadmap narrative flagged as not-yet-fixed

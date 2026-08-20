@@ -180,6 +180,17 @@ else
     echo "+ $MNT/etc/master.passwd already exists -- leaving accounts as-is"
 fi
 
+if [ ! -f "$MNT/etc/hostname" ]; then
+    echo "strudel" > "$MNT/etc/hostname"
+    chmod 644 "$MNT/etc/hostname"
+    echo "+ wrote $MNT/etc/hostname (default: strudel) -- init.c reads this at boot"
+    echo "  (matches real FreeBSD/NetBSD/OpenBSD convention: edit this file and"
+    echo "  reboot to rename, no rebuild needed; falls back to a compiled-in"
+    echo "  default of the same name if this file is ever missing)"
+else
+    echo "+ $MNT/etc/hostname already exists -- leaving as-is"
+fi
+
 diskutil unmount "$MNT"
 hdiutil detach "$DISK"
 trap - EXIT
