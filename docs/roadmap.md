@@ -29,12 +29,40 @@ the real Pi 3 firmware's clock scaling shifted the mini-UART's actual
 baud away from the nominal 115200 `pe_serial.c`'s fixed divisor assumes
 -- symptom was garbled-but-present serial output, not blank (fixed).
 Full writeup in `sdcard/README.md` (gitignored by the user's own global
-config -- not tracked in this repo, but present on disk). Not yet
-confirmed: whether XNU's own boot console draws on the HDMI framebuffer
-via the documented handoff (only u-boot's pre-jump text was observed
-there so far); everything past boot-to-idle (SD/GPIO/USB/Ethernet) is
-untested on real hardware, matching this project's own QEMU-side
-milestone at this same stage.
+config -- not tracked in this repo, but present on disk).
+
+**Both remaining open questions from the first test resolved the same
+day, both expected/by-design, neither a bug:**
+- **HDMI goes dark after `## Starting XNU`, no kernel console output
+  ever appears there.** Root cause confirmed in source, not the
+  framebuffer handoff failing: `osfmk/console/serial_console.c` (lines
+  ~139-156) hardcodes `cons_ops_index = SERIAL_CONS_OPS` for every
+  non-x86_64 target -- a deliberate scope decision from QEMU bring-up
+  (QEMU runs `-display none`, so routing console output to video would
+  have made it invisible there). XNU's `kprintf`/`/dev/console` path
+  never targets video on this board at all today, independent of
+  whether u-boot's HDMI framebuffer handoff itself works -- so this was
+  never going to draw on HDMI regardless. The framebuffer handoff's own
+  success/failure remains genuinely untested either way.
+- **Boot reaches real IOKit matching (`_IOConfigThread::main entered`)
+  and then hangs "Waiting for root device" (`IOMedia`/`Apple_HFS`).**
+  Expected: this real-hardware sanity card is a single FAT32 partition
+  (see `sdcard/README.md`) with no HFS+ root partition at all for
+  `vfs_mountroot()` to find, and `sdcard/kernel.development.bcm2837.
+  unstripped` is a frozen pre-session snapshot predating this project's
+  real SD/HFS+ driver work entirely. No root device was ever going to
+  appear. This is the sanity check's own intended stopping point --
+  boot-to-idle, matching QEMU's milestone at this exact same historical
+  point -- not a new bug to chase.
+
+Real SD/GPIO/USB/Ethernet on this specific board remain genuinely
+untested (backlog P0 items 1-6 -- SDHCI serialization/error-recovery/
+clock-speed/power-ramp/memory-barriers/GPIO-pinmux -- are all real-
+hardware-only risks QEMU cannot exercise). Testing any of that for real
+would need a 2-partition (FAT32 boot + HFS+ root) card built the same
+way `qemu/hfs_root_test.img` is, with the CURRENT from-source kernel
+(`build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped`),
+not this frozen snapshot -- a real next step, not attempted yet.
 
 **Phase 4.6 item 3 (real POSIX regex) DONE and QEMU-verified, 2026-08-20.**
 Real, unmodified Apple source (`third_party/Libc/regex/TRE/lib/*.c`, the
