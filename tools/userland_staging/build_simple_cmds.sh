@@ -453,6 +453,17 @@ CMD_LIST=(
     # core vendored at third_party/u-boot/lib/zlib -- see zlib_glue
     # generation above and both files' own header comments).
     "grep:$TEXT_CMDS/grep/grep.c:$TEXT_CMDS/grep/file.c|$TEXT_CMDS/grep/queue.c|$TEXT_CMDS/grep/util.c|gz_gzip_impl.c|gz_crc32_compat.c|du_fnmatch_libc_wrapper.c|simple_cmds_mmap_compat.c|$LIBC/stdlib/FreeBSD/getopt_long.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/stdlib/FreeBSD/strtoull.c"
+    # sed: real, unmodified main.c/compile.c/process.c/misc.c, needing
+    # only libc_regex.a (Phase 4.6 item 3) on top of what's already in
+    # LINK_COMMON -- unlike grep, sed's own real source has no
+    # fastmatch/lzma/bzip2/NLS optional subsystems at all (grepped
+    # first, not guessed: plain <regex.h>, no WITHOUT_* knobs anywhere
+    # in this program), and every other symbol it calls (getline(),
+    # mbrtowc()/iswprint()/wcwidth(), ioctl(TIOCGWINSZ), getprogname())
+    # was already confirmed present via nm in libc_stdio.a/libc_locale.a/
+    # libc_gen.a before attempting this -- a normal new-command port,
+    # nothing new to build.
+    "sed:$TEXT_CMDS/sed/main.c:$TEXT_CMDS/sed/compile.c|$TEXT_CMDS/sed/process.c|$TEXT_CMDS/sed/misc.c|$LIBC/stdlib/FreeBSD/atoi.c"
 )
 
 built=0
@@ -563,6 +574,19 @@ for spec in "${CMD_LIST[@]}"; do
             case "$name" in
                 grep) extra_libs="$extra_libs $OUT/libc_regex.a" ;;
             esac
+            common_read_compat=""
+            ;;
+        sed)
+            # sed needs libc_regex.a (Phase 4.6 item 3) for regcomp/
+            # regexec/regerror, plus real -i (in-place edit) support:
+            # main.c's mf_fgets() renames a real temp file over the
+            # original and fchmod/fchown's it to match, needing
+            # libremovefile.a's real rename()/unlink() (same duplicate
+            # read() conflict as rm/ln/grep above, resolved the same
+            # way) and libcopyfile.a's real fchmod()/fchown() (confirmed
+            # via nm not to redefine read() itself, unlike
+            # libremovefile.a -- no further conflict from adding it).
+            extra_libs="$OUT/libc_regex.a $OUT/libremovefile.a $OUT/libcopyfile.a"
             common_read_compat=""
             ;;
         cp|mv|mktemp|du|chmod)

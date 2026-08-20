@@ -1,0 +1,9 @@
+root
+darwin
+printf 'apple\n123\nbanana456\n7890\ncherry\n' > /tmp/sed_test.txt
+sed -E 's/[0-9]+/NUM/' /tmp/sed_test.txt
+sed -n '/[a-z]/p' /tmp/sed_test.txt
+sed 's/^[0-9][0-9]*$/DIGITLINE/' /tmp/sed_test.txt
+sed -i.bak -E 's/banana[0-9]+/FRUIT/' /tmp/sed_test.txt
+cat /tmp/sed_test.txt
+echo SED_TEST_DONE
