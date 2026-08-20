@@ -14,6 +14,28 @@ narrative itself flagged as still-open.
 
 ## Current status
 
+**Real hardware milestone, 2026-08-21**: first-ever confirmed boot on
+actual Pi 3 silicon (previously QEMU-only). `u-boot` reached
+`## Starting XNU at ...` on its HDMI console, and XNU's own real kernel
+boot banner (BSD copyright text via `kprintf`/the real `pi3_uart` mini-
+UART driver) came through cleanly over a real serial adapter -- first
+confirmation that `bootxnu`'s Mach-O loader/entry-point fix and XNU's
+real serial console path both work on real silicon, not just in
+QEMU-derived reasoning. Two real bugs found and fixed getting there:
+`tools/make_sd_image.sh`'s boot-partition population never actually
+copied the kernel file onto the card despite claiming "real-hardware
+parity" (fixed); and `sdcard/config.txt` had no `core_freq=250` pin, so
+the real Pi 3 firmware's clock scaling shifted the mini-UART's actual
+baud away from the nominal 115200 `pe_serial.c`'s fixed divisor assumes
+-- symptom was garbled-but-present serial output, not blank (fixed).
+Full writeup in `sdcard/README.md` (gitignored by the user's own global
+config -- not tracked in this repo, but present on disk). Not yet
+confirmed: whether XNU's own boot console draws on the HDMI framebuffer
+via the documented handoff (only u-boot's pre-jump text was observed
+there so far); everything past boot-to-idle (SD/GPIO/USB/Ethernet) is
+untested on real hardware, matching this project's own QEMU-side
+milestone at this same stage.
+
 **Phase 4.6 item 3 (real POSIX regex) DONE and QEMU-verified, 2026-08-20.**
 Real, unmodified Apple source (`third_party/Libc/regex/TRE/lib/*.c`, the
 TRE engine, + `third_party/Libc/regex/FreeBSD/regerror.c`) now builds
