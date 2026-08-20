@@ -32,16 +32,23 @@
 #     MACHTYPE=@host@, from configure.in's AC_INIT([bash], ...) for
 #     PACKAGE) -- this project's real target triple is arm64-apple-
 #     darwin20.3.0 (Darwin 20.3.0 per CLAUDE.md), not guessed.
-#   - READLINE deliberately undefined (-UREADLINE) at compile time: a
-#     real, normal bash configure option (bash historically ships
-#     --disable-readline), NOT a hack. This target's console is raw
-#     serial UART with no termcap/terminfo database, and real readline's
-#     line-editing/display code (rltty.c/display.c) needs real terminal
-#     ioctl semantics this project doesn't have. HISTORY stays real and
-#     enabled (bash's history mechanism is a genuinely separate library
-#     from readline's line editing -- lib/readline/history.c/histexpand.c/
+#   - READLINE is now genuinely ON (config.h's own #define, see that
+#     file's 2026-08-19 header comment) -- it used to be forced off here
+#     (-UREADLINE, historically real bash's own --disable-readline
+#     option) on the belief that this target's console had no real tty
+#     ioctl semantics for readline's raw-mode terminal handling. That
+#     belief was never tested and turned out to be wrong: a disposable
+#     ioctl(TIOCGETA/TIOCSETA) probe (see tools/userland_staging/
+#     libc_gen_syscalls.c's ioctl/_ioctl header comment) proved this
+#     target's real BSD tty stack is already fully wired. The one real
+#     remaining gap -- no termcap/terminfo database -- is handled
+#     honestly via bash_readline_termcap_compat.c (tgetent() reports "no
+#     database", triggering lib/readline/terminal.c's own real,
+#     documented dumb-terminal fallback, not a fabrication). HISTORY was
+#     always real/enabled regardless (a genuinely separate library from
+#     readline's line editing -- lib/readline/history.c/histexpand.c/
 #     histfile.c have no terminal/display dependency, confirmed by
-#     grepping their real #include lists).
+#     grepping their real #include lists) and needed no change here.
 set -e
 cd "$(dirname "$0")"
 
@@ -52,6 +59,21 @@ BASHSRC="../../third_party/bash/bash-3.2"
 BASHTOP="../../third_party/bash"
 OUT="libc_build"
 BOUT="bash_build"
+# rm -rf "$BOUT/obj" first (2026-08-19, real bug caught the hard way):
+# the final link step globs `"$BOUT"/obj/*.o` -- a stale .o left over
+# from a PREVIOUS run whose source file list has since changed (e.g.
+# lib/readline/shell.c and xmalloc.c, removed from EXTRA_FILES below
+# once bash's own general.c/variables.c/lib/sh/shquote.c/xmalloc.c were
+# found to already define the same sh_get_env_value/sh_single_quote/
+# xmalloc/etc symbols) silently lingers and gets globbed in anyway,
+# producing a real duplicate-symbol link failure that looks like a
+# fresh bug but is actually just build-directory staleness. Same root
+# cause as build_libc_gen.sh's own apple_gen/*.o glob hit earlier this
+# same session (isatty.o lingering after isatty.c was removed from
+# GEN_FILES) -- fixed there by removing the stale file by hand; fixed
+# here for good by never letting the directory accumulate stale output
+# in the first place.
+rm -rf "$BOUT/obj"
 mkdir -p "$BOUT/obj" "$BOUT/compat_include/System/sys" "$BOUT/compat_include/System/kern"
 
 XCODE12="/Applications/Xcode-12.app/Contents/Developer"
@@ -117,7 +139,7 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
     -include libc_build_prototypes.h -include $BOUT/pthread_rwlock_internal_alias.h \
     -D_LIBC_NO_FEATURE_VERIFICATION -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
     -DVARIANT_STATIC -DVARIANT_CANCELABLE -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \
-    -DHAVE_CONFIG_H -DSHELL=1 -DPROGRAM=\"bash\" -UREADLINE \
+    -DHAVE_CONFIG_H -DSHELL=1 -DPROGRAM=\"bash\" \
     -DCONF_MACHTYPE=\"arm64-apple-darwin20.3.0\" -DCONF_HOSTTYPE=\"arm64\" \
     -DCONF_OSTYPE=\"darwin20.3.0\" -DCONF_VENDOR=\"apple\" \
     -DPACKAGE=\"bash\" -DLOCALEDIR=\"/usr/share/locale\" \
@@ -150,7 +172,67 @@ EXTRA_FILES="$LIBC/gen/get_compat.c \
     $LIBC/stdtime/FreeBSD/localtime.c $LIBC/stdtime/FreeBSD/strftime.c $LIBC/stdtime/FreeBSD/asctime.c \
     $LIBC/gen/FreeBSD/siglist.c \
     $BASHSRC/syntax.c $BASHSRC/lib/sh/shmatch.c \
-    bash_syscalls.c"
+    bash_syscalls.c bash_readline_termcap_compat.c \
+    $BASHSRC/lib/readline/readline.c $BASHSRC/lib/readline/vi_mode.c \
+    $BASHSRC/lib/readline/funmap.c $BASHSRC/lib/readline/keymaps.c \
+    $BASHSRC/lib/readline/parens.c $BASHSRC/lib/readline/search.c \
+    $BASHSRC/lib/readline/rltty.c $BASHSRC/lib/readline/complete.c \
+    $BASHSRC/lib/readline/bind.c $BASHSRC/lib/readline/isearch.c \
+    $BASHSRC/lib/readline/display.c $BASHSRC/lib/readline/signals.c \
+    $BASHSRC/lib/readline/util.c $BASHSRC/lib/readline/kill.c \
+    $BASHSRC/lib/readline/undo.c $BASHSRC/lib/readline/macro.c \
+    $BASHSRC/lib/readline/input.c $BASHSRC/lib/readline/callback.c \
+    $BASHSRC/lib/readline/terminal.c $BASHSRC/lib/readline/text.c \
+    $BASHSRC/lib/readline/nls.c $BASHSRC/lib/readline/misc.c \
+    $BASHSRC/lib/readline/savestring.c $BASHSRC/lib/readline/compat.c \
+    $BASHSRC/pcomplete.c $BASHSRC/pcomplib.c $BASHSRC/bashline.c $BASHSRC/bracecomp.c \
+    simple_cmds_getenv_compat.c"
+# pcomplete.c + pcomplib.c: real bash's own programmable-completion
+# engine, split across two real files -- pcomplete.c has
+# gen_compspec_completions()/programmable_completions()/the progcomp_*
+# hash-table walkers, but compspec_create()/compspec_dispose()/
+# compspec_copy() themselves (the COMPSPEC struct's own alloc/free/copy)
+# live in the separate pcomplib.c (confirmed via grep + Makefile.in's
+# own LIBOBJS list, not guessed -- a first attempt at just pcomplete.c
+# alone left those three genuinely undefined). builtins/complete.c (now
+# compiled, see BUILTIN_FILES below) needs both.
+# bashline.c: real bash's own readline-integration glue (command-aware
+# completion, custom keybindings, `bind`/`read -e` support) -- 3199
+# lines, real unmodified Apple source, same -I paths (<readline/...>,
+# <glob/...>) every other lib/ subdirectory already resolves via
+# `-I $BASHSRC/lib`.
+# simple_cmds_getenv_compat.c: real, already-proven-correct setenv/
+# getenv/unsetenv/putenv/_NSGetEnviron (tools/userland_staging/
+# build_simple_cmds.sh's own tier, Phase 4.6 item 2) -- bash needed a
+# real setenv() for real lib/readline/shell.c's sh_set_lines_and_columns()
+# (exports COLUMNS/LINES after a window resize) and had NONE at all
+# before (confirmed via nm: no libc_*.a bash already links defines
+# setenv/putenv/unsetenv anywhere). Reused directly rather than
+# reimplemented -- this file's own getenv() also takes priority over
+# libc_locale.a's much older always-NULL getenv() stand-in (a real,
+# separate, PRE-EXISTING bug this incidentally fixes for bash too: since
+# object files listed directly on a link line always resolve a symbol
+# before the linker ever needs to pull in an archive member offering the
+# same name, libc_locale.a's own broken libc_locale_env_stubs.o member
+# is simply never pulled into bash's link once this file provides real
+# getenv/setenv/unsetenv/putenv directly).
+# The lib/readline/*.c files above are lib/readline/Makefile.in's own
+# real OBJECTS list (READLINE re-enabled 2026-08-19, see config.h's own
+# header comment for why) MINUS shell.c and xmalloc.c -- both real, but
+# deliberately excluded, confirmed the hard way (a real duplicate-symbol
+# link error, not guessed): bash's own top-level general.c/variables.c/
+# lib/sh/shquote.c and xmalloc.c already provide the exact same
+# sh_get_env_value/sh_set_lines_and_columns/sh_get_home_dir/
+# sh_single_quote/sh_unset_nodelay_mode/xmalloc/xfree/xrealloc symbols
+# lib/readline/shell.c and xmalloc.c also define -- those two
+# lib/readline files exist for libreadline's STANDALONE build (where
+# nothing else provides those hooks), not for embedding inside bash
+# itself, which supplies its own real versions instead (matching real
+# bash's own Makefile, which excludes them from bash's own link for the
+# identical reason). emacs_keymap.c/vi_keymap.c are real too but
+# deliberately NOT listed here either (also matching Makefile.in):
+# keymaps.c #includes them directly as static data tables, real bash
+# never compiles them as separate translation units.
 
 # Real bash-3.2's own bundled lib/sh/*.c portable helpers (zread/zwrite/
 # xstrchr/stringvec/timeval/itos/etc) -- real Apple's own build compiles
@@ -175,16 +257,20 @@ done
 # is manufactured by ./mkbuiltins, and should not be edited by hand" and
 # is already present, along with builtext.h) -- no need to run mkbuiltins
 # ourselves. mkbuiltins.c/psize.c are host-build-only helper tools, not
-# part of the shell itself, excluded. complete.c is also excluded: unlike
-# bind.c (real #if defined(READLINE) guard around its whole body, compiles
-# to an empty TU cleanly), complete.c has NO such guard -- it unconditionally
-# implements PROGRAMMABLE_COMPLETION, which is itself unconditionally
-# real-readline-dependent (rl_* completion hooks). Real bash's own
-# ./configure --disable-readline build genuinely omits this file from the
-# link (autoconf-conditional, not an #ifdef inside the file) -- matched
-# here by simply not compiling it, consistent with this project's real
-# READLINE-disabled scope decision (see this script's own header comment).
-BUILTIN_FILES=$(ls $BASHSRC/builtins/*.c | grep -v -e mkbuiltins.c -e psize.c -e complete.c)
+# part of the shell itself, excluded.
+#
+# builtins/complete.c (the `complete`/`compgen`/`compopt` builtin
+# commands -- NOT lib/readline/complete.c, readline's own internal
+# tab-completion engine, added separately above) USED to be excluded
+# here too: it has no `#if defined (READLINE)` guard around its body the
+# way e.g. lib/readline/bind.c does (that one compiles to a clean empty
+# TU when READLINE is off), so it unconditionally needs real rl_*
+# completion hooks. Real bash's own `./configure --disable-readline`
+# build genuinely omits it from the link the same way (autoconf-
+# conditional, not an #ifdef). Now that READLINE is genuinely on (see
+# config.h's own header comment for why), this file belongs in the
+# build for real -- re-added.
+BUILTIN_FILES=$(ls $BASHSRC/builtins/*.c | grep -v -e mkbuiltins.c -e psize.c)
 
 # Real Apple-generated raw syscall stubs (Perl generator, same pattern as
 # build_libsyscall_smoketest.sh) for the real, non-NO_SYSCALL_STUB
@@ -340,12 +426,24 @@ if [ "$fail" -eq 0 ]; then
     # _pthread_main_thread_bootstrap before _bash_shell_real_main. Real
     # bash STILL crashes after both fixes, on a separate, real, precisely
     # captured bug (Nineteenth pass) -- not yet fixed, see docs/roadmap.md.
+    # -Wl,-alias,_pthread_testcancel,... (2026-08-19): real termios.c
+    # (build_libc_gen.sh, real tcgetattr/tcsetattr for real job control -
+    # see that script's own header comment) pulls its whole .o member in
+    # the moment bash's real job.c calls tcgetattr, which drags
+    # __tcdrain's real pthread_testcancel() call along for the ride even
+    # though nothing calls tcdrain(3) itself - same real gap, same real
+    # fix (libpthread.a only exports the $UNIX2003-suffixed symbol) as
+    # build_ps.sh already found for the identical real termios.c.
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
         -o bash.macho \
         ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
         "$BOUT"/obj/*.o "$BOUT"/sys_stubs/*.o \
         "$OUT/libc_printf.a" "$OUT/libc_stdio.a" "$OUT/libc_locale.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" \
         "$OUT/libunwind.a" "$OUT/libpthread.a" "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/libplatform.a" \
+        -Wl,-alias,_pthread_testcancel,'_pthread_testcancel$UNIX2003' \
+        -Wl,-alias,_setenv,'_setenv$UNIX2003' \
+        -Wl,-alias,_select,'_select$1050' \
+        -Wl,-alias,_fopen,'_fopen$UNIX2003' \
         2>"$BOUT/link.err" && echo "wrote bash.macho" || { echo "LINK FAILED, see $BOUT/link.err:"; tail -100 "$BOUT/link.err"; exit 1; }
     otool -l bash.macho | grep -q LC_LOAD_DYLIB && echo "WARNING: LC_LOAD_DYLIB present" >&2
     otool -l bash.macho | grep -q LC_UNIXTHREAD || echo "WARNING: no LC_UNIXTHREAD" >&2

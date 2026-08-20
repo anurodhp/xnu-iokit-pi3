@@ -3545,6 +3545,283 @@ loop extended with all seven newly-verified names.
 
 ---
 
+**Twenty-fifth pass, 2026-08-19/20: real termios/tty ioctls wired end to
+end, then real GNU readline (tab completion + command history) built,
+linked, and QEMU-verified for the first time.** Started from a real open
+question: did this target's kernel have a working BSD tty line-discipline
+under `/dev/console` for `bash_syscalls.c`'s ENOTTY stand-ins to route
+through if un-stubbed, or was that a real kernel-level gap? `bsd/dev/arm/
+km.c` (the real Apple "km" keyboard/monitor tty driver), `bsd/kern/tty.c`
+(`ttioctl_locked`/`ttread`), and `bsd/dev/arm/cons.c` (the indirect
+`/dev/console` forwarding driver) were all already present, unmodified,
+real Apple source in this checkout -- the question was whether they were
+genuinely *wired* (kminit() called, cdevsw entry registered, devfs node
+backed by the right major) for BCM2837, not whether the source existed.
+
+**Investigation, empirical not assumed.** Grepped `bsd_init.c` and found
+`kminit()` IS called from `bsd_autoconf()` (`kprintf("bsd_autoconf:
+calling kminit\n"); kminit();`), `bsd/dev/arm/conf.c`'s real `cdevsw[]`
+table has a real `[12] = { kmopen, kmclose, kmread, kmwrite, kmioctl,
+... }` entry matching `km_tty[0]->t_dev = makedev(12, 0)` from
+`kminit()`, and `devfs_vfsops.c` creates `/dev/console` as
+`makedev(0, 0)` -> `cdevsw[0]` (`cnopen`/`cnioctl`, `bsd/dev/arm/cons.c`),
+which forwards to `cndevice()` -> `km_tty[0]->t_dev` whenever `constty`
+is unset. On paper, fully wired. To get REAL proof rather than trust a
+paper trail, a disposable diagnostic (`ttyinfo` builtin, `sys_ioctl()`
+raw syscall wrapper, a hand-laid-out `struct diag_termios` matching
+`bsd/sys/termios.h`'s real `struct user_termios` LP64 layout byte-for-
+byte) was added to `tools/init_binary/init.c`, built, injected onto the
+SD image, and driven via a modified `_pty_test_phase5.py` copy (adding
+`# ` to the shell-prompt-detection suffix list) through a real QEMU boot.
+
+First result was confusing: `ioctl(0, TIOCGETA)` returned success but the
+printed `iflag`/`oflag`/`cflag`/`lflag` values looked like the real
+`TTYDEF_*`/`kmopen()` defaults *right-shifted by one hex digit* (e.g.
+`cflag=0x8b0` instead of the expected `CREAD|CS8|CLOCAL = 0x8b00`) --
+consistent across three independent fields, too consistent to be
+garbage, but not matching any real kernel-side bit-packing theory tried
+(LP64-vs-ILP32 struct mismatch, embedded-vs-desktop XNU_TARGET_OS struct
+layout divergence, a stray in-kernel TIOCSETA reconfiguring the tty
+before `ttyinfo` ran -- none of these held up under closer reading of
+`ttioctl_locked()`'s real `TIOCGETA_64` case, a plain `bcopy(&tp->
+t_termios, data, sizeof(struct termios))` with no such transform
+possible). Rather than keep guessing, the diagnostic was extended to
+print the full 72 raw bytes of the struct alongside the interpreted
+fields -- and the raw bytes were **exactly correct**
+(`02 2b 00 00 00 00 00 00` = `0x2b02` = real `TTYDEF_IFLAG`, etc, byte
+for byte). The bug was entirely on the *printing* side: `put_hex64()`'s
+buffer-indexing loop wrote `buf[18-i]` into a `char buf[19]` whose valid
+digit range was actually indices 2-17 (the string `"0x" + 16 digits`
+occupies indices 0-17, with `buf[18]` being the array's auto-appended
+NUL from the initializer) -- an off-by-one that silently shoved the
+least-significant hex nibble into the unprinted `buf[18]` slot on every
+call, for every field, consistently. Fixed (`buf[17-i]`), re-verified:
+`ioctl(0, TIOCGETA)` returns the exact, unmodified real defaults
+(`iflag=0x2b02 oflag=0x3 cflag=0x8b00 lflag=0x5cb`) -- no kernel bug, no
+mystery reconfiguration, just a diagnostic-tool bug that would have sent
+the whole investigation down a false "the kernel is corrupting termios
+state" path if not caught by dumping raw bytes instead of trusting the
+interpreted print.
+
+With the printer fixed, the SAME diagnostic went further: issued a real
+`TIOCSETA` clearing `ICANON|ECHO|ECHOE|ECHOKE` and setting
+`VMIN=1/VTIME=0` (readline's real raw-mode contract, matching
+`cfmakeraw()`'s own documented semantics), read back via a second
+`TIOCGETA` to confirm it stuck (`lflag=0x4c0`, ICANON/ECHO bits
+genuinely clear), then did one real raw `sys_read(0, &c, 1)` -- which
+returned **immediately** (no Enter needed) with the exact byte typed
+(`0x78` = `'x'`) and **no visible kernel echo** in the transcript. This
+is the complete, real, working raw-mode contract readline needs, proven
+end to end against the real kernel with a real transcript, not assumed
+from source reading alone. The diagnostic (`ttyinfo` builtin,
+`sys_ioctl`/`struct diag_termios`/`put_hex64`/`put_hex8`) was fully
+reverted from `tools/init_binary/init.c` before any commit
+(`git checkout` back to the committed version, confirmed via `git diff`
+showing zero changes) -- `init.macho` was rebuilt clean off the reverted
+source and re-injected onto the SD image before the rest of this pass's
+QEMU testing.
+
+**Layer 1: real termios/isatty/ttyname for real bash, replacing the old
+ENOTTY/false stand-ins.** `bash_syscalls.c`'s `tcgetattr`/`tcsetattr`/
+`tcgetpgrp`/`tcsetpgrp`/`ttyname` (previously hand-written, unconditional
+`ENOTTY`/`NULL`) and `libc_stdio_process_shims.c`'s `isatty()`
+(previously unconditional `return 0`) were removed in favor of real
+Apple/FreeBSD source: `third_party/Libc/gen/FreeBSD/termios.c` and
+`ttyname.c` (plus `gen/devname.c`, a real dependency of `ttyname_r()`)
+added to `build_libc_gen.sh`'s `GEN_FILES`, so they compile for real into
+the SHARED `libc_gen.a` (used by both `bash` and `ps`, not a bash-only
+copy). `isatty()` itself was deliberately kept as a small, real (not
+fake) from-scratch reimplementation in `libc_stdio_process_shims.c`
+rather than compiling the real `gen/FreeBSD/isatty.c` directly: that
+file's fast path needs `<sys/conf.h>`'s `D_TTY` (a kernel-only header,
+confirmed absent from the Xcode-12 iPhoneOS SDK), and more importantly
+`libc_stdio.a`'s own standalone from-scratch smoketest (which proves
+`libc_stdio.a` is self-contained *before* `libc_gen.a` even exists in a
+from-scratch build) needs `isatty()` resolved without depending on
+`libc_gen.a`'s real `tcgetattr()` -- so this file's `isatty()` calls the
+same real `ioctl(TIOCGETA)` syscall `tcgetattr()` itself is a thin
+wrapper around, via a locally-scoped raw-asm helper (not the public
+`ioctl` name, to avoid a duplicate-symbol clash once both `libc_gen.a`
+and this file link into the same binary).
+
+A real, shared `ioctl`/`_ioctl` raw-syscall pair moved into the shared
+`libc_gen_syscalls.c` (previously bash had its own local copy in
+`bash_syscalls.c`, and `ps` had its own separate local copy in
+`ps_extra_syscalls.c` -- both removed, deduplicated into one shared
+copy, since real `termios.c`'s `tcgetattr`/`tcsetattr` calls `_ioctl`
+directly and both `bash` and `ps` link `libc_gen.a`). Real `termios.c`'s
+`tcdrain()`/`tcflush()`/`tcsendbreak()` (pulled in as part of the same
+`.o` member the moment anything calls `tcgetattr`/`tcsetattr`, even if
+nothing calls THEM specifically) needed `_writev`/`_select` too --
+same dedup treatment, moved to `libc_gen_syscalls.c`.
+
+Two real link-time surprises, both root-caused via a genuine build
+failure, not predicted: (1) `libc_gen_syscalls.c` had a stale, wrong,
+non-variadic `extern int _fcntl(int fd, int cmd, long arg);`
+declaration left over from before `libc_build_prototypes.h` grew its own
+(correct, variadic) `_fcntl` entry for `ps` -- silently never conflicting
+only because nobody had re-run `build_libc_gen.sh` since; fixed by
+removing the stale redeclaration (the force-included prototypes header
+already provides the right one). (2) real `termios.c`'s `__tcdrain()`
+unconditionally calls `pthread_testcancel()` under this project's real
+`VARIANT_CANCELABLE` build flag, but this project's `libpthread.a`
+deliberately never compiles `pthread_cancelable.c` (real `pthread_cancel()`
+needs signal delivery to a real second thread, doubly unreachable on
+this single-thread target, see `build_libpthread.sh`'s own header) --
+`ps_err_warn_compat.c` had already solved this exact gap for `ps` with a
+real, honest `void pthread_testcancel(void) {}` no-op (correct: "no
+cancellation request is ever pending" is unconditionally true when no
+mechanism to request one exists); the identical real definition was
+added to `bash_syscalls.c` (duplicated rather than shared, since `bash`
+and `ps` are independent static binaries with no common archive for this
+one symbol) plus a `-Wl,-alias,_pthread_testcancel,'_pthread_testcancel
+$UNIX2003'` link flag matching `build_ps.sh`'s own already-proven
+pattern. QEMU-verified: `bash -i`'s `[ -t 0 ]` now genuinely reports
+`true` (previously always `false`, since the old `isatty()` always
+returned 0) -- zero regression on the existing interactive-shell
+milestone (login, run commands, clean `exit`, status 0).
+
+**Layer 2: real GNU readline.** `third_party/bash/config.h`'s `READLINE`
+was re-`#define`d (previously `#undef`'d as part of the Twenty-third
+pass's real `bash -i` flood fix -- that fix's OTHER half, the
+`sigsetjmp`/`siglongjmp` frame-corruption bug, is untouched and still
+correct; only the "readline is unsupported on this target" premise
+changed). `HAVE_TERMCAP_H` was undefined (this checkout has no real
+`<termcap.h>` or termcap/terminfo database, confirmed absent from the
+Xcode-12 iPhoneOS SDK by `find`) -- `lib/readline/tcap.h`'s own real
+`#else` branch (taken whenever `HAVE_TERMCAP_H` is unset) already
+provides plain `extern` declarations for the real termcap API surface
+(`tgetent`/`tgetnum`/`tgetflag`/`tgetstr`/`tputs`/`tgoto`/`PC`/`UP`/`BC`/
+`ospeed`) a real `<termcap.h>` would, so a new
+`bash_readline_termcap_compat.c` just needed to provide real
+*definitions*: `tgetent()` honestly returns `-1` ("couldn't open
+database", the real termcap return code that best matches this target's
+actual situation -- no database file exists at all, as opposed to `0`,
+"database exists but doesn't list this TERM"). This is NOT a fabrication
+of terminal support: `lib/readline/terminal.c`'s real, documented
+`_rl_init_terminal_io()` has a complete fallback for exactly `tgetent()
+<= 0` -- `_rl_term_cr = "\r"`, `_rl_term_backspace = "\b"`, every
+cursor-addressing capability left `NULL`, and a real, working (if
+visually plain) line-editing mode, not a crash or an empty stub. `tputs`
+was implemented for real (writes the string through the callback,
+skipping any real leading numeric padding-delay prefix -- a real serial
+UART link needs no artificial padding delay, so this is a real, correct
+no-op for the delay specifically, not a fabricated capability); `tgoto`
+returns its input unchanged (real termcap's own documented `"OOPS"`
+error string for the unusable-cap case) since this target's fallback
+path never actually reaches a cursor-addressing capability to expand.
+
+`build_bash.sh`'s `EXTRA_FILES` grew the real `lib/readline/*.c` file
+list -- cross-checked directly against `lib/readline/Makefile.in`'s own
+real `OBJECTS`/`CSOURCES` lists, not guessed: `readline.c`, `vi_mode.c`,
+`funmap.c`, `keymaps.c`, `parens.c`, `search.c`, `rltty.c`, `complete.c`,
+`bind.c`, `isearch.c`, `display.c`, `signals.c`, `util.c`, `kill.c`,
+`undo.c`, `macro.c`, `input.c`, `callback.c`, `terminal.c`, `text.c`,
+`nls.c`, `misc.c`, `savestring.c`, `compat.c` (`history.c`/
+`histexpand.c`/`histfile.c`/`histsearch.c`/`mbutil.c` were already
+compiled, since bash's history mechanism has always been a separate
+library from readline's line editing; `emacs_keymap.c`/`vi_keymap.c` are
+real too but deliberately not separately compiled, matching
+`Makefile.in` exactly -- `keymaps.c` `#include`s them directly as static
+data). Two real files from that same `Makefile.in` `OBJECTS` list --
+`shell.c` and `xmalloc.c` -- were deliberately EXCLUDED after a real,
+not-guessed duplicate-symbol link error: bash's own top-level
+`general.c`/`variables.c`/`lib/sh/shquote.c` and `xmalloc.c` already
+define the exact same `sh_get_env_value`/`sh_set_lines_and_columns`/
+`sh_get_home_dir`/`sh_single_quote`/`sh_unset_nodelay_mode`/`xmalloc`/
+`xfree`/`xrealloc` symbols those two `lib/readline` files exist to
+provide for a *standalone* `libreadline` build (where nothing else
+supplies those hooks) -- real bash's own Makefile excludes them from
+bash's own link for the identical reason, confirmed after the fact by
+checking bash's real top-level `OBJECTS` list too.
+
+`builtins/complete.c` (the `complete`/`compgen`/`compopt` builtins,
+previously excluded with a documented "needs real readline" comment) was
+re-added -- it needed `pcomplete.c` (real programmable-completion engine)
+AND the separate `pcomplib.c` (the `COMPSPEC` struct's own real
+`compspec_create`/`compspec_dispose`/`compspec_copy`, confirmed via a
+real undefined-symbol list, not the same file as `pcomplete.c` --
+`pcomplete.c` alone left those three genuinely undefined). `bashline.c`
+(bash's own 3199-line real readline-integration glue: command-aware
+completion, custom keybindings, `bind`/`read -e` support) and
+`bracecomp.c` (real `bash_brace_completion`, `bashline.c`'s own
+`{`-completion keybinding target) were added too, once the link named
+them as the real, missing pieces. All of `bash_syscalls.c`'s old
+`rl_*`/`it_*`/`readline()`/`bashline_*` honest no-op stand-ins (a large
+block, accumulated across earlier passes) were removed in one sweep now
+that real `lib/readline`/`pcomplete.c`/`bashline.c` provide every one of
+those symbols for real.
+
+Remaining real gaps closed narrowly, each with a real/honest
+implementation rather than a fabrication: `__darwin_check_fd_set_overflow`
+(a real Apple SDK hardening hook the `FD_SET`/`FD_ISSET` macros call
+through -- real, correct `FD_SETSIZE`-bounds-check semantics, needed by
+`lib/readline/input.c`'s real stdin-readiness `select()` call); a public
+`select()` wrapper (thin, over the already-real `_select` raw syscall),
+aliased to the real versioned SDK export name via
+`-Wl,-alias,_select,'_select$1050'`; `setpwent`/`getpwent`/`setgrent`/
+`getgrent`/`endgrent`/`setservent`/`getservent`/`endservent` (honest
+"no enumeration API" stand-ins -- `tools/libinfo_custom` only supports
+lookup-by-name/uid today, not full-database enumeration, so
+`~user<TAB>`/`%group`/service-name completion candidates are always
+empty; `~`/HOME and literal paths still complete normally via readline's
+real filename-completion path, unaffected). And a real, separate,
+PRE-EXISTING gap surfaced and fixed as a side effect: bash had **no
+working `setenv`/`putenv`/`unsetenv` at all** before this pass (needed
+by real `lib/readline/shell.c`'s `sh_set_lines_and_columns()`, which
+`setenv()`s `COLUMNS`/`LINES` after a window resize), and its previously-
+linked `getenv()` (`libc_locale.a`'s old `libc_locale_env_stubs.c`)
+unconditionally returned `NULL` regardless of the real environment --
+both fixed by reusing (not reimplementing) `simple_cmds_getenv_compat.c`
+(the already-real, already-proven Phase 4.6 item 2 implementation) for
+bash's own link; since objects listed directly on a link line always
+resolve a symbol before the linker needs to pull in a competing archive
+member of the same name, `libc_locale.a`'s old broken stub is simply
+never pulled into bash's link once this file provides `getenv`/`setenv`/
+`unsetenv`/`putenv` directly, no archive surgery needed. `-Wl,-alias,
+_fopen,'_fopen$UNIX2003'` closed the last real link gap (`bashline.c`'s
+`snarf_hosts_from_file()`).
+
+One real, general build-script bug caught and fixed for good, not just
+patched around: `build_bash.sh`'s final link step globs `"$BOUT"/obj/
+*.o` -- when `lib/readline/shell.c`/`xmalloc.c` were removed from
+`EXTRA_FILES` (see above), their stale `.o` files from the PREVIOUS run
+lingered in that directory and were silently re-globbed into the next
+link, producing a real duplicate-symbol failure that looked like a fresh
+regression but was actually pure build-directory staleness (the exact
+same root-cause class as a stale `isatty.o` hit earlier this same pass
+in `build_libc_gen.sh`, fixed there by deleting the file by hand). Fixed
+properly this time: `rm -rf "$BOUT/obj"` added before the compile loop,
+so `build_bash.sh` can never accumulate stale output again.
+
+**QEMU-verified, real transcripts, not assumed:** a custom raw-byte pty
+test harness (`rl_raw_test.py`, adapted from `_pty_test_phase5.py` to
+send individual keystrokes -- including a literal Tab byte and a raw
+ANSI up-arrow escape `\x1b[A` -- rather than only newline-terminated
+command lines) logged into `root`/`darwin`, ran `exec /bin/bash -i`, then:
+typed `ec`, a literal Tab byte, then `HO_TABTEST_MARKER` + Enter -- the
+resulting executed command was `echo HO_TABTEST_MARKER` (real tab
+completion: `ec` + Tab expanded to `echo ` with a trailing space,
+confirmed by the argument boundary landing exactly where it should have
+if and only if completion inserted that space); ran
+`echo REAL_HISTORY_MARKER_42` (printed once), sent a raw up-arrow escape
+then Enter, and the exact same command re-executed and printed the
+marker a second time (real history recall via readline, not bash's own
+separate `!`-history-expansion mechanism, since no `!!`/`!42` syntax was
+typed). `bash -i` continued to log in, run ordinary commands, and `exit`
+cleanly (status 0) throughout, and both `bash.macho` and `ps.macho`
+still link with `LC_UNIXTHREAD`, zero `LC_LOAD_DYLIB`, zero undefined
+symbols (`nm -u` empty on both) after every change in this pass.
+
+**Not verified this pass** (real, honest gaps in test coverage, not
+known-broken): multi-candidate Tab completion (2+ matches -- does it
+list them or just beep), vi-mode editing (`set -o vi`), and
+`bind`/`complete`/`compgen` builtin correctness beyond "compiles and
+links clean." `docs/roadmap.md`'s "Current status"/"Known stubbings"/
+"Remaining future work" updated accordingly.
+
+---
+
 *(End of archived material. Phase 4.6 items 3-5, and Phases 5 through 8 in
 their entirety, were open/not-started as of the source document's latest
 entries and are therefore not archived here -- see `docs/roadmap.md`'s

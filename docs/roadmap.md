@@ -147,6 +147,85 @@ Separately, Phase 5's custom flat-file account resolver
 in real use by `ps`/`rm` for `getpwnam`/`getgrgid` lookups, even though the
 rest of Phase 5 (login/su/PAM) hasn't been started.
 
+**Real termios/tty + real GNU readline (tab completion, command history)
+DONE and QEMU-verified, 2026-08-19/20.** The starting assumption --
+baked into `bash_syscalls.c`'s old `tcgetattr`/`tcsetattr`/`tcgetpgrp`/
+`tcsetpgrp` stubs and `build_bash.sh`'s `-UREADLINE` flag -- was that
+this target's console had no real tty line-discipline for readline's
+raw-mode terminal handling to use. That assumption was never actually
+tested and turned out to be **wrong**: a disposable `ioctl(TIOCGETA/
+TIOCSETA)` probe built into `tools/init_binary/init.c` (removed before
+commit) proved `third_party/xnu-7195`'s real BSD tty stack
+(`bsd/dev/arm/km.c`'s `kmopen`/`kmioctl` -> `bsd/kern/tty.c`'s
+`ttioctl_locked`/`ttread`, wired from `bsd_autoconf()`'s `kminit()` call)
+is already fully, correctly wired under `/dev/console` -- `TIOCGETA`
+round-tripped the exact real `kmopen()` defaults
+(`iflag=0x2b02/oflag=0x3/cflag=0x8b00/lflag=0x5cb`), and a `TIOCSETA`
+clearing `ICANON|ECHO` genuinely took effect (confirmed via a second
+`TIOCGETA` readback) and produced a real, immediate, unechoed
+single-byte `read()` -- exactly the raw-mode contract readline needs, no
+kernel changes required at all.
+
+Real fix, two layers:
+1. **Real termios/isatty/ttyname for real**, replacing the old ENOTTY/
+   false stand-ins: `third_party/Libc/gen/FreeBSD/termios.c` and
+   `ttyname.c` are now compiled for real into the shared
+   `libc_gen.a` (`build_libc_gen.sh`, also picking up `devname.c`);
+   `isatty()` is a real (not fake) `ioctl(TIOCGETA)`-based
+   reimplementation in `libc_stdio_process_shims.c` (kept out of
+   `libc_gen.a` deliberately, so `libc_stdio.a`'s own standalone
+   from-scratch smoketest keeps working without depending on a later
+   tier). A real, shared `ioctl`/`_ioctl`/`_writev`/`_select` raw-syscall
+   layer moved into `libc_gen_syscalls.c` (previously duplicated,
+   separately, in both `bash_syscalls.c` and `ps_extra_syscalls.c`).
+   QEMU-verified: `bash -i`'s `[ -t 0 ]` now genuinely reports `true`
+   (previously always `false`).
+2. **Real GNU readline**, built from bash-3.2's own bundled
+   `lib/readline/*.c` (the Makefile.in's real `OBJECTS` list, minus
+   `shell.c`/`xmalloc.c` -- both real, but bash's own top-level
+   `general.c`/`variables.c`/`xmalloc.c` already provide the identical
+   `sh_get_env_value`/`xmalloc`/etc symbols those two exist for
+   *standalone* `libreadline` builds, confirmed via a real duplicate-
+   symbol link error), plus `pcomplete.c`/`pcomplib.c` (programmable
+   completion), `bashline.c` (bash's own completion/keybinding glue),
+   and `bracecomp.c`. `READLINE` re-`#define`d in `third_party/bash/
+   config.h`; `HAVE_TERMCAP_H` undefined (this checkout genuinely has no
+   `<termcap.h>`/termcap database -- `lib/readline/tcap.h`'s own real
+   `#else` fallback branch handles that, and a new
+   `bash_readline_termcap_compat.c` provides real, honest
+   `tgetent()` (returns -1, "no database", triggering
+   `terminal.c`'s own real, documented dumb-terminal fallback --
+   `\r`/`\b` only, no cursor-addressing capabilities) plus real
+   `tputs`/`tgoto`/`tgetnum`/`tgetflag`/`tgetstr`. A handful of small
+   real/honest stand-ins closed the remaining link gaps: `pthread_testcancel()`
+   (real no-op, matching this project's own prior art in
+   `ps_err_warn_compat.c` -- no real cancellation subsystem exists on
+   this single-thread target), `setpwent`/`getpwent`/`setgrent`/
+   `getgrent`/`endgrent`/`setservent`/`getservent`/`endservent` (honest
+   "no enumeration API yet" stand-ins for `~user`/`%group`/service-name
+   completion -- `tools/libinfo_custom` only supports lookup-by-name/uid
+   today), `__darwin_check_fd_set_overflow` (a real `FD_SETSIZE` bounds
+   check), a real `select()` wrapper, and reuse of the already-real,
+   already-proven `simple_cmds_getenv_compat.c` for `setenv`/`getenv`/
+   `putenv`/`unsetenv` (bash had **no working `setenv` at all** before
+   this, and its previously-linked `getenv()` -- `libc_locale.a`'s old
+   `libc_locale_env_stubs.c` -- unconditionally returned `NULL`; both
+   fixed as a side effect for bash specifically).
+
+QEMU-verified via real pty-driven transcripts (not assumed): typing
+`ec` then a literal Tab byte then `HO_TABTEST_MARKER` + Enter produced
+`echo HO_TABTEST_MARKER` executing correctly (real tab completion,
+expanding `ec` -> `echo `); running `echo REAL_HISTORY_MARKER_42`, then
+sending a raw up-arrow escape (`\x1b[A`) then Enter, re-executed the
+exact same command (real history recall). Zero regression: `bash -i`
+still logs in, runs commands, and exits cleanly, and both `bash.macho`
+and `ps.macho` still link with `LC_UNIXTHREAD`, zero `LC_LOAD_DYLIB`,
+zero undefined symbols. Not independently re-verified this pass: multi-
+candidate Tab completion (2+ matches), vi-mode editing, and full
+`bind`/`complete`/`compgen` builtin correctness beyond linking cleanly.
+See `docs/historic/roadmap.md`'s newest Phase 4 entry for the full
+investigation, exact commands, and transcripts.
+
 ## Known bugs
 
 Currently open, real bugs the roadmap narrative flagged as not-yet-fixed
@@ -204,13 +283,19 @@ need a real implementation later:
 - **`chmod` not attempted at all** -- needs real POSIX.1e/Darwin ACLs
   (`acl_get_file`/`acl_set_file`) plus `<membership.h>` UUID-based user/
   group lookups, a subsystem not started.
-- **Bash's own honest failure stand-ins** (`bash_syscalls.c`): `dlopen`/
-  `dlclose`/`dlsym`/`dlerror` always fail (no dyld at all); `tcgetattr`/
-  `tcsetattr`/`tcgetpgrp`/`tcsetpgrp`/`ttyname` return `ENOTTY` (no tty
-  line-discipline); `alarm`/interval timers are silent no-ops (no
-  `SIGALRM` subsystem); readline line-editing and programmable completion
-  are documented no-op/failure stubs; real networking (`netopen`/
-  `netconn`) is unavailable.
+- **Bash's own remaining honest failure stand-ins** (`bash_syscalls.c`):
+  `dlopen`/`dlclose`/`dlsym`/`dlerror` always fail (no dyld at all);
+  `alarm`/interval timers are silent no-ops (no `SIGALRM` subsystem);
+  real networking (`netopen`/`netconn`) is unavailable; POSIX regex
+  (`regcomp`/`regexec`) always reports no-match/bad-pattern (real TRE
+  source exists in this checkout but is out of scope for now, Phase 4.6
+  item 3); `~user`/`%group`/service-name tab-completion candidates are
+  always empty (`setpwent`/`getpwent`/`setgrent`/`getgrent`/
+  `setservent`/`getservent` honest "no enumeration API" stand-ins --
+  `~`/literal paths still complete normally). `tcgetattr`/`tcsetattr`/
+  `tcgetpgrp`/`tcsetpgrp`/`ttyname`/`isatty`/readline line-editing and
+  programmable completion are now REAL (2026-08-19/20, see Current
+  status above) -- this line is intentionally NOT listed here anymore.
 - **INET/INET6 domain registration disabled** in the kernel (along with
   MULTIPATH/flow_divert/IGMP/MLD) -- no network interface exists yet; a
   scope decision documented in `architecture.md`, revisited once Phase 6
@@ -225,15 +310,18 @@ need a real implementation later:
 
 ## Remaining future work
 
-- **Phase 4 (userland)**: fix bash's `-i` infinite `exit`-print loop (the
-  immediate next blocker, see Known bugs) so bash can reach a real visible
-  prompt; Phase 4.6 items 3-5 (real POSIX regex, real `setattrlist(2)`
-  wiring, real Mach IPC for `ps` stats + blocking sleep) remain not
-  started; real Apple `Libinfo` (the actual repo, distinct from the
-  working custom flat-file resolver) is still unbuilt; `chmod` needs a
-  real ACL subsystem. Separately worth profiling: bash.macho's first-touch
-  demand-paging takes ~90s on this target's mostly-polled SD read path --
-  slow but not a correctness bug.
+- **Phase 4 (userland)**: interactive bash, real termios/tty, and real
+  readline (tab completion + history) are all DONE (see Current status
+  above). Remaining: multi-candidate Tab completion and vi-mode editing
+  are unverified (not known-broken, just not exercised yet); `~user`/
+  `%group`/service-name completion candidates are always empty (no real
+  account/group enumeration API, see Known stubbings); Phase 4.6 items
+  3-5 (real POSIX regex, real `setattrlist(2)` wiring, real Mach IPC for
+  `ps` stats + blocking sleep) remain not started; real Apple `Libinfo`
+  (the actual repo, distinct from the working custom flat-file resolver)
+  is still unbuilt; `chmod` needs a real ACL subsystem. Separately worth
+  profiling: bash.macho's first-touch demand-paging takes ~90s on this
+  target's mostly-polled SD read path -- slow but not a correctness bug.
 - **Phase 5 (multi-user)**: the custom account resolver is done; still
   needed: account-provisioning tools (`pwd_mkdb`/`vipw`/`chpass`/
   `passwd`), `crypt()` password verification, wiring the resolver into a

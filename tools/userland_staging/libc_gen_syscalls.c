@@ -181,7 +181,17 @@ int sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size
  * inconsistency to paper over. Thin real aliases onto this project's
  * existing _open/_fcntl/_fstat, not reimplemented from scratch. */
 extern int _open(const char *path, int flags, ...);
-extern int _fcntl(int fd, int cmd, long arg);
+/* _fcntl deliberately NOT re-declared here (unlike _open/_fstat) - real
+ * libc_stdio_syscalls.c's own definition is variadic (`int _fcntl(int,
+ * int, ...)`, see that file's header comment for why), and
+ * libc_build_prototypes.h's force-included `-include` already provides
+ * a matching variadic declaration; a stale non-variadic redeclaration
+ * used to live here (`extern int _fcntl(int fd, int cmd, long arg)`) and
+ * silently never conflicted only because nothing had re-run this exact
+ * build script since libc_build_prototypes.h grew its own (correct,
+ * variadic) _fcntl entry for ps - caught for real 2026-08-19 as a build
+ * failure the moment this file was rebuilt for the readline/termios
+ * work, not guessed. */
 extern int _fstat(int fd, void *statbuf);
 
 int open(const char *path, int flags, ...) {
@@ -215,4 +225,81 @@ int stat(const char *path, void *statbuf) {
 
 int lstat(const char *path, void *statbuf) {
     return (int)syscall3(SYS_lstat64, (long)path, (long)statbuf, 0);
+}
+
+/* #54 AUE_IOCTL, NO_SYSCALL_STUB - real Apple hand-writes this in
+ * libsyscall/wrappers/ioctl.c as a thin variadic-to-fixed-arity shim onto
+ * a raw __ioctl(2) stub; this project's checkout has neither the
+ * variadic wrapper nor the raw stub (confirmed absent by find, same gap
+ * class as every other NO_SYSCALL_STUB entry in this file). Fixed
+ * 3-arg form (matching every existing call site in this project's own
+ * code, same shortcut tools/userland_staging/ps_extra_syscalls.c already
+ * took for real ps -- ps.macho links and runs QEMU-verified with this
+ * exact convention). _ioctl is the real underscore-prefixed private
+ * alias third_party/Libc/gen/FreeBSD/termios.c calls directly (same
+ * public/private split as open/_open, fcntl/_fcntl, fstat/_fstat above).
+ *
+ * Empirically confirmed real and reachable 2026-08-19 (not assumed): a
+ * disposable ioctl(0, TIOCGETA/TIOCSETA, ...) probe built into
+ * tools/init_binary/init.c (removed before commit) round-tripped real
+ * termios state through /dev/console -- TIOCGETA returned the exact
+ * TTYDEF_IFLAG/TTYDEF_OFLAG/(CREAD|CS8|CLOCAL)/TTYDEF_LFLAG default
+ * values kmopen() (bsd/dev/arm/km.c) sets, and a TIOCSETA clearing
+ * ICANON|ECHO (real raw-mode, VMIN=1/VTIME=0) both reported success and
+ * produced a real, immediately-delivered, unechoed single-byte read()
+ * back -- proving third_party/xnu-7195's real BSD tty/line-discipline
+ * stack (km.c -> linesw -> tty.c's ttioctl_locked/ttread) is already
+ * fully wired for this target, contrary to this project's own earlier,
+ * untested assumption (see docs/roadmap.md) that no real tty existed
+ * here. */
+#define SYS_ioctl 54
+
+int ioctl(int fd, unsigned long request, void *arg) {
+    return (int)syscall3(SYS_ioctl, fd, (long)request, (long)arg);
+}
+
+int _ioctl(int fd, unsigned long request, void *arg) {
+    return ioctl(fd, request, arg);
+}
+
+/* #121 AUE_WRITEV / #93 AUE_SELECT, both NO_SYSCALL_STUB - real
+ * termios.c's tcdrain()/tcflush()/tcsendbreak() (whole-file pull-in the
+ * moment anything in this .o needs tcgetattr/tcsetattr) reference
+ * _writev/_select directly, same underscore-prefixed-private-alias
+ * pattern as _ioctl above. Real signatures/numbers cross-checked the
+ * same way as everything else here; this project's own
+ * ps_extra_syscalls.c (build_ps.sh) independently proved this exact
+ * pair real and correct first (ps.macho links+runs QEMU-verified with
+ * it) - moved the canonical copy here once bash needed the same real
+ * termios.c and ps_extra_syscalls.c's own copies were removed to avoid
+ * a duplicate-symbol clash once both link libc_gen.a. */
+#define SYS_writev 121
+#define SYS_select 93
+
+static inline long syscall5(long num, long a0, long a1, long a2, long a3, long a4) {
+    register long x0 asm("x0") = a0;
+    register long x1 asm("x1") = a1;
+    register long x2 asm("x2") = a2;
+    register long x3 asm("x3") = a3;
+    register long x4 asm("x4") = a4;
+    register long x16 asm("x16") = num;
+    long is_error;
+    asm volatile("svc #0x80\n"
+                 "cset %1, cs"
+                 : "+r"(x0), "=r"(is_error)
+                 : "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x16)
+                 : "memory", "cc");
+    if (is_error) {
+        return cerror_nocancel((int)x0);
+    }
+    return x0;
+}
+
+int _writev(int fd, const void *iov, int iovcnt) {
+    return (int)syscall3(SYS_writev, fd, (long)iov, iovcnt);
+}
+
+int _select(int nfds, void *readfds, void *writefds, void *exceptfds, void *timeout) {
+    return (int)syscall5(SYS_select, nfds, (long)readfds, (long)writefds, (long)exceptfds,
+                          (long)timeout);
 }

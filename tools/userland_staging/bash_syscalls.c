@@ -105,24 +105,19 @@ unsigned alarm(unsigned seconds) {
     return 0;
 }
 
-/* Job-control terminal-state syscalls: tcgetpgrp/tcsetpgrp are real
- * ioctl(TIOCGPGRP/TIOCSPGRP)-based Libc wrappers, and tcgetattr/tcsetattr
- * are real ioctl(TIOCGETA/TIOCSETA)-based ones -- both need a real tty
- * line-discipline driver underneath. This target's console is a raw
- * serial UART (see architecture.md) with no such driver; honestly
- * reporting ENOTTY (real errno for "not a terminal in the ioctl sense")
- * rather than fabricating success, matching this project's existing
- * "honest stub, never fabricates support" convention (see libunwind's
- * _dyld_find_unwind_sections shim, copyfile's sandbox stand-ins). */
-#define ENOTTY 25
-static int g_errno_ref;
-extern int *__error(void);
-pid_t tcgetpgrp(int fd) { (void)fd; *__error() = ENOTTY; return -1; }
-int tcsetpgrp(int fd, pid_t pgrp) { (void)fd; (void)pgrp; *__error() = ENOTTY; return -1; }
-struct bash_termios_opaque { char _opaque[64]; };
-int tcgetattr(int fd, void *tp) { (void)fd; (void)tp; *__error() = ENOTTY; return -1; }
-int tcsetattr(int fd, int act, const void *tp) { (void)fd; (void)act; (void)tp; *__error() = ENOTTY; return -1; }
-char *ttyname(int fd) { (void)fd; return (char *)0; }
+/* Job-control terminal-state syscalls (tcgetpgrp/tcsetpgrp/tcgetattr/
+ * tcsetattr) and ttyname() used to be honest ENOTTY/NULL stand-ins here,
+ * on the assumption that this target's console had no real tty line-
+ * discipline driver underneath. That assumption was never actually
+ * tested and turned out to be WRONG: a disposable ioctl(TIOCGETA/
+ * TIOCSETA) probe (2026-08-19, see libc_gen_syscalls.c's ioctl/_ioctl
+ * header comment for the full transcript-backed writeup) proved
+ * third_party/xnu-7195's real BSD tty stack is already fully wired
+ * under /dev/console, including real raw-mode. The real Apple/FreeBSD
+ * implementations (third_party/Libc/gen/FreeBSD/termios.c,
+ * isatty.c, ttyname.c) are now compiled for real into libc_gen.a
+ * (tools/userland_staging/build_libc_gen.sh) and linked into bash
+ * instead -- removed the stand-ins here rather than shadow them. */
 
 /* dlopen family: this project's entire architecture is static (zero
  * dyld anywhere, see architecture.md and docs/roadmap.md's dyld-scoped-
@@ -453,45 +448,17 @@ long time(long *tloc) {
     return tv.tv_sec;
 }
 
-/* set_itemlist_dirty: real definition lives in pcomplete.c (programmable-
- * completion item-list cache invalidation), not compiled here -- real
- * bash's own --disable-readline builds omit programmable completion
- * entirely too (it's readline-driven), so callers marking a now-nonexistent
- * cache "dirty" is correctly a real no-op on this configuration, not a
- * fabricated stub hiding missing behavior. */
-void set_itemlist_dirty(void *list) { (void)list; }
-
-/* Real bash-3.2's own readline-integration entry points (builtin_bind.c's
- * `bind` builtin, builtin_read.c's `read -e`, variables.c's terminal-size
- * hooks) -- all genuinely inert with READLINE undefined (see
- * build_bash.sh's header comment for why real line-editing is out of
- * scope on this target's raw-serial-UART console). Honest no-op/failure
- * stubs, matching real bash's own --disable-readline behavior for these
- * exact entry points (the `bind` builtin becomes a documented no-op,
- * not a crash) -- never fabricates that editing/completion actually work. */
-typedef struct bash_rl_keymap_opaque *bash_keymap_t;
-int rl_read_init_file(const char *f) { (void)f; return -1; }
-int rl_parse_and_bind(char *l) { (void)l; return 1; }
-void rl_variable_dumper(int r) { (void)r; }
-void rl_macro_dumper(int r) { (void)r; }
-void rl_function_dumper(int r) { (void)r; }
-void rl_list_funmap_names(void) {}
-char **rl_invoking_keyseqs(void *f) { (void)f; return (void *)0; }
-void *rl_named_function(const char *n) { (void)n; return (void *)0; }
-int rl_set_key(const char *k, void *f, void *m) { (void)k; (void)f; (void)m; return -1; }
-int rl_bind_key(int k, void *f) { (void)k; (void)f; return -1; }
-void *rl_get_keymap(void) { return (void *)0; }
-void *rl_get_keymap_by_name(const char *n) { (void)n; return (void *)0; }
-void rl_set_keymap(void *m) { (void)m; }
-int rl_unbind_function_in_map(void *f, void *m) { (void)f; (void)m; return -1; }
-int rl_variable_bind(const char *v, const char *val) { (void)v; (void)val; return 1; }
-void rl_reset_terminal(const char *t) { (void)t; }
-int rl_set_screen_size(int r, int c) { (void)r; (void)c; return 0; }
-int rl_insert(int a, int b) { (void)a; (void)b; return 0; }
-int rl_newline(int a, int b) { (void)a; (void)b; return 0; }
-int rl_num_chars_to_read;
-void *rl_outstream;
-int rl_prefer_env_winsize;
+/* set_itemlist_dirty, every rl_-prefixed symbol, every it_-prefixed
+ * symbol, readline() itself, etc, used to all be honest no-op stubs
+ * here, standing in for real lib/readline (bind.c, readline.c,
+ * ...) and real pcomplete.c/bashline.c, on the belief that this target's
+ * console couldn't support real line editing at all. That belief was
+ * never tested and turned out to be wrong (see libc_gen_syscalls.c's
+ * ioctl/_ioctl header comment for the real, transcript-backed proof, and
+ * config.h's READLINE re-#define). All of that removed 2026-08-19 in
+ * favor of the real thing -- see build_bash.sh's EXTRA_FILES for the
+ * real lib/readline/*.c + pcomplete.c + bashline.c file list now
+ * providing every one of these symbols for real. */
 
 /* POSIX regex (regcomp/regexec/regfree): real Apple source exists
  * (third_party/Libc/regex/TRE/lib/{regcomp,regexec}.c, the TRE engine)
@@ -577,31 +544,15 @@ char *libintl_gettext(const char *msgid) { return (char *)msgid; }
 char *libintl_dgettext(const char *domain, const char *msgid) { (void)domain; return (char *)msgid; }
 char *libintl_bindtextdomain(const char *domain, const char *dir) { (void)domain; (void)dir; return (char *)0; }
 
-/* Programmable completion (it_enabled/it_disabled/it_functions,
- * no_empty_command_completion, perform_hostname_completion,
- * prog_completion_enabled) and readline itself (readline,
- * posix_readline_initialize, rl_attempted_completion_function,
- * rl_basic_word_break_characters, rl_completer_word_break_characters,
- * rl_dispatching, rl_done, rl_editing_mode): same real, documented
- * READLINE-disabled scope decision as the earlier rl_* stub block above
- * -- real bash's own --disable-readline configuration doesn't build
- * pcomplete.c at all (autoconf-conditional) and provides its own no-op
- * fallbacks for these exact interactive-editing entry points. Honest
- * real no-op/failure implementations, never fabricating that completion
- * or line-editing actually work on this raw-serial-console target. */
-int it_enabled, it_disabled;
-void *it_functions;
-int no_empty_command_completion;
-int perform_hostname_completion;
-int prog_completion_enabled;
-int posix_readline_initialize(int r) { (void)r; return 0; }
-char *readline(const char *prompt) { (void)prompt; return (char *)0; }
-void *rl_attempted_completion_function;
-char *rl_basic_word_break_characters = " \t\n";
-char *rl_completer_word_break_characters = " \t\n";
-int rl_dispatching;
-int rl_done;
-int rl_editing_mode = 1;
+/* it_enabled/it_disabled/it_functions/no_empty_command_completion/
+ * perform_hostname_completion/prog_completion_enabled (real pcomplete.c
+ * globals) and readline/posix_readline_initialize/
+ * rl_attempted_completion_function/rl_basic_word_break_characters/
+ * rl_completer_word_break_characters/rl_dispatching/rl_done/
+ * rl_editing_mode (real lib/readline globals/functions) all removed
+ * 2026-08-19 -- see this file's earlier set_itemlist_dirty comment for
+ * why, and build_bash.sh's EXTRA_FILES for where they now come from for
+ * real. */
 
 /* Plain (non-underscore-prefixed) pthread_rwlock_rdlock/unlock: real
  * Apple Libc/stdio's xprintf.c (compiled into libc_printf.a by an
@@ -632,16 +583,12 @@ int fcntl_u2003(int fd, int cmd, ...) {
     return fcntl_real(fd, cmd, arg);
 }
 
-/* #54 -- int ioctl(int fd, u_long com, caddr_t data), NO_SYSCALL_STUB.
- * Real raw syscall (unlike tcgetattr/tcgetpgrp above, this project does
- * let the real kernel answer rather than pre-emptively stubbing --
- * genuinely useful for non-tty ioctls too) -- callers asking for real
- * tty-specific commands (TIOCGWINSZ etc) will get a real ENOTTY back
- * from the kernel itself, same honest outcome as the dedicated tty stubs
- * above, just resolved at the real syscall layer instead of here. */
-int ioctl(int fd, unsigned long com, void *data) {
-    return (int)bsyscall3(54, (long)fd, (long)com, (long)data);
-}
+/* #54 ioctl -- moved OUT to libc_gen_syscalls.c (build_libc_gen.sh)
+ * 2026-08-19 so it's a shared symbol every tier can use, not a
+ * bash-only one -- real termios.c (now compiled for real into
+ * libc_gen.a) calls it via the real _ioctl private alias defined right
+ * next to it there. Kept out of this file entirely to avoid a duplicate-
+ * symbol link error against libc_gen.a's copy. */
 
 /* $UNIX2003/$INODE64 aliases for already-real functions from earlier
  * tiers (close/closedir in libc_gen.a, fdopen/fputs/fwrite in
@@ -681,22 +628,102 @@ int flsl(long v) {
     return pos;
 }
 
-/* Programmable-completion-only globals (it_aliases/it_builtins, real
- * definitions in pcomplete.c, not compiled -- same READLINE-disabled
- * scope decision as it_functions above) and bashline.c-only globals
- * (force_fignore/hostname_list_initialized/clear_hostname_list/
- * enable_hostname_completion) -- bashline.c itself is real-readline-
- * integration code, not compiled here for the same reason. Honest
- * no-op stubs/default values, never fabricating hostname completion or
- * `enable -f`/alias completion actually working without real readline. */
-void *it_aliases, *it_builtins;
-int force_fignore = 1; /* real bash's own documented default value */
-int hostname_list_initialized;
-void clear_hostname_list(void) {}
-void enable_hostname_completion(int e) { (void)e; }
-int initialize_readline(void) { return 0; }
-int complete_builtin(void *list) { (void)list; return 1; }
-int compgen_builtin(void *list) { (void)list; return 1; }
+/* __darwin_check_fd_set_overflow(3): real Apple hardening helper the
+ * SDK's <sys/_types/_fd_def.h> FD_SET/FD_ISSET/FD_CLR macros call
+ * (through the header's own `__darwin_check_fd_set()` inline, which only
+ * calls through if the symbol's address is nonzero -- weak-symbol-style,
+ * designed to tolerate linking against an older libSystem that lacks
+ * it). This target links statically with no such fallback, so it must
+ * genuinely resolve. Real, correct bounds-check semantics per that
+ * header's own documented contract: fd must be within the addressable
+ * range of the fd_set unless the caller opted into
+ * _DARWIN_UNLIMITED_SELECT (the `_ufds` flag) -- lib/readline/input.c's
+ * real rl_gather_tyi()/_rl_input_available() (pulled in the moment
+ * readline is genuinely enabled, see config.h) call select() on a
+ * regular, FD_SETSIZE-bounded fd_set for stdin, so a real FD_SETSIZE
+ * check is the correct, non-fabricated answer here, not a blanket "always
+ * ok". */
+#define BASH_FD_SETSIZE 1024
+int __darwin_check_fd_set_overflow(int fd, const void *fd_set_ptr, int unlimited) {
+    (void)fd_set_ptr;
+    if (unlimited) {
+        return 1;
+    }
+    return fd >= 0 && fd < BASH_FD_SETSIZE;
+}
+
+/* select(2): real public POSIX name the SDK's <sys/select.h> maps (via
+ * __DARWIN_ALIAS-family availability macros) to the versioned
+ * `select$1050` export lib/readline/input.c's real stdin-readiness
+ * check calls directly -- same underscore-free/no-underscore-needed
+ * convention as the plain `ioctl` name in libc_gen_syscalls.c (this one
+ * has no leading-underscore private alias, real Apple ships select(2)
+ * itself as NO_SYSCALL_STUB with the public name). Thin wrapper over the
+ * already-real `_select` raw syscall (libc_gen_syscalls.c, force-declared
+ * via libc_build_prototypes.h's `-include`) -- aliased to the real
+ * versioned export name via build_bash.sh's own -Wl,-alias flag. */
+extern int _select(int nfds, void *readfds, void *writefds, void *exceptfds, void *timeout);
+int select(int nfds, void *readfds, void *writefds, void *exceptfds, void *timeout) {
+    return _select(nfds, readfds, writefds, exceptfds, timeout);
+}
+
+/* setpwent/getpwent(3): real POSIX passwd-database ENUMERATION (distinct
+ * from getpwnam/getpwuid single-record lookup, which
+ * tools/libinfo_custom/libinfo_custom.c already implements for real and
+ * ps/rm already use) -- lib/readline/complete.c's real
+ * rl_username_completion_function() calls these for `~user<TAB>`
+ * completion. This project's flat-file account resolver
+ * (tools/libinfo_custom) has no enumeration API yet (Phase 5 scope,
+ * login/su/PAM only needed lookup-by-name/uid so far) -- honest, narrow
+ * "no more entries" stand-in rather than fabricating a fake account
+ * list, matching this project's existing "honest stub" convention.
+ * `~user` tab-completion simply finds no candidates on this target
+ * today; `~` itself (HOME) and literal paths still complete normally
+ * via readline's real filename-completion path, unaffected. */
+void setpwent(void) {}
+void *getpwent(void) { return (void *)0; }
+
+/* setgrent/getgrent/endgrent(3) and setservent/getservent/endservent(3):
+ * same real "no enumeration API on this target yet" gap as setpwent/
+ * getpwent above -- lib/readline/bashline.c's real
+ * bash_groupname_completion_function() (`%group<TAB>` job-spec-adjacent
+ * completion) and bash_servicename_completion_function() (`/etc/services`
+ * completion) call these. This target has no real group database beyond
+ * what tools/libinfo_custom already resolves by name for `su`/`ps`
+ * (single-group-per-user, no enumeration) and no network stack at all
+ * (Phase 6, so no /etc/services concept either) -- honest "database not
+ * open / no more entries" stand-ins, not fabricated group/service
+ * lists. */
+void setgrent(void) {}
+void *getgrent(void) { return (void *)0; }
+void endgrent(void) {}
+void setservent(int stayopen) { (void)stayopen; }
+void *getservent(void) { return (void *)0; }
+void endservent(void) {}
+
+/* pthread_testcancel(3): real termios.c's tcdrain() (pulled in whole-.o
+ * the moment real bash job control calls tcgetattr/tcsetattr -- see
+ * build_bash.sh's own -Wl,-alias comment) calls this as a real POSIX
+ * cancellation checkpoint. This project's libpthread.a build doesn't
+ * include real Apple's cancellation-support file (pthread_cancelable.c,
+ * out of scope -- see build_libpthread.sh's own header comment: real
+ * pthread_cancel() needs signal delivery to a real second thread, and
+ * this target has no real bsdthread_create at all). A no-op here is the
+ * honest, correct answer -- "no cancellation request is ever pending"
+ * is unconditionally true when no mechanism to request one exists, not
+ * a fabricated success. Same real definition/reasoning as this
+ * project's own tools/userland_staging/ps_err_warn_compat.c (build_ps.sh
+ * hit the identical real gap first); duplicated here rather than shared
+ * because bash and ps are built as two independent static binaries with
+ * no common intermediate archive for this one symbol. */
+void pthread_testcancel(void) {
+}
+
+/* it_aliases/it_builtins/force_fignore/hostname_list_initialized/
+ * clear_hostname_list/enable_hostname_completion/initialize_readline/
+ * complete_builtin/compgen_builtin all removed 2026-08-19 -- real
+ * definitions now come from pcomplete.c/bashline.c/builtins/complete.c
+ * (see build_bash.sh's EXTRA_FILES/BUILTIN_FILES). */
 
 /* #46 -- int sigaction(int signum, struct __sigaction *nsa, struct
  * sigaction *osa), NO_SYSCALL_STUB. Real Apple wrapper chain is
@@ -764,13 +791,9 @@ int access(const char *path, int flags) {
 int isnetconn(int fd) { (void)fd; return 0; }
 int netopen(const char *path) { (void)path; return -1; }
 
-/* bashline.c real-readline-integration globals/functions -- same
- * READLINE-disabled scope decision as every other rl_ and bashline_
- * stub in this file. */
-int bash_readline_initialized;
-int bash_re_edit(const char *l) { (void)l; return 0; }
-void bashline_reinitialize(void) {}
-int bind_keyseq_to_unix_command(char *k) { (void)k; return -1; }
+/* bash_readline_initialized/bash_re_edit/bashline_reinitialize/
+ * bind_keyseq_to_unix_command removed 2026-08-19 -- real definitions now
+ * come from bashline.c (see build_bash.sh's EXTRA_FILES). */
 
 /* gethostname: no real network/hostname config exists on this target yet
  * (Phase 6 scope) -- honest stub reporting a fixed, clearly-synthetic name. */

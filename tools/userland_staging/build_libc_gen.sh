@@ -93,11 +93,27 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
 
 # Real Apple/FreeBSD source. Deliberately curated rather than a blind
 # glob over gen/FreeBSD/*.c - most of that directory (arc4random, the
-# rand48 family, wordexp, glob, vis/unvis, termios, sysctl-heavy getcap/
+# rand48 family, wordexp, glob, vis/unvis, sysctl-heavy getcap/
 # getmntinfo) needs subsystems genuinely out of scope for "the POSIX
-# wrapper layer real coreutils/bash need" (real /dev/random, full termios
-# ioctl surface, etc) - listed explicitly so the skip reasons are real,
-# not "didn't get to it".
+# wrapper layer real coreutils/bash need" (real /dev/random, etc) -
+# listed explicitly so the skip reasons are real, not "didn't get to it".
+#
+# termios.c/isatty.c/ttyname.c moved IN here 2026-08-19 (readline
+# investigation) - the "full termios ioctl surface" gap this comment used
+# to cite them for was never actually verified, just assumed, and turned
+# out to be wrong: a disposable ioctl(TIOCGETA/TIOCSETA) probe built
+# into tools/init_binary/init.c (see libc_gen_syscalls.c's new ioctl/
+# _ioctl header comment for the full transcript-backed writeup) proved
+# third_party/xnu-7195's real BSD tty stack (bsd/dev/arm/km.c's kmopen/
+# kmioctl -> bsd/kern/tty.c's ttioctl_locked/ttread) is already fully
+# wired under /dev/console, including real raw-mode (TIOCSETA clearing
+# ICANON|ECHO) with genuine immediate, unechoed single-byte delivery -
+# exactly what tcsetattr(3)/real readline need. ps already proved
+# termios.c/ttyname.c compile clean against this project's headers (see
+# build_ps.sh); this promotes that from a ps-only curiosity to the
+# shared tier every tool links, and lets bash_syscalls.c's tcgetattr/
+# tcsetattr/tcgetpgrp/tcsetpgrp/ttyname honest-ENOTTY stand-ins retire in
+# favor of the real thing.
 GEN_FILES="
 $LIBC/gen/FreeBSD/opendir.c
 $LIBC/gen/FreeBSD/readdir.c
@@ -114,7 +130,19 @@ $LIBC/gen/uname.c
 $LIBC/gen/FreeBSD/getpagesize.c
 $LIBC/gen/confstr.c
 $LIBC/stdlib/FreeBSD/merge.c
+$LIBC/gen/FreeBSD/termios.c
+$LIBC/gen/FreeBSD/ttyname.c
+$LIBC/gen/devname.c
 "
+# isatty.c deliberately NOT pulled in here (unlike termios.c/ttyname.c
+# above) -- it would collide with libc_stdio_process_shims.c's own real
+# isatty() (tools/userland_staging/build_libc_stdio.sh), which has to
+# define it locally so libc_stdio.a's OWN standalone smoketest (which
+# proves libc_stdio.a is self-contained with zero undefined symbols,
+# genuinely BEFORE libc_gen.a exists in a from-scratch build) keeps
+# working without depending on this later tier. One real definition,
+# living in the earlier tier every later tier already links anyway - see
+# that file's header comment for why it's real, not a stub.
 
 ok=0
 skip=0

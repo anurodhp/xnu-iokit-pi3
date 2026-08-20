@@ -1,5 +1,7 @@
-/* Real exit()/__cleanup wiring + a documented isatty() stand-in - none of
- * this project's earlier tiers needed them (the locale tier's own hand-
+/* Real exit()/__cleanup wiring + a real isatty() (see its own header
+ * comment further down for why it's a local raw-ioctl reimplementation
+ * rather than compiling real Libc/gen/FreeBSD/isatty.c directly here) -
+ * none of this project's earlier tiers needed them (the locale tier's own hand-
  * rolled libc_locale_stdio.c FILE* shim never called real fopen(), and
  * nothing before this tier called exit() through real Libc code paths),
  * but real fopen()-family FILE*s do: third_party/Libc/stdio/FreeBSD/
@@ -48,14 +50,46 @@ void exit(int status) {
     raw_exit_syscall(status);
 }
 
-/* No tty/ioctl layer exists anywhere in this project's userland yet (see
- * docs/roadmap.md Phase 4) - real, documented "not a tty" answer, not a
- * guess: third_party/Libc/stdio/FreeBSD/makebuf.c's __smakebuf() only
- * uses isatty() to choose line-buffered vs fully-buffered, and fully-
- * buffered (the real non-tty answer) is always a SAFE, correct choice
- * for any real fd - just less convenient for interactive line-by-line
- * flushing until a real ioctl/tty subsystem is ported. */
+/* Real isatty() (2026-08-19, replacing the old honest-`return 0` stand-
+ * in) - the "no tty/ioctl layer exists" assumption that stand-in used to
+ * document was never actually tested and turned out to be wrong: a
+ * disposable ioctl(TIOCGETA/TIOCSETA) probe (see libc_gen_syscalls.c's
+ * ioctl/_ioctl header comment for the full transcript-backed writeup)
+ * proved third_party/xnu-7195's real BSD tty stack is already fully
+ * wired under /dev/console.
+ *
+ * This mirrors the real third_party/Libc/gen/FreeBSD/isatty.c's own
+ * fallback branch exactly (`tcgetattr(fd, &t) != -1`) rather than
+ * compiling that file directly here: isatty.c's fast path needs
+ * <sys/conf.h>'s D_TTY (a kernel-only header not in the iPhoneOS SDK),
+ * and more importantly tcgetattr() itself only exists in libc_gen.a (a
+ * LATER tier - see build_libc_gen.sh) which this file's own tier
+ * (build_libc_stdio.sh) has to link clean WITHOUT, since its standalone
+ * smoketest proves libc_stdio.a is self-contained before libc_gen.a is
+ * even built in a from-scratch run. So this calls the same real
+ * ioctl(2) TIOCGETA syscall tcgetattr() itself is just a thin wrapper
+ * around (see third_party/Libc/gen/FreeBSD/termios.c's own
+ * `return (_ioctl(fd, TIOCGETA, t));` body), via a locally-scoped raw
+ * syscall helper rather than a public `ioctl` symbol - a second
+ * `ioctl`/`_ioctl` definition here would collide with libc_gen.a's real
+ * one the moment both link into the same binary (bash, ps). */
+#include <termios.h>
+
+static long isatty_raw_tiocgeta(int fd, struct termios *t) {
+    register long x0 asm("x0") = fd;
+    register long x1 asm("x1") = (long)TIOCGETA;
+    register long x2 asm("x2") = (long)t;
+    register long x16 asm("x16") = 54; /* #54 AUE_IOCTL, see libc_gen_syscalls.c */
+    long is_error;
+    asm volatile("svc #0x80\n"
+                 "cset %1, cs"
+                 : "+r"(x0), "=r"(is_error)
+                 : "r"(x1), "r"(x2), "r"(x16)
+                 : "memory", "cc");
+    return is_error ? -1 : x0;
+}
+
 int isatty(int fd) {
-    (void)fd;
-    return 0;
+    struct termios t;
+    return isatty_raw_tiocgeta(fd, &t) != -1;
 }
