@@ -545,9 +545,41 @@ need a real implementation later:
   default login shell -- see Current status above) are all done. Still
   needed: account-provisioning tools (`pwd_mkdb`/`vipw`/`chpass`/
   `passwd` -- `pwtool` covers an ad hoc subset of this today, not the real
-  tools), a setuid-root helper so `su` can reach a different account from
-  a non-root session, and eventually PAM (OpenPAM as fallback). `sudo` is
+  tools; real, unmodified Apple source for all four already sits unbuilt
+  in `third_party/system_cmds/` -- `pwd_mkdb.tproj`, `vipw.tproj`,
+  `chpass.tproj`, `passwd.tproj` -- confirmed present, not yet attempted),
+  a setuid-root helper so `su` can reach a different account from a
+  non-root session, and eventually PAM (OpenPAM as fallback). `sudo` is
   deliberately out of scope indefinitely.
+- **Phase 5.5 (standard system daemons, filed 2026-08-20, deliberately
+  scheduled before Phase 6)**: a "genuinely usable OS" needs a handful of
+  standard background daemons this project has never planned for, found
+  while auditing what's missing beyond individual commands. Scoped for
+  *before* networking specifically because all three are purely local/
+  single-host concerns -- unlike `mDNSResponder`/`configd`-style network-
+  management daemons, which inherently need Phase 6 to exist first and so
+  are NOT filed here, they belong with/after Phase 6 instead.
+  1. **`getty`** (real, unmodified Apple source already unbuilt at
+     `third_party/system_cmds/getty.tproj`, confirmed present) -- this
+     project's login today is a single console session with `do_login()`
+     baked directly into `tools/init_binary/init.c`'s own respawn loop,
+     not a separate per-tty daemon. Real `getty` only starts mattering
+     once there's more than one real tty to spawn onto (real hardware's
+     serial console today, potentially real PTYs later) -- low urgency
+     alone, but natural to land alongside the other two below.
+  2. **`syslogd`**: no real Apple source cloned yet -- needs adding to
+     `setup_third_party.sh`'s pinned list first (confirm the exact
+     apple-oss-distributions repo name/tag against the `macos-112`
+     manifest, same method every other pin here used, not guessed).
+     Right now every diagnostic in this project goes straight to
+     `kprintf`/the console; a real syslog would give commands a real
+     place to log to.
+  3. **`cron`**: real `at`/`atrun` (task scheduling, cron-adjacent)
+     already sit unbuilt at `third_party/system_cmds/at.tproj` and
+     `atrun.tproj`, confirmed present. The full `cron` daemon itself is
+     likely its own separate apple-oss-distributions repo, not yet
+     cloned -- same `setup_third_party.sh` pinning work as `syslogd`
+     needed first.
 - **Phase 6 (networking)**: entirely unstarted. Needs, in strict order: a
   DWC2 USB host controller driver (6a -- the largest single remaining
   undertaking in the project, per its own plan doc, `docs/usb-support-plan.md`);
