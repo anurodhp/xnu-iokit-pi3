@@ -210,13 +210,24 @@ this pass even if the change itself is cheap.
     in-memory tree (item 1 above) rather than a real directory read — status
     unclear, re-check once 3.5a lands real syscalls.
 
-5. **No real POSIX regex (`regcomp`/`regexec`/`regfree`) built.**
-    `rm -i`'s `rpmatch()` currently uses a real but narrowly-scoped
-    C-locale-only replacement (`simple_cmds_rpmatch_compat.c`) instead
-    of pulling Apple's real regex implementation (likely already present
-    in this checkout, not yet confirmed/built). Blocks real bash
-    `[[ =~ ]]` and any future `grep`/`sed`-style command. See
-    `docs/roadmap.md`'s Phase 4.6.
+5. **[RESOLVED 2026-08-20]** ~~No real POSIX regex (`regcomp`/`regexec`/
+    `regfree`) built~~ — real, unmodified Apple TRE engine
+    (`third_party/Libc/regex/TRE/lib/*.c` + `FreeBSD/regerror.c`) now
+    builds clean into `libc_build/libc_regex.a` via the new, permanent
+    `tools/userland_staging/build_libc_regex.sh`, and is linked into
+    `bash.macho` (`build_bash.sh`), replacing `bash_syscalls.c`'s old
+    `REG_BADPAT`/`REG_NOMATCH` stand-ins. QEMU-verified: real bash
+    `[[ str =~ pattern ]]` performs genuine matches (both positive and
+    negative cases confirmed correct). `rm -i`'s `rpmatch()` was
+    deliberately left on its existing narrow C-locale-only replacement
+    (`simple_cmds_rpmatch_compat.c`) — that file's own comment already
+    establishes it's exactly equivalent real behavior in this project's
+    always-C locale, not a degraded approximation, so there was nothing
+    to gain by rewiring it. Still open: no `grep`/`sed`/`sort`/`nl`/
+    `xargs`/`ed`-style command has been built yet — each is now a normal
+    new-command port against a real, linkable engine, not blocked on a
+    missing subsystem. See `docs/roadmap.md`'s Phase 4.6 and Current
+    status.
 
 6. **[RESOLVED 2026-08-20]** ~~`setattrlist(2)` never wired to
     userland~~ — real raw syscall wired in `tools/userland_staging/

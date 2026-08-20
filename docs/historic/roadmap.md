@@ -4102,7 +4102,151 @@ present, zero `LC_LOAD_DYLIB`).
 
 ---
 
-*(End of archived material. Phase 4.6 items 3-5, and Phases 5 through 8 in
+**Phase 4.6 item 3, 2026-08-20: real POSIX regex (`regcomp`/`regexec`/
+`regfree`/`regerror`) built and wired into bash for real.** First-of-its-
+kind pass in this project: every prior `build_*.sh` tier pulled in
+individual Apple/FreeBSD `.c` files; this is the first to pull in a whole
+self-contained multi-file *engine* (TRE, `third_party/Libc/regex/TRE/
+lib/*.c`, 9 files: `regcomp`/`regexec`/`tre-ast`/`tre-compile`/
+`tre-match-backtrack`/`tre-match-parallel`/`tre-mem`/`tre-parse`/
+`tre-stack`, plus Apple's own vendored FreeBSD fallback
+`regex/FreeBSD/regerror.c`) with its own internal headers, autoconf-style
+`config.h`, and cross-file macro contract. New, permanent
+`tools/userland_staging/build_libc_regex.sh` compiles all 10 into
+`libc_build/libc_regex.a`, following the same CFLAGS/toolchain recipe
+every other tier uses (see `build_libc_locale.sh` for the fullest-
+commented reference version) -- no new build methodology.
+
+*Real gap 1 -- `TRE_REGEX_T_FIELD` undefined.* `tre-compile.c`/
+`regexec.c` reference `preg->TRE_REGEX_T_FIELD` (the field of the public
+`regex_t` struct TRE privately stores its compiled-NFA pointer in) as a
+macro, not a literal struct member -- real Apple's Xcode project defines
+it project-wide via `-D`/an injected `config.h`; this checkout's own
+`third_party/Libc/regex/TRE/config.h` has the real answer
+(`#define TRE_REGEX_T_FIELD re_g`, matching `_regex.h`'s real
+`struct re_guts *re_g` field) but nothing was force-including it. First
+attempted as a narrow `-DTRE_REGEX_T_FIELD=re_g`, which fixed that one
+error but left a second, related class of error still failing
+(`tre_mbrtowc_l`/`tre_isctype_l`/`tre_ctype_l` all "implicit declaration"
+-- these are gated behind `HAVE_MBRTOWC`/`HAVE_ISWCTYPE`/etc, autoconf
+macros ALSO only defined in that same top-level `config.h`, not by the
+narrower `-D`). Fixed for real by force-including the actual `config.h`
+(`-include $LIBC/regex/TRE/config.h`) instead of hand-picking individual
+`-D` flags -- more faithful to Apple's real build and closes the whole
+class of gap at once. The real `mbrtowc_l`/`wctype_l` function bodies
+already existed in `libc_locale.a` from an earlier tier
+(`locale/FreeBSD/mbrtowc.c`/`wctype.c`, confirmed via `nm`) -- only their
+prototypes were unreachable, gated behind this project's own
+`-D_USE_EXTENDED_LOCALES_` (which real `<wchar.h>`/`<wctype.h>` in this
+checkout both check before pulling in `xlocale/_wchar.h`/`_wctype.h`);
+`iswctype_l` needed no compiled body at all, just its declaration --
+it's a real `static inline` in `xlocale/__wctype.h`, unlocked by the
+same define.
+
+*Real gap 2 -- `'regncomp_l' is unavailable: not available on iOS`.*
+Once gap 1's `-D_USE_EXTENDED_LOCALES_` pulled in `xlocale/_regex.h`,
+`regcomp.c`'s own `#define tre_regncomp_l regncomp_l` (TRE's
+`TRE_USE_SYSTEM_REGEX_H` rename, making its internal function `DEFINE`
+the real system name) collided with that header's real
+`__OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_NA)` annotation on the
+*declaration* of `regncomp_l` -- a real Apple App-Store-review-time
+policy marker ("macOS-only public API, never available on iOS"), not a
+functional restriction; the underlying C is fully portable. This
+project's whole userland toolchain targets `-target arm64-apple-
+ios14.4` uniformly (Xcode-12's SDK vintage, not because this board runs
+iOS -- same reason every tier uses it), so defining a function under an
+iOS-unavailable name is a hard compile error here even though the real
+code works fine. Traced the exact macro chain by reading the real SDK
+headers directly (`Availability.h`'s `__OSX_AVAILABLE_STARTING`, which
+for an iOS target expands via token-pasting to
+`__AVAILABILITY_INTERNAL##_ios`, i.e. literally
+`__AVAILABILITY_INTERNAL__IPHONE_NA`, defined in `AvailabilityInternal.h`
+as `__attribute__((availability(ios,unavailable)))`) rather than guessed.
+Fixed via a new, narrowly-scoped compat shim
+(`regex_availability_override.h`, force-included first): it `#include`s
+`AvailabilityInternal.h` itself (tripping that header's own include
+guard before any other SDK header reaches it) and then redefines just
+that one macro to a no-op -- every other real availability annotation in
+every other header stays fully intact for this compile unit. Same class
+of "compat shim for genuine SDK-vintage skew" already established by
+`build_libc_locale.sh`'s `os/assumes.h`/`mach-o/dyld_priv.h` stand-ins,
+not a new pattern.
+
+*Real gap 3 -- the `$UNIX2003` `regcomp` alias mismatch.* Once the
+archive compiled clean (10/10, zero gaps), a standalone smoketest
+(`libc_regex_smoketest.c`/`.macho`, real `regcomp`/`regexec`/`regfree`/
+`regerror` calls against four real patterns) linked and ran clean
+end-to-end on the first real attempt -- `otool -l`: `LC_UNIXTHREAD`
+present, zero `LC_LOAD_DYLIB`; `nm -u`: zero undefined symbols. Wiring
+into real bash needed one more real fix: this checkout's own vendored
+`third_party/Libc/include/sys/cdefs.h` (found ahead of the SDK's own
+copy via this project's `-I $LIBC/include` search-path precedence --
+confirmed by reading it directly, not assumed) never defines
+`__DARWIN_ONLY_UNIX_CONFORMANCE`, so `__DARWIN_UNIX03`'s `$UNIX2003`-
+suffixing branch is live for `regcomp`'s lone `__DARWIN_ALIAS(regcomp)`
+annotation (real Apple installed-SDK builds don't hit this: their real
+`__DARWIN_ONLY_UNIX_CONFORMANCE=1` for this exact iPhoneOS target makes
+`__DARWIN_ALIAS` a no-op there -- a genuine, narrow divergence from
+Apple's real build environment caused by this project's own `-I`
+ordering, not a source bug). `regexec`/`regfree` carry no such alias at
+all (confirmed by reading `_regex.h`) -- real callers reference plain
+`_regexec`/`_regfree`, exactly matching what the archive exports, no
+shim needed. Real, unmodified bash `lib/sh/shmatch.c` (already compiled
+into `bash.macho`, implements `[[ str =~ pattern ]]`) therefore asm-
+references `_regcomp$UNIX2003`, which TRE's own `regcomp.c` never
+exports (only plain `_regcomp`). Bridged in `bash_syscalls.c`: the old
+narrow `regcomp`/`regexec_u2003`/`regfree` fake definitions
+(`REG_BADPAT`/`REG_NOMATCH` always) are deleted outright -- object files
+linked directly on the command line always win over an archive member
+offering the same symbol (this project's own documented archive-
+shadowing rule, see the Nineteenth pass's `pthread_once` writeup), so
+deleting them is enough to let `libc_regex.a`'s real `_regexec`/
+`_regfree` resolve once the archive is on the link line. Only `regcomp`
+still needs a trampoline (`regcomp_u2003`, kept, repointed): a private
+extern bound directly to the real `_regcomp` symbol via an explicit
+`asm()` label (deliberately NOT going through `<regex.h>`'s public
+`regcomp` declaration from within this same file, which would trip the
+identical `__DARWIN_ALIAS` rename on the call site and self-reference
+the trampoline being defined).
+
+`build_bash.sh` updated: `libc_regex` added to its prerequisite-archive
+check and `libc_regex.a` added to the final link line (right after
+`libc_gen.a`, before `libc_string.a`). Rebuild: 177 bash source files
+compiled clean, 0 gaps, real link succeeded on the first attempt after
+the three fixes above. `otool -l bash.macho`: `LC_UNIXTHREAD` present,
+zero `LC_LOAD_DYLIB`; `nm -u bash.macho`: zero undefined symbols; `nm
+bash.macho` confirms real `_regcomp`/`_regcomp$UNIX2003`/`_regexec`/
+`_regfree` all present as real, defined (`T`) symbols.
+
+QEMU-verified via a real interactive login + shell session
+(`tools/init_binary/_pty_test_phase5.py` against
+`tools/userland_staging/regex_qemu_test_cmds.txt`, real
+`qemu/hfs_root_test.img`, freshly re-injected via
+`tools/init_binary/inject_into_sd_image.sh` to pick up the relinked
+`bash.macho`): `[[ hello =~ ^h.*o$ ]]` correctly reports a match;
+`[[ goodbye =~ ^h.*o$ ]]` correctly reports no match; `[[ abc123 =~
+[0-9]+ ]]` correctly reports a match; `[[ abcxyz =~ ^[0-9]+$ ]]`
+correctly reports no match -- four real regex evaluations against the
+real TRE engine, all correct, transcript-backed (`/tmp/
+regex_qemu_log.txt` at capture time). `simple_cmds_rpmatch_compat.c`
+(`rm -i`'s y/n prompt) was deliberately left untouched -- not rebuilt,
+not relinked, zero regression risk -- since that file's own existing
+comment already establishes its direct first-character check is exactly
+equivalent real behavior to a real `regcomp`/`regexec` match against
+`YESEXPR`/`NOEXPR` in this project's always-C locale, not a degraded
+approximation worth replacing.
+
+Not attempted this pass (explicitly out of scope, see `docs/roadmap.md`'s
+own "if you hit a genuine roadblock" guidance for this exact class of
+work): porting `grep`/`sed`/`sort`/`nl`/`xargs`/`ed` themselves as new
+commands. Each is now a normal new-command port against a real, linkable
+engine (`libc_build/libc_regex.a`) rather than blocked on a missing
+subsystem -- tracked as follow-up work in `docs/roadmap.md`'s "Remaining
+future work".
+
+---
+
+*(End of archived material. Phase 4.6 item 5, and Phases 5 through 8 in
 their entirety, were open/not-started as of the source document's latest
 entries and are therefore not archived here -- see `docs/roadmap.md`'s
 "Remaining future work" section for a condensed summary of what's left in

@@ -460,32 +460,59 @@ long time(long *tloc) {
  * real lib/readline/*.c + pcomplete.c + bashline.c file list now
  * providing every one of these symbols for real. */
 
-/* POSIX regex (regcomp/regexec/regfree): real Apple source exists
- * (third_party/Libc/regex/TRE/lib/{regcomp,regexec}.c, the TRE engine)
- * but is a genuinely separate multi-file subsystem with its own internal
- * headers/build quirks -- out of scope for this pass given the time
- * already spent closing 30+ other real gaps to reach a link. Honest
- * stubs: regcomp always reports a real error code (REG_BADPAT) rather
- * than silently "succeeding" with a pattern that was never compiled;
- * regexec always reports REG_NOMATCH. Net real behavior: bash's
- * `[[ str =~ pattern ]]` conditional operator reports "no match" for
- * every pattern rather than crashing or lying about matching -- a
- * documented, narrow real gap (tracked in docs/roadmap.md), not
- * fabricated regex support. */
-#define REG_BADPAT 2
-#define REG_NOMATCH 1
-int regcomp(void *preg, const char *pattern, int cflags) {
-    (void)preg; (void)pattern; (void)cflags;
-    return REG_BADPAT;
-}
-extern int regexec_u2003(const void *preg, const char *s, size_t n, void *pm, int f) asm("_regexec");
-int regexec_u2003(const void *preg, const char *s, size_t n, void *pm, int f) {
-    (void)preg; (void)s; (void)n; (void)pm; (void)f;
-    return REG_NOMATCH;
-}
-void regfree(void *preg) { (void)preg; }
+/* POSIX regex (regcomp/regexec/regfree): Phase 4.6 item 3, DONE
+ * 2026-08-20 (docs/roadmap.md). Real Apple source
+ * (third_party/Libc/regex/TRE/lib/*.c, the TRE engine, + FreeBSD's
+ * regerror.c) now builds clean into libc_build/libc_regex.a
+ * (build_libc_regex.sh) and is linked into this binary below (see
+ * build_bash.sh's final link line) -- the narrow REG_BADPAT/REG_NOMATCH
+ * stand-ins that used to live here are gone. Real, unmodified
+ * lib/sh/shmatch.c (bash's own `[[ str =~ pattern ]]` implementation,
+ * already compiled into this binary via build_bash.sh's EXTRA_FILES)
+ * now performs a real regcomp/regexec/regfree match.
+ *
+ * regexec/regfree need no shim at all: this checkout's own vendored
+ * third_party/Libc/include/sys/cdefs.h (found ahead of the SDK's own
+ * copy via this project's -I $LIBC/include search-path precedence,
+ * confirmed by reading it directly -- it never defines
+ * __DARWIN_ONLY_UNIX_CONFORMANCE, so __DARWIN_UNIX03's "$UNIX2003"
+ * symbol-suffixing branch is live) carries no __DARWIN_ALIAS on
+ * regexec/regfree's <regex.h> declarations (only regcomp has one) --
+ * shmatch.c's calls to them reference plain `_regexec`/`_regfree`,
+ * exactly what libc_regex.a's real regexec.o/regcomp.o export.
+ * Object files linked directly on the command line always win over an
+ * archive member offering the same symbol (this project's own documented
+ * archive-shadowing rule, see the Nineteenth pass's pthread_once
+ * writeup) -- so simply deleting the old fake regexec/regfree
+ * DEFINITIONS from this file (done here) is enough to let the real
+ * archive members resolve them; no forwarding trampoline needed for
+ * either.
+ *
+ * regcomp is the one real exception: that same vendored cdefs.h DOES
+ * carry __DARWIN_ALIAS(regcomp) on its <regex.h> declaration, so any
+ * real caller built against these project headers (shmatch.c included)
+ * asm-references the suffixed `_regcomp$UNIX2003` symbol, not plain
+ * `_regcomp` -- confirmed by reading the __DARWIN_ALIAS/
+ * __DARWIN_SUF_UNIX03 macro chain directly, not guessed. TRE's own
+ * regcomp.c, compiled standalone, only ever exports the plain `_regcomp`
+ * name (tre.h's `#define tre_regcomp regcomp` is a C-level identifier
+ * rename, not an asm-level alias) -- so the real engine and shmatch.c's
+ * real call site would silently fail to link without a trampoline
+ * bridging the two names. Real Apple builds never hit this because a
+ * real installed-SDK environment's cdefs.h (built with
+ * __DARWIN_ONLY_UNIX_CONFORMANCE=1 for this exact iPhoneOS target, see
+ * build_libc_regex.sh's own header comment) makes __DARWIN_ALIAS a
+ * no-op suffix there -- a genuine, narrow divergence from Apple's real
+ * build environment introduced by this project's own -I ordering, not a
+ * bug in the vendored source itself. This trampoline's body calls the
+ * real engine via a private extern bound directly to the real `_regcomp`
+ * symbol (NOT the public <regex.h>-declared name, which this
+ * translation unit deliberately never includes -- doing so would trip
+ * the exact same __DARWIN_ALIAS rename on the call site itself and
+ * self-reference this same trampoline). */
+extern int __real_regcomp(void *preg, const char *pattern, int cflags) asm("_regcomp");
 extern int regcomp_u2003(void *preg, const char *pattern, int cflags) asm("_regcomp$UNIX2003");
-int regcomp_u2003(void *preg, const char *pattern, int cflags) { return regcomp(preg, pattern, cflags); }
+int regcomp_u2003(void *preg, const char *pattern, int cflags) { return __real_regcomp(preg, pattern, cflags); }
 
 /* gettext/NLS: this project has no locale message catalogs -- honest
  * no-op, matches the real gettext contract's own documented fallback

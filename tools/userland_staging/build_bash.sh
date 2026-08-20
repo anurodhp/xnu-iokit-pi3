@@ -83,7 +83,7 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     echo "error: Xcode-12.app not found at $XCODE12 (see tools/build_kexts.sh for the same dependency)" >&2
     exit 1
 fi
-for a in libc_string libplatform libc_locale libc_stdio libc_gen libc_printf libmalloc libpthread libclosure; do
+for a in libc_string libplatform libc_locale libc_stdio libc_gen libc_printf libmalloc libpthread libclosure libc_regex; do
     if [ ! -f "$OUT/$a.a" ]; then
         echo "error: $OUT/$a.a not found -- run its build_*.sh first" >&2
         exit 1
@@ -438,7 +438,7 @@ if [ "$fail" -eq 0 ]; then
         -o bash.macho \
         ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
         "$BOUT"/obj/*.o "$BOUT"/sys_stubs/*.o \
-        "$OUT/libc_printf.a" "$OUT/libc_stdio.a" "$OUT/libc_locale.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" \
+        "$OUT/libc_printf.a" "$OUT/libc_stdio.a" "$OUT/libc_locale.a" "$OUT/libc_gen.a" "$OUT/libc_regex.a" "$OUT/libc_string.a" \
         "$OUT/libunwind.a" "$OUT/libpthread.a" "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/libplatform.a" \
         -Wl,-alias,_pthread_testcancel,'_pthread_testcancel$UNIX2003' \
         -Wl,-alias,_setenv,'_setenv$UNIX2003' \

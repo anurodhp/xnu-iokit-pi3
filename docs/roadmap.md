@@ -14,6 +14,71 @@ narrative itself flagged as still-open.
 
 ## Current status
 
+**Phase 4.6 item 3 (real POSIX regex) DONE and QEMU-verified, 2026-08-20.**
+Real, unmodified Apple source (`third_party/Libc/regex/TRE/lib/*.c`, the
+TRE engine, + `third_party/Libc/regex/FreeBSD/regerror.c`) now builds
+clean into `libc_build/libc_regex.a` via the new, permanent
+`tools/userland_staging/build_libc_regex.sh` (10/10 real source files
+compile with zero gaps against the existing curated locale/malloc/
+platform stack). Three real, narrow build-time gaps found and fixed, all
+documented in that script's own header comment: (1) TRE's own
+`TRE_REGEX_T_FIELD` macro (which field of `regex_t` TRE privately stores
+its compiled-program pointer in) is only defined in TRE's top-level
+`config.h`, never force-included by any individual `.c` file on its own
+(real Apple Xcode project injects it project-wide; this checkout's
+non-Xcode build didn't) -- fixed by force-including that real
+`config.h`, which also supplies the `HAVE_MBRTOWC`/`HAVE_ISWCTYPE`/etc
+autoconf macros TRE's locale-aware wide-char matching needs (real
+`mbrtowc_l`/`wctype_l`/`iswctype_l` already existed in `libc_locale.a`
+from earlier tiers -- only their prototypes were unreachable, gated
+behind this project's own `-D_USE_EXTENDED_LOCALES_`, also added here).
+(2) Apple's real `xlocale/_regex.h` marks the xlocale-suffixed regex
+entry points (`regcomp_l`/`regncomp_l`/etc) `__IPHONE_NA` -- a real
+App-Store-review-time "macOS only" policy annotation, not a functional
+restriction -- which trips a hard compile error the moment TRE's
+`regcomp.c` *defines* a function under one of those names while building
+under this project's uniform `-target arm64-apple-ios14.4`; fixed via a
+new, narrowly-scoped compat shim (`regex_availability_override.h`) that
+neutralizes just the `__IPHONE_NA` sentinel's expansion, leaving every
+other real availability annotation intact. (3) `regcomp(3)` (and only
+`regcomp` -- not `regexec`/`regfree`) is `__DARWIN_ALIAS`'d to the
+`$UNIX2003`-suffixed symbol name by this checkout's own vendored
+`sys/cdefs.h` even on this LP64 arm64 target (confirmed by reading the
+real macro chain, not guessed) -- real callers built against these
+project headers (bash's own `lib/sh/shmatch.c`, unmodified Apple source)
+therefore reference `_regcomp$UNIX2003`, while TRE's `regcomp.c` itself
+only ever exports plain `_regcomp`; bridged via a small trampoline in
+`bash_syscalls.c` (see that file's own updated comment for the full
+mechanism).
+
+Wired into real bash as the end-to-end consumer: `bash_syscalls.c`'s old
+narrow `regcomp`/`regexec`/`regfree` stand-ins (`REG_BADPAT`/
+`REG_NOMATCH` always) are gone -- object files linked directly on the
+command line always win over an archive member offering the same symbol
+(this project's own documented archive-shadowing rule), so simply
+deleting those fake definitions lets `libc_regex.a`'s real ones resolve
+instead once the archive is added to `build_bash.sh`'s link line. Real,
+unmodified `lib/sh/shmatch.c` (already compiled into `bash.macho`,
+implements bash's `[[ str =~ pattern ]]`) now performs a genuine TRE
+match. QEMU-verified via a real interactive login + shell session
+(`tools/userland_staging/regex_qemu_test_cmds.txt`): `[[ hello =~
+^h.*o$ ]]` correctly matches, `[[ goodbye =~ ^h.*o$ ]]` correctly does
+not, `[[ abc123 =~ [0-9]+ ]]` correctly matches, `[[ abcxyz =~
+^[0-9]+$ ]]` correctly does not -- four real regex results, all correct.
+`bash.macho` remains a clean static Mach-O after relinking (`otool -l`:
+`LC_UNIXTHREAD` present, zero `LC_LOAD_DYLIB`; `nm -u`: zero undefined
+symbols). `simple_cmds_rpmatch_compat.c` (`rm -i`'s y/n prompt) was left
+untouched -- its own header comment already documents why a direct
+first-character check is exactly equivalent real behavior in this
+project's always-C locale, not a degraded approximation, so there was no
+real behavior to gain by rewiring it; unaffected by this change either
+way (not rebuilt, not relinked).
+
+Still needed for `grep`/`sed`/`sort`/`nl`/`xargs`/`ed`-class commands:
+each is otherwise a normal new-command port now that the underlying
+regex engine is real and linkable -- none attempted yet, see "Remaining
+future work" below.
+
 Actively on **Phase 4, step 3** ("real commands"): as of 2026-08-20
 (end of day, "command-sweep" session), **60** real Apple/FreeBSD command
 binaries build, link, and run QEMU-verified against the real HFS+ root,
@@ -148,9 +213,11 @@ exact instrumented QEMU transcripts that pinned down each bug in turn.
 **`-i` is now the correct, working way to get a real interactive
 prompt** -- the earlier "don't use `-i`" guidance is retired.
 
-Phase 4.6 items 1 (real timezone database) and 2 (real `environ`/`getenv`
-plumbing) are DONE and QEMU-verified (2026-08-16). Items 3-5 (POSIX regex,
-`setattrlist(2)`, Mach IPC) are explicitly not started.
+Phase 4.6 items 1 (real timezone database), 2 (real `environ`/`getenv`
+plumbing), and 3 (real POSIX regex) are DONE and QEMU-verified
+(2026-08-16, 2026-08-16, 2026-08-20 respectively). Item 4
+(`setattrlist(2)`) is also done, see below. Item 5 (Mach IPC) is
+explicitly not started.
 
 Separately, Phase 5's custom flat-file account resolver
 (`tools/libinfo_custom/`) is done and verified (2026-08-14) and already
@@ -353,9 +420,15 @@ need a real implementation later:
   `host_get_clock_service`/`semaphore_create`/`clock_get_time`, Phase 4.6
   item 5). Affects `tail -f`'s poll interval and any future `sleep(1)`.
 - **`simple_cmds_rpmatch_compat.c`** -- a real but C-locale-only
-  `rpmatch()` (used by `rm -i`'s y/n prompt) stands in for real POSIX
-  `regcomp`/`regexec`/`regfree`, which is entirely unbuilt (Phase 4.6 item
-  3). Also blocks bash's `[[ str =~ pattern ]]` and any future `grep`/`sed`.
+  `rpmatch()` (used by `rm -i`'s y/n prompt) stands in for real Apple
+  `Libc/gen/FreeBSD/rpmatch.c`'s `regcomp`/`regexec`-backed match against
+  `YESEXPR`/`NOEXPR`. Real POSIX regex itself is DONE now (Phase 4.6 item
+  3, `libc_build/libc_regex.a`, see below) -- this file's own comment
+  already documents why a direct first-character check is the exact same
+  real behavior in this project's always-C locale, not a degraded
+  approximation; left as-is (not rewired to the new regex engine) since
+  there's no real behavior difference to gain here. NOT a blocker for
+  bash's `[[ str =~ pattern ]]` any more -- see below.
 - **`simple_cmds_lutimes_compat.c`** -- honest `ENOSYS` for `touch -h`'s
   symlink case, pending real `setattrlist(2)` userland wiring (the kernel
   syscall itself is already implemented; only the userland stub/wrapper is
@@ -388,10 +461,7 @@ need a real implementation later:
 - **Bash's own remaining honest failure stand-ins** (`bash_syscalls.c`):
   `dlopen`/`dlclose`/`dlsym`/`dlerror` always fail (no dyld at all);
   `alarm`/interval timers are silent no-ops (no `SIGALRM` subsystem);
-  real networking (`netopen`/`netconn`) is unavailable; POSIX regex
-  (`regcomp`/`regexec`) always reports no-match/bad-pattern (real TRE
-  source exists in this checkout but is out of scope for now, Phase 4.6
-  item 3); `~user`/`%group`/service-name tab-completion candidates are
+  real networking (`netopen`/`netconn`) is unavailable; `~user`/`%group`/service-name tab-completion candidates are
   always empty (`setpwent`/`getpwent`/`setgrent`/`getgrent`/
   `setservent`/`getservent` honest "no enumeration API" stand-ins --
   `~`/literal paths still complete normally). `tcgetattr`/`tcsetattr`/
@@ -423,9 +493,9 @@ need a real implementation later:
   vi-mode editing are unverified (not known-broken, just not exercised
   yet); `~user`/`%group`/service-name completion candidates are always
   empty (no real account/group enumeration API, see Known stubbings);
-  Phase 4.6 items 3 and 5 (real POSIX regex, real Mach IPC for `ps`
-  stats + blocking sleep) remain not started -- item 3 is this session's
-  own explicit stopping point (see below); real Apple `Libinfo` (the
+  Phase 4.6 item 3 (real POSIX regex) is now DONE and QEMU-verified
+  (2026-08-20, see below); item 5 (real Mach IPC for `ps` stats + blocking
+  sleep) remains not started; real Apple `Libinfo` (the
   actual repo, distinct from the working custom flat-file resolver) is
   still unbuilt. Separately worth profiling: bash.macho's first-touch
   demand-paging takes ~90s on this target's mostly-polled SD read path
@@ -458,8 +528,11 @@ need a real implementation later:
       blocks `who`/`w`/`lastcomm` (distinct from item 8's `sysctl`
       dependency; both are needed for `who`/`w`).
 
-  `sort`/`xargs`/`nl`/`grep`/`sed`/`ed` need item 3 (POSIX regex, already
-  tracked, still not started); `sort` additionally needs real pthread
+  `sort`/`xargs`/`nl`/`grep`/`sed`/`ed` needed item 3 (POSIX regex),
+  now DONE -- each is otherwise a normal new-command port (real
+  `regcomp`/`regexec`/`regfree`/`regerror` all live in
+  `libc_build/libc_regex.a`, see Current status below), not yet
+  attempted as its own pass. `sort` additionally needs real pthread
   multithreading, which is Phase 7.5's permanent closed-source-shaped
   ceiling (`bsd_pthread_stub.c`, see Known Stubbings), not a new item here.
   `su` isn't a subsystem gap at all -- it needs careful design judgment

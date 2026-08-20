@@ -1,0 +1,7 @@
+root
+darwin
+[[ hello =~ ^h.*o$ ]] && echo REGEX_MATCH_OK || echo REGEX_MATCH_BAD
+[[ goodbye =~ ^h.*o$ ]] && echo REGEX_NOMATCH_OK || echo REGEX_NOMATCH_BAD
+[[ abc123 =~ [0-9]+ ]] && echo REGEX_DIGITS_OK || echo REGEX_DIGITS_BAD
+[[ abcxyz =~ ^[0-9]+$ ]] && echo REGEX_ANCHORED_BAD || echo REGEX_ANCHORED_OK
+echo REGEX_TEST_DONE
