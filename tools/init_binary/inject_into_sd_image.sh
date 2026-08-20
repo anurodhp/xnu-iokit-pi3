@@ -117,6 +117,17 @@ else
     echo "= tools/userland_staging/ps.macho not built -- run build_ps.sh first if wanted, skipping"
 fi
 
+if [ -f tools/pthread_kthread_test/pthread_kthread_test.macho ]; then
+    mkdir -p "$MNT/bin"
+    cp tools/pthread_kthread_test/pthread_kthread_test.macho "$MNT/bin/pthread_kthread_test"
+    chmod 755 "$MNT/bin/pthread_kthread_test"
+    echo "+ wrote $(wc -c < tools/pthread_kthread_test/pthread_kthread_test.macho) bytes to $MNT/bin/pthread_kthread_test"
+    echo "  (Phase 7.5 real-bsdthread_create smoke test -- run it from the shell,"
+    echo "  see tools/pthread_kthread_test/pthread_kthread_test.c)"
+else
+    echo "= tools/pthread_kthread_test/pthread_kthread_test.macho not built -- run tools/pthread_kthread_test/build.py first if wanted, skipping"
+fi
+
 # Real Phase 4 step 3 "remaining commands" tiers (docs/roadmap.md) --
 # each build_*_cmds.sh script writes one <name>.macho per real command
 # it built; every one of them lands in /bin, matching real BSD/macOS
