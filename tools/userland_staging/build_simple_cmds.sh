@@ -94,7 +94,7 @@ fi
 # syscall depending on whether the public Libc wrapper calls a private
 # name -- e.g. `___getlogin`/`___mmap`/`___munmap` vs plain `_kevent`/
 # `_kqueue`, which have no private wrapper layer at all).
-SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access _getuid _execve"
+SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access _getuid _execve _link _symlink _getegid _geteuid _getgid _getgroups"
 if [ ! -f "$OUT/simple_getlogin_trap.o" ]; then
     mkdir -p "$OUT/sys_asm_compat/mach/arm64"
     cat > "$OUT/sys_asm_compat/mach/arm64/asm.h" <<'EOF'
@@ -129,6 +129,8 @@ LINK_COMMON="$OUT/libc_printf.a $OUT/libc_gen.a $OUT/libc_stdio.a $OUT/libc_loca
     $OUT/simple_obj/sys__mkdir.o $OUT/simple_obj/sys__utimes.o $OUT/simple_obj/sys____chmod.o $OUT/simple_obj/sys__sigprocmask.o \
     $OUT/simple_obj/sys__fchmodat.o $OUT/simple_obj/sys__fstatat64.o $OUT/simple_obj/sys__mkdirat.o $OUT/simple_obj/sys__umask.o \
     $OUT/simple_obj/sys__access.o $OUT/simple_obj/sys__getuid.o $OUT/simple_obj/sys__execve.o \
+    $OUT/simple_obj/sys__link.o $OUT/simple_obj/sys__symlink.o \
+    $OUT/simple_obj/sys__getegid.o $OUT/simple_obj/sys__geteuid.o $OUT/simple_obj/sys__getgid.o $OUT/simple_obj/sys__getgroups.o \
     $OUT/libclosure.a $OUT/libmalloc.a $OUT/cerror_stub.o $OUT/libplatform.a"
 LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_close,_close\$UNIX2003 \
@@ -169,7 +171,8 @@ LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_opendir,_opendir\$INODE64\$UNIX2003 \
     -Wl,-alias,_readdir,_readdir\$INODE64 \
     -Wl,-alias,_fsync,_fsync\$UNIX2003 \
-    -Wl,-alias,_reallocarray,_reallocarray\$DARWIN_EXTSN"
+    -Wl,-alias,_reallocarray,_reallocarray\$DARWIN_EXTSN \
+    -Wl,-alias,_nanosleep,_nanosleep\$UNIX2003"
 
 # Bash array, one element per command: "name:srcfile:extra1|extra2|..."
 # (srcfile is the FULL real source path -- not just relative to
@@ -201,6 +204,21 @@ CMD_LIST=(
     "rm:$FILE_CMDS/rm/rm.c:$LIBC/gen/get_compat.c|ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c|simple_cmds_rpmatch_compat.c|simple_cmds_undelete_stub.c|$LIBC/gen/strtofflags.c"
     "which:$SHELL_CMDS/which/which.c:"
     "env:$SHELL_CMDS/env/env.c:$SHELL_CMDS/env/envopts.c|$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c"
+    "sleep:$SHELL_CMDS/sleep/sleep.c:simple_cmds_nanosleep_pub_compat.c"
+    "printenv:$SHELL_CMDS/printenv/printenv.c:"
+    "cut:$TEXT_CMDS/cut/cut.c:"
+    "uniq:$TEXT_CMDS/uniq/uniq.c:simple_cmds_catopen_compat.c"
+    "ln:$FILE_CMDS/ln/ln.c:"
+    "id:$SHELL_CMDS/id/id.c:ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c|simple_cmds_getgrouplist_compat.c|$LIBC/gen/FreeBSD/getlogin.c"
+    # cp/mv surveyed but deferred (not attempted further this pass): real
+    # cp.c/utils.c need a real chain of ~12 more raw syscalls this
+    # project doesn't have yet (chflags/fchflags/chown/fchown/mknod/
+    # mkfifo/futimes/readlink/clonefileat + lchown's/sigaction's private
+    # wrapper indirection) PLUS a real setattrlist(2) userland wrapper for
+    # lchmod/lchflags -- the exact Phase 4.6 item 4 gap already flagged
+    # for touch -h's lutimes case (docs/roadmap.md's "Known stubbings").
+    # A real, unmodified-source build is very plausible in a dedicated
+    # follow-up pass, just more plumbing than fits in this one.
 )
 
 built=0
@@ -250,12 +268,20 @@ for spec in "${CMD_LIST[@]}"; do
     extra_libs=""
     common_read_compat="$OUT/simple_obj/common_simple_cmds_read_compat.o"
     case "$name" in
-        rm)
+        rm|ln)
             # libremovefile.a's own removefile_syscalls.o already defines
             # read()/read$UNIX2003 -- a real, genuine duplicate-symbol
             # conflict against the shared compat object every other
             # command uses, confirmed via the real link error, not
-            # guessed preemptively. Use its copy instead.
+            # guessed preemptively. Use its copy instead. ln needs this
+            # same archive member for its real _rmdir/_unlink (both
+            # NO_SYSCALL_STUB in syscalls.master -- real Apple's public
+            # wrappers for those two go through a private __unlink/
+            # __rmdir + __inc_remove_counter indirection this project
+            # hasn't built; libremovefile.a's removefile_syscalls.o
+            # already has real, plain-named _unlink/_rmdir raw syscall
+            # bodies serving the exact same real syscall numbers, same
+            # precedent rm.c itself already established).
             extra_libs="$OUT/libremovefile.a"
             common_read_compat=""
             ;;

@@ -14,15 +14,32 @@ narrative itself flagged as still-open.
 
 ## Current status
 
-Actively on **Phase 4, step 3** ("real commands"): as of 2026-08-19, 21
+Actively on **Phase 4, step 3** ("real commands"): as of 2026-08-20, 28
 real Apple/FreeBSD command binaries (`bash`, `uname`, `ps`, plus the Tier
-1-4 set -- `true`/`false`/`yes`/`pwd`/`basename`/`dirname`/`echo`/`printf`/
-`hostname`/`logname`/`cat`/`wc`/`head`/`tail`/`mkdir`/`touch`/`rm`/`env`)
-build, link, and run QEMU-verified against the real HFS+ root, using a
-curated real Apple/FreeBSD libc stack (string, platform, locale, stdio,
-gen, printf/scanf, malloc, pthread, closure, removefile/copyfile,
-libunwind -- all real, QEMU-verified ports, see
-`docs/historic/roadmap.md`'s Phase 4 for the full per-tier build history).
+1-5 set -- `true`/`false`/`yes`/`pwd`/`basename`/`dirname`/`echo`/`printf`/
+`hostname`/`logname`/`cat`/`wc`/`head`/`tail`/`mkdir`/`touch`/`rm`/`env`/
+`which`/`sleep`/`printenv`/`cut`/`uniq`/`ln`/`id`) build, link, and run
+QEMU-verified against the real HFS+ root, using a curated real
+Apple/FreeBSD libc stack (string, platform, locale, stdio, gen,
+printf/scanf, malloc, pthread, closure, removefile/copyfile, libunwind --
+all real, QEMU-verified ports, see `docs/historic/roadmap.md`'s Phase 4
+for the full per-tier build history).
+
+`which`/`sleep`/`printenv`/`cut`/`uniq`/`ln`/`id` were added and
+QEMU-verified 2026-08-19/20 (Twenty-fourth pass, see
+`docs/historic/roadmap.md`): `which` had existed unverified since
+2026-08-16 (same situation `env` had been in) and needed no fix, just
+verification; the other six are genuinely new real commands, needing one
+new real syscall or compat shim each at most (a public `nanosleep()` for
+`sleep`, a spec-compliant `catopen()` stub for `uniq`, `link`/`symlink`
+raw syscalls plus reusing `libremovefile.a`'s real `unlink`/`rmdir`
+bodies for `ln`, and a real last-resort `getgrouplist_2()` SPI shim over
+`tools/libinfo_custom/` for `id`). `cp`/`mv` were surveyed and found to
+need roughly a dozen more real syscalls plus one Phase-4.6-item-4-shaped
+stand-in (`lchmod`/`lchflags`'s real `setattrlist(2)` dependency) --
+deferred to a dedicated follow-up pass rather than rushed; see
+`docs/historic/roadmap.md`'s Twenty-fourth pass entry for the exact
+per-symbol breakdown.
 
 `env.macho` (real Apple `shell_cmds/env/env.c`+`envopts.c`) had existed on
 disk since Phase 4.6 item 2 (2026-08-16) but was never actually

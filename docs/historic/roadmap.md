@@ -3404,6 +3404,145 @@ tools/userland_staging/bash_syscalls.c` returning nothing.
   full boots, both partitions, real HFS+ root mount, real `exec`) is
   itself the re-verification that this change didn't regress anything.
 
+**Twenty-fourth pass, 2026-08-19/20: `which`(1) verified for real, plus
+six new real commands (`sleep`, `printenv`, `cut`, `uniq`, `ln`, `id`) --
+21 -> 28 real commands.** Picked up two pieces of explicit work: verify
+`which.macho` (built earlier, never boot-tested) the same way the
+Twenty-second pass had done for `env`, and survey/build the next tier of
+`build_simple_cmds.sh` commands from the real, unmodified Apple
+`shell_cmds`/`text_cmds`/`file_cmds` checkouts already vendored in
+`third_party/`.
+
+`which`: rebuilt clean off the current tree (byte-identical
+`which.macho`, confirmed via `md5`), `otool -l`/`nm -u` invariants held
+(no `LC_LOAD_DYLIB`, real `LC_UNIXTHREAD`, zero undefined symbols). No
+bug found -- the existing build was already correct. QEMU-verified all
+four real behaviors real `usr.bin/which/which.c` documents: `which env`
+and `which /bin/env` both print `/bin/env` and exit 0 (the latter via the
+absolute-path branch, which skips `$PATH` entirely and calls `is_there()`
+directly); `which nonexistent-cmd-xyz` prints nothing and exits 1 (real
+`print_matches()` returning -1 on a full-`$PATH` miss); bare `which` (no
+args) prints `usage: which [-as] program ...` to stderr and exits 1 (real
+`usage()`).
+
+New commands, ordered by how much new plumbing each needed:
+
+- **`printenv`** and **`cut`**: compiled and linked clean on the first
+  try, zero new plumbing -- both only needed symbols the `env`/`cat`
+  tiers had already linked in.
+- **`sleep`**: needed a real public `nanosleep(2)`. Real Apple
+  `Libc/gen/nanosleep.c` is Mach-IPC-based under this build's
+  `__DARWIN_UNIX03=1` (same undone subsystem `simple_cmds_nanosleep_compat.c`
+  already documents for `tail -f`'s private `__nanosleep`), so this adds
+  a **new**, deliberately separate compat file,
+  `tools/userland_staging/simple_cmds_nanosleep_pub_compat.c`, defining
+  the *public* `nanosleep()` symbol (distinct C-level identifier from the
+  sibling file's private `_nanosleep`) with the identical real spin-wait
+  algorithm (`mach_absolute_time()`/`mach_timebase_info()`, real
+  numer/denom ratio, not assumed 1:1). Also needed a new
+  `-Wl,-alias,_nanosleep,_nanosleep\$UNIX2003` in `LINK_ALIASES` (Apple's
+  `__DARWIN_ALIAS` machinery rewrites the call site to the `$UNIX2003`
+  symbol at compile time, same pattern `sleep$UNIX2003`/`read$UNIX2003`/
+  etc. already use). QEMU: `exec /bin/sleep 1` completed and returned
+  `exited, status=0` with no hang and no crash; exact real-time precision
+  of the spin-wait wasn't separately profiled this pass (same disclosed
+  limitation the sibling private-`nanosleep` compat already carries).
+- **`uniq`**: needed `catopen(3)` -- real `text_cmds-106`'s
+  `strerror_init()` calls it once, purely to pre-warm an NLS catalog
+  before an (Apple-only-relevant) capability-mode entry; the return value
+  is discarded and no `catgets()` call exists anywhere in the file. This
+  checkout has no real `catopen.c`/`catgets.c` source at all (confirmed:
+  only the man pages ship under `Libc/nls/FreeBSD/`), so
+  `tools/userland_staging/simple_cmds_catopen_compat.c` provides a
+  minimal, spec-compliant `catopen()` returning `(nl_catd)-1`/`ENOENT` --
+  exactly what real POSIX `catopen(3)` documents for "no such catalog,"
+  which is this system's honest, permanent state (no NLS catalog data
+  built or shipped). Real `sys/capsicum.h`/`termios.h` FreeBSD-sandboxing
+  code elsewhere in the same file is already `#ifndef __APPLE__`-gated in
+  the real upstream source, so none of that needed touching. QEMU: built
+  a real `/tmp/uniq_test.txt` (`apple`x2/`banana`x3/`cherry`) directly on
+  the HFS+ image host-side (this minimal shell has no output redirection
+  to create one from inside the guest); `uniq` collapsed it to
+  `apple`/`banana`/`cherry`, `uniq -c` produced the correct real counts
+  (`   2 apple`/`   3 banana`/`   1 cherry`).
+- **`ln`**: needed four real syscalls: `link`/`symlink` (plain, no
+  `NO_SYSCALL_STUB` in `syscalls.master`, generated the same way every
+  other tier's raw stubs already are) plus `rmdir`/`unlink`, which
+  *are* `NO_SYSCALL_STUB` (real Apple's public wrappers for those two
+  route through a private `__unlink`/`__rmdir` + `__inc_remove_counter`
+  indirection this project hasn't built). Rather than build that
+  indirection fresh, reused the exact precedent `rm`'s own
+  `build_simple_cmds.sh` entry already established: `libremovefile.a`'s
+  `removefile_syscalls.o` archive member already contains real,
+  plain-named `_unlink`/`_rmdir` bodies for the same real syscall numbers
+  -- extended the existing `rm)` case-statement arm in the "extra whole
+  archives" switch to `rm|ln)`, which also (same as `rm`) drops the
+  shared `common_read_compat` object to avoid the real duplicate-`_read`
+  conflict against that same archive member. QEMU: `ln /tmp/ln_src.txt
+  /tmp/ln_hard.txt` (hard link) and `ln -s /tmp/ln_src.txt
+  /tmp/ln_sym.txt` (symlink) both exited 0, and the shell's built-in
+  `cat` on both link paths printed the real source file's content
+  (`hello link test`), confirming both real link types resolve correctly
+  against the real HFS+ filesystem.
+- **`id`** (the most involved of this batch): real `shell_cmds/id/id.c`
+  compiles the same real getpwnam/getgrgid/getgroups/getlogin surface
+  `ps`/`rm`/`logname` already use (reused `ps_passwd_compat.c`,
+  `tools/libinfo_custom/libinfo_custom.c`, and
+  `Libc/gen/FreeBSD/getlogin.c` directly, no changes), plus four new
+  plain raw syscalls (`getegid`/`geteuid`/`getgid`/`getgroups`, none
+  `NO_SYSCALL_STUB`). The one real new piece: under `__APPLE__`, id.c
+  calls the real Apple SPI `getgrouplist_2(name, gid, gid_t**)` (id.c's
+  own comment cites rdar://5235093) instead of portable
+  `getgrouplist(3)` -- real Apple's implementation goes through
+  OpenDirectory, permanently out of scope (closed source, no repo, same
+  class of gap `tools/libinfo_custom/` already exists to route around for
+  `getpwnam`/`getgrgid`). Per this project's source-priority rule (no
+  FreeBSD equivalent of this exact SPI signature exists to fall back to
+  either), wrote a real last-resort custom
+  `tools/userland_staging/simple_cmds_getgrouplist_compat.c`: allocates
+  the output array with real `malloc`, puts the real base gid first
+  (matching real `getgrouplist(3)`'s own documented semantics), then
+  scans every loaded `/etc/group` entry via `libinfo_custom`'s
+  `li_gr_entry_count()`/`li_gr_at()` iteration accessors for real
+  membership matches, skipping a duplicate of the base gid. QEMU:
+  `exec /bin/id` and `exec /bin/id root` both printed the real, correct
+  `uid=0(root) gid=0(root) groups=0(root)` (matching this image's real
+  `/etc/master.passwd`/`/etc/group`, `root:...:0:0:...` / `root:*:0:`),
+  both exiting 0.
+
+**Surveyed but deliberately deferred this pass: `cp`/`mv`.** Real
+`file_cmds/cp/cp.c`+`utils.c` compile clean (real `fts`, real
+`copyfile`/`fcopyfile` via the already-built `libcopyfile.a` cover the
+ACL/xattr-preserving path entirely under `__APPLE__` -- the non-Apple
+`acl_get_fd`/`acl_set_fd` fallback path in the same file is
+`#ifndef __APPLE__`-gated and never needed), but link-time real gaps
+stack up: `chflags`/`fchflags`/`chown`/`fchown`/`mknod`/`mkfifo`/
+`futimes`/`readlink` (plain raw syscalls, straightforward), `clonefileat`
+(plain raw syscall backing a real, unmodified
+`libsyscall/wrappers/clonefile.c` -- kernel-side `clonefileat`/
+`fclonefileat` are real, unstubbed implementations in
+`bsd/vfs/vfs_syscalls.c`, confirmed by reading them, not assumed),
+`lchown`/`sigaction` (both `NO_SYSCALL_STUB`, needing the same private-
+wrapper-indirection treatment `ln` needed for `unlink`/`rmdir`, though
+real Apple wrapper sources for both already exist in this checkout:
+`libsyscall/wrappers/legacy/lchown.c`, `Libc/sys/sigaction.c`), plus
+`compat_mode()` (`Libc/gen/get_compat.c`, already used by `rm`/`mv`) and
+the same real-`rpmatch`-vs-`simple_cmds_rpmatch_compat.c` substitution
+`rm`'s own entry already does. The one genuinely blocking piece: `cp -p`
+preservation calls real Apple `lchmod`/`lchflags` (`Libc/emulated/`,
+real source, not missing) -- both go through `setattrlist(2)`, which is
+Phase 4.6 item 4's exact documented gap (kernel syscall real and
+implemented; only the userland wrapper/stub is missing) already flagged
+by `simple_cmds_lutimes_compat.c`'s header for `touch -h`. All of the
+above is real, fully scoped, unstubbed work -- just enough of it (roughly
+a dozen new raw syscalls plus one Phase-4.6-shaped stand-in) that it
+didn't fit in the same pass as the six commands above; left for a
+dedicated follow-up rather than rushed.
+
+`docs/roadmap.md`'s "Current status" updated to the new 28-command count
+and list; `tools/init_binary/inject_into_sd_image.sh`'s per-command copy
+loop extended with all seven newly-verified names.
+
 ---
 
 *(End of archived material. Phase 4.6 items 3-5, and Phases 5 through 8 in
