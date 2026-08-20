@@ -1455,16 +1455,23 @@ void shell_main(void) {
 /* -------------------------------- pid 1 body ------------------------------
  * Real BSD-style init: fork a child to run the interactive shell, wait4()
  * for it, and respawn if it ever exits -- same shape as classic
- * single-user-mode init babysitting /bin/sh, just aimed at our builtin
- * virtual shell instead (see docs/roadmap.md Phase 4 step 2). PID 1 itself
- * never runs the shell loop directly except as a last-resort fallback if
- * fork() itself is unavailable.
+ * single-user-mode init babysitting /bin/sh (see docs/roadmap.md Phase 4
+ * step 2), now aimed at the real /bin/bash (see single_user_child() below)
+ * with the builtin virtual shell_main() kept only as a fallback for an
+ * image missing /bin/bash. PID 1 itself never runs the shell loop
+ * directly except as a last-resort fallback if fork() itself is
+ * unavailable.
  */
 
-/* What the forked child actually runs. Tries the real dyld-linked /bin/sh
- * first -- doesn't exist on the root fs yet (Phase 4), so this fails with
- * ENOENT today and falls through to the builtin virtual shell. Left wired
- * up now so pid 1 needs no further changes once a real /bin/sh lands. */
+/* What the forked child actually runs after a successful login: the real,
+ * dyld-free static bash (tools/userland_staging/bash.macho, written to
+ * /bin/bash by inject_into_sd_image.sh) -- QEMU-verified as a genuine
+ * interactive shell with real termios/tty and GNU readline (see
+ * docs/roadmap.md's Twenty-third pass). Previously this exec'd the
+ * nonexistent "/bin/sh" and relied on the ENOENT fall-through to the
+ * builtin virtual shell_main() -- that fallback is kept below for an
+ * older/un-provisioned image missing /bin/bash, but is no longer the
+ * expected path on a normally-provisioned image. */
 static void single_user_child(void) {
     /* Phase 5: real login happens here, BEFORE anything else -- matches
      * real BSD ordering (login authenticates, THEN execs the target
@@ -1479,9 +1486,38 @@ static void single_user_child(void) {
         sys_exit(1);
     }
 
-    static char *const argv0[] = { (char *)"/bin/sh", 0 };
-    static char *const envp0[] = { 0 };
-    sys_execve("/bin/sh", argv0, envp0);
+    /* argv[0] = "-bash" (leading '-') is the traditional BSD/login(1)
+     * convention for telling a shell it's a LOGIN shell, instead of a
+     * separate flag -- matches real bash-3.2's own set_shell_name()
+     * (third_party/bash/bash-3.2/shell.c: `argv0 && *argv0 == '-'` ->
+     * login_shell++). Verified safe even though this image has no
+     * /etc/profile yet: every startup file bash's login path tries
+     * (/etc/profile, ~/.bash_profile, ~/.bash_login, ~/.profile) goes
+     * through maybe_execute_file()/_evalfile()
+     * (third_party/bash/bash-3.2/builtins/evalfile.c), which passes
+     * FEVAL_ENOENTOK and silently skips a missing file with no error --
+     * confirmed by reading _evalfile()'s own ENOENT handling, not
+     * assumed.
+     *
+     * No "-i" needed: real bash only needs the "-i" flag to FORCE
+     * interactive mode when it wouldn't otherwise detect it. Its own
+     * autodetection (shell.c, main level: no -c command, no leftover
+     * script argument, and isatty(stdin) && isatty(stderr)) already
+     * turns interactive_shell on by itself here, now that /dev/console
+     * is wired to real BSD tty semantics (same real termios/tty work
+     * that made "bash -i" work interactively in the prior session).
+     *
+     * Real, non-empty envp: previously this path hardcoded envp to
+     * `{0}` -- a real bug (PATH/HOME/USER/TZ were silently unset for
+     * the default login shell, unlike the `exec` builtin above, which
+     * already builds a real envp via build_envp()). Fixed to match. */
+    static char *const argv0[] = { (char *)"-bash", 0 };
+    sys_execve("/bin/bash", argv0, build_envp());
+
+    /* Only reached if /bin/bash's execve() itself failed (e.g. an
+     * older/un-provisioned SD image missing /bin/bash) -- fall back to
+     * the builtin virtual shell rather than leaving this session with
+     * no shell at all. */
     shell_main();
 }
 

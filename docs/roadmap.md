@@ -144,8 +144,50 @@ plumbing) are DONE and QEMU-verified (2026-08-16). Items 3-5 (POSIX regex,
 
 Separately, Phase 5's custom flat-file account resolver
 (`tools/libinfo_custom/`) is done and verified (2026-08-14) and already
-in real use by `ps`/`rm` for `getpwnam`/`getgrgid` lookups, even though the
-rest of Phase 5 (login/su/PAM) hasn't been started.
+in real use by `ps`/`rm` for `getpwnam`/`getgrgid` lookups.
+**Correction, 2026-08-20**: the line that used to appear here ("the rest
+of Phase 5 (login/su/PAM) hasn't been started") was stale/wrong -- real
+`do_login()`/`cmd_su()` (`tools/init_binary/init.c`) have been in place
+and QEMU-verified since commit `d2108bb` (2026-08-14): a real interactive
+`login:`/`Password:` prompt loop against `/etc/master.passwd`
+(anti-enumeration-safe, fail-closed on a missing/damaged account
+database), real `setgroups`/`setgid`/`setuid` privilege drop, and a real
+`su` builtin with the correct real-Unix caveat documented in its own
+comment (no setuid-root helper binary yet, so `su` to a different account
+only works starting from root). Only PAM and account-provisioning tooling
+(`pwd_mkdb`/`vipw`/`chpass`/`passwd`) remain genuinely not started -- see
+"Remaining future work" below.
+
+**Default login shell is now real bash, QEMU-verified 2026-08-20.**
+`single_user_child()` (`tools/init_binary/init.c`) previously exec'd the
+nonexistent `/bin/sh` (falling through to the builtin virtual
+`shell_main()` on the resulting `ENOENT`) and, separately, passed a
+hardcoded EMPTY `envp` (`{0}`) even in the fallback-existed case -- a real
+bug, since the `exec` builtin already built a real envp via
+`build_envp()`. Both fixed: the default path now execs the real, already
+Twenty-third-pass-verified `/bin/bash` with argv[0] = `"-bash"` (the
+traditional BSD/login(1) leading-dash convention for a login shell -- real
+bash's own `set_shell_name()` in `third_party/bash/bash-3.2/shell.c` reads
+this) and a real `build_envp()` environment. No `-i` flag needed: bash's
+own interactive-shell autodetection (no `-c`/script argument, and
+`isatty(stdin) && isatty(stderr)`) already fires on its own now that
+`/dev/console` has real BSD tty semantics. Verified safe against this
+image's missing `/etc/profile`/`~/.bash_profile` etc.: bash's own
+`maybe_execute_file()`/`_evalfile()`
+(`third_party/bash/bash-3.2/builtins/evalfile.c`) passes `FEVAL_ENOENTOK`
+for every startup file it tries and silently skips a missing one, no
+error. Real QEMU transcript (pty-driven, full login-to-prompt): after
+`login: root` / `Password: darwin` / `Welcome, root.`, the very next line
+is a real `-bash-3.2# ` prompt (leading `-` confirms login-shell mode
+took), `echo $PATH`/`$HOME`/`$USER`/`$TZ` show the real
+`build_envp()`-provided values (`/bin:/usr/bin`, `/`, `root`, `UTC` --
+previously would have printed empty), an up-arrow history recall
+re-executed a prior command correctly, and `ec`+Tab completed to `echo`
+mid-line (typed continuation after the Tab landed as `echo o
+TAB_COMPLETION_TEST_7733`, proving completion fired rather than `ec`
+being run as a literal, nonexistent command) -- all in the DEFAULT path,
+no manual `exec /bin/bash -i` needed. `exit` cleanly logs out and pid 1's
+existing respawn loop gives a fresh `login:` prompt, unchanged.
 
 **Real termios/tty + real GNU readline (tab completion, command history)
 DONE and QEMU-verified, 2026-08-19/20.** The starting assumption --
@@ -322,11 +364,15 @@ need a real implementation later:
   is still unbuilt; `chmod` needs a real ACL subsystem. Separately worth
   profiling: bash.macho's first-touch demand-paging takes ~90s on this
   target's mostly-polled SD read path -- slow but not a correctness bug.
-- **Phase 5 (multi-user)**: the custom account resolver is done; still
+- **Phase 5 (multi-user)**: the custom account resolver, real DES
+  `crypt()` password verification, and a real `login`/`su` (wired into
+  `tools/init_binary/init.c`'s `do_login()`/`cmd_su()`, real bash now the
+  default login shell -- see Current status above) are all done. Still
   needed: account-provisioning tools (`pwd_mkdb`/`vipw`/`chpass`/
-  `passwd`), `crypt()` password verification, wiring the resolver into a
-  real `login`/`getty`/`su`, and eventually PAM (OpenPAM as fallback).
-  `sudo` is deliberately out of scope indefinitely.
+  `passwd` -- `pwtool` covers an ad hoc subset of this today, not the real
+  tools), a setuid-root helper so `su` can reach a different account from
+  a non-root session, and eventually PAM (OpenPAM as fallback). `sudo` is
+  deliberately out of scope indefinitely.
 - **Phase 6 (networking)**: entirely unstarted. Needs, in strict order: a
   DWC2 USB host controller driver (6a -- the largest single remaining
   undertaking in the project, per its own plan doc, `docs/usb-support-plan.md`);

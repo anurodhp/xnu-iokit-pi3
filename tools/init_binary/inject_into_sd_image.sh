@@ -79,9 +79,10 @@ if [ -f tools/userland_staging/bash.macho ]; then
     cp tools/userland_staging/bash.macho "$MNT/bin/bash"
     chmod 755 "$MNT/bin/bash"
     echo "+ wrote $(wc -c < tools/userland_staging/bash.macho) bytes to $MNT/bin/bash"
-    echo "  (real static bash-3.2 -- see docs/roadmap.md Phase 4's Seventeenth"
-    echo "  pass: links clean but currently SIGSEGVs very early on real exec,"
-    echo "  root cause not yet found -- injected for whoever continues that)"
+    echo "  (real static bash-3.2, fully working -- interactive prompt, real"
+    echo "  termios/tty, GNU readline tab completion + history all"
+    echo "  QEMU-verified; this is now the default login shell init.c execs"
+    echo "  after a successful login, see docs/roadmap.md)"
 else
     echo "= tools/userland_staging/bash.macho not built -- run build_bash.sh first if wanted, skipping"
 fi
