@@ -517,9 +517,18 @@ need a real implementation later:
   7. **`posix_spawn(2)`** -- an unbuilt process-creation API; blocks
      `install`, which also needs its own real `strip(1)` subprocess helper
      once spawning works.
-  8. **Real `sysctl(2)`** (variable-length-MIB syscall, never built here) --
-     blocks `df` (filesystem stats) and `killall`/`w`/`who` (`KERN_PROC`
-     process enumeration).
+  8. **[CORRECTED 2026-08-20]** `sysctl(2)` is actually already real and
+     general-purpose here, not unbuilt as this item originally claimed --
+     `tools/userland_staging/libc_gen_syscalls.c`'s `sysctl()`/
+     `sysctlbyname()` are a real, general raw-syscall wrapper (`SYS_sysctl`
+     = 202, forwards all 6 args via `syscall6`), already proven end-to-end
+     by the real `hostname(1)` command's `gethostname(3)`/`sethostname(3)`
+     (`{CTL_KERN, KERN_HOSTNAME}`). What's still genuinely unexercised:
+     the specific MIBs `df` (filesystem stats) and `killall`/`w`/`who`
+     (`KERN_PROC` process enumeration) need -- likely just a normal
+     command-port pass (wire `df.c`/`killall.c` against the existing
+     `sysctl()`, see what's missing for real), not a whole unbuilt
+     subsystem. Re-scope downward whenever this is picked up.
   9. **Real System V IPC** (`semget`/`shmget`/`msgget` family) -- blocks
      `ipcs`/`ipcrm`. `dd`'s more involved I/O-conversion logic wasn't
      surveyed in depth either; group it here for a first look.
