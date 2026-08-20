@@ -60,7 +60,8 @@ fi
 echo "+ populating boot partition ($BOOT_MNT) from sdcard/ (real-hardware parity;"
 echo "  QEMU itself boots via -kernel/-dtb and ignores this)"
 cp sdcard/bootcode.bin sdcard/start.elf sdcard/fixup.dat sdcard/config.txt \
-   sdcard/rpi3.dtb sdcard/u-boot.bin "$BOOT_MNT/"
+   sdcard/rpi3.dtb sdcard/u-boot.bin sdcard/kernel.development.bcm2837.unstripped \
+   "$BOOT_MNT/"
 
 echo "+ creating base root directory structure on ($ROOT_MNT)"
 mkdir -p "$ROOT_MNT/sbin" "$ROOT_MNT/bin" "$ROOT_MNT/usr/bin" \
