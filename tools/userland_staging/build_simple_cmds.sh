@@ -129,7 +129,7 @@ fi
 # syscall depending on whether the public Libc wrapper calls a private
 # name -- e.g. `___getlogin`/`___mmap`/`___munmap` vs plain `_kevent`/
 # `_kqueue`, which have no private wrapper layer at all).
-SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access _getuid _execve _link _symlink _getegid _geteuid _getgid _getgroups _chflags _chown _mknod _mkfifo _futimes _readlink _pread _pwrite _statfs _pathconf _faccessat _getentropy _dup2 _getpriority"
+SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access _getuid _execve _link _symlink _getegid _geteuid _getgid _getgroups _chflags _chown _mknod _mkfifo _futimes _readlink _pread _pwrite _statfs _pathconf _faccessat _getentropy _dup2 _getpriority _chroot _setgroups _setgid _setuid _chdir"
 if [ ! -f "$OUT/simple_getlogin_trap.o" ]; then
     mkdir -p "$OUT/sys_asm_compat/mach/arm64"
     cat > "$OUT/sys_asm_compat/mach/arm64/asm.h" <<'EOF'
@@ -171,6 +171,8 @@ LINK_COMMON="$OUT/libc_printf.a $OUT/libc_gen.a $OUT/libc_stdio.a $OUT/libc_loca
     $OUT/simple_obj/sys__pread.o $OUT/simple_obj/sys__pwrite.o $OUT/simple_obj/sys__statfs.o \
     $OUT/simple_obj/sys__pathconf.o $OUT/simple_obj/sys__faccessat.o $OUT/simple_obj/sys__getentropy.o \
     $OUT/simple_obj/sys__dup2.o $OUT/simple_obj/sys__getpriority.o \
+    $OUT/simple_obj/sys__chroot.o $OUT/simple_obj/sys__setgroups.o $OUT/simple_obj/sys__setgid.o $OUT/simple_obj/sys__setuid.o \
+    $OUT/simple_obj/sys__chdir.o \
     $OUT/libclosure.a $OUT/libmalloc.a $OUT/cerror_stub.o $OUT/libplatform.a"
 LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_close,_close\$UNIX2003 \
@@ -221,7 +223,9 @@ LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_pwrite,_pwrite\$UNIX2003 \
     -Wl,-alias,_statfs,_statfs\$INODE64 \
     -Wl,-alias,_waitpid,_waitpid\$UNIX2003 \
-    -Wl,-alias,_confstr,_confstr\$UNIX2003"
+    -Wl,-alias,_confstr,_confstr\$UNIX2003 \
+    -Wl,-alias,_pthread_testcancel,_pthread_testcancel\$UNIX2003 \
+    -Wl,-alias,_sigsuspend,_sigsuspend\$UNIX2003"
 
 # Bash array, one element per command: "name:srcfile:extra1|extra2|..."
 # (srcfile is the FULL real source path -- not just relative to
@@ -337,6 +341,19 @@ CMD_LIST=(
     "nice:$SHELL_CMDS/nice/nice.c:$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|cp_mv_syscalls.c|$LIBC/stdlib/FreeBSD/atoi.c"
     "renice:$SHELL_CMDS/renice/renice.c:ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c|cp_mv_syscalls.c"
     "nohup:$SHELL_CMDS/nohup/nohup.c:$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|$LIBC/gen/FreeBSD/signal.c|cp_mv_syscalls.c|nohup_vproc_compat.c"
+    # Block 6: chroot/apply (shell_cmds) and vis/unvis (text_cmds -- real
+    # commands wrapping the real Libc/gen/FreeBSD/vis.c+unvis.c encode/
+    # decode logic). sort hits TWO of this sweep's documented ceilings
+    # at once (real source confirmed to call both pthread_create -- no
+    # real pthread multithreading exists project-wide, bsd_pthread_stub.c
+    # -- and regcomp) and md5 needs a whole unbuilt CommonCrypto-shaped
+    # digest API (commoncrypto.h) rather than reusing this project's
+    # from-scratch SHA-2 (a different, narrower, non-CommonCrypto-shaped
+    # API) -- both surveyed and deliberately skipped, not overlooked.
+    "chroot:$SHELL_CMDS/chroot/chroot.c:ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c|$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c"
+    "apply:$SHELL_CMDS/apply/apply.c:$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|$LIBC/gen/FreeBSD/signal.c|cp_mv_syscalls.c|$LIBC/compat-43/sigcompat.c|apply_sigsuspend_compat.c"
+    "vis:$TEXT_CMDS/vis/vis.c:$TEXT_CMDS/vis/foldit.c|$LIBC/gen/FreeBSD/vis.c|$LIBC/stdlib/FreeBSD/atoi.c"
+    "unvis:$TEXT_CMDS/unvis/unvis.c:$LIBC/gen/FreeBSD/unvis.c"
 )
 
 built=0

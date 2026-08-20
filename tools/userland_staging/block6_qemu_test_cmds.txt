@@ -1,0 +1,10 @@
+root
+darwin
+chroot / /bin/echo chrooted_ok
+echo CHROOT_STATUS=$?
+apply echo hello world
+printf 'a b\tc\x01d\n' > /tmp/vis_in
+vis /tmp/vis_in
+vis /tmp/vis_in > /tmp/vis_out
+unvis < /tmp/vis_out
+echo DONE_BLOCK6_MARKER

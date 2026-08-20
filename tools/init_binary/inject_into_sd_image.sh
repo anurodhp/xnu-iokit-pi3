@@ -83,6 +83,15 @@ if [ -f tools/userland_staging/bash.macho ]; then
     echo "  termios/tty, GNU readline tab completion + history all"
     echo "  QEMU-verified; this is now the default login shell init.c execs"
     echo "  after a successful login, see docs/roadmap.md)"
+    cp tools/userland_staging/bash.macho "$MNT/bin/sh"
+    chmod 755 "$MNT/bin/sh"
+    echo "+ wrote $(wc -c < tools/userland_staging/bash.macho) bytes to $MNT/bin/sh (same real"
+    echo "  bash binary as /bin/bash -- real systems' /bin/sh is commonly bash or"
+    echo "  another real shell, not a distinct binary; needed for real real,"
+    echo "  unmodified Apple source that hardcodes _PATH_BSHELL (\"/bin/sh\"),"
+    echo "  e.g. shell_cmds/apply's real default command interpreter -- found via"
+    echo "  a real QEMU boot-test failure (apply's own honest \"/bin/sh: No such"
+    echo "  file or directory\"), not added speculatively)"
 else
     echo "= tools/userland_staging/bash.macho not built -- run build_bash.sh first if wanted, skipping"
 fi
@@ -115,7 +124,7 @@ fi
 # /usr/bin, on a real system). Generic loop instead of one if-block per
 # command -- this list only grows as more tiers land.
 mkdir -p "$MNT/bin"
-for cmd in true false yes pwd basename dirname echo printf hostname logname cat wc head tail mkdir touch rm which env sleep printenv cut uniq ln id cp mv rev fold paste expand unexpand comm colrm lam rs rmdir mkfifo mknod chflags seq jot test kill tee mktemp hexdump stat cksum pathchk du chmod chown nice renice nohup; do
+for cmd in true false yes pwd basename dirname echo printf hostname logname cat wc head tail mkdir touch rm which env sleep printenv cut uniq ln id cp mv rev fold paste expand unexpand comm colrm lam rs rmdir mkfifo mknod chflags seq jot test kill tee mktemp hexdump stat cksum pathchk du chmod chown nice renice nohup chroot apply vis unvis; do
     if [ -f "tools/userland_staging/${cmd}.macho" ]; then
         cp "tools/userland_staging/${cmd}.macho" "$MNT/bin/${cmd}"
         chmod 755 "$MNT/bin/${cmd}"
