@@ -32,6 +32,10 @@ tools/pwtool/*.o
 # Phase 5 login host test binary, same reasoning
 tools/init_binary/host_test
 
+# Phase 7.5 real-bsdthread_create smoke test -- build artifact, rebuild via
+# tools/pthread_kthread_test/build.py (same reasoning as init.macho above)
+tools/pthread_kthread_test/pthread_kthread_test.macho
+
 # Downloaded precompiled binaries and local QEMU test scaffolding -
 # large, reproducible, not our source (precompiled/rpi.dtb is also known-bad,
 # see project memory)

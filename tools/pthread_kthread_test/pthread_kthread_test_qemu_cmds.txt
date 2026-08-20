@@ -1,0 +1,14 @@
+root
+darwin
+echo REGRESSION_START
+pwd
+ls /bin
+uname -a
+echo hello_from_regression_check
+ps
+echo REGRESSION_END
+pthread_kthread_test
+echo PTHREAD_TEST_EXIT_STATUS=$?
+echo bash_still_alive_after_pthread_test
+ls /bin
+echo DONE_PTHREAD_KTHREAD_TEST_MARKER
