@@ -1,0 +1,33 @@
+root
+darwin
+seq 1 3
+seq 5
+seq -w 8 10
+jot 3 1
+kill -0 1
+echo KILL0_SELF=$?
+kill -0 99999
+echo KILL0_BAD=$?
+echo hello_input > /tmp/rev_in
+tee /tmp/tee_out2 < /tmp/rev_in
+cat /tmp/tee_out2
+mktemp /tmp/mktemp_test.XXXXXX
+test -f /etc/group
+echo TESTF=$?
+test -f /nonexistent-xyz
+echo TESTF2=$?
+test 3 -eq 3
+echo TESTEQ=$?
+hexdump -C /tmp/tee_out2
+stat /etc/group
+printf '1\n2\n3\n4\n' > /tmp/comm_a
+cksum /tmp/comm_a
+pathchk /tmp/some/valid/path
+echo PATHCHKOK=$?
+pathchk ""
+echo PATHCHKEMPTY=$?
+du /etc/group
+mkdir /tmp/dutest
+echo dudata > /tmp/dutest/f1
+du /tmp/dutest
+echo DONE_BLOCK3_MARKER

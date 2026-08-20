@@ -139,4 +139,12 @@ int _select(int nfds, void *readfds, void *writefds, void *exceptfds, void *time
 struct sigaction;
 int _sigaction(int sig, const struct sigaction *nsv, struct sigaction *osv);
 
+/* Block 3 (jot/mktemp's real Libc/gen/FreeBSD/arc4random.c) -- real
+ * definition already exists (stdlib/FreeBSD/abort.c, compiled into
+ * libmalloc.a, confirmed via nm), just no prototype in scope here (this
+ * checkout's arc4random.c doesn't itself include <stdlib.h> in a way
+ * that reaches it under this freestanding build) -- same implicit-
+ * declaration gap documented throughout this file. */
+void abort(void) __attribute__((noreturn));
+
 #endif

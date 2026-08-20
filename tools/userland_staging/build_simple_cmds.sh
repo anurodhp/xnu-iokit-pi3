@@ -105,7 +105,7 @@ fi
 # syscall depending on whether the public Libc wrapper calls a private
 # name -- e.g. `___getlogin`/`___mmap`/`___munmap` vs plain `_kevent`/
 # `_kqueue`, which have no private wrapper layer at all).
-SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access _getuid _execve _link _symlink _getegid _geteuid _getgid _getgroups _chflags _chown _mknod _mkfifo _futimes _readlink _pread _pwrite _statfs"
+SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access _getuid _execve _link _symlink _getegid _geteuid _getgid _getgroups _chflags _chown _mknod _mkfifo _futimes _readlink _pread _pwrite _statfs _pathconf _faccessat _getentropy"
 if [ ! -f "$OUT/simple_getlogin_trap.o" ]; then
     mkdir -p "$OUT/sys_asm_compat/mach/arm64"
     cat > "$OUT/sys_asm_compat/mach/arm64/asm.h" <<'EOF'
@@ -145,6 +145,7 @@ LINK_COMMON="$OUT/libc_printf.a $OUT/libc_gen.a $OUT/libc_stdio.a $OUT/libc_loca
     $OUT/simple_obj/sys__chflags.o $OUT/simple_obj/sys__chown.o $OUT/simple_obj/sys__mknod.o \
     $OUT/simple_obj/sys__mkfifo.o $OUT/simple_obj/sys__futimes.o $OUT/simple_obj/sys__readlink.o \
     $OUT/simple_obj/sys__pread.o $OUT/simple_obj/sys__pwrite.o $OUT/simple_obj/sys__statfs.o \
+    $OUT/simple_obj/sys__pathconf.o $OUT/simple_obj/sys__faccessat.o $OUT/simple_obj/sys__getentropy.o \
     $OUT/libclosure.a $OUT/libmalloc.a $OUT/cerror_stub.o $OUT/libplatform.a"
 LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_close,_close\$UNIX2003 \
@@ -194,7 +195,8 @@ LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_pread,_pread\$UNIX2003 \
     -Wl,-alias,_pwrite,_pwrite\$UNIX2003 \
     -Wl,-alias,_statfs,_statfs\$INODE64 \
-    -Wl,-alias,_waitpid,_waitpid\$UNIX2003"
+    -Wl,-alias,_waitpid,_waitpid\$UNIX2003 \
+    -Wl,-alias,_confstr,_confstr\$UNIX2003"
 
 # Bash array, one element per command: "name:srcfile:extra1|extra2|..."
 # (srcfile is the FULL real source path -- not just relative to
@@ -271,6 +273,27 @@ CMD_LIST=(
     "mkfifo:$FILE_CMDS/mkfifo/mkfifo.c:$LIBC/gen/get_compat.c|$LIBC/gen/FreeBSD/setmode.c|simple_cmds_sigprocmask_compat.c"
     "mknod:$FILE_CMDS/mknod/mknod.c:$LIBC/stdlib/FreeBSD/bsearch.c|$LIBC/stdlib/FreeBSD/strtoul.c"
     "chflags:$FILE_CMDS/chflags/chflags.c:$LIBC/gen/strtofflags.c|$LIBC/emulated/lchflags.c|cp_mv_syscalls.c"
+    # Block 3: seven shell_cmds (seq/jot/test/kill/tee/mktemp/hexdump) plus
+    # four file_cmds (stat/cksum/pathchk/du) -- all real-source-confirmed
+    # regex/ACL/mmap/Mach-IPC-free (grepped first, not guessed). mktemp
+    # needs real Libc/stdio/FreeBSD/mktemp.c (mkstemp/mkdtemp); cksum
+    # needs its own real crc.c/crc32.c/sum1.c/sum2.c/print.c siblings
+    # (cksum.c dispatches between CRC/sum1/sum2/CRC32 algorithms by
+    # argv[0]/-o, all four real implementations, not just one); hexdump
+    # is a real 5-file program (hexdump.c/hexsyntax.c/conv.c/display.c/
+    # parse.c -- od shares the same dir/od.1 but is a separate program
+    # via odsyntax.c, not built here).
+    "seq:$SHELL_CMDS/seq/seq.c:block3_last_resort_compat.c"
+    "jot:$SHELL_CMDS/jot/jot.c:$LIBC/stdlib/FreeBSD/random.c|$LIBC/gen/FreeBSD/arc4random.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/sys/gettimeofday.c|ps_commpage_gettimeofday_stub.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c"
+    "test:$SHELL_CMDS/test/test.c:"
+    "kill:$SHELL_CMDS/kill/kill.c:$LIBC/gen/FreeBSD/siglist.c"
+    "tee:$SHELL_CMDS/tee/tee.c:$LIBC/gen/FreeBSD/signal.c|cp_mv_syscalls.c"
+    "mktemp:$SHELL_CMDS/mktemp/mktemp.c:$LIBC/stdio/FreeBSD/mktemp.c|$LIBC/gen/FreeBSD/arc4random.c|block3_last_resort_compat.c"
+    "hexdump:$SHELL_CMDS/hexdump/hexdump.c:$SHELL_CMDS/hexdump/hexsyntax.c|$SHELL_CMDS/hexdump/conv.c|$SHELL_CMDS/hexdump/display.c|$SHELL_CMDS/hexdump/parse.c|$SHELL_CMDS/hexdump/odsyntax.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/stdlib/FreeBSD/strtoul.c|$LIBC/stdio/FreeBSD/freopen.c|$LIBC/stdio/FreeBSD/_flock_stub.c|hexdump_bcmp_compat.c"
+    "stat:$FILE_CMDS/stat/stat.c:$LIBC/gen/strtofflags.c|ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c|simple_cmds_time_compat.c|$LIBC/sys/gettimeofday.c|ps_commpage_gettimeofday_stub.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c"
+    "cksum:$FILE_CMDS/cksum/cksum.c:$FILE_CMDS/cksum/crc.c|$FILE_CMDS/cksum/crc32.c|$FILE_CMDS/cksum/sum1.c|$FILE_CMDS/cksum/sum2.c|$FILE_CMDS/cksum/print.c"
+    "pathchk:$FILE_CMDS/pathchk/pathchk.c:"
+    "du:$FILE_CMDS/du/du.c:block3_last_resort_compat.c|$LIBC/gen/get_compat.c|du_fnmatch_libc_wrapper.c|$LIBC/gen/FreeBSD/getbsize.c|$LIBC/stdlib/FreeBSD/atoi.c"
 )
 
 built=0
@@ -337,7 +360,7 @@ for spec in "${CMD_LIST[@]}"; do
             extra_libs="$OUT/libremovefile.a"
             common_read_compat=""
             ;;
-        cp|mv)
+        cp|mv|mktemp|du)
             # Same real duplicate-symbol reasoning as rm|ln above
             # (libremovefile.a's removefile_syscalls.o already defines
             # plain read()) plus libcopyfile.a for real copyfile()/
