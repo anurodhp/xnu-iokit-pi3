@@ -57,6 +57,91 @@ const char *_vprocmgr_detach_from_console(int flags);
 #endif
 EOF
 
+# grep's real, unmodified grep.h unconditionally `#include <zlib.h>` and
+# `#include <bzlib.h>` (only fastmatch.h's include is guarded by
+# WITHOUT_FASTMATCH; zlib/bzlib are not, even though file.c's actual
+# BZ2_* usage IS guarded by WITHOUT_BZIP2 -- confirmed by reading
+# grep.h/file.c directly, not assumed). With WITHOUT_BZIP2 defined (see
+# grep's own CMD_LIST entry below), zero BZ2_*/BZFILE symbols are ever
+# referenced, so bzlib.h can be a genuinely empty stand-in (same pattern
+# as vproc.h above). zlib.h can't be empty -- file.c's FILE_GZIP path
+# (grep's -Z flag / zgrep argv[0]) is NOT compile-time guarded upstream
+# (no WITHOUT_GZIP knob exists), so gzdopen()/gzread() must be real,
+# linkable symbols; this narrow public header just exposes the two of
+# them grep.c/file.c actually call (gzFile as an opaque `void *`) --
+# the real, non-fabricated implementation is gz_gzip_impl.c (genuine
+# DEFLATE decompression via the real, unmodified zlib core vendored at
+# third_party/u-boot/lib/zlib, see that file's own header comment and
+# the zlib_glue generation step below for the full mechanism).
+cat > "$OUT/compat_include/bzlib.h" <<'EOF'
+#ifndef _BZLIB_H_COMPAT_
+#define _BZLIB_H_COMPAT_
+#endif
+EOF
+cat > "$OUT/compat_include/zlib.h" <<'EOF'
+#ifndef _ZLIB_H_COMPAT_GREP_
+#define _ZLIB_H_COMPAT_GREP_
+typedef void *gzFile;
+gzFile gzdopen(int fd, const char *mode);
+int gzread(gzFile file, void *buf, unsigned len);
+#endif
+EOF
+
+# Real, unmodified upstream zlib core (third_party/u-boot/lib/zlib/*.c,
+# u-boot's own vendored copy of real zlib -- used there for gzip'd
+# kernel images) copied verbatim into a build-generated directory next
+# to a small glue zlib.h, so that zutil.h's own `#include "zlib.h"`
+# (quote form always resolves against the *including file's own
+# directory* first, before any -I search path -- confirmed via a real,
+# reproducible build failure otherwise, not assumed) picks up our glue
+# instead of u-boot's own lib/zlib/zlib.h, which pulls in u-boot's whole
+# <common.h> board-config/watchdog/malloc environment and doesn't build
+# outside a real u-boot tree. The glue supplies exactly the two things
+# that environment actually provides to these particular .c files (read
+# by inspection, not guessed): WATCHDOG_RESET() (real u-boot builds with
+# no watchdog configured also compile this to a no-op) and
+# get_unaligned() (a generic unaligned 16-bit load -- reproduced exactly
+# via memcpy, not approximated) -- plus trivial empty stand-ins for
+# <hang.h> (only reachable from dead `#ifdef DEBUG` code, never defined
+# here) and <linux/string.h> (real zutil.h includes it purely for the
+# memcpy/memcmp/memset prototypes already visible via plain <string.h>).
+# gz_gzip_impl.c (grep's own real gzdopen()/gzread(), see its header)
+# and gz_crc32_compat.c (a real standalone CRC-32, since u-boot's own
+# lib/crc32.c is itself too entangled with u-boot's board/EFI headers to
+# vendor directly -- see that file's own comment) are the only
+# consumers; -I "$OUT/zlib_glue" is added to the global CFLAGS below
+# since no other command's real source has a file named zutil.h/
+# inflate.h/etc to collide with.
+mkdir -p "$OUT/zlib_glue/linux"
+ZLIB_SRC="../../third_party/u-boot/lib/zlib"
+ZLIB_REAL_HDR="../../third_party/u-boot/include/u-boot/zlib.h"
+for f in inflate.c inftrees.c inffast.c zutil.c adler32.c zutil.h inftrees.h inflate.h inffast.h inffixed.h; do
+    cp "$ZLIB_SRC/$f" "$OUT/zlib_glue/$f"
+done
+cp "$ZLIB_REAL_HDR" "$OUT/zlib_glue/uboot_real_zlib.h"
+cat > "$OUT/zlib_glue/zlib.h" <<'EOF'
+#ifndef _GZ_ZLIB_GLUE_H_
+#define _GZ_ZLIB_GLUE_H_
+#include <string.h>
+#define WATCHDOG_RESET() ((void)0)
+#define get_unaligned(p) __gz_get_unaligned_u16(p)
+static __inline__ unsigned short __gz_get_unaligned_u16(const void *p) {
+    unsigned short v;
+    memcpy(&v, p, sizeof(v));
+    return v;
+}
+#include "uboot_real_zlib.h"
+#endif
+EOF
+cat > "$OUT/zlib_glue/hang.h" <<'EOF'
+#ifndef _GZ_HANG_H_COMPAT_
+#define _GZ_HANG_H_COMPAT_
+#endif
+EOF
+cat > "$OUT/zlib_glue/linux/string.h" <<'EOF'
+#include <string.h>
+EOF
+
 XCODE12="/Applications/Xcode-12.app/Contents/Developer"
 CLANG="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
 SDK="$XCODE12/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
@@ -225,7 +310,8 @@ LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_waitpid,_waitpid\$UNIX2003 \
     -Wl,-alias,_confstr,_confstr\$UNIX2003 \
     -Wl,-alias,_pthread_testcancel,_pthread_testcancel\$UNIX2003 \
-    -Wl,-alias,_sigsuspend,_sigsuspend\$UNIX2003"
+    -Wl,-alias,_sigsuspend,_sigsuspend\$UNIX2003 \
+    -Wl,-alias,_regcomp,_regcomp\$UNIX2003"
 
 # Bash array, one element per command: "name:srcfile:extra1|extra2|..."
 # (srcfile is the FULL real source path -- not just relative to
@@ -354,6 +440,19 @@ CMD_LIST=(
     "apply:$SHELL_CMDS/apply/apply.c:$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|$LIBC/gen/FreeBSD/signal.c|cp_mv_syscalls.c|$LIBC/compat-43/sigcompat.c|apply_sigsuspend_compat.c"
     "vis:$TEXT_CMDS/vis/vis.c:$TEXT_CMDS/vis/foldit.c|$LIBC/gen/FreeBSD/vis.c|$LIBC/stdlib/FreeBSD/atoi.c"
     "unvis:$TEXT_CMDS/unvis/unvis.c:$LIBC/gen/FreeBSD/unvis.c"
+    # Block 7 (docs/roadmap.md Phase 4.6 "grep/sed/nl/xargs/ed" sweep,
+    # now that item 3's real POSIX regex is linkable): grep, the first
+    # and simplest of the five. Real, unmodified grep.c/file.c/queue.c/
+    # util.c, built with four real upstream feature knobs disabled (see
+    # this loop's own cmd_cflags case for the full reasoning) plus real
+    # fnmatch() (du_fnmatch_libc_wrapper.c's real __LIBC__-scoped
+    # Libc/gen/FreeBSD/fnmatch.c wrapper, reused verbatim -- not
+    # du-specific despite the filename) and a real (not fabricated)
+    # gzdopen()/gzread() for grep's -Z/.gz support (gz_gzip_impl.c +
+    # gz_crc32_compat.c, genuine DEFLATE decompression via the real zlib
+    # core vendored at third_party/u-boot/lib/zlib -- see zlib_glue
+    # generation above and both files' own header comments).
+    "grep:$TEXT_CMDS/grep/grep.c:$TEXT_CMDS/grep/file.c|$TEXT_CMDS/grep/queue.c|$TEXT_CMDS/grep/util.c|gz_gzip_impl.c|gz_crc32_compat.c|du_fnmatch_libc_wrapper.c|simple_cmds_mmap_compat.c|$LIBC/stdlib/FreeBSD/getopt_long.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/stdlib/FreeBSD/strtoull.c"
 )
 
 built=0
@@ -375,7 +474,36 @@ for spec in "${CMD_LIST[@]}"; do
         continue
     fi
 
-    if ! "$CLANG" $CFLAGS "-Dmain=$real_main" "$src" -o "$obj" 2>"$OUT/simple_obj/${name}.err"; then
+    # Per-command extra CFLAGS (rare -- one command so far). grep's real,
+    # unmodified grep.c/file.c/queue.c/util.c need four real upstream
+    # build-time feature knobs disabled (WITHOUT_FASTMATCH -- this
+    # checkout has no fastmatch.h at all, a real Apple-only literal/
+    # substring fast-path optimization layered on top of the same real
+    # regex engine, not a functional loss; WITHOUT_LZMA/WITHOUT_BZIP2 --
+    # no real lzma/bzip2 codec vendored in this project, both cleanly
+    # supported real upstream build variants, confirmed via grep.c's own
+    # explicit "support was disabled at compile-time" runtime error path
+    # for -M/-J, not silently dropped; WITHOUT_NLS -- no real
+    # catgets(3)/message-catalog subsystem exists here, see
+    # simple_cmds_catopen_compat.c's own header for the identical gap
+    # uniq hit first) plus the three real u-boot-zlib-glue macros the
+    # zlib_glue generation step above documents (STDC/NO_DUMMY_DECL/
+    # __LITTLE_ENDIAN, needed by gz_gzip_impl.c/gz_crc32_compat.c, see
+    # its own comment) and -I "$OUT/zlib_glue" so gz_gzip_impl.c's
+    # `#include "zutil.h"` resolves. Deliberately NOT added to the
+    # global $CFLAGS -- STDC in particular is a common enough macro name
+    # in other vendored FreeBSD sources that toggling it project-wide
+    # risked unrelated behavior changes in already-verified commands,
+    # same reasoning as du_fnmatch_libc_wrapper.c's own __LIBC__ scoping
+    # comment.
+    cmd_cflags=""
+    case "$name" in
+        grep)
+            cmd_cflags="-DWITHOUT_FASTMATCH -DWITHOUT_LZMA -DWITHOUT_BZIP2 -DWITHOUT_NLS -DSTDC -DNO_DUMMY_DECL -D__LITTLE_ENDIAN=1 -I $OUT/zlib_glue"
+            ;;
+    esac
+
+    if ! "$CLANG" $CFLAGS $cmd_cflags "-Dmain=$real_main" "$src" -o "$obj" 2>"$OUT/simple_obj/${name}.err"; then
         echo "  skip: $name (real source)"
         cat "$OUT/simple_obj/${name}.err" >&2
         failed=$((failed + 1))
@@ -392,7 +520,12 @@ for spec in "${CMD_LIST[@]}"; do
     for ef in $extra; do
         ef_base=$(basename "$ef" .c)
         ef_out="$OUT/simple_obj/${name}_${ef_base}.o"
-        "$CLANG" $CFLAGS "$ef" -o "$ef_out"
+        if ! "$CLANG" $CFLAGS $cmd_cflags "$ef" -o "$ef_out" 2>"$OUT/simple_obj/${name}_${ef_base}.err"; then
+            echo "  skip: $name (extra: $ef)"
+            cat "$OUT/simple_obj/${name}_${ef_base}.err" >&2
+            failed=$((failed + 1))
+            continue 2
+        fi
         extra_objs="$extra_objs $ef_out"
     done
 
@@ -403,7 +536,7 @@ for spec in "${CMD_LIST[@]}"; do
     extra_libs=""
     common_read_compat="$OUT/simple_obj/common_simple_cmds_read_compat.o"
     case "$name" in
-        rm|ln|rmdir|chflags|chown)
+        rm|ln|rmdir|chflags|chown|grep)
             # libremovefile.a's own removefile_syscalls.o already defines
             # read()/read$UNIX2003 -- a real, genuine duplicate-symbol
             # conflict against the shared compat object every other
@@ -416,8 +549,20 @@ for spec in "${CMD_LIST[@]}"; do
             # hasn't built; libremovefile.a's removefile_syscalls.o
             # already has real, plain-named _unlink/_rmdir raw syscall
             # bodies serving the exact same real syscall numbers, same
-            # precedent rm.c itself already established).
+            # precedent rm.c itself already established). grep also
+            # needs this archive's real fts_open$INODE64/fts_read$INODE64/
+            # fts_close$INODE64 (real util.c's -r/-R directory recursion,
+            # confirmed present via nm before use) and hits the identical
+            # read() duplicate-symbol conflict via gz_gzip_impl.c's own
+            # real gzread()->read() call, resolved the same way. grep
+            # additionally needs libc_regex.a (Phase 4.6 item 3's real
+            # TRE engine, already built and proven via bash -- not
+            # linked into any Tier-1/simple_cmds binary before now) for
+            # its own real regcomp/regexec/regerror calls.
             extra_libs="$OUT/libremovefile.a"
+            case "$name" in
+                grep) extra_libs="$extra_libs $OUT/libc_regex.a" ;;
+            esac
             common_read_compat=""
             ;;
         cp|mv|mktemp|du|chmod)

@@ -1,0 +1,8 @@
+root
+darwin
+printf 'apple\n123\nbanana456\n7890\ncherry\n' > /tmp/grep_test.txt
+grep -E '^[0-9]+$' /tmp/grep_test.txt
+grep -c apple /tmp/grep_test.txt
+grep -v -E '^[0-9]+$' /tmp/grep_test.txt
+grep -E '[a-z]+[0-9]+' /tmp/grep_test.txt
+echo GREP_TEST_DONE
