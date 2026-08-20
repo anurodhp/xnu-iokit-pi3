@@ -650,6 +650,47 @@ need a real implementation later:
   against this project's own existing `do_login()`/`cmd_su()` in `init.c`
   rather than a naive port, flagged for whoever picks it up rather than
   filed as a work item.
+  **Command priority reorganized 2026-08-20: stop chasing whatever's
+  next in a source directory, prioritize by how commonly a real user
+  would actually reach for the command, defer genuinely obscure ones
+  until Phase 8's package manager exists** (once `pkg` lands, a rarely-
+  used utility can be installed on demand rather than needing to be
+  pre-baked into the base image forever). The 65 commands built so far
+  are NOT being removed -- several (`rs`/`lam`/`colrm`/`vis`/`unvis`/
+  `apply`/`jot`/`hexdump`) are genuinely niche and were simply next-in-
+  list when built; this reorganization only changes what gets picked up
+  *next*, prompted by `ls` -- one of the single most-used Unix commands
+  -- turning out to have been skipped entirely across 65 other ports.
+  - **Tier A -- do next, real source already sitting in this checkout,
+    unbuilt:** `ls` (`third_party/file_cmds/ls/` -- top priority, real
+    directory listing does not exist in this project at all today,
+    every `ls` invocation currently 404s as a missing command); `find`
+    (`third_party/shell_cmds/find/`); `date`
+    (`third_party/shell_cmds/date/`); `gzip`/`compress`
+    (`third_party/file_cmds/gzip/`, `file_cmds/compress/` -- meaningfully
+    easier now than when item 10 above was scoped, since the
+    grep/sed/nl/xargs/ed sweep already pulled in a real, working zlib
+    inflate core, `gz_gzip_impl.c` -- only the deflate/compress side and
+    a CLI wrapper are still missing, not the whole library).
+  - **Tier B -- common, but no real source cloned into this checkout
+    yet:** `diff`, `less`/`more` (a pager -- neither exists in any
+    currently-pinned repo, confirmed by grep, not assumed), `tar`,
+    `whoami` (no standalone real source found either; `id -un` already
+    covers the same information via an already-built command, so this
+    is genuinely low priority even within Tier B). Needs the same
+    `setup_third_party.sh` pinning work Phase 5.5's `syslogd`/`cron`
+    items already need -- confirm the exact apple-oss-distributions repo
+    name/tag against the `macos-112` manifest before cloning, not
+    guessed.
+  - **Deferred to Phase 8 (package manager) or later:** every other
+    unbuilt `shell_cmds`/`file_cmds`/`text_cmds` entry not already
+    listed as a Phase 4.6 work item above (regex/pthread/crypto/
+    `posix_spawn`/`sysctl`-MIB/SysV-IPC/`utmp`-blocked commands stay
+    tracked there on their own merits, independent of this
+    reprioritization) -- things like `w`/`who`/`lastcomm`/`ipcs`/
+    `ipcrm`/`mtree`/`pax`/`shar`/`rmt`/`col`/`ul`/`look`/`banner`/`pr`.
+    Not abandoned, just not worth pre-baking into the base image ahead
+    of a real package manager existing to install them on demand.
 - **Phase 5 (multi-user)**: the custom account resolver, real DES
   `crypt()` password verification, and a real `login`/`su` (wired into
   `tools/init_binary/init.c`'s `do_login()`/`cmd_su()`, real bash now the
