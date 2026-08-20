@@ -120,3 +120,14 @@ worked examples).
   `iokit/BCM2837ArmIO/BCM2837Personalities.cpp` (no Info.plist/prelink
   pipeline exists here) — if a new driver isn't matching, check this file
   before assuming the driver code itself is broken.
+- **Every built artifact needs a reproducing script, checked in** — no
+  manual/ad-hoc build steps that only exist in a shell history or an
+  agent's transcript. Any new binary, kext, image, or userland command
+  (e.g. new entries in `tools/userland_staging/build_simple_cmds.sh`, new
+  `tools/userland_staging/build_*.sh` scripts, new
+  `tools/init_binary/inject_into_sd_image.sh` copy-loop entries) must be
+  producible end-to-end by a script in the repo, so cloning fresh
+  (`git clone` + `setup_third_party.sh` + the documented build commands
+  above) reproduces it with no undocumented manual steps. If a fix needs a
+  one-off manual command to verify, promote it into the relevant build
+  script before considering the work done.
