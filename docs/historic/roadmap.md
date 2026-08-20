@@ -4029,6 +4029,79 @@ stubbings"/"Remaining future work" all updated accordingly.
 
 ---
 
+**2026-08-20, follow-up: root-causing the "empty argv[0] from bash"
+bug flagged (not fixed) at the end of Block 1 above.** The Block 1 writeup
+above speculated the bug was in "bash's own real `execve()` call
+sequence" specifically, since every other command's `getprogname()`-based
+error prefix had just been fixed and only bash-spawned children still
+showed it empty. That theory turned out to be wrong, caught by actually
+testing it rather than trusting the plausible-sounding deduction (per
+this project's standing "verify claims against source" rule): a real
+QEMU A/B instrumentation test added two temporary `fprintf(stderr, ...)`
+prints (removed before committing, per this project's repeated "sweep
+for stray debug hooks before commit" history) -- one in bash's own
+`execute_cmd.c`, right before its call to `shell_execve()`, dumping
+`args[0]`'s pointer and content; one in `cp.c`'s `main()`, dumping the
+freshly-`exec`'d child's own `argv[0]` and `getprogname()`. Both ran in
+the same real boot: `TEMP_DIAGNOSTIC_ARGV0 ... args[0]=0x100207c10 [cp]`
+(bash's own view, correct) followed by `TEMP_DIAGNOSTIC_CRT0 ...
+argv[0]=0x16fdffec8 [cp] progname=[]` (the child's own view: `argv[0]`
+itself is *also* correct, but `getprogname()` already reads back empty)
+-- immediately followed by the real, unmodified `": /nonexistent-src-file:
+No such file or directory"` empty-prefixed line. This proves bash's
+`execve()` call, the raw `execve` syscall trap, and the kernel's real
+`exec_copyout_strings()` argv marshaling are all innocent -- the child's
+own `argv[0]` parameter is provably correct at its own `main()` entry.
+The break is between that correct `argv[0]` and `getprogname()`'s answer,
+i.e. in this project's own C runtime startup, not in bash or the kernel.
+
+Root cause, found by reading (not guessing) `third_party/Csu/start.s`'s
+real arm64 entry point next to `crt.c`: `crt.c`'s own header comment says
+"This file is not needed for executables targeting 10.5 or later -- start
+calls main() directly," and its C `_start()` function (the *only* code in
+the file that ever wrote `NXArgc`/`NXArgv`/`__progname`) is entirely
+gated behind `#if __DYNAMIC__ && OLD_LIBSYSTEM_SUPPORT` -- both
+permanently undefined on this project's static/no-dyld target, so that
+whole function, including the `__progname = crt_basename(argv[0])` line,
+has never once been compiled into any binary this project has ever
+built. `start.s`'s real arm64 `start:` entry point (the code that
+actually runs) only ever set `environ` (the Phase 4.6 item 2 fix,
+2026-08-16) and jumped straight to `_main` -- `__progname`/`NXArgc`/
+`NXArgv` were left at their static-initializer values (`NULL`/`0`)
+forever, for *every* process on this target, unconditionally. This is
+not a bash-specific bug at all -- it's a real, universal gap in this
+project's own C runtime startup that happened to only become externally
+visible once `getprogname()` stopped lying (the Block 1 `getprogname()`
+fix, same day) and once something other than `init.c`'s own hand-rolled,
+Csu-free entry point (which never called `getprogname()` in the first
+place) was around to expose it.
+
+Real fix, matching the same "no dyld to populate ProgramVars, so do the
+one-off store ourselves" pattern the existing `environ` fix already
+established: `crt.c` gained a new, unconditionally-compiled
+`crt_init_program_vars(argc, argv)` (real logic -- a straight copy of
+Apple's own dead `crt_basename()` scan-for-last-slash, promoted out of
+the dead block rather than reinvented) that sets `NXArgc`/`NXArgv`/
+`__progname` for real; `start.s`'s arm64 `start:` now calls it (`bl
+_crt_init_program_vars`) right after the existing `environ` store,
+saving `argc`/`argv`/`envp`/`apple` across the call in callee-saved
+`x19`-`x22` (AAPCS64 `x0`-`x17` are caller-saved, so the real C call
+clobbers them) and restoring them before the existing `bl _main`. Every
+Csu-linked binary needed rebuilding to pick this up: `bash.macho`, all 60
+`build_simple_cmds.sh` commands, `ps.macho`, `uname.macho` (`init.macho`/
+`pwtool.macho` don't link Csu at all -- unaffected, confirmed by grep).
+QEMU-verified via a real transcript, both temporary diagnostics removed
+first (confirmed via a source grep) and both `third_party/bash` and
+`third_party/file_cmds` confirmed to have zero leftover diff before
+rebuilding: `cp /nonexistent-src-file /tmp/x` -> `cp:
+/nonexistent-src-file: No such file or directory`; `mv` and `cat` against
+nonexistent paths likewise now correctly prefixed with their own names;
+zero regression (`echo`, `pwd`, login all still work correctly in the
+same session). Every rebuilt `.macho` reconfirmed static (`LC_UNIXTHREAD`
+present, zero `LC_LOAD_DYLIB`).
+
+---
+
 *(End of archived material. Phase 4.6 items 3-5, and Phases 5 through 8 in
 their entirety, were open/not-started as of the source document's latest
 entries and are therefore not archived here -- see `docs/roadmap.md`'s

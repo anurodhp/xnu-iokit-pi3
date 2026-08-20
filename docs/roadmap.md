@@ -290,27 +290,33 @@ Currently open, real bugs the roadmap narrative flagged as not-yet-fixed
   watchdog, under sustained fast syscall load) -- a real kernel bug, not a
   port bug in `yes.c` itself. Ships anyway, flagged. See `docs/backlog.md`
   P0 item 29.
-- **`bash`'s real fork+exec of an external command passes an empty
-  `argv[0]`** to the child -- found 2026-08-20 while QEMU-verifying `cp`/
-  `mv` (Block 1): a real fix to `libc_locale_env_stubs.c`'s `getprogname()`
-  (previously hardcoded to return `"libc_locale_smoketest"` unconditionally
-  for every command in this tier, a stale leftover from before this
-  tier's real `argv[0]`/`__progname` plumbing existed) now correctly
-  returns the real `__progname` Csu/`crt.c` computes from `argv[0]` --
-  which exposed that `argv[0]` itself is empty for children bash spawns,
-  not "libc_locale_smoketest" wrongly. Every `err(3)`/`warn(3)` call in
-  every command run *from bash* now prints an empty prefix (e.g.
-  `": /nonexistent-src-file: No such file or directory"`) instead of the
-  command's own name -- cosmetic only (the error text itself is correct
-  and honest), but a real bug in bash's own real `execve()` call
-  sequence, not in `getprogname()` or in any individual command. Not
-  root-caused or fixed this pass (out of this sweep's scope, and
-  possibly interacts with the same-day, separately-landed "bash is the
-  default login shell" work) -- see `docs/historic/roadmap.md`'s Block 1
-  entry for the exact evidence trail.
+- **Every command run from bash printed an empty `err(3)`/`warn(3)` prefix**
+  -- FIXED 2026-08-20. Originally suspected to be bash's own `execve()`
+  call passing an empty `argv[0]` to the child (found 2026-08-20 while
+  QEMU-verifying `cp`/`mv`, Block 1); a real QEMU A/B instrumentation test
+  disproved that theory -- both bash's own `args[0]` right before
+  `execve()` and the spawned child's own `argv[0]` (read directly in its
+  `main()`) were already correct. The real root cause was one layer
+  further down: `third_party/Csu/start.s`'s arm64 entry point (this
+  project's static/no-dyld target never runs the C `_start()` in
+  `crt.c`, which is dead code here -- see that file's own
+  `crt_init_program_vars()` comment) never wrote `__progname` (only
+  `environ`, added by the earlier Phase 4.6 item 2 fix), so
+  `getprogname()` read back an unset global for every process on this
+  target, unconditionally -- not a bash-specific bug at all. Fixed by
+  adding a real `crt_init_program_vars()` to `crt.c` (computes
+  `__progname`/`NXArgc`/`NXArgv` from `argv[0]`, matching Apple's own
+  dead `crt_basename()` logic) and calling it from `start.s` right after
+  the existing `environ` store. QEMU-verified via a real transcript:
+  `cp`/`mv`/`cat` against nonexistent paths now correctly prefix their
+  own name (`cp: /nonexistent-src-file: No such file or directory`), zero
+  regression (login, `echo`, `pwd` all still work). See
+  `docs/historic/roadmap.md`'s Phase 4 entry for the full evidence trail.
 - **Also every command in `build_simple_cmds.sh`'s tier (28 commands as
-  of 2026-08-19) had this same wrong-`getprogname()` bug silently masking
-  the argv[0] issue above** -- fixed as part of the same Block 1 pass,
+  of 2026-08-19) had a wrong-`getprogname()` bug** (hardcoded
+  `"libc_locale_smoketest"` literal) **that was silently masking the
+  `__progname`-never-initialized bug fixed above** -- the
+  `getprogname()` fix itself landed as part of the same Block 1 pass,
   see `docs/historic/roadmap.md`.
 - **`hexdump` prints no data rows** (`freopen`+`getc`/`ungetc` idiom bug)
   -- found 2026-08-20, ships anyway. See `docs/backlog.md` P1 item 3.
