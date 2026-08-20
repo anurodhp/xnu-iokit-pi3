@@ -60,7 +60,7 @@ cmd_idx = 0
 last_growth = time.time()
 last_len = 0
 
-PROMPT_SUFFIXES = [b"% ", b"login: ", b"Password: ", b"New password: ", b"Retype new password: "]
+PROMPT_SUFFIXES = [b"% ", b"login: ", b"Password: ", b"New password: ", b"Retype new password: ", b"-bash-3.2# ", b"(y/n [n]) "]
 
 def buf_tail_has_prompt():
     tail = buf[-40:]

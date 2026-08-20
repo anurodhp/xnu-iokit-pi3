@@ -46,6 +46,17 @@ for dep in libmalloc libplatform libclosure libpthread libc_gen libc_stdio libc_
         exit 1
     fi
 done
+# cp/mv also need libcopyfile.a (real copyfile()/fcopyfile(), plus its
+# already-built realpath/fchown/fchflags/fchmod members) and
+# libremovefile.a (real public rename()/unlink()); both already built by
+# earlier tiers (build_copyfile.sh, build_removefile.sh) for rm/the
+# copyfile smoketest, reused here rather than rebuilt.
+for dep in libcopyfile libremovefile; do
+    if [ ! -f "$OUT/$dep.a" ]; then
+        echo "error: $OUT/$dep.a not found -- run build_$dep.sh first" >&2
+        exit 1
+    fi
+done
 
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness \
@@ -94,7 +105,7 @@ fi
 # syscall depending on whether the public Libc wrapper calls a private
 # name -- e.g. `___getlogin`/`___mmap`/`___munmap` vs plain `_kevent`/
 # `_kqueue`, which have no private wrapper layer at all).
-SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access _getuid _execve _link _symlink _getegid _geteuid _getgid _getgroups"
+SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access _getuid _execve _link _symlink _getegid _geteuid _getgid _getgroups _chflags _chown _mknod _mkfifo _futimes _readlink _pread _pwrite _statfs"
 if [ ! -f "$OUT/simple_getlogin_trap.o" ]; then
     mkdir -p "$OUT/sys_asm_compat/mach/arm64"
     cat > "$OUT/sys_asm_compat/mach/arm64/asm.h" <<'EOF'
@@ -131,6 +142,9 @@ LINK_COMMON="$OUT/libc_printf.a $OUT/libc_gen.a $OUT/libc_stdio.a $OUT/libc_loca
     $OUT/simple_obj/sys__access.o $OUT/simple_obj/sys__getuid.o $OUT/simple_obj/sys__execve.o \
     $OUT/simple_obj/sys__link.o $OUT/simple_obj/sys__symlink.o \
     $OUT/simple_obj/sys__getegid.o $OUT/simple_obj/sys__geteuid.o $OUT/simple_obj/sys__getgid.o $OUT/simple_obj/sys__getgroups.o \
+    $OUT/simple_obj/sys__chflags.o $OUT/simple_obj/sys__chown.o $OUT/simple_obj/sys__mknod.o \
+    $OUT/simple_obj/sys__mkfifo.o $OUT/simple_obj/sys__futimes.o $OUT/simple_obj/sys__readlink.o \
+    $OUT/simple_obj/sys__pread.o $OUT/simple_obj/sys__pwrite.o $OUT/simple_obj/sys__statfs.o \
     $OUT/libclosure.a $OUT/libmalloc.a $OUT/cerror_stub.o $OUT/libplatform.a"
 LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_close,_close\$UNIX2003 \
@@ -172,7 +186,15 @@ LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_readdir,_readdir\$INODE64 \
     -Wl,-alias,_fsync,_fsync\$UNIX2003 \
     -Wl,-alias,_reallocarray,_reallocarray\$DARWIN_EXTSN \
-    -Wl,-alias,_nanosleep,_nanosleep\$UNIX2003"
+    -Wl,-alias,_nanosleep,_nanosleep\$UNIX2003 \
+    -Wl,-alias,_fchmod,_fchmod\$UNIX2003 \
+    -Wl,-alias,_lchown,_lchown\$UNIX2003 \
+    -Wl,-alias,_getattrlist,_getattrlist\$UNIX2003 \
+    -Wl,-alias,_setattrlist,_setattrlist\$UNIX2003 \
+    -Wl,-alias,_pread,_pread\$UNIX2003 \
+    -Wl,-alias,_pwrite,_pwrite\$UNIX2003 \
+    -Wl,-alias,_statfs,_statfs\$INODE64 \
+    -Wl,-alias,_waitpid,_waitpid\$UNIX2003"
 
 # Bash array, one element per command: "name:srcfile:extra1|extra2|..."
 # (srcfile is the FULL real source path -- not just relative to
@@ -210,15 +232,23 @@ CMD_LIST=(
     "uniq:$TEXT_CMDS/uniq/uniq.c:simple_cmds_catopen_compat.c"
     "ln:$FILE_CMDS/ln/ln.c:"
     "id:$SHELL_CMDS/id/id.c:ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c|simple_cmds_getgrouplist_compat.c|$LIBC/gen/FreeBSD/getlogin.c"
-    # cp/mv surveyed but deferred (not attempted further this pass): real
-    # cp.c/utils.c need a real chain of ~12 more raw syscalls this
-    # project doesn't have yet (chflags/fchflags/chown/fchown/mknod/
-    # mkfifo/futimes/readlink/clonefileat + lchown's/sigaction's private
-    # wrapper indirection) PLUS a real setattrlist(2) userland wrapper for
-    # lchmod/lchflags -- the exact Phase 4.6 item 4 gap already flagged
-    # for touch -h's lutimes case (docs/roadmap.md's "Known stubbings").
-    # A real, unmodified-source build is very plausible in a dedicated
-    # follow-up pass, just more plumbing than fits in this one.
+    # cp/mv: real, unmodified file_cmds/cp + file_cmds/mv sources. Needed
+    # new plumbing (this pass): six new plain raw syscalls generated the
+    # normal way (chflags/chown/mknod/mkfifo/futimes/readlink -- see
+    # SYS_STUBS_NEEDED above), three hand-written NO_SYSCALL_STUB raw
+    # syscalls (lchown/sigaction/setattrlist -- cp_mv_syscalls.c, same
+    # carry-flag pattern removefile_syscalls.c/copyfile_syscalls.c
+    # already established), real Apple lchmod.c/lchflags.c (both call the
+    # new setattrlist directly -- Phase 4.6 item 4's "cheapest item"
+    # closed for real, not just for touch -h anymore), real
+    # Libc/gen/FreeBSD/signal.c (cp's SIGINFO progress handler -- see
+    # cp_mv_syscalls.c's sigaction header comment for why this target
+    # honestly can't deliver it, but still links/runs the real syscall),
+    # and real Libc/gen/get_compat.c (both cp.c/utils.c/mv.c compile
+    # __APPLE__'s real get_compat.h path, not the non-Apple COMPAT_MODE=1
+    # macro fallback -- confirmed by reading the #ifdef, not assumed).
+    "cp:$FILE_CMDS/cp/cp.c:$FILE_CMDS/cp/utils.c|$LIBC/gen/get_compat.c|$LIBC/emulated/lchmod.c|$LIBC/emulated/lchflags.c|$LIBC/gen/FreeBSD/signal.c|cp_mv_syscalls.c|simple_cmds_rpmatch_compat.c|simple_cmds_lutimes_compat.c|$XNU/libsyscall/wrappers/clonefile.c|$XNU/libsyscall/wrappers/unix03/chmod.c"
+    "mv:$FILE_CMDS/mv/mv.c:$LIBC/gen/get_compat.c|cp_mv_syscalls.c|simple_cmds_rpmatch_compat.c|$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|mv_pwcache_compat.c|../libinfo_custom/libinfo_custom.c|$XNU/libsyscall/wrappers/unix03/chmod.c"
 )
 
 built=0
@@ -283,6 +313,23 @@ for spec in "${CMD_LIST[@]}"; do
             # bodies serving the exact same real syscall numbers, same
             # precedent rm.c itself already established).
             extra_libs="$OUT/libremovefile.a"
+            common_read_compat=""
+            ;;
+        cp|mv)
+            # Same real duplicate-symbol reasoning as rm|ln above
+            # (libremovefile.a's removefile_syscalls.o already defines
+            # plain read()) plus libcopyfile.a for real copyfile()/
+            # fcopyfile() (cp's data+xattr+ACL copy, mv's fcopyfile
+            # ACL/xattr preservation across a rename fallback) and its
+            # already-built realpath/fchmod/fchown/fchflags members
+            # (mv.c needs all three, reused rather than regenerated).
+            # Normal (non-force_load) archive linking for both -- only
+            # symbols cp.c/mv.c/utils.c actually reference get pulled,
+            # so no duplicate-symbol risk against this script's own
+            # freshly generated sys__readlink.o/sys__chown.o/etc (first
+            # definition on the link line wins, archive members for an
+            # already-resolved symbol are simply never pulled).
+            extra_libs="$OUT/libremovefile.a $OUT/libcopyfile.a"
             common_read_compat=""
             ;;
     esac

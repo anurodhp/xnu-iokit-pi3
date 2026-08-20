@@ -11,13 +11,27 @@
  *   - issetugid(): this process is never setuid/setgid (no real
  *     credential model exists yet at all) - 0 is the real, correct
  *     answer, not a placeholder.
- *   - getprogname(): no real argv[0] plumbed through yet either; returns
- *     a fixed literal identifying this specific smoketest rather than
- *     silently returning something misleading.
- */
+ *   - getprogname(): REAL BUG FOUND+FIXED (build_simple_cmds.sh's cp/mv
+ *     tier, edge-case error-path testing): this used to unconditionally
+ *     return a fixed literal identifying the one original smoketest this
+ *     file was written for, on the honest grounds that "no real argv[0]
+ *     plumbed through yet" -- true when this file was written, but
+ *     stale since Csu/crt.c's real _start() has set a real `__progname`
+ *     (from the real argv[0] every one of this tier's binaries actually
+ *     gets from the kernel's real execve(2)) all along. Every command in
+ *     this tier links this file (via libc_locale_for_stdio.a, unlike
+ *     getenv() below this was never given the weak-symbol-override
+ *     escape hatch), so every err(3)/warn(3) call in every one of them
+ *     was silently printing "libc_locale_smoketest: ..." instead of its
+ *     own real name -- confirmed via a real QEMU transcript (`cp
+ *     /nonexistent-src-file ...` printing exactly that wrong prefix)
+ *     before this fix, not guessed. Real fix: return the real
+ *     crt.c-computed global directly. */
+
+extern const char *__progname;
 
 const char *getprogname(void) {
-    return "libc_locale_smoketest";
+    return __progname ? __progname : "";
 }
 
 /* Real Apple private alias - third_party/Libc/locale/FreeBSD/collate.c

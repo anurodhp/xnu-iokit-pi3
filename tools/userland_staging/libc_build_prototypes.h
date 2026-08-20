@@ -129,4 +129,14 @@ int _ioctl(int fd, unsigned long request, void *arg);
 int _writev(int fd, const void *iov, int iovcnt);
 int _select(int nfds, void *readfds, void *writefds, void *exceptfds, void *timeout);
 
+/* build_simple_cmds.sh's cp/mv tier - real Apple third_party/Libc/gen/
+ * FreeBSD/signal.c calls this exact underscore-prefixed name with no
+ * prototype in scope in this checkout (real Apple Libc normally gets it
+ * via namespace.h's public/private symbol-renaming macro system, which
+ * this project doesn't build) - same implicit-declaration gap documented
+ * above. Real definition (a thin wrapper over this project's own
+ * sigaction()) is in cp_mv_syscalls.c. */
+struct sigaction;
+int _sigaction(int sig, const struct sigaction *nsv, struct sigaction *osv);
+
 #endif

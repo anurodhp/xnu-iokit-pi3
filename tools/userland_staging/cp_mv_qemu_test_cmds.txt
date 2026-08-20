@@ -1,0 +1,18 @@
+root
+darwin
+echo CONTENT_A > /tmp/fileA
+echo CONTENT_B > /tmp/fileB
+cp /tmp/fileA /tmp/itarget
+cp -i /tmp/fileB /tmp/itarget
+n
+cat /tmp/itarget
+cp -i /tmp/fileB /tmp/itarget
+y
+cat /tmp/itarget
+cp /tmp/fileA /tmp/mv_i_src
+cp /tmp/fileB /tmp/mv_i_dst
+mv -i /tmp/mv_i_src /tmp/mv_i_dst
+n
+cat /tmp/mv_i_dst
+cat /tmp/mv_i_src
+echo DONE_MARKER_67890
