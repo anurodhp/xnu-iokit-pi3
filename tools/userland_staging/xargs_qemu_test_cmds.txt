@@ -1,0 +1,7 @@
+root
+darwin
+printf 'apple\nbanana\ncherry\n' > /tmp/xargs_a.txt
+printf 'apple\nbanana\n' > /tmp/xargs_b.txt
+printf '/tmp/xargs_a.txt\n/tmp/xargs_b.txt\n' | xargs grep -l apple
+printf '/tmp/xargs_a.txt\n/tmp/xargs_b.txt\n' | xargs -n1 wc -l
+echo XARGS_TEST_DONE

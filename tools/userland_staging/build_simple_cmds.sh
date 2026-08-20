@@ -167,6 +167,21 @@ for dep in libcopyfile libremovefile; do
     fi
 done
 
+# Real FreeBSD strstr.c, fetched fresh each run -- same reproducible
+# curl-at-build-time pattern build_libc_string.sh already established
+# for functions Apple's own checkout doesn't vendor open source for
+# (confirmed via grep across all of third_party/Libc, not guessed: only
+# strstr.3's man page ships, no implementation -- a real, if surprising,
+# gap in Apple's own open-source drop). xargs is the first
+# simple_cmds.sh command needing it; not folded into libc_string.a
+# (which this script's binaries don't otherwise link at all) to avoid
+# introducing that whole archive's duplicate-symbol surface into every
+# other already-verified command.
+mkdir -p "$OUT/freebsd_extra"
+if [ ! -f "$OUT/freebsd_extra/strstr.c" ]; then
+    curl -sf -o "$OUT/freebsd_extra/strstr.c" "https://raw.githubusercontent.com/freebsd/freebsd-src/main/lib/libc/string/strstr.c"
+fi
+
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness \
     -include libc_build_prototypes.h \
@@ -311,7 +326,8 @@ LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_confstr,_confstr\$UNIX2003 \
     -Wl,-alias,_pthread_testcancel,_pthread_testcancel\$UNIX2003 \
     -Wl,-alias,_sigsuspend,_sigsuspend\$UNIX2003 \
-    -Wl,-alias,_regcomp,_regcomp\$UNIX2003"
+    -Wl,-alias,_regcomp,_regcomp\$UNIX2003 \
+    -Wl,-alias,_getrlimit,_getrlimit\$UNIX2003"
 
 # Bash array, one element per command: "name:srcfile:extra1|extra2|..."
 # (srcfile is the FULL real source path -- not just relative to
@@ -471,6 +487,18 @@ CMD_LIST=(
     # path in this program at all, it only ever reads stdin/its input
     # file and writes stdout).
     "nl:$TEXT_CMDS/nl/nl.c:$LIBC/stdio/FreeBSD/freopen.c|$LIBC/stdio/FreeBSD/_flock_stub.c|$LIBC/stdlib/FreeBSD/strtoul.c"
+    # xargs: real, unmodified shell_cmds/xargs.c + strnsubst.c. First
+    # simple_cmds.sh binary to spawn real child processes (real vfork()/
+    # waitpid(), already built for mv's cross-filesystem-rename fallback
+    # in cp_mv_syscalls.c -- see that file's own header for the real
+    # arm64 fork-ABI writeup -- and reused verbatim here, not
+    # reimplemented) plus real execvp() (Libc/gen/FreeBSD/exec.c +
+    # simple_cmds_execve_compat.c, the same pairing env/mv/nice/nohup/
+    # apply/chroot already established). libc_regex.a (Phase 4.6 item 3)
+    # is needed only for -p's real y/n confirmation prompt
+    # (regcomp(nl_langinfo(YESEXPR))), not xargs' main argument-batching
+    # logic, which has no regex in it at all.
+    "xargs:$SHELL_CMDS/xargs/xargs.c:$SHELL_CMDS/xargs/strnsubst.c|$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|$LIBC/stdlib/FreeBSD/strtoul.c|$LIBC/stdlib/FreeBSD/strtonum.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/gen/get_compat.c|cp_mv_syscalls.c|xargs_getrlimit_compat.c|$OUT/freebsd_extra/strstr.c"
 )
 
 built=0
@@ -597,6 +625,11 @@ for spec in "${CMD_LIST[@]}"; do
             common_read_compat=""
             ;;
         nl)
+            extra_libs="$OUT/libc_regex.a"
+            ;;
+        xargs)
+            # regcomp/regexec/regfree for -p's real y/n confirmation
+            # prompt only (see xargs's own CMD_LIST comment).
             extra_libs="$OUT/libc_regex.a"
             ;;
         cp|mv|mktemp|du|chmod)
