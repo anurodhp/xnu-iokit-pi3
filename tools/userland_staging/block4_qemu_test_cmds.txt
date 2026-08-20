@@ -1,0 +1,16 @@
+root
+darwin
+echo chmoddata > /tmp/chmodtest
+chmod 600 /tmp/chmodtest
+stat -f %Lp /tmp/chmodtest
+chmod 755 /tmp/chmodtest
+stat -f %Lp /tmp/chmodtest
+chmod +x /tmp/chmodtest
+stat -f %Lp /tmp/chmodtest
+chown root /tmp/chmodtest
+echo CHOWN_ROOT=$?
+chown 0:0 /tmp/chmodtest
+echo CHOWN_NUM=$?
+chown nosuchuserxyz /tmp/chmodtest
+echo CHOWN_BAD=$?
+echo DONE_BLOCK4_MARKER

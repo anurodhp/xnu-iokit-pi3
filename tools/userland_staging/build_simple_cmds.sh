@@ -294,6 +294,15 @@ CMD_LIST=(
     "cksum:$FILE_CMDS/cksum/cksum.c:$FILE_CMDS/cksum/crc.c|$FILE_CMDS/cksum/crc32.c|$FILE_CMDS/cksum/sum1.c|$FILE_CMDS/cksum/sum2.c|$FILE_CMDS/cksum/print.c"
     "pathchk:$FILE_CMDS/pathchk/pathchk.c:"
     "du:$FILE_CMDS/du/du.c:block3_last_resort_compat.c|$LIBC/gen/get_compat.c|du_fnmatch_libc_wrapper.c|$LIBC/gen/FreeBSD/getbsize.c|$LIBC/stdlib/FreeBSD/atoi.c"
+    # Block 4: chmod/chown, deliberately re-examined per the roadmap's own
+    # note that "chmod needs real ACLs" was never actually verified for
+    # the common mode-bit-only case -- turned out FALSE: real Apple
+    # posix1e/acl.c (acl_get_file/acl_set_file/etc) was already compiled
+    # into libcopyfile.a back in the cp/mv pass (copyfile's own real
+    # ACL-copy path needed it) and confirmed present via nm before
+    # attempting this, not assumed.
+    "chmod:$FILE_CMDS/chmod/chmod.c:$FILE_CMDS/chmod/chmod_acl.c|$LIBC/gen/FreeBSD/setmode.c|$LIBC/gen/get_compat.c|$XNU/libsyscall/wrappers/unix03/chmod.c|$LIBC/emulated/lchmod.c|cp_mv_syscalls.c|simple_cmds_sigprocmask_compat.c|chmod_mbr_compat.c"
+    "chown:$FILE_CMDS/chown/chown.c:$LIBC/gen/get_compat.c|ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c|simple_cmds_getgrouplist_compat.c|cp_mv_syscalls.c|$LIBC/stdlib/FreeBSD/strtoul.c"
 )
 
 built=0
@@ -343,7 +352,7 @@ for spec in "${CMD_LIST[@]}"; do
     extra_libs=""
     common_read_compat="$OUT/simple_obj/common_simple_cmds_read_compat.o"
     case "$name" in
-        rm|ln|rmdir|chflags)
+        rm|ln|rmdir|chflags|chown)
             # libremovefile.a's own removefile_syscalls.o already defines
             # read()/read$UNIX2003 -- a real, genuine duplicate-symbol
             # conflict against the shared compat object every other
@@ -360,7 +369,7 @@ for spec in "${CMD_LIST[@]}"; do
             extra_libs="$OUT/libremovefile.a"
             common_read_compat=""
             ;;
-        cp|mv|mktemp|du)
+        cp|mv|mktemp|du|chmod)
             # Same real duplicate-symbol reasoning as rm|ln above
             # (libremovefile.a's removefile_syscalls.o already defines
             # plain read()) plus libcopyfile.a for real copyfile()/
