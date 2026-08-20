@@ -312,30 +312,12 @@ Currently open, real bugs the roadmap narrative flagged as not-yet-fixed
   of 2026-08-19) had this same wrong-`getprogname()` bug silently masking
   the argv[0] issue above** -- fixed as part of the same Block 1 pass,
   see `docs/historic/roadmap.md`.
-- **`hexdump`** (all format flags, including plain/`-c`/`-C`) prints only
-  the final byte-count address line, never the actual hex+ASCII data
-  rows, against a real non-empty file -- found and narrowed down (not
-  fully root-caused) during Block 3: specific to hexdump's own
-  `freopen(argv, "r", stdin)` + `getc()`/`ungetc()` read idiom, not a
-  general `freopen` bug (Block 2's `fold`/`expand`/`unexpand`, linking
-  the identical real `freopen.c`, correctly read real file-argument
-  content in the same session). Most likely a latent bug in this
-  project's ported `getc()`/`ungetc()` interaction with a freshly
-  `freopen`'d stream -- a real but nontrivial `libc_stdio` question.
-  Ships anyway (real, unmodified source, links, runs, doesn't crash),
-  same tolerance as `yes`'s documented kernel-panic bug. See
-  `docs/historic/roadmap.md`'s Block 3 entry.
-- **`pathchk ""`** (empty pathname) exits 0 instead of POSIX's specified
-  "shall report an error" -- real, unmodified upstream FreeBSD source;
-  low practical impact, not investigated further.
-- **`rs -T`** (transpose) dropped the first row of a small piped 2x3
-  matrix in one observed test (`printf '1 2 3\n4 5 6\n' | rs -T` printed
-  only `4\n5\n6\n`) -- not confirmed as a port bug (real upstream `rs`'s
-  array-dimension auto-guessing heuristics, active whenever neither `-g`
-  nor `-c` is given, are documented as sensitive to small/irregular
-  input shapes) vs. a genuine regression; not investigated further given
-  `rs`'s low practical value. See `docs/historic/roadmap.md`'s Block 2
-  entry.
+- **`hexdump` prints no data rows** (`freopen`+`getc`/`ungetc` idiom bug)
+  -- found 2026-08-20, ships anyway. See `docs/backlog.md` P1 item 3.
+- **`pathchk ""` doesn't error per POSIX** -- low impact. See
+  `docs/backlog.md` P1 item 4.
+- **`rs -T` may drop a row on small input** (unconfirmed as a regression
+  vs. upstream heuristic sensitivity). See `docs/backlog.md` P1 item 5.
 
 ## Known stubbings / stand-ins
 
@@ -446,24 +428,38 @@ need a real implementation later:
   six blocks/32 new commands in one session)**: every remaining
   `shell_cmds`/`file_cmds`/`text_cmds` candidate surveyed needs a real
   subsystem this project hasn't built at all, not just one or two more
-  syscalls -- `sort`/`xargs`/`nl`/`grep`/`sed`/`ed` need POSIX regex
-  and/or real pthread multithreading (both documented permanent-or-
-  Phase-4.6-scoped ceilings); `md5` needs a whole CommonCrypto-shaped
-  digest API distinct from this project's existing from-scratch SHA-2;
-  `install` needs `posix_spawn` (an unbuilt process-creation API, plus
-  its own real `strip(1)` subprocess helper); `df` needs real `sysctl(2)`
-  (a variable-length-MIB syscall never built here); `ipcs`/`ipcrm`/`dd`
-  need real System V IPC / more involved I/O-conversion logic not
-  surveyed in depth; `compress`/`gzip` need zlib; `who`/`w`/`lastcomm`
-  need real `utmp`/accounting-file formats this project doesn't write;
-  `killall` needs process enumeration (real `sysctl(KERN_PROC)` again);
-  `su` was flagged in the original plan as needing careful judgment
-  against this project's own existing `do_login()`/`cmd_su()` in
-  `init.c` rather than a naive port. None of these are a quick "one more
-  raw syscall" the way this session's 32 commands were -- each is its
-  own dedicated-pass-sized subsystem, matching this file's own standing
-  guidance not to rush a real architectural gap into a command-sweep
-  pass.
+  syscalls. Tracked as discrete Phase 4.6-style work items below (continuing
+  that section's existing 1-5 numbering) so each can be picked up as its
+  own dedicated pass, matching this file's own standing guidance not to
+  rush a real architectural gap into a command-sweep pass:
+  6. **CommonCrypto-shaped digest API** -- `md5` (and any future
+     `sha1sum`/`shasum`-class command) needs a real userland digest API
+     surface distinct from this project's existing from-scratch SHA-2
+     (that's a low-level replacement for corecrypto's kernel-side
+     `g_crypto_funcs` registration, not a userland `CC_MD5`/`CC_SHA*`-shaped
+     API).
+  7. **`posix_spawn(2)`** -- an unbuilt process-creation API; blocks
+     `install`, which also needs its own real `strip(1)` subprocess helper
+     once spawning works.
+  8. **Real `sysctl(2)`** (variable-length-MIB syscall, never built here) --
+     blocks `df` (filesystem stats) and `killall`/`w`/`who` (`KERN_PROC`
+     process enumeration).
+  9. **Real System V IPC** (`semget`/`shmget`/`msgget` family) -- blocks
+     `ipcs`/`ipcrm`. `dd`'s more involved I/O-conversion logic wasn't
+     surveyed in depth either; group it here for a first look.
+  10. **zlib** -- blocks `compress`/`gzip`.
+  11. **Real `utmp`/`wtmp`/`lastlog` accounting file format + writers** --
+      blocks `who`/`w`/`lastcomm` (distinct from item 8's `sysctl`
+      dependency; both are needed for `who`/`w`).
+
+  `sort`/`xargs`/`nl`/`grep`/`sed`/`ed` need item 3 (POSIX regex, already
+  tracked, still not started); `sort` additionally needs real pthread
+  multithreading, which is Phase 7.5's permanent closed-source-shaped
+  ceiling (`bsd_pthread_stub.c`, see Known Stubbings), not a new item here.
+  `su` isn't a subsystem gap at all -- it needs careful design judgment
+  against this project's own existing `do_login()`/`cmd_su()` in `init.c`
+  rather than a naive port, flagged for whoever picks it up rather than
+  filed as a work item.
 - **Phase 5 (multi-user)**: the custom account resolver, real DES
   `crypt()` password verification, and a real `login`/`su` (wired into
   `tools/init_binary/init.c`'s `do_login()`/`cmd_su()`, real bash now the

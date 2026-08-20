@@ -241,6 +241,34 @@ this pass even if the change itself is cheap.
     just `host_get_clock_service`/`clock_get_time`/`semaphore_*`, without
     needing full MIG-stub generation).
 
+3. **`hexdump` prints only the final byte-count address line, never the
+    actual hex+ASCII data rows**, against a real non-empty file, for every
+    format flag tried (plain/`-c`/`-C`) -- found and narrowed (not fully
+    root-caused) during the 2026-08-20 command-sweep session's Block 3.
+    Specific to `hexdump`'s own `freopen(argv, "r", stdin)` +
+    `getc()`/`ungetc()` read idiom, not a general `freopen` bug (Block 2's
+    `fold`/`expand`/`unexpand`, linking the identical real `freopen.c`,
+    correctly read real file-argument content the same session). Most
+    likely a latent bug in this project's ported `getc()`/`ungetc()`
+    interaction with a freshly-`freopen`'d stream. Ships anyway (real,
+    unmodified source, links, runs, doesn't crash) -- same tolerance as
+    P0 item 7's `yes` kernel-panic bug. See `docs/historic/roadmap.md`'s
+    "Twenty-fifth pass" Block 3 entry for the full evidence trail.
+
+4. **`pathchk ""` (empty pathname) exits 0 instead of POSIX's specified
+    "shall report an error"** -- real, unmodified upstream FreeBSD source,
+    found during the same session's Block 3. Low practical impact, not
+    investigated further.
+
+5. **`rs -T` (transpose) dropped the first row of a small piped 2x3
+    matrix in one observed test** (`printf '1 2 3\n4 5 6\n' | rs -T`
+    printed only `4\n5\n6\n`) -- found during the same session's Block 2.
+    Not confirmed as a port bug vs. a genuine regression: real upstream
+    `rs`'s array-dimension auto-guessing heuristics, active whenever
+    neither `-g` nor `-c` is given, are documented as sensitive to
+    small/irregular input shapes. Not investigated further given `rs`'s
+    low practical value.
+
 ---
 
 ## P3 — hygiene / cleanup
