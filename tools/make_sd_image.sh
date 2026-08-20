@@ -18,7 +18,7 @@ cd "$(dirname "$0")/.."
 mkdir -p qemu
 
 OUT="${1:-qemu/hfs_root_test.img}"
-SIZE_MB="${2:-4096}"
+SIZE_MB="${2:-500}"
 
 if [ -e "$OUT" ]; then
     echo "error: $OUT already exists -- remove it first (this script never overwrites)" >&2
