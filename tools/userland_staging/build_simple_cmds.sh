@@ -257,6 +257,36 @@ EOF
     touch "$OUT/simple_getlogin_trap.o" # sentinel: this whole block already ran
 fi
 
+# Real pipe(2) for ed's popen()/pclose() (ed_popen_system_compat.c).
+# syscalls.master marks pipe NO_SYSCALL_STUB (real kernel trap returns
+# BOTH fds via x0/x1, not a single value -- a real special case a
+# generic single-return-value stub generator can't produce), but unlike
+# getrlimit/setattrlist's NO_SYSCALL_STUB gaps elsewhere in this project
+# (hand-written from scratch), Apple ships a real, complete,
+# already-correct hand-written arm64 implementation for this one right
+# in libsyscall/custom/__pipe.s (confirmed by reading it: takes the
+# caller's `int fd[2]` pointer in x0, does the raw syscall, stores the
+# kernel's x0/x1 results into fd[0]/fd[1], returns 0/error via the same
+# real cerror_nocancel convention every other raw syscall here uses) --
+# compiled directly, real Apple asm, not hand-rolled.
+if [ ! -f "$OUT/ed_pipe_trap.o" ]; then
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -arch arm64 \
+        -I"$OUT/sys_asm_compat" -I"$XNU/libsyscall/custom" -I"$XNU/libsyscall/mach" -I"$XNU/osfmk" \
+        "$XNU/libsyscall/custom/__pipe.s" -o "$OUT/ed_pipe_trap.o" 2>"$OUT/ed_pipe_trap.err" \
+        || { echo "error: __pipe.s compile failed:" >&2; cat "$OUT/ed_pipe_trap.err" >&2; exit 1; }
+fi
+
+# Real AAPCS64 register-save/restore primitives for ed's setjmp/longjmp/
+# sigsetjmp/siglongjmp (ed_setjmp_compat.c calls these; see both files'
+# own header comments). Compiled as its own plain .s object here
+# (rather than through the generic per-command CFLAGS extra-file loop
+# below, which assumes C sources) since assembly needs neither this
+# tier's C defines nor -include libc_build_prototypes.h.
+if [ ! -f "$OUT/ed_setjmp_raw.o" ]; then
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+        ed_setjmp_raw.s -o "$OUT/ed_setjmp_raw.o"
+fi
+
 LINK_COMMON="$OUT/libc_printf.a $OUT/libc_gen.a $OUT/libc_stdio.a $OUT/libc_locale_for_stdio.a $OUT/libc_gen.a $OUT/libc_stdio.a \
     $OUT/pthread_tsd_shim_libc_bootstrap.o $OUT/libpthread.a $OUT/simple_sched_yield_trap.o $OUT/simple_sched_yield.o \
     $OUT/simple_obj/sys____getlogin.o $OUT/simple_obj/sys____mmap.o $OUT/simple_obj/sys____munmap.o \
@@ -327,7 +357,8 @@ LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_pthread_testcancel,_pthread_testcancel\$UNIX2003 \
     -Wl,-alias,_sigsuspend,_sigsuspend\$UNIX2003 \
     -Wl,-alias,_regcomp,_regcomp\$UNIX2003 \
-    -Wl,-alias,_getrlimit,_getrlimit\$UNIX2003"
+    -Wl,-alias,_getrlimit,_getrlimit\$UNIX2003 \
+    -Wl,-alias,___pipe,_pipe"
 
 # Bash array, one element per command: "name:srcfile:extra1|extra2|..."
 # (srcfile is the FULL real source path -- not just relative to
@@ -499,6 +530,27 @@ CMD_LIST=(
     # (regcomp(nl_langinfo(YESEXPR))), not xargs' main argument-batching
     # logic, which has no regex in it at all.
     "xargs:$SHELL_CMDS/xargs/xargs.c:$SHELL_CMDS/xargs/strnsubst.c|$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|$LIBC/stdlib/FreeBSD/strtoul.c|$LIBC/stdlib/FreeBSD/strtonum.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/gen/get_compat.c|cp_mv_syscalls.c|xargs_getrlimit_compat.c|$OUT/freebsd_extra/strstr.c"
+    # ed: real, unmodified main.c/buf.c/cbc.c/glbl.c/io.c/re.c/sub.c/
+    # undo.c. Built WITHOUT -DDES (real, upstream-supported build
+    # variant -- cbc.c's own #ifdef DES guards every actual DES/
+    # openssl-des.h reference, see this loop's own cmd_cflags case;
+    # real crypto is an already-known permanent-ish ceiling this sweep
+    # was told not to attempt). Three new real pieces this command
+    # needed and nothing before it did: setjmp(3)/longjmp(3)/
+    # sigsetjmp(3)/siglongjmp(3) (ed_setjmp_raw.s + ed_setjmp_compat.c,
+    # see their own header comments for why Apple's real
+    # libplatform arm64 setjmp.s can't be used complete/unmodified
+    # here -- a genuinely missing __sigunaltstack real dependency, not
+    # just a missing header); real popen()/pclose()/system()
+    # (ed_popen_system_compat.c, same "Apple's real source needs
+    # posix_spawn, an already-deferred whole subsystem" gap as
+    # `install`/`df`, worked around with the classic pre-posix_spawn
+    # fork+execve algorithm built on primitives this project already
+    # has); and a real pipe(2) (this loop's own ed_pipe_trap.o
+    # generation step above, real Apple asm). mkstemp (buf.c's real
+    # temp-file-backed edit buffer) reuses mktemp's real
+    # Libc/stdio/FreeBSD/mktemp.c.
+    "ed:$TEXT_CMDS/ed/main.c:$TEXT_CMDS/ed/buf.c|$TEXT_CMDS/ed/cbc.c|$TEXT_CMDS/ed/glbl.c|$TEXT_CMDS/ed/io.c|$TEXT_CMDS/ed/re.c|$TEXT_CMDS/ed/sub.c|$TEXT_CMDS/ed/undo.c|ed_setjmp_compat.c|ed_popen_system_compat.c|$LIBC/stdio/FreeBSD/mktemp.c|$LIBC/gen/FreeBSD/arc4random.c|$LIBC/gen/get_compat.c|$LIBC/gen/FreeBSD/signal.c|cp_mv_syscalls.c"
 )
 
 built=0
@@ -546,6 +598,17 @@ for spec in "${CMD_LIST[@]}"; do
     case "$name" in
         grep)
             cmd_cflags="-DWITHOUT_FASTMATCH -DWITHOUT_LZMA -DWITHOUT_BZIP2 -DWITHOUT_NLS -DSTDC -DNO_DUMMY_DECL -D__LITTLE_ENDIAN=1 -I $OUT/zlib_glue"
+            ;;
+        ed)
+            # ed.c's real `!cmd` shell-escape calls system(3), marked
+            # __IOS_PROHIBITED (a real App-Store-review-time policy
+            # annotation, not a functional restriction on this non-App-
+            # Store target) by this project's vendored stdlib.h under
+            # the uniform -target arm64-apple-ios14.4 this whole build
+            # uses -- see ed_availability_override.h's own header
+            # comment for the full story (same class of gap, same class
+            # of fix, as Phase 4.6 item 3's regex_availability_override.h).
+            cmd_cflags="-include ed_availability_override.h"
             ;;
     esac
 
@@ -631,6 +694,23 @@ for spec in "${CMD_LIST[@]}"; do
             # regcomp/regexec/regfree for -p's real y/n confirmation
             # prompt only (see xargs's own CMD_LIST comment).
             extra_libs="$OUT/libc_regex.a"
+            ;;
+        ed)
+            # libc_regex.a: re.c's real regcomp/regexec/regerror
+            # (search/substitute addressing). $OUT/ed_pipe_trap.o /
+            # $OUT/ed_setjmp_raw.o: real Apple pipe(2) asm + this
+            # command's own AAPCS64 setjmp/longjmp core (both generated
+            # above, see this loop's own comments there for why each is
+            # its own dedicated .o rather than a CMD_LIST extra source).
+            # libremovefile.a: real unlink() (buf.c's real temp-file
+            # cleanup) -- same real duplicate read()/read$UNIX2003
+            # conflict as rm/ln/grep/sed above, common_read_compat
+            # cleared the same way. libcopyfile.a: real
+            # open_dprotected_np() (mktemp.c's real content-protection-
+            # class-aware mkstemp() path, same real dependency the
+            # `mktemp` command itself already established).
+            extra_libs="$OUT/libc_regex.a $OUT/ed_pipe_trap.o $OUT/ed_setjmp_raw.o $OUT/libremovefile.a $OUT/libcopyfile.a"
+            common_read_compat=""
             ;;
         cp|mv|mktemp|du|chmod)
             # Same real duplicate-symbol reasoning as rm|ln above

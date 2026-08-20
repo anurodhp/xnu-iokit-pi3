@@ -74,13 +74,54 @@ project's always-C locale, not a degraded approximation, so there was no
 real behavior to gain by rewiring it; unaffected by this change either
 way (not rebuilt, not relinked).
 
-Still needed for `grep`/`sed`/`sort`/`nl`/`xargs`/`ed`-class commands:
-each is otherwise a normal new-command port now that the underlying
-regex engine is real and linkable -- none attempted yet, see "Remaining
-future work" below.
+**Phase 4.6's `grep`/`sed`/`nl`/`xargs`/`ed` sweep DONE and QEMU-verified,
+2026-08-20 (session immediately following item 3).** All five real
+commands now build, link, and run against the real POSIX regex engine
+(`libc_regex.a`). Highlights (full per-command narrative, every new raw
+syscall, every real-source dependency chased down, in
+`docs/historic/roadmap.md`): `grep` needed the most new plumbing --
+`WITHOUT_FASTMATCH`/`WITHOUT_LZMA`/`WITHOUT_BZIP2`/`WITHOUT_NLS` (real,
+upstream-supported build knobs disabling optional subsystems this
+project doesn't have), real `fts_*`/`fnmatch()`, and a genuinely real
+(not fabricated) `gzdopen()`/`gzread()` for `-Z`/`.gz` support --
+real DEFLATE decompression via the real, unmodified zlib core vendored
+at `third_party/u-boot/lib/zlib`, glued in with a real standalone
+CRC-32 (`gz_crc32_compat.c`) since even u-boot's own `crc32.c` was too
+u-boot-board-specific to vendor directly. `sed` and `nl` were both
+close to drop-in once `libc_regex.a` was linkable. `xargs` was the
+first `simple_cmds.sh` binary to spawn real child processes (real
+`vfork()`/`waitpid()`/`execvp()`) and, along the way, surfaced and fixed
+a real project-wide bug: `sysconf(_SC_ARG_MAX)` unconditionally failed
+because the *only* `sysconf()` anywhere in this project's built libc
+archives was a narrow `_SC_STREAM_MAX`-only stdio-bootstrap stand-in
+silently shadowing every other case -- fixed narrowly (a real
+`sysctl(CTL_KERN, KERN_ARGMAX)` call added to that same stand-in,
+root-caused via a standalone QEMU-run diagnostic first) rather than
+swapping in the real general-purpose `sysconf.c`, which would have
+touched every other already-verified command's stdio-bootstrap path
+too. `ed` was the deepest port of the five: real `setjmp`/`longjmp`/
+`sigsetjmp`/`siglongjmp` did not exist anywhere in this project before
+it (Apple's real arm64 `libplatform` asm needs a genuinely missing
+`__sigunaltstack` real dependency, not just a missing header, so this
+project now carries its own real AAPCS64 register-save/restore core
+instead, deliberately scoped narrower than Apple's -- no
+pointer-authentication munging, no sigaltstack-status preservation,
+both honestly documented as real, narrow gaps, not silently dropped);
+real `popen()`/`pclose()`/`system()` (Apple's real source needs
+`posix_spawn`, an already-deferred whole subsystem -- worked around
+with the classic pre-`posix_spawn` `pipe()`+`fork()`+`execve()`
+algorithm); and a real `pipe(2)` (Apple's own hand-written arm64 raw
+syscall, `libsyscall/custom/__pipe.s`, compiled directly). QEMU-verified
+with real extended/basic regex patterns for each (`grep -E
+'^[0-9]+$'`, `sed -E 's/[0-9]+/NUM/'` plus a real `-i` in-place edit,
+`nl -b p'[0-9]'`, `xargs grep -l` + `xargs -n1`, and `ed`'s
+`g/[0-9][0-9]*/s//NUM/`, a real global regex substitute, plus a real
+`w` write-back verified via a follow-up `cat`) -- not just
+literal-string happy paths.
 
 Actively on **Phase 4, step 3** ("real commands"): as of 2026-08-20
-(end of day, "command-sweep" session), **60** real Apple/FreeBSD command
+(end of day, "command-sweep" session, plus the grep/sed/nl/xargs/ed
+sweep immediately after), **65** real Apple/FreeBSD command
 binaries build, link, and run QEMU-verified against the real HFS+ root,
 using a curated real Apple/FreeBSD libc stack (string, platform, locale,
 stdio, gen, printf/scanf, malloc, pthread, closure, removefile/copyfile,
@@ -410,10 +451,24 @@ Currently open, real bugs the roadmap narrative flagged as not-yet-fixed
 Deliberate stand-ins currently in place for a real subsystem, each will
 need a real implementation later:
 
-- **`bsd_pthread_stub.c`** (kernel) -- `bsdthread_create`/
-  `workq_kernreturn`/`psynch_*` unconditionally return `ENOTSUP`, standing
-  in for Apple's never-open-sourced pthread.kext. Blocks all real
-  multithreading, project-wide, indefinitely.
+- **`bsd_pthread_stub.c`** (kernel) -- `workq_kernreturn`/`psynch_*` still
+  unconditionally return `ENOTSUP`, standing in for Apple's never-open-
+  sourced pthread.kext. `bsdthread_create` itself is now REAL as of
+  2026-08-20 (Phase 7.5's first step, see below) -- it creates a genuine
+  second Mach thread via `pthread_kern->thread_create`/
+  `->thread_set_wq_state64`/`->thread_resume` (the same real callback
+  table + real `osfmk/kern/thread.c`/`osfmk/arm64/status.c` primitives
+  Apple's real pthread.kext would have used), QEMU-verified running real
+  code concurrently with the caller and exiting cleanly via the task's
+  normal multi-thread teardown. It does NOT implement the real pthread
+  ABI (no libpthread trampoline/TSD/dispatch-queue wiring, no thread port
+  returned for `bsdthread_terminate`/`pthread_kill` to target) -- not
+  `pthread_create()`-compatible yet. Real userspace-pthread scheduling
+  (workqueues, `psynch_mutex*`/`psynch_cvwait` userspace synchronizers)
+  remains unimplemented and still blocks all real `pthread_create()`-based
+  multithreading project-wide -- see `tools/pthread_kthread_test/` for the
+  real, minimal, verified exercise of the new path, and the Phase 7.5 entry
+  below for the fuller design writeup.
 - **From-scratch SHA-256/384/512** standing in for corecrypto
   (`g_crypto_funcs` is never registered) -- covers hashing/integrity only;
   no AES/HMAC/RSA/ECDSA/DH/ECDH. Blocks real `sshd` (Phase 7b) and `pkg`'s
@@ -492,6 +547,35 @@ need a real implementation later:
   is fully static, zero `.dylib` output anywhere (Phase 6.5).
 - **`libdispatch`/GCD** -- zero API surface, not attempted at all (Phase
   6.6).
+- **`ed_setjmp_raw.s`/`ed_setjmp_compat.c`** (Phase 4.6 grep/sed/nl/
+  xargs/ed sweep) -- real AAPCS64 register-save/restore core for
+  `setjmp`/`longjmp`/`sigsetjmp`/`siglongjmp`, standing in for Apple's
+  real `libplatform` arm64 asm (which needs a genuinely missing
+  `__sigunaltstack` real dependency, not just a missing header -- not
+  vendored anywhere in this checkout). Two honest, narrow, deliberate
+  omissions from Apple's version: no pointer-authentication ("PAC")
+  munging of saved fp/lr/sp (a memory-corruption-hardening step, a
+  no-op-equivalent omission on this plain non-PAC arm64 target, not a
+  behavior change), and no `sigaltstack(2)` status preserved across
+  `siglongjmp` (this project has no `sigaltstack(2)` caller anywhere
+  else either). Real signal-mask save/restore for the `sig-` variants
+  IS implemented (via the already-real `sigprocmask()`).
+- **`ed_popen_system_compat.c`** -- real `popen()`/`pclose()`/`system()`
+  via the classic pre-`posix_spawn` `pipe()`+`fork()`+`execve()`
+  algorithm, standing in for Apple's real `popen.c`/`system.c` (both
+  need `posix_spawn`, an already-deferred whole subsystem -- see
+  `install`/`df` above). Functionally complete for `ed`'s own real
+  usage (`!cmd`, `r !cmd`, `w !cmd`); bounded to 8 concurrent `popen()`
+  handles (a fixed table, real classic BSD implementations used a
+  similarly bounded table before switching to a linked list -- more
+  than `ed` itself ever needs concurrently).
+- **`gz_gzip_impl.c`/`gz_crc32_compat.c`** (grep's `-Z`/`.gz` support) --
+  real DEFLATE decompression via the real, unmodified zlib core vendored
+  at `third_party/u-boot/lib/zlib`, but only the narrow `gzdopen()`/
+  `gzread()` read-side subset grep itself calls; no compression side, no
+  general-purpose `zlib.h` public API. See item 10 in "Remaining future
+  work" below for what this still blocks (`gzip`/`compress` as
+  standalone commands).
 
 ## Remaining future work
 
@@ -545,18 +629,23 @@ need a real implementation later:
   9. **Real System V IPC** (`semget`/`shmget`/`msgget` family) -- blocks
      `ipcs`/`ipcrm`. `dd`'s more involved I/O-conversion logic wasn't
      surveyed in depth either; group it here for a first look.
-  10. **zlib** -- blocks `compress`/`gzip`.
+  10. **zlib** -- real inflate-side decompression now exists (the
+      grep/sed/nl/xargs/ed sweep's `gz_gzip_impl.c`, genuine DEFLATE via
+      the real, unmodified zlib core at `third_party/u-boot/lib/zlib`),
+      but only the narrow `gzdopen()`/`gzread()` subset grep's own
+      `-Z`/`.gz` support needed -- no compression (deflate) side, no
+      `gzip`(1)/`compress`(1) CLI wrapper. Still blocks `compress`/
+      `gzip` as standalone commands.
   11. **Real `utmp`/`wtmp`/`lastlog` accounting file format + writers** --
       blocks `who`/`w`/`lastcomm` (distinct from item 8's `sysctl`
       dependency; both are needed for `who`/`w`).
 
-  `sort`/`xargs`/`nl`/`grep`/`sed`/`ed` needed item 3 (POSIX regex),
-  now DONE -- each is otherwise a normal new-command port (real
-  `regcomp`/`regexec`/`regfree`/`regerror` all live in
-  `libc_build/libc_regex.a`, see Current status below), not yet
-  attempted as its own pass. `sort` additionally needs real pthread
+  `xargs`/`nl`/`grep`/`sed`/`ed` needed item 3 (POSIX regex), now DONE
+  -- all five DONE and QEMU-verified as their own pass 2026-08-20 (see
+  Current status below). `sort` additionally needs real pthread
   multithreading, which is Phase 7.5's permanent closed-source-shaped
-  ceiling (`bsd_pthread_stub.c`, see Known Stubbings), not a new item here.
+  ceiling (`bsd_pthread_stub.c`, see Known Stubbings) -- deliberately
+  NOT attempted in that pass, still open.
   `su` isn't a subsystem gap at all -- it needs careful design judgment
   against this project's own existing `do_login()`/`cmd_su()` in `init.c`
   rather than a naive port, flagged for whoever picks it up rather than
@@ -627,6 +716,92 @@ need a real implementation later:
   "complete" -- real pthread multithreading and real corecrypto-backed
   crypto are permanent gaps short of a from-scratch reimplementation of a
   closed Apple subsystem (see Known Stubbings above).
+  - **Real pthread kernel bridge, step 1: real thread creation, DONE +
+    QEMU-verified 2026-08-20.** Confirmed independently (not just trusting
+    `bsd_pthread_stub.c`'s own header comment) that no
+    `pthread_synch.c`/`pthread_shims`-style kernel *implementation* exists
+    anywhere in `third_party/xnu-7195` -- only the thin, real, open-source
+    shim layer (`bsd/pthread/pthread_shims.c`) that a real closed-source
+    pthread.kext would have plugged into via `pthread_kext_register()`.
+    One real nuance the original framing undersold:
+    `bsd/pthread/pthread_workqueue.c` (3683 lines, real Apple source,
+    already in this tree) DOES implement real `workq_open`/
+    `workq_kernreturn` workqueue *policy* logic (deciding when to spin up/
+    down worker threads, kqueue integration) -- but it still delegates the
+    actual thread-creation mechanics to the same closed `pthread_functions`
+    vtable (`workq_create_threadstack`/`workq_setup_thread`/
+    `workq_destroy_threadstack`/`workq_markfree_threadstack`/
+    `workq_handle_stack_events`, all still `bsd_pthread_stub.c` stubs
+    returning `ENOTSUP`/doing nothing). Filling in those five hooks for
+    real would light up *already-present* real Apple scheduling logic, not
+    just extend a hand-rolled stub -- a real, valuable, and narrower-than-
+    expected next scope for whoever picks up workqueues, worth knowing
+    before assuming that's "more closed-source design work" like
+    `bsdthread_create` was.
+
+    The real bridge implemented: `pthread_kern` (the real callback table
+    `pthread_shims.c` hands to any pthread.kext, already populated at
+    kernel-link-time since this project has no kext-loading boundary --
+    `bsd_pthread_stub.c` links directly against the same kernel image) is
+    used as designed -- `pthread_kern->thread_create(current_task(), &th)`
+    (real `osfmk/kern/thread.c`, leaves a suspended thread with
+    `user_stop_count=1`), then `pthread_kern->thread_set_wq_state64(th,
+    &state)` (real `osfmk/arm64/status.c`, sets `thread->machine.upcb`'s
+    pc/sp/x0 -- the exact same struct `bsd/dev/arm/unix_signal.c`'s real,
+    already-QEMU-verified `sendsig_set_thread_state64()` sets for signal
+    delivery on this same board), then `pthread_kern->thread_resume(th)`.
+    The new thread's very first return to userspace goes through
+    `thread_bootstrap_return` -> `arm64_thread_exception_return`
+    (`osfmk/arm64/locore.s`) -- the identical real, already-proven-safe
+    return-to-EL0 path every `exec()` in this project already exercises,
+    not new/invented machine-dependent code. Reference-counting mirrors
+    this project's own already-working `fork()` (`kern_fork.c`'s
+    "drop the extra references we got during the creation" ->
+    `thread_deallocate()` after `thread_resume()`).
+
+    Deliberately NOT implemented (out of scope for this step, per the
+    session's own instructions): no real libpthread-ABI trampoline
+    (kport/self/flags register conventions), no TSD/dispatch-queue
+    offsets, no thread port returned in `*retval` (so nothing in userspace
+    can `bsdthread_terminate`/signal the new thread individually yet -- it
+    only stops when the whole task exits), `bsdthread_register`/
+    `psynch_*`/`workq_*` all remain `ENOTSUP` stubs, untouched.
+
+    Verification: `tools/pthread_kthread_test/` (new, raw-syscall
+    freestanding test binary, same build shape as `tools/init_binary/`) --
+    a real second Mach thread writes a magic value and spins forever; the
+    main thread observes it and calls real `exit(2)`, which for the first
+    time in this project has to tear down a task with >1 live thread (real
+    `task_terminate_internal()` reaping, structurally untested here until
+    now). QEMU-confirmed via two separate real boot+login sessions:
+    `pthread_kthread_test` printed "SUCCESS: second real Mach thread ran
+    and wrote the magic value" both times, exited 0, and bash remained
+    alive and fully functional immediately afterward. Zero-regression
+    check (not just the new binary in isolation): in the same two sessions,
+    `pwd`/`true`/`false`/pipes/`wc`/`head`/`tail`/`mkdir`/`touch`/output-
+    redirection/`grep`/`sed`/`cat`/`cp`/`mv`/`rm`/`which`/`id`/`uname`/
+    `hostname`/`stat`/`ps`, plus real login itself, all ran identically to
+    before, interleaved before AND after the pthread test in the same
+    continuous shell session -- no panic, no hang, no crash, no divergent
+    output anywhere in either session's full serial log. Committed as a
+    real, working, regression-verified change (see `third_party/xnu-7195`
+    commit history for `bsd/kern/bsd_pthread_stub.c`); not pushed.
+
+    Real next step for whoever continues this: either (a) the narrower
+    workqueue-mechanics scope surfaced above (fill in
+    `workq_create_threadstack`/`workq_setup_thread`/
+    `workq_destroy_threadstack`/`workq_markfree_threadstack`/
+    `workq_handle_stack_events` to light up the already-real
+    `pthread_workqueue.c` policy logic), or (b) a real minimal libpthread-
+    ABI-compatible `bsdthread_create` (thread port + real register
+    convention) as a prerequisite for any real userspace `pthread_create()`
+    wrapper. `psynch_mutex*`/`psynch_cvwait`'s real backing primitive is
+    very likely real Mach semaphores/turnstiles already used elsewhere in
+    this kernel (`bsd/pthread/pthread_shims.c`'s own
+    `psynch_wait_prepare`/`psynch_wait_wakeup` already call real
+    `turnstile_prepare`/`waitq_assert_wait64_leeway`/
+    `waitq_wakeup64_thread` -- real, open-source, unexplored in depth this
+    session) -- not yet designed in detail, flagged rather than guessed at.
 - **Phase 8 (`pkg` package management)**: fully planned, not started.
   `freebsd/pkg` is the chosen vehicle (native Mach-O awareness, real
   custom-repo support already documented). Needs `libsqlite`/`libucl`/

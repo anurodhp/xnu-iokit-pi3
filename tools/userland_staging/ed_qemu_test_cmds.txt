@@ -1,0 +1,17 @@
+root
+darwin
+printf 'apple\nbanana123\ncherry\ndate456\n' > /tmp/ed_test.txt
+printf ',p\ns/[0-9][0-9]*/NUM/\n2p\ng/[0-9]/s//NUM/\n,p\nw\nq\n' | ed -s /tmp/ed_test.txt
+cat /tmp/ed_test.txt
+echo ED_TEST_DONE
+# The transcript above shows only line 2's leading digit run replaced by
+# the g/[0-9]/s//NUM/ step (bananaNUM23, not bananaNUM) -- this is real,
+# correct POSIX "last used regular expression" reuse, not a bug: the g
+# command's own address pattern ([0-9], no quantifier) becomes the "last
+# regex" by the time the embedded s//NUM/ runs, not the earlier explicit
+# s/[0-9][0-9]*/NUM/. Second transcript below removes the ambiguity by
+# using the same greedy pattern for both the address and the substitute.
+printf 'apple\nbanana123\ncherry\ndate456\n' > /tmp/ed_test2.txt
+printf 'g/[0-9][0-9]*/s//NUM/\n,p\nw\nq\n' | ed -s /tmp/ed_test2.txt
+cat /tmp/ed_test2.txt
+echo ED_TEST2_DONE

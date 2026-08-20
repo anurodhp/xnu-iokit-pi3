@@ -1,0 +1,6 @@
+root
+darwin
+printf 'apple\nbanana\ncherry\n' > /tmp/ed_shell_test.txt
+printf '!echo hello_from_system\nr !echo appended_via_popen_read\n,p\n1,2w !cat >/tmp/ed_popen_write_out.txt\nq\n' | ed -s /tmp/ed_shell_test.txt
+cat /tmp/ed_popen_write_out.txt
+echo SHELLESCAPE_TEST_DONE
