@@ -249,6 +249,28 @@ CMD_LIST=(
     # macro fallback -- confirmed by reading the #ifdef, not assumed).
     "cp:$FILE_CMDS/cp/cp.c:$FILE_CMDS/cp/utils.c|$LIBC/gen/get_compat.c|$LIBC/emulated/lchmod.c|$LIBC/emulated/lchflags.c|$LIBC/gen/FreeBSD/signal.c|cp_mv_syscalls.c|simple_cmds_rpmatch_compat.c|simple_cmds_lutimes_compat.c|$XNU/libsyscall/wrappers/clonefile.c|$XNU/libsyscall/wrappers/unix03/chmod.c"
     "mv:$FILE_CMDS/mv/mv.c:$LIBC/gen/get_compat.c|cp_mv_syscalls.c|simple_cmds_rpmatch_compat.c|$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|mv_pwcache_compat.c|../libinfo_custom/libinfo_custom.c|$XNU/libsyscall/wrappers/unix03/chmod.c"
+    # Block 2 (docs/roadmap.md Phase 4 step 3 "remaining commands" sweep):
+    # nine pure-stdio text_cmds (zero new syscalls -- just real getopt/
+    # err/warn, all already linked) plus four file_cmds reusing the raw
+    # syscalls cp/mv's block just added (chflags/mkfifo/mknod) or
+    # libremovefile.a's real rmdir. Deliberately excludes text_cmds' `nl`
+    # and shell_cmds' `xargs` from this same survey pass -- both real-
+    # source-confirmed to call regcomp/regexec (grepped, not guessed),
+    # the Phase 4.6 item 3 POSIX-regex wall this sweep is scoped to stop
+    # at, not attempt piecemeal.
+    "rev:$TEXT_CMDS/rev/rev.c:"
+    "fold:$TEXT_CMDS/fold/fold.c:$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/stdio/FreeBSD/freopen.c|$LIBC/stdio/FreeBSD/_flock_stub.c"
+    "paste:$TEXT_CMDS/paste/paste.c:"
+    "expand:$TEXT_CMDS/expand/expand.c:$LIBC/stdio/FreeBSD/freopen.c|$LIBC/stdio/FreeBSD/_flock_stub.c"
+    "unexpand:$TEXT_CMDS/unexpand/unexpand.c:$LIBC/stdio/FreeBSD/freopen.c|$LIBC/stdio/FreeBSD/_flock_stub.c"
+    "comm:$TEXT_CMDS/comm/comm.c:"
+    "colrm:$TEXT_CMDS/colrm/colrm.c:"
+    "lam:$TEXT_CMDS/lam/lam.c:"
+    "rs:$TEXT_CMDS/rs/rs.c:$LIBC/stdlib/FreeBSD/atoi.c"
+    "rmdir:$FILE_CMDS/rmdir/rmdir.c:"
+    "mkfifo:$FILE_CMDS/mkfifo/mkfifo.c:$LIBC/gen/get_compat.c|$LIBC/gen/FreeBSD/setmode.c|simple_cmds_sigprocmask_compat.c"
+    "mknod:$FILE_CMDS/mknod/mknod.c:$LIBC/stdlib/FreeBSD/bsearch.c|$LIBC/stdlib/FreeBSD/strtoul.c"
+    "chflags:$FILE_CMDS/chflags/chflags.c:$LIBC/gen/strtofflags.c|$LIBC/emulated/lchflags.c|cp_mv_syscalls.c"
 )
 
 built=0
@@ -298,7 +320,7 @@ for spec in "${CMD_LIST[@]}"; do
     extra_libs=""
     common_read_compat="$OUT/simple_obj/common_simple_cmds_read_compat.o"
     case "$name" in
-        rm|ln)
+        rm|ln|rmdir|chflags)
             # libremovefile.a's own removefile_syscalls.o already defines
             # read()/read$UNIX2003 -- a real, genuine duplicate-symbol
             # conflict against the shared compat object every other

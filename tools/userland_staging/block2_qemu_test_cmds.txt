@@ -1,0 +1,28 @@
+root
+darwin
+echo hello > /tmp/rev_in
+rev /tmp/rev_in
+printf 'a\tb\tc\n' > /tmp/exp_in
+expand /tmp/exp_in
+expand /tmp/exp_in > /tmp/exp_out
+unexpand -a /tmp/exp_out
+printf 'ONE\nTWO\nTHREE\n' > /tmp/paste1
+printf 'aaa\nbbb\nccc\n' > /tmp/paste2
+paste /tmp/paste1 /tmp/paste2
+lam -s ':' /tmp/paste1 /tmp/paste2
+printf '1\n2\n3\n4\n' > /tmp/comm_a
+printf '2\n3\n5\n' > /tmp/comm_b
+comm /tmp/comm_a /tmp/comm_b
+printf '1234567890\n' > /tmp/colrm_in
+colrm 3 5 < /tmp/colrm_in
+echo thisisaveryverylongwordtotestfold | fold -w 10
+echo hello | rs -T
+mkfifo /tmp/testfifo
+chflags nodump /tmp/exp_in
+mknod /tmp/testnod c 1 2
+rmdir /tmp/mvdir2/renamed
+cat /tmp/mvdir2/renamed/nope
+mkdir /tmp/rmdirtest
+rmdir /tmp/rmdirtest
+cat /tmp/rmdirtest/anything
+echo DONE_BLOCK2_MARKER
