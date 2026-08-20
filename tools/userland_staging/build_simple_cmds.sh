@@ -31,7 +31,31 @@ SHELL_CMDS="../../third_party/shell_cmds"
 TEXT_CMDS="../../third_party/text_cmds"
 FILE_CMDS="../../third_party/file_cmds"
 OUT="libc_build"
-mkdir -p "$OUT/simple_obj"
+mkdir -p "$OUT/simple_obj" "$OUT/compat_include"
+
+# Stand-in headers for nohup.c's real vproc.h/vproc_priv.h (libvproc/
+# launchd client API this project has no equivalent of at all -- no
+# launchd-managed daemons, see architecture.md's userland section, same
+# class of gap as build_copyfile.sh's xpc/private.h stand-in). Generated
+# here (not checked in directly) since $OUT/compat_include is a build
+# intermediate, matching every other tier's compat-header-generation
+# precedent (e.g. build_copyfile.sh's content_protection.h forwarder).
+cat > "$OUT/compat_include/vproc.h" <<'EOF'
+#ifndef _VPROC_H_COMPAT_
+#define _VPROC_H_COMPAT_
+#endif
+EOF
+cat > "$OUT/compat_include/vproc_priv.h" <<'EOF'
+/* Real declaration nohup.c actually calls; real (honest, not fabricated)
+ * implementation is nohup_vproc_compat.c -- see that file's own header
+ * comment for why NULL ("detach succeeded") is the correct, not just
+ * convenient, answer on a target with no console-session concept at
+ * all to detach from. */
+#ifndef _VPROC_PRIV_H_COMPAT_
+#define _VPROC_PRIV_H_COMPAT_
+const char *_vprocmgr_detach_from_console(int flags);
+#endif
+EOF
 
 XCODE12="/Applications/Xcode-12.app/Contents/Developer"
 CLANG="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
@@ -105,7 +129,7 @@ fi
 # syscall depending on whether the public Libc wrapper calls a private
 # name -- e.g. `___getlogin`/`___mmap`/`___munmap` vs plain `_kevent`/
 # `_kqueue`, which have no private wrapper layer at all).
-SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access _getuid _execve _link _symlink _getegid _geteuid _getgid _getgroups _chflags _chown _mknod _mkfifo _futimes _readlink _pread _pwrite _statfs _pathconf _faccessat _getentropy"
+SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access _getuid _execve _link _symlink _getegid _geteuid _getgid _getgroups _chflags _chown _mknod _mkfifo _futimes _readlink _pread _pwrite _statfs _pathconf _faccessat _getentropy _dup2 _getpriority"
 if [ ! -f "$OUT/simple_getlogin_trap.o" ]; then
     mkdir -p "$OUT/sys_asm_compat/mach/arm64"
     cat > "$OUT/sys_asm_compat/mach/arm64/asm.h" <<'EOF'
@@ -146,6 +170,7 @@ LINK_COMMON="$OUT/libc_printf.a $OUT/libc_gen.a $OUT/libc_stdio.a $OUT/libc_loca
     $OUT/simple_obj/sys__mkfifo.o $OUT/simple_obj/sys__futimes.o $OUT/simple_obj/sys__readlink.o \
     $OUT/simple_obj/sys__pread.o $OUT/simple_obj/sys__pwrite.o $OUT/simple_obj/sys__statfs.o \
     $OUT/simple_obj/sys__pathconf.o $OUT/simple_obj/sys__faccessat.o $OUT/simple_obj/sys__getentropy.o \
+    $OUT/simple_obj/sys__dup2.o $OUT/simple_obj/sys__getpriority.o \
     $OUT/libclosure.a $OUT/libmalloc.a $OUT/cerror_stub.o $OUT/libplatform.a"
 LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_close,_close\$UNIX2003 \
@@ -303,6 +328,15 @@ CMD_LIST=(
     # attempting this, not assumed.
     "chmod:$FILE_CMDS/chmod/chmod.c:$FILE_CMDS/chmod/chmod_acl.c|$LIBC/gen/FreeBSD/setmode.c|$LIBC/gen/get_compat.c|$XNU/libsyscall/wrappers/unix03/chmod.c|$LIBC/emulated/lchmod.c|cp_mv_syscalls.c|simple_cmds_sigprocmask_compat.c|chmod_mbr_compat.c"
     "chown:$FILE_CMDS/chown/chown.c:$LIBC/gen/get_compat.c|ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c|simple_cmds_getgrouplist_compat.c|cp_mv_syscalls.c|$LIBC/stdlib/FreeBSD/strtoul.c"
+    # Block 5: nice/renice/nohup. df (needs real sysctl(2), a variable-
+    # length-MIB syscall this project has never built) and install (needs
+    # posix_spawn -- a whole unbuilt subsystem, its own real strip(1)
+    # subprocess helper) were surveyed and deliberately deferred, real
+    # complexity confirmed by reading xinstall.c/df.c directly, not
+    # guessed -- both more involved than fits this pass.
+    "nice:$SHELL_CMDS/nice/nice.c:$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|cp_mv_syscalls.c|$LIBC/stdlib/FreeBSD/atoi.c"
+    "renice:$SHELL_CMDS/renice/renice.c:ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c|cp_mv_syscalls.c"
+    "nohup:$SHELL_CMDS/nohup/nohup.c:$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|$LIBC/gen/FreeBSD/signal.c|cp_mv_syscalls.c|nohup_vproc_compat.c"
 )
 
 built=0

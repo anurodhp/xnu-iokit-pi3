@@ -1,0 +1,11 @@
+root
+darwin
+nice -n 5 echo niced_output
+nice echo default_niced
+renice -n 3 -p 1
+echo RENICE_SELF=$?
+renice -n 3 -p 99999
+echo RENICE_BAD=$?
+nohup echo nohup_output
+cat nohup.out
+echo DONE_BLOCK5_MARKER

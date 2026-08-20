@@ -129,6 +129,15 @@ int setattrlist(const char *path, struct attrlist *alist, void *attributeBuffer,
                           (long)attributeBuffer, (long)bufferSize, (long)options);
 }
 
+/* setpriority(2) -- bsd/kern/syscalls.master #96, NO_SYSCALL_STUB, same
+ * real carry-flag pattern as this file's other raw syscalls. Block 5's
+ * nice/renice both need it. */
+typedef int id_t_compat;
+#define SYS_setpriority 96
+int setpriority(int which, id_t_compat who, int prio) {
+    return (int)syscall3(SYS_setpriority, which, who, prio);
+}
+
 /* fork()/vfork()/waitpid(): mv.c's cross-filesystem-rename fallback
  * (fastcopy() calling out to real /bin/cp + /bin/rm as subprocesses via
  * fork+execl+waitpid, exercised when rename(2) fails EXDEV) is the
