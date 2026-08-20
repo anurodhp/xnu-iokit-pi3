@@ -15,6 +15,20 @@ disable_overscan=1
 # on either way.
 enable_uart=1
 
+# Real Pi 3 mini-UART (BCM2837_AUX_MU_*, what both u-boot's serial console
+# and pexpert/arm/pe_serial.c's PI3_UART driver use on GPIO14/15) derives
+# its baud rate from the VPU core clock, NOT a fixed UART clock like the
+# PL011 has - its divisor register (baudreg=270 in pe_serial.c) is a fixed
+# value computed assuming a 250MHz core clock (270 -> ~115200 baud at
+# 250MHz). Without pinning core_freq, the firmware is free to scale that
+# clock (e.g. up under HDMI/GPU load), which silently shifts the ACTUAL
+# baud rate away from 115200 while every -b setting on the host side still
+# says 115200 - the real, confirmed (real-hardware boot test, 2026-08-20)
+# symptom is garbled-but-present serial output, not blank. Locking the
+# clock is the standard rpi3 mini-UART fix, not a guessed alternate baud
+# value.
+core_freq=250
+
 # gpu_mem is otherwise irrelevant to XNU (bootxnu.c hardcodes
 # boot_args->mem_size to a fixed 128MB regardless of this value - see
 # README.md and devicetrees/rpi3-realhw.dts) but pinned explicitly anyway
