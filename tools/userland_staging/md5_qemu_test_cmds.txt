@@ -1,0 +1,13 @@
+root
+darwin
+echo MD5_TEST_MARKER
+md5 -x
+echo MD5_X_EXIT_$?
+md5 -s abc
+echo MD5_S_EXIT_$?
+echo -n abc > /tmp/md5_test_file
+md5 /tmp/md5_test_file
+echo MD5_FILE_EXIT_$?
+printf '' | md5
+echo MD5_EMPTY_STDIN_EXIT_$?
+echo MD5_TEST_DONE

@@ -37,8 +37,25 @@ LIBARCHIVE_TAR="$LIBARCHIVE_ROOT/libarchive/tar"
 LIBARCHIVE_FE="$LIBARCHIVE_ROOT/libarchive/libarchive_fe"
 LESS="../../third_party/less/less"
 LESSROOT="../../third_party/less"
+COMMONCRYPTO="../../third_party/CommonCrypto"
 OUT="libc_build"
 mkdir -p "$OUT/simple_obj" "$OUT/compat_include"
+
+# md5(1) (Phase 4.6 item 6): real, unmodified text_cmds/md5/md5.c and its
+# real sibling commoncrypto.h (same directory, also unmodified) both
+# `#include <CommonCrypto/CommonDigest.h>` / `<CommonCrypto/
+# CommonDigestSPI.h>` -- real Apple headers, vendored verbatim here from
+# third_party/CommonCrypto (tag CommonCrypto-60178.40.2, see
+# setup_third_party.sh's own header comment for the macos-112 manifest
+# confirmation). md5_commoncrypto_shim.c (this command's own CMD_LIST
+# extra source, see its header) supplies the real function BODIES
+# (CCDigestInit/Update/Final/OutputSize, Digest_End/Data/File) these
+# headers only declare -- real corecrypto, which those functions would
+# call through to on real macOS, is not open-sourced (confirmed, see
+# md5_rfc1321_core.c's header).
+mkdir -p "$OUT/commoncrypto_glue/CommonCrypto"
+cp "$COMMONCRYPTO/include/CommonDigest.h" "$OUT/commoncrypto_glue/CommonCrypto/CommonDigest.h"
+cp "$COMMONCRYPTO/include/Private/CommonDigestSPI.h" "$OUT/commoncrypto_glue/CommonCrypto/CommonDigestSPI.h"
 
 # Stand-in headers for nohup.c's real vproc.h/vproc_priv.h (libvproc/
 # launchd client API this project has no equivalent of at all -- no
@@ -648,7 +665,7 @@ fi
 # same class of mismatch fstatfs() already had to work around). Hand-
 # written correctly in simple_cmds_statfs64_compat.c instead, alongside a
 # correct getfsstat() (also never in this list -- same file).
-SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access _getuid _execve _link _symlink _getegid _geteuid _getgid _getgroups _chflags _chown _mknod _mkfifo _futimes _readlink _pread _pwrite _pathconf _faccessat _getentropy _dup2 _getpriority _chroot _setgroups _setgid _setuid _chdir _fgetattrlist _fsetattrlist _dup _readlinkat _poll _fsync"
+SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access _getuid _execve _link _symlink _getegid _geteuid _getgid _getgroups _chflags _chown _mknod _mkfifo _futimes _readlink _pread _pwrite _pathconf _faccessat _getentropy _dup2 _getpriority _chroot _setgroups _setgid _setuid _chdir _fgetattrlist _fsetattrlist _dup _readlinkat _poll _fsync _getrusage"
 if [ ! -f "$OUT/simple_getlogin_trap.o" ]; then
     mkdir -p "$OUT/sys_asm_compat/mach/arm64"
     cat > "$OUT/sys_asm_compat/mach/arm64/asm.h" <<'EOF'
@@ -1262,6 +1279,18 @@ CMD_LIST=(
     # libc_regex.a: real regcomp/regexec/regfree (killall -m's real
     # regex-match mode), same archive tar/less/diff already proved.
     "killall:$SHELL_CMDS/killall/killall.c:$LIBC/gen/FreeBSD/siglist.c|ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c"
+    # md5 (Phase 4.6 item 6, closing the gap Block 6's own comment above
+    # flagged and deferred): real, unmodified text_cmds/md5/md5.c, linked
+    # against md5_commoncrypto_shim.c's real-CommonCrypto-header-shaped
+    # digest API (see that file's own header, and this script's
+    # commoncrypto_glue generation above) instead of real commoncrypto.c
+    # (needs libdispatch, out of scope project-wide) or this project's
+    # existing from-scratch SHA-2 (a different, non-CommonCrypto-shaped
+    # API, see the deferred-Block-6 comment above). md5_rfc1321_core.c is
+    # the actual MD5 math -- a userland port of xnu-7195's own already-
+    # proven libkern/crypto/corecrypto_md5.c (see that file's own header
+    # for why real Apple/FreeBSD sources aren't usable here).
+    "md5:$TEXT_CMDS/md5/md5.c:md5_commoncrypto_shim.c|md5_rfc1321_core.c"
 )
 
 built=0
@@ -1479,6 +1508,13 @@ for spec in "${CMD_LIST[@]}"; do
             #    gnudiff's config.h).
             cmd_cflags="-include ed_availability_override.h -I ../../third_party/bash/bash-3.2/lib/termcap -I $LESSROOT -I $LESS"
             ;;
+        md5)
+            # Real md5.c/commoncrypto.h's own `#include <CommonCrypto/
+            # CommonDigest.h>` / `<CommonCrypto/CommonDigestSPI.h>` --
+            # resolves to the real, unmodified headers this script's
+            # commoncrypto_glue generation step (above) copied in.
+            cmd_cflags="-I $OUT/commoncrypto_glue"
+            ;;
     esac
 
     if ! "$CLANG" $CFLAGS $cmd_cflags "-Dmain=$real_main" "$src" -o "$obj" 2>"$OUT/simple_obj/${name}.err"; then
@@ -1686,6 +1722,17 @@ for spec in "${CMD_LIST[@]}"; do
             # less/diff already proved, real _regcomp$UNIX2003 alias
             # already in the shared LINK_ALIASES above.
             extra_libs="$OUT/libc_regex.a"
+            ;;
+        md5)
+            # Real md5.c's MDTimeTrial() (-t flag) calls getrusage(2)
+            # unconditionally at file scope (not dead-code-eliminated
+            # even though -t is rarely exercised) -- not previously
+            # needed by any simple_cmds.sh command, so not in the shared
+            # SYS_STUBS_NEEDED batch's LINK_COMMON; generated there
+            # (SYS_STUBS_NEEDED now includes _getrusage) and linked here
+            # instead, same scoping precedent as tar/less/killall's own
+            # per-command extra_libs above.
+            extra_libs="$OUT/simple_obj/sys__getrusage.o"
             ;;
     esac
 

@@ -19,17 +19,18 @@ below archived to `docs/historic/roadmap.md`'s "Second archive pass"
 section -- read that for exact bugs found, exact QEMU-verified transcripts,
 and exact files touched per command):
 
-- **76 real userland commands built** (up from 65 at the start of this
+- **77 real userland commands built** (up from 65 at the start of this
   round of sweeps): the Tier A sweep (`ls`, `find`, `date`, `gzip`,
   `compress`), the real POSIX-regex-unlocked `grep`/`sed`/`nl`/`xargs`/`ed`
-  sweep, the Tier B sweep (`diff`, `tar`, `whoami`, `less`/`more`), and
-  most recently `df`/`killall` (Phase 4.6 item 8, sysctl/getfsstat/
-  KERN_PROC MIBs) -- all real, unmodified Apple/BSD/GNU source, all
-  QEMU-verified. `getty` (Phase 5.5 item 1, real `system_cmds/getty.tproj`)
-  also builds/links/runs cleanly and is installed at `/bin/getty`, but is
-  deliberately NOT wired into the boot/login path yet (needs a separate
-  `login(1)` binary this project doesn't build), so it isn't counted
-  among the 76.
+  sweep, the Tier B sweep (`diff`, `tar`, `whoami`, `less`/`more`),
+  `df`/`killall` (Phase 4.6 item 8, sysctl/getfsstat/KERN_PROC MIBs), and
+  most recently `md5` (Phase 4.6 item 6, real CommonCrypto-shaped digest
+  API shim -- see Known stubbings/Remaining future work below) -- all
+  real, unmodified Apple/BSD/GNU source, all QEMU-verified. `getty`
+  (Phase 5.5 item 1, real `system_cmds/getty.tproj`) also builds/links/
+  runs cleanly and is installed at `/bin/getty`, but is deliberately NOT
+  wired into the boot/login path yet (needs a separate `login(1)` binary
+  this project doesn't build), so it isn't counted among the 77.
 - **Interactive shell is real bash** (default login shell, real GNU
   readline -- tab completion, command history -- real termios/tty, real
   default hostname), with the earlier `bash -i` infinite-`exit`-flood bug
@@ -268,12 +269,40 @@ need a real implementation later:
   that section's existing 1-5 numbering) so each can be picked up as its
   own dedicated pass, matching this file's own standing guidance not to
   rush a real architectural gap into a command-sweep pass:
-  6. **CommonCrypto-shaped digest API** -- `md5` (and any future
-     `sha1sum`/`shasum`-class command) needs a real userland digest API
-     surface distinct from this project's existing from-scratch SHA-2
-     (that's a low-level replacement for corecrypto's kernel-side
-     `g_crypto_funcs` registration, not a userland `CC_MD5`/`CC_SHA*`-shaped
-     API).
+  6. **[DONE 2026-08-21]** CommonCrypto-shaped digest API for `md5`. Real,
+     unmodified `text_cmds/md5/md5.c` (tag `text_cmds-106`) now builds and
+     links via a new pin, `third_party/CommonCrypto` (tag
+     `CommonCrypto-60178.40.2`, confirmed against the `macos-112` manifest
+     the same way as every other pin) -- its real, unmodified
+     `CommonDigest.h`/`CommonDigestSPI.h` headers supply the real
+     `CCDigestCtx`/`CCDigestAlg`/`CC_MD5_DIGEST_LENGTH` types md5.c's own
+     real sibling `commoncrypto.h` expects. Real CommonCrypto's own
+     `lib/CommonDigest.c` glue turned out unusable as-is: it `#include`s
+     `<corecrypto/ccmd5.h>` etc and calls `ccdigest_init/update/final`,
+     and corecrypto's actual digest cores are confirmed NOT open-sourced
+     anywhere in this checkout (only 4 headers under
+     `xnu-7195/EXTERNAL_HEADERS/corecrypto/`, zero `.c` bodies, and this
+     CommonCrypto clone doesn't vendor corecrypto either). No FreeBSD
+     libmd precedent existed in-checkout either. Per source priority,
+     `tools/userland_staging/md5_commoncrypto_shim.c` implements the real
+     `CCDigestInit/Update/Final/OutputSize` + `Digest_End/Data/File`
+     surface `commoncrypto.h` declares (blocking `open()`/`read()` instead
+     of real `commoncrypto.c`'s `dispatch_io()`/GCD-based version --
+     libdispatch is already ruled out project-wide, see Known stubbings);
+     the actual MD5 math (`md5_rfc1321_core.c`) is a userland port of
+     `xnu-7195`'s own already-proven, already-kernel-boot-verified
+     `libkern/crypto/corecrypto_md5.c` (last-resort custom RFC 1321, not
+     Apple/FreeBSD source -- that kernel file's own header explains why).
+     QEMU-verified via a real pty-driven boot + login: `md5 -x` (built-in
+     self-test) printed all 8 RFC 1321 reference vectors as
+     `- verified correct`; `md5 -s abc`, `md5 <file containing "abc">`,
+     and `printf '' | md5` (stdin filter path) all produced
+     `900150983cd24fb0d6963f7d28e17f72` / `d41d8cd98f00b204e9800998ecf8427e`
+     respectively, matching this host's own real `/sbin/md5` byte-for-byte.
+     `sha1sum`/`shasum`-class follow-on (same shim pattern, wiring in this
+     project's existing from-scratch SHA-2 instead) not attempted this
+     pass -- `md5` was the item's actual named consumer; left for a future
+     pass, not forgotten.
   7. **`posix_spawn(2)`** -- an unbuilt process-creation API; blocks
      `install`, which also needs its own real `strip(1)` subprocess helper
      once spawning works.

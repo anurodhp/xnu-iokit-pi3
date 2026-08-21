@@ -37,6 +37,25 @@
 #     directly (commits 9c1581935ce26141f6118d3f9d136b7347a82122 ==
 #     `less-34`, 70fe9c400e7f10398c18ccc883b706d9694dd14b ==
 #     `libarchive-83.40.4`).
+#   - CommonCrypto (Phase 4.6 item 6, 2026-08-21): same `macos-112`
+#     manifest method -- `git ls-tree macos-112 -- CommonCrypto` ==
+#     commit 0e9014afa4389c0bf127c79aaf3bb9204b29b9cd == tag
+#     `CommonCrypto-60178.40.2` (confirmed via `git ls-remote --tags`).
+#     Real Apple source, but only its public/private *headers* and thin
+#     CC_*/CCDigest* glue (`lib/CommonDigest.c`) are usable here -- that
+#     glue itself `#include`s `<corecrypto/ccmd5.h>` etc and calls
+#     `ccdigest_init/update/final`, and the actual corecrypto digest
+#     compression cores are NOT present in this checkout (confirmed:
+#     `third_party/xnu-7195/EXTERNAL_HEADERS/corecrypto/` has only
+#     `cc.h`/`cc_config.h`/`ccmode_impl.h`/`ccpad.h` -- headers, no
+#     `ccdigest.c`/`ccmd5.c`/`ccsha2.c` implementation -- and this
+#     CommonCrypto checkout doesn't vendor corecrypto either), so
+#     `lib/CommonDigest.c` cannot actually link/run standalone here.
+#     Used for its real, unmodified `include/CommonDigest.h` +
+#     `include/Private/CommonDigestSPI.h` headers (CC_MD5_CTX layout,
+#     CCDigestAlg/CCDigestCtx/CCDigestRef, real function prototypes);
+#     the digest math itself is a from-scratch fallback -- see
+#     `tools/userland_staging/md5_commoncrypto_shim.c`'s header comment.
 #
 # Usage: ./setup_third_party.sh [--force]
 set -euo pipefail
@@ -84,6 +103,7 @@ misc_cmds|https://github.com/apple-oss-distributions/misc_cmds.git|misc_cmds-34|
 gnudiff|https://github.com/apple-oss-distributions/gnudiff.git|gnudiff-25.40.1|
 less|https://github.com/apple-oss-distributions/less.git|less-34|
 libarchive|https://github.com/apple-oss-distributions/libarchive.git|libarchive-83.40.4|
+CommonCrypto|https://github.com/apple-oss-distributions/CommonCrypto.git|CommonCrypto-60178.40.2|
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch; do
