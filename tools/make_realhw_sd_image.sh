@@ -2,13 +2,20 @@
 # Creates a fresh 2-partition (FAT32 boot + HFS+ root) SD card image for
 # REAL RASPBERRY PI 3 HARDWARE, using the CURRENT from-source kernel
 # (build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped)
-# instead of the frozen pre-session snapshot in sdcard/. Same recipe as
-# tools/make_sd_image.sh (which builds qemu/hfs_root_test.img for QEMU),
-# deliberately kept as its own separate script rather than a flag on that
-# one -- the two have different, easy-to-confuse defaults (real vs QEMU
-# device tree, real vs frozen kernel, real-hardware boot firmware), and
-# writing the wrong one to a real SD card is a real footgun worth a
-# distinct script name to avoid.
+# instead of the frozen pre-session snapshot in sdcard/. Otherwise
+# byte-for-byte the same recipe as tools/make_sd_image.sh (which builds
+# qemu/hfs_root_test.img for QEMU) -- same partition layout, same real
+# sdcard/ boot firmware (bootcode.bin/start.elf/fixup.dat/config.txt/
+# rpi3.dtb/u-boot.bin, copied there even by the QEMU script purely for
+# real-hardware parity, since QEMU itself boots via -kernel/-dtb and
+# never reads them), same tools/init_binary/inject_into_sd_image.sh root
+# provisioning. The ONLY functional difference between the two scripts
+# is which kernel file lands in the boot partition -- kept as its own
+# separate script rather than a flag on make_sd_image.sh because writing
+# the wrong kernel onto a real physical SD card is an easy, SILENT
+# mistake (no error, it just boots stale code) -- a distinctly-named
+# script with the choice baked into its filename is safer than a
+# same-named flag you could forget to pass.
 #
 # 4 GB (see SIZE_MB default below) is load-bearing, not arbitrary --
 # below it puts the SD card into SDSC (CSD v1) mode, which BCM2837SDHCI
