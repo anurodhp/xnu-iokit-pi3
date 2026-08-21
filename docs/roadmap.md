@@ -145,12 +145,16 @@ need a real implementation later:
   don't collide.
 - **`ps_task_info_stub.c`** -- `ps`'s CPU%/RSS/VSZ/thread columns print
   honest zeros instead of real values, standing in for `task_for_pid`/
-  `task_info`/`task_threads`/`thread_info` (needs real Mach IPC, Phase 4.6
-  item 5).
-- **`simple_cmds_nanosleep_compat.c`** -- a CPU-burning spin-wait against
-  `mach_absolute_time()` stands in for real blocking `nanosleep(2)` (needs
-  `host_get_clock_service`/`semaphore_create`/`clock_get_time`, Phase 4.6
-  item 5). Affects `tail -f`'s poll interval and any future `sleep(1)`.
+  `task_info`/`task_threads`/`thread_info` -- still NOT done (Phase 4.6
+  item 5's real Mach IPC infrastructure now exists and is QEMU-verified
+  for the simpler clock/semaphore routines, but `task_for_pid`'s own MIG
+  RPC to the task subsystem wasn't attempted this pass).
+- **`simple_cmds_nanosleep_compat.c`/`simple_cmds_nanosleep_pub_compat.c`:
+  DONE 2026-08-21** -- both now real, genuinely blocking `nanosleep(2)`/
+  `_nanosleep` via real Mach IPC (`host_get_clock_service` +
+  `semaphore_create` + `clock_get_time` + `__semwait_signal`), replacing
+  the prior CPU-burning `mach_absolute_time()` spin-wait. See Phase 4.6
+  item 5 below for the full writeup.
 - **`simple_cmds_rpmatch_compat.c`** -- a real but C-locale-only
   `rpmatch()` (used by `rm -i`'s y/n prompt) stands in for real Apple
   `Libc/gen/FreeBSD/rpmatch.c`'s `regcomp`/`regexec`-backed match against
@@ -255,8 +259,10 @@ need a real implementation later:
   yet); `~user`/`%group`/service-name completion candidates are always
   empty (no real account/group enumeration API, see Known stubbings);
   Phase 4.6 item 3 (real POSIX regex) is now DONE and QEMU-verified
-  (2026-08-20, see below); item 5 (real Mach IPC for `ps` stats + blocking
-  sleep) remains not started; real Apple `Libinfo` (the
+  (2026-08-20, see below); item 5 (real Mach IPC) is **PARTIALLY DONE
+  2026-08-21** -- the blocking-`nanosleep(2)` half is real and
+  QEMU-verified, the `ps` task-stats half (`task_for_pid`/`task_info`)
+  was not attempted this pass, see item 5 below; real Apple `Libinfo` (the
   actual repo, distinct from the working custom flat-file resolver) is
   still unbuilt. Separately worth profiling: bash.macho's first-touch
   demand-paging takes ~90s on this target's mostly-polled SD read path
@@ -269,6 +275,57 @@ need a real implementation later:
   that section's existing 1-5 numbering) so each can be picked up as its
   own dedicated pass, matching this file's own standing guidance not to
   rush a real architectural gap into a command-sweep pass:
+  5. **[PARTIALLY DONE 2026-08-21]** Real Mach IPC (`mach_msg()` trap +
+     MIG RPC) in userland -- kernel-side implementation was already real
+     and present (`third_party/xnu-7195` `osfmk/kern/ipc_*`/`clock.c`),
+     never exercised from a userland binary before this pass. The
+     smaller-scoped first target (`docs/backlog.md` item 7's own
+     suggestion) landed for real: **blocking `nanosleep(2)`/`_nanosleep`
+     is DONE** (`simple_cmds_nanosleep_compat.c`/
+     `simple_cmds_nanosleep_pub_compat.c`, used by `tail -f`'s poll
+     interval and `sleep(1)`) -- **`ps`'s CPU%/RSS/VSZ/thread-count
+     columns (`task_for_pid`/`task_info`/`task_threads`/`thread_info`,
+     `ps_task_info_stub.c`) is NOT done**, not attempted this pass, still
+     printing honest zeros.
+
+     Real chain now built (`tools/userland_staging/build_libmach_ipc.sh`,
+     new `libc_build/libmach_ipc.a`): `mach_host_self()` -> real
+     `host_get_clock_service()` -> real `semaphore_create()` (once, at
+     first use) -> per-call real `clock_get_time()` +
+     `__semwait_signal()` (the real, cancelable BSD syscall 334 --
+     already linked via `libmalloc.a`'s `sys_semwait_signal.o`, this is
+     its first real semaphore-backed caller). `host_get_clock_service`/
+     `clock_get_time`/`semaphore_create` client stubs are real,
+     `mig`-generated code (`/usr/bin/mig` run fresh each build against
+     the real, unmodified `osfmk/mach/{clock,mach_host,task}.defs`, same
+     tool/source-regeneration precedent `build_libmalloc.sh`'s own
+     `mach_vm_internal.h` step already established) -- not hand-derived
+     wire format. Two new real arm64 trap stubs needed generating by
+     hand (`mach_ipc_traps.s`, same pattern as `libplatform_mach_traps.s`/
+     `libmalloc_vm_traps.s`): `mach_msg_trap` (-31) and `host_self_trap`
+     (-29). A handful of genuinely-unreachable-for-these-3-routines MIG
+     support symbols (`mach_port_insert_right`/`mach_port_extract_right`/
+     `mach_port_unguard`/`voucher_mach_msg_set`) got honest `KERN_FAILURE`/
+     `FALSE` stand-ins (`mach_ipc_dead_stubs.c`, same pattern as
+     `libmalloc_vm_mig_stubs.c`) -- proven unreachable via each routine's
+     own real generated reply-disposition check, not assumed.
+
+     QEMU-verified via a real pty-driven boot + login, three independent
+     ways: (1) the real, unmodified `/bin/sleep 3` and `tail -f` binaries
+     link with zero undefined symbols and `sleep 3` completes and returns
+     the shell to its prompt without hanging; (2) a dedicated smoketest
+     (`mach_ipc_smoketest.macho`, calling the exact same real `nanosleep()`
+     `sleep(1)` uses) self-measured a real 3000ms requested sleep at
+     `ELAPSED_MS=3032` via `mach_absolute_time()` + a real, non-1:1
+     `mach_timebase_info()` ratio (numer=125/denom=3) -- accurate to
+     within 1%; (3) independently, the QEMU monitor's `info registers`
+     was polled (non-invasively, VM kept running) during the sleep window
+     and caught the guest PC at `_processor_idle+0x168` -- the real
+     kernel idle-loop symbol, confirming genuine blocking/descheduling
+     rather than the old `mach_absolute_time()` spin-wait it replaced.
+     `task_for_pid`'s real MIG RPC to the task subsystem (`ps` stats) is
+     a separate, larger follow-on -- left for a future pass, not
+     forgotten.
   6. **[DONE 2026-08-21]** CommonCrypto-shaped digest API for `md5`. Real,
      unmodified `text_cmds/md5/md5.c` (tag `text_cmds-106`) now builds and
      links via a new pin, `third_party/CommonCrypto` (tag

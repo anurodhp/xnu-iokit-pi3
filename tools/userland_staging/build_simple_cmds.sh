@@ -458,7 +458,7 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     echo "error: Xcode-12.app not found at $XCODE12 (see tools/build_kexts.sh for the same dependency)" >&2
     exit 1
 fi
-for dep in libmalloc libplatform libclosure libpthread libc_gen libc_stdio libc_printf libc_locale libc_locale_for_stdio; do
+for dep in libmalloc libplatform libclosure libpthread libc_gen libc_stdio libc_printf libc_locale libc_locale_for_stdio libmach_ipc; do
     if [ ! -f "$OUT/$dep.a" ]; then
         echo "error: $OUT/$dep.a not found -- run build_$dep.sh first" >&2
         exit 1
@@ -1722,6 +1722,18 @@ for spec in "${CMD_LIST[@]}"; do
             # less/diff already proved, real _regcomp$UNIX2003 alias
             # already in the shared LINK_ALIASES above.
             extra_libs="$OUT/libc_regex.a"
+            ;;
+        sleep|tail)
+            # Real Mach IPC (Phase 4.6 item 5, 2026-08-21): both real
+            # nanosleep() entry points these two commands need
+            # (simple_cmds_nanosleep_pub_compat.c's public `nanosleep()`
+            # for sleep(1); simple_cmds_nanosleep_compat.c's private
+            # `_nanosleep` for tail -f's poll interval, via usleep.c) are
+            # now genuinely blocking, via real host_get_clock_service +
+            # semaphore_create + clock_get_time + __semwait_signal Mach
+            # IPC -- see build_mach_ipc.sh for the full real chain this
+            # links (this project's first-ever mach_msg()-trap exercise).
+            extra_libs="$OUT/libmach_ipc.a"
             ;;
         md5)
             # Real md5.c's MDTimeTrial() (-t flag) calls getrusage(2)
