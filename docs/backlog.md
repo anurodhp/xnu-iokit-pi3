@@ -392,6 +392,25 @@ this pass even if the change itself is cheap.
     expert would populate it) is still open for whoever wants boot to
     work without an explicit `rd=` in the future.
 
+11. **[RESOLVED 2026-08-21, one real scope limit remains]** ~~`less`/
+    `more` interactive behavior only partially verified~~ — a follow-up
+    one-off timing-based pty test (RETURN/space/`q` sent on a fixed
+    schedule, not depending on the shared harness's prompt-string
+    matching, since `less`'s own real `(press RETURN)` prompt isn't in
+    its `PROMPT_SUFFIXES` list) confirmed: RETURN correctly advances
+    past the hardcopy-mode prompt and prints the file header, and `q`
+    correctly exits back to the shell with a real exit code 0. `less`/
+    `more`'s launch → degraded-mode-detection → quit lifecycle is real
+    and QEMU-verified end to end. **Remaining real, honest scope limit,
+    not a bug**: this project has no real termcap/terminfo *database*
+    (only the proven "always report no entry" stub), so `less` always
+    runs in real hardcopy mode on this target — never true full-screen
+    cursor-addressing paging, and a genuine page-by-page scroll-through
+    of multi-screen content was not separately exercised (only single
+    RETURN + quit). Porting a real terminal-capability database is a
+    distinct, larger, not-yet-scoped follow-up if full-screen paging is
+    ever needed.
+
 ---
 
 ## P3 — hygiene / cleanup

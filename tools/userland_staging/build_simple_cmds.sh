@@ -30,6 +30,13 @@ PTHREAD="../../third_party/libpthread"
 SHELL_CMDS="../../third_party/shell_cmds"
 TEXT_CMDS="../../third_party/text_cmds"
 FILE_CMDS="../../third_party/file_cmds"
+GNUDIFF="../../third_party/gnudiff/diffutils"
+LIBARCHIVE_ROOT="../../third_party/libarchive"
+LIBARCHIVE="$LIBARCHIVE_ROOT/libarchive/libarchive"
+LIBARCHIVE_TAR="$LIBARCHIVE_ROOT/libarchive/tar"
+LIBARCHIVE_FE="$LIBARCHIVE_ROOT/libarchive/libarchive_fe"
+LESS="../../third_party/less/less"
+LESSROOT="../../third_party/less"
 OUT="libc_build"
 mkdir -p "$OUT/simple_obj" "$OUT/compat_include"
 
@@ -54,6 +61,186 @@ cat > "$OUT/compat_include/vproc_priv.h" <<'EOF'
 #ifndef _VPROC_PRIV_H_COMPAT_
 #define _VPROC_PRIV_H_COMPAT_
 const char *_vprocmgr_detach_from_console(int flags);
+#endif
+EOF
+
+# diff(1)'s real, unmodified lib/regex.c and src/{diff,analyze,context,
+# io,util}.c all `#include <regex.h>` expecting gnulib's OWN GNU-syntax
+# regex engine (struct re_pattern_buffer, re_compile_pattern() -- a
+# different, older API from the POSIX regcomp()/regexec() this
+# project's TRE-based $LIBC/include/regex.h provides for every other
+# command) -- real Apple's own gnudiff.xcodeproj resolves `<regex.h>`
+# to gnulib's own copy by putting lib/ ahead of the SDK's regex.h on its
+# HEADER_SEARCH_PATHS; this build reproduces that by (a) putting diff's
+# own cmd_cflags -I paths ahead of the shared $CFLAGS on the compile
+# line (see this loop's own comment further down) and (b) generating
+# lib/regex.h here, since the checked-out tree only has the *.hin
+# autoconf input template (never actually configured for this
+# checkout's own target) -- confirmed byte-for-byte template-only, zero
+# "@VAR@" substitution markers present, so a straight copy is the real,
+# correct "configure" output here, not a guess. Same story for
+# fnmatch.h (exclude.c's `#include "fnmatch.h"` -- the real
+# implementation used is still the project's own $LIBC/gen/FreeBSD/
+# fnmatch.c via du_fnmatch_libc_wrapper.c, reused verbatim from the
+# grep/du tiers; gnulib's own lib/fnmatch.c is deliberately NOT compiled,
+# matching Apple's own diffutils.xcodeproj "diffutils" static-lib target
+# source list, which omits it too).
+mkdir -p "$OUT/gnudiff_glue"
+if grep -q '@[A-Za-z_]*@' "$GNUDIFF/lib/regex.hin" 2>/dev/null; then
+    echo "error: $GNUDIFF/lib/regex.hin has unexpected @VAR@ substitution markers" >&2
+    exit 1
+fi
+cp "$GNUDIFF/lib/regex.hin" "$OUT/gnudiff_glue/regex.h"
+if grep -q '@[A-Za-z_]*@' "$GNUDIFF/lib/fnmatch.hin" 2>/dev/null; then
+    echo "error: $GNUDIFF/lib/fnmatch.hin has unexpected @VAR@ substitution markers" >&2
+    exit 1
+fi
+cp "$GNUDIFF/lib/fnmatch.hin" "$OUT/gnudiff_glue/fnmatch.h"
+
+# diff needs BOTH gnulib's own real lib/strftime.c (context.c's real
+# nstrftime() call -- see this command's own CMD_LIST comment) AND the
+# real system $LIBC/stdtime/FreeBSD/strftime.c (nstrftime's own
+# internal locale-dependent-conversion fallback calls real system
+# strftime()/strftime_l(), and $LIBC/stdtime/FreeBSD/asctime.c's real
+# asctime_r() is itself implemented via strftime_l() -- both genuine,
+# separate real dependencies, not redundant). The per-command build
+# loop's own object-naming scheme (`${name}_$(basename $ef .c).o`)
+# can't tell these two same-named strftime.c apart -- confirmed via the
+# real, reproducible silent-clobber bug this caused before adding this
+# copy (gnulib's own compiled object got overwritten on disk by the
+# system one compiled right after it, since both produced
+# libc_build/simple_obj/diff_strftime.o). A plain renamed copy of the
+# real, unmodified system file sidesteps the collision without
+# touching the shared build-loop logic other commands also use.
+cp "$LIBC/stdtime/FreeBSD/strftime.c" "$OUT/gnudiff_glue/libc_real_strftime.c"
+
+# less(1) needs BOTH its own real, unmodified less/signal.c (winch()/
+# init_signals()/psignals()/the real `sigs` global -- SIGWINCH/SIGINT
+# bookkeeping) AND the real system $LIBC/gen/FreeBSD/signal.c (real
+# signal(3), lsystem.c's own real dependency) -- same real same-
+# basename object-clobber bug diff's own strftime.c pair already hit
+# and fixed the same way (a renamed copy, not a build-loop change).
+mkdir -p "$OUT/less_glue"
+cp "$LIBC/gen/FreeBSD/signal.c" "$OUT/less_glue/libc_real_signal.c"
+
+# lib/c-stack.c's real segv_handler()/init_backtrace() call
+# write()/_exit()/getpid()/kill() without including <unistd.h>/
+# <signal.h> themselves (same real "relies on ambient TU context"
+# pattern dirname.h's own missing size_t/strlen already showed --
+# see this command's own CMD_LIST comment). Force-including the real
+# <unistd.h>/<signal.h> themselves (rather than four narrow prototypes)
+# was tried first and reverted: cp_mv_syscalls.c's own hand-rolled
+# setattrlist() prototype (a real, deliberate NO_SYSCALL_STUB stand-in,
+# see that file's own header) then collides with unistd.h's real
+# declaration the moment unistd.h is force-included into every extra
+# source file for this command, not just c-stack.c -- a real,
+# reproducible build break, not a guess. Four narrow, real-signature-
+# matching prototypes avoid pulling in unistd.h's ~150 other
+# declarations entirely, so nothing else can collide.
+cat > "$OUT/gnudiff_glue/diff_cstack_decls.h" <<'EOF'
+#ifndef _DIFF_CSTACK_DECLS_H_COMPAT_
+#define _DIFF_CSTACK_DECLS_H_COMPAT_
+#include <sys/types.h>
+extern ssize_t write(int fd, const void *buf, size_t nbyte);
+extern void _exit(int status) __attribute__((noreturn));
+extern pid_t getpid(void);
+extern int kill(pid_t pid, int sig);
+/* $LIBC/stdlib/FreeBSD/getopt_long.c's own real `#include <getopt.h>`
+ * -- same angle-bracket include diff.c itself uses, so it also resolves
+ * to gnulib's own lib/getopt.h via $OUT/cmd_pre_include (see the
+ * "diff" cmd_cflags case's own comment) rather than this project's
+ * usual $LIBC/include/getopt.h -- loses that header's own `optreset`
+ * global (a real 4.4BSD extension gnulib's getopt.h has no equivalent
+ * of at all, confirmed by reading it). The real getopt_long.c source
+ * itself is unmodified; common_getopt.o ($LIBC/stdlib/FreeBSD/
+ * getopt.c, always linked into every command) already defines the
+ * real storage for this exact global, this just restores its
+ * declaration.
+ */
+extern int optreset;
+#endif
+EOF
+
+# tar(1) (Tier B, third_party/libarchive, pinned via setup_third_party.sh
+# tag libarchive-83.40.4): real, unmodified Apple libarchive/bsdtar
+# source needs its own "corrected" config.h -- the real, checked-in
+# config.h reflects what Apple's OWN full-macOS-SDK build environment
+# actually has (HAVE_BZLIB_H/HAVE_LZMA_H/HAVE_LIBXML2/HAVE_ICONV(_H)/
+# HAVE_LOCALCHARSET_H/HAVE_READPASSPHRASE(_H)/HAVE_POSIX_SPAWNP all =1),
+# none of which this project has ported (no bzip2/lzma/libxml2/iconv/
+# posix_spawn anywhere in this checkout, confirmed by grep, not
+# assumed). Real upstream libarchive is ALREADY designed to gracefully
+# degrade when any of these are undefined (confirmed by reading
+# archive_read_support_filter_bzip2.c's own real `#if !defined(HAVE_
+# BZLIB_H)` fallback before relying on this project-wide) -- so
+# "correcting" config.h to say what this environment actually has is
+# the same real, honest signal a real ./configure run would have
+# produced here, not a fabricated shortcut. HAVE_UTIMENSAT/HAVE_
+# FUTIMENS are undef'd too for the same reason (archive_write_disk_
+# posix.c's own real `#if defined(HAVE_UTIMENSAT) && defined(HAVE_
+# FUTIMENS)` vs `#elif HAVE_UTIMES` fallback -- neither utimensat(2)
+# nor futimens(2) exist in this xnu-7195 checkout's syscalls.master at
+# all, confirmed, not guessed, so forcing the real, already-available
+# utimes/futimes/lutimes fallback path is correct). A straight sed
+# transform of the real, checked-in file (never modified in place),
+# regenerated every build.
+mkdir -p "$OUT/tar_glue"
+sed -e 's/^#define HAVE_BZLIB_H 1/\/* #undef HAVE_BZLIB_H *\//' \
+    -e 's/^#define HAVE_LZMA_H 1/\/* #undef HAVE_LZMA_H *\//' \
+    -e 's/^#define HAVE_LIBXML2 1/\/* #undef HAVE_LIBXML2 *\//' \
+    -e 's/^#define HAVE_ICONV 1/\/* #undef HAVE_ICONV *\//' \
+    -e 's/^#define HAVE_ICONV_H 1/\/* #undef HAVE_ICONV_H *\//' \
+    -e 's/^#define HAVE_LOCALCHARSET_H 1/\/* #undef HAVE_LOCALCHARSET_H *\//' \
+    -e 's/^#define HAVE_READPASSPHRASE 1/\/* #undef HAVE_READPASSPHRASE *\//' \
+    -e 's/^#define HAVE_READPASSPHRASE_H 1/\/* #undef HAVE_READPASSPHRASE_H *\//' \
+    -e 's/^#define HAVE_POSIX_SPAWNP 1/\/* #undef HAVE_POSIX_SPAWNP *\//' \
+    -e 's/^#define HAVE_UTIMENSAT 1/\/* #undef HAVE_UTIMENSAT *\//' \
+    -e 's/^#define HAVE_FUTIMENS 1/\/* #undef HAVE_FUTIMENS *\//' \
+    "$LIBARCHIVE_ROOT/config.h" > "$OUT/tar_glue/config.h"
+
+# Real zlib convenience-macro/function restoration (deflateInit as a
+# macro over the real deflateInit_, plus compressBound()/uncompress(),
+# needed only by archive_write_disk_posix.c's real Apple-only HFS+
+# "decmpfs" support) lives directly in $OUT/compat_include/zlib.h's own
+# widening below (NOT a separate force-included header here -- that was
+# tried first and reverted, see that widening's own comment for the real
+# crc32 conflicting-types break it caused).
+
+# Real Apple dirent.h privately renamed every DIR struct field to a
+# double-underscore-prefixed name (__dd_fd/__dd_loc/etc, confirmed by
+# reading third_party/Libc/include/dirent.h directly) but the real,
+# unmodified FreeBSD opendir.c/readdir.c/closedir.c this project newly
+# needs for tar(1) (archive_read_disk_posix.c's real directory-tree
+# walk -- no prior tier needed real opendir/readdir/closedir at all,
+# every earlier command used libremovefile.a's fts_* instead) still
+# reference the plain FreeBSD names throughout -- same real field
+# layout either way (confirmed field-for-field), so a narrow macro
+# rename is a real, textually-scoped compatibility fix, not a
+# behavior change.
+cat > "$OUT/tar_glue/dirent_compat_macros.h" <<'EOF'
+#ifndef _TAR_DIRENT_COMPAT_MACROS_H_
+#define _TAR_DIRENT_COMPAT_MACROS_H_
+#define dd_fd __dd_fd
+#define dd_loc __dd_loc
+#define dd_size __dd_size
+#define dd_buf __dd_buf
+#define dd_len __dd_len
+#define dd_seek __dd_seek
+#define dd_flags __dd_flags
+#define dd_lock __dd_lock
+#define dd_td __dd_td
+/* Real, unmodified readdir.c's own `_GENERIC_DIRSIZ()` macro (its only
+ * real dependency on third_party/Libc/fbsdcompat/_fbsd_compat_.h,
+ * copied verbatim from there rather than force-including that whole
+ * header project-wide) -- that header's own real `#define _sigaction
+ * sigaction`-style BSD-namespace-hiding macros (meant to redirect
+ * OTHER real FreeBSD source's internal `_foo()` calls to the public
+ * `foo()` symbol) collide with cp_mv_syscalls.c's own, unrelated
+ * `_sigaction()` helper function name -- a real, reproducible
+ * redefinition error this narrower single-macro copy avoids
+ * entirely while still giving readdir.c exactly what it needs. */
+#define _GENERIC_DIRSIZ(dp) \
+    (((unsigned long)&((struct dirent *)0)->d_name + (dp)->d_namlen+1 + 3) & ~3)
 #endif
 EOF
 
@@ -126,6 +313,34 @@ int gzread(gzFile file, void *buf, unsigned len);
 	deflateInit2_((strm), (level), (method), (windowBits), (memLevel), \
 	    (strategy), ZLIB_VERSION, (int)sizeof(z_stream))
 #endif
+/* Widened again 2026-08-21 (tar(1) tier): real, unmodified
+ * archive_write_disk_posix.c (Apple-only HFS+ "decmpfs" support) calls
+ * the real unversioned deflateInit() macro (same real "u-boot trimmed
+ * it, restore the real upstream macro" story as deflateInit2 above) plus
+ * compressBound()/uncompress() -- real zlib top-level convenience
+ * wrappers u-boot's vendored core never included (only deflate/inflate,
+ * confirmed absent from third_party/u-boot/lib/zlib by directory
+ * listing). See tools/userland_staging/tar_zlib_convenience_compat.c's
+ * own header for the real implementation (compressBound: zlib's own
+ * well-known deterministic formula; uncompress: a faithful real
+ * inflateInit_/inflate/inflateEnd wrapper, matching upstream zlib's own
+ * actual implementation). Declared here (the widely-shared, already-
+ * included-by-every-zlib-consumer header) rather than via a separate
+ * force-included file, which was tried first and reverted: forcing a
+ * second copy of this same real crc32()/deflateInit_()/etc block ahead
+ * of gz_crc32_compat.c's own definition on tar's command line caused a
+ * real, reproducible `uInt` vs `uLong` conflicting-types error for
+ * crc32 (gz_crc32_compat.c has zero #includes of its own by design, so
+ * it never saw this file's real crc32 prototype under grep/gzip -- only
+ * an extra forced -include newly introduced it for tar).
+ */
+#ifndef deflateInit
+#define deflateInit(strm, level) \
+	deflateInit_((strm), (level), ZLIB_VERSION, (int)sizeof(z_stream))
+#endif
+unsigned long compressBound(unsigned long sourceLen);
+int uncompress(unsigned char *dest, unsigned long *destLen,
+    const unsigned char *source, unsigned long sourceLen);
 #endif
 EOF
 
@@ -270,6 +485,20 @@ if [ ! -f "$OUT/freebsd_extra/humanize_number.c" ]; then
     curl -sf -o "$OUT/freebsd_extra/humanize_number.c" "https://raw.githubusercontent.com/freebsd/freebsd-src/main/lib/libutil/humanize_number.c"
 fi
 
+# Real, unmodified FreeBSD flsl.c -- diff(1)'s real, unmodified
+# $LIBC/stdlib/FreeBSD/qsort.c (DEPTH() macro, its own real recursion-
+# depth-limit-before-falling-back-to-heapsort logic) calls flsl(), which
+# this checkout's Libc only ever declares (include/strings.h) and never
+# implements (confirmed by grep across all of third_party/Libc, same
+# "genuinely missing, not just unfound" gap strstr.c/humanize_number.c's
+# own comments document -- apple-oss-distributions' Libc drop doesn't
+# open-source this one either). Same reproducible curl-at-build-time
+# pattern; a tiny, self-contained, dependency-free single function
+# (LONG_WIDTH - __builtin_clzl(mask)).
+if [ ! -f "$OUT/freebsd_extra/flsl.c" ]; then
+    curl -sf -o "$OUT/freebsd_extra/flsl.c" "https://raw.githubusercontent.com/freebsd/freebsd-src/main/lib/libc/string/flsl.c"
+fi
+
 # ls(1)'s own real, unmodified print.c #includes <libutil.h> (only for
 # strmode()'s declaration -- the real implementation is Libc/string/
 # FreeBSD/strmode.c, already vendored -- and humanize_number()/HN_* --
@@ -307,11 +536,32 @@ int humanize_number(char *buf, size_t len, int64_t number,
 #endif
 EOF
 
+# $OUT/cmd_pre_include: an always-first -I directory, empty by default,
+# that a per-command cmd_cflags case can populate (just before its own
+# compile step, then it MUST be cleared at the top of the next command's
+# iteration -- see the "clear any previous command's override" line
+# below) to make a same-named header shadow one $CFLAGS's own later -I
+# dirs would otherwise resolve to. diff's own real `<regex.h>` (gnulib's
+# GNU-syntax regex engine, NOT this project's shared TRE/POSIX one) is
+# the first real need for this -- see the gnudiff_glue generation
+# comment above and this loop's own "diff" cmd_cflags case. Deliberately
+# NOT done by simply reordering `$cmd_cflags $CFLAGS` on the compile
+# line instead (tried first, reverted): that would also move every
+# *other* command's existing cmd_cflags -I dirs ahead of $CFLAGS, and
+# grep/gzip's own zlib_glue -I -- added for a completely different
+# reason (zlib's inflate/deflate.c's own internal zutil.h, never meant
+# to shadow anything) -- happens to contain its OWN internal zlib.h,
+# which would then wrongly win over $OUT/compat_include/zlib.h's real,
+# complete public API forwarder that grep.c/gzip.c's own `#include
+# <zlib.h>` needs (confirmed by the real, reproducible build break this
+# caused before reverting, not guessed).
+mkdir -p "$OUT/cmd_pre_include"
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness \
     -include libc_build_prototypes.h \
     -D_LIBC_NO_FEATURE_VERIFICATION -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
     -DVARIANT_STATIC -DVARIANT_CANCELABLE -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \
+    -I $OUT/cmd_pre_include \
     -I $LIBC/include -I $LIBC/locale -I $LIBC/locale/FreeBSD -I $LIBC/darwin -I $LIBC/gen \
     -I $LIBC/fbsdcompat \
     -I $LIBC/stdtime/FreeBSD \
@@ -381,7 +631,15 @@ fi
 # syscall depending on whether the public Libc wrapper calls a private
 # name -- e.g. `___getlogin`/`___mmap`/`___munmap` vs plain `_kevent`/
 # `_kqueue`, which have no private wrapper layer at all).
-SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access _getuid _execve _link _symlink _getegid _geteuid _getgid _getgroups _chflags _chown _mknod _mkfifo _futimes _readlink _pread _pwrite _statfs _pathconf _faccessat _getentropy _dup2 _getpriority _chroot _setgroups _setgid _setuid _chdir _fgetattrlist _fsetattrlist _dup"
+# _readlinkat: tar(1)'s real archive_read_disk_posix.c (symlink-target
+# reads during a real *at()-relative directory-tree walk). syscalls.master
+# #473, not NO_SYSCALL_STUB, a plain generatable addition.
+# _poll: tar(1)'s real filter_fork_posix.c (__archive_check_child()'s
+# real HAVE_POLL path, waiting on the external-decompressor pipe).
+# syscalls.master #230, plain cancelable poll, not NO_SYSCALL_STUB.
+# _fsync: less(1)'s real ch.c (log-file (-o/-O) durability on close).
+# syscalls.master #95, plain cancelable fsync, not NO_SYSCALL_STUB.
+SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access _getuid _execve _link _symlink _getegid _geteuid _getgid _getgroups _chflags _chown _mknod _mkfifo _futimes _readlink _pread _pwrite _statfs _pathconf _faccessat _getentropy _dup2 _getpriority _chroot _setgroups _setgid _setuid _chdir _fgetattrlist _fsetattrlist _dup _readlinkat _poll _fsync"
 if [ ! -f "$OUT/simple_getlogin_trap.o" ]; then
     mkdir -p "$OUT/sys_asm_compat/mach/arm64"
     cat > "$OUT/sys_asm_compat/mach/arm64/asm.h" <<'EOF'
@@ -439,6 +697,24 @@ if [ ! -f "$OUT/ed_setjmp_raw.o" ]; then
         ed_setjmp_raw.s -o "$OUT/ed_setjmp_raw.o"
 fi
 
+# Real sigaltstack(2) raw syscall for diff(1)'s real, unmodified
+# lib/c-stack.c (`c_stack_action()`, called unconditionally at diff's
+# own startup to install a SIGSEGV-on-alternate-stack handler for deep
+# recursive comparisons). syscalls.master marks sigaltstack
+# NO_SYSCALL_STUB (same category as pipe above -- a real case the
+# generic create-syscalls.pl generator skips), but Apple ships a real,
+# already-correct hand-written arm64 stub at
+# libsyscall/custom/__sigaltstack.s (same __SYSCALL macro/cerror
+# convention as every generated stub, just not auto-generated); compiled
+# directly here rather than added to SYS_STUBS_NEEDED, matching the
+# __pipe.s precedent immediately above.
+if [ ! -f "$OUT/simple_obj/sys____sigaltstack.o" ]; then
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -arch arm64 \
+        -I"$OUT/sys_asm_compat" -I"$XNU/libsyscall/custom" -I"$XNU/libsyscall/mach" -I"$XNU/osfmk" \
+        "$XNU/libsyscall/custom/__sigaltstack.s" -o "$OUT/simple_obj/sys____sigaltstack.o" 2>"$OUT/simple_obj/sys____sigaltstack.err" \
+        || { echo "error: __sigaltstack.s compile failed:" >&2; cat "$OUT/simple_obj/sys____sigaltstack.err" >&2; exit 1; }
+fi
+
 LINK_COMMON="$OUT/libc_printf.a $OUT/libc_gen.a $OUT/libc_stdio.a $OUT/libc_locale_for_stdio.a $OUT/libc_gen.a $OUT/libc_stdio.a \
     $OUT/pthread_tsd_shim_libc_bootstrap.o $OUT/libpthread.a $OUT/simple_sched_yield_trap.o $OUT/simple_sched_yield.o \
     $OUT/simple_obj/sys____getlogin.o $OUT/simple_obj/sys____mmap.o $OUT/simple_obj/sys____munmap.o \
@@ -467,6 +743,7 @@ LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_fstat,_fstat\$INODE64 \
     -Wl,-alias,_lstat,_lstat\$INODE64 \
     -Wl,-alias,_stat,_stat\$INODE64 \
+    -Wl,-alias,_poll,_poll\$UNIX2003 \
     -Wl,-alias,__err,_err \
     -Wl,-alias,__warn,_warn \
     -Wl,-alias,_fputs,_fputs\$UNIX2003 \
@@ -494,6 +771,8 @@ LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_closedir,_closedir\$UNIX2003 \
     -Wl,-alias,_opendir,_opendir\$INODE64\$UNIX2003 \
     -Wl,-alias,_readdir,_readdir\$INODE64 \
+    -Wl,-alias,_readdir_r,_readdir_r\$INODE64 \
+    -Wl,-alias,_fdopendir,_fdopendir\$INODE64\$UNIX2003 \
     -Wl,-alias,_fsync,_fsync\$UNIX2003 \
     -Wl,-alias,_reallocarray,_reallocarray\$DARWIN_EXTSN \
     -Wl,-alias,_nanosleep,_nanosleep\$UNIX2003 \
@@ -513,6 +792,74 @@ LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,___pipe,_pipe \
     -Wl,-alias,_send,_send\$UNIX2003 \
     -Wl,-alias,_writev,_writev\$UNIX2003"
+
+# tar(1)-only variant, real ld64-609 crash workaround -- root-caused via
+# a real binary search over LINK_ALIASES against tar's actual ~140-object
+# link (its own real relink harness, not guessed): passing the FULL
+# shared LINK_ALIASES list (60 entries, several with a genuinely
+# undefined base symbol -- e.g. `-alias ___pipe _pipe`, where nothing in
+# this project ever generates a `___pipe` symbol; ed_pipe_trap.o defines
+# plain `_pipe` directly instead) triggers a real, reproducible ld64-609
+# (Xcode 12's linker) internal crash in generateLinkEditInfo ("Assertion
+# failed: (target != NULL)") once tar's object count is combined with
+# enough simultaneously-undefined alias bases. Every smaller command
+# tolerates the same undefined-base aliases fine (a plain warning,
+# ld64-609 only crashes past some real but unidentified combined
+# threshold this project has never hit before tar) -- confirmed via
+# bisection that no SINGLE alias entry is independently "the" bad one;
+# it's cumulative. The real fix is a tar-specific alias list containing
+# ONLY the aliases tar's own real object set actually references as
+# undefined (computed once, by a real link attempt with zero aliases and
+# reading its own undefined-symbol list -- not guessed) -- every alias
+# below has a real, confirmed consumer in tar.macho's own real link
+# inputs. `___pipe`'s alias is correctly absent (tar gets `pipe()` via
+# tar_pipe_compat.c's own direct forwarding to the real `___pipe` raw
+# syscall symbol instead, see that file's own header) and
+# `_pthread_testcancel`'s missing alias direction is resolved by a real
+# no-op definition (tar_pthread_testcancel_compat.c) rather than an
+# alias at all (same real gap/fix apply(1)/bash(1)/ps(1) each
+# independently already hit, see that file's own header).
+LINK_ALIASES_TAR="-Wl,-alias,_open,_open\$UNIX2003 \
+    -Wl,-alias,_close,_close\$UNIX2003 \
+    -Wl,-alias,_write,_write\$UNIX2003 \
+    -Wl,-alias,___kill,_kill\$UNIX2003 \
+    -Wl,-alias,___kill,_kill \
+    -Wl,-alias,__mal_semwait_sleep,_sleep\$UNIX2003 \
+    -Wl,-alias,___kdebug_trace,_kdebug_trace \
+    -Wl,-alias,_fcntl,_fcntl\$UNIX2003 \
+    -Wl,-alias,_fstat,_fstat\$INODE64 \
+    -Wl,-alias,_lstat,_lstat\$INODE64 \
+    -Wl,-alias,_stat,_stat\$INODE64 \
+    -Wl,-alias,_poll,_poll\$UNIX2003 \
+    -Wl,-alias,_fputs,_fputs\$UNIX2003 \
+    -Wl,-alias,_mprotect,_mprotect\$UNIX2003 \
+    -Wl,-alias,_pthread_rwlock_rdlock\$UNIX2003,_pthread_rwlock_rdlock \
+    -Wl,-alias,_pthread_rwlock_unlock\$UNIX2003,_pthread_rwlock_unlock \
+    -Wl,-alias,_strerror,_strerror\$UNIX2003 \
+    -Wl,-alias,_fwrite,_fwrite\$UNIX2003 \
+    -Wl,-alias,_read,_read\$UNIX2003 \
+    -Wl,-alias,_fstatfs,_fstatfs\$INODE64 \
+    -Wl,-alias,_fopen,_fopen\$UNIX2003 \
+    -Wl,-alias,_pthread_rwlock_rdlock\$UNIX2003,__pthread_rwlock_rdlock \
+    -Wl,-alias,_pthread_rwlock_wrlock\$UNIX2003,__pthread_rwlock_wrlock \
+    -Wl,-alias,_pthread_rwlock_unlock\$UNIX2003,__pthread_rwlock_unlock \
+    -Wl,-alias,_strchr,_index \
+    -Wl,-alias,_fstatat64,_fstatat\$INODE64 \
+    -Wl,-alias,_closedir,_closedir\$UNIX2003 \
+    -Wl,-alias,_opendir,_opendir\$INODE64\$UNIX2003 \
+    -Wl,-alias,_readdir,_readdir\$INODE64 \
+    -Wl,-alias,_readdir_r,_readdir_r\$INODE64 \
+    -Wl,-alias,_fdopendir,_fdopendir\$INODE64\$UNIX2003 \
+    -Wl,-alias,_reallocarray,_reallocarray\$DARWIN_EXTSN \
+    -Wl,-alias,_fchmod,_fchmod\$UNIX2003 \
+    -Wl,-alias,_lchown,_lchown\$UNIX2003 \
+    -Wl,-alias,_getattrlist,_getattrlist\$UNIX2003 \
+    -Wl,-alias,_setattrlist,_setattrlist\$UNIX2003 \
+    -Wl,-alias,_pread,_pread\$UNIX2003 \
+    -Wl,-alias,_pwrite,_pwrite\$UNIX2003 \
+    -Wl,-alias,_statfs,_statfs\$INODE64 \
+    -Wl,-alias,_waitpid,_waitpid\$UNIX2003 \
+    -Wl,-alias,_regcomp,_regcomp\$UNIX2003"
 
 # Bash array, one element per command: "name:srcfile:extra1|extra2|..."
 # (srcfile is the FULL real source path -- not just relative to
@@ -808,6 +1155,64 @@ CMD_LIST=(
     # a "5-function subset" at the ABI/internals level, only its
     # earliest bring-up milestone was.
     "compress:$FILE_CMDS/compress/compress.c:$FILE_CMDS/compress/zopen.c|$LIBC/stdio/FreeBSD/funopen.c|$XNU/libsyscall/wrappers/unix03/chmod.c"
+    # Tier B (docs/roadmap.md "Command priority reorganized 2026-08-20"):
+    # diff, the first Tier B command -- real, unmodified source newly
+    # pinned via setup_third_party.sh (third_party/gnudiff, tag
+    # gnudiff-25.40.1, confirmed against the macos-112 manifest; real
+    # apple-oss-distributions project name for GNU diffutils is
+    # "gnudiff", not "diffutils" -- see setup_third_party.sh's own
+    # header comment). Source list matches gnudiff.xcodeproj's own real
+    # "diff" + "diffutils" (its static-lib dependency, libdiffutils.a)
+    # targets exactly (confirmed by reading project.pbxproj's own
+    # PBXSourcesBuildPhase entries, not guessed): diff's own
+    # analyze/context/dir/ed/ifdef/io/normal/side/util/version.c, plus
+    # libdiffutils.a's basename/c-stack/cmpbuf/error/exclude/exitfail/
+    # freesoft/hard-locale/imaxtostr/offtostr/posixver/prepargs/
+    # quotesys/regex/setmode/strftime/umaxtostr/xmalloc/xstrtoumax.c.
+    # Two real, deliberate deviations from that exact list:
+    #   - lib/getopt.c + lib/getopt1.c (gnulib's own self-contained
+    #     getopt_long, providing its own optind/optarg/opterr globals)
+    #     are NOT compiled -- they'd be a real duplicate-strong-symbol
+    #     conflict against this script's own common_getopt.o
+    #     ($LIBC/stdlib/FreeBSD/getopt.c, linked into every command).
+    #     diff.c's own `#include <getopt.h>` instead resolves to
+    #     gnulib's lib/getopt.h (binary-identical `struct option`
+    #     layout to $LIBC/include/getopt.h, confirmed field-by-field),
+    #     satisfied at link time by the project's own real
+    #     $LIBC/stdlib/FreeBSD/getopt_long.c (already proven by the
+    #     grep tier) instead of gnulib's getopt1.c -- same real
+    #     function, different real source, zero behavior gap for
+    #     diff's own use (permuting getopt_long over argv).
+    #   - lib/fnmatch.c is not compiled either (matching Apple's own
+    #     libdiffutils.a source list, which omits it too) -- exclude.c's
+    #     `#include "fnmatch.h"` (generated from fnmatch.hin, verbatim
+    #     copy, see the gnudiff_glue generation above) declares the same
+    #     real fnmatch() the project's own du/grep tiers already provide
+    #     via du_fnmatch_libc_wrapper.c, reused verbatim here too.
+    # c-stack.c's real sigaltstack(2)-based SIGSEGV/stack-overflow
+    # handler needs both a real C wrapper ($LIBC/compat-43/sigaltstk.c,
+    # calling `__sigaltstack`) and the raw syscall stub itself
+    # ($OUT/simple_obj/sys____sigaltstack.o, generated above from
+    # Apple's real hand-written libsyscall/custom/__sigaltstack.s --
+    # NO_SYSCALL_STUB in syscalls.master, same category as pipe(2),
+    # not auto-generated by create-syscalls.pl); the raw .o is added via
+    # this loop's own extra_libs case below (like ed's
+    # ed_pipe_trap.o/ed_setjmp_raw.o) since it isn't a plain .c source.
+    # HAVE_CONFIG_H is deliberately NOT defined for regex.c specifically
+    # (it's the one file in this list that only pulls in real
+    # <config.h> -- and therefore any of its HAVE_MBRTOWC/HAVE_WCHAR_H/
+    # HAVE_BTOWC-gated wide-char regex support -- when that macro is
+    # set): every other file here reaches config.h unconditionally via
+    # diff.h/system.h's own unguarded `#include <config.h>` regardless,
+    # so this only turns off gnulib regex's optional wide-char-locale
+    # matching path (an honest, narrow, documented gap -- real
+    # mbrtowc()/wctype()/iswctype() linkability against this tier's
+    # actual LINK_COMMON was not verified, and ASCII-range -I/--ignore-
+    # matching-lines matching, the feature this pass actually verifies,
+    # doesn't need it).
+    "diff:$GNUDIFF/src/diff.c:$GNUDIFF/src/analyze.c|$GNUDIFF/src/context.c|$GNUDIFF/src/dir.c|$GNUDIFF/src/ed.c|$GNUDIFF/src/ifdef.c|$GNUDIFF/src/io.c|$GNUDIFF/src/normal.c|$GNUDIFF/src/side.c|$GNUDIFF/src/util.c|$GNUDIFF/src/version.c|$GNUDIFF/lib/basename.c|$GNUDIFF/lib/c-stack.c|$GNUDIFF/lib/cmpbuf.c|$GNUDIFF/lib/error.c|$GNUDIFF/lib/exclude.c|$GNUDIFF/lib/exitfail.c|$GNUDIFF/lib/freesoft.c|$GNUDIFF/lib/hard-locale.c|$GNUDIFF/lib/imaxtostr.c|$GNUDIFF/lib/offtostr.c|$GNUDIFF/lib/posixver.c|$GNUDIFF/lib/prepargs.c|$GNUDIFF/lib/quotesys.c|$GNUDIFF/lib/regex.c|$GNUDIFF/lib/setmode.c|$GNUDIFF/lib/strftime.c|$GNUDIFF/lib/umaxtostr.c|$GNUDIFF/lib/xmalloc.c|$GNUDIFF/lib/xstrtoumax.c|$LIBC/stdlib/FreeBSD/getopt_long.c|du_fnmatch_libc_wrapper.c|$LIBC/compat-43/sigaltstk.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/stdlib/FreeBSD/strtoull.c|$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|cp_mv_syscalls.c|ed_setjmp_compat.c|$LIBC/stdlib/FreeBSD/qsort.c|$LIBC/gen/FreeBSD/signal.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/timelocal.c|$OUT/freebsd_extra/flsl.c|$LIBC/stdlib/FreeBSD/heapsort.c|$LIBC/sys/gettimeofday.c|ps_commpage_gettimeofday_stub.c|$OUT/gnudiff_glue/libc_real_strftime.c"
+    "tar:$LIBARCHIVE_TAR/bsdtar.c:$LIBARCHIVE/archive_acl.c|$LIBARCHIVE/archive_check_magic.c|$LIBARCHIVE/archive_cmdline.c|$LIBARCHIVE/archive_disk_acl_darwin.c|$LIBARCHIVE/archive_entry_copy_stat.c|$LIBARCHIVE/archive_entry_link_resolver.c|$LIBARCHIVE/archive_entry_sparse.c|$LIBARCHIVE/archive_entry_stat.c|$LIBARCHIVE/archive_entry_strmode.c|$LIBARCHIVE/archive_entry_xattr.c|$LIBARCHIVE/archive_entry.c|$LIBARCHIVE/archive_getdate.c|$LIBARCHIVE/archive_match.c|$LIBARCHIVE/archive_options.c|$LIBARCHIVE/archive_pack_dev.c|$LIBARCHIVE/archive_pathmatch.c|$LIBARCHIVE/archive_ppmd7.c|$LIBARCHIVE/archive_random.c|$LIBARCHIVE/archive_rb.c|$LIBARCHIVE/archive_read_add_passphrase.c|$LIBARCHIVE/archive_read_append_filter.c|$LIBARCHIVE/archive_read_data_into_fd.c|$LIBARCHIVE/archive_read_disk_entry_from_file.c|$LIBARCHIVE/archive_read_disk_posix.c|$LIBARCHIVE/archive_read_disk_set_standard_lookup.c|$LIBARCHIVE/archive_read_extract.c|$LIBARCHIVE/archive_read_extract2.c|$LIBARCHIVE/archive_read_open_fd.c|$LIBARCHIVE/archive_read_open_file.c|$LIBARCHIVE/archive_read_open_filename.c|$LIBARCHIVE/archive_read_open_memory.c|$LIBARCHIVE/archive_read_set_format.c|$LIBARCHIVE/archive_read_set_options.c|$LIBARCHIVE/archive_read_support_filter_all.c|$LIBARCHIVE/archive_read_support_filter_bzip2.c|$LIBARCHIVE/archive_read_support_filter_compress.c|$LIBARCHIVE/archive_read_support_filter_grzip.c|$LIBARCHIVE/archive_read_support_filter_gzip.c|$LIBARCHIVE/archive_read_support_filter_lrzip.c|$LIBARCHIVE/archive_read_support_filter_lz4.c|$LIBARCHIVE/archive_read_support_filter_lzop.c|$LIBARCHIVE/archive_read_support_filter_none.c|$LIBARCHIVE/archive_read_support_filter_program.c|$LIBARCHIVE/archive_read_support_filter_rpm.c|$LIBARCHIVE/archive_read_support_filter_uu.c|$LIBARCHIVE/archive_read_support_filter_xz.c|$LIBARCHIVE/archive_read_support_format_all.c|$LIBARCHIVE/archive_read_support_format_ar.c|$LIBARCHIVE/archive_read_support_format_by_code.c|$LIBARCHIVE/archive_read_support_format_cpio.c|$LIBARCHIVE/archive_read_support_format_empty.c|$LIBARCHIVE/archive_read_support_format_iso9660.c|$LIBARCHIVE/archive_read_support_format_lha.c|$LIBARCHIVE/archive_read_support_format_mtree.c|$LIBARCHIVE/archive_read_support_format_rar.c|$LIBARCHIVE/archive_read_support_format_raw.c|$LIBARCHIVE/archive_read_support_format_tar.c|$LIBARCHIVE/archive_read_support_format_warc.c|$LIBARCHIVE/archive_read.c|$LIBARCHIVE/archive_string_sprintf.c|$LIBARCHIVE/archive_string.c|$LIBARCHIVE/archive_util.c|$LIBARCHIVE/archive_version_details.c|$LIBARCHIVE/archive_virtual.c|$LIBARCHIVE/archive_write_add_filter_b64encode.c|$LIBARCHIVE/archive_write_add_filter_by_name.c|$LIBARCHIVE/archive_write_add_filter_bzip2.c|$LIBARCHIVE/archive_write_add_filter_compress.c|$LIBARCHIVE/archive_write_add_filter_grzip.c|$LIBARCHIVE/archive_write_add_filter_gzip.c|$LIBARCHIVE/archive_write_add_filter_lrzip.c|$LIBARCHIVE/archive_write_add_filter_lz4.c|$LIBARCHIVE/archive_write_add_filter_lzop.c|$LIBARCHIVE/archive_write_add_filter_none.c|$LIBARCHIVE/archive_write_add_filter_program.c|$LIBARCHIVE/archive_write_add_filter_uuencode.c|$LIBARCHIVE/archive_write_add_filter_xz.c|$LIBARCHIVE/archive_write_add_filter.c|$LIBARCHIVE/archive_write_disk_posix.c|$LIBARCHIVE/archive_write_disk_set_standard_lookup.c|$LIBARCHIVE/archive_write_open_fd.c|$LIBARCHIVE/archive_write_open_file.c|$LIBARCHIVE/archive_write_open_filename.c|$LIBARCHIVE/archive_write_open_memory.c|$LIBARCHIVE/archive_write_set_format_7zip.c|$LIBARCHIVE/archive_write_set_format_ar.c|$LIBARCHIVE/archive_write_set_format_by_name.c|$LIBARCHIVE/archive_write_set_format_cpio_newc.c|$LIBARCHIVE/archive_write_set_format_cpio.c|$LIBARCHIVE/archive_write_set_format_filter_by_ext.c|$LIBARCHIVE/archive_write_set_format_gnutar.c|$LIBARCHIVE/archive_write_set_format_iso9660.c|$LIBARCHIVE/archive_write_set_format_pax.c|$LIBARCHIVE/archive_write_set_format_raw.c|$LIBARCHIVE/archive_write_set_format_shar.c|$LIBARCHIVE/archive_write_set_format_ustar.c|$LIBARCHIVE/archive_write_set_format_v7tar.c|$LIBARCHIVE/archive_write_set_format_warc.c|$LIBARCHIVE/archive_write_set_format.c|$LIBARCHIVE/archive_write_set_options.c|$LIBARCHIVE/archive_write_set_passphrase.c|$LIBARCHIVE/archive_write.c|$LIBARCHIVE/filter_fork_posix.c|$LIBARCHIVE/xxhash.c|tar_zlib_convenience_compat.c|tar_cab_format_compat.c|tar_pwgr_r_compat.c|gz_deflate_impl.c|gz_crc32_compat.c|$OUT/freebsd_extra/strstr.c|$LIBC/gen/FreeBSD/signal.c|$LIBC/emulated/lchmod.c|$LIBC/emulated/lchflags.c|simple_cmds_lutimes_compat.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/timelocal.c|$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|cp_mv_syscalls.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/stdlib/FreeBSD/strtoull.c|$LIBARCHIVE_TAR/cmdline.c|$LIBARCHIVE_TAR/creation_set.c|$LIBARCHIVE_TAR/read.c|$LIBARCHIVE_TAR/subst.c|$LIBARCHIVE_TAR/util.c|$LIBARCHIVE_TAR/write.c|$LIBARCHIVE_FE/err.c|$LIBARCHIVE_FE/line_reader.c|$LIBARCHIVE_FE/passphrase.c|$XNU/libsyscall/wrappers/unix03/chmod.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/stdlib/FreeBSD/bsearch.c|$LIBC/gen/FreeBSD/arc4random.c|$LIBC/stdtime/FreeBSD/strftime.c|tar_pipe_compat.c|tar_pthread_testcancel_compat.c"
+    "less:$LESS/main.c:$LESS/brac.c|$LESS/ch.c|$LESS/charset.c|$LESS/cmdbuf.c|$LESS/command.c|$LESS/cvt.c|$LESS/decode.c|$LESS/edit.c|$LESS/filename.c|$LESS/forwback.c|$LESS/help.c|$LESS/ifile.c|$LESS/input.c|$LESS/jump.c|$LESS/line.c|$LESS/linenum.c|$LESS/lsystem.c|$LESS/mark.c|$LESS/optfunc.c|$LESS/option.c|$LESS/opttbl.c|$LESS/os.c|$LESS/output.c|$LESS/pattern.c|$LESS/position.c|$LESS/prompt.c|$LESS/screen.c|$LESS/search.c|$LESS/signal.c|$LESS/tags.c|$LESS/ttyin.c|$LESS/version.c|$OUT/less_glue/libc_real_signal.c|ed_popen_system_compat.c|bash_readline_termcap_compat.c|$OUT/freebsd_extra/strstr.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|ed_setjmp_compat.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/stdlib/FreeBSD/abs.c|$LIBC/gen/get_compat.c|less_misc_compat.c|tar_pthread_testcancel_compat.c|cp_mv_syscalls.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/timelocal.c|$LIBC/stdtime/FreeBSD/strftime.c"
 )
 
 built=0
@@ -818,6 +1223,14 @@ for spec in "${CMD_LIST[@]}"; do
     src="${rest%%:*}"
     extra_raw="${rest#*:}"
     extra="${extra_raw//|/ }"
+
+    # Clear any previous command's $OUT/cmd_pre_include override before
+    # this command's own cmd_cflags case (below) decides whether to
+    # repopulate it -- see that directory's own header comment above
+    # CFLAGS's definition. Without this, a header a prior command
+    # dropped in here would silently keep shadowing the real one for
+    # every later command too.
+    rm -f "$OUT/cmd_pre_include"/*
 
     real_main="${name}_cmd_real_main"
     obj="$OUT/simple_obj/${name}.o"
@@ -895,6 +1308,127 @@ for spec in "${CMD_LIST[@]}"; do
             # makes it use plain <stdint.h> instead -- a real supported
             # upstream code path, not a workaround.
             cmd_cflags="-I ../../third_party/bash/bash-3.2/lib/termcap -I ../../third_party/Libinfo/membership.subproj -DHAVE_STDINT_H=1"
+            ;;
+        diff)
+            # See the gnudiff_glue generation comment above (near
+            # vproc_priv.h) for why `<regex.h>` must resolve to gnulib's
+            # OWN regex engine here (struct re_pattern_buffer,
+            # re_compile_pattern()), not this project's shared TRE/POSIX
+            # one at $LIBC/include/regex.h -- and why `<getopt.h>` must
+            # resolve to gnulib's own copy too (binary-identical struct
+            # option layout, but declares the real getopt_long() this
+            # command actually links against, from
+            # $LIBC/stdlib/FreeBSD/getopt_long.c, not gnulib's own
+            # getopt1.c -- see this command's own CMD_LIST comment for
+            # why getopt.c/getopt1.c aren't compiled). Populating
+            # $OUT/cmd_pre_include (see that directory's own header
+            # comment above CFLAGS) makes both win over $CFLAGS's own
+            # -I $LIBC/include, which comes later on the command line,
+            # without disturbing any other command's own cmd_cflags
+            # (only this directory, cleared before every command's own
+            # turn, is ever allowed to shadow a $CFLAGS header). The
+            # rest of gnulib's real headers (c-stack.h, xalloc.h,
+            # cmpbuf.h, etc, plus lib/posix/regex.h our copied regex.h
+            # itself `#include <posix/regex.h>`s, plus $GNUDIFF's own
+            # real config.h for system.h's unconditional `#include
+            # <config.h>`) have no same-named collision anywhere on
+            # $CFLAGS's existing search path (confirmed by grep), so a
+            # plain additional -I is enough for those, no shadowing
+            # needed.
+            cp "$OUT/gnudiff_glue/regex.h" "$OUT/gnudiff_glue/fnmatch.h" "$GNUDIFF/lib/getopt.h" "$OUT/cmd_pre_include/"
+            # lib/dirname.h (basename.c's own header) declares
+            # `size_t`-returning prototypes without including anything
+            # that defines `size_t` itself -- real on real macOS too
+            # (confirmed by reading the file: no #include at all beyond
+            # its own include guard), relying on whatever earlier
+            # translation-unit context already brought `size_t` in
+            # (Xcode's real build environment apparently always has one;
+            # this project's minimal -ffreestanding one doesn't). A
+            # forced `-include sys/types.h` (same real, unmodified
+            # project header every other command already gets `size_t`
+            # from) supplies exactly that, matching this script's own
+            # existing `-include libc_build_prototypes.h`/`-include
+            # ed_availability_override.h` precedent for narrow
+            # environment gaps -- not a source modification.
+            # LONG_WIDTH=64: real flsl.c (freebsd_extra, see its own
+            # generation comment above) is current FreeBSD source using
+            # a real C23/<limits.h> macro this checkout's older vendored
+            # limits.h doesn't define -- 64 is simply correct for this
+            # target's LP64 `long` (arm64-apple-ios, confirmed via
+            # sizeof(long)==8, not guessed), not a fabricated stand-in.
+            cmd_cflags="-I $GNUDIFF/lib -I $GNUDIFF/lib/posix -I $GNUDIFF -include sys/types.h -include string.h -include $OUT/gnudiff_glue/diff_cstack_decls.h -DHAVE_CONFIG_H -DLONG_WIDTH=64"
+            ;;
+        tar)
+            # libarchive_fe/err.h declares lafe_errc()/lafe_warnc()/
+            # lafe_setprogname() -- real, unmodified tar/{bsdtar,cmdline,
+            # creation_set,read,subst,util,write}.c all `#include
+            # "err.h"` expecting THIS header, but $CFLAGS's own -I
+            # $LIBC/include has its own real, unrelated BSD err.h
+            # (err()/warn() family, zero lafe_* declarations) that wins
+            # via plain quote-include search order otherwise -- same
+            # real shadowing problem diff's own regex.h/getopt.h had,
+            # fixed the same way (populate $OUT/cmd_pre_include, see its
+            # own header comment above CFLAGS).
+            cp "$LIBARCHIVE_FE/err.h" "$OUT/cmd_pre_include/"
+            # -I $OUT/tar_glue: this command's own corrected config.h
+            # (see its generation comment above, near vproc_priv.h) plus
+            # the deflateInit/compressBound/uncompress and dd_fd-style
+            # dirent-field-rename compat headers, both force-included
+            # below. -DPRIVATE=1: xnu-7195/bsd/sys/dirent.h's own real
+            # `getdirentries64_flags_t`/`GETDIRENTRIES64_EXTENDED_
+            # BUFSIZE` (opendir.c's real 64-bit-inode buffer-tail-flags
+            # support) are wrapped in a real `#if PRIVATE` this project's
+            # userland builds don't normally set -- same real, already-
+            # established knob build_copyfile.sh/build_libmalloc.sh use
+            # for the identical reason, not new. -include .../_fbsd_
+            # compat_.h: real, unmodified readdir.c calls
+            # `_GENERIC_DIRSIZ()`, defined there and nowhere else on
+            # this command's real include path (confirmed by grep) --
+            # never previously force-included project-wide since no
+            # earlier tier compiled any real FreeBSD dirent source (every
+            # prior directory-walking command used libremovefile.a's
+            # fts_* instead; archive_read_disk_posix.c's own real,
+            # unmodified tree-walk genuinely calls opendir/readdir/
+            # closedir/fdopendir directly). -I $OUT/zlib_glue plus the
+            # real STDC/NO_DUMMY_DECL/__LITTLE_ENDIAN macros: gz_deflate_
+            # impl.c's own real zutil.h dependency, identical to gzip's
+            # own cmd_cflags case (real DEFLATE+INFLATE core, reused
+            # verbatim here for tar's own real z/gzip-filter support and
+            # archive_write_disk_posix.c's decmpfs deflate/inflate calls
+            # -- both need the SAME real zlib core, only one compiled
+            # copy per command as usual).
+            # CONFIG_GZIP_COMPRESSED: real, same as gzip's own cmd_cflags
+            # -- zlib_glue/zutil.h's real OS_CODE/PRESET_DICT (deflate.c's
+            # own header-byte constants) are gated behind this exact
+            # macro (confirmed by reading zutil.h directly after this
+            # command's own first real build attempt failed here without
+            # it -- not guessed).
+            cmd_cflags="-DSTDC -DNO_DUMMY_DECL -D__LITTLE_ENDIAN=1 -DCONFIG_GZIP_COMPRESSED -DHAVE_CONFIG_H -DPRIVATE=1 -I $OUT/tar_glue -I $LIBARCHIVE -I $LIBARCHIVE_TAR -I $LIBARCHIVE_FE -I $OUT/zlib_glue -include $OUT/tar_glue/dirent_compat_macros.h"
+            ;;
+        less)
+            # Real, unmodified less/main.c and friends need:
+            #  - -include ed_availability_override.h: real, unmodified
+            #    lsystem.c calls system(3) for its own `!cmd` shell-
+            #    escape -- same real __IOS_PROHIBITED App-Store-policy
+            #    annotation (not a functional restriction) ed(1)'s own
+            #    identical `!cmd` already hit and fixed, reused verbatim.
+            #  - -I .../bash-3.2/lib/termcap: real, unmodified screen.c's
+            #    own `#include <termcap.h>` -- same real GNU termcap.h
+            #    declaring header the ls(1)/bash tiers already vendor
+            #    and share (bash_readline_termcap_compat.c's own real
+            #    tgetent()/tgetnum()/tgetstr()/tgoto()/tputs()/PC/ospeed
+            #    definitions, reused verbatim here too -- this project's
+            #    already-proven honest "no termcap database" real
+            #    fallback: real screen.c already has its own graceful
+            #    real "hardcopy mode" (no cursor addressing) path for
+            #    exactly this case, confirmed by reading
+            #    get_term()'s own `if (tgetent(...) != TGETENT_OK)
+            #    hardcopy = 1;`, not assumed).
+            #  - -I $LESSROOT: real, pre-generated defines.h (this
+            #    checkout's own real autotools output, same "real
+            #    generated config, not re-run configure" pattern as
+            #    gnudiff's config.h).
+            cmd_cflags="-include ed_availability_override.h -I ../../third_party/bash/bash-3.2/lib/termcap -I $LESSROOT -I $LESS"
             ;;
     esac
 
@@ -1042,6 +1576,70 @@ for spec in "${CMD_LIST[@]}"; do
             extra_libs="$OUT/libremovefile.a $OUT/libcopyfile.a"
             common_read_compat=""
             ;;
+        diff)
+            # Real sigaltstack(2) raw syscall (see this command's own
+            # CMD_LIST comment) plus ed's own real pipe(2) raw syscall
+            # (diff.c's own begin_output()/finish_output() real
+            # vfork()+pipe()+execl() "diff | pager" path, when built
+            # with a real default pager -- see PR_PROGRAM/DEFAULT_
+            # PAGER in diff.h/system.h) and AAPCS64 setjmp/longjmp
+            # register-save/restore core (dir.c's real recursive-
+            # directory-diff error unwinding) -- all three generated
+            # above as their own .o files already, not CMD_LIST extra
+            # .c sources, same precedent as the ed tier that first
+            # needed them.
+            extra_libs="$OUT/simple_obj/sys____sigaltstack.o $OUT/ed_pipe_trap.o $OUT/ed_setjmp_raw.o"
+            ;;
+        tar)
+            # libremovefile.a: real fts_*/unlink/rmdir (archive_read_
+            # disk_posix.c's own -exclude-vcs handling and general real
+            # filesystem cleanup) -- same real duplicate read()/
+            # read$UNIX2003 conflict rm/ln/grep/sed/ed/gzip/compress all
+            # already hit against the shared common_read_compat object,
+            # resolved the same way (common_read_compat cleared below).
+            # libcopyfile.a: real fcopyfile()/ACL+xattr copy helpers
+            # archive_read_disk_posix.c/archive_disk_acl_darwin.c
+            # actually call. libc_regex.a: real regcomp/regexec/regerror
+            # (archive_write.c's/bsdtar's own real -s substitution-
+            # pattern support, subst.c). $OUT/ed_pipe_trap.o: real
+            # pipe(2) raw syscall (filter_fork_posix.c's real forked-
+            # external-decompressor fallback path, reused verbatim from
+            # the ed tier).
+            extra_libs="$OUT/libc_regex.a $OUT/libremovefile.a $OUT/libcopyfile.a $OUT/ed_pipe_trap.o $OUT/simple_obj/sys__dup.o $OUT/simple_obj/sys__readlinkat.o $OUT/simple_obj/sys__poll.o"
+            common_read_compat=""
+            ;;
+        less)
+            # libc_regex.a: real pattern.c's regcomp/regexec/regerror
+            # (POSIX search, HAVE_POSIX_REGCOMP). $OUT/ed_setjmp_raw.o:
+            # real AAPCS64 setjmp/longjmp register-save/restore core
+            # (ed_setjmp_compat.c's own real setjmp()/longjmp() bodies,
+            # which command.c's real multi-key-sequence input handling
+            # calls, reused verbatim from the ed tier). $OUT/simple_obj/
+            # sys__fsync.o: real fsync(2) raw syscall (ch.c's log-file
+            # durability), generated above via the standard
+            # SYS_STUBS_NEEDED batch.
+            # libremovefile.a: real rename() (mark.c's real lock-file
+            # rename), plus the same real duplicate read()/read$UNIX2003
+            # conflict as rm/ln/grep/sed/ed/gzip/tar above (common_read_
+            # compat cleared below). libcopyfile.a: real fchmod().
+            # $OUT/ed_pipe_trap.o: real pipe(2) raw syscall (tar_pipe_
+            # compat.c's own real forwarder to it, reused verbatim --
+            # lsystem.c's real popen()-backed pipe-to-external-command
+            # support). $OUT/simple_obj/sys__dup.o: real dup(2) (also
+            # lsystem.c's real stdin/stdout-fd-juggling around a forked
+            # child).
+            extra_libs="$OUT/libc_regex.a $OUT/ed_setjmp_raw.o $OUT/simple_obj/sys__fsync.o $OUT/libremovefile.a $OUT/libcopyfile.a $OUT/ed_pipe_trap.o $OUT/simple_obj/sys__dup.o"
+            common_read_compat=""
+            ;;
+    esac
+
+    # See LINK_ALIASES_TAR's own header comment (near LINK_ALIASES'
+    # definition) for why tar(1) specifically needs its own minimal
+    # alias list (a real ld64-609 crash workaround, not a behavior
+    # change).
+    link_aliases="$LINK_ALIASES"
+    case "$name" in
+        tar) link_aliases="$LINK_ALIASES_TAR" ;;
     esac
 
     if ! "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
@@ -1050,7 +1648,7 @@ for spec in "${CMD_LIST[@]}"; do
         "$wrapper_obj" "$obj" $extra_objs \
         "$OUT/simple_obj/common_err.o" "$OUT/simple_obj/common_getopt.o" "$OUT/simple_obj/common_simple_cmds_getenv_compat.o" $common_read_compat \
         $extra_libs \
-        $LINK_COMMON $LINK_ALIASES 2>"$OUT/simple_obj/${name}_link.err"; then
+        $LINK_COMMON $link_aliases 2>"$OUT/simple_obj/${name}_link.err"; then
         echo "  skip: $name (link)"
         cat "$OUT/simple_obj/${name}_link.err" >&2
         failed=$((failed + 1))

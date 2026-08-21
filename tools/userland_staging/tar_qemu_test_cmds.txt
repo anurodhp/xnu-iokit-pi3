@@ -1,0 +1,30 @@
+root
+darwin
+echo TAR_TEST_MARKER
+mkdir /tmp/tarsrc
+printf 'hello from tar test\nsecond line here\n' > /tmp/tarsrc/file1.txt
+printf 'another real file, different content, 12345\n' > /tmp/tarsrc/file2.txt
+mkdir /tmp/tarsrc/subdir
+printf 'nested file content\n' > /tmp/tarsrc/subdir/file3.txt
+tar -cf /tmp/test.tar -C /tmp tarsrc
+echo TAR_CREATE_EXIT_$?
+ls -l /tmp/test.tar
+tar -tf /tmp/test.tar
+echo TAR_LIST_EXIT_$?
+mkdir /tmp/tarout
+tar -xf /tmp/test.tar -C /tmp/tarout
+echo TAR_EXTRACT_EXIT_$?
+cat /tmp/tarout/tarsrc/file1.txt
+cat /tmp/tarout/tarsrc/file2.txt
+cat /tmp/tarout/tarsrc/subdir/file3.txt
+diff /tmp/tarsrc/file1.txt /tmp/tarout/tarsrc/file1.txt && echo TAR_ROUNDTRIP_F1_OK
+diff /tmp/tarsrc/file2.txt /tmp/tarout/tarsrc/file2.txt && echo TAR_ROUNDTRIP_F2_OK
+diff /tmp/tarsrc/subdir/file3.txt /tmp/tarout/tarsrc/subdir/file3.txt && echo TAR_ROUNDTRIP_F3_OK
+tar -czf /tmp/test.tar.gz -C /tmp tarsrc
+echo TAR_GZ_CREATE_EXIT_$?
+ls -l /tmp/test.tar.gz
+mkdir /tmp/tarout_gz
+tar -xzf /tmp/test.tar.gz -C /tmp/tarout_gz
+echo TAR_GZ_EXTRACT_EXIT_$?
+diff /tmp/tarsrc/file1.txt /tmp/tarout_gz/tarsrc/file1.txt && echo TAR_GZ_ROUNDTRIP_OK
+echo TAR_TEST_DONE

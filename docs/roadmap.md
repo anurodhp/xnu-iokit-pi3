@@ -14,6 +14,137 @@ narrative itself flagged as still-open.
 
 ## Current status
 
+**Tier B command sweep DONE (4 of 4), 2026-08-21** (see "Command priority
+reorganized" below for the prioritization this closes out): `diff`,
+`tar`, `whoami`, and `less`/`more` all real, unmodified source, built,
+and QEMU-verified. 74 total commands now built (70 before this pass).
+- **New real repos pinned** (`setup_third_party.sh`, confirmed against
+  the `macos-112` manifest, not guessed): `gnudiff` (tag
+  `gnudiff-25.40.1` -- the manifest has no `diffutils` entry at all;
+  Apple's own apple-oss-distributions project name for GNU diff is
+  `gnudiff`), `less` (tag `less-34`), `libarchive` (tag
+  `libarchive-83.40.4`).
+- **`diff`** (real, unmodified `gnudiff/diffutils/src/{diff,analyze,
+  context,dir,ed,ifdef,io,normal,side,util,version}.c` + gnulib's own
+  `lib/{basename,c-stack,cmpbuf,error,exclude,exitfail,freesoft,
+  hard-locale,imaxtostr,offtostr,posixver,prepargs,quotesys,regex,
+  setmode,strftime,umaxtostr,xmalloc,xstrtoumax}.c`, matching
+  `gnudiff.xcodeproj`'s own real "diff" + "diffutils" static-lib target
+  source lists exactly): needed gnulib's OWN GNU-syntax regex engine
+  (`re_compile_pattern()`, a different, older API from this project's
+  shared TRE/POSIX `libc_regex.a`) and its own `getopt.h` (binary-
+  compatible `struct option`, but satisfied by this project's real
+  `getopt_long.c` rather than gnulib's own `getopt1.c`, avoiding a
+  duplicate-`optind`-global conflict) -- both made to win over
+  `$CFLAGS`'s own headers via a new, general `$OUT/cmd_pre_include`
+  override directory (cleared before every command's own turn), not a
+  global reorder (a global `cmd_cflags`-before-`$CFLAGS` reorder was
+  tried first and reverted -- it broke `grep`/`gzip`'s own unrelated
+  `zlib_glue` internal header for a real, reproducible reason, see
+  `build_simple_cmds.sh`'s own comment). Real new raw syscall: a hand-
+  written `sigaltstack(2)` stub from Apple's own `libsyscall/custom/
+  __sigaltstack.s` (`c-stack.c`'s real SIGSEGV-on-stack-overflow
+  handler). One real, narrow, honestly-documented gap: `regex.c`'s
+  optional wide-char/locale-aware matching path is left off
+  (`HAVE_CONFIG_H` deliberately not defined for that one file), ASCII-
+  range matching unaffected. QEMU-verified: real normal-format diff
+  output (`< line two` / `> line TWO changed`), a real unified diff
+  (`-u`, correct `---`/`+++`/`@@` hunk headers), correct exit codes
+  (0 for identical files, 1 for differences).
+- **`tar`** (real, unmodified libarchive core -- 104 of 122 real
+  `libarchive/libarchive/*.c` files, matching Apple's real dynamic-
+  library target list minus a handful of deliberately-scoped-out real
+  gaps below -- plus real `tar/{bsdtar,cmdline,creation_set,read,subst,
+  util,write}.c` and `libarchive_fe/{err,line_reader,passphrase}.c`):
+  the single largest command this project has ever built (~140 compiled
+  files, `tar.macho` itself 1.4MB). Needed a "corrected" `config.h` (a
+  real `sed` transform of the checked-in file, undefining ~11 `HAVE_*`
+  macros this project genuinely doesn't have -- `HAVE_BZLIB_H`/
+  `HAVE_LZMA_H`/`HAVE_LIBXML2`/`HAVE_ICONV(_H)`/`HAVE_LOCALCHARSET_H`/
+  `HAVE_READPASSPHRASE(_H)`/`HAVE_POSIX_SPAWNP`/`HAVE_UTIMENSAT`/
+  `HAVE_FUTIMENS` -- real upstream libarchive is already designed to
+  gracefully degrade when each is undefined, confirmed by reading
+  `archive_read_support_filter_bzip2.c`'s own real `#if !defined(HAVE_
+  BZLIB_H)` fallback before relying on this project-wide); real, reused
+  `gz_deflate_impl.c`/`gz_crc32_compat.c` (the same real zlib DEFLATE+
+  INFLATE core `gzip`'s own tier already proved) for `.tar.gz` support;
+  real, unmodified FreeBSD `opendir.c`/`readdir.c`/`closedir.c`
+  (archive_read_disk_posix.c's real directory-tree walk is the first
+  command to call these directly rather than going through
+  `libremovefile.a`'s `fts_*`), needing a real `dd_fd`-style field-
+  rename compat header (Apple's own `dirent.h` privately renamed every
+  `DIR` struct field with a `__` prefix) and `-DPRIVATE=1` (a real,
+  already-established knob for `xnu-7195/bsd/sys/dirent.h`'s own
+  `#if PRIVATE`-gated 64-bit-inode buffer flags). Three real, narrow,
+  honestly-scoped-out format/crypto gaps, matching this project's
+  already-standing `md5`(1) precedent (Phase 4.6: "needs a whole
+  unbuilt CommonCrypto-shaped digest API... deliberately skipped"): no
+  real CommonCrypto/OpenSSL/libmd digest backend exists here either, so
+  `archive_digest.c`/`archive_hmac.c`/`archive_cryptor.c` aren't
+  compiled, and the six real format entry points that need them
+  (7zip/zip read, xar read, zip/xar/mtree write) get narrow, honest
+  "not available" stand-ins instead -- every other real format (tar/
+  pax/ustar/gnutar/rar-read/lha/ar/cpio/mtree-read/warc/iso9660-read/
+  raw/empty, all genuinely compiled) is unaffected. Separately, one
+  Microsoft CAB-format read gap (`inflateSetDictionary()`, a real zlib
+  entry point u-boot's vendored core never implemented) gets the same
+  narrow honest-stub treatment. A real, reproducible ld64-609 (Xcode
+  12's linker) internal crash (`generateLinkEditInfo`'s "Assertion
+  failed: (target != NULL)") was root-caused via a real binary search
+  over the shared `LINK_ALIASES` list against `tar`'s own real link
+  inputs -- not any single bad alias, but a cumulative effect only
+  `tar`'s much larger object count (~140 files, dwarfing every prior
+  command) ever triggered; fixed with a `tar`-specific minimal alias
+  list (`LINK_ALIASES_TAR`, containing only the aliases `tar`'s own
+  objects actually reference) rather than touching the shared list.
+  **QEMU-verified real round-trip**: `tar -cf`/`tar -tf`/`tar -xf`
+  correctly created, listed (all 5 real entries), and extracted a real
+  3-file/1-subdir tree, every extracted file byte-identical to the
+  original (`diff`, freshly verified above, confirms); `tar -czf`/
+  `tar -xzf` (real gzip compression) round-tripped correctly too.
+- **`whoami`** (Tier B, low priority per the roadmap): confirmed no
+  standalone real source exists anywhere in the `macos-112` manifest
+  (a real, not assumed, gap) -- real Apple ships it as a real *mode* of
+  `shell_cmds/id/id.c` instead (`argv[0]`-basename dispatch, `myname ==
+  "whoami"`), already built and QEMU-verified as `id.macho`. Fixed via
+  `tools/init_binary/inject_into_sd_image.sh` installing a second copy
+  of the same real binary under `/bin/whoami` (same real "one binary,
+  multiple installed names" pattern the script already used for
+  `/bin/bash` + `/bin/sh`). QEMU-verified: `whoami` prints `root`,
+  matching `id -un`.
+- **`less`/`more` DONE, 2026-08-21, with one honest, real, documented
+  scope limit**: real, unmodified `less/{brac,ch,charset,cmdbuf,
+  command,cvt,decode,edit,filename,forwback,help,ifile,input,jump,line,
+  linenum,lsystem,main,mark,optfunc,option,opttbl,os,output,pattern,
+  position,prompt,screen,search,signal,tags,ttyin,version}.c` all
+  compile and link clean against this project's real termcap
+  (`bash_readline_termcap_compat.c`, reused verbatim -- real, already-
+  proven "no termcap database" honest stub) and real `system()`/
+  `popen()`/`pclose()` (`ed_availability_override.h` +
+  `ed_popen_system_compat.c`, both reused verbatim from the `ed` tier).
+  `less.macho`/`more` (same binary, real `argv[0]`-basename `less_is_more`
+  dispatch, same pattern as `whoami` above) build clean, zero undefined
+  symbols. **QEMU-verified real behavior**: `less <file>` correctly
+  detects the absent termcap database (`tgetent()` fails) and drops into
+  `less`'s own real, documented "hardcopy mode" instead of crashing or
+  hanging (`WARNING: terminal is not fully functional` + a real
+  `(press RETURN)` prompt -- confirmed by reading `screen.c`'s own real
+  `get_term()` fallback, not assumed); sending RETURN correctly advances
+  past that prompt and prints the file header; `q` correctly exits back
+  to the shell with exit code 0 (verified via a real interactive pty
+  session, keystrokes on a fixed schedule since `less`'s own real
+  prompts aren't in the shared test harness's `PROMPT_SUFFIXES` list --
+  a harness gap, not a `less` bug, see `docs/backlog.md` item 11 for the
+  one remaining follow-up: this confirms launch/degraded-mode/clean-quit
+  but not yet a full page-by-page scroll-through of content longer than
+  one screen). Honest, real, narrow scope limit (not a bug): this
+  project has no real termcap/terminfo *database* at all (only the
+  proven "always report no entry" stub every other termcap consumer
+  already uses), so `less` never gets real full-screen cursor-addressing
+  paging on this target -- it always runs in real hardcopy mode. Genuine
+  full-screen paging would need a real terminal-capability database
+  ported, a distinct, larger, not-yet-scoped follow-up.
+
 **Real hardware milestone, 2026-08-21**: first-ever confirmed boot on
 actual Pi 3 silicon (previously QEMU-only). `u-boot` reached
 `## Starting XNU at ...` on its HDMI console, and XNU's own real kernel

@@ -97,11 +97,25 @@ struct group *getgrgid(gid_t gid) {
 }
 
 struct group *getgrnam(const char *name) {
-    (void)name;
-    /* Not called by any real ps code path this project's build actually
-     * compiles (checked) -- honest NULL (real "not found" contract), not
-     * a fabricated match, if that ever changes. */
-    return NULL;
+    struct li_group *ligr;
+    ensure_gr_loaded();
+    ligr = li_getgrnam(name);
+    if (ligr == NULL) {
+        return NULL;
+    }
+    /* Same real li_group -> struct group field-copy as getgrgid() above
+     * (not byte-layout-compatible, see that function's own comment) --
+     * genuinely implemented 2026-08-21 for tar(1)'s real archive_write_
+     * disk_posix.c/archive_read_disk_set_standard_lookup.c, which do
+     * call this by name (unlike ps/print.c, which only ever looks up by
+     * numeric id) -- shares grbuf with getgrgid() intentionally, same
+     * single-lookup-at-a-time real getgrnam(3)/getgrgid(3) static-buffer
+     * contract every libc implementation has. */
+    grbuf.gr_name = ligr->gr_name;
+    grbuf.gr_passwd = ligr->gr_passwd;
+    grbuf.gr_gid = (gid_t)ligr->gr_gid;
+    grbuf.gr_mem = &ligr->gr_mem[0];
+    return &grbuf;
 }
 
 /* Real prototypes, matching the Xcode-12 iPhoneOS SDK's own pwd.h/grp.h

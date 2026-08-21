@@ -1,0 +1,10 @@
+root
+darwin
+echo LESS_TEST_MARKER
+jot 60 1 > /tmp/lesstest.txt
+wc -l /tmp/lesstest.txt
+less /tmp/lesstest.txt
+
+q
+echo LESS_EXIT_$?
+echo LESS_TEST_DONE

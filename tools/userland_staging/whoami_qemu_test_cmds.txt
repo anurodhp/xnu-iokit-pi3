@@ -1,0 +1,7 @@
+root
+darwin
+echo WHOAMI_TEST_MARKER
+whoami
+echo WHOAMI_EXIT_$?
+id -un
+echo WHOAMI_TEST_DONE

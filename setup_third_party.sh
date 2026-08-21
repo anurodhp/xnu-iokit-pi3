@@ -26,6 +26,17 @@
 #     `git ls-tree macos-112 -- <name>` away from an exact matching tag for
 #     any other apple-oss-distributions repo Phase 4 ever needs -- prior
 #     project notes assumed no such manifest existed; it does.
+#   - gnudiff/less/libarchive (Tier B command sweep, 2026-08-20): same
+#     `macos-112` manifest method, one wrinkle each --
+#     `git ls-tree macos-112 -- diffutils` has NO entry at all (real gap,
+#     not a miss); the manifest calls real GNU diff by its actual
+#     apple-oss-distributions project name, `gnudiff`
+#     (commit 6c956e21239393eee016d92c441c3f61d8bdaa96 == tag
+#     `gnudiff-25.40.1`, confirmed via `git ls-remote --tags`, not
+#     guessed). `less` and `libarchive` matched their own project names
+#     directly (commits 9c1581935ce26141f6118d3f9d136b7347a82122 ==
+#     `less-34`, 70fe9c400e7f10398c18ccc883b706d9694dd14b ==
+#     `libarchive-83.40.4`).
 #
 # Usage: ./setup_third_party.sh [--force]
 set -euo pipefail
@@ -70,6 +81,9 @@ adv_cmds|https://github.com/apple-oss-distributions/adv_cmds.git|adv_cmds-176|
 system_cmds|https://github.com/apple-oss-distributions/system_cmds.git|system_cmds-880.60.2|
 basic_cmds|https://github.com/apple-oss-distributions/basic_cmds.git|basic_cmds-55|
 misc_cmds|https://github.com/apple-oss-distributions/misc_cmds.git|misc_cmds-34|
+gnudiff|https://github.com/apple-oss-distributions/gnudiff.git|gnudiff-25.40.1|
+less|https://github.com/apple-oss-distributions/less.git|less-34|
+libarchive|https://github.com/apple-oss-distributions/libarchive.git|libarchive-83.40.4|
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch; do

@@ -135,7 +135,7 @@ fi
 # /usr/bin, on a real system). Generic loop instead of one if-block per
 # command -- this list only grows as more tiers land.
 mkdir -p "$MNT/bin"
-for cmd in true false yes pwd basename dirname echo printf hostname logname cat wc head tail mkdir touch rm which env sleep printenv cut uniq ln id cp mv rev fold paste expand unexpand comm colrm lam rs rmdir mkfifo mknod chflags seq jot test kill tee mktemp hexdump stat cksum pathchk du chmod chown nice renice nohup chroot apply vis unvis grep sed nl xargs ed ls find date gzip compress; do
+for cmd in true false yes pwd basename dirname echo printf hostname logname cat wc head tail mkdir touch rm which env sleep printenv cut uniq ln id cp mv rev fold paste expand unexpand comm colrm lam rs rmdir mkfifo mknod chflags seq jot test kill tee mktemp hexdump stat cksum pathchk du chmod chown nice renice nohup chroot apply vis unvis grep sed nl xargs ed ls find date gzip compress diff tar less; do
     if [ -f "tools/userland_staging/${cmd}.macho" ]; then
         cp "tools/userland_staging/${cmd}.macho" "$MNT/bin/${cmd}"
         chmod 755 "$MNT/bin/${cmd}"
@@ -144,6 +144,41 @@ for cmd in true false yes pwd basename dirname echo printf hostname logname cat 
         echo "= tools/userland_staging/${cmd}.macho not built -- run build_simple_cmds.sh first if wanted, skipping"
     fi
 done
+
+# whoami(1) (Tier B, docs/roadmap.md "Command priority reorganized"):
+# no standalone real source exists anywhere in the macos-112 manifest
+# (confirmed via a real `git ls-tree macos-112` lookup against
+# apple-oss-distributions/distribution-macOS, not guessed) -- real
+# Apple ships it as a real *mode* of shell_cmds/id/id.c instead
+# (id.c's own real `myname = strrchr(argv[0], '/'); ...; else if
+# (strcmp(myname, "whoami") == 0) iswhoami = 1;` argv[0]-basename
+# dispatch, confirmed by reading the file directly), the exact same
+# real "one binary, multiple installed names" pattern this script
+# already uses for /bin/bash + /bin/sh above. id.macho is already
+# built and QEMU-verified; this just installs a second copy of the
+# same real binary under the name that makes it behave as whoami.
+if [ -f tools/userland_staging/id.macho ]; then
+    cp tools/userland_staging/id.macho "$MNT/bin/whoami"
+    chmod 755 "$MNT/bin/whoami"
+    echo "+ wrote $(wc -c < tools/userland_staging/id.macho) bytes to $MNT/bin/whoami (same real"
+    echo "  id binary as /bin/id -- id.c's own real argv[0]-basename dispatch"
+    echo "  ('myname == \"whoami\"') makes it behave as whoami(1) when installed"
+    echo "  under this name, real Apple/BSD source, not a wrapper script)"
+fi
+
+# more(1) (Tier B): same real "one binary, multiple installed names"
+# story as whoami above -- real less/main.c itself checks its own
+# argv[0] basename (`if (strcmp(s, "more") == 0) less_is_more = 1;`,
+# confirmed by reading the file directly) and switches to real
+# more(1)-compatible default behavior (no real wrapper script).
+if [ -f tools/userland_staging/less.macho ]; then
+    cp tools/userland_staging/less.macho "$MNT/bin/more"
+    chmod 755 "$MNT/bin/more"
+    echo "+ wrote $(wc -c < tools/userland_staging/less.macho) bytes to $MNT/bin/more (same real"
+    echo "  less binary as /bin/less -- less/main.c's own real argv[0]-basename"
+    echo "  dispatch ('less_is_more') makes it behave as more(1) when installed"
+    echo "  under this name)"
+fi
 
 mkdir -p "$MNT/tmp"
 echo "+ ensured $MNT/tmp exists (real fopen()-family O_CREAT target dir -- same"
