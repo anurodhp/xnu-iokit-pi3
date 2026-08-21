@@ -64,6 +64,22 @@ if [ ! -f "$KERNEL_SRC" ]; then
     echo "  output there first (see CLAUDE.md's Build commands section)" >&2
     exit 1
 fi
+
+# The dtb has the SAME staleness trap the kernel comment above already
+# guards against, and until 2026-08-21 this script fell into it: it copied
+# sdcard/rpi3.dtb, a frozen snapshot (last regenerated 2026-08-13, predating
+# the "usb" node added for Phase 6a) instead of the tree that actually
+# matches the current source. Building fresh here rather than trusting
+# devicetrees/rpi3-realhw.dtb to already be up to date, for the same
+# reason: a stale committed .dtb is a silent mistake, a freshly regenerated
+# one cannot be.
+DTB_SRC="devicetrees/rpi3-realhw.dtb"
+echo "+ regenerating $DTB_SRC from current devicetrees/ source"
+make -C devicetrees rpi3-realhw.dtb
+if [ ! -f "$DTB_SRC" ]; then
+    echo "error: $DTB_SRC not found after 'make -C devicetrees'" >&2
+    exit 1
+fi
 if ! file "$KERNEL_SRC" | grep -q "Mach-O"; then
     echo "error: $KERNEL_SRC doesn't look like a real Mach-O -- refusing to ship it" >&2
     exit 1
@@ -107,13 +123,19 @@ if [ -z "$BOOT_MNT" ] || [ -z "$ROOT_MNT" ]; then
 fi
 
 echo "+ populating boot partition ($BOOT_MNT) -- real hardware boot firmware from"
-echo "  sdcard/, but the CURRENT from-source kernel, not sdcard/'s frozen snapshot"
+echo "  sdcard/ (bootcode.bin/start.elf/fixup.dat/config.txt/u-boot.bin are"
+echo "  unmodified VC/u-boot firmware, not this project's source, so the frozen"
+echo "  copies are fine), but the CURRENT from-source kernel and dtb"
 cp sdcard/bootcode.bin sdcard/start.elf sdcard/fixup.dat sdcard/config.txt \
-   sdcard/rpi3.dtb sdcard/u-boot.bin "$BOOT_MNT/"
+   sdcard/u-boot.bin "$BOOT_MNT/"
 cp "$KERNEL_SRC" "$BOOT_MNT/kernel.development.bcm2837.unstripped"
 echo "+ wrote $(wc -c < "$KERNEL_SRC") bytes to $BOOT_MNT/kernel.development.bcm2837.unstripped"
 echo "  (current from-source build, renamed to match u-boot's baked-in"
 echo "  CONFIG_BOOTCOMMAND fatload target -- see this script's own header)"
+cp "$DTB_SRC" "$BOOT_MNT/rpi3.dtb"
+echo "+ wrote $(wc -c < "$DTB_SRC") bytes to $BOOT_MNT/rpi3.dtb"
+echo "  (freshly built from $DTB_SRC, renamed to match u-boot's fatload target"
+echo "  -- same rename convention as the kernel above, NOT sdcard/'s frozen copy)"
 
 echo "+ creating base root directory structure on ($ROOT_MNT)"
 mkdir -p "$ROOT_MNT/sbin" "$ROOT_MNT/bin" "$ROOT_MNT/usr/bin" \
