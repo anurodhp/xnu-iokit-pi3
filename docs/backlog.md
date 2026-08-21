@@ -328,27 +328,32 @@ this pass even if the change itself is cheap.
     cosmetic `notify(3)`/ASL side effects. Not planned to be revisited
     before Phase 6/Phase 5.5's `syslogd` land for real.
 
-8. **`tools/make_sd_image.sh`'s `SIZE_MB` default is `500`, contradicting
-    its own header comment** ("4 GB is load-bearing... SIZE_MB: defaults
-    to 4096 ... don't go below it") -- found while QEMU-testing this
-    session's `ls`/`find`/`date`/`gzip` work: `qemu/hfs_root_test.img`
+8. **[FIXED 2026-08-21]** `tools/make_sd_image.sh`'s `SIZE_MB` default
+    is now `1200` (was `500`, silently below the 1024 MiB SDHC/SDSC
+    threshold -- see below for the real mechanism). Also added a real
+    fail-fast check: the script now exits with a clear error if invoked
+    with `SIZE_MB` at or below 1024, instead of silently building an
+    image `BCM2837SDHCI` refuses much later at card-init time. 1200 (not
+    the originally-considered 4096) deliberately keeps a wide safety
+    margin above 1024 while minimizing attach/partition/detach time on
+    every test iteration -- picked once the exact QEMU-side mechanism
+    was confirmed (see below), not guessed.
+
+    Original finding, kept for context: found while QEMU-testing the
+    `ls`/`find`/`date`/`gzip` session: `qemu/hfs_root_test.img`
     regenerated at the buggy 500 MB default puts QEMU's emulated SD card
-    into SDSC (CSD v1) mode, which `BCM2837SDHCI` deliberately doesn't
-    implement (SDHC/SDXC only, see that driver's own real behavior,
-    exercised live: `no card identified at start()`, boot hangs forever
-    at "Still waiting for root device"). One-line fix: change line 21's
-    `SIZE_MB="${2:-500}"` to `SIZE_MB="${2:-4096}"`. This session
-    attempted that exact fix but it did not persist in the working tree
-    (reverted by something outside this session's own edits, not
-    re-fought per this project's own "don't revert intentional changes"
-    convention) -- confirmed still present as of this entry. Workaround
-    used for all QEMU verification this session: always invoke as
-    `tools/make_sd_image.sh qemu/hfs_root_test.img 4096` (explicit
-    second argument), never bare. A real, reproducible, silent-failure-
-    mode bug (produces a normal-looking image that only fails much later,
-    at root-mount time) -- worth a permanent fix and, ideally, an
-    explicit assertion/warning in the script if `SIZE_MB` < some safe
-    floor (e.g. 2048) rather than silently building an unbootable image.
+    into SDSC (CSD v1) mode -- confirmed exactly why by reading
+    `third_party/qemu-zhuowei/hw/sd/sd.c`: `if (sd->size > 1 * GiB)` is
+    literally what selects SDHC vs SDSC in the emulated card, based on
+    the backing image file's own size, not any property of a real
+    card. `BCM2837SDHCI` (`iokit/BCM2837SDHCI/BCM2837SDHCI.cpp`, ~line
+    590-605) explicitly refuses SDSC cards outright (never implemented
+    that CSD version's older capacity formula) -- exercised live as
+    `no card identified at start()`, boot hangs forever at "Still
+    waiting for root device". A real, reproducible, silent-failure-mode
+    bug (produced a normal-looking image that only failed much later, at
+    root-mount time) -- the new fail-fast check closes that class of
+    mistake going forward, not just this one instance of it.
 
 9. **`tools/init_binary/inject_into_sd_image.sh`'s `for cmd in ...` list
     needs each new command name appended by hand** (documented in this
