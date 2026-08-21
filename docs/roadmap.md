@@ -193,7 +193,36 @@ hardware-only risks QEMU cannot exercise). Testing any of that for real
 would need a 2-partition (FAT32 boot + HFS+ root) card built the same
 way `qemu/hfs_root_test.img` is, with the CURRENT from-source kernel
 (`build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped`),
-not this frozen snapshot -- a real next step, not attempted yet.
+not this frozen snapshot.
+
+**DONE, same day**: `tools/make_realhw_sd_image.sh` (new script) builds
+exactly that -- current kernel, real 2-partition layout. Two more real
+bugs found and fixed testing it for real: (1) real hardware boots with
+zero `bootargs` by default (unlike QEMU's `runvm.sh`, which always
+passes `rd=disk0s2`), so root-device selection
+(`iokit/bsddev/IOKitBSDInit.cpp`) fell through to generic
+`IOMedia`/`Content=Apple_HFS` matching, which can never succeed since
+this project's kext personalities never wire up the
+`kIOFDiskPartitionSchemeContentTable` content-hint table it depends on
+(real, correctly-typed `0xAF` MBR partition confirmed via `fdisk`/`xxd`
+on the actual image -- not a data-corruption bug); (2) `serialmode`
+defaults to `0` (`osfmk/arm/arm_init.c`) unless a real `serial=`
+boot-arg is present, and `SERIALMODE_INPUT` specifically gates real
+serial-input polling (`osfmk/console/serial_general.c`), separate from
+the always-on `kprintf` output path -- so the login prompt was visible
+over serial but nothing typed reached the shell. Both fixed by baking
+`setenv bootargs "rd=disk0s2 serial=3"` into `u-boot`'s autoboot
+sequence (`third_party/u-boot`'s `configs/rpi3_xnu_defconfig`, same
+values `runvm.sh` already uses successfully for QEMU) -- see
+`sdcard/README.md` for the full writeup. **Result, confirmed on real
+Pi 3 hardware, same day: full boot -> real HFS+ root mount -> login ->
+real interactive bash shell with working keyboard input, all over
+serial, using the CURRENT actively-developed kernel** -- the same
+milestone this project first reached on QEMU, now also real on actual
+silicon. Real SD/GPIO (backlog P0 items 1-6) survived a real multi-
+partition boot+login+shell session without incident, though still not
+exhaustively exercised (no sustained heavy I/O load, no USB/Ethernet
+involved at all -- both remain genuinely untested on this board).
 
 **Phase 4.6 item 3 (real POSIX regex) DONE and QEMU-verified, 2026-08-20.**
 Real, unmodified Apple source (`third_party/Libc/regex/TRE/lib/*.c`, the
