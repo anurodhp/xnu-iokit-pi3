@@ -47,7 +47,7 @@ cd "$(dirname "$0")/.."
 mkdir -p qemu
 
 OUT="${1:-qemu/realhw_root.img}"
-SIZE_MB="${2:-3500}"
+SIZE_MB="${2:-1200}"
 
 KERNEL_SRC="build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped"
 if [ ! -f "$KERNEL_SRC" ]; then
