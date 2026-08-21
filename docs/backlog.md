@@ -370,6 +370,28 @@ this pass even if the change itself is cheap.
     real login prompt) before trusting a QEMU test's "command not found"
     absence to mean anything about the command itself.
 
+10. **This project's kext personalities never wire up
+    `kIOFDiskPartitionSchemeContentTable`** (`third_party/IOStorageFamily/
+    IOFDiskPartitionScheme.cpp`'s `instantiateMediaObject()` looks this
+    dictionary up to translate a raw MBR partition-type byte, e.g. real
+    `0xAF`, into a content-hint string like `"Apple_HFS"` -- with no
+    table wired, every partition's `Content` property is just the raw
+    `"0xNN"` hex string instead). Only actually matters when XNU boots
+    with no `rd=` boot-arg (real hardware's default, confirmed via a
+    real device boot 2026-08-21 -- `iokit/bsddev/IOKitBSDInit.cpp` falls
+    through to generic `IOProviderClass=IOMedia`/`Content=Apple_HFS`
+    root matching in that case, which can never succeed without this
+    table); every QEMU boot always passes `rd=disk0s2` (`runvm.sh`) and
+    never hits this path, which is why it went unnoticed all session.
+    Worked around for now by baking `setenv bootargs rd=disk0s2` into
+    real hardware's `u-boot` autoboot (`third_party/u-boot`'s
+    `configs/rpi3_xnu_defconfig`, see `sdcard/README.md`) rather than
+    fixing the underlying table -- the real, more general fix (wiring an
+    actual content-hint table into this project's hand-built
+    `BCM2837Personalities.cpp`, matching how a real Apple platform
+    expert would populate it) is still open for whoever wants boot to
+    work without an explicit `rd=` in the future.
+
 ---
 
 ## P3 — hygiene / cleanup

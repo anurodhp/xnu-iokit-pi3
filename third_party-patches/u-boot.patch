@@ -1,7 +1,7 @@
 From 448b8db2677f6ebbf0e83b919ca3622b3ca60796 Mon Sep 17 00:00:00 2001
 From: Anurodh Pokharel <anurodhp@icloud.com>
 Date: Tue, 11 Aug 2026 08:54:26 -0400
-Subject: [PATCH] fixes for xnu boot
+Subject: [PATCH 1/2] fixes for xnu boot
 
 ---
  cmd/bootxnu.c | 40 +++++++++++++++++++++++++++++++++++++---
@@ -72,6 +72,90 @@ index 7738364a..f734fb4c 100644
  	// Jump into the XNU entry point with data cache disabled
  	printf("## Starting XNU at %p ...\n", xnu_entry);
  	dcache_disable();
+-- 
+2.50.1 (Apple Git-155)
+
+
+From 6f557b54794bef908778a9b6df114da523751707 Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@icloud.com>
+Date: Thu, 20 Aug 2026 20:34:10 -0400
+Subject: [PATCH 2/2] Add rpi3_xnu_defconfig: captures CONFIG_CMD_BOOTXNU +
+ CONFIG_BOOTCOMMAND
+
+Minimal diff from rpi_3_defconfig (via `make savedefconfig`), capturing
+this checkout's real customization that was previously only living in a
+gitignored, undocumented-in-any-patch .config: CONFIG_CMD_BOOTXNU=y
+(enables the bootxnu command this fork adds) and CONFIG_BOOTCOMMAND set
+to the real autoboot sequence (fatload kernel+dtb, bootxnu), now
+including `setenv bootargs rd=disk0s2` before it -- without this,
+real-hardware boots (which set zero bootargs by default, unlike QEMU's
+runvm.sh) fall through to XNU's generic IOMedia/Content=Apple_HFS root
+matching, which was never wired up in this project's kext personalities
+and can never succeed -- confirmed via a real device boot (2026-08-21)
+that hung forever at "Waiting for root device" despite a verified-good,
+correctly-partitioned/typed real HFS+ card.
+---
+ configs/rpi3_xnu_defconfig | 51 ++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 51 insertions(+)
+ create mode 100644 configs/rpi3_xnu_defconfig
+
+diff --git a/configs/rpi3_xnu_defconfig b/configs/rpi3_xnu_defconfig
+new file mode 100644
+index 00000000..7c36d420
+--- /dev/null
++++ b/configs/rpi3_xnu_defconfig
+@@ -0,0 +1,51 @@
++CONFIG_ARM=y
++CONFIG_ARCH_CPU_INIT=y
++CONFIG_ARCH_BCM283X=y
++CONFIG_SYS_TEXT_BASE=0x00080000
++CONFIG_TARGET_RPI_3=y
++CONFIG_SYS_MALLOC_F_LEN=0x2000
++CONFIG_ENV_SIZE=0x4000
++CONFIG_NR_DRAM_BANKS=1
++CONFIG_DISTRO_DEFAULTS=y
++CONFIG_OF_BOARD_SETUP=y
++CONFIG_BOOTCOMMAND="setenv bootargs rd=disk0s2; fatload mmc 0:1 0x04000000 kernel.development.bcm2837.unstripped; fatload mmc 0:1 0x06000000 rpi3.dtb; bootxnu 0x04000000 0x06000000"
++CONFIG_USE_PREBOOT=y
++CONFIG_PREBOOT="usb start"
++CONFIG_MISC_INIT_R=y
++# CONFIG_DISPLAY_CPUINFO is not set
++# CONFIG_DISPLAY_BOARDINFO is not set
++CONFIG_SYS_PROMPT="U-Boot> "
++CONFIG_CMD_BOOTXNU=y
++CONFIG_CMD_GPIO=y
++CONFIG_CMD_MMC=y
++CONFIG_CMD_USB=y
++CONFIG_CMD_FS_UUID=y
++CONFIG_OF_EMBED=y
++CONFIG_DEFAULT_DEVICE_TREE="bcm2837-rpi-3-b"
++CONFIG_ENV_FAT_INTERFACE="mmc"
++CONFIG_ENV_FAT_DEVICE_AND_PART="0:1"
++CONFIG_SYS_RELOC_GD_ENV_ADDR=y
++CONFIG_ENV_VARS_UBOOT_RUNTIME_CONFIG=y
++CONFIG_DM_KEYBOARD=y
++CONFIG_DM_MMC=y
++CONFIG_MMC_SDHCI=y
++CONFIG_MMC_SDHCI_BCM2835=y
++CONFIG_PHYLIB=y
++CONFIG_DM_ETH=y
++CONFIG_PINCTRL=y
++# CONFIG_PINCTRL_GENERIC is not set
++# CONFIG_REQUIRE_SERIAL_CONSOLE is not set
++CONFIG_USB=y
++CONFIG_DM_USB=y
++CONFIG_USB_DWC2=y
++CONFIG_USB_KEYBOARD=y
++CONFIG_USB_HOST_ETHER=y
++CONFIG_USB_ETHER_LAN78XX=y
++CONFIG_USB_ETHER_SMSC95XX=y
++CONFIG_DM_VIDEO=y
++# CONFIG_VIDEO_BPP8 is not set
++# CONFIG_VIDEO_BPP16 is not set
++CONFIG_SYS_WHITE_ON_BLACK=y
++CONFIG_CONSOLE_SCROLL_LINES=10
++CONFIG_PHYS_TO_BUS=y
++CONFIG_OF_LIBFDT_OVERLAY=y
 -- 
 2.50.1 (Apple Git-155)
 
