@@ -57,6 +57,19 @@ for src in iokit/*/*.cpp iokit/*/*.h; do
 	base="$(basename "$src")"
 	dst="$DEST/$base"
 
+	# Skip NOT_BUILT sources and their headers entirely - don't copy them
+	# either. The XNU tree should contain exactly what it compiles;
+	# shipping sources it ignores just invites someone to edit the copy.
+	skip=0
+	for nb in "${NOT_BUILT[@]}"; do
+		if [ "$base" = "$nb" ] || [ "$base" = "${nb%.cpp}.h" ]; then
+			skip=1
+		fi
+	done
+	if [ "$skip" -eq 1 ]; then
+		continue
+	fi
+
 	if ! cmp -s "$src" "$dst"; then
 		# Refuse to clobber an uncommitted edit made on the XNU-tree side.
 		if [ -e "$dst" ] && ! git -C third_party/xnu-7195 diff --quiet -- \
@@ -71,11 +84,7 @@ for src in iokit/*/*.cpp iokit/*/*.h; do
 
 	case "$base" in
 	*.cpp)
-		skip=0
-		for nb in "${NOT_BUILT[@]}"; do
-			[ "$base" = "$nb" ] && skip=1
-		done
-		if [ "$skip" -eq 0 ] && ! grep -q "iokit/Drivers/BCM2837/$base" "$CONF"; then
+		if ! grep -q "iokit/Drivers/BCM2837/$base" "$CONF"; then
 			missing_from_conf+=("$base")
 		fi
 		;;
