@@ -372,16 +372,38 @@ need a real implementation later:
   9. **Real System V IPC** (`semget`/`shmget`/`msgget` family) -- blocks
      `ipcs`/`ipcrm`. `dd`'s more involved I/O-conversion logic wasn't
      surveyed in depth either; group it here for a first look.
-  10. **zlib** -- real inflate-side decompression now exists (the
-      grep/sed/nl/xargs/ed sweep's `gz_gzip_impl.c`, genuine DEFLATE via
-      the real, unmodified zlib core at `third_party/u-boot/lib/zlib`),
-      but only the narrow `gzdopen()`/`gzread()` subset grep's own
-      `-Z`/`.gz` support needed -- no compression (deflate) side, no
-      `gzip`(1)/`compress`(1) CLI wrapper. Still blocks `compress`/
-      `gzip` as standalone commands.
+  10. **[DONE 2026-08-20]** zlib compression (deflate side) landed with
+      the Tier A sweep's `gzip` (`gz_deflate_impl.c`, real
+      `deflateInit2()`/`deflate()` against the same real, unmodified
+      zlib core at `third_party/u-boot/lib/zlib` the grep/sed/nl/xargs/ed
+      sweep's inflate-only `gz_gzip_impl.c` already used) and `compress`
+      (a separate, self-contained LZW codec, no zlib dependency at all).
+      Both standalone commands built and QEMU-verified real round-trip
+      -- see Current status above / historic archive for detail.
   11. **Real `utmp`/`wtmp`/`lastlog` accounting file format + writers** --
       blocks `who`/`w`/`lastcomm` (distinct from item 8's `sysctl`
       dependency; both are needed for `who`/`w`).
+
+  **Deprioritized 2026-08-21 (moved down for completeness while items 5/6
+  are actively worked by background agents):** none of the remaining
+  Phase 4 items below block 5/6 or each other, and none are in progress.
+  Revisit after 5/6 land. This is a re-statement/pointer, not a
+  duplicate work item list -- see each original item above for detail.
+  - Item 7 (`posix_spawn(2)`, blocks `install`/`strip`).
+  - Item 9 (real System V IPC, blocks `ipcs`/`ipcrm`; `dd`'s I/O-
+    conversion logic ungrouped).
+  - Item 11 (`utmp`/`wtmp`/`lastlog`, blocks `who`/`w`/`lastcomm`).
+  - Tier B commands (`diff`, `less`/`more`, `tar`, `whoami`) -- needs new
+    `setup_third_party.sh` source pins first.
+  - Multi-candidate Tab completion and vi-mode editing (bash) --
+    unverified, not known-broken.
+  - `~user`/`%group`/service-name bash completion -- needs real account/
+    group enumeration (no directory service).
+  - Real Apple `Libinfo` (the actual repo, distinct from the working
+    custom flat-file resolver).
+  - `su`'s own design-judgment note (not a subsystem gap -- needs care
+    against `init.c`'s existing `do_login()`/`cmd_su()`, not a naive
+    port).
 
   `xargs`/`nl`/`grep`/`sed`/`ed` needed item 3 (POSIX regex), now DONE
   -- all five DONE and QEMU-verified as their own pass 2026-08-20 (see
