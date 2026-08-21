@@ -1,0 +1,14 @@
+root
+darwin
+echo DATE_TEST_MARKER
+date
+date -u
+date "+%Y-%m-%d"
+echo GZIP_TEST_MARKER
+echo 'The quick brown fox jumps over the lazy dog. 1234567890 abcdefg.' > /tmp/gz_orig.txt
+cat /tmp/gz_orig.txt
+gzip -k /tmp/gz_orig.txt
+ls -l /tmp/gz_orig.txt.gz
+gzip -d -k /tmp/gz_orig.txt.gz -c > /tmp/gz_roundtrip.txt
+cmp /tmp/gz_orig.txt /tmp/gz_roundtrip.txt && echo GZIP_ROUNDTRIP_OK
+echo ALL_TEST_DONE

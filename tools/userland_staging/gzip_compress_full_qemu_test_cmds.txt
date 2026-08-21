@@ -1,0 +1,21 @@
+root
+darwin
+echo GZFULL_MARKER
+echo 'The quick brown fox jumps over the lazy dog. 1234567890 abcdefg.' > /tmp/gzf_orig.txt
+wc -c /tmp/gzf_orig.txt
+cat /tmp/gzf_orig.txt
+gzip -k /tmp/gzf_orig.txt
+ls -l /tmp/gzf_orig.txt.gz
+gzip -l /tmp/gzf_orig.txt.gz
+gzip -d -k /tmp/gzf_orig.txt.gz -c > /tmp/gzf_roundtrip.txt
+wc -c /tmp/gzf_roundtrip.txt
+cat /tmp/gzf_roundtrip.txt
+echo COMPRESS_MARKER
+echo 'Another real test string for LZW compress 42 42 42 42 42.' > /tmp/cz_orig.txt
+wc -c /tmp/cz_orig.txt
+compress -c /tmp/cz_orig.txt > /tmp/cz_orig.txt.Z
+ls -l /tmp/cz_orig.txt.Z
+compress -d -c /tmp/cz_orig.txt.Z > /tmp/cz_roundtrip.txt
+wc -c /tmp/cz_roundtrip.txt
+cat /tmp/cz_roundtrip.txt
+echo ALLFULL_DONE

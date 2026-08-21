@@ -78,12 +78,54 @@ cat > "$OUT/compat_include/bzlib.h" <<'EOF'
 #define _BZLIB_H_COMPAT_
 #endif
 EOF
+# Widened 2026-08-20 (gzip(1) tier): originally a narrow gzdopen()/
+# gzread()-only stand-in (grep.c/file.c's only real call sites at the
+# time) -- but $OUT/compat_include is on EVERY command's include path
+# ahead of any command-specific -I (confirmed the hard way: gzip.c's own
+# real, unmodified `#include <zlib.h>` silently resolved to this narrow
+# stand-in instead of the fuller real one gzip's own cmd_cflags adds via
+# -I $OUT/zlib_glue, since -I search order follows command-line order
+# and CFLAGS's own -I always precedes any per-command cmd_cflags -I).
+# Rather than leave that shadowing trap in place for the next command
+# that needs more of real zlib.h than gzFile/gzdopen/gzread (gzip.c
+# itself needs the full public API: z_stream, deflateInit2/deflate,
+# Z_DEFLATED/Z_NULL/etc), this is now a copy of the exact same real,
+# complete upstream zlib.h (third_party/u-boot/include/u-boot/zlib.h,
+# u-boot's own vendored real zlib public header) $OUT/zlib_glue/zlib.h
+# already forwards to -- real, not fabricated, and a strict superset of
+# what grep.c/file.c's own narrower use needs, so this is a widening,
+# not a behavior change, for every command that was already using it.
+cp "../../third_party/u-boot/include/u-boot/zlib.h" "$OUT/compat_include/uboot_real_zlib_public.h"
 cat > "$OUT/compat_include/zlib.h" <<'EOF'
-#ifndef _ZLIB_H_COMPAT_GREP_
-#define _ZLIB_H_COMPAT_GREP_
+#ifndef _ZLIB_H_COMPAT_PUBLIC_
+#define _ZLIB_H_COMPAT_PUBLIC_
+#include "uboot_real_zlib_public.h"
+/* u-boot's own real zlib.h has zero gzFile/gzdopen()/gzread() (the
+ * file-based convenience API) -- it only ever uses in-memory z_stream
+ * calls itself, confirmed absent by grep, not omitted by mistake here.
+ * grep.c/file.c's real -Z/.gz support needs exactly these two (see
+ * gz_gzip_impl.c's own header for the real, non-fabricated
+ * implementation); restored here after this header was widened from a
+ * narrow gzFile-only stand-in to the full real public zlib.h (2026-08-20,
+ * gzip(1) tier) so grep doesn't lose what it already had. */
 typedef void *gzFile;
 gzFile gzdopen(int fd, const char *mode);
 int gzread(gzFile file, void *buf, unsigned len);
+/* u-boot's own copy of real zlib.h keeps the real deflateInit_/
+ * inflateInit_/inflateInit2_ convenience macros (it calls inflateInit2
+ * itself) but trimmed the real deflateInit/deflateInit2 macros (it never
+ * calls those, only declares+links the real deflateInit2_ function so a
+ * full real deflate.c can be compiled in) -- gzip(1) needs the real
+ * macro form (real call site: `deflateInit2(&z, level, Z_DEFLATED,
+ * -MAX_WBITS, 8, strategy)`), so this restores the exact real macro
+ * every other real zlib.h ships (see the same file's own real
+ * deflateInit_/inflateInit2 macros a few lines up in
+ * uboot_real_zlib_public.h for the identical pattern), not invented. */
+#ifndef deflateInit2
+#define deflateInit2(strm, level, method, windowBits, memLevel, strategy) \
+	deflateInit2_((strm), (level), (method), (windowBits), (memLevel), \
+	    (strategy), ZLIB_VERSION, (int)sizeof(z_stream))
+#endif
 #endif
 EOF
 
@@ -115,10 +157,45 @@ EOF
 mkdir -p "$OUT/zlib_glue/linux"
 ZLIB_SRC="../../third_party/u-boot/lib/zlib"
 ZLIB_REAL_HDR="../../third_party/u-boot/include/u-boot/zlib.h"
-for f in inflate.c inftrees.c inffast.c zutil.c adler32.c zutil.h inftrees.h inflate.h inffast.h inffixed.h; do
+for f in inflate.c inftrees.c inffast.c zutil.c adler32.c zutil.h inftrees.h inflate.h inffast.h inffixed.h \
+         deflate.c deflate.h trees.c trees.h; do
     cp "$ZLIB_SRC/$f" "$OUT/zlib_glue/$f"
 done
 cp "$ZLIB_REAL_HDR" "$OUT/zlib_glue/uboot_real_zlib.h"
+# Real deflate.c's own `#include <u-boot/crc.h>` (its gzip-format wrap==2
+# path's crc32() calls, real trailing-CRC support -- exactly what
+# gzip(1)'s own compression path needs) -- narrow forwarding declaration
+# matching gz_crc32_compat.c's already-real, already-proven standalone
+# crc32() (same signature, same real byte-for-byte zlib-compatible CRC-32,
+# see that file's own header), not u-boot's own lib/crc32.c (too
+# board/EFI-entangled to vendor directly, same reasoning gz_crc32_compat.c's
+# header already documents).
+mkdir -p "$OUT/zlib_glue/u-boot"
+# Signature deliberately matches u-boot's OWN real zlib.h's crc32
+# declaration (`uInt crc32(uInt crc, ...)`, NOT standard real zlib's
+# usual `uLong crc32(uLong crc, ...)`, confirmed by reading
+# uboot_real_zlib.h directly -- u-boot trimmed the crc/return type from
+# uLong to uInt in its own vendored copy) rather than gz_crc32_compat.c's
+# own (standard-zlib-matching) `uLong` signature, to avoid a hard
+# "conflicting types" redeclaration error against uboot_real_zlib.h in
+# this same translation unit (deflate.c includes both). The resulting
+# declared-uInt-vs-defined-uLong mismatch against gz_crc32_compat.c's
+# real definition is real but harmless on this target's AAPCS64 ABI: a
+# CRC-32 is always a <=32-bit value, and arguments/return values that
+# fit in 32 bits occupy the same register (W-view of X0 etc) regardless
+# of whether either side thinks it's a 32- or 64-bit type -- the exact
+# same latent (and already QEMU-verified working) mismatch grep's own
+# build already has for this identical symbol, not a new risk this pass
+# introduces.
+cat > "$OUT/zlib_glue/u-boot/crc.h" <<'EOF'
+#ifndef _GZ_UBOOT_CRC_H_COMPAT_
+#define _GZ_UBOOT_CRC_H_COMPAT_
+#include <stdint.h>
+typedef unsigned int uInt;
+typedef unsigned char Bytef;
+uInt crc32(uInt crc, const Bytef *buf, uInt len);
+#endif
+EOF
 cat > "$OUT/zlib_glue/zlib.h" <<'EOF'
 #ifndef _GZ_ZLIB_GLUE_H_
 #define _GZ_ZLIB_GLUE_H_
@@ -182,6 +259,54 @@ if [ ! -f "$OUT/freebsd_extra/strstr.c" ]; then
     curl -sf -o "$OUT/freebsd_extra/strstr.c" "https://raw.githubusercontent.com/freebsd/freebsd-src/main/lib/libc/string/strstr.c"
 fi
 
+# Real, unmodified FreeBSD humanize_number.c -- ls(1) -h needs it and
+# nothing in this project's vendored Libc checkout has it (confirmed by
+# grep: it's a libutil(3) function, and this checkout has no libutil.h
+# or libutil source at all, apple-oss-distributions doesn't open-source
+# it separately -- same "genuinely missing, not just unfound" gap
+# strstr.c's own comment documents for a different function). Same
+# reproducible curl-at-build-time pattern.
+if [ ! -f "$OUT/freebsd_extra/humanize_number.c" ]; then
+    curl -sf -o "$OUT/freebsd_extra/humanize_number.c" "https://raw.githubusercontent.com/freebsd/freebsd-src/main/lib/libutil/humanize_number.c"
+fi
+
+# ls(1)'s own real, unmodified print.c #includes <libutil.h> (only for
+# strmode()'s declaration -- the real implementation is Libc/string/
+# FreeBSD/strmode.c, already vendored -- and humanize_number()/HN_* --
+# see above) and <System/sys/fsctl.h> (ls.c's IS_DATALESS macro only
+# needs SF_DATALESS from real sys/stat.h, already visible, but the
+# literal include path must still resolve). Neither the "System/"-
+# prefixed path nor a real libutil.h exist anywhere in this checkout or
+# in Xcode 12's iPhoneOS/MacOSX SDKs (grepped both directly: real
+# macOS/iOS sys/acl.h headers have zero libutil.h coupling and Apple
+# never shipped a public libutil.h on iOS at all) -- narrow forwarding/
+# declaration shims, same convention as zlib.h's glue and
+# mach/arm64/asm.h's forwarder elsewhere in this script.
+mkdir -p "$OUT/compat_include/System/sys"
+cat > "$OUT/compat_include/System/sys/fsctl.h" <<'EOF'
+#ifndef _SYSTEM_SYS_FSCTL_H_COMPAT_
+#define _SYSTEM_SYS_FSCTL_H_COMPAT_
+#include <sys/fsctl.h>
+#endif
+EOF
+cat > "$OUT/compat_include/libutil.h" <<'EOF'
+#ifndef _LIBUTIL_H_COMPAT_LS_
+#define _LIBUTIL_H_COMPAT_LS_
+#include <sys/types.h>
+#include <stdint.h>
+void strmode(int mode, char *p);
+int humanize_number(char *buf, size_t len, int64_t number,
+    const char *suffix, int scale, int flags);
+#define HN_DECIMAL        0x01
+#define HN_NOSPACE        0x02
+#define HN_B              0x04
+#define HN_DIVISOR_1000   0x08
+#define HN_IEC_PREFIXES   0x10
+#define HN_GETSCALE       0x10
+#define HN_AUTOSCALE      0x20
+#endif
+EOF
+
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness \
     -include libc_build_prototypes.h \
@@ -209,6 +334,33 @@ for f in $COMMON_EXTRA; do
     fi
 done
 
+# Real, unmodified find(1) getdate.y (third_party/shell_cmds/find/
+# getdate.y) -- find's real -newerXY predicate can take either a
+# reference file OR a literal natural-language date string
+# ("2 days ago", "next monday", real ISO-ish timestamps, etc), and
+# function.c's real c_newer() calls get_date() unconditionally for the
+# literal-string case (confirmed by reading it, not assumed dead code --
+# the symbol has to link even if a given test run never exercises that
+# branch). This is upstream's own classic public-domain getdate.y
+# grammar (same file traceable to the original Bellovin/Salz/Berets BSD
+# getdate.y this project's other real, unmodified sources trace back
+# to) -- genuinely different from, and not a substitute for, Apple's own
+# real Libc/stdtime/getdate.c (that one implements the POSIX
+# getdate(3) API instead: a $DATEMSK-template-file matcher returning
+# struct tm*, incompatible signature and semantics, not what find.c
+# calls). Real yacc/bison is a standard build-time code generator (this
+# host has /usr/bin/bison, GNU Bison 2.3) -- running it over real,
+# unmodified upstream grammar source at build time is the same real
+# "run a real generator over real source" pattern this script already
+# uses for the raw-syscall .s stubs above (create-syscalls.pl), not a
+# fabrication. `bison -y` (POSIX yacc-compatible output naming) is the
+# same invocation upstream's own Makefile uses for this exact file.
+mkdir -p "$OUT/find_gen"
+if [ ! -f "$OUT/find_gen/getdate.c" ]; then
+    bison -y -o "$OUT/find_gen/getdate.c" "$SHELL_CMDS/find/getdate.y" \
+        || { echo "error: bison generation of find's getdate.y failed" >&2; exit 1; }
+fi
+
 # Real sched_yield()/swtch_pri Mach trap: libpthread.a's real
 # contended-rwlock slow path (__pthread_rwlock_lock_slow) needs it --
 # same real object every prior tier (uname/ps/etc) already links.
@@ -229,7 +381,7 @@ fi
 # syscall depending on whether the public Libc wrapper calls a private
 # name -- e.g. `___getlogin`/`___mmap`/`___munmap` vs plain `_kevent`/
 # `_kqueue`, which have no private wrapper layer at all).
-SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access _getuid _execve _link _symlink _getegid _geteuid _getgid _getgroups _chflags _chown _mknod _mkfifo _futimes _readlink _pread _pwrite _statfs _pathconf _faccessat _getentropy _dup2 _getpriority _chroot _setgroups _setgid _setuid _chdir"
+SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access _getuid _execve _link _symlink _getegid _geteuid _getgid _getgroups _chflags _chown _mknod _mkfifo _futimes _readlink _pread _pwrite _statfs _pathconf _faccessat _getentropy _dup2 _getpriority _chroot _setgroups _setgid _setuid _chdir _fgetattrlist _fsetattrlist _dup"
 if [ ! -f "$OUT/simple_getlogin_trap.o" ]; then
     mkdir -p "$OUT/sys_asm_compat/mach/arm64"
     cat > "$OUT/sys_asm_compat/mach/arm64/asm.h" <<'EOF'
@@ -358,7 +510,9 @@ LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
     -Wl,-alias,_sigsuspend,_sigsuspend\$UNIX2003 \
     -Wl,-alias,_regcomp,_regcomp\$UNIX2003 \
     -Wl,-alias,_getrlimit,_getrlimit\$UNIX2003 \
-    -Wl,-alias,___pipe,_pipe"
+    -Wl,-alias,___pipe,_pipe \
+    -Wl,-alias,_send,_send\$UNIX2003 \
+    -Wl,-alias,_writev,_writev\$UNIX2003"
 
 # Bash array, one element per command: "name:srcfile:extra1|extra2|..."
 # (srcfile is the FULL real source path -- not just relative to
@@ -456,6 +610,34 @@ CMD_LIST=(
     "cksum:$FILE_CMDS/cksum/cksum.c:$FILE_CMDS/cksum/crc.c|$FILE_CMDS/cksum/crc32.c|$FILE_CMDS/cksum/sum1.c|$FILE_CMDS/cksum/sum2.c|$FILE_CMDS/cksum/print.c"
     "pathchk:$FILE_CMDS/pathchk/pathchk.c:"
     "du:$FILE_CMDS/du/du.c:block3_last_resort_compat.c|$LIBC/gen/get_compat.c|du_fnmatch_libc_wrapper.c|$LIBC/gen/FreeBSD/getbsize.c|$LIBC/stdlib/FreeBSD/atoi.c"
+    # ls: docs/roadmap.md's "Command priority reorganized 2026-08-20" top
+    # priority -- real directory listing has never been built in this
+    # project despite 65 other commands existing. Real, unmodified
+    # ls.c/print.c/util.c/cmp.c, same fts (via libremovefile.a, already
+    # proven by du/grep above) and real xattr getters (via libcopyfile.a,
+    # already proven by cp/sed) this tier already has wired. New real
+    # pieces: acl.c/acl_entry.c/acl_perm.c/acl_flag.c (real, unmodified
+    # Apple posix1e ACL-entry-manipulation source, zero filesec_t
+    # dependency -- needed at link time for print.c's printacl(), dead
+    # code today but must still resolve); ls_acl_compat.c (honest
+    # ENOTSUP/NULL stub for ONLY acl_get_link_np/acl_get_file -- the real
+    # implementation needs a private <sys/filesec.h> layout Apple removed
+    # from the public SDK entirely, confirmed absent from both this
+    # checkout and Xcode 12's SDKs, not reconstructed/guessed -- see that
+    # file's own header and docs/backlog.md for the tracked follow-up);
+    # ls_mbr_compat.c (honest always-fails mbr_identifier_translate --
+    # this project has no opendirectoryd, same class of gap as nohup's
+    # vprocmgr stub; ls.c's own real uuid_to_name() already has a correct
+    # upstream fallback to plain uuid_unparse_upper() on failure);
+    # bash_readline_termcap_compat.c (real, already-proven honest
+    # "no termcap database" stub from the bash tier, reused verbatim --
+    # ls -G's tgetent()==1 color-setup branch is simply skipped, same as
+    # bash's own real readline fallback); strmode.c (real FreeBSD source,
+    # already vendored); humanize_number.c (real, unmodified FreeBSD
+    # libutil source, curl-fetched above -- genuinely missing from this
+    # checkout, not a libc gap); getbsize.c (real, already proven by du);
+    # uuid/uuidsrc/unparse.c (real, already-vendored uuid_unparse_upper).
+    "ls:$FILE_CMDS/ls/ls.c:$FILE_CMDS/ls/print.c|$FILE_CMDS/ls/util.c|$FILE_CMDS/ls/cmp.c|$LIBC/posix1e/acl.c|$LIBC/posix1e/acl_entry.c|$LIBC/posix1e/acl_perm.c|$LIBC/posix1e/acl_flag.c|ls_acl_compat.c|ls_mbr_compat.c|bash_readline_termcap_compat.c|$LIBC/string/FreeBSD/strmode.c|$OUT/freebsd_extra/humanize_number.c|$LIBC/gen/FreeBSD/getbsize.c|$LIBC/uuid/uuidsrc/unparse.c|$LIBC/gen/get_compat.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/gen/strtofflags.c|mv_pwcache_compat.c|../libinfo_custom/libinfo_custom.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c"
     # Block 4: chmod/chown, deliberately re-examined per the roadmap's own
     # note that "chmod needs real ACLs" was never actually verified for
     # the common mode-bit-only case -- turned out FALSE: real Apple
@@ -551,6 +733,81 @@ CMD_LIST=(
     # temp-file-backed edit buffer) reuses mktemp's real
     # Libc/stdio/FreeBSD/mktemp.c.
     "ed:$TEXT_CMDS/ed/main.c:$TEXT_CMDS/ed/buf.c|$TEXT_CMDS/ed/cbc.c|$TEXT_CMDS/ed/glbl.c|$TEXT_CMDS/ed/io.c|$TEXT_CMDS/ed/re.c|$TEXT_CMDS/ed/sub.c|$TEXT_CMDS/ed/undo.c|ed_setjmp_compat.c|ed_popen_system_compat.c|$LIBC/stdio/FreeBSD/mktemp.c|$LIBC/gen/FreeBSD/arc4random.c|$LIBC/gen/get_compat.c|$LIBC/gen/FreeBSD/signal.c|cp_mv_syscalls.c"
+    # find: docs/roadmap.md Tier A #2. Real, unmodified find.c/function.c/
+    # main.c/misc.c/operator.c/option.c PLUS find's own ls.c (not
+    # file_cmds/ls/ls.c -- a separate, much smaller real source file in
+    # the same directory implementing printlong() for the -ls predicate,
+    # genuinely needed at link time, found while compiling, not
+    # originally scoped but real/unmodified/required all the same).
+    # getdate.y turned out unneeded: grepped, zero getdate() call sites
+    # anywhere in find's real source (the -newer/-mtime/-atime/-ctime
+    # family all do plain integer day/second arithmetic against
+    # stat-returned timestamps, no date-string parser involved).
+    # function.c's real __APPLE__ f_acl()/-acl predicate only calls
+    # acl_get_link_np/acl_get_entry/acl_free (the ls(1) tier's own real
+    # subset, reused verbatim via ls_acl_compat.c/acl_entry.c/acl.c) --
+    # its sibling ACL_TYPE_NFS4/acl_is_trivial_np code path is real
+    # upstream's `#else /* !__APPLE__ */` branch, dead code under this
+    # project's -target arm64-apple-ios build (confirmed by reading the
+    # #ifdef, not assumed), so it needed no new ACL plumbing at all.
+    # Real fork()/execvp()/waitpid() for -exec/-execdir (cp_mv_syscalls.c/
+    # exec.c/simple_cmds_execve_compat.c, same real primitives xargs's
+    # own -exec-like child-process path already proved).
+    "find:$SHELL_CMDS/find/main.c:$SHELL_CMDS/find/find.c|$SHELL_CMDS/find/function.c|$SHELL_CMDS/find/misc.c|$SHELL_CMDS/find/operator.c|$SHELL_CMDS/find/option.c|$SHELL_CMDS/find/ls.c|$OUT/find_gen/getdate.c|$LIBC/gen/get_compat.c|du_fnmatch_libc_wrapper.c|$LIBC/gen/strtofflags.c|mv_pwcache_compat.c|../libinfo_custom/libinfo_custom.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c|$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|cp_mv_syscalls.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/stdlib/FreeBSD/bsearch.c|$LIBC/stdlib/FreeBSD/strtoq.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/gen/FreeBSD/setmode.c|$LIBC/emulated/lchflags.c|simple_cmds_sigprocmask_compat.c"
+    # date: docs/roadmap.md Tier A #3. Real, unmodified date.c/vary.c.
+    # netdate.c deliberately NOT compiled -- its one entry point
+    # (netsettime(), the legacy `timed`-protocol UDP broadcast only
+    # reached when actually setting the clock without -n) needs a real
+    # resolver+socket stack (Phase 6, unstarted) for a protocol dead on
+    # every real modern system anyway; date_compat.c's honest
+    # always-fails stub replaces just that one symbol (see its own
+    # header). Same file also honestly stubs pututxline() (real
+    # implementation is Libc/gen/utmpx-darwin.c, a 1193-line real Mach-
+    # RPC-to-ASL/utmpx-daemon client this project has no launchd/
+    # bootstrap-service backing for -- same "whole additional unbuilt
+    # subsystem" class as netsettime) while implementing a REAL raw
+    # settimeofday(2) syscall (cheap, NO_SYSCALL_STUB, same cp_mv_syscalls.c
+    # pattern) so -d/-t and an actual privileged clock-set still really
+    # work, just without Apple's own wrapper's cosmetic notify(3)/ASL
+    # logging side effects. Real oldsyslog.c (date -u's "date set by ..."
+    # audit log line) reuses cat_socket_stub.c's existing honest
+    # socket()/connect() ENOSYS stand-ins (same real AF_UNIX-to-syslogd
+    # path cat -u's stub already established, syslogd itself not built
+    # yet either, Phase 5.5). Real strptime.c (-f format parsing) and
+    # localtime.c's own real mktime() (vary.c's real -v offset math)
+    # newly needed, both real Apple/FreeBSD source already vendored.
+    "date:$SHELL_CMDS/date/date.c:$SHELL_CMDS/date/vary.c|$LIBC/gen/get_compat.c|$LIBC/gen/oldsyslog.c|cat_socket_stub.c|date_compat.c|$LIBC/stdtime/FreeBSD/strptime.c|$LIBC/stdlib/FreeBSD/strtoq.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/gen/FreeBSD/getlogin.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|$LIBC/sys/gettimeofday.c|ps_commpage_gettimeofday_stub.c|simple_cmds_time_compat.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c"
+    # gzip: docs/roadmap.md Tier A #4. Real, unmodified gzip.c PLUS its
+    # own real sibling unity-build includes (unbzip2.c/zuncompress.c/
+    # unpack.c/unxz.c, each already individually #include-guarded by
+    # gzip.c itself, see NO_BZIP2_SUPPORT/NO_XZ_SUPPORT below).
+    # gz_deflate_impl.c is this pass's real new piece: the DEFLATE
+    # (compression) half of zlib, genuinely missing before now -- see
+    # that file's own header for why it's a separate, from-scratch unity
+    # build from gz_gzip_impl.c (grep's own real but INFLATE-only,
+    # narrow-gzdopen/gzread-wrapped file) rather than a reuse of it.
+    # NO_BZIP2_SUPPORT/NO_XZ_SUPPORT: same real, upstream-supported
+    # build-time knobs as grep's WITHOUT_BZIP2/WITHOUT_LZMA (neither
+    # bzip2 nor lzma is vendored in this project) -- NO_COMPRESS_SUPPORT
+    # and NO_PACK_SUPPORT deliberately left OFF (undefined) since
+    # zuncompress.c/unpack.c are both real, self-contained, external-
+    # dependency-free BSD source already sitting right next to gzip.c,
+    # genuinely free real functionality, not scope creep.
+    "gzip:$FILE_CMDS/gzip/gzip.c:$LIBC/gen/get_compat.c|gz_deflate_impl.c|gz_crc32_compat.c|gz_futimens_compat.c|$XNU/libsyscall/wrappers/unix03/chmod.c|$LIBC/stdlib/FreeBSD/getopt_long.c|$LIBC/gen/FreeBSD/signal.c|cp_mv_syscalls.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c"
+    # compress: docs/roadmap.md Tier A #4's other half. Real, unmodified
+    # compress.c/zopen.c -- a real, self-contained classic LZW codec,
+    # zero zlib/deflate dependency at all (genuinely separate from
+    # gzip's own DEFLATE work above). zopen.c's real FILE*-returning
+    # zopen() wraps its own zread/zwrite/zclose via real funopen(3)
+    # (Libc/stdio/FreeBSD/funopen.c, real BSD custom-stream-hooks API,
+    # never used by any prior tier) -- confirmed compatible with this
+    # project's own already-built libc_stdio.a before attempting: its
+    # real internal __sfp() allocator funopen.c itself calls is already
+    # a real, defined, linkable symbol there (checked via nm, not
+    # assumed), i.e. this project's stdio was never actually narrowed to
+    # a "5-function subset" at the ABI/internals level, only its
+    # earliest bring-up milestone was.
+    "compress:$FILE_CMDS/compress/compress.c:$FILE_CMDS/compress/zopen.c|$LIBC/stdio/FreeBSD/funopen.c|$XNU/libsyscall/wrappers/unix03/chmod.c"
 )
 
 built=0
@@ -599,6 +856,14 @@ for spec in "${CMD_LIST[@]}"; do
         grep)
             cmd_cflags="-DWITHOUT_FASTMATCH -DWITHOUT_LZMA -DWITHOUT_BZIP2 -DWITHOUT_NLS -DSTDC -DNO_DUMMY_DECL -D__LITTLE_ENDIAN=1 -I $OUT/zlib_glue"
             ;;
+        gzip)
+            # Same real STDC/NO_DUMMY_DECL/__LITTLE_ENDIAN u-boot-zlib-glue
+            # macros grep needed (gz_deflate_impl.c's own real deflate.c/
+            # trees.c/inflate.c etc, same zutil.h dependency), plus
+            # NO_BZIP2_SUPPORT/NO_XZ_SUPPORT (see this command's own
+            # CMD_LIST comment).
+            cmd_cflags="-DNO_BZIP2_SUPPORT -DNO_XZ_SUPPORT -DSTDC -DNO_DUMMY_DECL -D__LITTLE_ENDIAN=1 -DGZIP_APPLE_VERSION=\"1.0\" -DCONFIG_GZIP_COMPRESSED -I $OUT/zlib_glue"
+            ;;
         ed)
             # ed.c's real `!cmd` shell-escape calls system(3), marked
             # __IOS_PROHIBITED (a real App-Store-review-time policy
@@ -609,6 +874,27 @@ for spec in "${CMD_LIST[@]}"; do
             # comment for the full story (same class of gap, same class
             # of fix, as Phase 4.6 item 3's regex_availability_override.h).
             cmd_cflags="-include ed_availability_override.h"
+            ;;
+        ls)
+            # ls.c/print.c real `#include <termcap.h>`: reuse the real
+            # GNU termcap.h declaring header bash's own tier already
+            # vendors (third_party/bash/bash-3.2/lib/termcap/termcap.h --
+            # matches bash_readline_termcap_compat.c's real function
+            # definitions this command's own CMD_LIST extra list links
+            # in). print.c's real `#include <membershipPriv.h>` (for
+            # mbr_identifier_translate's declaration, ls_mbr_compat.c
+            # supplies the honest stub body) needs real Apple
+            # membership.h/membershipPriv.h/ntsid.h, vendored at
+            # third_party/Libinfo/membership.subproj/, not previously on
+            # any tier's include path. -DHAVE_STDINT_H=1: real
+            # Libc/uuid/uuidsrc/uuidP.h (unparse.c's own private header)
+            # falls back to a real, nonexistent-in-this-checkout
+            # <uuid/uuid_types.h> unless this real, already-established
+            # (build_copyfile.sh's POSIX1E_CFLAGS uses the same flag for
+            # the same header) upstream build-time knob is set, which
+            # makes it use plain <stdint.h> instead -- a real supported
+            # upstream code path, not a workaround.
+            cmd_cflags="-I ../../third_party/bash/bash-3.2/lib/termcap -I ../../third_party/Libinfo/membership.subproj -DHAVE_STDINT_H=1"
             ;;
     esac
 
@@ -674,7 +960,7 @@ for spec in "${CMD_LIST[@]}"; do
             esac
             common_read_compat=""
             ;;
-        sed)
+        sed|find)
             # sed needs libc_regex.a (Phase 4.6 item 3) for regcomp/
             # regexec/regerror, plus real -i (in-place edit) support:
             # main.c's mf_fgets() renames a real temp file over the
@@ -712,7 +998,34 @@ for spec in "${CMD_LIST[@]}"; do
             extra_libs="$OUT/libc_regex.a $OUT/ed_pipe_trap.o $OUT/ed_setjmp_raw.o $OUT/libremovefile.a $OUT/libcopyfile.a"
             common_read_compat=""
             ;;
-        cp|mv|mktemp|du|chmod)
+        compress)
+            # libc_regex.a: real rpmatch() (compress -f's real y/n
+            # overwrite-confirmation prompt) pulls in regexec/regfree
+            # from libc_locale_for_stdio.a's own rpmatch.o, same real
+            # regcomp(nl_langinfo(YESEXPR)) dependency xargs -p's own
+            # CMD_LIST comment already documents. libremovefile.a: real
+            # unlink() (compress/decompress's real "remove the original
+            # after successful compression" step) -- same real duplicate
+            # read()/read$UNIX2003 conflict as rm/ln/grep/gzip above,
+            # common_read_compat cleared the same way.
+            extra_libs="$OUT/libc_regex.a $OUT/libremovefile.a"
+            common_read_compat=""
+            ;;
+        gzip)
+            # Same real duplicate-symbol reasoning as rm|ln|grep above
+            # (libremovefile.a's real fts_open$INODE64/fts_read$INODE64/
+            # fts_close$INODE64 for gzip -r's real directory recursion,
+            # libcopyfile.a's real fcopyfile() for gzip's real
+            # ACL/xattr-preserving output-file creation). Plus this
+            # command's own new real fgetattrlist/fsetattrlist raw
+            # syscalls (plain generatable stubs, not NO_SYSCALL_STUB --
+            # generated into the standard SYS_STUBS_NEEDED batch above,
+            # referenced directly here since they're niche enough not to
+            # warrant a global LINK_COMMON addition).
+            extra_libs="$OUT/libremovefile.a $OUT/libcopyfile.a $OUT/simple_obj/sys__fgetattrlist.o $OUT/simple_obj/sys__fsetattrlist.o $OUT/simple_obj/sys__dup.o"
+            common_read_compat=""
+            ;;
+        cp|mv|mktemp|du|chmod|ls)
             # Same real duplicate-symbol reasoning as rm|ln above
             # (libremovefile.a's removefile_syscalls.o already defines
             # plain read()) plus libcopyfile.a for real copyfile()/

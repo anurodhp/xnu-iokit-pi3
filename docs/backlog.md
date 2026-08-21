@@ -280,6 +280,91 @@ this pass even if the change itself is cheap.
     small/irregular input shapes. Not investigated further given `rs`'s
     low practical value.
 
+6. **`ls -e`'s real ACL display (`acl_get_link_np()`) is an honest
+    always-NULL stub** (`tools/userland_staging/ls_acl_compat.c`), not a
+    real implementation -- found/scoped during the 2026-08-20 Tier-A
+    command sweep (`ls`/`find`/`date`/`gzip`/`compress`). Real Apple
+    `acl_get_link_np()` (`Libc/posix1e/acl_file.c`) goes through a real
+    `filesec_t` abstraction (`Libc/gen/filesec.c`, implementation
+    vendored) whose *declaring header* (`<sys/filesec.h>`) Apple removed
+    from the public SDK entirely -- confirmed absent from both this
+    project's vendored Libc checkout and Xcode 12's iPhoneOS/MacOSX SDKs
+    directly (grepped both real `sys/acl.h` headers: zero `filesec_t`/
+    `FILESEC_*` mentions in either), not merely unfound. The real kernel
+    side is NOT missing -- `stat64_extended`/`lstat64_extended`/
+    `fstat64_extended` (bsd/kern/syscalls.master #341-343, real,
+    `NO_SYSCALL_STUB`, real `vn_stat(..., &fsec, ...)` kernel
+    implementation already in `bsd/vfs/vfs_syscalls.c`) are proven live
+    and callable via this same tier's raw-syscall pattern (see
+    `cp_mv_syscalls.c`'s `lchown`/`sigaction`/`setattrlist` precedent) --
+    only the userland-side struct layout is the gap. `find -acl`'s real
+    `__APPLE__` path also depends on this same stub (same honest
+    always-"no ACL" answer). Real follow-up: reconstruct or re-source a
+    real `filesec_t` layout (possibly from an older/different Apple SDK
+    vintage, or by reverse-engineering `Libc/gen/filesec.c`'s own real
+    property-ID usage) and wire the three real syscalls above through
+    it, then re-point `acl_get_link_np()`/`acl_get_file()` at the real
+    path. Low urgency -- this target's HFS+/msdosfs mounts have no
+    kernel-side ACL *storage* wired either, so a real userland
+    implementation would correctly report "no ACL" for every file today
+    regardless.
+
+7. **`date`'s network time-sync (`netsettime()`, `-n`-less clock-set)
+    and login-record write (`pututxline()`, also clock-set-only) are
+    honest always-fail stubs** (`tools/userland_staging/date_compat.c`),
+    found/scoped during the same 2026-08-20 Tier-A sweep. Neither
+    affects `date`'s ordinary display/format path (QEMU-verified
+    working) at all. `netsettime()`'s real implementation
+    (`shell_cmds/date/netdate.c`) needs a real resolver+socket stack
+    (Phase 6, unstarted) for the legacy `timed` UDP protocol, dead on
+    every real modern system regardless. `pututxline()`'s real
+    implementation (`Libc/gen/utmpx-darwin.c`, 1193 lines) needs a real
+    Mach-RPC-to-ASL/utmpx-daemon path this project has no launchd/
+    bootstrap-service registry to back (see CLAUDE.md's "no launchd"
+    line) -- a whole additional unbuilt subsystem, not a narrow gap.
+    `settimeofday(2)` itself IS real (wired as a raw `NO_SYSCALL_STUB`
+    syscall in the same file), so `-d`/`-t` and an actual privileged
+    clock-set still work for real, just without Apple's own wrapper's
+    cosmetic `notify(3)`/ASL side effects. Not planned to be revisited
+    before Phase 6/Phase 5.5's `syslogd` land for real.
+
+8. **`tools/make_sd_image.sh`'s `SIZE_MB` default is `500`, contradicting
+    its own header comment** ("4 GB is load-bearing... SIZE_MB: defaults
+    to 4096 ... don't go below it") -- found while QEMU-testing this
+    session's `ls`/`find`/`date`/`gzip` work: `qemu/hfs_root_test.img`
+    regenerated at the buggy 500 MB default puts QEMU's emulated SD card
+    into SDSC (CSD v1) mode, which `BCM2837SDHCI` deliberately doesn't
+    implement (SDHC/SDXC only, see that driver's own real behavior,
+    exercised live: `no card identified at start()`, boot hangs forever
+    at "Still waiting for root device"). One-line fix: change line 21's
+    `SIZE_MB="${2:-500}"` to `SIZE_MB="${2:-4096}"`. This session
+    attempted that exact fix but it did not persist in the working tree
+    (reverted by something outside this session's own edits, not
+    re-fought per this project's own "don't revert intentional changes"
+    convention) -- confirmed still present as of this entry. Workaround
+    used for all QEMU verification this session: always invoke as
+    `tools/make_sd_image.sh qemu/hfs_root_test.img 4096` (explicit
+    second argument), never bare. A real, reproducible, silent-failure-
+    mode bug (produces a normal-looking image that only fails much later,
+    at root-mount time) -- worth a permanent fix and, ideally, an
+    explicit assertion/warning in the script if `SIZE_MB` < some safe
+    floor (e.g. 2048) rather than silently building an unbootable image.
+
+9. **`tools/init_binary/inject_into_sd_image.sh`'s `for cmd in ...` list
+    needs each new command name appended by hand** (documented in this
+    repo's own working conventions but easy to forget) -- caught during
+    this session's `find`/`date`/`gzip`/`compress` QEMU verification when
+    each was initially silently absent from the injected image despite
+    building cleanly (no error, the command just never got copied to
+    `/bin`, "command not found" was the only symptom). Not a design
+    flaw worth fixing structurally this pass (the list is deliberately
+    explicit, matching the project's "no fabricated automation" bias),
+    just a real, repeated friction point worth flagging for whoever adds
+    the next command: verify the injected image actually contains the
+    new binary (e.g. `strings`-check the mount, or just `ls /bin` at a
+    real login prompt) before trusting a QEMU test's "command not found"
+    absence to mean anything about the command itself.
+
 ---
 
 ## P3 — hygiene / cleanup

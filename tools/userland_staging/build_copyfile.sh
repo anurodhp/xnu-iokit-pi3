@@ -166,15 +166,37 @@ echo "copyfile: $ok compiled, $skip skipped"
 # calls acl_get_link_np/acl_set_file/etc) - real source, not stubbed.
 mkdir -p "$OUT/compat_include"
 cat > "$OUT/compat_include/membershipPriv.h" <<'EOF'
-/* Empty stand-in: the three real membership functions acl_translate.c
- * actually calls (mbr_uid_to_uuid/mbr_gid_to_uuid/mbr_uuid_to_id) are
- * ALL already declared in the real public membership.h (confirmed
- * present in this project's pinned Xcode-12 iPhoneOS SDK) - this private
- * header adds nothing acl_translate.c's real call sites need beyond
- * that, so an empty stand-in is correct, not a gap (same pattern as
- * build_libc_locale.sh's os/assumes.h). */
+/* Originally an empty stand-in: the three real membership functions
+ * acl_translate.c actually calls (mbr_uid_to_uuid/mbr_gid_to_uuid/
+ * mbr_uuid_to_id) are ALL already declared in the real public
+ * membership.h (confirmed present in this project's pinned Xcode-12
+ * iPhoneOS SDK) - this private header adds nothing acl_translate.c's
+ * real call sites need beyond that (same pattern as build_libc_locale.sh's
+ * os/assumes.h).
+ *
+ * Extended 2026-08-20 (ls(1) tier, build_simple_cmds.sh): because this
+ * generic $OUT/compat_include is on every command's include path BEFORE
+ * any command-specific -I, this stand-in silently shadows the REAL
+ * membershipPriv.h vendored at third_party/Libinfo/membership.subproj/
+ * for any command that needs more than acl_translate.c's narrow original
+ * subset (ls(1)'s print.c calls the real mbr_identifier_translate() for
+ * its -e ACL-owner-name display, real declaration only in the private
+ * header, not membership.h). Rather than leave that trap in place, this
+ * now carries the additional real declarations/macros verbatim from
+ * third_party/Libinfo/membership.subproj/membershipPriv.h (not
+ * fabricated -- copied from the real vendored header) that any current
+ * or future command might need; still not the FULL private header (no
+ * mbr_check_membership_ext/mbr_set_identifier_ttl/etc -- add on demand,
+ * same as this file's own history). */
 #ifndef _MEMBERSHIP_PRIV_H_COMPAT_
 #define _MEMBERSHIP_PRIV_H_COMPAT_
+#define MBR_REC_TYPE_USER 1
+#define MBR_REC_TYPE_GROUP 2
+/* only supported by mbr_identifier_translate for target type */
+#define ID_TYPE_UID_OR_GID 30
+#define ID_TYPE_NAME 31
+#define ID_TYPE_WINDOWS_FQN 32
+int mbr_identifier_translate(int id_type, const void *identifier, size_t identifier_size, int target_type, void **result, int *rec_type);
 #endif
 EOF
 

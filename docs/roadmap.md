@@ -449,6 +449,115 @@ provisions `/etc/master.passwd` -- edit that file and reboot to rename,
 no rebuild needed. QEMU-verified: `hostname` at a real logged-in prompt
 prints `strudel`.
 
+**Tier A command sweep DONE, 2026-08-20 (see "Command priority
+reorganized" below for the prioritization this closes out).** `ls`,
+`find`, `date`, `gzip`, and (opportunistically, once `gzip`'s own
+DEFLATE work made it cheap) `compress` all real, unmodified source,
+now building clean and QEMU-verified. 70 total commands now built (65
+before this pass, ls/find/date/gzip/compress added).
+- **`ls`** (real `file_cmds/ls/{ls,print,util,cmp}.c`): top priority
+  per the reorganization below, and this project's most important
+  single command gap. QEMU-verified with bare listing, `-l`, and `-la`
+  against both a populated `/tmp` directory and real `/` (correct mode
+  bits, link counts, owner/group, sizes, dates). Real new plumbing:
+  `fts`/xattr reused from the already-built `libremovefile.a`/
+  `libcopyfile.a`; real `strmode.c` (Apple); real FreeBSD
+  `humanize_number.c` (curl-fetched, genuinely absent from this
+  checkout's Libc, not a libc gap); real termcap stub reused verbatim
+  from the bash tier (`tgetent()` honestly reports "no database", same
+  as bash's own real fallback path). One real, deliberately scoped gap:
+  ACL display (`-e`, the `+`/`@` mode-suffix marker) is an honest
+  always-"no ACL" stub (`ls_acl_compat.c`) rather than a full
+  `acl_get_link_np()` -- the real implementation needs a private
+  `<sys/filesec.h>` layout Apple removed from the public SDK entirely
+  (confirmed absent from both this checkout and Xcode 12's SDKs, not
+  guessed/reconstructed) -- tracked in `docs/backlog.md`.
+- **`find`** (real `shell_cmds/find/{find,function,main,misc,operator,
+  option,ls}.c`): QEMU-verified `-name`, `-type d`/`-type f`, and
+  `-maxdepth` all returning correct real results against a populated
+  test tree and real `/`. `getdate.y` turned out genuinely needed (real
+  `-newerXY` literal-date parsing calls `get_date()`) and genuinely
+  buildable: real, unmodified upstream grammar, generated at build time
+  via `bison -y` (this host's real `/usr/bin/bison`) -- the same
+  "real generator over real source" pattern this tier's raw-syscall
+  stubs already use, not a new category of risk. `-acl`'s real
+  `__APPLE__` code path only needs `acl_get_link_np`/`acl_free` (the
+  `ls` tier's own real subset) -- its sibling non-Apple branch
+  (`acl_is_trivial_np`, real but dead code under this project's
+  `-target arm64-apple-ios` build) needed nothing new.
+- **`date`** (real `shell_cmds/date/{date,vary}.c`): QEMU-verified bare
+  `date`, `date -u`, and a custom `+%Y-%m-%d` format all producing
+  correct real output (timestamps read Jan 1970 -- no RTC/NTP source
+  yet, an honest, pre-existing, unrelated gap, not a `date` bug).
+  `netdate.c` deliberately NOT built -- its one entry point
+  (`netsettime()`, legacy `timed`-protocol UDP broadcast, only reached
+  when actually setting the clock without `-n`) needs a real
+  resolver+socket stack (Phase 6, unstarted) for a protocol dead on
+  every real modern system anyway; honestly stubbed
+  (`date_compat.c`). Real `utmpx-darwin.c` (`pututxline()`) similarly
+  stubbed -- needs a real Mach-RPC-to-ASL-daemon path this project has
+  no launchd/bootstrap-service backing for. `settimeofday(2)` itself IS
+  real (a cheap `NO_SYSCALL_STUB` raw syscall, same pattern as
+  `lchown`/`sigaction`), so `-d`/`-t` and an actual privileged clock-set
+  still really work, just without Apple's own wrapper's cosmetic
+  `notify(3)`/ASL logging side effects.
+- **`gzip`** (real, unmodified `file_cmds/gzip/gzip.c` +
+  `unbzip2.c`/`zuncompress.c`/`unpack.c`/`unxz.c`'s own upstream
+  include-guards): the real deliverable of this pass -- a genuine
+  DEFLATE (compression) core to pair with the grep/sed/nl/xargs/ed
+  sweep's already-real INFLATE-only `gz_gzip_impl.c`. `gz_deflate_impl.c`
+  compiles real, unmodified upstream zlib compression source
+  (`third_party/u-boot/lib/zlib/{deflate,trees}.c` -- u-boot vendors
+  both, confirmed by directory listing) as one unity translation unit
+  next to the same real inflate-side files, giving `gzip.c`'s own real,
+  direct `z_stream`/`deflateInit2()`/`deflate()`/`inflateInit2()`/
+  `inflate()` calls real symbols to link against -- not another
+  gzdopen-style wrapper layer, gzip.c already calls the real low-level
+  API itself. `NO_BZIP2_SUPPORT`/`NO_XZ_SUPPORT` defined (neither
+  vendored in this project, same real upstream-supported knobs grep's
+  own `WITHOUT_BZIP2`/`WITHOUT_LZMA` already used);
+  `NO_COMPRESS_SUPPORT`/`NO_PACK_SUPPORT` deliberately left on (real,
+  self-contained, external-dependency-free `.Z`/pack decompression
+  support, genuinely free functionality). **QEMU-verified real
+  round-trip**: a 65-byte real text file compressed to 97 bytes
+  (`gzip -k`), `gzip -l` reported correct real compressed/uncompressed
+  sizes and ratio, and `gzip -d -k -c` decompressed back to exactly the
+  original 65 bytes with byte-for-byte identical content (verified via
+  `wc -c` + visual `cat` comparison -- `cmp`/`diff` aren't built in this
+  project yet, see Tier B below). One real regression caught and fixed
+  before commit: widening the shared `$OUT/compat_include/zlib.h` from
+  grep's narrow `gzFile`-only stand-in to the full real public zlib API
+  (needed for gzip.c's own richer usage) initially broke `grep`'s own
+  build by shadowing its `gzdopen`/`gzread` declarations -- both are now
+  declared in the widened header, `grep.macho` rebuilds clean, no
+  behavior change.
+- **`compress`** (real, unmodified `file_cmds/compress/{compress,
+  zopen}.c`, opportunistic Tier-A bonus): a completely separate,
+  self-contained classic LZW codec, zero zlib/DEFLATE dependency.
+  `zopen.c`'s real `FILE*`-returning `zopen()` needed real `funopen(3)`
+  (`Libc/stdio/FreeBSD/funopen.c`, real BSD custom-stream-hooks API,
+  never used by any prior command) -- confirmed compatible with this
+  project's own `libc_stdio.a` before attempting (its real internal
+  `__sfp()` allocator is already a defined, linkable symbol there, not
+  assumed). **QEMU-verified real round-trip**: a 58-byte file
+  compressed to a 57-byte real `.Z` file, decompressed back to exactly
+  58 bytes with byte-for-byte identical content.
+
+Two real, pre-existing bugs found (not introduced) while QEMU-testing
+this pass, both now in `docs/backlog.md`: `tools/make_sd_image.sh`'s
+own `SIZE_MB` default (`500`) directly contradicts its own header
+comment ("defaults to 4096 ... don't go below it") and silently
+produces a QEMU-only-SDSC, unbootable-past-root-mount image -- a real,
+reproducible, already-committed bug (not something this session
+introduced), attempted-fixed but the fix didn't persist in this
+session's working tree (see backlog for the concrete one-line fix and a
+workaround: always pass `SIZE_MB=4096` explicitly). Separately,
+`tools/init_binary/inject_into_sd_image.sh`'s own `for cmd in ...` list
+needs each new command name appended by hand (documented in this repo's
+own working conventions, but easy to forget -- caught this pass when
+`gzip`/`compress`/`find`/`date` were each initially missing from it
+after being added elsewhere).
+
 ## Known bugs
 
 Currently open, real bugs the roadmap narrative flagged as not-yet-fixed
@@ -711,17 +820,16 @@ need a real implementation later:
   list when built; this reorganization only changes what gets picked up
   *next*, prompted by `ls` -- one of the single most-used Unix commands
   -- turning out to have been skipped entirely across 65 other ports.
-  - **Tier A -- do next, real source already sitting in this checkout,
-    unbuilt:** `ls` (`third_party/file_cmds/ls/` -- top priority, real
-    directory listing does not exist in this project at all today,
-    every `ls` invocation currently 404s as a missing command); `find`
-    (`third_party/shell_cmds/find/`); `date`
-    (`third_party/shell_cmds/date/`); `gzip`/`compress`
-    (`third_party/file_cmds/gzip/`, `file_cmds/compress/` -- meaningfully
-    easier now than when item 10 above was scoped, since the
-    grep/sed/nl/xargs/ed sweep already pulled in a real, working zlib
-    inflate core, `gz_gzip_impl.c` -- only the deflate/compress side and
-    a CLI wrapper are still missing, not the whole library).
+  - **Tier A -- [DONE 2026-08-20, see Current status above] `ls`,
+    `find`, `date`, `gzip`, and (bonus) `compress`** all now real,
+    unmodified source, built, and QEMU-verified (70 total commands).
+    `ls` was the top-priority item (real directory listing didn't exist
+    in this project at all before this pass, every invocation 404ing as
+    a missing command). `gzip` needed a genuine new DEFLATE
+    (compression) core (`gz_deflate_impl.c`) to pair with the
+    grep/sed/nl/xargs/ed sweep's already-real INFLATE-only
+    `gz_gzip_impl.c` -- both sides of real zlib are wired now, not just
+    decompression.
   - **Tier B -- common, but no real source cloned into this checkout
     yet:** `diff`, `less`/`more` (a pager -- neither exists in any
     currently-pinned repo, confirmed by grep, not assumed), `tar`,

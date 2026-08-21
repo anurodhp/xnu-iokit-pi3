@@ -1,0 +1,148 @@
+/* Real date(1) has two features gated behind actually SETTING the
+ * system clock (`date <newdate>` as root, not the ordinary display/
+ * format path this tier's own QEMU verification exercises) that each
+ * need a whole additional unbuilt subsystem this project doesn't have,
+ * matching this pass's own "roadblocks to stop at" scope:
+ *
+ * 1. netsettime() (real third_party/shell_cmds/date/netdate.c) --
+ *    broadcasts the new time to other hosts via the ancient `timed`
+ *    UDP protocol (getservbyname/socket/bind/connect/send/select, a
+ *    real resolver+socket stack this project's Phase 6 networking
+ *    hasn't started). `timed` itself has been dead/unshipped on every
+ *    real macOS release for decades regardless -- this is real,
+ *    vendored legacy-compat source Apple itself still carries, but
+ *    date.c only calls it when neither -n was passed NOR does the
+ *    caller want to skip network notification, i.e. only on an actual
+ *    privileged clock-set. An honest "no time daemon reachable" failure
+ *    (return nonzero) is the same real outcome this call already has on
+ *    every modern real system, not a fabricated success.
+ *
+ * 2. pututxline() (real Libc/gen/utmpx-darwin.c, 1193 lines) -- records
+ *    an OLD_TIME/NEW_TIME utmpx entry via a real Mach RPC to a real
+ *    ASL/utmpx-logging service reached through servers/bootstrap.h --
+ *    this project has no launchd, no Mach bootstrap service registry,
+ *    no ASL daemon (see CLAUDE.md's own "no launchd" line). Also only
+ *    reached from setthetime(), the same actually-setting-the-clock
+ *    path as netsettime() above. A real NULL return (pututxline's own
+ *    documented "entry could not be written" failure code) is honest
+ *    here, not fabricated.
+ *
+ * Neither stub affects date(1)'s ordinary, overwhelmingly common
+ * behavior at all: displaying/formatting the current time, -u (UTC),
+ * -v (vary offsets), -j (don't set the clock), custom +format strings,
+ * and TZ handling are all real, unmodified date.c/vary.c, untouched by
+ * this file. Follow-up (actually setting the clock for real) is
+ * tracked in docs/backlog.md, not attempted this pass. */
+
+#include <stddef.h>
+
+struct utmpx;
+
+struct utmpx *
+pututxline(const struct utmpx *utx)
+{
+	(void)utx;
+	return (struct utmpx *)0;
+}
+
+typedef long date_compat_time_t;
+
+int
+netsettime(date_compat_time_t tval)
+{
+	(void)tval;
+	return 1;
+}
+
+/* Real settimeofday(2) -- bsd/kern/syscalls.master #122, NO_SYSCALL_STUB
+ * (2-pointer-arg real kernel trap), same real carry-flag raw-asm pattern
+ * as cp_mv_syscalls.c's lchown/sigaction/setattrlist. Only reached from
+ * date.c's -d/-t (set kernel DST flag / minutes-west) and the (jflag==0)
+ * actual-clock-set path -- both real, rare, privileged uses, but cheap
+ * to make genuinely real rather than stubbed: this implements the
+ * PUBLIC `settimeofday` symbol directly via the raw syscall, skipping
+ * Apple's real Libc/sys/settimeofday.c wrapper's own notify_post()/
+ * _simple_asl_log() side effects (real notifyd/ASL calls this project
+ * has neither of, same class of gap as pututxline's own comment above)
+ * -- same "implement the real public wrapper name directly, skip a
+ * private-service indirection this project doesn't have" precedent
+ * cp_mv_syscalls.c's own header comment documents for lchown/sigaction.
+ * The actual clock-set/timezone-set behavior is real and correct; only
+ * the cosmetic notify/logging side effects are absent. */
+struct timeval;
+struct timezone;
+
+extern int cerror_nocancel(int err);
+
+static inline long date_compat_syscall2(long num, long a0, long a1) {
+	register long x0 asm("x0") = a0;
+	register long x1 asm("x1") = a1;
+	register long x16 asm("x16") = num;
+	long is_error;
+	asm volatile("svc #0x80\n"
+	             "cset %1, cs"
+	             : "+r"(x0), "=r"(is_error)
+	             : "r"(x1), "r"(x16)
+	             : "memory", "cc");
+	if (is_error) {
+		return cerror_nocancel((int)x0);
+	}
+	return x0;
+}
+
+#define DATE_COMPAT_SYS_settimeofday 122
+
+int
+settimeofday(const struct timeval *tp, const struct timezone *tzp)
+{
+	return (int)date_compat_syscall2(DATE_COMPAT_SYS_settimeofday, (long)tp, (long)tzp);
+}
+
+/* Real crt_externs.h _NSGetArgv() -- oldsyslog.c's vsyslog() dereferences
+ * it to get argv[0] as openlog()'s default log tag (cosmetic; the
+ * message is never actually delivered anywhere given cat_socket_stub.c's
+ * honest socket()==ENOSYS, see this file's own top-of-file comment).
+ * Real, not fabricated: third_party/Csu/crt.c already populates the real
+ * NXArgv global from the real argv this process was actually invoked
+ * with (same global real crt_externs()/_NSGetArgv() forward to on a
+ * normal dyld-based macOS -- this project has no dyld, but the
+ * underlying data this call is supposed to expose is the same real,
+ * correctly-populated pointer, just reached directly instead of via a
+ * dyld-provided indirection). */
+extern const char **NXArgv;
+
+char ***
+_NSGetArgv(void)
+{
+	return (char ***)&NXArgv;
+}
+
+/* Real vsyslog() (oldsyslog.c) sends the formatted log line via
+ * send(2)/writev(2) over the AF_UNIX socket cat_socket_stub.c's real
+ * socket()/connect() already honestly fail to create (ENOSYS -- no
+ * syslogd, Phase 5.5, not built yet). Both call sites are only reached
+ * AFTER a successful connect(), which never happens here (_sl_LogFile
+ * stays -1, openlog()'s real logic already bails out before ever
+ * calling send/writev) -- these two exist purely to satisfy the linker,
+ * same "stub the symbol so it links, document why it can't fire"
+ * pattern cat_socket_stub.c's own header comment already established
+ * for socket/connect/shutdown. */
+#include <errno.h>
+
+long
+send(int fd, const void *buf, unsigned long len, int flags)
+{
+	(void)fd; (void)buf; (void)len; (void)flags;
+	errno = ENOSYS;
+	return -1;
+}
+
+struct iovec;
+
+long
+writev(int fd, const struct iovec *iov, int iovcnt)
+{
+	(void)fd; (void)iov; (void)iovcnt;
+	errno = ENOSYS;
+	return -1;
+}

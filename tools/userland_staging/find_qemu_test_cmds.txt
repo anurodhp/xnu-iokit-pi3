@@ -1,0 +1,14 @@
+root
+darwin
+mkdir -p /tmp/find_test/sub1
+mkdir -p /tmp/find_test/sub2
+touch /tmp/find_test/a.macho
+touch /tmp/find_test/sub1/b.macho
+touch /tmp/find_test/sub1/c.txt
+touch /tmp/find_test/sub2/d.txt
+echo FIND_TEST_MARKER
+find /tmp/find_test -name '*.macho'
+find /tmp/find_test -type d
+find /tmp/find_test -type f -name '*.txt'
+find / -maxdepth 1 -name bin
+echo FIND_TEST_DONE

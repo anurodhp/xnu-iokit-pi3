@@ -4506,6 +4506,281 @@ per-command override mechanism, and five new `CMD_LIST` entries.
 One commit per command (`grep`, `sed`, `nl`, `xargs`+the `sysconf` fix,
 `ed`), all local-only, none pushed.
 
+### Tier A command sweep: `ls`, `find`, `date`, `gzip`, `compress` (2026-08-20)
+
+Immediately following the grep/sed/nl/xargs/ed pass, `docs/roadmap.md`'s
+"Command priority reorganized 2026-08-20" note flagged that `ls` -- one
+of the single most-used Unix commands -- had been skipped entirely
+across all 65 commands built so far. This pass closed that gap plus
+`find`/`date`/`gzip` (all real source already sitting unbuilt in this
+checkout) and, opportunistically, `compress` (cheap once `gzip`'s own
+DEFLATE work made real `funopen(3)` a known-safe dependency).
+
+**`ls`** (`file_cmds/ls/{ls,print,util,cmp}.c`). The real ACL/xattr/
+membership/termcap/humanize-number dependency surface print.c/ls.c pull
+in turned out to be almost entirely already-solved-elsewhere or cheaply
+solvable, not the "whole new subsystem" it looked like at first read:
+- `fts`/xattr: reused verbatim from `libremovefile.a`/`libcopyfile.a`
+  (already proven by `du`/`grep`/`cp`).
+- `strmode()`: real, already-vendored `Libc/string/FreeBSD/strmode.c`.
+- `humanize_number()`: genuinely absent from this checkout's Libc (it's
+  a `libutil(3)` function and apple-oss-distributions never
+  open-sources `libutil` separately) -- real, unmodified FreeBSD source,
+  curl-fetched at build time, same reproducible pattern
+  `xargs`'s own `strstr.c` pull already established.
+- termcap (`tgetent`/`tgetstr`/`tputs`/etc, `ls -G`'s color support):
+  reused the bash tier's own real, honest `bash_readline_termcap_
+  compat.c` verbatim -- `tgetent()` reports "no database" (real
+  termcap's own documented -1 return), so ls's real color-setup branch
+  is simply skipped, same as bash's own real readline fallback path.
+- `<System/sys/fsctl.h>`/`<libutil.h>`: neither literal include path
+  exists anywhere in this checkout or in Xcode 12's iPhoneOS/MacOSX
+  SDKs (checked directly, not assumed) -- narrow forwarding/declaration
+  shims, same convention as this tier's other compat headers.
+- `mbr_identifier_translate()` (the `-e` ACL-owner-name path's real
+  UUID-to-username lookup): honestly always fails (`ls_mbr_compat.c`) --
+  real Apple's own implementation is an XPC RPC to opendirectoryd,
+  which this project doesn't have; upstream `ls.c`'s own real fallback
+  (`uuid_unparse_upper()`) already handles this failure correctly, not
+  patched around.
+- `acl_get_link_np()`/`acl_get_file()` (the `-e` ACL-display path's real
+  per-file ACL fetch, called unconditionally by `traverse()` for every
+  file, not just under `-e`): the one genuine, deliberately-scoped gap
+  this pass didn't close -- see `docs/backlog.md` P2 item 6 for the
+  full "why" (a private, SDK-removed `<sys/filesec.h>` layout, not a
+  missing kernel capability). Honestly stubbed to always return NULL
+  (`ls_acl_compat.c`), which is exactly upstream's own real "no ACL on
+  this file" code path, not a fabricated empty ACL.
+- `fegetenv()`/`fesetenv()` (real `Libc/gen/FreeBSD/time.c`'s own
+  Radar-9zzz floating-point-environment save/restore around its
+  `gettimeofday()` call): this project has no libm built at all (out of
+  scope project-wide). Rather than pull one in for two calls,
+  `ls_fenv_compat.c` implements the real, complete, non-fabricated
+  arm64 FPCR/FPSR `mrs`/`msr` pair any real arm64 libm's `fegetenv`/
+  `fesetenv` would contain (`fenv_t` on this target is real, documented
+  `{ uint64_t __fpsr; uint64_t __fpcr; }`, confirmed against Xcode 12's
+  own SDK header, not guessed) -- reused by `find`/`date`/`gzip` too,
+  since all three also pull in `Libc/gen/FreeBSD/time.c` for real
+  `time()`.
+
+QEMU-verified: bare `ls`, `ls -l`, and `ls -la` against both a populated
+`/tmp` test directory and real `/`, all producing correct real output
+(mode bits via real `strmode()`, link counts, numeric-fallback owner/
+group where `/etc/group` has no matching entry -- honest, not a bug,
+group `20` and uid `502` simply aren't provisioned -- sizes, and real
+`Jan 1 1970`-epoch dates, this board having no RTC/NTP source, an
+unrelated pre-existing gap).
+
+**`find`** (`shell_cmds/find/{find,function,main,misc,operator,option,
+ls}.c` -- note `find`'s own small, separate `ls.c`, implementing just
+`printlong()` for the `-ls` predicate, turned out to be a genuinely
+required link-time dependency `function.c` references, not originally
+scoped but real/unmodified/needed all the same). Two real findings:
+1. **`main()` actually lives in `main.c`, not `find.c`.** This tier's
+   `CMD_LIST` convention renames whichever file is listed as the
+   command's own "src" via `-Dmain=<cmd>_cmd_real_main`; `find.c` was
+   the natural first guess (matching the command name) but doesn't
+   define `main()` at all -- a real, if minor, gotcha this session's
+   own build-log caught immediately (`_find_cmd_real_main` undefined at
+   link time) and fixed by swapping which file plays the "src" role.
+2. **`getdate.y` turned out genuinely needed, not stubbable.** Real
+   `-newerXY`'s literal-date-string form calls `get_date()`
+   unconditionally at link time (not runtime-conditional dead code).
+   Apple's own `Libc/stdtime/getdate.c` looked like a tempting reuse at
+   first (same-ish name) but is a completely different, incompatible
+   POSIX `getdate(3)` API (`$DATEMSK`-template-file matcher returning
+   `struct tm*`) -- not what `find.c` calls. The real fix: `bison -y`
+   (this host's real `/usr/bin/bison`, GNU Bison 2.3) generating real,
+   unmodified upstream `getdate.y` (the classic public-domain
+   Bellovin/Salz/Berets grammar) at build time -- confirmed correct via
+   its own "10 shift/reduce conflicts" self-check matching the grammar
+   file's own header comment exactly. Same "real generator over real
+   source" pattern this tier's raw-syscall `.s` stub generation already
+   uses, not a new category of risk.
+`-acl`'s real `__APPLE__` code path (as opposed to its dead, non-Apple
+`ACL_TYPE_NFS4`/`acl_is_trivial_np` sibling branch, confirmed dead by
+reading the `#ifdef`, not assumed) only calls `acl_get_link_np`/
+`acl_get_entry`/`acl_free` -- the exact same real subset `ls`'s own
+tier already solved, reused verbatim.
+
+QEMU-verified: `find <dir> -name '*.macho'`, `-type d`, `-type f -name
+'*.txt'`, and `find / -maxdepth 1 -name bin` all returned correct real
+results against a populated multi-directory test tree and real `/`.
+
+**`date`** (`shell_cmds/date/{date,vary}.c`). `netdate.c` deliberately
+NOT compiled -- its one real entry point, `netsettime()`, needs a real
+resolver+socket stack (`getservbyname`/`socket`/`bind`/`connect`/`send`/
+`select`, real Phase 6 networking, unstarted) for the legacy `timed`
+UDP protocol, dead on every real modern macOS release regardless of
+this project's own gaps. `date_compat.c` supplies three real pieces
+instead of pulling in that whole subsystem:
+- `netsettime()`: honest always-fails stub (same real outcome this call
+  already has on any system with no `timed` daemon reachable).
+- `pututxline()`: honest always-fails stub -- real implementation
+  (`Libc/gen/utmpx-darwin.c`, 1193 lines) is a real Mach-RPC client to
+  an ASL/utmpx-logging service reached via `servers/bootstrap.h`, and
+  this project has no launchd/bootstrap-service registry at all.
+- `settimeofday(2)`: made genuinely REAL rather than stubbed -- a cheap
+  `NO_SYSCALL_STUB` 2-arg raw syscall, same carry-flag pattern as
+  `cp_mv_syscalls.c`'s `lchown`/`sigaction`/`setattrlist`, deliberately
+  bypassing Apple's own wrapper (which needs real `notify_post()`/ASL
+  logging, the same missing subsystem `pututxline()` hit) so `-d`/`-t`
+  and an actual privileged clock-set still work for real.
+Smaller real pieces newly needed and found via straightforward
+build-error iteration: real `oldsyslog.c` (the "date set by ..." audit
+log line -- reuses `cat_socket_stub.c`'s existing honest `socket()`/
+`connect()` ENOSYS stand-ins, same AF_UNIX-to-syslogd path `cat -u`'s
+own stub already established, `syslogd` itself not built yet either);
+real `_NSGetArgv()` (a small, real forwarder to `Csu/crt.c`'s own
+already-correct `NXArgv` global, needed by `vsyslog()`'s log-tag
+default, cosmetic only since the log message never actually sends
+anywhere); real `send()`/`writev()` honest ENOSYS stand-ins (same
+"stub the symbol so it links, document why it can't fire" pattern as
+`cat_socket_stub.c`, both genuinely unreachable since `openlog()`'s own
+real logic bails before ever calling them, `socket()` having already
+failed).
+
+QEMU-verified: bare `date`, `date -u`, and `date "+%Y-%m-%d"` all
+produced correct real output (timestamps read Jan 1 1970 -- no RTC/NTP
+source yet, unrelated pre-existing gap, not a `date` bug).
+
+**`gzip`** (`file_cmds/gzip/gzip.c` + its own real, upstream-guarded
+`unbzip2.c`/`zuncompress.c`/`unpack.c`/`unxz.c` unity-build includes).
+The actual headline deliverable of this pass: a real DEFLATE
+(compression) core, `gz_deflate_impl.c`, to pair with the
+grep/sed/nl/xargs/ed sweep's already-real but INFLATE-only
+`gz_gzip_impl.c`. Real, unmodified upstream zlib compression source
+(`third_party/u-boot/lib/zlib/{deflate,trees}.c` -- u-boot vendors both
+files even though u-boot itself only ever calls the inflate side,
+confirmed by directory listing, not assumed) compiled as one unity
+translation unit next to the same real inflate-side files
+`gz_gzip_impl.c` already established, via the identical
+quote-include-resolves-via-own-directory `zutil.h`/`deflate.h`/
+`trees.h` mechanism. Unlike grep (which only ever calls two narrow
+wrapper functions, `gzdopen`/`gzread`), real `gzip.c` calls the
+lower-level public zlib API directly -- `z_stream`,
+`deflateInit2()`/`deflate()`/`deflateEnd()`,
+`inflateInit2()`/`inflate()`/`inflateEnd()` -- so `gz_deflate_impl.c`
+adds no wrapper layer at all, it just makes the real symbols those real
+calls need resolve.
+
+Six real, narrow build-time gaps found and fixed, all via straightforward
+iteration against real compiler/linker errors rather than guessed ahead
+of time:
+1. **Real regression**: widening the shared `$OUT/compat_include/
+   zlib.h` from grep's original narrow `gzFile`-only stand-in to the
+   full real public zlib API (needed for gzip.c's own richer `z_stream`/
+   `deflateInit2` usage -- narrow shadowed the real, richer
+   `$OUT/zlib_glue/zlib.h` gzip's own `cmd_cflags` adds, since `-I`
+   search order follows command-line order and global `CFLAGS`'s own
+   `-I` always precedes any per-command `cmd_cflags` `-I`) initially
+   broke `grep`'s own build by losing its `gzdopen`/`gzread`
+   declarations. Caught immediately by re-running the full
+   `build_simple_cmds.sh` sweep (not just the new command) after the
+   change -- both declarations restored in the widened header, `grep`
+   rebuilds clean, zero behavior change, real lesson: always re-run the
+   FULL command sweep after touching shared infrastructure, not just
+   the command being added.
+2. `deflate.c`'s real `#include <u-boot/crc.h>` needed a narrow
+   forwarding header matching u-boot's own (non-standard: `uInt` not
+   `uLong`) `crc32()` signature exactly, to avoid a hard "conflicting
+   types" redeclaration error against `uboot_real_zlib.h` in the same
+   translation unit -- the resulting declared-`uInt`-vs-defined-`uLong`
+   mismatch against `gz_crc32_compat.c`'s real (standard-zlib-matching)
+   definition is real but harmless on AAPCS64 (a CRC-32 always fits in
+   32 bits, occupying the same register regardless of which side thinks
+   it's 32- or 64-bit) -- the exact same latent, already-shipped-and-
+   working mismatch grep's own build already has for this identical
+   symbol, not a new risk.
+3. `zutil.h`'s real `OS_CODE`/`PRESET_DICT` defines are gated behind
+   u-boot's own real `CONFIG_GZIP_COMPRESSED` board-config knob (u-boot
+   itself only defines it when its own image-compression path is
+   enabled) -- defined for real here, a legitimate real upstream
+   feature flag, not invented.
+4. Real u-boot `zlib.h` (deliberately trimmed of macros u-boot itself
+   never calls, since it only ever invokes `inflateInit2` directly) is
+   missing the real `deflateInit2` convenience macro real gzip.c's own
+   call site needs -- restored verbatim (same real macro every other
+   real zlib.h ships, not invented) in the widened `compat_include/
+   zlib.h`.
+5. `GZIP_APPLE_VERSION` (real Apple's own build system supplies it via
+   `xcconfig`, this project has no equivalent) -- defined as a literal
+   placeholder string.
+6. `_dup`/`_fgetattrlist`/`_fsetattrlist`/`futimens()`/real `getopt_long`/
+   real `signal()`/real `chmod()`: all real, either added to the
+   existing `SYS_STUBS_NEEDED` batch-generated raw-syscall list
+   (`fgetattrlist`/`fsetattrlist`/`dup`, all plain generatable stubs,
+   not `NO_SYSCALL_STUB`) or reused from earlier tiers
+   (`getopt_long.c`/`signal.c`/`chmod.c`, already proven by grep/cp/
+   mv/etc). `futimens(2)` itself doesn't exist in this project's
+   vendored xnu-7195 at all (no syscall, no Libc source) -- real
+   `futimens()` wrapper (`gz_futimens_compat.c`) truncates to real
+   `futimes(2)`'s microsecond precision, the standard real technique
+   any libc without a native `futimens` syscall uses, not a shortcut.
+
+**QEMU-verified real round-trip** (not just "it links and doesn't
+crash"): a 65-byte real text file compressed via `gzip -k` to 97 bytes;
+`gzip -l` reported correct real compressed/uncompressed sizes (97/65)
+and ratio (-47.7%); `gzip -d -k -c` decompressed back to exactly 65
+bytes with byte-for-byte identical content, confirmed via `wc -c` size
+match plus visual `cat` comparison of both files in the same shell
+session (`cmp`/`diff` aren't built in this project yet, Tier B).
+
+**`compress`** (`file_cmds/compress/{compress,zopen}.c`, an
+opportunistic bonus once `gzip`'s own work de-risked one real question:
+whether this project's own `libc_stdio.a` -- ostensibly narrowed to a
+"5-function minimal subset" per an earlier Phase 4 milestone's own
+framing -- could actually support real `funopen(3)`, the custom-stream-
+hooks API `zopen.c`'s own real `FILE*`-returning `zopen()` needs to wrap
+its LZW `zread`/`zwrite`/`zclose` callbacks. Checked before attempting,
+not assumed: `funopen.c`'s own real internal `__sfp()` allocator was
+already a real, defined, linkable symbol in `libc_stdio.a` (confirmed
+via `nm`) -- meaning this project's stdio internals were never actually
+narrowed at the ABI level, only an earlier bring-up milestone's own
+surface was. `compress.c`/`zopen.c` are otherwise completely
+self-contained real BSD source, zero zlib/DEFLATE dependency at all
+(a genuinely separate codec from `gzip`).
+
+**QEMU-verified real round-trip**: a 58-byte real text file compressed
+via `compress -c` to a 57-byte real `.Z` file; `compress -d -c`
+decompressed back to exactly 58 bytes with byte-for-byte identical
+content (same `wc -c` + `cat`-comparison verification method as
+`gzip`).
+
+**Two real, pre-existing bugs found while QEMU-testing this pass**
+(neither introduced by this session, both now `docs/backlog.md` P2
+items 8-9): `tools/make_sd_image.sh`'s own `SIZE_MB` default (`500`)
+directly contradicts its own header comment ("defaults to 4096 ...
+don't go below it") and silently produces a QEMU-only-SDSC, unbootable-
+past-root-mount image -- caught the hard way, twice, as real `ls`/
+`find` QEMU boots hung forever at "Still waiting for root device" after
+a routine `qemu/hfs_root_test.img` regeneration; worked around for the
+rest of this session by always passing an explicit `SIZE_MB=4096`
+argument. Separately, `tools/init_binary/inject_into_sd_image.sh`'s own
+`for cmd in ...` command-copy list needs each new command name appended
+by hand (a known, documented convention -- but easy to forget, and
+easy to misdiagnose as a build/link bug rather than a
+missing-from-the-injection-list one, since the symptom is an identical
+real-sounding "command not found" either way). Both real findings,
+neither this session's own regression.
+
+Files: `ls_acl_compat.c`, `ls_mbr_compat.c`, `ls_fenv_compat.c` (`ls`,
+`ls_fenv_compat.c` also reused by `find`/`date`/`gzip`); the bison-
+generated `getdate.y` build step (`find`); `date_compat.c` (`date`);
+`gz_deflate_impl.c`, `gz_futimens_compat.c` (`gzip`); no new files for
+`compress` (real, unmodified source plus already-existing
+`funopen.c`/`chmod.c` reuse). `build_simple_cmds.sh`'s `zlib_glue`
+generation extended (real `deflate.c`/`trees.c`/`u-boot/crc.h` forwarder),
+`compat_include/zlib.h`/`compat_include/membershipPriv.h` widened (the
+latter via `build_copyfile.sh`, since that's where it's generated),
+five new `CMD_LIST` entries, `SYS_STUBS_NEEDED` extended
+(`fgetattrlist`/`fsetattrlist`/`dup`), two new global `LINK_ALIASES`
+(`send`/`writev`). `inject_into_sd_image.sh`'s command-copy loop
+extended for all five (`ls`/`find`/`date`/`gzip`/`compress`). All 70
+commands (65 prior + these 5) rebuilt clean from scratch as part of
+verifying no regressions -- zero failures, zero undefined symbols,
+zero `LC_LOAD_DYLIB` anywhere. Committed locally, not pushed.
+
 ---
 
 *(End of archived material. Phase 4.6 item 5, and Phases 5 through 8 in

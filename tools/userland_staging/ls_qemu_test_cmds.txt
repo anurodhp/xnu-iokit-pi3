@@ -1,0 +1,11 @@
+root
+darwin
+mkdir -p /tmp/ls_test
+touch /tmp/ls_test/afile
+touch /tmp/ls_test/bfile
+mkdir -p /tmp/ls_test/subdir
+echo LS_TEST_MARKER
+ls /tmp/ls_test
+ls -l /tmp/ls_test
+ls -la /
+echo LS_TEST_DONE
