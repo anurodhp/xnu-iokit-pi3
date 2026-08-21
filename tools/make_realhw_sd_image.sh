@@ -30,18 +30,20 @@
 #
 # Usage: tools/make_realhw_sd_image.sh [OUTPUT_IMAGE] [SIZE_MB]
 #   OUTPUT_IMAGE: defaults to qemu/realhw_root.img
-#   SIZE_MB:      defaults to 3500 -- sized for a genuine "4 GB" SD card: a
-#                 nominal 4GB card's real usable capacity is normally a bit
+#   SIZE_MB:      defaults to 1200 -- large enough for the current
+#                 provisioned root (real commands + timezone data, well
+#                 under a GB) while clearing the 1024 MiB SDHC/SDSC
+#                 threshold with a safe margin, and small enough to write
+#                 quickly regardless of physical card size. A nominal
+#                 "4 GB" card's real usable capacity is normally a bit
 #                 under 4096 MiB (manufacturer GB = 1,000,000,000 bytes,
 #                 not the binary MiB this script's mkfile/dd use, plus
-#                 some reserved/spare sectors) -- a literal 4096 MiB image
-#                 can be too large to `dd` onto a real "4GB" card (3800
-#                 still wasn't a large enough margin against this specific
-#                 card, confirmed 2026-08-21). 3500 is a wider margin,
-#                 still comfortably above the 2048 MiB SDHC threshold
-#                 above. Double-check your actual card's real byte
-#                 capacity with `diskutil info` if you want to push it
-#                 closer to 4096.
+#                 some reserved/spare sectors) -- push the size up only if
+#                 the provisioned root actually needs more room, and if
+#                 so double-check your card's real byte capacity with
+#                 `diskutil info` first (3800 and even 3500 both proved
+#                 too large a margin against one real "4GB" card,
+#                 confirmed 2026-08-21).
 set -e
 cd "$(dirname "$0")/.."
 mkdir -p qemu
