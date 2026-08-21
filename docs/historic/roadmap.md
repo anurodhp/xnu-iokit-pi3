@@ -2,12 +2,15 @@
 
 This file is a verbatim archive of the completed-work sections originally
 in `docs/roadmap.md`, split out on 2026-08-17 once that file grew too large
-(~3864 lines) to serve as a working plan doc. Nothing below has been
-edited, summarized, or reworded from the original -- headers, dates, and
-prose are unchanged, only reorganized into this file. See `docs/roadmap.md`
-for the short, current-state view (active phase/step, open bugs, known
-stand-ins, and condensed remaining work); use this file when you need the
-underlying debugging history/evidence a status line in that shorter file is
+(~3864 lines) to serve as a working plan doc, plus a second archive pass
+on 2026-08-21 (see that pass's own section near the end of this file) once
+the "Current status" section grew large again from five more passes'
+worth of dated entries. Nothing below has been edited, summarized, or
+reworded from the original -- headers, dates, and prose are unchanged,
+only reorganized into this file. See `docs/roadmap.md` for the short,
+current-state view (active phase/step, open bugs, known stand-ins, and
+condensed remaining work); use this file when you need the underlying
+debugging history/evidence a status line in that shorter file is
 summarizing.
 
 Contents: Phases 1, 2, 3, and 3.5 in full (all marked done/closed in the
@@ -4794,3 +4797,874 @@ this split's scope rule [only Phase 4/4.6 sub-items are archived here],
 its detailed writeup was left in place in git history rather than copied
 into this file. Consult `git log -p` on `docs/roadmap.md` before this split
 if that detail is needed.)*
+
+
+---
+
+# Second archive pass: docs/roadmap.md "Current status" entries, 2026-08-21
+
+Everything below is a verbatim copy of the dated status entries that had
+accumulated in `docs/roadmap.md`'s "Current status" section between the
+first split (2026-08-17, above) and 2026-08-21, moved here for the same
+reason as the first split: keep the working doc short enough to stay in
+context. Entries are in the order they appeared (newest-first, as
+`docs/roadmap.md`'s own convention prepends each new pass's writeup above
+the previous one) -- so reading top-to-bottom here goes from most-recent
+to oldest. Nothing has been edited or reworded, only relocated.
+`docs/roadmap.md`'s own "Current status" section now holds only a short,
+condensed summary of where things stand; come here for the underlying
+per-command debugging detail, QEMU-verification transcripts, and the
+exact real bugs found along the way.
+
+**`df`/`killall` (Phase 4.6 item 8) + `getty` (Phase 5.5 item 1) DONE, 2026-08-21.**
+`df` (real, unmodified `file_cmds/df/{df,vfslist}.c`) and `killall`
+(real, unmodified `shell_cmds/killall/killall.c`) both QEMU-verified
+against the real, general-purpose `sysctl()`/`getfsstat()`/`KERN_PROC`
+plumbing -- `df`, `df -h`, `df -k` all print correct real filesystem
+stats with exit 0; `killall -v sleep` correctly signals a backgrounded
+`sleep` (confirmed via `ps -ax` before/after); `killall nonexistentcmdxyz`
+correctly exits 1 with "No matching processes were found". Needed two new
+real files: `simple_cmds_statfs64_compat.c` (the auto-generated `_statfs`
+stub was wired to syscall #157's legacy 32-bit-struct layout, wrong for
+this project's `__DARWIN_64_BIT_INO_T=1` build which expects
+`statfs$INODE64`/#345 -- same class of mismatch `fstatfs()` already
+worked around; also adds a correct `getfsstat()`, this project's first
+real caller, `df`'s own `getmntinfo()`) and `simple_cmds_libm_compat.c`
+(narrow `fabs()`/`trunc()`/`ilogb()` for `df.c`'s own `-h`/`-H` unit
+rounding -- this project has no libm at all).
+`getty` (real, unmodified `system_cmds/getty.tproj/{main,init,subr,chat}.c`,
+`tools/userland_staging/build_getty.sh`) compiles, links, and now
+**runs without crashing** -- installed at `/bin/getty` but deliberately
+NOT wired into the boot/login path (see build_getty.sh's own header
+comment: real getty hands off to a separate `login(1)` binary this
+project doesn't build; this project's actual login flow is one-shot
+in `init.c`). Found and fixed a real bug during QEMU verification: getty's
+real, unmodified `main()` never calls this project's TSD-bootstrap
+(`pthread_main_thread_bootstrap()`), so `gettable()`'s `cgetent()` call
+dereferenced `__current_locale()` off an uninitialized TSD base -- an
+immediate, zero-output `SIGSEGV`, confirmed via bisection (temporary
+`write()`-marker instrumentation of a scratch, git-reverted copy of
+`main.c`/`subr.c`/`getcap.c`, isolating the crash to the `cgetent()` call
+itself). Same fix shape as `uname`'s own historic identical bug
+(`uname_main_wrapper.c`): a new `getty_main_wrapper.c`, `main.c` compiled
+with `-Dmain=getty_cmd_real_main`, so the wrapper (which bootstraps TSD
+first) is the real process entry point. Post-fix: `getty` prints its
+real "login: " prompt with no crash; the interactive login-name capture
+itself isn't exercised meaningfully by this ad hoc single-console pty
+test (no separate real tty to hand off to) -- expected given the
+deliberately-deferred integration scope, not a new bug.
+
+**Tier B command sweep DONE (4 of 4), 2026-08-21** (see "Command priority
+reorganized" below for the prioritization this closes out): `diff`,
+`tar`, `whoami`, and `less`/`more` all real, unmodified source, built,
+and QEMU-verified. 74 total commands now built (70 before this pass).
+- **New real repos pinned** (`setup_third_party.sh`, confirmed against
+  the `macos-112` manifest, not guessed): `gnudiff` (tag
+  `gnudiff-25.40.1` -- the manifest has no `diffutils` entry at all;
+  Apple's own apple-oss-distributions project name for GNU diff is
+  `gnudiff`), `less` (tag `less-34`), `libarchive` (tag
+  `libarchive-83.40.4`).
+- **`diff`** (real, unmodified `gnudiff/diffutils/src/{diff,analyze,
+  context,dir,ed,ifdef,io,normal,side,util,version}.c` + gnulib's own
+  `lib/{basename,c-stack,cmpbuf,error,exclude,exitfail,freesoft,
+  hard-locale,imaxtostr,offtostr,posixver,prepargs,quotesys,regex,
+  setmode,strftime,umaxtostr,xmalloc,xstrtoumax}.c`, matching
+  `gnudiff.xcodeproj`'s own real "diff" + "diffutils" static-lib target
+  source lists exactly): needed gnulib's OWN GNU-syntax regex engine
+  (`re_compile_pattern()`, a different, older API from this project's
+  shared TRE/POSIX `libc_regex.a`) and its own `getopt.h` (binary-
+  compatible `struct option`, but satisfied by this project's real
+  `getopt_long.c` rather than gnulib's own `getopt1.c`, avoiding a
+  duplicate-`optind`-global conflict) -- both made to win over
+  `$CFLAGS`'s own headers via a new, general `$OUT/cmd_pre_include`
+  override directory (cleared before every command's own turn), not a
+  global reorder (a global `cmd_cflags`-before-`$CFLAGS` reorder was
+  tried first and reverted -- it broke `grep`/`gzip`'s own unrelated
+  `zlib_glue` internal header for a real, reproducible reason, see
+  `build_simple_cmds.sh`'s own comment). Real new raw syscall: a hand-
+  written `sigaltstack(2)` stub from Apple's own `libsyscall/custom/
+  __sigaltstack.s` (`c-stack.c`'s real SIGSEGV-on-stack-overflow
+  handler). One real, narrow, honestly-documented gap: `regex.c`'s
+  optional wide-char/locale-aware matching path is left off
+  (`HAVE_CONFIG_H` deliberately not defined for that one file), ASCII-
+  range matching unaffected. QEMU-verified: real normal-format diff
+  output (`< line two` / `> line TWO changed`), a real unified diff
+  (`-u`, correct `---`/`+++`/`@@` hunk headers), correct exit codes
+  (0 for identical files, 1 for differences).
+- **`tar`** (real, unmodified libarchive core -- 104 of 122 real
+  `libarchive/libarchive/*.c` files, matching Apple's real dynamic-
+  library target list minus a handful of deliberately-scoped-out real
+  gaps below -- plus real `tar/{bsdtar,cmdline,creation_set,read,subst,
+  util,write}.c` and `libarchive_fe/{err,line_reader,passphrase}.c`):
+  the single largest command this project has ever built (~140 compiled
+  files, `tar.macho` itself 1.4MB). Needed a "corrected" `config.h` (a
+  real `sed` transform of the checked-in file, undefining ~11 `HAVE_*`
+  macros this project genuinely doesn't have -- `HAVE_BZLIB_H`/
+  `HAVE_LZMA_H`/`HAVE_LIBXML2`/`HAVE_ICONV(_H)`/`HAVE_LOCALCHARSET_H`/
+  `HAVE_READPASSPHRASE(_H)`/`HAVE_POSIX_SPAWNP`/`HAVE_UTIMENSAT`/
+  `HAVE_FUTIMENS` -- real upstream libarchive is already designed to
+  gracefully degrade when each is undefined, confirmed by reading
+  `archive_read_support_filter_bzip2.c`'s own real `#if !defined(HAVE_
+  BZLIB_H)` fallback before relying on this project-wide); real, reused
+  `gz_deflate_impl.c`/`gz_crc32_compat.c` (the same real zlib DEFLATE+
+  INFLATE core `gzip`'s own tier already proved) for `.tar.gz` support;
+  real, unmodified FreeBSD `opendir.c`/`readdir.c`/`closedir.c`
+  (archive_read_disk_posix.c's real directory-tree walk is the first
+  command to call these directly rather than going through
+  `libremovefile.a`'s `fts_*`), needing a real `dd_fd`-style field-
+  rename compat header (Apple's own `dirent.h` privately renamed every
+  `DIR` struct field with a `__` prefix) and `-DPRIVATE=1` (a real,
+  already-established knob for `xnu-7195/bsd/sys/dirent.h`'s own
+  `#if PRIVATE`-gated 64-bit-inode buffer flags). Three real, narrow,
+  honestly-scoped-out format/crypto gaps, matching this project's
+  already-standing `md5`(1) precedent (Phase 4.6: "needs a whole
+  unbuilt CommonCrypto-shaped digest API... deliberately skipped"): no
+  real CommonCrypto/OpenSSL/libmd digest backend exists here either, so
+  `archive_digest.c`/`archive_hmac.c`/`archive_cryptor.c` aren't
+  compiled, and the six real format entry points that need them
+  (7zip/zip read, xar read, zip/xar/mtree write) get narrow, honest
+  "not available" stand-ins instead -- every other real format (tar/
+  pax/ustar/gnutar/rar-read/lha/ar/cpio/mtree-read/warc/iso9660-read/
+  raw/empty, all genuinely compiled) is unaffected. Separately, one
+  Microsoft CAB-format read gap (`inflateSetDictionary()`, a real zlib
+  entry point u-boot's vendored core never implemented) gets the same
+  narrow honest-stub treatment. A real, reproducible ld64-609 (Xcode
+  12's linker) internal crash (`generateLinkEditInfo`'s "Assertion
+  failed: (target != NULL)") was root-caused via a real binary search
+  over the shared `LINK_ALIASES` list against `tar`'s own real link
+  inputs -- not any single bad alias, but a cumulative effect only
+  `tar`'s much larger object count (~140 files, dwarfing every prior
+  command) ever triggered; fixed with a `tar`-specific minimal alias
+  list (`LINK_ALIASES_TAR`, containing only the aliases `tar`'s own
+  objects actually reference) rather than touching the shared list.
+  **QEMU-verified real round-trip**: `tar -cf`/`tar -tf`/`tar -xf`
+  correctly created, listed (all 5 real entries), and extracted a real
+  3-file/1-subdir tree, every extracted file byte-identical to the
+  original (`diff`, freshly verified above, confirms); `tar -czf`/
+  `tar -xzf` (real gzip compression) round-tripped correctly too.
+- **`whoami`** (Tier B, low priority per the roadmap): confirmed no
+  standalone real source exists anywhere in the `macos-112` manifest
+  (a real, not assumed, gap) -- real Apple ships it as a real *mode* of
+  `shell_cmds/id/id.c` instead (`argv[0]`-basename dispatch, `myname ==
+  "whoami"`), already built and QEMU-verified as `id.macho`. Fixed via
+  `tools/init_binary/inject_into_sd_image.sh` installing a second copy
+  of the same real binary under `/bin/whoami` (same real "one binary,
+  multiple installed names" pattern the script already used for
+  `/bin/bash` + `/bin/sh`). QEMU-verified: `whoami` prints `root`,
+  matching `id -un`.
+- **`less`/`more` DONE, 2026-08-21, with one honest, real, documented
+  scope limit**: real, unmodified `less/{brac,ch,charset,cmdbuf,
+  command,cvt,decode,edit,filename,forwback,help,ifile,input,jump,line,
+  linenum,lsystem,main,mark,optfunc,option,opttbl,os,output,pattern,
+  position,prompt,screen,search,signal,tags,ttyin,version}.c` all
+  compile and link clean against this project's real termcap
+  (`bash_readline_termcap_compat.c`, reused verbatim -- real, already-
+  proven "no termcap database" honest stub) and real `system()`/
+  `popen()`/`pclose()` (`ed_availability_override.h` +
+  `ed_popen_system_compat.c`, both reused verbatim from the `ed` tier).
+  `less.macho`/`more` (same binary, real `argv[0]`-basename `less_is_more`
+  dispatch, same pattern as `whoami` above) build clean, zero undefined
+  symbols. **QEMU-verified real behavior**: `less <file>` correctly
+  detects the absent termcap database (`tgetent()` fails) and drops into
+  `less`'s own real, documented "hardcopy mode" instead of crashing or
+  hanging (`WARNING: terminal is not fully functional` + a real
+  `(press RETURN)` prompt -- confirmed by reading `screen.c`'s own real
+  `get_term()` fallback, not assumed); sending RETURN correctly advances
+  past that prompt and prints the file header; `q` correctly exits back
+  to the shell with exit code 0 (verified via a real interactive pty
+  session, keystrokes on a fixed schedule since `less`'s own real
+  prompts aren't in the shared test harness's `PROMPT_SUFFIXES` list --
+  a harness gap, not a `less` bug, see `docs/backlog.md` item 11 for the
+  one remaining follow-up: this confirms launch/degraded-mode/clean-quit
+  but not yet a full page-by-page scroll-through of content longer than
+  one screen). Honest, real, narrow scope limit (not a bug): this
+  project has no real termcap/terminfo *database* at all (only the
+  proven "always report no entry" stub every other termcap consumer
+  already uses), so `less` never gets real full-screen cursor-addressing
+  paging on this target -- it always runs in real hardcopy mode. Genuine
+  full-screen paging would need a real terminal-capability database
+  ported, a distinct, larger, not-yet-scoped follow-up.
+
+**Real hardware milestone, 2026-08-21**: first-ever confirmed boot on
+actual Pi 3 silicon (previously QEMU-only). `u-boot` reached
+`## Starting XNU at ...` on its HDMI console, and XNU's own real kernel
+boot banner (BSD copyright text via `kprintf`/the real `pi3_uart` mini-
+UART driver) came through cleanly over a real serial adapter -- first
+confirmation that `bootxnu`'s Mach-O loader/entry-point fix and XNU's
+real serial console path both work on real silicon, not just in
+QEMU-derived reasoning. Two real bugs found and fixed getting there:
+`tools/make_sd_image.sh`'s boot-partition population never actually
+copied the kernel file onto the card despite claiming "real-hardware
+parity" (fixed); and `sdcard/config.txt` had no `core_freq=250` pin, so
+the real Pi 3 firmware's clock scaling shifted the mini-UART's actual
+baud away from the nominal 115200 `pe_serial.c`'s fixed divisor assumes
+-- symptom was garbled-but-present serial output, not blank (fixed).
+Full writeup in `sdcard/README.md` (gitignored by the user's own global
+config -- not tracked in this repo, but present on disk).
+
+**Both remaining open questions from the first test resolved the same
+day, both expected/by-design, neither a bug:**
+- **HDMI goes dark after `## Starting XNU`, no kernel console output
+  ever appears there.** Root cause confirmed in source, not the
+  framebuffer handoff failing: `osfmk/console/serial_console.c` (lines
+  ~139-156) hardcodes `cons_ops_index = SERIAL_CONS_OPS` for every
+  non-x86_64 target -- a deliberate scope decision from QEMU bring-up
+  (QEMU runs `-display none`, so routing console output to video would
+  have made it invisible there). XNU's `kprintf`/`/dev/console` path
+  never targets video on this board at all today, independent of
+  whether u-boot's HDMI framebuffer handoff itself works -- so this was
+  never going to draw on HDMI regardless. The framebuffer handoff's own
+  success/failure remains genuinely untested either way.
+- **Boot reaches real IOKit matching (`_IOConfigThread::main entered`)
+  and then hangs "Waiting for root device" (`IOMedia`/`Apple_HFS`).**
+  Expected: this real-hardware sanity card is a single FAT32 partition
+  (see `sdcard/README.md`) with no HFS+ root partition at all for
+  `vfs_mountroot()` to find, and `sdcard/kernel.development.bcm2837.
+  unstripped` is a frozen pre-session snapshot predating this project's
+  real SD/HFS+ driver work entirely. No root device was ever going to
+  appear. This is the sanity check's own intended stopping point --
+  boot-to-idle, matching QEMU's milestone at this exact same historical
+  point -- not a new bug to chase.
+
+**HDMI framebuffer console-output investigation, 2026-08-21 -- scoped,
+attempted, ABANDONED/REVERTED per explicit user decision; project remains
+serial-only.** Scoping question was "what's the minimal path from the
+existing mailbox-handshake framebuffer code to real pixels on HDMI from
+XNU's own console, independent of keyboard input (which needs Phase 6a's
+full USB stack regardless and is explicitly out of scope here)." Real
+findings, still valid for a future attempt even though the code below was
+reverted:
+- **Already present and real, confirmed by reading the actual source, not
+  assumed:** `bcm2837_video_init()` (`pexpert/arm/pe_init.c`) is a real
+  BCM2837 GPU mailbox property-tag handshake (physical/virtual
+  width-height, depth, pixel-order, allocate-buffer, get-pitch tags,
+  cross-checked against the real protocol) that requests a 640x480x32
+  HDMI framebuffer from VideoCore firmware and, on success, fills in a
+  `PE_Video` struct including a real mapped virtual address
+  (`ml_io_map_wcomb`). It's called from `osfmk/arm/arm_init.c` (between
+  `arm_vm_init()` and `PE_create_console()`, the correct window since
+  `ml_io_map()` needs VM/pmap bootstrapped first) gated behind an
+  already-existing `hdmi_console` boot-arg, default off -- this much
+  predates this session. Separately, `third_party/u-boot`'s own local
+  patch (`third_party-patches/u-boot.patch`, `sdcard/README.md`)
+  independently hands off *u-boot's* already-working HDMI framebuffer via
+  `boot_args->video_information`, which stock `PE_init_platform()`
+  unconditionally copies into `PE_state.video` -- real-hardware-only,
+  still untested for actual pixel correctness either way. The real font/
+  glyph table `video_console.c`'s renderer needs (`osfmk/console/
+  iso_font.c`) is already compiled in, real Apple source, no gap there.
+- **The real, previously-unidentified gap:** `cons_ops_index`
+  (`osfmk/console/serial_console.c`) is the single switch that decides
+  whether `kprintf`/`IOLog`/`/dev/console` text actually reaches
+  `vcputc()` (video) or `_serial_putc()` (serial) -- and nothing in this
+  tree ever sets it to `VC_CONS_OPS`, even when a real framebuffer is
+  present. `switch_to_video_console()` (`osfmk/console/serial_general.c`)
+  had zero callers anywhere in the tree (confirmed by grepping every
+  file). `initialize_screen()` (`video_console.c`) sets up the video
+  renderer's internal state (`vinfo`, font, `gc_ops`) whenever a real
+  framebuffer is present, but only ever calls `switch_to_serial_console()`
+  -- and only in its *no*-video fallback path, never the reverse. So even
+  a fully successful mailbox handshake could never have actually routed
+  console text to HDMI before this investigation, independent of whether
+  the pixels themselves would have rendered correctly.
+- **What was implemented (then fully reverted, see below):** two small,
+  additive, boot-arg-gated changes in `osfmk/arm/arm_init.c`: (a) guard
+  the existing `bcm2837_video_init()` call with
+  `!PE_state.video.v_display` so it can't clobber an already-valid
+  loader-handed-off framebuffer (e.g. u-boot's) with a second, separate
+  GPU allocation; (b) immediately after `PE_create_console()`, call
+  `switch_to_video_console()` iff `hdmi_console` was passed AND
+  `PE_state.video.v_display` is set (i.e. a real framebuffer was actually
+  obtained) -- default behavior (no `hdmi_console` boot-arg) was designed
+  to be byte-for-byte identical to before, and `runvm.sh`'s `-append` line
+  never passes `hdmi_console`, so QEMU's normal boot path was never
+  supposed to be affected either way.
+- **Verification attempt and why it was stopped:** the kernel rebuilt
+  cleanly (no new warnings/errors). It was boot-tested from an isolated
+  scratch copy of the kernel binary (deliberately never overwritten:
+  `build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped`,
+  the file other tooling/agents rely on, so this test could not have
+  corrupted anything else regardless of outcome) with **default**
+  boot-args (no `hdmi_console` -- a pure regression check of the two
+  guard changes, not yet a test of the new opt-in video path itself,
+  which was never reached). The captured serial log genuinely did reach
+  the same `init: pid 1 up, forking single-user shell` / `login:`
+  steady state every other successful boot this session reaches, with no
+  panic, fault, or visible loop in the log -- then the process was killed
+  by the coordinating session after ~13 minutes of no further output,
+  read externally as a hang. Honest assessment, not a guess dressed up as
+  a finding: I cannot confirm whether that was a real wedge or simply an
+  unattended login prompt correctly waiting forever for input that this
+  passive (non-interactive) test never sent -- both look identical from
+  outside, and I was told to stop before re-running with a QEMU-monitor
+  PC/register check (`x`, not `xp`) to disambiguate. Root cause is
+  therefore genuinely unknown, not "probably fine" -- treat it as
+  unresolved. Note also that the *actual* new code path
+  (`hdmi_console=1`, the video-console switch itself) was never
+  QEMU-tested at all before the work was stopped -- only the regression
+  guard was exercised.
+- **Disposition:** per explicit user decision (relayed 2026-08-21), this
+  work is abandoned for now, not paused mid-stream. `osfmk/arm/arm_init.c`
+  was reverted via `git checkout --` in the `third_party/xnu-7195` fork
+  (confirmed clean via `git status`/`git diff` -- zero diff against the
+  pre-session state) -- the serial-only console path is exactly as it was
+  working before this investigation, zero net code change. No commits
+  were made in either the main `iokit` repo or the `xnu-7195` fork for
+  this work, and nothing was pushed. The scratch kernel build and its
+  boot log (both outside the tracked tree, in the session scratchpad)
+  were deleted.
+- **For whoever picks this back up:** the scoping/research findings above
+  (what's present, what's missing, the exact two-part shape of the fix)
+  remain accurate and don't depend on the reverted code still being
+  there -- re-derive line numbers fresh from source rather than trusting
+  ones written here, since they drift. Before re-attempting: (1) run the
+  regression boot (default args, no `hdmi_console`) at least twice and
+  pair it with a QEMU-monitor register/PC check, since "no further serial
+  output at an unattended login prompt" alone is not a reliable pass/fail
+  signal, as this session's own inconclusive result shows; (2) only once
+  that's confirmed genuinely clean, test `hdmi_console=1` itself, which
+  this session never reached. **Independent of Phase 6a (keyboard
+  input):** this entire effort is about console *output* only -- real
+  keyboard input over HDMI needs the full USB host-controller stack
+  (`docs/usb-support-plan.md`), a separate, much larger, unstarted
+  undertaking. Solving this does not get you input.
+
+Real SD/GPIO/USB/Ethernet on this specific board remain genuinely
+untested (backlog P0 items 1-6 -- SDHCI serialization/error-recovery/
+clock-speed/power-ramp/memory-barriers/GPIO-pinmux -- are all real-
+hardware-only risks QEMU cannot exercise). Testing any of that for real
+would need a 2-partition (FAT32 boot + HFS+ root) card built the same
+way `qemu/hfs_root_test.img` is, with the CURRENT from-source kernel
+(`build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped`),
+not this frozen snapshot.
+
+**DONE, same day**: `tools/make_realhw_sd_image.sh` (new script) builds
+exactly that -- current kernel, real 2-partition layout. Two more real
+bugs found and fixed testing it for real: (1) real hardware boots with
+zero `bootargs` by default (unlike QEMU's `runvm.sh`, which always
+passes `rd=disk0s2`), so root-device selection
+(`iokit/bsddev/IOKitBSDInit.cpp`) fell through to generic
+`IOMedia`/`Content=Apple_HFS` matching, which can never succeed since
+this project's kext personalities never wire up the
+`kIOFDiskPartitionSchemeContentTable` content-hint table it depends on
+(real, correctly-typed `0xAF` MBR partition confirmed via `fdisk`/`xxd`
+on the actual image -- not a data-corruption bug); (2) `serialmode`
+defaults to `0` (`osfmk/arm/arm_init.c`) unless a real `serial=`
+boot-arg is present, and `SERIALMODE_INPUT` specifically gates real
+serial-input polling (`osfmk/console/serial_general.c`), separate from
+the always-on `kprintf` output path -- so the login prompt was visible
+over serial but nothing typed reached the shell. Both fixed by baking
+`setenv bootargs "rd=disk0s2 serial=3"` into `u-boot`'s autoboot
+sequence (`third_party/u-boot`'s `configs/rpi3_xnu_defconfig`, same
+values `runvm.sh` already uses successfully for QEMU) -- see
+`sdcard/README.md` for the full writeup. **Result, confirmed on real
+Pi 3 hardware, same day: full boot -> real HFS+ root mount -> login ->
+real interactive bash shell with working keyboard input, all over
+serial, using the CURRENT actively-developed kernel** -- the same
+milestone this project first reached on QEMU, now also real on actual
+silicon. Real SD/GPIO (backlog P0 items 1-6) survived a real multi-
+partition boot+login+shell session without incident, though still not
+exhaustively exercised (no sustained heavy I/O load, no USB/Ethernet
+involved at all -- both remain genuinely untested on this board).
+
+**Phase 4.6 item 3 (real POSIX regex) DONE and QEMU-verified, 2026-08-20.**
+Real, unmodified Apple source (`third_party/Libc/regex/TRE/lib/*.c`, the
+TRE engine, + `third_party/Libc/regex/FreeBSD/regerror.c`) now builds
+clean into `libc_build/libc_regex.a` via the new, permanent
+`tools/userland_staging/build_libc_regex.sh` (10/10 real source files
+compile with zero gaps against the existing curated locale/malloc/
+platform stack). Three real, narrow build-time gaps found and fixed, all
+documented in that script's own header comment: (1) TRE's own
+`TRE_REGEX_T_FIELD` macro (which field of `regex_t` TRE privately stores
+its compiled-program pointer in) is only defined in TRE's top-level
+`config.h`, never force-included by any individual `.c` file on its own
+(real Apple Xcode project injects it project-wide; this checkout's
+non-Xcode build didn't) -- fixed by force-including that real
+`config.h`, which also supplies the `HAVE_MBRTOWC`/`HAVE_ISWCTYPE`/etc
+autoconf macros TRE's locale-aware wide-char matching needs (real
+`mbrtowc_l`/`wctype_l`/`iswctype_l` already existed in `libc_locale.a`
+from earlier tiers -- only their prototypes were unreachable, gated
+behind this project's own `-D_USE_EXTENDED_LOCALES_`, also added here).
+(2) Apple's real `xlocale/_regex.h` marks the xlocale-suffixed regex
+entry points (`regcomp_l`/`regncomp_l`/etc) `__IPHONE_NA` -- a real
+App-Store-review-time "macOS only" policy annotation, not a functional
+restriction -- which trips a hard compile error the moment TRE's
+`regcomp.c` *defines* a function under one of those names while building
+under this project's uniform `-target arm64-apple-ios14.4`; fixed via a
+new, narrowly-scoped compat shim (`regex_availability_override.h`) that
+neutralizes just the `__IPHONE_NA` sentinel's expansion, leaving every
+other real availability annotation intact. (3) `regcomp(3)` (and only
+`regcomp` -- not `regexec`/`regfree`) is `__DARWIN_ALIAS`'d to the
+`$UNIX2003`-suffixed symbol name by this checkout's own vendored
+`sys/cdefs.h` even on this LP64 arm64 target (confirmed by reading the
+real macro chain, not guessed) -- real callers built against these
+project headers (bash's own `lib/sh/shmatch.c`, unmodified Apple source)
+therefore reference `_regcomp$UNIX2003`, while TRE's `regcomp.c` itself
+only ever exports plain `_regcomp`; bridged via a small trampoline in
+`bash_syscalls.c` (see that file's own updated comment for the full
+mechanism).
+
+Wired into real bash as the end-to-end consumer: `bash_syscalls.c`'s old
+narrow `regcomp`/`regexec`/`regfree` stand-ins (`REG_BADPAT`/
+`REG_NOMATCH` always) are gone -- object files linked directly on the
+command line always win over an archive member offering the same symbol
+(this project's own documented archive-shadowing rule), so simply
+deleting those fake definitions lets `libc_regex.a`'s real ones resolve
+instead once the archive is added to `build_bash.sh`'s link line. Real,
+unmodified `lib/sh/shmatch.c` (already compiled into `bash.macho`,
+implements bash's `[[ str =~ pattern ]]`) now performs a genuine TRE
+match. QEMU-verified via a real interactive login + shell session
+(`tools/userland_staging/regex_qemu_test_cmds.txt`): `[[ hello =~
+^h.*o$ ]]` correctly matches, `[[ goodbye =~ ^h.*o$ ]]` correctly does
+not, `[[ abc123 =~ [0-9]+ ]]` correctly matches, `[[ abcxyz =~
+^[0-9]+$ ]]` correctly does not -- four real regex results, all correct.
+`bash.macho` remains a clean static Mach-O after relinking (`otool -l`:
+`LC_UNIXTHREAD` present, zero `LC_LOAD_DYLIB`; `nm -u`: zero undefined
+symbols). `simple_cmds_rpmatch_compat.c` (`rm -i`'s y/n prompt) was left
+untouched -- its own header comment already documents why a direct
+first-character check is exactly equivalent real behavior in this
+project's always-C locale, not a degraded approximation, so there was no
+real behavior to gain by rewiring it; unaffected by this change either
+way (not rebuilt, not relinked).
+
+**Phase 4.6's `grep`/`sed`/`nl`/`xargs`/`ed` sweep DONE and QEMU-verified,
+2026-08-20 (session immediately following item 3).** All five real
+commands now build, link, and run against the real POSIX regex engine
+(`libc_regex.a`). Highlights (full per-command narrative, every new raw
+syscall, every real-source dependency chased down, in
+`docs/historic/roadmap.md`): `grep` needed the most new plumbing --
+`WITHOUT_FASTMATCH`/`WITHOUT_LZMA`/`WITHOUT_BZIP2`/`WITHOUT_NLS` (real,
+upstream-supported build knobs disabling optional subsystems this
+project doesn't have), real `fts_*`/`fnmatch()`, and a genuinely real
+(not fabricated) `gzdopen()`/`gzread()` for `-Z`/`.gz` support --
+real DEFLATE decompression via the real, unmodified zlib core vendored
+at `third_party/u-boot/lib/zlib`, glued in with a real standalone
+CRC-32 (`gz_crc32_compat.c`) since even u-boot's own `crc32.c` was too
+u-boot-board-specific to vendor directly. `sed` and `nl` were both
+close to drop-in once `libc_regex.a` was linkable. `xargs` was the
+first `simple_cmds.sh` binary to spawn real child processes (real
+`vfork()`/`waitpid()`/`execvp()`) and, along the way, surfaced and fixed
+a real project-wide bug: `sysconf(_SC_ARG_MAX)` unconditionally failed
+because the *only* `sysconf()` anywhere in this project's built libc
+archives was a narrow `_SC_STREAM_MAX`-only stdio-bootstrap stand-in
+silently shadowing every other case -- fixed narrowly (a real
+`sysctl(CTL_KERN, KERN_ARGMAX)` call added to that same stand-in,
+root-caused via a standalone QEMU-run diagnostic first) rather than
+swapping in the real general-purpose `sysconf.c`, which would have
+touched every other already-verified command's stdio-bootstrap path
+too. `ed` was the deepest port of the five: real `setjmp`/`longjmp`/
+`sigsetjmp`/`siglongjmp` did not exist anywhere in this project before
+it (Apple's real arm64 `libplatform` asm needs a genuinely missing
+`__sigunaltstack` real dependency, not just a missing header, so this
+project now carries its own real AAPCS64 register-save/restore core
+instead, deliberately scoped narrower than Apple's -- no
+pointer-authentication munging, no sigaltstack-status preservation,
+both honestly documented as real, narrow gaps, not silently dropped);
+real `popen()`/`pclose()`/`system()` (Apple's real source needs
+`posix_spawn`, an already-deferred whole subsystem -- worked around
+with the classic pre-`posix_spawn` `pipe()`+`fork()`+`execve()`
+algorithm); and a real `pipe(2)` (Apple's own hand-written arm64 raw
+syscall, `libsyscall/custom/__pipe.s`, compiled directly). QEMU-verified
+with real extended/basic regex patterns for each (`grep -E
+'^[0-9]+$'`, `sed -E 's/[0-9]+/NUM/'` plus a real `-i` in-place edit,
+`nl -b p'[0-9]'`, `xargs grep -l` + `xargs -n1`, and `ed`'s
+`g/[0-9][0-9]*/s//NUM/`, a real global regex substitute, plus a real
+`w` write-back verified via a follow-up `cat`) -- not just
+literal-string happy paths.
+
+Actively on **Phase 4, step 3** ("real commands"): as of 2026-08-20
+(end of day, "command-sweep" session, plus the grep/sed/nl/xargs/ed
+sweep immediately after), **65** real Apple/FreeBSD command
+binaries build, link, and run QEMU-verified against the real HFS+ root,
+using a curated real Apple/FreeBSD libc stack (string, platform, locale,
+stdio, gen, printf/scanf, malloc, pthread, closure, removefile/copyfile,
+libunwind -- all real, QEMU-verified ports, see `docs/historic/
+roadmap.md`'s Phase 4 for the full per-tier build history): `bash`,
+`uname`, `ps`, the original Tier 1-5 set (`true`/`false`/`yes`/`pwd`/
+`basename`/`dirname`/`echo`/`printf`/`hostname`/`logname`/`cat`/`wc`/
+`head`/`tail`/`mkdir`/`touch`/`rm`/`env`/`which`/`sleep`/`printenv`/
+`cut`/`uniq`/`ln`/`id`), and 32 more added in one long same-day
+"command-sweep" session across six blocks: `cp`/`mv` (Block 1);
+`rev`/`fold`/`paste`/`expand`/`unexpand`/`comm`/`colrm`/`lam`/`rs`/
+`rmdir`/`mkfifo`/`mknod`/`chflags` (Block 2); `seq`/`jot`/`test`/`kill`/
+`tee`/`mktemp`/`hexdump`/`stat`/`cksum`/`pathchk`/`du` (Block 3);
+`chmod`/`chown` (Block 4); `nice`/`renice`/`nohup` (Block 5); and
+`chroot`/`apply`/`vis`/`unvis` (Block 6). Full per-block build/debug
+narrative (every new raw syscall, every real-source dependency chased
+down, every QEMU transcript) is in `docs/historic/roadmap.md`'s newest
+Phase 4 entry -- this section only summarizes.
+
+`which`/`sleep`/`printenv`/`cut`/`uniq`/`ln`/`id` were added and
+QEMU-verified 2026-08-19/20 (Twenty-fourth pass, see
+`docs/historic/roadmap.md`): `which` had existed unverified since
+2026-08-16 (same situation `env` had been in) and needed no fix, just
+verification; the other six are genuinely new real commands, needing one
+new real syscall or compat shim each at most (a public `nanosleep()` for
+`sleep`, a spec-compliant `catopen()` stub for `uniq`, `link`/`symlink`
+raw syscalls plus reusing `libremovefile.a`'s real `unlink`/`rmdir`
+bodies for `ln`, and a real last-resort `getgrouplist_2()` SPI shim over
+`tools/libinfo_custom/` for `id`). `cp`/`mv` were surveyed and found to
+need roughly a dozen more real syscalls plus one Phase-4.6-item-4-shaped
+stand-in (`lchmod`/`lchflags`'s real `setattrlist(2)` dependency) --
+deferred to a dedicated follow-up pass rather than rushed; see
+`docs/historic/roadmap.md`'s Twenty-fourth pass entry for the exact
+per-symbol breakdown.
+
+`env.macho` (real Apple `shell_cmds/env/env.c`+`envopts.c`) had existed on
+disk since Phase 4.6 item 2 (2026-08-16) but was never actually
+boot-tested that day -- confirmed for real 2026-08-19: rebuilt clean off
+today's tree (byte-identical output, only the same benign
+`$UNIX2003`/`$DARWIN_EXTSN` alias link warnings as before) and QEMU-verified
+in all three real modes via `exec /bin/env` at the shell: bare `env`
+prints the real `PATH=/bin:/usr/bin`/`HOME=/`/`USER=root`/`TZ=UTC` table
+`init.c`'s `build_envp()` sets; `env FOO=barbaz /bin/env` adds `FOO` on
+top of the inherited table before exec'ing; `env -i /bin/env` and
+`env -i FOO=onlyfoo /bin/env` correctly clear the environment first (the
+former printing nothing, the latter printing only `FOO=onlyfoo`). No bug
+found or fix needed -- the environ/getenv plumbing landed 2026-08-16
+already covered `env`(1) correctly.
+
+Real static `bash.macho` links clean and, after fixing three real bugs
+found the same day (a stale/wrong-format `.dtb`, a test-harness login-line
+bug, and a shell-quoting bug that corrupted `CONF_HOSTTYPE` into a garbage
+pointer), executes real code. The 2026-08-16 "hangs indefinitely, kernel
+provably idle" report was **re-investigated 2026-08-19 and found to be a
+misdiagnosis**: `exec /bin/bash` (no `-i`) genuinely works -- it runs
+non-interactively (real `isatty(stdin)`/`isatty(stderr)` honestly return
+false, since this console has no real tty ioctls), which is *correct*
+POSIX behavior, not a bug; it prints no `PS1` prompt by design, then
+legitimately blocks on a real, correct `read()` waiting for the next
+line -- this is what earlier sessions' PC-sampling correctly saw as
+"kernel idle, not crashed". Feeding it a real command after `exec /bin/bash`
+(no visible prompt needed) proves it fully alive: `echo` produced real,
+correct output. Demand-paging the ~1.2MB binary in for the first time is
+also genuinely slow (~90s, all real block reads, not a hang) on this
+target's mostly-polled SD read path -- a real, separate perf
+characteristic worth profiling later, not a correctness bug.
+
+**`bash -i`'s infinite `exit`-flood bug is FIXED and QEMU-verified for real
+as of 2026-08-19** (Twenty-third pass) -- real interactive bash now boots
+to a genuine `bash-3.2# ` `PS1` prompt, reads and executes multiple real
+typed commands in a row with correct output, and exits cleanly (once,
+not in a loop) on an explicit `exit`. Two independent, real, compounding
+bugs were found and fixed, both root-caused via a live QEMU boot with
+temporary instrumentation (removed before commit) rather than guessed:
+
+1. **`sigsetjmp`/`siglongjmp` double-frame corruption**
+   (`tools/userland_staging/bash_syscalls.c`): the previous implementation
+   split the work into a C wrapper function (`sigsetjmp()`/`siglongjmp()`)
+   that called a separate raw-asm register-save/restore helper. Because a
+   real C function always gets its own compiler-generated stack frame,
+   that asm helper was being invoked one level too deep -- it captured
+   x29/x30 as they stood *inside* `sigsetjmp()`'s own frame (return
+   address = back into `sigsetjmp()`, not into `sigsetjmp()`'s real
+   caller, `reader_loop()` in `eval.c`), and spilled the `env` parameter
+   into that same frame. The instant the initial `sigsetjmp()` call
+   returned 0, that frame was popped and its memory became fair game for
+   every function bash called afterward (parsing, `read_command()`, ...);
+   by the time bash's own EOF handling called `siglongjmp()` many stack
+   frames deeper, `sigsetjmp()`'s old frame -- including its own saved
+   x29/x30 needed to eventually return to `reader_loop()` -- had long
+   since been overwritten. Fixed by rewriting `sigsetjmp`/`siglongjmp` as
+   the raw asm entry points directly (no intervening C wrapper, hence no
+   doomed extra frame) -- register capture is the very first thing that
+   runs on entry, before any nested call, so x29/x30/sp captured are
+   genuinely the real caller's, exactly like a real libc implementation.
+2. **`READLINE` silently forced on** (`third_party/bash/config.h`): this
+   vendored config.h unconditionally `#define`d `READLINE 1`, silently
+   overriding `build_bash.sh`'s deliberate `-UREADLINE` compile flag (a
+   `#define` inside a header included by every translation unit wins over
+   an earlier command-line `-U`). With `READLINE` still effectively on,
+   `y.tab.c`'s interactive input path compiled to `yy_readline_get()`
+   (calling the real `readline()` API) instead of the intended plain-stdio
+   `yy_stream_get()`/`getc_with_restart()` path -- and since real GNU
+   readline's line-editing engine is deliberately not built for this
+   target (no termcap/terminfo, raw serial UART), `bash_syscalls.c`'s
+   stand-in `readline()` always returns NULL, which `yy_readline_get()`
+   treats as immediate EOF on *every* call, with zero real console reads
+   ever happening. That's what fed `handle_eof_input_unit()` ->
+   `exit_builtin()` every time `bash -i` tried to read its very first
+   interactive line. Fixed by disabling `READLINE` in config.h itself
+   (matching the project's own documented scope decision), which in turn
+   exposed one small, genuine pre-existing gap in this exact bash-3.2
+   checkout under a real `--disable-readline`-style build (never
+   previously exercised, since Apple's own build always ships readline
+   on): `variables.c` used `no_line_editing`/`rl_prefer_env_winsize`
+   unconditionally but only declared them inside `#if defined (READLINE)`
+   -- fixed by un-guarding just those two declarations.
+
+Either bug alone would have caused *a* problem, but together they explain
+the exact observed symptom precisely: bug 2 made every attempted
+interactive read return EOF immediately and unconditionally (explaining
+the *high rate* of the flood -- no real blocking read ever happened), and
+bug 1 made the resulting `jump_to_top_level(EXITPROG)` fail to actually
+unwind back to `reader_loop()`'s loop-exit check (explaining why it never
+terminated -- control was landing on stomped register state that
+happened, deterministically, to unwind back into another read/EOF/exit
+cycle instead). See `docs/historic/roadmap.md`'s newest Phase 4 entry
+(search "Twenty-third pass") for the full evidence trail, including the
+exact instrumented QEMU transcripts that pinned down each bug in turn.
+**`-i` is now the correct, working way to get a real interactive
+prompt** -- the earlier "don't use `-i`" guidance is retired.
+
+Phase 4.6 items 1 (real timezone database), 2 (real `environ`/`getenv`
+plumbing), and 3 (real POSIX regex) are DONE and QEMU-verified
+(2026-08-16, 2026-08-16, 2026-08-20 respectively). Item 4
+(`setattrlist(2)`) is also done, see below. Item 5 (Mach IPC) is
+explicitly not started.
+
+Separately, Phase 5's custom flat-file account resolver
+(`tools/libinfo_custom/`) is done and verified (2026-08-14) and already
+in real use by `ps`/`rm` for `getpwnam`/`getgrgid` lookups.
+**Correction, 2026-08-20**: the line that used to appear here ("the rest
+of Phase 5 (login/su/PAM) hasn't been started") was stale/wrong -- real
+`do_login()`/`cmd_su()` (`tools/init_binary/init.c`) have been in place
+and QEMU-verified since commit `d2108bb` (2026-08-14): a real interactive
+`login:`/`Password:` prompt loop against `/etc/master.passwd`
+(anti-enumeration-safe, fail-closed on a missing/damaged account
+database), real `setgroups`/`setgid`/`setuid` privilege drop, and a real
+`su` builtin with the correct real-Unix caveat documented in its own
+comment (no setuid-root helper binary yet, so `su` to a different account
+only works starting from root). Only PAM and account-provisioning tooling
+(`pwd_mkdb`/`vipw`/`chpass`/`passwd`) remain genuinely not started -- see
+"Remaining future work" below.
+
+**Default login shell is now real bash, QEMU-verified 2026-08-20.**
+`single_user_child()` (`tools/init_binary/init.c`) previously exec'd the
+nonexistent `/bin/sh` (falling through to the builtin virtual
+`shell_main()` on the resulting `ENOENT`) and, separately, passed a
+hardcoded EMPTY `envp` (`{0}`) even in the fallback-existed case -- a real
+bug, since the `exec` builtin already built a real envp via
+`build_envp()`. Both fixed: the default path now execs the real, already
+Twenty-third-pass-verified `/bin/bash` with argv[0] = `"-bash"` (the
+traditional BSD/login(1) leading-dash convention for a login shell -- real
+bash's own `set_shell_name()` in `third_party/bash/bash-3.2/shell.c` reads
+this) and a real `build_envp()` environment. No `-i` flag needed: bash's
+own interactive-shell autodetection (no `-c`/script argument, and
+`isatty(stdin) && isatty(stderr)`) already fires on its own now that
+`/dev/console` has real BSD tty semantics. Verified safe against this
+image's missing `/etc/profile`/`~/.bash_profile` etc.: bash's own
+`maybe_execute_file()`/`_evalfile()`
+(`third_party/bash/bash-3.2/builtins/evalfile.c`) passes `FEVAL_ENOENTOK`
+for every startup file it tries and silently skips a missing one, no
+error. Real QEMU transcript (pty-driven, full login-to-prompt): after
+`login: root` / `Password: darwin` / `Welcome, root.`, the very next line
+is a real `-bash-3.2# ` prompt (leading `-` confirms login-shell mode
+took), `echo $PATH`/`$HOME`/`$USER`/`$TZ` show the real
+`build_envp()`-provided values (`/bin:/usr/bin`, `/`, `root`, `UTC` --
+previously would have printed empty), an up-arrow history recall
+re-executed a prior command correctly, and `ec`+Tab completed to `echo`
+mid-line (typed continuation after the Tab landed as `echo o
+TAB_COMPLETION_TEST_7733`, proving completion fired rather than `ec`
+being run as a literal, nonexistent command) -- all in the DEFAULT path,
+no manual `exec /bin/bash -i` needed. `exit` cleanly logs out and pid 1's
+existing respawn loop gives a fresh `login:` prompt, unchanged.
+
+**Real termios/tty + real GNU readline (tab completion, command history)
+DONE and QEMU-verified, 2026-08-19/20.** The starting assumption --
+baked into `bash_syscalls.c`'s old `tcgetattr`/`tcsetattr`/`tcgetpgrp`/
+`tcsetpgrp` stubs and `build_bash.sh`'s `-UREADLINE` flag -- was that
+this target's console had no real tty line-discipline for readline's
+raw-mode terminal handling to use. That assumption was never actually
+tested and turned out to be **wrong**: a disposable `ioctl(TIOCGETA/
+TIOCSETA)` probe built into `tools/init_binary/init.c` (removed before
+commit) proved `third_party/xnu-7195`'s real BSD tty stack
+(`bsd/dev/arm/km.c`'s `kmopen`/`kmioctl` -> `bsd/kern/tty.c`'s
+`ttioctl_locked`/`ttread`, wired from `bsd_autoconf()`'s `kminit()` call)
+is already fully, correctly wired under `/dev/console` -- `TIOCGETA`
+round-tripped the exact real `kmopen()` defaults
+(`iflag=0x2b02/oflag=0x3/cflag=0x8b00/lflag=0x5cb`), and a `TIOCSETA`
+clearing `ICANON|ECHO` genuinely took effect (confirmed via a second
+`TIOCGETA` readback) and produced a real, immediate, unechoed
+single-byte `read()` -- exactly the raw-mode contract readline needs, no
+kernel changes required at all.
+
+Real fix, two layers:
+1. **Real termios/isatty/ttyname for real**, replacing the old ENOTTY/
+   false stand-ins: `third_party/Libc/gen/FreeBSD/termios.c` and
+   `ttyname.c` are now compiled for real into the shared
+   `libc_gen.a` (`build_libc_gen.sh`, also picking up `devname.c`);
+   `isatty()` is a real (not fake) `ioctl(TIOCGETA)`-based
+   reimplementation in `libc_stdio_process_shims.c` (kept out of
+   `libc_gen.a` deliberately, so `libc_stdio.a`'s own standalone
+   from-scratch smoketest keeps working without depending on a later
+   tier). A real, shared `ioctl`/`_ioctl`/`_writev`/`_select` raw-syscall
+   layer moved into `libc_gen_syscalls.c` (previously duplicated,
+   separately, in both `bash_syscalls.c` and `ps_extra_syscalls.c`).
+   QEMU-verified: `bash -i`'s `[ -t 0 ]` now genuinely reports `true`
+   (previously always `false`).
+2. **Real GNU readline**, built from bash-3.2's own bundled
+   `lib/readline/*.c` (the Makefile.in's real `OBJECTS` list, minus
+   `shell.c`/`xmalloc.c` -- both real, but bash's own top-level
+   `general.c`/`variables.c`/`xmalloc.c` already provide the identical
+   `sh_get_env_value`/`xmalloc`/etc symbols those two exist for
+   *standalone* `libreadline` builds, confirmed via a real duplicate-
+   symbol link error), plus `pcomplete.c`/`pcomplib.c` (programmable
+   completion), `bashline.c` (bash's own completion/keybinding glue),
+   and `bracecomp.c`. `READLINE` re-`#define`d in `third_party/bash/
+   config.h`; `HAVE_TERMCAP_H` undefined (this checkout genuinely has no
+   `<termcap.h>`/termcap database -- `lib/readline/tcap.h`'s own real
+   `#else` fallback branch handles that, and a new
+   `bash_readline_termcap_compat.c` provides real, honest
+   `tgetent()` (returns -1, "no database", triggering
+   `terminal.c`'s own real, documented dumb-terminal fallback --
+   `\r`/`\b` only, no cursor-addressing capabilities) plus real
+   `tputs`/`tgoto`/`tgetnum`/`tgetflag`/`tgetstr`. A handful of small
+   real/honest stand-ins closed the remaining link gaps: `pthread_testcancel()`
+   (real no-op, matching this project's own prior art in
+   `ps_err_warn_compat.c` -- no real cancellation subsystem exists on
+   this single-thread target), `setpwent`/`getpwent`/`setgrent`/
+   `getgrent`/`endgrent`/`setservent`/`getservent`/`endservent` (honest
+   "no enumeration API yet" stand-ins for `~user`/`%group`/service-name
+   completion -- `tools/libinfo_custom` only supports lookup-by-name/uid
+   today), `__darwin_check_fd_set_overflow` (a real `FD_SETSIZE` bounds
+   check), a real `select()` wrapper, and reuse of the already-real,
+   already-proven `simple_cmds_getenv_compat.c` for `setenv`/`getenv`/
+   `putenv`/`unsetenv` (bash had **no working `setenv` at all** before
+   this, and its previously-linked `getenv()` -- `libc_locale.a`'s old
+   `libc_locale_env_stubs.c` -- unconditionally returned `NULL`; both
+   fixed as a side effect for bash specifically).
+
+QEMU-verified via real pty-driven transcripts (not assumed): typing
+`ec` then a literal Tab byte then `HO_TABTEST_MARKER` + Enter produced
+`echo HO_TABTEST_MARKER` executing correctly (real tab completion,
+expanding `ec` -> `echo `); running `echo REAL_HISTORY_MARKER_42`, then
+sending a raw up-arrow escape (`\x1b[A`) then Enter, re-executed the
+exact same command (real history recall). Zero regression: `bash -i`
+still logs in, runs commands, and exits cleanly, and both `bash.macho`
+and `ps.macho` still link with `LC_UNIXTHREAD`, zero `LC_LOAD_DYLIB`,
+zero undefined symbols. Not independently re-verified this pass: multi-
+candidate Tab completion (2+ matches), vi-mode editing, and full
+`bind`/`complete`/`compgen` builtin correctness beyond linking cleanly.
+See `docs/historic/roadmap.md`'s newest Phase 4 entry for the full
+investigation, exact commands, and transcripts.
+
+**Real default hostname, 2026-08-20.** Nothing previously set one --
+real XNU's `kern.hostname` global stayed empty every boot. `init.c`'s
+new `set_default_hostname()` reads `/etc/hostname` (matching real
+FreeBSD/NetBSD/OpenBSD's rc-script convention, adapted since this
+project has no rc scripts -- init.c IS the boot sequence) and calls the
+same real `sysctl(2)` `{CTL_KERN, KERN_HOSTNAME}` MIB the real
+`hostname(1)` command uses, falling back to a compiled-in `"strudel"`
+default only if the file is missing. `inject_into_sd_image.sh` now
+provisions a real `/etc/hostname` (`strudel`) the same way it already
+provisions `/etc/master.passwd` -- edit that file and reboot to rename,
+no rebuild needed. QEMU-verified: `hostname` at a real logged-in prompt
+prints `strudel`.
+
+**Tier A command sweep DONE, 2026-08-20 (see "Command priority
+reorganized" below for the prioritization this closes out).** `ls`,
+`find`, `date`, `gzip`, and (opportunistically, once `gzip`'s own
+DEFLATE work made it cheap) `compress` all real, unmodified source,
+now building clean and QEMU-verified. 70 total commands now built (65
+before this pass, ls/find/date/gzip/compress added).
+- **`ls`** (real `file_cmds/ls/{ls,print,util,cmp}.c`): top priority
+  per the reorganization below, and this project's most important
+  single command gap. QEMU-verified with bare listing, `-l`, and `-la`
+  against both a populated `/tmp` directory and real `/` (correct mode
+  bits, link counts, owner/group, sizes, dates). Real new plumbing:
+  `fts`/xattr reused from the already-built `libremovefile.a`/
+  `libcopyfile.a`; real `strmode.c` (Apple); real FreeBSD
+  `humanize_number.c` (curl-fetched, genuinely absent from this
+  checkout's Libc, not a libc gap); real termcap stub reused verbatim
+  from the bash tier (`tgetent()` honestly reports "no database", same
+  as bash's own real fallback path). One real, deliberately scoped gap:
+  ACL display (`-e`, the `+`/`@` mode-suffix marker) is an honest
+  always-"no ACL" stub (`ls_acl_compat.c`) rather than a full
+  `acl_get_link_np()` -- the real implementation needs a private
+  `<sys/filesec.h>` layout Apple removed from the public SDK entirely
+  (confirmed absent from both this checkout and Xcode 12's SDKs, not
+  guessed/reconstructed) -- tracked in `docs/backlog.md`.
+- **`find`** (real `shell_cmds/find/{find,function,main,misc,operator,
+  option,ls}.c`): QEMU-verified `-name`, `-type d`/`-type f`, and
+  `-maxdepth` all returning correct real results against a populated
+  test tree and real `/`. `getdate.y` turned out genuinely needed (real
+  `-newerXY` literal-date parsing calls `get_date()`) and genuinely
+  buildable: real, unmodified upstream grammar, generated at build time
+  via `bison -y` (this host's real `/usr/bin/bison`) -- the same
+  "real generator over real source" pattern this tier's raw-syscall
+  stubs already use, not a new category of risk. `-acl`'s real
+  `__APPLE__` code path only needs `acl_get_link_np`/`acl_free` (the
+  `ls` tier's own real subset) -- its sibling non-Apple branch
+  (`acl_is_trivial_np`, real but dead code under this project's
+  `-target arm64-apple-ios` build) needed nothing new.
+- **`date`** (real `shell_cmds/date/{date,vary}.c`): QEMU-verified bare
+  `date`, `date -u`, and a custom `+%Y-%m-%d` format all producing
+  correct real output (timestamps read Jan 1970 -- no RTC/NTP source
+  yet, an honest, pre-existing, unrelated gap, not a `date` bug).
+  `netdate.c` deliberately NOT built -- its one entry point
+  (`netsettime()`, legacy `timed`-protocol UDP broadcast, only reached
+  when actually setting the clock without `-n`) needs a real
+  resolver+socket stack (Phase 6, unstarted) for a protocol dead on
+  every real modern system anyway; honestly stubbed
+  (`date_compat.c`). Real `utmpx-darwin.c` (`pututxline()`) similarly
+  stubbed -- needs a real Mach-RPC-to-ASL-daemon path this project has
+  no launchd/bootstrap-service backing for. `settimeofday(2)` itself IS
+  real (a cheap `NO_SYSCALL_STUB` raw syscall, same pattern as
+  `lchown`/`sigaction`), so `-d`/`-t` and an actual privileged clock-set
+  still really work, just without Apple's own wrapper's cosmetic
+  `notify(3)`/ASL logging side effects.
+- **`gzip`** (real, unmodified `file_cmds/gzip/gzip.c` +
+  `unbzip2.c`/`zuncompress.c`/`unpack.c`/`unxz.c`'s own upstream
+  include-guards): the real deliverable of this pass -- a genuine
+  DEFLATE (compression) core to pair with the grep/sed/nl/xargs/ed
+  sweep's already-real INFLATE-only `gz_gzip_impl.c`. `gz_deflate_impl.c`
+  compiles real, unmodified upstream zlib compression source
+  (`third_party/u-boot/lib/zlib/{deflate,trees}.c` -- u-boot vendors
+  both, confirmed by directory listing) as one unity translation unit
+  next to the same real inflate-side files, giving `gzip.c`'s own real,
+  direct `z_stream`/`deflateInit2()`/`deflate()`/`inflateInit2()`/
+  `inflate()` calls real symbols to link against -- not another
+  gzdopen-style wrapper layer, gzip.c already calls the real low-level
+  API itself. `NO_BZIP2_SUPPORT`/`NO_XZ_SUPPORT` defined (neither
+  vendored in this project, same real upstream-supported knobs grep's
+  own `WITHOUT_BZIP2`/`WITHOUT_LZMA` already used);
+  `NO_COMPRESS_SUPPORT`/`NO_PACK_SUPPORT` deliberately left on (real,
+  self-contained, external-dependency-free `.Z`/pack decompression
+  support, genuinely free functionality). **QEMU-verified real
+  round-trip**: a 65-byte real text file compressed to 97 bytes
+  (`gzip -k`), `gzip -l` reported correct real compressed/uncompressed
+  sizes and ratio, and `gzip -d -k -c` decompressed back to exactly the
+  original 65 bytes with byte-for-byte identical content (verified via
+  `wc -c` + visual `cat` comparison -- `cmp`/`diff` aren't built in this
+  project yet, see Tier B below). One real regression caught and fixed
+  before commit: widening the shared `$OUT/compat_include/zlib.h` from
+  grep's narrow `gzFile`-only stand-in to the full real public zlib API
+  (needed for gzip.c's own richer usage) initially broke `grep`'s own
+  build by shadowing its `gzdopen`/`gzread` declarations -- both are now
+  declared in the widened header, `grep.macho` rebuilds clean, no
+  behavior change.
+- **`compress`** (real, unmodified `file_cmds/compress/{compress,
+  zopen}.c`, opportunistic Tier-A bonus): a completely separate,
+  self-contained classic LZW codec, zero zlib/DEFLATE dependency.
+  `zopen.c`'s real `FILE*`-returning `zopen()` needed real `funopen(3)`
+  (`Libc/stdio/FreeBSD/funopen.c`, real BSD custom-stream-hooks API,
+  never used by any prior command) -- confirmed compatible with this
+  project's own `libc_stdio.a` before attempting (its real internal
+  `__sfp()` allocator is already a defined, linkable symbol there, not
+  assumed). **QEMU-verified real round-trip**: a 58-byte file
+  compressed to a 57-byte real `.Z` file, decompressed back to exactly
+  58 bytes with byte-for-byte identical content.
+
+Two real, pre-existing bugs found (not introduced) while QEMU-testing
+this pass, both now in `docs/backlog.md`: `tools/make_sd_image.sh`'s
+own `SIZE_MB` default (`500`) directly contradicts its own header
+comment ("defaults to 4096 ... don't go below it") and silently
+produces a QEMU-only-SDSC, unbootable-past-root-mount image -- a real,
+reproducible, already-committed bug (not something this session
+introduced), attempted-fixed but the fix didn't persist in this
+session's working tree (see backlog for the concrete one-line fix and a
+workaround: always pass `SIZE_MB=4096` explicitly). Separately,
+`tools/init_binary/inject_into_sd_image.sh`'s own `for cmd in ...` list
+needs each new command name appended by hand (documented in this repo's
+own working conventions, but easy to forget -- caught this pass when
+`gzip`/`compress`/`find`/`date` were each initially missing from it
+after being added elsewhere).
+
+
+---
+
+*(End of second archive pass, 2026-08-21. As with the first split, still-
+open work is NOT archived here -- see `docs/roadmap.md`'s "Remaining
+future work" section for the current, condensed view of everything from
+Phase 4's still-open sub-items through Phase 8.)*
