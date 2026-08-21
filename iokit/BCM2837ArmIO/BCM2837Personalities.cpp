@@ -130,6 +130,11 @@ BCM2837RegisterBuiltinPersonalities(void)
 	OSDictionary *armio = makePersonality("IOPlatformDevice", "BCM2837ArmIO", "arm-io", -1);
 	OSDictionary *intc = makePersonality("IOPlatformDevice", "BCM2837InterruptController", "intc", -1);
 	OSDictionary *sdhci = makePersonality("IOPlatformDevice", "BCM2837SDHCI", "sdhci", -1);
+	// "usb" - the DWC2 USB 2.0 OTG host controller, the board's only USB
+	// silicon and therefore the gate on all Phase 6 networking (the SMSC
+	// LAN9514 Ethernet chip is a USB device behind it). See BCM2837DWC2.h
+	// and docs/usb-support-plan.md.
+	OSDictionary *usb = makePersonality("IOPlatformDevice", "BCM2837DWC2", "usb", -1);
 	// IOBlockStorageDriver (real apple-oss-distributions/IOStorageFamily,
 	// vendored into iokit/Storage/ and iokit/IOKit/storage/, matching
 	// vintage IOStorageFamily-218.1.4 - the initially-vendored 337.100.1
@@ -210,6 +215,10 @@ BCM2837RegisterBuiltinPersonalities(void)
 	if (sdhci != NULL) {
 		personalities->setObject(sdhci);
 		sdhci->release();
+	}
+	if (usb != NULL) {
+		personalities->setObject(usb);
+		usb->release();
 	}
 	if (blockStorageDriver != NULL) {
 		personalities->setObject(blockStorageDriver);

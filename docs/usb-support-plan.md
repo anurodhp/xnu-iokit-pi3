@@ -1,5 +1,70 @@
 # USB host controller support: what Ethernet is actually blocked on
 
+## STATUS 2026-08-21: tasks 1-4 DONE and QEMU-verified; 5-6 written, not verified
+
+Implemented and confirmed on a real QEMU boot (`tools/boot_test.py`, full
+boot to `login:`, no panic):
+
+- `iokit/BCM2837DWC2/BCM2837DWC2.cpp` - DWC2 core/host bring-up and the
+  control/bulk/interrupt transfer engine, ported from
+  `third_party/u-boot/drivers/usb/host/dwc2.c` (tasks 2-3).
+- `iokit/BCM2837DWC2/BCM2837USBEnum.cpp` - device enumeration and the hub
+  protocol subset (task 4).
+- `devicetrees/rpi3.dts` `usb` node + personality (tasks 1, 6).
+
+Evidence from the boot log, not inference:
+
+```
+BCM2837DWC2: GSNPSID=0x4f54294a GHWCFG2=0x250dc016 GHWCFG3=0x10000044
+BCM2837DWC2: DMA buffer virt=0xfffffff8858cd000 phys=0xa5d4000 bus=0xca5d4000
+BCM2837DWC2: core init done, 8 host channels
+BCM2837DWC2: root port enabled, full-speed device attached (HPRT0=0x2100d)
+BCM2837DWC2: device 1: 0409:55aa class 9, ep0 mps 8, full-speed (hub 0 port 0)
+BCM2837DWC2: hub at address 1 has 8 ports (power-good 20ms)
+BCM2837DWC2: device 2: 0525:a4a2 class 2, ep0 mps 64, full-speed (hub 1 port 1)
+BCM2837DWC2: enumeration complete, 2 device(s)
+```
+
+That is a real GSNPSID (`0x4f54...` = "OT"), a real bus address (`0xca5d4000`
+= ARM physical `0xa5d4000` through the `0xc0000000` VC alias), a real device
+descriptor read from the root-port device, and - the part this plan's
+"hub-in-the-path" note existed to force - **a second device enumerated
+through a downstream hub port**, which is the exact topology the LAN9514
+presents. This meets and exceeds the exit criteria below.
+
+### What is NOT verified
+
+- **Task 5, `SMSC9514USBTransport`, is written but unverified.** QEMU models
+  no LAN9514, so `runvm.sh` substitutes a generic `usb-net`. Everything
+  under the SMSC register protocol is exercised for real; the SMSC protocol
+  itself is not, and cannot be here. It needs real hardware - now possible,
+  a serial cable is available as of 2026-08-21.
+- **Interrupt-driven completion.** Task 2 called for mirroring
+  `BCM2837SDHCI`'s interrupt-driven design; this first cut POLLS, with
+  global interrupts deliberately masked, exactly as the u-boot reference
+  does. Doing register bring-up and interrupt plumbing in one change would
+  have meant debugging two unproven things at once, which is precisely how
+  `BCM2837SDHCI`'s interrupt work burned three passes. Contained follow-up.
+- **Split transactions.** Implemented (required whenever a full/low-speed
+  device sits behind a high-speed hub) but never executed: QEMU's `usb-hub`
+  is full-speed, so no split is needed, and the LAN9514's Ethernet function
+  is high-speed, so real hardware may not exercise it either.
+- Cascaded hubs, hot-plug and re-enumeration are out of scope by design.
+
+### Prerequisite discovered mid-implementation, not in the original plan
+
+The "Exit criteria" section below guessed that `third_party/qemu-zhuowei`
+"already emulates a DWC2 device given `-M raspi3`'s usual peripheral set".
+**That was wrong.** The fork is based on QEMU 2.12.91; upstream QEMU only
+gained a DWC2 model in 5.2, and this tree's `bcm2835_peripherals.c` maps
+nothing at `USB_OFFSET`, so `0x3f980000` read back as unassigned memory.
+With real-hardware boot then still blocked on serial, there was no way to
+test a USB stack at all. Backporting the model became step 0 - see the
+`hw/usb: backport DWC2 host controller from QEMU 5.2` commit in the
+qemu-zhuowei fork.
+
+
+
 Written 2026-08-11. `docs/sd-and-ethernet-plan.md` already identified that
 Ethernet (`iokit/SMSC9514Ethernet/`) cannot send or receive a single packet
 without a working USB host controller, and flagged that as "a materially

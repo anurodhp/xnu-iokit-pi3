@@ -36,14 +36,22 @@ fi
 OUT_DIR="${1:-build/kexts}"
 mkdir -p "$OUT_DIR"
 
-KEXTS=(BCM2837InterruptController BCM2837SDHCI SMSC9514Ethernet)
+KEXTS=(BCM2837InterruptController BCM2837SDHCI SMSC9514Ethernet BCM2837DWC2)
 
+# Compiles every .cpp in each driver directory, not just <dir>/<dir>.cpp:
+# BCM2837DWC2 is split across several translation units (controller,
+# enumeration, transport) and a one-file-per-directory loop would have
+# silently skipped all but one of them.
 for kext in "${KEXTS[@]}"; do
 	echo "=== compiling $kext ==="
-	"$CLANGXX" -isysroot "$SDK" -arch arm64 -fapple-kext -mkernel \
-		$(grep -v '^-xc++$' compile_flags.txt) \
-		-c "iokit/$kext/$kext.cpp" \
-		-o "$OUT_DIR/$kext.o"
+	for src in "iokit/$kext"/*.cpp; do
+		[ -e "$src" ] || continue
+		obj="$OUT_DIR/$(basename "${src%.cpp}").o"
+		"$CLANGXX" -isysroot "$SDK" -arch arm64 -fapple-kext -mkernel \
+			$(grep -v '^-xc++$' compile_flags.txt) \
+			-c "$src" \
+			-o "$obj"
+	done
 done
 
 echo "=== done, objects in $OUT_DIR/ ==="

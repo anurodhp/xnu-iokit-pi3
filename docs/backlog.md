@@ -181,6 +181,22 @@ this pass even if the change itself is cheap.
 
 ## P2 — known gaps / incomplete work (not bugs, just unfinished)
 
+0. **DWC2 transfer completion is polled, not interrupt-driven** (added
+    2026-08-21 with `iokit/BCM2837DWC2/`). `docs/usb-support-plan.md` task 2
+    called for mirroring `BCM2837SDHCI`'s interrupt-driven design; this
+    first cut leaves global interrupts masked (`GAHBCFG.GLBLINTRMSK` clear)
+    and polls `HCINT.CHHLTD`, exactly as its u-boot reference does. That was
+    a deliberate sequencing call — doing first-ever register bring-up and
+    interrupt plumbing in one change means debugging two unproven things at
+    once, and `BCM2837SDHCI`'s interrupt work needed three passes and a
+    device-tree root cause before a real interrupt was ever observed. The
+    conversion is contained: `waitForBits()`/`waitForChannelHalted()` are the
+    only places that spin, and `BCM2837SDHCI`'s hybrid
+    `IOSimpleLock` + `IOLockSleepDeadline` pattern (real interrupt wins
+    immediately, poll tick as a safety net that also proves which path
+    fired) is the model to copy. Worth doing before any sustained Ethernet
+    RX load, since polling a bulk-IN endpoint burns a core.
+
 1. **Phase 3.5a still not done**: `tools/init_binary/init.c`'s `ls`/`cat`/
     `cd`/`pwd`/`mkdir` operate on a hardcoded in-memory fake tree, not real
     `open`/`read`/`getdirentries` syscalls against the actually-mounted
@@ -195,7 +211,12 @@ this pass even if the change itself is cheap.
     dependency) before `stdio`/`malloc`/locale. Expect the same
     header-skew-per-subsystem fight `IOStorageFamily`/`hfs` needed.
 
-3. **`build_kexts.sh` only standalone-compiles 3 of 8 driver sources**
+3. **`build_kexts.sh` only standalone-compiles some driver sources**
+    (PARTIALLY ADDRESSED 2026-08-21: it now compiles every `.cpp` in each
+    listed directory rather than only `<dir>/<dir>.cpp`, and `BCM2837DWC2`
+    was added, so the four USB sources are covered. The `KEXTS` array is
+    still a hand-maintained list, so the gap below stands for the rest.)
+    Originally: only 3 of 8 driver sources
     (`BCM2837InterruptController`, `BCM2837SDHCI`, `SMSC9514Ethernet`) —
     `BCM2837CPU`, `BCM2837LocalIntc`, `BCM2837ArmIO`, `BCM2837Personalities`,
     `BCM2837PlatformExpert` are never syntax-checked outside a full kernel

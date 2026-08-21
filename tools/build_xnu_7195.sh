@@ -11,9 +11,23 @@
 # and XNU_TARGET_OS_OSX (from PLATFORM=MacOSX) disagreeing with each other,
 # which desyncs struct layouts like vm_map's vmmap_high_start field between
 # translation units. See project memory for the full diagnosis.
+#
+# Two hand-steps that used to bracket this script are now part of it, because
+# both failed silently and both cost a full QEMU boot cycle to notice:
+#   - iokit/<Driver>/*.cpp are plain copies of the files the XNU tree
+#     actually compiles, so an edit here would otherwise build the stale
+#     copy. tools/sync_iokit_drivers.sh copies them and checks each is
+#     listed in iokit/conf/files.
+#   - the kernel lands deep in xnu's BUILD/ tree, while runvm.sh reads
+#     build/xnu-latest-build/out/. That copy was documented in CLAUDE.md as
+#     something no script did; now it does, so a "rebuilt" kernel cannot
+#     silently be the previous one.
 set -ex
 cd "$(dirname "$0")/.."
+REPO_ROOT="$PWD"
 BUILD_ROOT="$PWD/build/xnu-latest-build"
+
+"$REPO_ROOT/tools/sync_iokit_drivers.sh"
 
 unset DEVELOPER_DIR
 export SDKROOT_RESOLVED="$BUILD_ROOT/sdk-7195-ios/iPhoneOS.sdk"
@@ -21,7 +35,7 @@ export CTFCONVERT="$BUILD_ROOT/dtrace/dst/usr/local/bin/ctfconvert"
 export CTFMERGE="$BUILD_ROOT/dtrace/dst/usr/local/bin/ctfmerge"
 
 cd third_party/xnu-7195
-exec make LOGCOLORS=y \
+make LOGCOLORS=y \
 	SDKROOT=iphoneos \
 	PLATFORM=iPhoneOS \
 	PLATFORMPATH=/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform \
@@ -33,3 +47,13 @@ exec make LOGCOLORS=y \
 	KERNEL_CONFIGS=DEVELOPMENT \
 	BUILD_WERROR=0 \
 	"$@"
+
+# Publish the kernel where runvm.sh / tools/boot_test.py look for it. Skipped
+# for non-building targets (clean, etc.), which leave no output behind.
+BUILT="$REPO_ROOT/third_party/xnu-7195/BUILD/obj/DEVELOPMENT_ARM64_BCM2837/mach.development.bcm2837.unstripped"
+PUBLISHED="$REPO_ROOT/build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped"
+if [ -f "$BUILT" ]; then
+	mkdir -p "$(dirname "$PUBLISHED")"
+	cp "$BUILT" "$PUBLISHED"
+	echo "published kernel -> ${PUBLISHED#$REPO_ROOT/}"
+fi

@@ -502,12 +502,28 @@ need a real implementation later:
      likely its own separate apple-oss-distributions repo, not yet
      cloned -- same `setup_third_party.sh` pinning work as `syslogd`
      needed first.
-- **Phase 6 (networking)**: entirely unstarted. Needs, in strict order: a
-  DWC2 USB host controller driver (6a -- the largest single remaining
-  undertaking in the project, per its own plan doc, `docs/usb-support-plan.md`);
-  then the SMSC LAN9514 Ethernet driver (6b -- chip-level logic already
-  ported, waiting on 6a); then a DHCP client + `ifconfig`/`ping`/`netstat`
-  (6c -- FreeBSD's `dhclient` recommended over Apple's `bootp`).
+- **Phase 6 (networking)**: **6a DONE 2026-08-21** -- the DWC2 USB host
+  controller driver (`iokit/BCM2837DWC2/`), device enumeration and the hub
+  protocol subset are implemented and QEMU-verified: a real device
+  descriptor is read from the root-port device, and a second device is
+  enumerated through a downstream hub port, which is the exact topology the
+  LAN9514 presents. See `docs/usb-support-plan.md`'s STATUS section for the
+  boot-log evidence and for what is explicitly NOT verified (the SMSC
+  register protocol, which QEMU cannot model; interrupt-driven completion,
+  deliberately deferred -- this cut polls, as its u-boot reference does;
+  split transactions, implemented but never executed).
+  Testing USB at all first required backporting a DWC2 model into
+  `third_party/qemu-zhuowei` (QEMU 2.12.91 modelled no USB for `-M raspi3`),
+  a prerequisite the plan doc had wrongly assumed away.
+  Next: 6b, the SMSC LAN9514 Ethernet driver -- chip-level logic was already
+  ported and its `SMSCUSBTransport` now has a concrete implementation
+  (`iokit/BCM2837DWC2/SMSC9514USBTransport.cpp`, written, compiles, real-
+  hardware verification pending). 6b's remaining work is integration:
+  compiling `SMSC9514Ethernet` into the kernel, which pulls in
+  IONetworkingFamily and revisits the INET/INET6 domain-registration
+  decision in `architecture.md` (taken when no network interface existed).
+  Then 6c: a DHCP client + `ifconfig`/`ping`/`netstat` (FreeBSD's
+  `dhclient` recommended over Apple's `bootp`).
 - **Phase 6.5 (dyld)**: planning-only placeholder, deliberately deferred
   until Phase 6 gives it a real concurrent multi-process workload to
   justify the cost. Needs a real `.dylib`-producing link path and an
