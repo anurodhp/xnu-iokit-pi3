@@ -873,24 +873,37 @@ Currently open, real bugs the roadmap narrative flagged as not-yet-fixed
 Deliberate stand-ins currently in place for a real subsystem, each will
 need a real implementation later:
 
-- **`bsd_pthread_stub.c`** (kernel) -- `workq_kernreturn`/`psynch_*` still
-  unconditionally return `ENOTSUP`, standing in for Apple's never-open-
-  sourced pthread.kext. `bsdthread_create` itself is now REAL as of
-  2026-08-20 (Phase 7.5's first step, see below) -- it creates a genuine
-  second Mach thread via `pthread_kern->thread_create`/
-  `->thread_set_wq_state64`/`->thread_resume` (the same real callback
-  table + real `osfmk/kern/thread.c`/`osfmk/arm64/status.c` primitives
-  Apple's real pthread.kext would have used), QEMU-verified running real
-  code concurrently with the caller and exiting cleanly via the task's
-  normal multi-thread teardown. It does NOT implement the real pthread
-  ABI (no libpthread trampoline/TSD/dispatch-queue wiring, no thread port
-  returned for `bsdthread_terminate`/`pthread_kill` to target) -- not
-  `pthread_create()`-compatible yet. Real userspace-pthread scheduling
-  (workqueues, `psynch_mutex*`/`psynch_cvwait` userspace synchronizers)
-  remains unimplemented and still blocks all real `pthread_create()`-based
-  multithreading project-wide -- see `tools/pthread_kthread_test/` for the
-  real, minimal, verified exercise of the new path, and the Phase 7.5 entry
-  below for the fuller design writeup.
+- **`bsd_pthread_stub.c`/`bsd_pthread_workq.c`** (kernel) -- `psynch_*`
+  (userspace mutex/cv/rwlock kernel slow path), `bsdthread_terminate`,
+  `thread_selfid`, and `bsdthread_register2` (the newer TSD-offset-aware
+  registration SPI, genuinely unreachable by design on this project's
+  exact xnu-7195 + libpthread-454.80.2 pairing, see Phase 7.5 below)
+  still unconditionally return `ENOTSUP`, standing in for Apple-internal
+  pthread.kext logic that genuinely was never open-sourced. `
+  bsdthread_create` (2026-08-20) and, as of 2026-08-21,
+  `bsdthread_register` + all five real workqueue thread-stack hooks
+  (`workq_create_threadstack`/`workq_destroy_threadstack`/
+  `workq_markfree_threadstack`/`workq_setup_thread`/
+  `workq_handle_stack_events`) are now REAL -- the latter six turned out
+  to have real, unmodified, already-open-source Apple implementations
+  sitting in `third_party/libpthread/kern/` all along (Apple ships
+  pthread.kext's kernel-support code as that repo's own `kern/`
+  subdirectory), ported into a new `bsd_pthread_workq.c` rather than
+  hand-rolled. `bsdthread_create` creates a genuine second Mach thread
+  via `pthread_kern->thread_create`/`->thread_set_wq_state64`/
+  `->thread_resume`; the workqueue hooks light up the already-real
+  `bsd/pthread/pthread_workqueue.c` policy logic (workqueue creation,
+  thread-stack lifecycle, real arm64 wqthread register-state setup and
+  return-to-userspace). Both QEMU-verified running real code concurrently
+  with the caller. Still NOT implemented: the real userspace libpthread
+  ABI side (no TSD/dispatch-queue offsets actually populated by any real
+  userspace caller on this target yet, no thread port returned for
+  `bsdthread_terminate`/`pthread_kill` to target) and `psynch_*` -- not
+  `pthread_create()`-compatible yet, though architecturally closer than
+  before this pass. See `tools/pthread_kthread_test/` and the newer
+  `tools/workq_kthread_test/` for the real, minimal, verified exercises
+  of each path, and the Phase 7.5 entry below for the fuller design
+  writeup.
 - **From-scratch SHA-256/384/512** standing in for corecrypto
   (`g_crypto_funcs` is never registered) -- covers hashing/integrity only;
   no AES/HMAC/RSA/ECDSA/DH/ECDH. Blocks real `sshd` (Phase 7b) and `pkg`'s
@@ -1249,21 +1262,150 @@ need a real implementation later:
     real, working, regression-verified change (see `third_party/xnu-7195`
     commit history for `bsd/kern/bsd_pthread_stub.c`); not pushed.
 
-    Real next step for whoever continues this: either (a) the narrower
-    workqueue-mechanics scope surfaced above (fill in
-    `workq_create_threadstack`/`workq_setup_thread`/
+  - **Real pthread kernel bridge, step 2: real workqueue thread-stack
+    hooks, DONE + QEMU-verified 2026-08-21.** Major correction to step 1's
+    own framing above (found by actually reading
+    `third_party/libpthread/kern/` instead of trusting the inherited
+    "never open-sourced" assumption): `workq_create_threadstack`/
     `workq_destroy_threadstack`/`workq_markfree_threadstack`/
-    `workq_handle_stack_events` to light up the already-real
-    `pthread_workqueue.c` policy logic), or (b) a real minimal libpthread-
-    ABI-compatible `bsdthread_create` (thread port + real register
-    convention) as a prerequisite for any real userspace `pthread_create()`
-    wrapper. `psynch_mutex*`/`psynch_cvwait`'s real backing primitive is
-    very likely real Mach semaphores/turnstiles already used elsewhere in
-    this kernel (`bsd/pthread/pthread_shims.c`'s own
-    `psynch_wait_prepare`/`psynch_wait_wakeup` already call real
-    `turnstile_prepare`/`waitq_assert_wait64_leeway`/
-    `waitq_wakeup64_thread` -- real, open-source, unexplored in depth this
-    session) -- not yet designed in detail, flagged rather than guessed at.
+    `workq_setup_thread`/`workq_handle_stack_events` -- and
+    `bsdthread_register` itself -- all DO have real, unmodified,
+    already-open-source Apple implementations. Apple ships pthread.kext's
+    kernel-support code as `third_party/libpthread`'s own `kern/`
+    subdirectory (`kern_support.c`/`kern_init.c`/`kern_internal.h`,
+    pinned `libpthread-454.80.2`, confirmed against
+    `distribution-macOS`'s `macos-112` manifest via
+    `setup_third_party.sh`'s own established method, same as every other
+    pin in this project) -- built as a real kext on real macOS/iOS; this
+    project has no kext-loading boundary, so (exactly like every other
+    "kext" here) it needed linking directly into the kernel instead, not
+    reinventing. A prior pass (`build_libpthread.sh`, Phase 4's userland
+    libpthread tier) had already noticed this `kern/` subdirectory but
+    filed it as "the KERNEL-side pthread.kext internals bsd_pthread_stub.c
+    stands in for" and moved on without checking further -- this session's
+    real find was actually reading it.
+
+    What was ported, into a new file
+    (`third_party/xnu-7195/bsd/kern/bsd_pthread_workq.c`, ~460 lines):
+    real `workq_create_threadstack`/`workq_destroy_threadstack` (real
+    `mach_vm_map_external`/`mach_vm_allocate_external` + `mach_vm_protect`
+    guard-page setup in the target process's own `vm_map` -- note:
+    `mach_vm_map`/`mach_vm_allocate`'s convenience-wrapper names are
+    `__x86_64__`-only in this xnu checkout, `osfmk/vm/vm_user.c` confirmed
+    by reading it; arm64 needs the real `_external` entry points
+    directly, same functions, different names), real
+    `workq_markfree_threadstack` (`mach_vm_behavior_set(...,
+    VM_BEHAVIOR_REUSABLE)`), real `workq_setup_thread` (real arm64
+    register-state setup -- x0=self, x1=kport, x2=stack_bottom,
+    x3=kevent_list, x4=upcall_flags, x5=kevent_count, pc=the real
+    wqthread entry point, sp=stack top -- via
+    `pthread_kern->thread_set_wq_state64`, then a real noreturn jump back
+    to userspace via `thread_bootstrap_return()`/`unix_syscall_return()`),
+    real `workq_handle_stack_events` (real kevent-list marshalling via
+    the already-real `pthread_kern->kevent_workq_internal` callback, this
+    kernel's own already-built kqueue plumbing), and real
+    `real_bsdthread_register` (ported from `_bsdthread_register`,
+    per-process pthread registration via the already-real
+    `pthread_kern` `proc_set_threadstart`/`proc_set_wqthread`/
+    `proc_set_pthsize`/`proc_set_register`/etc. callback family).
+    `bsd_pthread_stub.c` itself only changed to wire these six real
+    functions into its `pthread_functions` vtable in place of their old
+    `stub_workq_*`/`stub_bsdthread_register` ENOTSUP stand-ins (now
+    deleted, not left as dead code) -- `bsdthread_register2`/`psynch_*`/
+    `bsdthread_terminate`/`thread_selfid` remain untouched ENOTSUP stubs,
+    out of scope.
+
+    One real, evidence-backed (not guessed) wiring correction, found by
+    reading both sides rather than assuming: `bsd_pthread_stub.c`'s
+    `.version` field changed from `PTHREAD_FUNCTIONS_TABLE_VERSION` (1)
+    to `0`. `bsd/pthread/pthread_shims.c`'s real `bsdthread_register()`
+    syscall wrapper branches on `pthread_functions->version >= 1` to pick
+    between the OLDER `.bsdthread_register` vtable slot and the newer
+    `.bsdthread_register2` one; `third_party/libpthread/kern/kern_init.c`'s
+    own real `pthread_internal_functions` initializer leaves `.version`
+    unset (so it's 0), meaning real Apple's own pairing for this exact
+    libpthread vintage uses the OLDER slot -- confirmed by also checking
+    that the old slot's real (if stale-named) signature
+    (`pthsize`/`dummy_value`/`targetconc_ptr`) matches
+    `_bsdthread_register`'s actual parameter types 1:1 (Apple just
+    renamed two params to `pthread_init_data`/`pthread_init_data_size` in
+    a later revision without changing the vtable slot itself).
+    `.bsdthread_register2` stays populated with its old ENOTSUP stub,
+    now genuinely unreachable by design rather than by accident. Verified
+    only one call site in the whole tree reads `pthread_functions->version`,
+    and `bsdthread_create`'s own syscall wrapper never checks it at all --
+    so this change carries zero risk to step 1's already-verified
+    `real_bsdthread_create` path.
+
+    Verification: `tools/workq_kthread_test/` (new, raw-syscall
+    freestanding test binary, same shape as `tools/pthread_kthread_test/`)
+    drives the real, full, unmodified userspace-facing API in order: (1)
+    real `bsdthread_register(2)` (syscall 366) registers a real wqthread
+    entry point; (2) real `workq_open(2)` (syscall 367, real
+    `bsd/pthread/pthread_workqueue.c`, allocates this process's real
+    `struct workqueue`); (3) real `workq_kernreturn(2)` (syscall 368) with
+    `WQOPS_QUEUE_REQTHREADS`, `pp=0x8FF` (a real, hand-derived
+    `pthread_priority_t` for `THREAD_QOS_LEGACY` -- verified by tracing
+    `_pthread_priority_thread_qos()` back against it, documented in the
+    test's own header comment) -- which drives real
+    `workq_reqthreads()` -> `workq_schedule_creator()` ->
+    `workq_add_new_idle_thread()` (real `workq_create_threadstack()` +
+    the pre-existing, unmodified real `osfmk/kern/thread.c`
+    `thread_create_workq_waiting()`) -> a real wakeup of the newly idle
+    thread, which runs real `workq_setup_thread()` on its own real
+    return-to-userspace path, landing at the test's `wq_entry` (real
+    arm64 wqthread register convention, not a fabricated one) which
+    writes a magic value the main thread observes. QEMU-confirmed via two
+    separate full boot + login + 37-command regression-sweep sessions,
+    byte-for-byte identical real transcript both times:
+    `workq_kthread_test` printed `bsdthread_register OK` / `workq_open OK`
+    / `workq_kernreturn(REQTHREADS) OK, waiting for real workqueue
+    thread...` / `SUCCESS: real workqueue thread ran via real
+    workq_setup_thread and wrote the magic value`, exited 0. Zero
+    regression: in the same two sessions, `pthread_kthread_test` (step
+    1's own real second-Mach-thread test) ran identically and still
+    printed its own real success line immediately before the workqueue
+    test in the same continuous shell session; `pwd`/`true`/`false`/
+    pipes/`ls`/`mkdir`/`touch`/output-redirection/`grep`/`sed`/`cat`/
+    `cp`/`mv`/`rm`/`which`/`id`/`uname`/`hostname`/`stat`/`ps`, plus real
+    login itself, all ran identically to before and after both tests --
+    no panic, no hang, no crash, no divergent output in either session's
+    full serial log (`DONE cmd_idx=37/37` both times). Adversarially
+    self-reviewed before commit: confirmed the new `panic()` call inside
+    `workq_set_register_state()` (real Apple code, fires if
+    `bsdthread_register` was never called for the process) is not
+    reachable by any of the 79 already-shipped commands -- none of them
+    call `workq_open`/`bsdthread_register`/`workq_kernreturn` (no
+    libdispatch/GCD, no pthread-workqueue-consuming program existed in
+    this project before this session's own new test binary) -- and swept
+    the diff for stray debug instrumentation (none found). Committed as a
+    real, working, regression-verified change (see `third_party/xnu-7195`
+    commit history for `bsd/kern/bsd_pthread_workq.c` and
+    `bsd/kern/bsd_pthread_stub.c`); not pushed.
+
+    Real next step for whoever continues this: `psynch_mutex*`/
+    `psynch_cvwait`'s real backing primitive is very likely real Mach
+    semaphores/turnstiles already used elsewhere in this kernel
+    (`bsd/pthread/pthread_shims.c`'s own `psynch_wait_prepare`/
+    `psynch_wait_wakeup` already call real `turnstile_prepare`/
+    `waitq_assert_wait64_leeway`/`waitq_wakeup64_thread` -- real,
+    open-source, unexplored in depth this session) -- not yet designed in
+    detail, flagged rather than guessed at. A real minimal
+    libpthread-ABI-compatible userspace `pthread_create()` wrapper is now
+    architecturally much closer than it looked before this session (the
+    kernel side of workqueue thread creation is real and verified) but
+    still needs: real TSD/dispatch-queue-offset wiring end to end (the
+    kernel-side plumbing for it, `proc_set_pthread_tsd_offset`, etc., is
+    real and exercised by `real_bsdthread_register` above, but no real
+    userspace libpthread on this target calls it with real offsets yet --
+    `tools/workq_kthread_test/` deliberately passes 0s, see its own header
+    comment), and `psynch_*` (previous paragraph). `workq_kernreturn`'s
+    other real op codes (`WQOPS_THREAD_RETURN`/`WQOPS_THREAD_KEVENT_RETURN`/
+    `WQOPS_QUEUE_REQTHREADS2`/etc.) were not exercised by this pass either
+    -- `tools/workq_kthread_test/`'s worker thread just spins forever
+    rather than really parking back into the kernel, a real, narrower,
+    deliberately-scoped simplification documented in the test's own
+    header comment.
 - **Phase 8 (`pkg` package management)**: fully planned, not started.
   `freebsd/pkg` is the chosen vehicle (native Mach-O awareness, real
   custom-repo support already documented). Needs `libsqlite`/`libucl`/

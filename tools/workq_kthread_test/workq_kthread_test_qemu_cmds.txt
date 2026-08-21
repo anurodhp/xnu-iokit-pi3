@@ -1,0 +1,37 @@
+root
+darwin
+echo REGRESSION_START
+pwd
+true
+echo TRUE_STATUS=$?
+false
+echo FALSE_STATUS=$?
+echo hi | cat
+ls /bin
+mkdir -p /tmp/wqregress
+touch /tmp/wqregress/f1
+echo hello_world > /tmp/wqregress/f1
+grep hello_world /tmp/wqregress/f1
+sed 's/hello/goodbye/' /tmp/wqregress/f1
+cat /tmp/wqregress/f1
+cp /tmp/wqregress/f1 /tmp/wqregress/f2
+mv /tmp/wqregress/f2 /tmp/wqregress/f3
+rm /tmp/wqregress/f3
+which grep
+id
+uname -a
+hostname
+stat /etc/group
+ps
+echo REGRESSION_MID
+pthread_kthread_test
+echo PTHREAD_EXIT=$?
+echo bash_alive_after_pthread_kthread_test
+workq_kthread_test
+echo WORKQ_EXIT=$?
+echo bash_alive_after_workq_kthread_test
+true
+echo TRUE_STATUS_AFTER=$?
+ls /bin
+cat /tmp/wqregress/f1
+echo REGRESSION_END_MARKER
