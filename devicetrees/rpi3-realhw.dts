@@ -1,208 +1,33 @@
-/dts-v1/;
-
 /*
- * Identical to rpi3.dts except for `dram-size` below - see that file for
- * everything else (base tree, sdhci/intc extensions, interrupt-cell fix,
- * ranges fix, AAPL,phandle/interrupt-controller wiring). This variant is
- * for booting via the real FlorentRevest/u-boot `bootxnu` command on
- * actual hardware, not QEMU. Regenerated from rpi3.dts 2026-08-13 to pick
- * up that file's interrupt-cell root-cause fix and every other fix made
- * since this file was last hand-maintained separately, per docs/backlog.md
- * item 1 - previously stale, missing every driver-wiring fix in rpi3.dts.
+ * Real-hardware variant of rpi3.dts, for booting via the real
+ * FlorentRevest/u-boot `bootxnu` command on an actual Pi 3 rather than
+ * QEMU.
+ *
+ * This file used to be a full hand-maintained copy of rpi3.dts that
+ * differed only in `dram-size`. That arrangement drifted and went stale
+ * twice: once before 2026-08-13 (docs/backlog.md item 1 - it was missing
+ * every driver-wiring fix rpi3.dts had accumulated, including the
+ * interrupt-cell root-cause fix), and again afterwards, silently losing
+ * the `model = "BCM2837"` property whose absence makes uname(2)'s
+ * HW_MACHINE sysctl return a hard EINVAL (see rpi3.dts's own comment on
+ * that property). Both were found by diffing, not by a failing test -
+ * this variant only gets exercised on real hardware, so drift here is
+ * invisible until it matters most.
+ *
+ * So it is no longer a copy. devicetrees/Makefile already runs the C
+ * preprocessor over these files before dtc, so the whole tree is included
+ * from the single source of truth and only the one genuinely differing
+ * property is overridden. Adding a node to rpi3.dts now cannot fail to
+ * reach real hardware.
  */
 
-/ {
-	#address-cells = <2>;
-	#size-cells = <2>;
+/*
+ * DRAM size reported to arm_init() via chosen/dram-size. Deliberately
+ * NOT the same as rpi3.dts's QEMU value: that one is derived from
+ * runvm.sh's `-m 1024` minus the VideoCore carve-out, which has no
+ * bearing on a physical board. Kept at the conservative bring-up value
+ * this variant has always carried.
+ */
+#define RPI3_DRAM_SIZE 0x08000000
 
-	cpus {
-		#address-cells = <1>;
-		#size-cells = <0>;
-
-		cpu0 {
-			reg = <0xf00>;
-			cpu-id = <0x0>;
-			state = "running";
-		};
-	};
-
-	/*
-	 * BCM2836/2837 L1 interrupt controller ("local_intc" in Linux DT).
-	 * Lives at a fixed physical address outside the 0x7e000000 VC/GPU
-	 * peripheral bus window, so it's a root sibling rather than a child
-	 * of arm-io (its address wouldn't translate through arm-io's single
-	 * ranges entry below). Handles per-CPU timer/PMU/mailbox IRQs and
-	 * takes IRQ 8 from the global armctrl-ic as its "GPU interrupt" line.
-	 */
-	local-intc {
-		device_type = "interrupt-controller";
-		compatible = "brcm,bcm2836-l1-intc";
-		reg = <0x40000000 0 0x100 0>;
-		/*
-		 * FIX (found wiring BCM2837InterruptController's own upstream
-		 * interrupt): needed so IODTFindInterruptParent()/
-		 * IODTMapOneInterrupt() (iokit/Kernel/IODeviceTreeSupport.cpp)
-		 * can resolve "intc"'s `interrupt-parent = <0x2>` below to a
-		 * terminal controller and compute the symbol
-		 * BCM2837InterruptController::start() must register itself
-		 * under - AAPL,phandle for FindPHandle(), the
-		 * "interrupt-controller" boolean marker so the walk stops here
-		 * instead of following gIODTPlane up to root, #interrupt-cells
-		 * so "intc"'s single-cell `interrupts = <8>` below is sized
-		 * correctly (IRQ 8 = the "GPU interrupt" line per Linux's
-		 * bcm2836-l1-intc.dtsi convention, matching this node's own
-		 * header comment above).
-		 */
-		interrupt-controller = <0x0>;
-		AAPL,phandle = <0x2>;
-		#interrupt-cells = <1>;
-	};
-
-	arm-io {
-		device_type = "bcm2837-io";
-		/*
-		 * FIX (found booting BCM2837InterruptController/BCM2837SDHCI for
-		 * real): child-base was 0x7e000000, but every child node's own
-		 * "reg" below is written as a bare VC-bus *offset* (0xb200,
-		 * 0x300000, ...), not the full VC address (0x7e00b200,
-		 * 0x7e300000, ...). Standard OF ranges translation requires
-		 * child reg values to fall within [child-base, child-base+size)
-		 * - with child-base=0x7e000000, every one of these offsets was
-		 * numerically far below that window, so IODTResolveAddressing()
-		 * (iokit/Kernel/IODeviceTreeSupport.cpp) could never find a
-		 * match and every device's mapDeviceMemoryWithIndex() failed
-		 * (confirmed: "BCM2837InterruptController: failed to map
-		 * \"intc\" registers" at boot). child-base=0 makes translation
-		 * `child_reg - 0 + 0x3f000000`, e.g. intc's 0xb200 -> 0x3f00b200
-		 * - exactly the physical address BCM2837InterruptController.h's
-		 * own header comment already documented as correct.
-		 */
-		ranges = <0 0 0x3f000000 0 0x1000000 0>;
-
-		#address-cells = <2>;
-		#size-cells = <2>;
-
-		gpio { reg = <0x200000 0 0xB4 0>; };
-		aux  { reg = <0x215000 0 0xE4 0>; };
-
-		/*
-		 * Global/GPU interrupt controller ("armctrl-ic"). All
-		 * VC-bus peripheral IRQs (gpio, aux, sdhci, ...) route
-		 * through here before reaching local-intc on IRQ 8.
-		 */
-		intc {
-			device_type = "interrupt-controller";
-			compatible = "brcm,bcm2836-armctrl-ic";
-			reg = <0xb200 0 0x200 0>;
-			/*
-			 * IODeviceTreeSupport.cpp's IODTFindInterruptParent()
-			 * checks for a property literally named
-			 * "interrupt-controller" (boolean marker, Linux DT
-			 * convention) - device_type above does NOT satisfy
-			 * this check, it's a separate mechanism. Phandle
-			 * lookups go through Apple's own "AAPL,phandle" (not
-			 * the standard "phandle") per gIODTPHandleKey.
-			 */
-			interrupt-controller = <0x0>;
-			AAPL,phandle = <0x1>;
-			// Single-cell, pre-flattened vector numbers - see the file
-			// header comment ("ROOT CAUSE FOUND AND FIXED") for why this
-			// changed from <2> (bank, bit) - the base IOInterruptController
-			// registerInterrupt() only ever reads a multi-cell specifier's
-			// first word as the vector number, so a 2-cell {bank,bit}
-			// convention silently registered every consumer against the
-			// wrong vector (bank value only) without a custom decode this
-			// controller never implemented.
-			#interrupt-cells = <1>;
-			#address-cells = <0>;
-			/*
-			 * FIX: intc's own upstream interrupt (cascaded from
-			 * local-intc's "GPU interrupt" line, IRQ 8 - see
-			 * local-intc's header comment above) - without this,
-			 * BCM2837InterruptController::start()'s
-			 * provider->registerInterrupt(0, ...) call (against the
-			 * "intc" nub itself) has no interrupt-parent to resolve
-			 * and fails outright (confirmed empirically: 0xe00002be).
-			 * interrupt-parent points at local-intc's AAPL,phandle
-			 * (0x2); the single cell in `interrupts` is sized by
-			 * local-intc's own #interrupt-cells=<1> above.
-			 */
-			interrupt-parent = <0x2>;
-			interrupts = <8>;
-		};
-
-		/*
-		 * Arasan SDHCI controller (Linux: sdhci@7e300000,
-		 * "brcm,bcm2835-sdhci"). On stock firmware this is wired to
-		 * the onboard SDIO WiFi (GPIO34-39, ALT3) rather than the
-		 * physical SD slot. To reach the SD card instead, GPIO48-53
-		 * must be muxed to ALT3 ("emmc_gpio48" in Linux DT) instead
-		 * of ALT0 (which routes them to the "sdhost" controller at
-		 * VC offset 0x202000 / size 0x100, interrupts <2 24> - the
-		 * default owner of the physical slot, but a Broadcom-
-		 * proprietary register layout with no public reference
-		 * outside the Linux driver).
-		 */
-		sdhci {
-			device_type = "sdhci";
-			compatible = "brcm,bcm2835-sdhci";
-			reg = <0x300000 0 0x100 0>;
-			interrupt-parent = <0x1>;
-			// Pre-flattened: real bank 2 ("pending_2", GPU IRQs 32-63),
-			// bit 30 -> BCM2837InterruptController's own
-			// kVectorBank2Base(32) + 30 = vector 62. Was <2 30> (raw
-			// 2-cell bank/bit) - see "intc" node's own comment above for
-			// why that never actually worked.
-			interrupts = <62>;
-		};
-
-		/*
-		 * VideoCore mailbox (Linux: mailbox@7e00b880,
-		 * "brcm,bcm2835-mbox"). Used by pexpert/arm/pe_init.c's
-		 * bcm2837_video_init() to request an HDMI framebuffer from the
-		 * GPU firmware via the property-tag protocol before
-		 * PE_create_console() runs. Size 0x40 covers both mailbox 0
-		 * (read, offset 0x00) and mailbox 1 (write, offset 0x20)
-		 * register blocks - see Linux's drivers/mailbox/bcm2835-mailbox.c.
-		 */
-		mbox {
-			device_type = "mbox";
-			compatible = "brcm,bcm2835-mbox";
-			reg = <0xb880 0 0x40 0>;
-		};
-	};
-
-	chosen {
-		random-seed = <0xDEADBEEF 0x13375EED 0x8BADF00D 0xC0FFEE42 0x5A17BE55 0x9E3779B9 0xF00DFACE 0x2545F491 0x1B873593 0x85EBCA6B 0xC2B2AE35 0x27D4EB2F 0x165667B1 0xD3A2646C 0xFD7046C5 0xB55A4F09>;
-
-		/*
-		 * arm_init() (osfmk/arm64/arm_init.c in the source this kernel was
-		 * built from) hard-requires these two directly under chosen, read
-		 * as 8-byte values (disassembly of arm_init confirms two 64-bit
-		 * ldr's into dram_base/dram_size globals via
-		 * SecureDTGetPropertyInternal). Real BCM2837 DRAM starts at
-		 * physical 0x0 on both QEMU and real hardware - that part
-		 * doesn't change.
-		 *
-		 * dram-size here DOES differ from rpi3.dts's QEMU value
-		 * (0x3C000000, matching `-m 1024` minus a 64MB VC carve-out):
-		 * this is instead FlorentRevest/u-boot's cmd/bootxnu.c
-		 * CONFIG_SYS_SDRAM_SIZE (include/configs/rpi.h), a hardcoded
-		 * 128MB (SZ_128M) - not a real hardware limit, just what that
-		 * exact bootxnu.c build unconditionally tells XNU via
-		 * boot_args->mem_size, regardless of the Pi 3's actual 1GB.
-		 * dram-size here MUST match that value, not the board's real
-		 * capacity - a mismatch between what the DT claims and what
-		 * boot_args.memSize says is exactly the kind of inconsistency
-		 * that caused the vm_first_phys/topOfKernelData bugs already
-		 * found on the QEMU path. If bootxnu.c is ever rebuilt with a
-		 * larger CONFIG_SYS_SDRAM_SIZE, update this to match.
-		 */
-		dram-base = <0x0 0x0>;
-		dram-size = <0x0 0x08000000>;
-
-		memory-map { };
-	};
-
-	defaults { };
-};
+#include "rpi3.dts"

@@ -205,6 +205,43 @@
 		};
 
 		/*
+		 * Synopsys DesignWare USB 2.0 OTG host controller ("dwc2").
+		 * Linux/u-boot: usb@7e980000, compatible "brcm,bcm2835-usb",
+		 * reg <0x7e980000 0x10000>, interrupts <1 9> - verified against
+		 * third_party/u-boot/arch/arm/dts/bcm283x.dtsi:626, not from
+		 * memory.
+		 *
+		 * This is the Pi 3's *only* USB controller, and the SMSC LAN9514
+		 * (USB hub + Ethernet in one chip) is hard-wired to its root
+		 * port, so this node gates all of Phase 6 networking - see
+		 * docs/usb-support-plan.md.
+		 *
+		 * The register window is 0x10000 (matching Linux/u-boot), not
+		 * QEMU's slightly larger 0x11000 container region: 0x0000-0x0fff
+		 * is the hsotg core/host register block this driver actually
+		 * uses, 0x1000+ is the per-channel FIFO space used only in slave
+		 * (non-DMA) mode. 0x10000 is correct on real hardware and is a
+		 * strict subset of what QEMU maps, so it is right for both.
+		 *
+		 * u-boot's second reg entry (<0x7e00b200 0x200>, the MPHI
+		 * peripheral) is deliberately omitted: it exists only so Linux's
+		 * dwc_otg FIQ fast-path can generate a spurious interrupt to
+		 * kick its own softirq, which this driver does not implement.
+		 */
+		usb {
+			device_type = "usb";
+			compatible = "brcm,bcm2835-usb";
+			reg = <0x980000 0 0x10000 0>;
+			interrupt-parent = <0x1>;
+			// Pre-flattened, same convention as sdhci above: u-boot's raw
+			// 2-cell <1 9> means bank 1 ("pending_1", GPU IRQs 0-31) bit 9,
+			// so BCM2837InterruptController's own
+			// kVectorBank1Base(0) + 9 = vector 9. See the "intc" node's
+			// comment for why the raw 2-cell form never worked here.
+			interrupts = <9>;
+		};
+
+		/*
 		 * VideoCore mailbox (Linux: mailbox@7e00b880,
 		 * "brcm,bcm2835-mbox"). Used by pexpert/arm/pe_init.c's
 		 * bcm2837_video_init() to request an HDMI framebuffer from the
@@ -235,7 +272,17 @@
 		 * -m changes: dram-size = (m_megabytes * 0x100000) - 0x4000000.
 		 */
 		dram-base = <0x0 0x0>;
-		dram-size = <0x0 0x3C000000>;
+		/*
+		 * The QEMU value. rpi3-realhw.dts #includes this file and
+		 * pre-defines RPI3_DRAM_SIZE to its own board value - that is
+		 * the ONLY property the two trees differ in, and doing it this
+		 * way is what stops the real-hardware tree going stale again
+		 * (it did, twice - see rpi3-realhw.dts's header).
+		 */
+#ifndef RPI3_DRAM_SIZE
+#define RPI3_DRAM_SIZE 0x3C000000
+#endif
+		dram-size = <0x0 RPI3_DRAM_SIZE>;
 
 		memory-map { };
 	};
