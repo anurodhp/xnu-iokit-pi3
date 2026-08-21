@@ -186,6 +186,109 @@ day, both expected/by-design, neither a bug:**
   boot-to-idle, matching QEMU's milestone at this exact same historical
   point -- not a new bug to chase.
 
+**HDMI framebuffer console-output investigation, 2026-08-21 -- scoped,
+attempted, ABANDONED/REVERTED per explicit user decision; project remains
+serial-only.** Scoping question was "what's the minimal path from the
+existing mailbox-handshake framebuffer code to real pixels on HDMI from
+XNU's own console, independent of keyboard input (which needs Phase 6a's
+full USB stack regardless and is explicitly out of scope here)." Real
+findings, still valid for a future attempt even though the code below was
+reverted:
+- **Already present and real, confirmed by reading the actual source, not
+  assumed:** `bcm2837_video_init()` (`pexpert/arm/pe_init.c`) is a real
+  BCM2837 GPU mailbox property-tag handshake (physical/virtual
+  width-height, depth, pixel-order, allocate-buffer, get-pitch tags,
+  cross-checked against the real protocol) that requests a 640x480x32
+  HDMI framebuffer from VideoCore firmware and, on success, fills in a
+  `PE_Video` struct including a real mapped virtual address
+  (`ml_io_map_wcomb`). It's called from `osfmk/arm/arm_init.c` (between
+  `arm_vm_init()` and `PE_create_console()`, the correct window since
+  `ml_io_map()` needs VM/pmap bootstrapped first) gated behind an
+  already-existing `hdmi_console` boot-arg, default off -- this much
+  predates this session. Separately, `third_party/u-boot`'s own local
+  patch (`third_party-patches/u-boot.patch`, `sdcard/README.md`)
+  independently hands off *u-boot's* already-working HDMI framebuffer via
+  `boot_args->video_information`, which stock `PE_init_platform()`
+  unconditionally copies into `PE_state.video` -- real-hardware-only,
+  still untested for actual pixel correctness either way. The real font/
+  glyph table `video_console.c`'s renderer needs (`osfmk/console/
+  iso_font.c`) is already compiled in, real Apple source, no gap there.
+- **The real, previously-unidentified gap:** `cons_ops_index`
+  (`osfmk/console/serial_console.c`) is the single switch that decides
+  whether `kprintf`/`IOLog`/`/dev/console` text actually reaches
+  `vcputc()` (video) or `_serial_putc()` (serial) -- and nothing in this
+  tree ever sets it to `VC_CONS_OPS`, even when a real framebuffer is
+  present. `switch_to_video_console()` (`osfmk/console/serial_general.c`)
+  had zero callers anywhere in the tree (confirmed by grepping every
+  file). `initialize_screen()` (`video_console.c`) sets up the video
+  renderer's internal state (`vinfo`, font, `gc_ops`) whenever a real
+  framebuffer is present, but only ever calls `switch_to_serial_console()`
+  -- and only in its *no*-video fallback path, never the reverse. So even
+  a fully successful mailbox handshake could never have actually routed
+  console text to HDMI before this investigation, independent of whether
+  the pixels themselves would have rendered correctly.
+- **What was implemented (then fully reverted, see below):** two small,
+  additive, boot-arg-gated changes in `osfmk/arm/arm_init.c`: (a) guard
+  the existing `bcm2837_video_init()` call with
+  `!PE_state.video.v_display` so it can't clobber an already-valid
+  loader-handed-off framebuffer (e.g. u-boot's) with a second, separate
+  GPU allocation; (b) immediately after `PE_create_console()`, call
+  `switch_to_video_console()` iff `hdmi_console` was passed AND
+  `PE_state.video.v_display` is set (i.e. a real framebuffer was actually
+  obtained) -- default behavior (no `hdmi_console` boot-arg) was designed
+  to be byte-for-byte identical to before, and `runvm.sh`'s `-append` line
+  never passes `hdmi_console`, so QEMU's normal boot path was never
+  supposed to be affected either way.
+- **Verification attempt and why it was stopped:** the kernel rebuilt
+  cleanly (no new warnings/errors). It was boot-tested from an isolated
+  scratch copy of the kernel binary (deliberately never overwritten:
+  `build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped`,
+  the file other tooling/agents rely on, so this test could not have
+  corrupted anything else regardless of outcome) with **default**
+  boot-args (no `hdmi_console` -- a pure regression check of the two
+  guard changes, not yet a test of the new opt-in video path itself,
+  which was never reached). The captured serial log genuinely did reach
+  the same `init: pid 1 up, forking single-user shell` / `login:`
+  steady state every other successful boot this session reaches, with no
+  panic, fault, or visible loop in the log -- then the process was killed
+  by the coordinating session after ~13 minutes of no further output,
+  read externally as a hang. Honest assessment, not a guess dressed up as
+  a finding: I cannot confirm whether that was a real wedge or simply an
+  unattended login prompt correctly waiting forever for input that this
+  passive (non-interactive) test never sent -- both look identical from
+  outside, and I was told to stop before re-running with a QEMU-monitor
+  PC/register check (`x`, not `xp`) to disambiguate. Root cause is
+  therefore genuinely unknown, not "probably fine" -- treat it as
+  unresolved. Note also that the *actual* new code path
+  (`hdmi_console=1`, the video-console switch itself) was never
+  QEMU-tested at all before the work was stopped -- only the regression
+  guard was exercised.
+- **Disposition:** per explicit user decision (relayed 2026-08-21), this
+  work is abandoned for now, not paused mid-stream. `osfmk/arm/arm_init.c`
+  was reverted via `git checkout --` in the `third_party/xnu-7195` fork
+  (confirmed clean via `git status`/`git diff` -- zero diff against the
+  pre-session state) -- the serial-only console path is exactly as it was
+  working before this investigation, zero net code change. No commits
+  were made in either the main `iokit` repo or the `xnu-7195` fork for
+  this work, and nothing was pushed. The scratch kernel build and its
+  boot log (both outside the tracked tree, in the session scratchpad)
+  were deleted.
+- **For whoever picks this back up:** the scoping/research findings above
+  (what's present, what's missing, the exact two-part shape of the fix)
+  remain accurate and don't depend on the reverted code still being
+  there -- re-derive line numbers fresh from source rather than trusting
+  ones written here, since they drift. Before re-attempting: (1) run the
+  regression boot (default args, no `hdmi_console`) at least twice and
+  pair it with a QEMU-monitor register/PC check, since "no further serial
+  output at an unattended login prompt" alone is not a reliable pass/fail
+  signal, as this session's own inconclusive result shows; (2) only once
+  that's confirmed genuinely clean, test `hdmi_console=1` itself, which
+  this session never reached. **Independent of Phase 6a (keyboard
+  input):** this entire effort is about console *output* only -- real
+  keyboard input over HDMI needs the full USB host-controller stack
+  (`docs/usb-support-plan.md`), a separate, much larger, unstarted
+  undertaking. Solving this does not get you input.
+
 Real SD/GPIO/USB/Ethernet on this specific board remain genuinely
 untested (backlog P0 items 1-6 -- SDHCI serialization/error-recovery/
 clock-speed/power-ramp/memory-barriers/GPIO-pinmux -- are all real-
