@@ -1,0 +1,18 @@
+root
+darwin
+echo DF_KILLALL_TEST_MARKER
+df
+echo DF_EXIT_$?
+df -h
+echo DF_H_EXIT_$?
+df -k
+echo DF_K_EXIT_$?
+sleep 120 &
+echo SLEEP_BG_EXIT_$?
+ps -ax
+killall -v sleep
+echo KILLALL_EXIT_$?
+ps -ax
+killall nonexistentcmdxyz
+echo KILLALL_NOMATCH_EXIT_$?
+echo DF_KILLALL_TEST_DONE

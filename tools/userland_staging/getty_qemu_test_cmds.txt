@@ -1,0 +1,8 @@
+root
+darwin
+echo GETTY_TEST_MARKER
+ls -l /bin/getty
+getty
+testuser
+echo GETTY_EXIT_$?
+echo GETTY_TEST_DONE

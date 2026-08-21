@@ -14,6 +14,44 @@ narrative itself flagged as still-open.
 
 ## Current status
 
+**`df`/`killall` (Phase 4.6 item 8) + `getty` (Phase 5.5 item 1) DONE, 2026-08-21.**
+`df` (real, unmodified `file_cmds/df/{df,vfslist}.c`) and `killall`
+(real, unmodified `shell_cmds/killall/killall.c`) both QEMU-verified
+against the real, general-purpose `sysctl()`/`getfsstat()`/`KERN_PROC`
+plumbing -- `df`, `df -h`, `df -k` all print correct real filesystem
+stats with exit 0; `killall -v sleep` correctly signals a backgrounded
+`sleep` (confirmed via `ps -ax` before/after); `killall nonexistentcmdxyz`
+correctly exits 1 with "No matching processes were found". Needed two new
+real files: `simple_cmds_statfs64_compat.c` (the auto-generated `_statfs`
+stub was wired to syscall #157's legacy 32-bit-struct layout, wrong for
+this project's `__DARWIN_64_BIT_INO_T=1` build which expects
+`statfs$INODE64`/#345 -- same class of mismatch `fstatfs()` already
+worked around; also adds a correct `getfsstat()`, this project's first
+real caller, `df`'s own `getmntinfo()`) and `simple_cmds_libm_compat.c`
+(narrow `fabs()`/`trunc()`/`ilogb()` for `df.c`'s own `-h`/`-H` unit
+rounding -- this project has no libm at all).
+`getty` (real, unmodified `system_cmds/getty.tproj/{main,init,subr,chat}.c`,
+`tools/userland_staging/build_getty.sh`) compiles, links, and now
+**runs without crashing** -- installed at `/bin/getty` but deliberately
+NOT wired into the boot/login path (see build_getty.sh's own header
+comment: real getty hands off to a separate `login(1)` binary this
+project doesn't build; this project's actual login flow is one-shot
+in `init.c`). Found and fixed a real bug during QEMU verification: getty's
+real, unmodified `main()` never calls this project's TSD-bootstrap
+(`pthread_main_thread_bootstrap()`), so `gettable()`'s `cgetent()` call
+dereferenced `__current_locale()` off an uninitialized TSD base -- an
+immediate, zero-output `SIGSEGV`, confirmed via bisection (temporary
+`write()`-marker instrumentation of a scratch, git-reverted copy of
+`main.c`/`subr.c`/`getcap.c`, isolating the crash to the `cgetent()` call
+itself). Same fix shape as `uname`'s own historic identical bug
+(`uname_main_wrapper.c`): a new `getty_main_wrapper.c`, `main.c` compiled
+with `-Dmain=getty_cmd_real_main`, so the wrapper (which bootstraps TSD
+first) is the real process entry point. Post-fix: `getty` prints its
+real "login: " prompt with no crash; the interactive login-name capture
+itself isn't exercised meaningfully by this ad hoc single-console pty
+test (no separate real tty to hand off to) -- expected given the
+deliberately-deferred integration scope, not a new bug.
+
 **Tier B command sweep DONE (4 of 4), 2026-08-21** (see "Command priority
 reorganized" below for the prioritization this closes out): `diff`,
 `tar`, `whoami`, and `less`/`more` all real, unmodified source, built,
@@ -1049,18 +1087,12 @@ need a real implementation later:
   7. **`posix_spawn(2)`** -- an unbuilt process-creation API; blocks
      `install`, which also needs its own real `strip(1)` subprocess helper
      once spawning works.
-  8. **[CORRECTED 2026-08-20]** `sysctl(2)` is actually already real and
-     general-purpose here, not unbuilt as this item originally claimed --
-     `tools/userland_staging/libc_gen_syscalls.c`'s `sysctl()`/
-     `sysctlbyname()` are a real, general raw-syscall wrapper (`SYS_sysctl`
-     = 202, forwards all 6 args via `syscall6`), already proven end-to-end
-     by the real `hostname(1)` command's `gethostname(3)`/`sethostname(3)`
-     (`{CTL_KERN, KERN_HOSTNAME}`). What's still genuinely unexercised:
-     the specific MIBs `df` (filesystem stats) and `killall`/`w`/`who`
-     (`KERN_PROC` process enumeration) need -- likely just a normal
-     command-port pass (wire `df.c`/`killall.c` against the existing
-     `sysctl()`, see what's missing for real), not a whole unbuilt
-     subsystem. Re-scope downward whenever this is picked up.
+  8. **[DONE 2026-08-21]** `sysctl(2)` was already real and general-purpose
+     here (`tools/userland_staging/libc_gen_syscalls.c`'s `sysctl()`/
+     `sysctlbyname()`, `SYS_sysctl` = 202). `df` and `killall` are now
+     both built and QEMU-verified against it -- see Current status above.
+     `w`/`who` still need this same `KERN_PROC` MIB plus `utmp`/`wtmp`
+     (item 11 below), not filed here.
   9. **Real System V IPC** (`semget`/`shmget`/`msgget` family) -- blocks
      `ipcs`/`ipcrm`. `dd`'s more involved I/O-conversion logic wasn't
      surveyed in depth either; group it here for a first look.
@@ -1145,14 +1177,20 @@ need a real implementation later:
   single-host concerns -- unlike `mDNSResponder`/`configd`-style network-
   management daemons, which inherently need Phase 6 to exist first and so
   are NOT filed here, they belong with/after Phase 6 instead.
-  1. **`getty`** (real, unmodified Apple source already unbuilt at
-     `third_party/system_cmds/getty.tproj`, confirmed present) -- this
-     project's login today is a single console session with `do_login()`
-     baked directly into `tools/init_binary/init.c`'s own respawn loop,
-     not a separate per-tty daemon. Real `getty` only starts mattering
-     once there's more than one real tty to spawn onto (real hardware's
-     serial console today, potentially real PTYs later) -- low urgency
-     alone, but natural to land alongside the other two below.
+  1. **[DONE 2026-08-21, build/run only]** `getty` (real, unmodified
+     Apple source, `third_party/system_cmds/getty.tproj`) now builds,
+     links, and runs without crashing (see Current status above for the
+     real TSD-bootstrap segfault this pass found and fixed). Still NOT
+     wired into the actual boot/login path -- this project's login today
+     remains a single console session with `do_login()` baked directly
+     into `tools/init_binary/init.c`'s own respawn loop, not a separate
+     per-tty daemon. Real `getty` only starts mattering once there's more
+     than one real tty to spawn onto (real hardware's serial console
+     today, potentially real PTYs later), and wiring it in for real needs
+     a separate `login(1)` binary this project doesn't build yet (own
+     undertaking, comparable in scope to the still-open `pwd_mkdb`/`vipw`/
+     `chpass`/`passwd` item under Phase 5) -- low urgency alone, deferred
+     rather than rushed.
   2. **`syslogd`**: no real Apple source cloned yet -- needs adding to
      `setup_third_party.sh`'s pinned list first (confirm the exact
      apple-oss-distributions repo name/tag against the `macos-112`
