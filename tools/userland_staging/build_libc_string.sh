@@ -45,6 +45,14 @@ LIBC="../../third_party/Libc"
 OUT="libc_build"
 mkdir -p "$OUT/apple_string" "$OUT/freebsd_string" "$OUT/compat_include/sys"
 
+XCODE12="/Applications/Xcode-12.app/Contents/Developer"
+CLANG="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+SDK="$XCODE12/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
+if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
+    echo "error: Xcode-12.app not found at $XCODE12 (see tools/build_kexts.sh for the same dependency)" >&2
+    exit 1
+fi
+
 cat > "$OUT/compat_include/sys/limits.h" <<'EOF'
 /* Minimal compat shim: FreeBSD's sys/limits.h isn't present in this
  * project's Apple Libc checkout (BSD-ism, not part of Apple's public
@@ -58,7 +66,7 @@ cat > "$OUT/compat_include/sys/limits.h" <<'EOF'
 #endif
 EOF
 
-CFLAGS="-target arm64-apple-macos11 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 -w \
+CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 -w \
     -D_LIBC_NO_FEATURE_VERIFICATION -D_FORTIFY_SOURCE=0 \
     -I $LIBC/include -I $LIBC/darwin -I $LIBC/fbsdcompat -I $LIBC/locale \
     -I $OUT/compat_include"
@@ -74,7 +82,7 @@ for f in "$LIBC"/string/*.c "$LIBC"/string/FreeBSD/*.c; do
     base=$(basename "$f" .c)
     [ "$base" = "bcopy" ] && continue
     out="$OUT/apple_string/${base}.o"
-    if clang $CFLAGS "$f" -o "$out" 2>/dev/null; then
+    if "$CLANG" $CFLAGS "$f" -o "$out" 2>/dev/null; then
         ok=$((ok + 1))
     else
         skip=$((skip + 1))
@@ -101,7 +109,7 @@ for f in bcopy memcpy memmove memset bzero memcmp strlen strcmp strncmp \
     if [ ! -f "$dst" ]; then
         curl -sf -o "$dst" "https://raw.githubusercontent.com/freebsd/freebsd-src/main/lib/libc/string/${f}.c"
     fi
-    clang $CFLAGS -I "$OUT/freebsd_string" -I "$OUT/compat_include" "$dst" -o "$OUT/freebsd_string/${f}.o"
+    "$CLANG" $CFLAGS -I "$OUT/freebsd_string" -I "$OUT/compat_include" "$dst" -o "$OUT/freebsd_string/${f}.o"
 done
 echo "freebsd_string: 18 compiled (memcpy/memmove/memset/memcmp/strlen/strcmp/strncmp/bcopy/bzero/strchr/strchrnul/ffs/memchr/strcpy/strlcat/strlcpy/strncpy/strnlen)"
 
@@ -118,7 +126,7 @@ cat > "$OUT/freebsd_string/index.c" <<'EOF'
 #include <string.h>
 char *index(const char *s, int c) { return strchr(s, c); }
 EOF
-clang $CFLAGS -I "$OUT/compat_include" "$OUT/freebsd_string/index.c" -o "$OUT/freebsd_string/index.o"
+"$CLANG" $CFLAGS -I "$OUT/compat_include" "$OUT/freebsd_string/index.c" -o "$OUT/freebsd_string/index.o"
 
 rm -f "$OUT/libc_string.a"
 ar rcs "$OUT/libc_string.a" "$OUT"/apple_string/*.o "$OUT"/freebsd_string/*.o
