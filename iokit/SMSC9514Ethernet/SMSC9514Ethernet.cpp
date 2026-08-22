@@ -15,6 +15,7 @@ SMSC9514Ethernet::init(OSDictionary *properties, SMSCUSBTransport *transport)
 	fTransport = transport;
 	fOutputQueue = NULL;
 	fInterface = NULL;
+	fNetif = NULL;
 	fLinkUp = false;
 	bzero(&fMACAddress, sizeof(fMACAddress));
 	return true;
@@ -170,6 +171,27 @@ SMSC9514Ethernet::start(IOService *provider)
 		return false;
 	}
 
+	/*
+	 * Real Apple convention (IONetworkController.cpp's own comment on
+	 * attachInterface(): "Drivers will usually call this method from their
+	 * start() implementation, after they are ready to process client
+	 * requests"). This is the step that was missing before: without it,
+	 * the chip-level logic above is real and now genuinely reachable over
+	 * USB, but nothing ever creates the IOEthernetInterface the BSD
+	 * network stack (INET, phase-6b-inet) attaches to - the driver would
+	 * publish an IOService and nothing more, invisible to ifconfig no
+	 * matter how correct the register protocol underneath it is.
+	 * createInterface() is not overridden here because
+	 * IOEthernetController::createInterface() already does exactly what
+	 * this chip needs - allocate a plain IOEthernetInterface and init() it
+	 * against `this` - so attachInterface() is left to call it via its own
+	 * default path rather than duplicating that.
+	 */
+	if (!attachInterface((IONetworkInterface **)&fNetif, true)) {
+		IOLog("SMSC9514Ethernet: attachInterface failed\n");
+		return false;
+	}
+
 	registerService();
 	return true;
 }
@@ -177,6 +199,10 @@ SMSC9514Ethernet::start(IOService *provider)
 void
 SMSC9514Ethernet::stop(IOService *provider)
 {
+	if (fNetif != NULL) {
+		detachInterface(fNetif);
+		fNetif = NULL;
+	}
 	super::stop(provider);
 }
 

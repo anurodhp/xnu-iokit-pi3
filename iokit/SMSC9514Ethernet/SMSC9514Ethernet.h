@@ -81,6 +81,7 @@ private:
 	IOEthernetAddress    fMACAddress;
 	IOGatedOutputQueue  *fOutputQueue;
 	IONetworkInterface  *fInterface; // cached from enable(), for inputPacketAvailable()
+	IONetworkInterface  *fNetif; // owned; the interface attachInterface() created in start()
 	bool                 fLinkUp;
 
 	// SCSRs (System Control and Status Registers), byte offsets.

@@ -1,35 +1,35 @@
 /*
  * Concrete SMSCUSBTransport over the BCM2837 DWC2 host controller. See
  * SMSC9514USBTransport.cpp for the protocol references and, importantly,
- * for its verification status: the layers beneath it are QEMU-verified,
- * this layer is not and cannot be (QEMU models no LAN9514) - it needs real
- * hardware.
+ * for its verification status: the layers beneath it are QEMU-verified;
+ * this layer needed real hardware and got it - see probe()'s real-silicon
+ * confirmation recorded in project history.
  *
- * This deliberately does NOT include SMSC9514Ethernet.h, and does not
- * inherit from SMSCUSBTransport, even though it implements exactly that
- * interface method-for-method. SMSC9514Ethernet.h pulls in
+ * Formally inherits from SMSCUSBTransport (SMSC9514Ethernet.h) - this is
+ * the join this file used to describe as deferred: an earlier version of
+ * this header deliberately did NOT include SMSC9514Ethernet.h or inherit
+ * from SMSCUSBTransport, because that header pulls in
  * IOKit/network/IOEthernetController.h and the rest of IONetworkingFamily,
- * which is not currently compiled into this kernel (SMSC9514Ethernet.cpp is
- * deliberately absent from iokit/conf/files - see tools/sync_iokit_drivers.sh's
- * NOT_BUILT list, and the INET/INET6 domain-registration decision recorded
- * in architecture.md). Making the USB transport depend on that header would
- * drag the whole networking family into the kernel build as a side effect
- * of landing a USB driver.
- *
- * So the signatures below are kept deliberately identical to
- * SMSCUSBTransport's, and the two are joined at the point where Ethernet is
- * actually wired up (Phase 6b), by which time IONetworkingFamily will be in
- * the build for its own reasons. If either side's signature drifts before
- * then, that join will fail to compile - which is the intended outcome, and
- * far better than a silent mismatch.
+ * which at the time was not compiled into this kernel (SMSC9514Ethernet.cpp
+ * was excluded from iokit/conf/files - see tools/sync_iokit_drivers.sh's
+ * NOT_BUILT list, then). It kept every method's signature deliberately
+ * identical to SMSCUSBTransport's so that whenever IONetworkingFamily did
+ * land, the two could be joined by adding one base-class clause - which is
+ * exactly what happened once IONetworkingFamily was vendored
+ * (iokit/Network/, iokit/IOKit/network/) and both SMSC9514Ethernet.cpp and
+ * SMSC9514USBTransport.cpp became unconditional entries in
+ * iokit/conf/files. The old deferred-dependency rationale no longer
+ * applies: IONetworkingFamily is now always part of this kernel build, not
+ * something a USB driver could still avoid dragging in.
  */
 
 #ifndef _SMSC9514_USB_TRANSPORT_H
 #define _SMSC9514_USB_TRANSPORT_H
 
 #include "BCM2837DWC2.h"
+#include "SMSC9514Ethernet.h"
 
-class SMSC9514USBTransport
+class SMSC9514USBTransport : public SMSCUSBTransport
 {
 public:
 	// Called for each Ethernet frame unpacked from a bulk-IN transfer.
@@ -42,11 +42,11 @@ public:
 	// Bind to an already-enumerated, already-configured device.
 	bool init(BCM2837DWC2 *controller, const DWC2USBDevice *device);
 
-	// --- SMSCUSBTransport interface (signatures must stay in step) ---
-	virtual bool readRegister(uint32_t offset, uint32_t *value);
-	virtual bool writeRegister(uint32_t offset, uint32_t value);
-	virtual uint32_t bulkIn(void *buf, uint32_t maxLen);
-	virtual uint32_t bulkOut(const void *buf, uint32_t len);
+	// --- SMSCUSBTransport interface ---
+	virtual bool readRegister(uint32_t offset, uint32_t *value) APPLE_KEXT_OVERRIDE;
+	virtual bool writeRegister(uint32_t offset, uint32_t value) APPLE_KEXT_OVERRIDE;
+	virtual uint32_t bulkIn(void *buf, uint32_t maxLen) APPLE_KEXT_OVERRIDE;
+	virtual uint32_t bulkOut(const void *buf, uint32_t len) APPLE_KEXT_OVERRIDE;
 
 	// Unpack the frames packed into one bulk-IN transfer. Returns the
 	// number of good frames handed to `handler`.

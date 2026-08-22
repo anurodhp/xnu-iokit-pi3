@@ -508,49 +508,98 @@ need a real implementation later:
   descriptor is read from the root-port device, and a second device is
   enumerated through a downstream hub port, which is the exact topology the
   LAN9514 presents. See `docs/usb-support-plan.md`'s STATUS section for the
-  boot-log evidence and for what is explicitly NOT verified (the SMSC
-  register protocol, which QEMU cannot model; interrupt-driven completion,
-  deliberately deferred -- this cut polls, as its u-boot reference does;
-  split transactions, implemented but never executed).
+  boot-log evidence.
   Testing USB at all first required backporting a DWC2 model into
   `third_party/qemu-zhuowei` (QEMU 2.12.91 modelled no USB for `-M raspi3`),
   a prerequisite the plan doc had wrongly assumed away.
-  Next: 6b, the SMSC LAN9514 Ethernet driver -- chip-level logic was already
-  ported and its `SMSCUSBTransport` now has a concrete implementation
-  (`iokit/BCM2837DWC2/SMSC9514USBTransport.cpp`, written, compiles, real-
-  hardware verification pending). 6b's remaining work is integration:
-  compiling `SMSC9514Ethernet` into the kernel, which pulls in
-  IONetworkingFamily and revisits the INET/INET6 domain-registration
-  decision in `architecture.md` (taken when no network interface existed).
+
+  **6b DONE 2026-08-22**, in three real-hardware-driven passes the same day:
+  1. A root-port `HFIR` write in `portReset()` was silently corrupting the
+     bus cadence for any device reached through the hub (deterministic
+     XACTERR on the LAN9514's Ethernet function, invisible to QEMU - its
+     dwc2 model stores HFIR and never reads it back for scheduling). Fixing
+     it (removing the write, not correcting its value - see the commit) let
+     `0424:ec00` enumerate on real hardware for the first time.
+  2. `SMSC9514USBTransport::probe()`, a read-only self-test, then confirmed
+     the SMSC vendor-request register protocol against real silicon:
+     distinct register values (rules out the wIndex/wValue-swap failure
+     mode) and `ID_REV`'s chip field matching the enumerated USB product ID.
+     This is the one layer QEMU can never verify, in any version - see the
+     LAN9514-never-emulated note below.
+  3. IONetworkingFamily was vendored into the kernel build for real
+     (`third_party/xnu-7195/iokit/Network/`, `iokit/IOKit/network/`,
+     `iokit/conf/files`, `iokit/conf/Makefile.template`'s CFLAGS), closing
+     out the integration scoped below - all four gaps it predicted were
+     confirmed exactly as measured, plus three more only a REAL (not
+     trial-compile) build surfaced: `bsd/net/dlil.h` reaching two
+     KERNEL_PRIVATE-only headers (`net/classq/classq.h`, `net/flowadv.h`)
+     that Apple's own export manifest never puts on this monolithic
+     build's search path (fixed with `-I$(SRCROOT)/bsd -I$(SRCROOT)/osfmk`,
+     giving iokit the same live-source view bsd's/osfmk's own code already
+     has - real Apple builds never hit this because IONetworkingFamily is
+     always a separate kext project against an already-built SDK there,
+     never inside the xnu Makefile); and a plain SDK header,
+     `TargetConditionals.h`, invisible under the kernel's `-nostdinc`
+     (vendored directly rather than broadly adding the SDK's `usr/include`
+     to the search path - that was tried first and reverted, since it
+     silently shadowed `libkern/os/base.h` with the SDK's own `os/base.h`
+     at the same relative path and broke an unrelated file, DriverKit's
+     `OSObject.iig.cpp`, with no error until parsing an unrelated macro
+     several files downstream - a real lesson on how broad `-I` additions
+     can regress something they look nowhere near).
+     `SMSC9514Ethernet.cpp` then compiled into the kernel cleanly on its
+     first real attempt (the standalone `tools/build_kexts.sh` verification
+     from when it was chip-logic-only, transport-less, held up).
+     `SMSC9514Ethernet::start()` was also wired to call `attachInterface()`
+     (previously missing - chip logic was real but no `IOEthernetInterface`
+     was ever created, so nothing would have been reachable from
+     `ifconfig` regardless of the register protocol underneath it), and
+     `BCM2837DWC2::start()`'s existing probe-only scaffolding was extended
+     to actually construct, `attach()`, and `start()` a real
+     `SMSC9514Ethernet` once `probe()` confirms the transport - manual
+     construction rather than personality-based matching, since
+     `BCM2837USBEnum.cpp` does not publish per-device nubs a personality
+     could match against (a real follow-up, not done here).
+     QEMU-boot-verified with zero regressions (its LAN9514-vendor-ID device
+     never exists, so the new code path is a clean no-op there); the
+     construct/attach/start sequence itself is real-hardware-only, like
+     `probe()` before it, and is NOT YET boot-verified there - the next
+     real-hardware boot log is what closes that out.
   The INET half is DONE on branch `phase-6b-inet` (IPv4 stack initializes,
-  `lo0` attaches, zero panics).
+  `lo0` attaches, zero panics) and this work landed on the same branch.
 
   **IONetworkingFamily integration, scoped 2026-08-22** (measured, not
   estimated -- all 12 `third_party/IONetworkingFamily/*.cpp` were
-  trial-compiled individually):
+  trial-compiled individually) -- kept for history; DONE per above:
   - **`-D__PRIVATE_SPI__` is required.** `IONetworkController.h:1500` gates
     `outputStart`/`pollInputPackets`/`setInputPacketPollingEnable`/
     `IOMbufServiceClass` behind it while the `.cpp` defines them
     unconditionally, so without it the base class alone fails with
     "out-of-line definition does not match any declaration". Adding it took
-    `IONetworkController.cpp` from 4 errors to zero. Apple's own build
-    flag, not a workaround.
+    `IONetworkController.cpp` from 4 errors to zero. Confirmed to be
+    Apple's own build flag, not a workaround: the real
+    `IONetworkingFamily.xcodeproj` sets
+    `GCC_PREPROCESSOR_DEFINITIONS = __PRIVATE_SPI__` for every one of its
+    targets.
   - **7 of 12 sources then compile clean** (`IOKernelDebugger`,
     `IOMbufMemoryCursor`, `IONetworkController`, `IONetworkData`,
     `IONetworkMedium`, `IOOutputQueue`, `IOPacketQueue`).
-  - Of the rest, **most errors are trial-harness artifacts, not real skew**:
-    `io_filter_policy_t` (`IOUserClient.h:170`, behind `#if PRIVATE`),
-    `kqueue_id_t` (`bsd/sys/event.h`, same class), and
-    `DriverKit/IODMACommand.h`. Those come from compiling standalone with
-    `compile_flags.txt`; the real kernel build sets those defines and
-    include paths. So do the integration by vendoring into the tree and
-    building via `iokit/conf/files` the way `iokit/Storage/` already is,
-    rather than fighting the standalone harness.
-  - **The genuine vintage skew is a short, bounded list**, all in
-    `IONetworkInterface.cpp`/`IOEthernetInterface.cpp` referencing
-    `bsd/net/` symbols this xnu vintage does not expose:
-    `IFNET_LQM_THRESH_GOOD`, `IFNET_LQM_THRESH_OFF`, `if_bandwidths_t`
-    (incomplete type), `DLIL_MODIDLEN`, `DLIL_MODARGLEN`.
+  - Of the rest, **most errors were trial-harness artifacts, not real
+    skew, confirmed by the real build**: `io_filter_policy_t`
+    (`IOUserClient.h:170`, behind `#if PRIVATE`), `kqueue_id_t`
+    (`bsd/sys/event.h`, same class), and `DriverKit/IODMACommand.h` all
+    evaporated once vendored into the tree and built via
+    `iokit/conf/files`, exactly as predicted.
+  - **The predicted "genuine vintage skew" list turned out to be a
+    trial-harness artifact too, not real skew** - a correction worth
+    recording since it was stated with confidence at the time:
+    `IFNET_LQM_THRESH_GOOD`, `IFNET_LQM_THRESH_OFF`, `if_bandwidths_t`,
+    `DLIL_MODIDLEN`, `DLIL_MODARGLEN` are all genuinely present and
+    complete in this xnu-7195 checkout's real `bsd/net/if.h`,
+    `bsd/net/if_var.h`, and `bsd/net/kpi_interface.h` (checked directly
+    against source before trusting the old note). The three real gaps the
+    live build did surface (`classq.h`/`flowadv.h`/`TargetConditionals.h`,
+    detailed above) were never on this predicted list at all.
 
   Then 6c: a DHCP client + `ifconfig`/`ping`/`netstat` (FreeBSD's
   `dhclient` recommended over Apple's `bootp`).

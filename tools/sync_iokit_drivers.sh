@@ -38,22 +38,15 @@ fi
 
 # Sources deliberately NOT compiled into the kernel.
 #
-# SMSC9514Ethernet is real, finished chip-level logic, but it subclasses
-# IOEthernetController, so compiling it into the kernel drags in the whole
-# of IONetworkingFamily - scoped in docs/usb-support-plan.md but not landed.
-# Built standalone by tools/build_kexts.sh to keep it honest, and absent
-# from iokit/conf/files until that family is in the build for its own
-# reasons.
-#
-# SMSC9514USBTransport used to be listed here too, on the grounds that
-# nothing instantiated it. That changed: BCM2837DWC2::start() now runs its
-# read-only probe() against real silicon, which is the only way the SMSC
-# vendor-request protocol can be verified at all (QEMU models no LAN9514).
-# It deliberately does not include SMSC9514Ethernet.h - see its own header -
-# so landing it does NOT pull IONetworkingFamily in with it. That
-# independence is the whole reason this layer can be tested before the one
-# above it.
-NOT_BUILT=("SMSC9514Ethernet.cpp")
+# Both SMSC9514Ethernet and SMSC9514USBTransport used to be listed here.
+# SMSC9514Ethernet subclasses IOEthernetController, so compiling it in
+# needed IONetworkingFamily vendored into the kernel build first
+# (third_party/xnu-7195/iokit/Network/, iokit/conf/files) - that landed, so
+# the reason this was excluded no longer holds. SMSC9514USBTransport never
+# needed IONetworkingFamily at all (deliberately avoids including
+# SMSC9514Ethernet.h - see its own header) and landed earlier, once
+# BCM2837DWC2::start() needed its read-only probe() against real silicon.
+NOT_BUILT=()
 
 copied=0
 missing_from_conf=()

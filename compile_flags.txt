@@ -5,11 +5,13 @@
 -DXNU_KERNEL_PRIVATE
 -DAPPLE_KEXT_LEGACY_ABI=0
 -DARM64_BOARD_CONFIG_BCM2837
+-D__PRIVATE_SPI__
 -include
 compat/decls.h
 -Icompat
 -Ithird_party/_sdk_shim
 -Igenerated
+-Iiokit/SMSC9514Ethernet
 -Ithird_party/xnu-7195/pexpert
 -Ithird_party/xnu-7195/iokit
 -Ithird_party/xnu-7195/libkern

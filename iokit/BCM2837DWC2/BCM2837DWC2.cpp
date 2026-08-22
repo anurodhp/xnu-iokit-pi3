@@ -1050,30 +1050,58 @@ BCM2837DWC2::start(IOService *provider)
 	 * BRING-UP SCAFFOLDING, not the final wiring.
 	 *
 	 * This is an SMSC-specific call inside an otherwise chip-agnostic host
-	 * controller, which is the wrong home for it long-term. It is here
-	 * because the SMSC vendor-request register protocol has never once run
-	 * against real silicon - QEMU models no LAN9514, so every layer beneath
-	 * this was QEMU-verified and this layer could not be - and the device
-	 * only became reachable at all with the HFIR fix in portReset(). A
-	 * read-only probe at the one point where an enumerated bus is known to
-	 * exist buys that verification now, without waiting on
-	 * IONetworkingFamily.
+	 * controller, which is the wrong home for it long-term - the real fix
+	 * is a personality-based match once this driver publishes a nub per
+	 * enumerated USB device (it does not yet; BCM2837USBEnum.cpp's device
+	 * table is internal to this class, not IOService objects other drivers
+	 * could match against). It is here because nothing else in this tree
+	 * can reach the LAN9514's Ethernet function at all otherwise: the SMSC
+	 * vendor-request register protocol was unverified against real silicon
+	 * until this session (QEMU models no LAN9514), and the device only
+	 * became reachable in the first place with the HFIR fix in
+	 * portReset().
 	 *
-	 * It cannot become load-bearing: probe() only reads, its result is not
-	 * consulted, and a board with no SMSC part (every QEMU run, which
-	 * substitutes a generic usb-net) simply finds no device and skips.
-	 * When SMSC9514Ethernet is wired up for real - which needs
-	 * IOEthernetController, hence IONetworkingFamily in the build, which is
-	 * scoped but not landed - it matches against the published controller
-	 * and owns its own transport, and this block goes away.
+	 * probe() is read-only and cannot become load-bearing - its result is
+	 * logged, not consulted, and a board with no SMSC part (every QEMU
+	 * run, which substitutes a generic usb-net) simply finds no device and
+	 * skips this whole block. What follows it is NOT read-only: once
+	 * probe() confirms the register protocol is real, a genuine
+	 * SMSC9514Ethernet is constructed, attached, and started by hand -
+	 * IONetworkingFamily is landed now (iokit/Network/, this kernel
+	 * build), so it can actually create a live IOEthernetInterface rather
+	 * than just proving the transport works. attach()+start() are called
+	 * directly rather than through registerService()+matching because
+	 * there is no nub for a personality to match against (see above) -
+	 * this is the same manual-construction shortcut IOService's own
+	 * matching engine takes internally, just without a matching dictionary
+	 * driving it.
 	 */
 	const DWC2USBDevice *ethFunction =
 	    SMSC9514USBTransport::findEthernetFunction(this);
 	if (ethFunction != NULL) {
-		SMSC9514USBTransport transport;
-		if (transport.init(this, ethFunction)) {
-			transport.probe();
+		SMSC9514USBTransport *transport = new SMSC9514USBTransport;
+		if (transport != NULL && transport->init(this, ethFunction) && transport->probe()) {
+			SMSC9514Ethernet *eth = new SMSC9514Ethernet;
+			if (eth != NULL && eth->init(NULL, transport) && eth->attach(this)) {
+				if (eth->start(this)) {
+					fEthernetTransport = transport;
+					fEthernetDriver = eth;
+					transport = NULL; // ownership moved to fEthernetTransport
+				} else {
+					IOLog("BCM2837DWC2: SMSC9514Ethernet start() failed\n");
+					eth->detach(this);
+					eth->release();
+				}
+			} else {
+				IOLog("BCM2837DWC2: SMSC9514Ethernet init/attach failed\n");
+				if (eth != NULL) {
+					eth->release();
+				}
+			}
 		}
+		// Either genuinely no probe(), or ownership was handed off above
+		// (transport == NULL in that case) - safe either way.
+		delete transport;
 	}
 
 	registerService();
@@ -1083,6 +1111,18 @@ BCM2837DWC2::start(IOService *provider)
 void
 BCM2837DWC2::stop(IOService *provider)
 {
+	// Undo start()'s manual attach()+start() of the Ethernet scaffolding
+	// child, mirroring what IOService::terminate() would have done had
+	// this gone through normal matching (stop() then detach()) - there was
+	// no registerService()+match for it to begin with, so there is no
+	// automatic teardown for it either.
+	if (fEthernetDriver != NULL) {
+		fEthernetDriver->stop(this);
+		fEthernetDriver->detach(this);
+		fEthernetDriver->release();
+		fEthernetDriver = NULL;
+	}
+
 	if (fRegBase != NULL) {
 		// Drop port power and mask everything, so a subsequent driver (or
 		// a reboot into another OS) starts from a quiet controller.
@@ -1096,6 +1136,12 @@ BCM2837DWC2::stop(IOService *provider)
 void
 BCM2837DWC2::free(void)
 {
+	// Plain C++ object, not OSObject-derived (see SMSC9514USBTransport.h) -
+	// deleted directly rather than release()'d. fEthernetDriver no longer
+	// references it: stop() already tore that down first.
+	delete fEthernetTransport;
+	fEthernetTransport = NULL;
+
 	if (fDMABuffer != NULL) {
 		fDMABuffer->complete();
 		fDMABuffer->release();

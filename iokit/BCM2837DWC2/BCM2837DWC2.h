@@ -440,6 +440,13 @@ struct DWC2USBDevice {
 
 #define kDWC2MaxDevices 8
 
+// Forward-declared rather than #included here so that BCM2837DWC2.h - a
+// chip-agnostic host controller header - does not pull in the SMSC-specific
+// classes just to hold two owned pointers to them. Both are only ever
+// dereferenced from BCM2837DWC2.cpp, which does include their real headers.
+class SMSC9514USBTransport;
+class SMSC9514Ethernet;
+
 class BCM2837DWC2 : public IOService
 {
 	OSDeclareDefaultStructors(BCM2837DWC2);
@@ -453,6 +460,13 @@ private:
 	uint32_t                 fNumChannels;
 	uint8_t                  fRootSpeed;
 	bool                     fRootConnected;
+
+	// Bring-up scaffolding (see the long comment at the call site in
+	// start()): owned for as long as this controller is, so the Ethernet
+	// driver they back has a live transport past start() returning. NULL
+	// on any board/boot where no SMSC part enumerated (every QEMU run).
+	SMSC9514USBTransport     *fEthernetTransport;
+	SMSC9514Ethernet         *fEthernetDriver;
 
 	// Register accessors. All DWC2 registers are 32-bit.
 	uint32_t regRead(uint32_t offset) const;
