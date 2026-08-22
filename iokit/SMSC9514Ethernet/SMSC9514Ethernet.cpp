@@ -1,6 +1,9 @@
 #include "SMSC9514Ethernet.h"
 
 #include <IOKit/IOLib.h>
+#include <IOKit/IOTimerEventSource.h>
+#include <IOKit/IOWorkLoop.h>
+#include <IOKit/network/IONetworkMedium.h>
 
 #define super IOEthernetController
 
@@ -17,6 +20,8 @@ SMSC9514Ethernet::init(OSDictionary *properties, SMSCUSBTransport *transport)
 	fInterface = NULL;
 	fNetif = NULL;
 	fLinkUp = false;
+	fLinkTimer = NULL;
+	bzero(fMediumTable, sizeof(fMediumTable));
 	bzero(&fMACAddress, sizeof(fMACAddress));
 	return true;
 }
@@ -127,6 +132,26 @@ SMSC9514Ethernet::resetChip(void)
 		return false;
 	}
 
+	/*
+	 * Explicitly (re)start auto-negotiation rather than relying on
+	 * whatever the PHY defaulted to out of the PM_CTL PHY_RST pulse
+	 * above. The PHY_RST alone is very likely enough on its own (most
+	 * PHYs including this one default ANENABLE=1 out of reset), but
+	 * smsc95xx.c's own smsc95xx_reset() does this explicitly too
+	 * (mii_nway_restart()) instead of assuming reset defaults, and
+	 * that's the only real reference this driver has for LAN9514 PHY
+	 * bring-up - mirror it rather than hope.
+	 */
+	uint16_t bmcr;
+	if (!mdioRead(kMiiPhyAddr, kMiiBmcr, &bmcr)) {
+		IOLog("SMSC9514Ethernet: PHY BMCR read failed\n");
+		return false;
+	}
+	if (!mdioWrite(kMiiPhyAddr, kMiiBmcr, bmcr | kBmcrAnEnable | kBmcrAnRestart)) {
+		IOLog("SMSC9514Ethernet: PHY auto-negotiation restart failed\n");
+		return false;
+	}
+
 	return true;
 }
 
@@ -138,6 +163,118 @@ SMSC9514Ethernet::programMACAddress(const IOEthernetAddress *addr)
 	uint32_t addrH = (uint32_t)addr->bytes[4] | ((uint32_t)addr->bytes[5] << 8);
 	return fTransport->writeRegister(kRegAddrL, addrL) &&
 	    fTransport->writeRegister(kRegAddrH, addrH);
+}
+
+bool
+SMSC9514Ethernet::createMediumTables(void)
+{
+	static const struct {
+		UInt32       index;
+		IOMediumType type;
+		UInt64       speed;
+	} kMedia[kMediumCount] = {
+		{ kMediumIndexAuto,          kIOMediumEthernetAuto,                                    0 },
+		{ kMediumIndex10HalfDuplex,  kIOMediumEthernet10BaseT,                                 10 * 1000000 },
+		{ kMediumIndex10FullDuplex,  kIOMediumEthernet10BaseT   | kIOMediumOptionFullDuplex,    10 * 1000000 },
+		{ kMediumIndex100HalfDuplex, kIOMediumEthernet100BaseTX,                                100 * 1000000 },
+		{ kMediumIndex100FullDuplex, kIOMediumEthernet100BaseTX | kIOMediumOptionFullDuplex,    100 * 1000000 },
+	};
+
+	OSDictionary *dict = OSDictionary::withCapacity(kMediumCount);
+	if (dict == NULL) {
+		return false;
+	}
+
+	bool ok = true;
+	for (UInt32 i = 0; i < kMediumCount && ok; i++) {
+		IONetworkMedium *medium = IONetworkMedium::medium(
+		    kMedia[i].type, kMedia[i].speed, 0, kMedia[i].index);
+		if (medium == NULL || !IONetworkMedium::addMedium(dict, medium)) {
+			ok = false;
+			if (medium != NULL) {
+				medium->release();
+			}
+			break;
+		}
+		// addMedium() above retained its own reference for the
+		// dictionary; this one is kept for updateLinkStatus() to hand
+		// straight to setLinkStatus() without a dictionary lookup each
+		// time. Released in stop().
+		fMediumTable[kMedia[i].index] = medium;
+	}
+
+	if (ok) {
+		ok = publishMediumDictionary(dict);
+	}
+	dict->release(); // publishMediumDictionary() retains what it needs
+
+	return ok;
+}
+
+void
+SMSC9514Ethernet::updateLinkStatus(void)
+{
+	if (fTransport == NULL) {
+		return;
+	}
+
+	// BMSR's Link Status bit latches low - discard this first read (it
+	// may reflect a transient drop already cleared) and trust the second.
+	uint16_t bmsr;
+	if (!mdioRead(kMiiPhyAddr, kMiiBmsr, &bmsr) ||
+	    !mdioRead(kMiiPhyAddr, kMiiBmsr, &bmsr)) {
+		return;
+	}
+
+	if (!(bmsr & kBmsrLinkStatus)) {
+		if (fLinkUp) {
+			fLinkUp = false;
+			setLinkStatus(kIONetworkLinkValid, NULL);
+		}
+		return;
+	}
+
+	// Link is up. Resolve the negotiated speed/duplex the standard IEEE
+	// 802.3 way: intersect what we advertised (ANAR) with what the link
+	// partner advertised (ANLPAR), then pick the highest-priority bit set
+	// in the intersection (100Full > 100Half > 10Full > 10Half). Falls
+	// back to Auto/unknown-duplex if for any reason the intersection is
+	// empty (e.g. a partner that doesn't auto-negotiate at all).
+	uint16_t anar, anlpar;
+	UInt32   mediumIndex = kMediumIndexAuto;
+	UInt64   speed = 0;
+	if (mdioRead(kMiiPhyAddr, kMiiAnar, &anar) &&
+	    mdioRead(kMiiPhyAddr, kMiiAnlpar, &anlpar)) {
+		uint16_t common = anar & anlpar;
+		if (common & kAnar100Full) {
+			mediumIndex = kMediumIndex100FullDuplex;
+			speed = 100 * 1000000;
+		} else if (common & kAnar100Half) {
+			mediumIndex = kMediumIndex100HalfDuplex;
+			speed = 100 * 1000000;
+		} else if (common & kAnar10Full) {
+			mediumIndex = kMediumIndex10FullDuplex;
+			speed = 10 * 1000000;
+		} else if (common & kAnar10Half) {
+			mediumIndex = kMediumIndex10HalfDuplex;
+			speed = 10 * 1000000;
+		}
+	}
+
+	fLinkUp = true;
+	setLinkStatus(kIONetworkLinkValid | kIONetworkLinkActive,
+	    fMediumTable[mediumIndex], speed);
+}
+
+void
+SMSC9514Ethernet::linkTimerFired(OSObject *owner, IOTimerEventSource *sender)
+{
+	SMSC9514Ethernet *self = OSDynamicCast(SMSC9514Ethernet, owner);
+	if (self == NULL) {
+		return;
+	}
+	self->updateLinkStatus();
+	sender->setTimeoutMS(kLinkPollIntervalMS);
 }
 
 bool
@@ -171,6 +308,30 @@ SMSC9514Ethernet::start(IOService *provider)
 		return false;
 	}
 
+	if (!createMediumTables()) {
+		IOLog("SMSC9514Ethernet: createMediumTables failed\n");
+		return false;
+	}
+
+	/*
+	 * Real link-state monitoring (see updateLinkStatus()'s header
+	 * comment on why this is polled, not interrupt-driven). The timer is
+	 * only created/attached here; enable()/disable() start and stop it,
+	 * matching those methods' role as "the interface is/isn't in active
+	 * use right now" rather than start()/stop()'s "the driver object
+	 * exists at all".
+	 */
+	IOWorkLoop *workLoop = getWorkLoop();
+	if (workLoop == NULL) {
+		IOLog("SMSC9514Ethernet: no workloop\n");
+		return false;
+	}
+	fLinkTimer = IOTimerEventSource::timerEventSource(this, &SMSC9514Ethernet::linkTimerFired);
+	if (fLinkTimer == NULL || workLoop->addEventSource(fLinkTimer) != kIOReturnSuccess) {
+		IOLog("SMSC9514Ethernet: link timer setup failed\n");
+		return false;
+	}
+
 	/*
 	 * Real Apple convention (IONetworkController.cpp's own comment on
 	 * attachInterface(): "Drivers will usually call this method from their
@@ -199,6 +360,21 @@ SMSC9514Ethernet::start(IOService *provider)
 void
 SMSC9514Ethernet::stop(IOService *provider)
 {
+	// Undoes the workloop attachment start() made, same idea as
+	// detachInterface() below undoing attachInterface() - stop() reverses
+	// everything start() did that's visible outside this object, before
+	// free() does the final (and here, purely defensive/idempotent)
+	// pointer cleanup.
+	if (fLinkTimer != NULL) {
+		fLinkTimer->cancelTimeout();
+		IOWorkLoop *wl = getWorkLoop();
+		if (wl != NULL) {
+			wl->removeEventSource(fLinkTimer);
+		}
+		fLinkTimer->release();
+		fLinkTimer = NULL;
+	}
+
 	if (fNetif != NULL) {
 		detachInterface(fNetif);
 		fNetif = NULL;
@@ -209,6 +385,23 @@ SMSC9514Ethernet::stop(IOService *provider)
 void
 SMSC9514Ethernet::free(void)
 {
+	// Defensive, not the primary teardown path: stop() above already
+	// clears fLinkTimer on any boot where start() succeeded. This only
+	// matters if start() failed partway through (e.g. createMediumTables()
+	// or the timer setup itself failing) - BCM2837DWC2.cpp's cleanup for
+	// that case calls release() directly, never stop(), the same way it
+	// already does for SMSC9514Ethernet itself.
+	if (fLinkTimer != NULL) {
+		fLinkTimer->cancelTimeout();
+		fLinkTimer->release();
+		fLinkTimer = NULL;
+	}
+	for (UInt32 i = 0; i < kMediumCount; i++) {
+		if (fMediumTable[i] != NULL) {
+			fMediumTable[i]->release();
+			fMediumTable[i] = NULL;
+		}
+	}
 	super::free();
 }
 
@@ -260,13 +453,19 @@ IOReturn
 SMSC9514Ethernet::enable(IONetworkInterface *interface)
 {
 	fInterface = interface;
-	fLinkUp = true; // no real link-state/PHY-status polling wired up yet
+	updateLinkStatus(); // real initial state, not a hardcoded guess
+	if (fLinkTimer != NULL) {
+		fLinkTimer->setTimeoutMS(kLinkPollIntervalMS);
+	}
 	return kIOReturnSuccess;
 }
 
 IOReturn
 SMSC9514Ethernet::disable(IONetworkInterface * /*interface*/)
 {
+	if (fLinkTimer != NULL) {
+		fLinkTimer->cancelTimeout();
+	}
 	fLinkUp = false;
 	fInterface = NULL;
 	return kIOReturnSuccess;

@@ -1,24 +1,20 @@
 /*
  * Driver for the SMSC LAN9514 USB-to-Ethernet+hub chip on the RPi3's
- * onboard USB/network combo (Linux: drivers/net/usb/smsc95xx.c). This is
- * NOT reachable yet - see "Blocking dependency" below.
+ * onboard USB/network combo (Linux: drivers/net/usb/smsc95xx.c).
  *
  * ================================ SCOPE ================================
  * This chip is a USB device, not a memory-mapped one: every register
  * access and every packet TX/RX goes over USB control/bulk transfers to
- * the DWC2 host controller (BCM2835_USB, VC offset 0x980000 per
- * bcm283x.dtsi - not yet in devicetrees/rpi3.dts, not yet matched by any
- * driver). NO IOKit USB host controller driver exists for DWC2 anywhere
- * in this project or in apple-oss-distributions/IOUSBFamily (that family
- * only ships EHCI/OHCI/UHCI/XHCI - real Synopsys DesignWare/DWC2 support
- * was never open-sourced by Apple, since Apple's actual embedded/iPhone
- * equivalent driver for this IP block is closed-source). Writing that
- * host controller driver - USB device/config descriptor parsing, hub and
- * endpoint enumeration, transfer scheduling - is a materially larger,
- * separate undertaking than everything in this repo so far; not
- * attempted here.
+ * the DWC2 host controller. That host controller driver
+ * (iokit/BCM2837DWC2/) and a concrete SMSCUSBTransport
+ * (SMSC9514USBTransport, iokit/BCM2837DWC2/) now exist and have both
+ * been probe()-verified against real LAN9514 silicon (2026-08-21/22) -
+ * this driver is genuinely reachable on real hardware, not stubbed. It
+ * still cannot be exercised in QEMU: QEMU's usb-net device is always
+ * generic CDC/RNDIS (0525:a4a1/a4a2), never a LAN9514 - see
+ * BCM2837DWC2.cpp's findEthernetFunction() call site.
  *
- * Given that, this driver is deliberately split in two:
+ * Given the USB indirection, this driver is deliberately split in two:
  *   - SMSC9514Ethernet (this class): all of the chip-specific protocol
  *     logic (reset sequence, MAC/PHY setup, RX/TX packet framing) ported
  *     from smsc95xx.c, talking only to the abstract SMSCUSBTransport
@@ -26,20 +22,24 @@
  *   - SMSCUSBTransport: a pure-virtual interface capturing exactly the
  *     two USB operations smsc95xx.c actually needs (vendor-specific
  *     register read/write control transfers, and bulk IN/OUT for packet
- *     data). Whatever eventually implements DWC2 host + USB device
- *     enumeration provides a concrete subclass of this and hands it to
- *     SMSC9514Ethernet::start().
+ *     data). SMSC9514USBTransport is the one concrete implementation,
+ *     constructed and handed to SMSC9514Ethernet::start() by
+ *     BCM2837DWC2::start() on real hardware only.
  *
- * This means SMSC9514Ethernet's *logic* is real, verifiable, and can be
- * exercised by a test/stub transport today, but genuinely cannot pass a
- * single real packet until the DWC2 work above exists. Not stubbed here
- * to avoid overstating readiness.
+ * Known gaps: outputPacket()/inputPacketAvailable() implement real TX/RX
+ * framing but the RX side (inputPacketAvailable()) is not called from
+ * anywhere yet - no code drives the bulk IN endpoint to feed it. Link
+ * state (updateLinkStatus()) and BSD/ifconfig registration
+ * (BCM2837DWC2.cpp's IONetworkStack wiring) are both real as of
+ * 2026-08-22 but unverified end-to-end on real hardware (QEMU can't
+ * exercise this path at all, see above).
  *
  * Register offsets/bits below are from Linux's drivers/net/usb/smsc95xx.h
  * (SCSRs at 0x00-0x3F, MAC-level CSRs at 0x100+, both accessed through the
  * same generic USB_VENDOR_REQUEST_READ/WRITE_REGISTER control transfer -
  * there is no separate indirect-addressing scheme, unlike some other MAC
- * register sets).
+ * register sets), plus the standard IEEE 802.3 clause-22 MII registers
+ * (BMCR/BMSR/ANAR/ANLPAR) for PHY link-state/auto-negotiation.
  */
 
 #ifndef _SMSC9514_ETHERNET_H
@@ -48,6 +48,9 @@
 #include <IOKit/network/IOEthernetController.h>
 #include <IOKit/network/IOEthernetInterface.h>
 #include <IOKit/network/IOGatedOutputQueue.h>
+
+class IONetworkMedium;
+class IOTimerEventSource;
 
 /*
  * Abstract USB transport SMSC9514Ethernet talks to. UNIMPLEMENTED - see
@@ -83,6 +86,23 @@ private:
 	IONetworkInterface  *fInterface; // cached from enable(), for inputPacketAvailable()
 	IONetworkInterface  *fNetif; // owned; the interface attachInterface() created in start()
 	bool                 fLinkUp;
+
+	// Real PHY link-state tracking (see updateLinkStatus()). No PHY
+	// interrupt is wired up (LAN9514's PHY IRQ line, if even routed to
+	// this board, would need real hardware interrupt plumbing through
+	// BCM2837DWC2 that doesn't exist), so this is polled instead - the
+	// same fallback this project uses elsewhere when a real IRQ path
+	// isn't available yet.
+	enum {
+		kMediumIndexAuto = 0,
+		kMediumIndex10HalfDuplex,
+		kMediumIndex10FullDuplex,
+		kMediumIndex100HalfDuplex,
+		kMediumIndex100FullDuplex,
+		kMediumCount
+	};
+	IONetworkMedium     *fMediumTable[kMediumCount];
+	IOTimerEventSource  *fLinkTimer;
 
 	// SCSRs (System Control and Status Registers), byte offsets.
 	enum {
@@ -123,11 +143,57 @@ private:
 		kMiiAddrWrite = 1U << 1,
 	};
 
+	// LAN9514's internal PHY, at the fixed MDIO address smsc95xx.h calls
+	// SMSC95XX_INTERNAL_PHY_ID.
+	enum {
+		kMiiPhyAddr = 1,
+	};
+
+	// Standard IEEE 802.3 clause-22 MII management registers - not
+	// SMSC-specific, unlike the SCSR/MAC-CSR enums above, so any
+	// standard-compliant PHY would use the same numbers/bits.
+	enum {
+		kMiiBmcr   = 0x00, // Basic Mode Control Register
+		kMiiBmsr   = 0x01, // Basic Mode Status Register
+		kMiiAnar   = 0x04, // Auto-Negotiation Advertisement Register
+		kMiiAnlpar = 0x05, // Auto-Negotiation Link Partner Ability Register
+	};
+
+	enum {
+		kBmcrAnEnable  = 1U << 12,
+		kBmcrAnRestart = 1U << 9,
+
+		// Link Status latches low on a down transition - a stale read can
+		// show a link that dropped and came back as still up. Callers
+		// must read kMiiBmsr twice, discarding the first value, to get
+		// the true current state (standard MII quirk, not chip-specific).
+		kBmsrLinkStatus = 1U << 2,
+
+		// Advertisement/link-partner-ability bits shared between kMiiAnar
+		// and kMiiAnlpar - intersecting the two and picking the highest
+		// priority set bit (100Full > 100Half > 10Full > 10Half) is the
+		// standard IEEE 802.3 auto-negotiation resolution algorithm.
+		kAnar100Full = 1U << 8,
+		kAnar100Half = 1U << 7,
+		kAnar10Full  = 1U << 6,
+		kAnar10Half  = 1U << 5,
+	};
+
+	// Re-poll interval for updateLinkStatus() while the interface is
+	// enabled - see fLinkTimer's header comment for why this is polled
+	// rather than interrupt-driven.
+	enum {
+		kLinkPollIntervalMS = 1000,
+	};
+
 	bool mdioWait(void);
 	bool mdioRead(uint8_t phyAddr, uint8_t regAddr, uint16_t *value);
 	bool mdioWrite(uint8_t phyAddr, uint8_t regAddr, uint16_t value);
 	bool resetChip(void);
 	bool programMACAddress(const IOEthernetAddress *addr);
+	bool createMediumTables(void);
+	void updateLinkStatus(void);
+	static void linkTimerFired(OSObject *owner, IOTimerEventSource *sender);
 
 public:
 	virtual bool init(OSDictionary *properties, SMSCUSBTransport *transport);
