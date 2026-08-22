@@ -181,6 +181,64 @@ this pass even if the change itself is cheap.
 
 ## P2 — known gaps / incomplete work (not bugs, just unfinished)
 
+0a. **No AES implementation exists anywhere in this kernel — HARD
+    PREREQUISITE for Phase 7b (`sshd`).** Filed explicitly 2026-08-21 so it
+    is a known gate rather than the fourth surprise NULL dereference.
+
+    `g_crypto_funcs` (`libkern/crypto/register_crypto.c`) is a table of
+    function pointers that real macOS's closed-source corecrypto kext fills
+    in via `register_crypto_functions()`. This kernel loads no kexts at all,
+    so **nothing ever calls it and the table stays NULL forever**. Every
+    consumer therefore faults as `NULL + <field offset>`. This has now bitten
+    four separate times, each rediscovered the hard way from a fault address:
+
+    | Caller | Offset | Field | Resolution so far |
+    |---|---|---|---|
+    | `SHA256_Init` via `devfs_mount` | `0x30` | `ccsha256_di` | from-scratch SHA-2 (`corecrypto_sha2.c`), bypasses the table |
+    | MD5 | `0x20` | `ccmd5_di` | from-scratch, bypasses the table |
+    | `read_random` | n/a | `cckprng` | falls back to `read_erandom()` |
+    | `tcp_init`→`tcp_tfo_init` | `0x78` | `ccaes_cbc_encrypt` | guarded; TCP Fast Open disabled |
+
+    Every fix so far *routed around* the table rather than filling it, which
+    is exactly why it keeps recurring. To decode the next one: the offset is
+    the field index times 8 into `struct crypto_functions`
+    (`libkern/libkern/crypto/register_crypto.h:113`).
+
+    **Current state is safe but featureless.** `aes_encrypt_key()` now
+    returns `aes_error` instead of dereferencing NULL, so further hits are a
+    log line rather than a panic. Nothing that needs AES works.
+
+    **What Phase 7b actually requires**, and why it is not just "write AES":
+    - The AES block-cipher core (this is the part to take from an existing
+      implementation, see below).
+    - A corecrypto-shaped adapter: a `struct ccmode_cbc`
+      (`EXTERNAL_HEADERS/corecrypto/ccmode_impl.h:63` — only 5 fields:
+      `size`, `block_size`, `init`, `cbc`, `custom`) plus whatever other
+      modes are needed, and a boot-time `register_crypto_functions()` call.
+      No library provides this glue; it is project-specific either way.
+    - The table can be filled **incrementally** — register AES, leave the
+      rest NULL, and the guard above keeps unfilled slots non-fatal. The
+      existing from-scratch SHA-2/MD5 should be folded in at that point so
+      there is one mechanism rather than two.
+
+    **Do not hand-roll the AES core.** Confirmed 2026-08-21: `corecrypto` is
+    **not** in apple-oss-distributions (searched, zero repos), so this
+    project's "Apple's real source first" rule cannot be satisfied — the
+    documented fallback is FreeBSD, whose `sys/crypto/rijndael/` is
+    self-contained, already kernel-resident, and permissively licensed.
+    xnu-7195 itself ships **no** AES core (only the corecrypto dispatch
+    wrappers `corecrypto_aes.c`/`corecrypto_aesxts.c`, and
+    `bsd/netinet6/esp_rijndael.c` which is IPsec glue over the same
+    dispatch), so there is nothing in-tree to reuse.
+
+    Risks to handle when doing it: verify against FIPS-197 known-answer
+    vectors (a subtly wrong AES silently produces valid-looking wrong
+    ciphertext — worse than none); table-based AES is cache-timing
+    vulnerable, acceptable here but worth recording; and check whether the
+    BCM2837's Cortex-A53 implements the optional ARMv8 Crypto Extensions
+    (AESE/AESMC) before assuming a hardware path exists — believed absent on
+    Pi 3, NOT verified.
+
 0. **DWC2 transfer completion is polled, not interrupt-driven** (added
     2026-08-21 with `iokit/BCM2837DWC2/`). `docs/usb-support-plan.md` task 2
     called for mirroring `BCM2837SDHCI`'s interrupt-driven design; this

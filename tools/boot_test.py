@@ -140,6 +140,26 @@ def main():
                     failed = pat
                     break
             if failed:
+                # Keep draining before tearing the VM down. A panic is the
+                # single most useful thing this harness can capture, and its
+                # message plus backtrace arrive AFTER the "panic(" that
+                # matched here - killing QEMU immediately truncated the log
+                # to a bare "panic(cpu" and threw away the diagnosis, which
+                # cost a whole extra boot cycle to rediscover. Serial is slow
+                # (115200), so give it real time.
+                drain_until = time.time() + 15
+                while time.time() < drain_until:
+                    r2, _, _ = select.select([master], [], [], 0.5)
+                    if not r2:
+                        continue
+                    try:
+                        chunk = os.read(master, 65536)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    logf.write(chunk)
+                    logf.flush()
                 break
             for pat, rx in expect:
                 if pat not in matched and rx.search(text):

@@ -535,7 +535,13 @@ need a real implementation later:
   kqueue-backed dispatch sources.
 - **Phase 7 (usable OS)**: none of 7a-7d started. 7a (DNS via `libresolv`)
   is small and clean once Phase 6 lands. 7b (`sshd` via OpenSSH) is
-  blocked on real crypto beyond SHA-2 (Phase 7.5). 7c (self-hosting
+  blocked on real crypto beyond SHA-2 (Phase 7.5) -- concretely, on
+  **AES, which does not exist anywhere in this kernel**: `g_crypto_funcs`
+  is never populated (no kext ever loads) and xnu-7195 ships no AES core
+  of its own. Scoped as an explicit gate in `docs/backlog.md` P2 item 0a,
+  including why the core should come from FreeBSD's `sys/crypto/rijndael/`
+  rather than be hand-rolled (corecrypto is confirmed absent from
+  apple-oss-distributions, so the "Apple first" rule cannot apply). 7c (self-hosting
   toolchain) recommends Apple's old `gcc_42` over `clang` for feasibility,
   plus `cctools`. 7d (`vim`) is small and can fold into whichever of 7a-7c
   lands first.
