@@ -6,6 +6,7 @@
  */
 
 #include "BCM2837DWC2.h"
+#include "SMSC9514USBTransport.h"
 
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/IOPlatformExpert.h>
@@ -1044,6 +1045,36 @@ BCM2837DWC2::start(IOService *provider)
 	// since "controller up, enumeration failed" and "controller dead" have
 	// completely different causes.
 	enumerateBus();
+
+	/*
+	 * BRING-UP SCAFFOLDING, not the final wiring.
+	 *
+	 * This is an SMSC-specific call inside an otherwise chip-agnostic host
+	 * controller, which is the wrong home for it long-term. It is here
+	 * because the SMSC vendor-request register protocol has never once run
+	 * against real silicon - QEMU models no LAN9514, so every layer beneath
+	 * this was QEMU-verified and this layer could not be - and the device
+	 * only became reachable at all with the HFIR fix in portReset(). A
+	 * read-only probe at the one point where an enumerated bus is known to
+	 * exist buys that verification now, without waiting on
+	 * IONetworkingFamily.
+	 *
+	 * It cannot become load-bearing: probe() only reads, its result is not
+	 * consulted, and a board with no SMSC part (every QEMU run, which
+	 * substitutes a generic usb-net) simply finds no device and skips.
+	 * When SMSC9514Ethernet is wired up for real - which needs
+	 * IOEthernetController, hence IONetworkingFamily in the build, which is
+	 * scoped but not landed - it matches against the published controller
+	 * and owns its own transport, and this block goes away.
+	 */
+	const DWC2USBDevice *ethFunction =
+	    SMSC9514USBTransport::findEthernetFunction(this);
+	if (ethFunction != NULL) {
+		SMSC9514USBTransport transport;
+		if (transport.init(this, ethFunction)) {
+			transport.probe();
+		}
+	}
 
 	registerService();
 	return true;

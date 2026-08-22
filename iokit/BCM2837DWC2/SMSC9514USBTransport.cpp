@@ -48,6 +48,10 @@
 #define kSMSCRxStsFrameLenShift  16
 #define kSMSCRxStsErrorSummary   0x00008000
 
+// SMSC's USB vendor ID; both halves of the LAN9514 (hub and Ethernet)
+// report it, which is why findEthernetFunction() also requires a bulk pair.
+#define kSMSCVendorID            0x0424
+
 bool
 SMSC9514USBTransport::init(BCM2837DWC2 *controller, const DWC2USBDevice *device)
 {
@@ -78,6 +82,128 @@ SMSC9514USBTransport::init(BCM2837DWC2 *controller, const DWC2USBDevice *device)
 	    device->address, device->idVendor, device->idProduct,
 	    device->bulkInEp, device->bulkInMax,
 	    device->bulkOutEp, device->bulkOutMax);
+
+	return true;
+}
+
+const DWC2USBDevice *
+SMSC9514USBTransport::findEthernetFunction(const BCM2837DWC2 *controller)
+{
+	if (controller == NULL) {
+		return NULL;
+	}
+
+	for (uint32_t i = 0; i < controller->deviceCount(); i++) {
+		const DWC2USBDevice *dev = controller->deviceAt(i);
+		if (dev == NULL || !dev->inUse) {
+			continue;
+		}
+		if (dev->idVendor != kSMSCVendorID) {
+			continue;
+		}
+		if (dev->bulkInEp == 0 || dev->bulkOutEp == 0) {
+			continue;
+		}
+		return dev;
+	}
+	return NULL;
+}
+
+/*
+ * Prove the vendor-request register protocol works against real silicon.
+ *
+ * Everything below this file was verifiable under QEMU; this layer never
+ * was, because QEMU models no LAN9514 at all. So the first time these
+ * control transfers run, they run on hardware, and "it returned some bytes"
+ * is not evidence they returned the *right* bytes. Two independent checks,
+ * neither of which needs a constant this tree cannot cite from source:
+ *
+ *  1. Distinct offsets must yield distinct values. This is the specific
+ *     failure the .cpp header warns about: wIndex carries the register
+ *     offset and wValue is always zero, which is the opposite of the
+ *     intuitive assignment. Get them backwards and every read addresses the
+ *     same register - returning plausible-looking, self-consistent garbage
+ *     rather than failing. Reading several registers and finding them all
+ *     identical is exactly that signature.
+ *
+ *  2. ID_REV must not read as all-zeroes or all-ones, the two values a
+ *     dead or absent register file produces.
+ *
+ * A third check is logged but deliberately NOT fatal: the LAN9514's ID_REV
+ * carries the chip ID in its top 16 bits, which is expected to equal the
+ * USB product ID this same device enumerated with (0xec00). That is a
+ * self-consistent cross-check between two independently-obtained values,
+ * needing no hard-coded chip ID - but it is an expectation about the part,
+ * not a property of the transport, so a mismatch is reported and not
+ * treated as transport failure.
+ *
+ * Read-only throughout. It runs before any real driver exists, so it must
+ * not leave the chip in a state one would have to know about.
+ */
+bool
+SMSC9514USBTransport::probe(void)
+{
+	static const struct {
+		uint32_t    offset;
+		const char *name;
+	} kProbeRegs[] = {
+		{ 0x000, "ID_REV"  },
+		{ 0x014, "HW_CFG"  },
+		{ 0x020, "PM_CTRL" },
+		{ 0x02C, "AFC_CFG" },
+		{ 0x100, "MAC_CR"  },
+		{ 0x104, "ADDRH"   },
+		{ 0x108, "ADDRL"   },
+	};
+	const uint32_t kNumProbeRegs = sizeof(kProbeRegs) / sizeof(kProbeRegs[0]);
+
+	if (fController == NULL || fDevice == NULL) {
+		IOLog("SMSC9514USBTransport: probe called before init\n");
+		return false;
+	}
+
+	uint32_t values[kNumProbeRegs];
+	for (uint32_t i = 0; i < kNumProbeRegs; i++) {
+		values[i] = 0;
+		if (!readRegister(kProbeRegs[i].offset, &values[i])) {
+			IOLog("SMSC9514USBTransport: probe FAILED - could not read %s "
+			      "(%#x)\n", kProbeRegs[i].name, kProbeRegs[i].offset);
+			return false;
+		}
+		IOLog("SMSC9514USBTransport:   %-7s (%#05x) = %#010x\n",
+		    kProbeRegs[i].name, kProbeRegs[i].offset, values[i]);
+	}
+
+	bool allSame = true;
+	for (uint32_t i = 1; i < kNumProbeRegs; i++) {
+		if (values[i] != values[0]) {
+			allSame = false;
+			break;
+		}
+	}
+	if (allSame) {
+		IOLog("SMSC9514USBTransport: probe FAILED - every register read back "
+		      "%#010x, so the offset is not selecting a register. Check that "
+		      "wIndex carries the offset and wValue is zero, not the reverse.\n",
+		    values[0]);
+		return false;
+	}
+
+	uint32_t idRev = values[0];
+	if (idRev == 0 || idRev == 0xFFFFFFFF) {
+		IOLog("SMSC9514USBTransport: probe FAILED - ID_REV reads %#010x, which "
+		      "is what an absent or unpowered register file returns\n", idRev);
+		return false;
+	}
+
+	uint16_t chipID = (uint16_t)(idRev >> 16);
+	IOLog("SMSC9514USBTransport: probe OK - ID_REV chip %#06x rev %#06x "
+	      "(USB product id %#06x, %s), MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
+	    chipID, (uint16_t)(idRev & 0xFFFF), fDevice->idProduct,
+	    (chipID == fDevice->idProduct) ? "matches" : "DOES NOT MATCH",
+	    (values[6] >> 0) & 0xFF, (values[6] >> 8) & 0xFF,
+	    (values[6] >> 16) & 0xFF, (values[6] >> 24) & 0xFF,
+	    (values[5] >> 0) & 0xFF, (values[5] >> 8) & 0xFF);
 
 	return true;
 }

@@ -36,17 +36,24 @@ if [ ! -d "$DEST" ]; then
 	exit 1
 fi
 
-# Sources deliberately NOT compiled into the kernel. SMSC9514Ethernet is
-# real, finished chip-level logic with no USB transport under it yet, so it
-# is built standalone by tools/build_kexts.sh to keep it honest but is not
-# in iokit/conf/files - see its own header and docs/usb-support-plan.md.
+# Sources deliberately NOT compiled into the kernel.
 #
-# SMSC9514USBTransport is the same situation one layer up: it compiles
-# cleanly and standalone (it deliberately avoids including
-# SMSC9514Ethernet.h - see its own header), but nothing instantiates it
-# until Ethernet is wired up in Phase 6b, so carrying it in the kernel
-# would just be dead code. Built standalone so it cannot rot.
-NOT_BUILT=("SMSC9514Ethernet.cpp" "SMSC9514USBTransport.cpp")
+# SMSC9514Ethernet is real, finished chip-level logic, but it subclasses
+# IOEthernetController, so compiling it into the kernel drags in the whole
+# of IONetworkingFamily - scoped in docs/usb-support-plan.md but not landed.
+# Built standalone by tools/build_kexts.sh to keep it honest, and absent
+# from iokit/conf/files until that family is in the build for its own
+# reasons.
+#
+# SMSC9514USBTransport used to be listed here too, on the grounds that
+# nothing instantiated it. That changed: BCM2837DWC2::start() now runs its
+# read-only probe() against real silicon, which is the only way the SMSC
+# vendor-request protocol can be verified at all (QEMU models no LAN9514).
+# It deliberately does not include SMSC9514Ethernet.h - see its own header -
+# so landing it does NOT pull IONetworkingFamily in with it. That
+# independence is the whole reason this layer can be tested before the one
+# above it.
+NOT_BUILT=("SMSC9514Ethernet.cpp")
 
 copied=0
 missing_from_conf=()

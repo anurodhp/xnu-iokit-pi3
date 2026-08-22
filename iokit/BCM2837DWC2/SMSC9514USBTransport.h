@@ -53,6 +53,24 @@ public:
 	uint32_t forEachRxFrame(void *buf, uint32_t len,
 	                        RxFrameHandler handler, void *context);
 
+	/*
+	 * Locate the LAN9514's Ethernet function among the devices an
+	 * enumerateBus() left behind: SMSC's vendor ID with a bulk IN/OUT pair.
+	 * Matched on vendor + endpoints rather than on the product ID so a
+	 * LAN9512 (same driver, same protocol, different PID) is not excluded
+	 * for no reason; the hub half of the same chip shares the vendor ID but
+	 * has no bulk pair, so it cannot be picked up by mistake.
+	 */
+	static const DWC2USBDevice *findEthernetFunction(const BCM2837DWC2 *controller);
+
+	/*
+	 * Read-only bring-up self-test. Verifies that the vendor-request
+	 * register protocol actually works against real silicon, which nothing
+	 * has ever done - see the verification status note in the .cpp. Writes
+	 * nothing, so it cannot disturb chip state or a later real driver.
+	 */
+	bool probe(void);
+
 private:
 	BCM2837DWC2         *fController;
 	const DWC2USBDevice *fDevice;
