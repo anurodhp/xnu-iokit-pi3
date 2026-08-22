@@ -149,6 +149,32 @@ CCDigestOutputSize(CCDigestRef ctx)
 }
 
 /*
+ * CC_MD5() -- the legacy one-shot CommonDigest.h wrapper (distinct from
+ * the CCDigest*() SPI family above). Real Apple CommonDigest.c
+ * implements this the same way, in terms of CC_MD5_Init/Update/Final
+ * (themselves thin wrappers over corecrypto, same absent-from-this-
+ * checkout situation the CCDigest*() functions above already document)
+ * -- dispatches to the same real, kernel-proven md5_rfc1321_core.c this
+ * whole file already uses, not a separate implementation. First real
+ * caller: third_party/cron/crontab/crontab.c's MD5File() (Phase 5.5,
+ * cron port, 2026-08-22), a new consumer beyond md5.c's original scope
+ * -- CC_MD5_Init/_Update/_Final themselves remain declared-but-unused
+ * (real header, no caller needs the multi-step form here either).
+ */
+unsigned char *
+CC_MD5(const void *data, CC_LONG len, unsigned char *md)
+{
+    MD5_CTX ctx;
+
+    MD5Init(&ctx);
+    if (len != 0) {
+        MD5Update(&ctx, data, (unsigned int)len);
+    }
+    MD5Final(md, &ctx);
+    return md;
+}
+
+/*
  * Real text_cmds/md5/commoncrypto.h's own declared surface -- see this
  * file's header comment for how Digest_File() differs from real
  * commoncrypto.c's dispatch_io()-based version.

@@ -496,12 +496,28 @@ need a real implementation later:
      Right now every diagnostic in this project goes straight to
      `kprintf`/the console; a real syslog would give commands a real
      place to log to.
-  3. **`cron`**: real `at`/`atrun` (task scheduling, cron-adjacent)
-     already sit unbuilt at `third_party/system_cmds/at.tproj` and
-     `atrun.tproj`, confirmed present. The full `cron` daemon itself is
-     likely its own separate apple-oss-distributions repo, not yet
-     cloned -- same `setup_third_party.sh` pinning work as `syslogd`
-     needed first.
+  3. **`cron`: source pinned, real binaries build, daemon shelved
+     2026-08-22 -- a real, unresolved startup crash, not a scoping gap.**
+     Real `at`/`atrun` (task scheduling, cron-adjacent) still sit unbuilt
+     at `third_party/system_cmds/at.tproj`/`atrun.tproj`, confirmed
+     present, untouched by this pass. The full `cron` daemon's real repo
+     is pinned (`apple-oss-distributions/cron`, tag `cron-40`) and real,
+     fully-static `cron.macho`/`crontab.macho` build cleanly
+     (`tools/userland_staging/build_cron.sh`, new) -- but `cron.macho`
+     itself SIGSEGVs at startup (real bug, bisected but not root-caused;
+     `crontab.macho` has two separate real bugs fixed and
+     bisection-confirmed but never got a full clean end-to-end QEMU run).
+     Neither binary is installed into the SD image or spawned at boot
+     right now -- `tools/init_binary/init.c`'s `spawn_cron()` is written
+     and correct but its call site is disabled, and
+     `inject_into_sd_image.sh`'s install blocks for both binaries are
+     removed. Nothing is lost: `docs/daemon-roadmap.md`'s Phase 5.5 item
+     3 entry has the complete bug-by-bug writeup (three real runtime
+     bugs found, two fixed, one open) and exact resume instructions for
+     whoever picks this back up.
+  4. **`ntpd`** (added 2026-08-22, see `docs/daemon-roadmap.md`): real repo
+     `apple-oss-distributions/ntp`, also pure BSD/POSIX C, no new
+     infrastructure needed beyond Phase 6b's already-landed UDP/INET work.
 - **Phase 6 (networking)**: **6a DONE 2026-08-21** -- the DWC2 USB host
   controller driver (`iokit/BCM2837DWC2/`), device enumeration and the hub
   protocol subset are implemented and QEMU-verified: a real device
@@ -606,12 +622,34 @@ need a real implementation later:
 - **Phase 6.5 (dyld)**: planning-only placeholder, deliberately deferred
   until Phase 6 gives it a real concurrent multi-process workload to
   justify the cost. Needs a real `.dylib`-producing link path and an
-  as-yet-unexercised kernel `LC_LOAD_DYLINKER` path.
+  as-yet-unexercised kernel `LC_LOAD_DYLINKER` path. Expanded scope
+  2026-08-22: this is also the real prerequisite for the whole daemon
+  track below -- see `docs/daemon-roadmap.md`.
 - **Phase 6.6 (libdispatch/GCD)**: planning-only placeholder, blocked
   behind 6.5. Even once unblocked, real concurrent `dispatch_async` can't
   exist until real threading does (Phase 7.5's pthread ceiling) -- scope
   would be limited to single-thread-honest `dispatch_once`/`dispatch_sync`/
   kqueue-backed dispatch sources.
+- **Phase 6.7 (Mach IPC completion + `notifyd`), 6.8 (`launchd`+XPC),
+  Phase 9 (CoreFoundation), Phase 10 (Tier 2/3 daemons: real `configd`,
+  `DiskArbitration`, `mDNSResponder`, `PowerManagement`) -- all new
+  2026-08-22, fully scoped, not started.** User has confirmed
+  `dyld`/`launchd`/XPC are real long-term intents, not permanently out of
+  scope. Full daemon inventory (verified against apple-oss-distributions,
+  which is/isn't actually open source, real dependency tiers), phasing
+  rationale, and Phase 6.8's real caveats all live in
+  `docs/daemon-roadmap.md` -- read that before starting any of these.
+  Phase 6.8 revised same day: use
+  [PureDarwin/XPC](https://github.com/PureDarwin/XPC) (`launchd`+`libxpc`
+  combined) rather than plain `apple-oss-distributions/launchd` alone --
+  verified directly against the repo, not assumed from its name; it's
+  still the same 2014/OS X 10.9.5-vintage `launchd` base with an
+  incomplete, unmaintained (archived 2026-07-18), no-explicit-license
+  third-party XPC skeleton layered on top, not a vintage-matched or
+  complete solution -- see the daemon roadmap for the full real
+  assessment before starting that phase. Immediate actionable next step
+  that needs none of this new infrastructure: Phase 5.5 items 3-4
+  (`cron`/`ntpd`) above.
 - **Phase 7 (usable OS)**: none of 7a-7d started. 7a (DNS via `libresolv`)
   is small and clean once Phase 6 lands. 7b (`sshd` via OpenSSH) is
   blocked on real crypto beyond SHA-2 (Phase 7.5) -- concretely, on

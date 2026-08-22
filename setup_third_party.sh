@@ -72,6 +72,32 @@
 #     af_link.c/ifmedia.c/ifclone.c are actually compiled -- see
 #     `tools/userland_staging/build_ifconfig.sh`'s own header comment for
 #     which real address-family/clone plugins were scoped out and why.
+#   - cron (Phase 5.5 item 3, 2026-08-22): same `macos-112` manifest
+#     method -- `git ls-tree macos-112 -- cron` == commit
+#     43ca0402cc51c9c81171c9ee1b92b28ed6148219 == tag `cron-40` (confirmed
+#     via `git ls-remote --tags`). Real, unmodified Apple `cron`/
+#     `crontab` source. `ntp` was investigated the same way and
+#     deliberately NOT pinned: `git ls-tree macos-112 -- ntp` has no entry
+#     at all (checked the full 232-entry manifest, not just this one
+#     lookup) -- real macOS 11.2 shipped no ntpd source at all, having
+#     already moved to the closed-source `timed` by Big Sur. The
+#     `apple-oss-distributions/ntp` repo still exists (newest tag
+#     `ntp-139`) but pinning it would mean an unverifiable vintage
+#     mismatch with no manifest to confirm against, unlike every other
+#     pin here -- see `docs/daemon-roadmap.md` for the full writeup.
+#     Verified (2026-08-22): real macOS has not used ntpd since High
+#     Sierra (10.13, 2017) either, replaced by the closed-source `timed`
+#     -- so this isn't just a this-project gap, ntpd is dead upstream too.
+#     ntp sync, if wanted later, should come from FreeBSD's actively-
+#     maintained `contrib/ntp` (reference NTP Project code, genuinely
+#     portable, NTP license) instead -- not yet pinned, tracked in
+#     `docs/daemon-roadmap.md`.
+#   - libutil (Phase 5.5 item 3, 2026-08-22): `cron`'s pidfile handling
+#     (`pidfile_open`/`pidfile_write`/`pidfile_close`, `<libutil.h>`)
+#     needed a real source this project hadn't pulled yet. Same
+#     `macos-112` manifest method -- `git ls-tree macos-112 -- libutil`
+#     == commit 82b4f3ed687a5226c3404dc290c84f1897874c08 == tag
+#     `libutil-58.40.2` (confirmed via `git ls-remote --tags`).
 #
 # Usage: ./setup_third_party.sh [--force]
 set -euo pipefail
@@ -121,6 +147,8 @@ less|https://github.com/apple-oss-distributions/less.git|less-34|
 libarchive|https://github.com/apple-oss-distributions/libarchive.git|libarchive-83.40.4|
 CommonCrypto|https://github.com/apple-oss-distributions/CommonCrypto.git|CommonCrypto-60178.40.2|
 network_cmds|https://github.com/apple-oss-distributions/network_cmds.git|network_cmds-606.40.2|
+cron|https://github.com/apple-oss-distributions/cron.git|cron-40|cron.patch
+libutil|https://github.com/apple-oss-distributions/libutil.git|libutil-58.40.2|
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch; do

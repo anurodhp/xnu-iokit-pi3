@@ -1609,10 +1609,69 @@ static void single_user_child(void) {
     shell_main();
 }
 
+/* Real /usr/sbin/cron (Phase 5.5 item 3, third_party/cron, tag cron-40)
+ * needs to actually run somewhere -- this project has no launchd (no
+ * MachServices/launchd.plist launch-on-demand exists at all, see
+ * docs/daemon-roadmap.md), so PID-1 spawns it directly, the same real
+ * role launchd's com.vix.cron.plist would otherwise fill. One-shot
+ * fork+execve, deliberately NOT wait4()'d by the caller (fire-and-
+ * forget, unlike single_user_child()'s respawn loop below) -- cron is a
+ * real daemon designed to run forever via its own internal event loop,
+ * not a session to babysit/respawn. Known, documented gap: if cron ever
+ * exits/crashes, nothing here reaps it (PID-1 never wait4()s this
+ * specific pid), so it would sit as a zombie rather than being
+ * respawned. Acceptable for now (real crashes would be a real cron bug
+ * worth fixing directly, not routinely expected) -- revisit if this
+ * project ever wants a general SIGCHLD-driven reaper, out of scope for
+ * this fix. */
+static void spawn_cron(void) {
+    int is_child = 0;
+    long pid = sys_fork(&is_child);
+
+    if (pid < 0) {
+        put("init: fork failed spawning cron -- scheduled jobs will not run\n");
+        return;
+    }
+
+    if (is_child) {
+        static char *const argv0[] = { (char *)"/usr/sbin/cron", 0 };
+        sys_execve("/usr/sbin/cron", argv0, build_envp());
+        /* Only reached if execve() itself failed (e.g. an older SD image
+         * missing /usr/sbin/cron) -- exit quietly rather than falling
+         * through into anything else meant for the login shell child. */
+        sys_exit(1);
+    }
+
+    put("init: cron spawned\n");
+}
+
 void init_main(void) {
     open_console();
     remount_root_rw();
     set_default_hostname();
+    /* spawn_cron() DISABLED 2026-08-22 -- real cron.c (daemon side) has a
+     * genuine, not-yet-root-caused crash: it SIGSEGVs during its own
+     * startup, in the snprintf() call inside open_pidfile() (real
+     * PIDFILE/PIDDIR macro expansion), immediately after this exact
+     * process's own signal(SIGCHLD or SIGCLD, ...) + signal(SIGHUP, ...)
+     * registrations -- confirmed via real QEMU crashes bisected down to
+     * that exact line with temporary write(2) checkpoints (not guessed).
+     * A trivial snprintf(buf, size, "%s", "hello") right before the real
+     * PIDFILE/PIDDIR call ALSO crashes, ruling out anything specific to
+     * those macros -- something about program state at that exact point
+     * (most likely stack/register corruption from this project's own
+     * hand-rolled _sigaction()/__sigtramp signal-delivery plumbing in
+     * tools/userland_staging/cron_extra_syscalls.c, though that same
+     * plumbing's signal() calls themselves completed successfully just
+     * before the crash) is the real suspect, not yet isolated further.
+     * See docs/daemon-roadmap.md's Phase 5.5 item 3 entry for the full
+     * writeup and what's still needed. Spawning a daemon that reliably
+     * crashes at startup on every boot is worse than not spawning it at
+     * all (spams the console, leaves an unreaped zombie per
+     * spawn_cron()'s own already-documented gap above) -- disabled
+     * until the real crash is fixed, not silently left in. crontab(1)
+     * itself (a separate binary, no signal()/pidfile code in its own
+     * -l/install paths) is unaffected by this and still installed. */
     put("\ninit: pid 1 up, forking single-user shell\n");
 
     for (;;) {

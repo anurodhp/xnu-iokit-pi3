@@ -128,6 +128,25 @@ else
     echo "= tools/userland_staging/ifconfig.macho not built -- run build_ifconfig.sh first if wanted, skipping"
 fi
 
+# cron.macho/crontab.macho intentionally NOT installed here (2026-08-22).
+# Both build real (tools/userland_staging/build_cron.sh still produces
+# working, fully-static Mach-O binaries, and can be run/inspected on its
+# own) but cron.macho itself has a real, unresolved startup crash --
+# SIGSEGV in open_pidfile()'s snprintf() call, immediately after this
+# same process's own signal(SIGCHLD/SIGCLD, ...) + signal(SIGHUP, ...)
+# registrations, bisected with temporary write(2) checkpoints down to
+# that exact line but not root-caused further. Shipping a daemon that
+# reliably crashes on every boot is worse than not shipping it (spams
+# the console right at the login prompt, leaves an unreaped zombie --
+# see tools/init_binary/init.c's now-disabled spawn_cron() for the full
+# writeup). crontab(1) itself has two separate real bugs already fixed
+# (a broken pthread_once()-based COMPAT_MODE, a broken setlinebuf()) but
+# was never fully confirmed end-to-end (a host-side QEMU test image
+# journal issue blocked the last verification pass, unrelated to the
+# code itself) -- left uninstalled alongside cron rather than shipped
+# half-verified. See docs/daemon-roadmap.md's Phase 5.5 item 3 for the
+# complete writeup and what a future pass needs to finish this for real.
+
 if [ -f tools/pthread_kthread_test/pthread_kthread_test.macho ]; then
     mkdir -p "$MNT/bin"
     cp tools/pthread_kthread_test/pthread_kthread_test.macho "$MNT/bin/pthread_kthread_test"
