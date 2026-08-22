@@ -109,15 +109,28 @@ SMSC9514Ethernet::resetChip(void)
 	if (!fTransport->writeRegister(kRegPmCtl, kPmCtlPhyRst)) {
 		return false;
 	}
+	bool phyCleared = false;
 	for (int i = 0; i < 1000; i++) {
 		uint32_t v;
 		if (!fTransport->readRegister(kRegPmCtl, &v)) {
 			return false;
 		}
 		if (!(v & kPmCtlPhyRst)) {
+			phyCleared = true;
 			break;
 		}
 		IODelay(10);
+	}
+	if (!phyCleared) {
+		// Real bug fixed here (docs/backlog.md item 2): this loop used to
+		// fall through and continue as if the reset had cleared, same
+		// mistake the lite-reset loop above it doesn't make. Matters more
+		// now than when first flagged - the MDIO reads/writes right below
+		// this (auto-negotiation restart) talk to the PHY this reset is
+		// supposed to have brought out of reset; proceeding on a timeout
+		// would make their failures much more confusing to diagnose.
+		IOLog("SMSC9514Ethernet: PHY reset never cleared\n");
+		return false;
 	}
 
 	// Enable MAC receiver/transmitter and the corresponding FIFO paths.

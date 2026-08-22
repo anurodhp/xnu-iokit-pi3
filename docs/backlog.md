@@ -155,27 +155,50 @@ this pass even if the change itself is cheap.
       moved to real HFS+ (`d7c6934d8`). Cosmetic, but it's the first thing
       a human sees.
 
-2. **`SMSC9514Ethernet` has several real logic bugs**, all currently
-    unreachable since the class has no personality and is never
-    instantiated (no urgency, but worth fixing before it's wired up):
+2. **`SMSC9514Ethernet` has several real logic bugs.** Status as of
+    2026-08-22 (was written when the class had no personality and was
+    entirely unreachable — that's no longer true, see below):
+    - ~~The PHY-reset loop doesn't check its own timeout flag before
+      continuing as if it succeeded.~~ FIXED 2026-08-22 (`resetChip()`
+      now has a `phyCleared` flag matching the lite-reset loop's own
+      pattern, logs+fails instead of continuing on timeout).
+    - ~~`mdioRead`/`mdioWrite` are never called from anywhere — the PHY
+      is never initialized/auto-negotiated, yet `enable()`
+      unconditionally sets `fLinkUp = true`.~~ FIXED 2026-08-22:
+      `resetChip()` now does a real BMCR auto-negotiation restart, and
+      `updateLinkStatus()` (polled via a real `IOTimerEventSource`,
+      started/stopped in `enable()`/`disable()`) reads BMSR/ANAR/ANLPAR
+      and reports real link state + negotiated speed/duplex through
+      `setLinkStatus()`.
+    - ~~`attachInterface()` is never called from `start()`, so no
+      `IONetworkInterface` can ever be created — matches the "no
+      personality, unreachable" state above.~~ FIXED 2026-08-21
+      (`attachInterface()` in `start()`) + 2026-08-22 (the class is now
+      manually constructed/attached/started by `BCM2837DWC2::start()` on
+      real hardware, and its `IONetworkInterface` is now actually wired
+      to BSD/`ifconfig` via a hand-instantiated `IONetworkStack` — see
+      `iokit/BCM2837DWC2/BCM2837DWC2.cpp`).
     - `smsc95xx_reset()`-equivalent code does blind register writes to
       `HW_CFG`/`PM_CTRL`/`MAC_CR` where Linux does read-modify-write,
       clobbering unrelated bits (`BIR`/`RXDOFF`/`MEF`, full-duplex/
-      auto-speed defaults).
-    - The PHY-reset loop doesn't check its own timeout flag before
-      continuing as if it succeeded.
-    - `mdioRead`/`mdioWrite` are never called from anywhere — the PHY is
-      never initialized/auto-negotiated, yet `enable()` unconditionally
-      sets `fLinkUp = true`.
-    - `attachInterface()` is never called from `start()`, so no
-      `IONetworkInterface` can ever be created — matches the "no
-      personality, unreachable" state above.
+      auto-speed defaults). Still open.
     - `getPacketFilters()` advertises multicast filtering while
-      `enablePacketFilter()` is a no-op — will break IPv6 ND the moment a
-      transport exists.
+      `enablePacketFilter()` is a no-op — will break IPv6 ND. Still open,
+      now more reachable than when written.
     - `fInterface` is read without a retain/lock from a USB-completion
       context that can race `disable()` setting it to NULL — UAF shape.
-    - `frameLen & 0x7FF` truncates silently with no length guard.
+      Still open; also still moot in practice since nothing drives the
+      bulk IN endpoint into `inputPacketAvailable()` yet (see the
+      driver's own header comment).
+    - `frameLen & 0x7FF` truncates silently with no length guard. Still
+      open.
+    - New as of 2026-08-22, not yet verified: the BSD/`ifconfig`
+      registration and real link-state/auto-negotiation logic above are
+      build-verified and QEMU-boot-regression-tested (QEMU never
+      emulates the LAN9514, so this whole path is untouched there — see
+      the driver's header comment), but genuinely unverified end-to-end
+      on real hardware. Next real-hardware boot should confirm `en0`
+      appears in `ifconfig` and reflects actual link/light state.
 
 ---
 
