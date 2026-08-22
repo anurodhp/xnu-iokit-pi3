@@ -150,6 +150,14 @@ public:
 	// Called by whatever eventually drives the bulk IN endpoint with
 	// received frame data (not wired to anything yet - see header).
 	void inputPacketAvailable(void *frameData, uint32_t frameLen);
+
+	// The IONetworkInterface attachInterface() created in start() (fNetif
+	// is private). BCM2837DWC2::start() needs the *interface*, not this
+	// controller, to hand to IOKitBSDInit.cpp's IORegisterNetworkInterface()
+	// - that call resolves its argument's IORegistry path back with
+	// OSDynamicCast(IONetworkInterface, ...), which fails silently on a
+	// controller object. NULL before start() succeeds / after stop().
+	IONetworkInterface *getEthernetInterface(void) const { return fNetif; }
 };
 
 #endif /* _SMSC9514_ETHERNET_H */

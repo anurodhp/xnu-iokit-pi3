@@ -1126,14 +1126,30 @@ BCM2837DWC2::start(IOService *provider)
 					 * before that call, not after.
 					 */
 					IONetworkStack *stack = new IONetworkStack;
-					if (stack != NULL && stack->init() && stack->attach(this) &&
-					    stack->start(this)) {
-						fNetworkStack = stack;
-						if (!IORegisterNetworkInterface(eth)) {
-							IOLog("BCM2837DWC2: IORegisterNetworkInterface failed - en0 will not appear\n");
+					if (stack != NULL && stack->init() && stack->attach(this)) {
+						if (stack->start(this)) {
+							fNetworkStack = stack;
+							/*
+							 * IORegisterNetworkInterface()'s argument must be
+							 * the IONetworkInterface itself, not this
+							 * controller - IONetworkStack::setProperties()
+							 * resolves it back with
+							 * OSDynamicCast(IONetworkInterface, ...), which
+							 * fails (silently, just an error return) for a
+							 * controller object. eth's fNetif is private for
+							 * exactly this one caller - see
+							 * getEthernetInterface()'s header comment.
+							 */
+							if (!IORegisterNetworkInterface(eth->getEthernetInterface())) {
+								IOLog("BCM2837DWC2: IORegisterNetworkInterface failed - en0 will not appear\n");
+							}
+						} else {
+							IOLog("BCM2837DWC2: IONetworkStack start() failed - en0 will not appear\n");
+							stack->detach(this);
+							stack->release();
 						}
 					} else {
-						IOLog("BCM2837DWC2: IONetworkStack init/attach/start failed - en0 will not appear\n");
+						IOLog("BCM2837DWC2: IONetworkStack init/attach failed - en0 will not appear\n");
 						if (stack != NULL) {
 							stack->release();
 						}
