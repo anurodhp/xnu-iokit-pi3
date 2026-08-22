@@ -522,6 +522,36 @@ need a real implementation later:
   compiling `SMSC9514Ethernet` into the kernel, which pulls in
   IONetworkingFamily and revisits the INET/INET6 domain-registration
   decision in `architecture.md` (taken when no network interface existed).
+  The INET half is DONE on branch `phase-6b-inet` (IPv4 stack initializes,
+  `lo0` attaches, zero panics).
+
+  **IONetworkingFamily integration, scoped 2026-08-22** (measured, not
+  estimated -- all 12 `third_party/IONetworkingFamily/*.cpp` were
+  trial-compiled individually):
+  - **`-D__PRIVATE_SPI__` is required.** `IONetworkController.h:1500` gates
+    `outputStart`/`pollInputPackets`/`setInputPacketPollingEnable`/
+    `IOMbufServiceClass` behind it while the `.cpp` defines them
+    unconditionally, so without it the base class alone fails with
+    "out-of-line definition does not match any declaration". Adding it took
+    `IONetworkController.cpp` from 4 errors to zero. Apple's own build
+    flag, not a workaround.
+  - **7 of 12 sources then compile clean** (`IOKernelDebugger`,
+    `IOMbufMemoryCursor`, `IONetworkController`, `IONetworkData`,
+    `IONetworkMedium`, `IOOutputQueue`, `IOPacketQueue`).
+  - Of the rest, **most errors are trial-harness artifacts, not real skew**:
+    `io_filter_policy_t` (`IOUserClient.h:170`, behind `#if PRIVATE`),
+    `kqueue_id_t` (`bsd/sys/event.h`, same class), and
+    `DriverKit/IODMACommand.h`. Those come from compiling standalone with
+    `compile_flags.txt`; the real kernel build sets those defines and
+    include paths. So do the integration by vendoring into the tree and
+    building via `iokit/conf/files` the way `iokit/Storage/` already is,
+    rather than fighting the standalone harness.
+  - **The genuine vintage skew is a short, bounded list**, all in
+    `IONetworkInterface.cpp`/`IOEthernetInterface.cpp` referencing
+    `bsd/net/` symbols this xnu vintage does not expose:
+    `IFNET_LQM_THRESH_GOOD`, `IFNET_LQM_THRESH_OFF`, `if_bandwidths_t`
+    (incomplete type), `DLIL_MODIDLEN`, `DLIL_MODARGLEN`.
+
   Then 6c: a DHCP client + `ifconfig`/`ping`/`netstat` (FreeBSD's
   `dhclient` recommended over Apple's `bootp`).
 - **Phase 6.5 (dyld)**: planning-only placeholder, deliberately deferred
