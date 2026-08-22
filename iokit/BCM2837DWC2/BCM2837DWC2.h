@@ -446,6 +446,7 @@ struct DWC2USBDevice {
 // dereferenced from BCM2837DWC2.cpp, which does include their real headers.
 class SMSC9514USBTransport;
 class SMSC9514Ethernet;
+class IONetworkStack;
 
 class BCM2837DWC2 : public IOService
 {
@@ -467,6 +468,14 @@ private:
 	// on any board/boot where no SMSC part enumerated (every QEMU run).
 	SMSC9514USBTransport     *fEthernetTransport;
 	SMSC9514Ethernet         *fEthernetDriver;
+
+	// The one IONetworkStack instance this kernel ever creates - see the
+	// long comment at the call site in start(). Nothing else in this
+	// hand-built personality tree (BCM2837Personalities.cpp) ever matches
+	// or starts an IONetworkStack, so without this, IOKitBSDInit.cpp's
+	// IORegisterNetworkInterface() would block forever in
+	// waitForService(serviceMatching("IONetworkStack")).
+	IONetworkStack           *fNetworkStack;
 
 	// Register accessors. All DWC2 registers are 32-bit.
 	uint32_t regRead(uint32_t offset) const;

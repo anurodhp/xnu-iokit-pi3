@@ -10,6 +10,14 @@
 
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/IOPlatformExpert.h>
+#include <IOKit/network/IONetworkStack.h>
+
+// iokit/bsddev/IOKitBSDInit.cpp (real Apple source, kernel-private). Used
+// to be `static` and only reachable from within that file for the
+// netboot-root case - see the long comment at the call site below for why
+// it had to be exposed here too. extern "C" because IOKitBSDInit.cpp
+// defines it inside its own top-level `extern "C" { ... }` block.
+extern "C" bool IORegisterNetworkInterface(IOService *netif);
 
 #define super IOService
 OSDefineMetaClassAndStructors(BCM2837DWC2, IOService);
@@ -1087,6 +1095,49 @@ BCM2837DWC2::start(IOService *provider)
 					fEthernetTransport = transport;
 					fEthernetDriver = eth;
 					transport = NULL; // ownership moved to fEthernetTransport
+
+					/*
+					 * eth->start() above (attachInterface(), inside
+					 * SMSC9514Ethernet::start()) only creates the
+					 * IOEthernetInterface inside the IORegistry - it does
+					 * NOT make it visible to BSD/ifconfig. On real macOS
+					 * that last step is driven by a userspace daemon
+					 * (configd's InterfaceNamer) opening a user client on
+					 * IONetworkStack and naming the interface; this port
+					 * has no configd. Both halves are done here by hand
+					 * instead: construct the one IONetworkStack instance
+					 * this kernel will ever have (nothing in this
+					 * hand-built personality tree - BCM2837Personalities.cpp
+					 * - ever matches or starts one; IOService::
+					 * serviceMatching("IONetworkStack") only finds an
+					 * *already-registered* instance, it does not create
+					 * one), then call the same kernel-side naming path
+					 * IOKitBSDInit.cpp's IORegisterNetworkInterface()
+					 * already uses for the netboot-root-device case,
+					 * generalized here to run for any real interface, not
+					 * just that one. IONetworkStack::start() wires up an
+					 * addMatchingNotification for IONetworkInterface
+					 * publish events, which fires for interfaces already
+					 * registered (ours) as well as future ones, so
+					 * construction order relative to eth->start() does not
+					 * matter - but IORegisterNetworkInterface() itself
+					 * blocks in waitForService() until a matching
+					 * IONetworkStack exists, so this stack must be started
+					 * before that call, not after.
+					 */
+					IONetworkStack *stack = new IONetworkStack;
+					if (stack != NULL && stack->init() && stack->attach(this) &&
+					    stack->start(this)) {
+						fNetworkStack = stack;
+						if (!IORegisterNetworkInterface(eth)) {
+							IOLog("BCM2837DWC2: IORegisterNetworkInterface failed - en0 will not appear\n");
+						}
+					} else {
+						IOLog("BCM2837DWC2: IONetworkStack init/attach/start failed - en0 will not appear\n");
+						if (stack != NULL) {
+							stack->release();
+						}
+					}
 				} else {
 					IOLog("BCM2837DWC2: SMSC9514Ethernet start() failed\n");
 					eth->detach(this);
@@ -1121,6 +1172,13 @@ BCM2837DWC2::stop(IOService *provider)
 		fEthernetDriver->detach(this);
 		fEthernetDriver->release();
 		fEthernetDriver = NULL;
+	}
+
+	if (fNetworkStack != NULL) {
+		fNetworkStack->stop(this);
+		fNetworkStack->detach(this);
+		fNetworkStack->release();
+		fNetworkStack = NULL;
 	}
 
 	if (fRegBase != NULL) {
