@@ -522,8 +522,25 @@ BCM2837DWC2::hubEnumeratePorts(DWC2USBDevice *hub)
 		}
 
 		hubClearPortFeature(hub, port, kHubFeatCPortReset);
-		// Reset recovery (USB 2.0 spec 7.1.7.5).
-		IOSleep(20);
+		/*
+		 * Reset recovery. USB 2.0 spec 7.1.7.5 (TRSTRCY) only mandates
+		 * 10ms, but real Linux (drivers/usb/core/hub.c, hub_port_reset())
+		 * unconditionally waits 50ms for every hub port it resets, root or
+		 * downstream, quirk table or not: `reset_recovery_time = 10 + 40`.
+		 * The +40ms is real-world margin Linux itself found the bare spec
+		 * minimum insufficient for, not something specific to any one
+		 * device. This was 20ms - under half that - and a real LAN9514's
+		 * downstream Ethernet function (0424:9514) failed every control
+		 * transfer to it, identically, 100% of the time
+		 * (docs/backlog.md's real-hardware log: XACTERR, byte-for-byte the
+		 * same register state on all 3 retries - deterministic, not the
+		 * transient noise a retry loop can paper over). The root port's
+		 * own 30ms recovery (BCM2837DWC2::portReset()) is left alone here:
+		 * it already enumerates this exact hub successfully, so there is
+		 * no evidence it needs raising, and this fix is scoped to what
+		 * failed.
+		 */
+		IOSleep(50);
 
 		if (!hubGetPortStatus(hub, port, &status, &change)) {
 			continue;
