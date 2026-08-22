@@ -1,0 +1,18 @@
+root
+darwin
+exec /sbin/ifconfig -a
+root
+darwin
+exec /sbin/ifconfig -l
+root
+darwin
+exec /sbin/ifconfig lo0 down
+root
+darwin
+exec /sbin/ifconfig lo0
+root
+darwin
+exec /sbin/ifconfig lo0 up
+root
+darwin
+exec /sbin/ifconfig lo0

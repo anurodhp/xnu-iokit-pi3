@@ -254,12 +254,42 @@ int lstat(const char *path, void *statbuf) {
  * here. */
 #define SYS_ioctl 54
 
-int ioctl(int fd, unsigned long request, void *arg) {
+/* Real bug found 2026-08-22 building ifconfig (first real caller of the
+ * PUBLIC `ioctl()` name -- every prior user, e.g. termios.c, calls the
+ * private fixed-3-arg `_ioctl` alias directly instead, see below): this
+ * project's own $XNU/bsd/sys/ioctl.h (on every build's -I path) declares
+ * the public name variadic -- `int ioctl(int, unsigned long, ...)` --
+ * matching real Apple's own header. Apple's arm64 ABI (unlike standard
+ * AAPCS64) requires variadic arguments to be passed on the STACK, not in
+ * registers, even for the first variadic slot. A caller compiled against
+ * that variadic prototype (ifconfig.c) therefore pushes its third
+ * argument to the stack, while this function's old fixed-3-arg
+ * definition read it from x2 instead -- a real caller/callee ABI
+ * mismatch, invisible until now because no prior tier's code called
+ * `ioctl()` by its public name with a real pointer argument (confirmed
+ * via a real QEMU test: `ifconfig lo0 up` got EFAULT with a garbage
+ * `uap->data` in the kernel, traced via temporary kernel
+ * instrumentation to a bad arg3, not a kernel bug -- see project memory/
+ * git history for the full diagnosis). Real Apple's own
+ * libsyscall/wrappers/ioctl.c is ALSO variadic for exactly this reason
+ * (see this file's own top-of-function comment); this is the same real
+ * shape, not a novel workaround. */
+#include <stdarg.h>
+
+int ioctl(int fd, unsigned long request, ...) {
+    va_list ap;
+    va_start(ap, request);
+    void *arg = va_arg(ap, void *);
+    va_end(ap);
     return (int)syscall3(SYS_ioctl, fd, (long)request, (long)arg);
 }
 
+/* Real, private, fixed-3-arg alias -- third_party/Libc/gen/FreeBSD/
+ * termios.c calls this directly (its own internal prototype is fixed-
+ * arity, not variadic, so register-based arg passing is correct for
+ * that caller); kept exactly as before, this is not the buggy half. */
 int _ioctl(int fd, unsigned long request, void *arg) {
-    return ioctl(fd, request, arg);
+    return (int)syscall3(SYS_ioctl, fd, (long)request, (long)arg);
 }
 
 /* #121 AUE_WRITEV / #93 AUE_SELECT, both NO_SYSCALL_STUB - real

@@ -8,10 +8,18 @@
 #   - xnu-7195, xnu-latest, qemu-zhuowei: this project's own personal forks
 #     (anurodhp/*) carry full commit history of the port work -- cloned
 #     directly from there, no patching needed after clone.
-#   - dtc-AppleDeviceTree, u-boot: small local-only fixes on top of a
+#   - dtc-AppleDeviceTree, u-boot, Csu: small local-only fixes on top of a
 #     third-party (not personal-fork) upstream -- kept as patch files in
 #     third_party-patches/ and applied after cloning upstream, rather than
-#     standing up a whole personal fork for a single commit each.
+#     standing up a whole personal fork for a single commit each. Csu.patch
+#     (3 commits) closes a real reproducibility gap: the first two (real
+#     `environ`/`__progname`/NXArgc/NXArgv globals, Phase 4.6) had been
+#     committed only in this checkout's own local git history with no
+#     patch file and no personal fork remote -- silently lost on a fresh
+#     `--force` re-clone. Bundled here with the third (2026-08-22,
+#     `__DATA,__mod_init_func` constructor support for real ifconfig --
+#     see tools/userland_staging/build_ifconfig.sh) rather than left
+#     unresolved further.
 #   - hfs, IOStorageFamily, IOUSBFamily, IONetworkingFamily, msdosfs: unmodified Apple
 #     open-source reference sources, pinned to an exact tag, no patching.
 #   - dyld/Libc/libpthread/.../Csu (Phase 4 libSystem+userland stack) and
@@ -56,6 +64,14 @@
 #     CCDigestAlg/CCDigestCtx/CCDigestRef, real function prototypes);
 #     the digest math itself is a from-scratch fallback -- see
 #     `tools/userland_staging/md5_commoncrypto_shim.c`'s header comment.
+#   - network_cmds (Phase 6b `ifconfig`, 2026-08-22): same `macos-112`
+#     manifest method -- `git ls-tree macos-112 -- network_cmds` ==
+#     commit 80f2c23cabef8839f8ec50611cf43d4033fc8ed9 == tag
+#     `network_cmds-606.40.2` (confirmed via `git ls-remote --tags`).
+#     Real Apple ifconfig.tproj source; only ifconfig.c/af_inet.c/
+#     af_link.c/ifmedia.c/ifclone.c are actually compiled -- see
+#     `tools/userland_staging/build_ifconfig.sh`'s own header comment for
+#     which real address-family/clone plugins were scoped out and why.
 #
 # Usage: ./setup_third_party.sh [--force]
 set -euo pipefail
@@ -91,7 +107,7 @@ libunwind|https://github.com/apple-oss-distributions/libunwind.git|libunwind-200
 Libinfo|https://github.com/apple-oss-distributions/Libinfo.git|Libinfo-542.40.3|
 removefile|https://github.com/apple-oss-distributions/removefile.git|removefile-49.40.3|
 copyfile|https://github.com/apple-oss-distributions/copyfile.git|copyfile-173.40.2|
-Csu|https://github.com/apple-oss-distributions/Csu.git|Csu-88|
+Csu|https://github.com/apple-oss-distributions/Csu.git|Csu-88|Csu.patch
 bash|https://github.com/apple-oss-distributions/bash.git|bash-123.40.1|bash.patch
 shell_cmds|https://github.com/apple-oss-distributions/shell_cmds.git|shell_cmds-216.60.1|
 file_cmds|https://github.com/apple-oss-distributions/file_cmds.git|file_cmds-321.40.3|
@@ -104,6 +120,7 @@ gnudiff|https://github.com/apple-oss-distributions/gnudiff.git|gnudiff-25.40.1|
 less|https://github.com/apple-oss-distributions/less.git|less-34|
 libarchive|https://github.com/apple-oss-distributions/libarchive.git|libarchive-83.40.4|
 CommonCrypto|https://github.com/apple-oss-distributions/CommonCrypto.git|CommonCrypto-60178.40.2|
+network_cmds|https://github.com/apple-oss-distributions/network_cmds.git|network_cmds-606.40.2|
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch; do

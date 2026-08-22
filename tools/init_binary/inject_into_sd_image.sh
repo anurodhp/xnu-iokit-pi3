@@ -117,6 +117,17 @@ else
     echo "= tools/userland_staging/ps.macho not built -- run build_ps.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/ifconfig.macho ]; then
+    mkdir -p "$MNT/sbin"
+    cp tools/userland_staging/ifconfig.macho "$MNT/sbin/ifconfig"
+    chmod 755 "$MNT/sbin/ifconfig"
+    echo "+ wrote $(wc -c < tools/userland_staging/ifconfig.macho) bytes to $MNT/sbin/ifconfig"
+    echo "  (real, unmodified Apple ifconfig -- Phase 6b, see"
+    echo "  tools/userland_staging/build_ifconfig.sh)"
+else
+    echo "= tools/userland_staging/ifconfig.macho not built -- run build_ifconfig.sh first if wanted, skipping"
+fi
+
 if [ -f tools/pthread_kthread_test/pthread_kthread_test.macho ]; then
     mkdir -p "$MNT/bin"
     cp tools/pthread_kthread_test/pthread_kthread_test.macho "$MNT/bin/pthread_kthread_test"

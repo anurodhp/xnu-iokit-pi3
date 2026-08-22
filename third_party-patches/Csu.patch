@@ -1,0 +1,256 @@
+From a2709f253bf415048767b8e8389ec4b06e8b6498 Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@icloud.com>
+Date: Sun, 16 Aug 2026 08:09:13 -0400
+Subject: [PATCH 1/3] start.s: set real environ global at process entry (arm64)
+
+Real crt.c's own _start() C function (which does `environ = envp;`) is
+legacy, pre-10.5-only code, gated behind `#if __DYNAMIC__ &&
+OLD_LIBSYSTEM_SUPPORT` -- genuinely dead in this build (neither macro
+defined, confirmed via an empty preprocessed output). On real modern
+Darwin, dyld itself populates `environ` before reaching this asm entry
+point; this project has no dyld, so nothing else ever performed that
+assignment. Latent since this project's first Csu work -- every prior
+command only needed argc/argv (set up directly by this same asm,
+independent of crt.c), so environ staying permanently NULL never
+mattered until real envp/getenv plumbing was wired up
+(iokit repo's Phase 4.6 "Real environment variable plumbing").
+
+One store instruction, right before bl _main: x2 still holds envp at
+that point (untouched by the preceding env-array NULL-scan loop), so
+this does exactly what dyld's own ProgramVars registration would have
+done for this one global.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01UUxaiaAUwx3EcmMQrxztjG
+---
+ start.s | 17 +++++++++++++++++
+ 1 file changed, 17 insertions(+)
+
+diff --git a/start.s b/start.s
+index 2166de5..14f472b 100644
+--- a/start.s
++++ b/start.s
+@@ -253,6 +253,23 @@ start:
+ L1: ldr     x4, [x3], #8
+ 	cmp     x4, #0              ; look for NULL ending env[] array
+ 	b.ne     L1
++	; Real Apple crt.c's own comment above documents that its _start()
++	; C function (which does `environ = envp;`) is legacy, pre-10.5-only
++	; code, gated behind `#if __DYNAMIC__ && OLD_LIBSYSTEM_SUPPORT` --
++	; genuinely dead in this build (neither macro defined) and NOT a
++	; bug: on real modern Darwin, dyld itself populates the `environ`
++	; global (via __program_vars/ProgramVars) before ever reaching this
++	; asm entry point. This project has no dyld (see architecture.md),
++	; so nothing else ever performs that real assignment -- confirmed
++	; via a real, empty preprocessed crt.c output for exactly this
++	; reason (docs/roadmap.md Phase 4.6 "Real environment variable
++	; plumbing"). One real store, matching exactly what dyld's own
++	; ProgramVars setup would have done for this one global (x2 still
++	; holds envp here, untouched by the scan loop above, which only
++	; mutates x3/x4).
++	adrp    x9, _environ@PAGE
++	add     x9, x9, _environ@PAGEOFF
++	str     x2, [x9]
+ 	bl      _main               ; main(x0=argc, x1=argv, x2=envp, x3=apple)
+ 	b       _exit
+ 
+-- 
+2.50.1 (Apple Git-155)
+
+
+From 9455ffb3f22aa8ce6acd1e2ae9acd1d438a947b5 Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@icloud.com>
+Date: Thu, 20 Aug 2026 14:19:36 -0400
+Subject: [PATCH 2/3] start.s/crt.c: set real __progname/NXArgc/NXArgv at
+ process entry (arm64)
+
+Same root cause and pattern as a2709f2's environ fix: crt.c's own C
+_start() (the only code in this file that ever wrote __progname/NXArgc/
+NXArgv) is dead code on this static/no-dyld target (gated behind
+__DYNAMIC__ && OLD_LIBSYSTEM_SUPPORT, neither ever defined). start.s's
+real arm64 entry point only set environ, leaving __progname permanently
+NULL for every process, unconditionally -- not a bash-specific bug, a
+universal C-runtime-startup gap that only became visible once
+getprogname() stopped returning a hardcoded stand-in string.
+
+Adds crt_init_program_vars() (real logic, promoted out of crt.c's dead
+crt_basename()) and calls it from start.s right after the existing
+environ store, saving argc/argv/envp/apple across the call in
+callee-saved x19-x22.
+
+QEMU-verified (iokit repo, tools/userland_staging/): cp/mv/cat against
+nonexistent paths now correctly prefix their own name instead of an
+empty string; zero regression.
+---
+ crt.c   | 43 +++++++++++++++++++++++++++++++++++++++++++
+ start.s | 16 ++++++++++++++++
+ 2 files changed, 59 insertions(+)
+
+diff --git a/crt.c b/crt.c
+index 8d180f8..009caa3 100644
+--- a/crt.c
++++ b/crt.c
+@@ -44,6 +44,49 @@ const char**  NXArgv = NULL;
+ const char**  environ = NULL;
+ const char*   __progname = NULL;
+ 
++/* Real basename-of-argv[0] helper, matching Apple's own crt_basename()
++ * further down this file (real logic, just copied up here since that
++ * copy lives inside the `#if __DYNAMIC__ && OLD_LIBSYSTEM_SUPPORT` dead
++ * block below -- see this file's own "not needed for executables
++ * targeting 10.5 or later" comment: neither macro is ever defined for
++ * this project's static/no-dyld target, so NOTHING in that whole block,
++ * including _start() itself, is ever compiled in. That block was the
++ * ONLY code in this file that ever wrote __progname/NXArgc/NXArgv, which
++ * meant those three globals were permanently NULL/0 for every process on
++ * this target, always -- a real, universal bug (found 2026-08-20 via a
++ * real QEMU A/B instrumentation test: a spawned child's own argv[0], read
++ * directly in its own main(), was already correct, but getprogname()
++ * still read back "" from this file's own never-written __progname
++ * global -- see docs/roadmap.md/docs/historic/roadmap.md Phase 4 for the
++ * full transcript-backed writeup). Real Apple dyld would populate these
++ * three via ProgramVars (see crt_externs.c's real _program_vars_init(),
++ * also unreachable here for the same no-dyld reason) before ever
++ * reaching this static target's entry point; this project's own
++ * start.s (arm64) already does the equivalent one-off real store for
++ * `environ` (Phase 4.6 item 2) -- this is the same real fix for the
++ * remaining three globals, called from start.s right after that
++ * existing environ store. */
++static const char *
++crt0_basename(const char *path)
++{
++    const char *s;
++    const char *last = path;
++
++    for (s = path; *s != '\0'; s++) {
++        if (*s == '/') last = s + 1;
++    }
++
++    return last;
++}
++
++void
++crt_init_program_vars(int argc, const char **argv)
++{
++    NXArgc = argc;
++    NXArgv = argv;
++    __progname = (argv != NULL && argv[0] != NULL) ? crt0_basename(argv[0]) : "";
++}
++
+ #if ADD_PROGRAM_VARS
+ extern void* __dso_handle;
+ struct ProgramVars
+diff --git a/start.s b/start.s
+index 14f472b..45c3c9a 100644
+--- a/start.s
++++ b/start.s
+@@ -270,6 +270,22 @@ L1: ldr     x4, [x3], #8
+ 	adrp    x9, _environ@PAGE
+ 	add     x9, x9, _environ@PAGEOFF
+ 	str     x2, [x9]
++	; Real __progname/NXArgc/NXArgv initialization (found+fixed
++	; 2026-08-20, same real "no dyld to populate ProgramVars" root cause
++	; as the _environ store just above -- see crt.c's own
++	; crt_init_program_vars() header comment for the full real-bug
++	; writeup). Save argc/argv/envp/apple across the real `bl` (AAPCS64
++	; x0-x17 are caller-saved, so a genuine C call clobbers them) into
++	; callee-saved x19-x22, restore after.
++	mov     x19, x0             ; argc
++	mov     x20, x1             ; argv
++	mov     x21, x2             ; envp
++	mov     x22, x3             ; apple
++	bl      _crt_init_program_vars   ; x0=argc, x1=argv already in place
++	mov     x0, x19
++	mov     x1, x20
++	mov     x2, x21
++	mov     x3, x22
+ 	bl      _main               ; main(x0=argc, x1=argv, x2=envp, x3=apple)
+ 	b       _exit
+ 
+-- 
+2.50.1 (Apple Git-155)
+
+
+From 51a079c2a080ff9b9ed08e97cacd736f6cdfc94f Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@icloud.com>
+Date: Sat, 22 Aug 2026 09:05:39 -0400
+Subject: [PATCH 3/3] start.s/crt.c: run __DATA,__mod_init_func constructors at
+ process entry (arm64)
+
+This static/no-dyld target never processes Mach-O static initializers
+(__attribute__((constructor))) since nothing here plays dyld's usual
+role of walking that section before main(). Needed for real ifconfig
+(network_cmds/ifconfig.tproj), whose af_inet/af_link/ifmedia/ifclone
+self-registration relies on constructors running.
+---
+ crt.c   | 34 ++++++++++++++++++++++++++++++++++
+ start.s |  8 ++++++++
+ 2 files changed, 42 insertions(+)
+
+diff --git a/crt.c b/crt.c
+index 009caa3..36178a7 100644
+--- a/crt.c
++++ b/crt.c
+@@ -87,6 +87,40 @@ crt_init_program_vars(int argc, const char **argv)
+     __progname = (argv != NULL && argv[0] != NULL) ? crt0_basename(argv[0]) : "";
+ }
+ 
++/* Real dyld responsibility this project's static/no-dyld target has to
++ * take over itself, same class of gap as crt_init_program_vars() above
++ * (see its own header comment) -- found 2026-08-22 building the first
++ * tool (ifconfig) that uses `__attribute__((constructor))`
++ * (network_cmds/ifconfig.tproj's af_register()/clone_setcallback()
++ * self-registration pattern): a real QEMU crash (`ifconfig -a`
++ * immediately EXC_CORPSE_NOTIFY, zero output) traced to this project's
++ * whole static-link strategy (`-nostdlib -static -e start`, real
++ * LC_UNIXTHREAD entry, no LC_MAIN/crt1.o) meaning nothing ever walks
++ * `__DATA,__mod_init_func` -- on a real dynamic executable dyld does
++ * this (see crt.c's own dead `_dyld_make_delayed_module_initializer_calls`
++ * call further down, unreachable here for the same no-`__DYNAMIC__`
++ * reason as everything else in that block), but a fully static Mach-O
++ * with no dyld loses constructor support entirely unless something
++ * walks the section itself. `section$start$__DATA$__mod_init_func`/
++ * `section$end$__DATA$__mod_init_func` are real, standard ld64-synthesized
++ * boundary symbols (always defined, even as an empty zero-length range
++ * when a binary has no `__mod_init_func` entries at all -- confirmed
++ * real ld64 behavior, not assumed) -- this is the same idiom real
++ * minimal/static libc startup code (e.g. musl's __libc_start_main) uses
++ * for the identical reason. Safe to call unconditionally from every
++ * tool's start.s; a no-op for every prior tool (none use constructors),
++ * real fix for ifconfig's af_inet/af_link/ifmedia/ifclone registration. */
++extern void (*__crt_mod_init_func_start[])(void) __asm("section$start$__DATA$__mod_init_func");
++extern void (*__crt_mod_init_func_end[])(void) __asm("section$end$__DATA$__mod_init_func");
++
++void
++crt_run_static_initializers(void)
++{
++    for (void (**f)(void) = __crt_mod_init_func_start; f < __crt_mod_init_func_end; f++) {
++        (*f)();
++    }
++}
++
+ #if ADD_PROGRAM_VARS
+ extern void* __dso_handle;
+ struct ProgramVars
+diff --git a/start.s b/start.s
+index 45c3c9a..4b1ab95 100644
+--- a/start.s
++++ b/start.s
+@@ -282,6 +282,14 @@ L1: ldr     x4, [x3], #8
+ 	mov     x21, x2             ; envp
+ 	mov     x22, x3             ; apple
+ 	bl      _crt_init_program_vars   ; x0=argc, x1=argv already in place
++	; Real dyld responsibility (running __DATA,__mod_init_func
++	; constructors) this static/no-dyld target has to take over itself --
++	; see crt_run_static_initializers()'s own header comment in crt.c for
++	; the full real-bug writeup (2026-08-22, first tool needing
++	; __attribute__((constructor)) support). Must run after argc/argv/
++	; environ/__progname are all live (constructors may reasonably assume
++	; a fully-initialized libc) and before main().
++	bl      _crt_run_static_initializers
+ 	mov     x0, x19
+ 	mov     x1, x20
+ 	mov     x2, x21
+-- 
+2.50.1 (Apple Git-155)
+
