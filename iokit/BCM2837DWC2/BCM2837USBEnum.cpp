@@ -225,37 +225,66 @@ BCM2837DWC2::enumerateDevice(uint8_t speed, uint8_t parentHubAddr, uint8_t paren
 	uint8_t buf[kConfigBufferSize];
 	uint32_t actual = 0;
 
-	// A device answering at address 0 still needs a plausible endpoint-0
-	// max packet size to talk to at all. 8 bytes is the minimum every
-	// full/low-speed device must support and is legal for high speed too,
-	// so the first 8-byte fetch below works regardless - and its 8th byte
-	// (bMaxPacketSize0) is exactly what tells us the real value.
+	/*
+	 * Endpoint-0 max packet size for a device still at address 0.
+	 *
+	 * This is SPEED-DEPENDENT and getting it wrong is not cosmetic. USB
+	 * 2.0 spec 5.5.3 fixes it outright for two of the three speeds: a
+	 * high-speed control endpoint MUST be 64 bytes, and a low-speed one
+	 * MUST be 8. Only full-speed genuinely varies (8/16/32/64), and only
+	 * full-speed therefore needs the 8-byte discovery read below to learn
+	 * it. u-boot - which drives this exact silicon in this project's own
+	 * boot chain - does exactly this split in usb_setup_descriptor()
+	 * (common/usb.c): 8 only for USB_SPEED_LOW, 64 otherwise, and it
+	 * performs the discovery read only `if (do_read && dev->speed ==
+	 * USB_SPEED_FULL)`.
+	 *
+	 * This code previously used 8 for every speed. On real hardware that
+	 * programmed HCCHAR.MPS=8 for the LAN9514's high-speed Ethernet
+	 * function, and every control transfer to it failed with XACTERR -
+	 * byte-for-byte identical register state on all three retries,
+	 * deterministic rather than transient. (The root-port hub tolerated
+	 * the same wrong value, which is why enumeration got as far as it
+	 * did and why this looked like a hub-specific problem at first.)
+	 */
+	uint8_t maxPacket0 = (speed == kUSBSpeedLow) ? 8 : 64;
+
 	DWC2Endpoint ep;
 	bzero(&ep, sizeof(ep));
 	ep.devAddr = 0;
 	ep.epNum = 0;
 	ep.epType = kHCCHAR_EPTYPE_CONTROL;
-	ep.maxPacket = 8;
+	ep.maxPacket = maxPacket0;
 	ep.speed = speed;
 	ep.splitHubAddr = splitHubAddr;
 	ep.splitHubPort = splitHubPort;
 
-	bzero(buf, sizeof(buf));
-	IOReturn ret = controlRequest(&ep,
-	    kUSBReqDirIn | kUSBReqTypeStandard | kUSBReqRecipDevice,
-	    kUSBReqGetDescriptor, (kUSBDescDevice << 8) | 0, 0, 8, buf, &actual);
-	if (ret != kIOReturnSuccess || actual < 8) {
-		IOLog("BCM2837DWC2: initial GET_DESCRIPTOR failed (%#x, %u bytes)\n",
-		    ret, actual);
-		return false;
-	}
+	IOReturn ret;
 
-	uint8_t maxPacket0 = buf[7];
-	if (maxPacket0 != 8 && maxPacket0 != 16 && maxPacket0 != 32 && maxPacket0 != 64) {
-		IOLog("BCM2837DWC2: implausible bMaxPacketSize0 %u, assuming 8\n", maxPacket0);
-		maxPacket0 = 8;
+	if (speed == kUSBSpeedFull) {
+		// Full speed is the only case where bMaxPacketSize0 is not
+		// already pinned by the spec, so it is the only case worth a
+		// round trip to discover. Byte 7 of the device descriptor is
+		// bMaxPacketSize0.
+		bzero(buf, sizeof(buf));
+		ret = controlRequest(&ep,
+		    kUSBReqDirIn | kUSBReqTypeStandard | kUSBReqRecipDevice,
+		    kUSBReqGetDescriptor, (kUSBDescDevice << 8) | 0, 0, 8, buf, &actual);
+		if (ret != kIOReturnSuccess || actual < 8) {
+			IOLog("BCM2837DWC2: initial GET_DESCRIPTOR failed (%#x, %u bytes)\n",
+			    ret, actual);
+			return false;
+		}
+
+		maxPacket0 = buf[7];
+		if (maxPacket0 != 8 && maxPacket0 != 16 &&
+		    maxPacket0 != 32 && maxPacket0 != 64) {
+			IOLog("BCM2837DWC2: implausible bMaxPacketSize0 %u, assuming 8\n",
+			    maxPacket0);
+			maxPacket0 = 8;
+		}
+		ep.maxPacket = maxPacket0;
 	}
-	ep.maxPacket = maxPacket0;
 
 	uint8_t newAddress = fNextAddress;
 	ret = controlRequest(&ep,
@@ -486,7 +515,9 @@ BCM2837DWC2::hubEnumeratePorts(DWC2USBDevice *hub)
 
 		// Acknowledge the connect event before resetting, so the change
 		// bit we look at after the reset is the reset's own.
-		if (change & kPortStatusConnection) {
+		// (kPortChange*, not kPortStatus* - same bit value here, but this
+		// is the change field; see the header's note on the two schemes.)
+		if (change & kPortChangeConnection) {
 			hubClearPortFeature(hub, port, kHubFeatCPortConnection);
 		}
 
@@ -506,7 +537,7 @@ BCM2837DWC2::hubEnumeratePorts(DWC2USBDevice *hub)
 			if (!hubGetPortStatus(hub, port, &status, &change)) {
 				break;
 			}
-			if (change & (1U << kHubFeatCPortReset)) {
+			if (change & kPortChangeReset) {
 				resetDone = true;
 				break;
 			}

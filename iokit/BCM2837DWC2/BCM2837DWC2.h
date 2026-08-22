@@ -348,7 +348,7 @@ enum {
 	kHubFeatCPortReset      = 20,
 };
 
-// wPortStatus / wPortChange bits (USB 2.0 spec 11.24.2.7).
+// wPortStatus bits (USB 2.0 spec Table 11-21).
 enum {
 	kPortStatusConnection = 1U << 0,
 	kPortStatusEnable     = 1U << 1,
@@ -356,6 +356,26 @@ enum {
 	kPortStatusPower      = 1U << 8,
 	kPortStatusLowSpeed   = 1U << 9,
 	kPortStatusHighSpeed  = 1U << 10,
+};
+
+/*
+ * wPortChange bits (USB 2.0 spec Table 11-22). These are DELIBERATELY
+ * separate from the kHubFeat* selectors above, because the two numbering
+ * schemes are different and conflating them is a silent bug: C_PORT_RESET
+ * is feature selector 20 (what ClearPortFeature takes) but wPortChange
+ * BIT 4 (what a GET_STATUS reply carries). Testing `change & (1 << 20)`
+ * against a 16-bit wPortChange can never be true - which is exactly what
+ * this driver did, so the reset-complete check silently never fired and
+ * only the status-based fallback beside it kept enumeration working.
+ * Values cross-checked against u-boot's include/usb_defs.h
+ * (USB_PORT_STAT_C_RESET == 0x0010).
+ */
+enum {
+	kPortChangeConnection  = 1U << 0,
+	kPortChangeEnable      = 1U << 1,
+	kPortChangeSuspend     = 1U << 2,
+	kPortChangeOverCurrent = 1U << 3,
+	kPortChangeReset       = 1U << 4,
 };
 
 /*
