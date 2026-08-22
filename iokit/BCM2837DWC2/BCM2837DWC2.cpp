@@ -545,6 +545,30 @@ BCM2837DWC2::transferChunk(uint32_t xferLen, uint32_t *actualLen, uint32_t *hcin
 		return kIOReturnNotResponding; // endpoint stalled: real protocol error
 	}
 
+	/*
+	 * Everything else genuinely is an I/O error, but which one matters for
+	 * diagnosis and kIOReturnIOError alone throws that away. Decode the
+	 * remaining HCINT bits by name (AHBERR/BBLERR/XACTERR/DATATGLERR are
+	 * mutually exclusive in practice - the silicon halts the channel on
+	 * the first one it hits) plus the channel state that produced it, so
+	 * a real-hardware failure is diagnosable from one boot capture instead
+	 * of needing a second pass with more logging added after the fact.
+	 */
+	const char *reason = "unknown";
+	if (hcint & kHCINT_XACTERR) {
+		reason = "XACTERR (transaction error: bad PID/CRC/timeout at the PHY)";
+	} else if (hcint & kHCINT_BBLERR) {
+		reason = "BBLERR (babble: device sent more than expected)";
+	} else if (hcint & kHCINT_AHBERR) {
+		reason = "AHBERR (AHB bus error - DMA address/access problem)";
+	} else if (hcint & kHCINT_DATATGLERR) {
+		reason = "DATATGLERR (data toggle mismatch)";
+	}
+	IOLog("BCM2837DWC2: transfer failed: %s (HCINT=%#x HCCHAR=%#x HCSPLT=%#x "
+	      "HCTSIZ=%#x xferLen=%u)\n",
+	    reason, hcint, regRead(hcOffset(kDWC2Channel, kDWC2_HCCHAR)),
+	    regRead(hcOffset(kDWC2Channel, kDWC2_HCSPLT)), hctsiz, xferLen);
+
 	return kIOReturnIOError;
 }
 
@@ -623,40 +647,77 @@ BCM2837DWC2::doTransfer(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
 			oddFrame = ((regRead(kDWC2_HFNUM) & 1) == 0);
 		}
 
-		// Program the transfer descriptor.
-		regWrite(hcOffset(kDWC2Channel, kDWC2_HCTSIZ),
-		    (xferLen & kHCTSIZ_XFERSIZE_MASK) |
-		    (numPackets << kHCTSIZ_PKTCNT_SHIFT) |
-		    ((uint32_t)(*pid) << kHCTSIZ_PID_SHIFT));
-
-		if (xferLen > 0 && !isIn) {
-			memcpy(fDMAVirt, (uint8_t *)buffer + done, xferLen);
-		}
-
-		regWrite(hcOffset(kDWC2Channel, kDWC2_HCDMA), (uint32_t)fDMABusAddr);
-
-		// Clear any stale conditions for this channel before arming it.
-		regWrite(hcOffset(kDWC2Channel, kDWC2_HCINT), kHCINT_ALL);
-
-		/*
-		 * Ordering matters here: the staging buffer write above and the
-		 * HCDMA/HCTSIZ programming must all be visible to the DWC2 bus
-		 * master before the channel is enabled. The buffer is Normal
-		 * non-cacheable memory while the registers are Device memory, and
-		 * ARM does not order those against each other, so an explicit
-		 * barrier is required rather than implied.
-		 */
-		__asm__ volatile ("dsb sy" ::: "memory");
-
-		regModify(hcOffset(kDWC2Channel, kDWC2_HCCHAR),
-		    kHCCHAR_MULTICNT_MASK | kHCCHAR_CHEN | kHCCHAR_CHDIS | kHCCHAR_ODDFRM,
-		    (1U << kHCCHAR_MULTICNT_SHIFT) |
-		    (oddFrame ? kHCCHAR_ODDFRM : 0) |
-		    kHCCHAR_CHEN);
-
 		uint32_t actual = 0;
 		uint32_t hcint = 0;
-		ret = transferChunk(xferLen, &actual, &hcint);
+
+		/*
+		 * XACTERR retry, bounded at 3 attempts total - the same Cerr=3
+		 * convention the EHCI spec itself mandates in hardware (a qTD's
+		 * error counter field), and which Linux's own EHCI driver added
+		 * a software equivalent of specifically because real transaction
+		 * errors on real silicon are often transient and "generally
+		 * succeed the second or third time through" (its own commit
+		 * message). Confirmed real, not a QEMU artifact: this exact path
+		 * failed on real hardware enumerating the actual LAN9514 (device
+		 * 0424:9514) on the very first SETUP token to a freshly-reset
+		 * high-speed port - a moment particularly prone to real PHY-level
+		 * transients while clocks/negotiation settle, and exactly the
+		 * class of error this convention exists for. u-boot's own
+		 * reference driver has zero special-case handling for XACTERR
+		 * either (confirmed absent, not just unread) - it is a bring-up
+		 * driver, not held to this standard; this stack now is.
+		 *
+		 * Scoped to XACTERR specifically, not the other fallback errors
+		 * (BBLERR/AHBERR/DATATGLERR): those indicate a real protocol or
+		 * bus problem, not the kind of line-level noise this convention
+		 * targets, and retrying them blindly would mask a genuine bug
+		 * instead of working around a transient one.
+		 */
+		for (uint32_t attempt = 0; attempt < 3; attempt++) {
+			// Program the transfer descriptor.
+			regWrite(hcOffset(kDWC2Channel, kDWC2_HCTSIZ),
+			    (xferLen & kHCTSIZ_XFERSIZE_MASK) |
+			    (numPackets << kHCTSIZ_PKTCNT_SHIFT) |
+			    ((uint32_t)(*pid) << kHCTSIZ_PID_SHIFT));
+
+			if (xferLen > 0 && !isIn) {
+				memcpy(fDMAVirt, (uint8_t *)buffer + done, xferLen);
+			}
+
+			regWrite(hcOffset(kDWC2Channel, kDWC2_HCDMA), (uint32_t)fDMABusAddr);
+
+			// Clear any stale conditions for this channel before arming it.
+			regWrite(hcOffset(kDWC2Channel, kDWC2_HCINT), kHCINT_ALL);
+
+			/*
+			 * Ordering matters here: the staging buffer write above and
+			 * the HCDMA/HCTSIZ programming must all be visible to the
+			 * DWC2 bus master before the channel is enabled. The buffer
+			 * is Normal non-cacheable memory while the registers are
+			 * Device memory, and ARM does not order those against each
+			 * other, so an explicit barrier is required rather than
+			 * implied.
+			 */
+			__asm__ volatile ("dsb sy" ::: "memory");
+
+			regModify(hcOffset(kDWC2Channel, kDWC2_HCCHAR),
+			    kHCCHAR_MULTICNT_MASK | kHCCHAR_CHEN | kHCCHAR_CHDIS | kHCCHAR_ODDFRM,
+			    (1U << kHCCHAR_MULTICNT_SHIFT) |
+			    (oddFrame ? kHCCHAR_ODDFRM : 0) |
+			    kHCCHAR_CHEN);
+
+			actual = 0;
+			hcint = 0;
+			ret = transferChunk(xferLen, &actual, &hcint);
+
+			if (!(ret == kIOReturnIOError && (hcint & kHCINT_XACTERR))) {
+				break;
+			}
+			if (attempt + 1 < 3) {
+				IOLog("BCM2837DWC2: XACTERR on attempt %u/3, retrying\n",
+				    attempt + 1);
+			}
+		}
 
 		if (ret == kIOReturnSuccess && xferLen > 0 && isIn) {
 			// Read back only what actually arrived.
