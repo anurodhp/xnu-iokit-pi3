@@ -192,13 +192,12 @@ this pass even if the change itself is cheap.
       driver's own header comment).
     - `frameLen & 0x7FF` truncates silently with no length guard. Still
       open.
-    - New as of 2026-08-22, not yet verified: the BSD/`ifconfig`
-      registration and real link-state/auto-negotiation logic above are
-      build-verified and QEMU-boot-regression-tested (QEMU never
-      emulates the LAN9514, so this whole path is untouched there — see
-      the driver's header comment), but genuinely unverified end-to-end
-      on real hardware. Next real-hardware boot should confirm `en0`
-      appears in `ifconfig` and reflects actual link/light state.
+    - **[RESOLVED 2026-08-22]** ~~New as of 2026-08-22, not yet verified~~
+      — real hardware confirmed: `en0` attaches, shows link up in
+      `ifconfig`, and responds to ICMP echo (ping) over a real Ethernet
+      link. BSD/`ifconfig` registration and link-state/auto-negotiation
+      logic are now verified end-to-end on silicon, not just build+QEMU-
+      regression-tested. No DHCP/address assignment yet — that's Phase 6c.
 
 ---
 

@@ -579,8 +579,11 @@ need a real implementation later:
      QEMU-boot-verified with zero regressions (its LAN9514-vendor-ID device
      never exists, so the new code path is a clean no-op there); the
      construct/attach/start sequence itself is real-hardware-only, like
-     `probe()` before it, and is NOT YET boot-verified there - the next
-     real-hardware boot log is what closes that out.
+     `probe()` before it -- **CONFIRMED on real hardware 2026-08-22**:
+     `en0` attaches, link comes up, and the interface responds to ICMP
+     echo (ping) over a real Ethernet link. This confirms L2/driver +
+     basic L3 (no DHCP/address assignment yet) end to end on silicon,
+     ahead of Phase 6c below.
   The INET half is DONE on branch `phase-6b-inet` (IPv4 stack initializes,
   `lo0` attaches, zero panics) and this work landed on the same branch.
 
@@ -617,8 +620,20 @@ need a real implementation later:
     live build did surface (`classq.h`/`flowadv.h`/`TargetConditionals.h`,
     detailed above) were never on this predicted list at all.
 
-  Then 6c: a DHCP client + `ifconfig`/`ping`/`netstat` (FreeBSD's
-  `dhclient` recommended over Apple's `bootp`).
+  **6c, revised 2026-08-22: DHCP deprioritized, not planned for now** --
+  manual static IP assignment via `ifconfig` is sufficient for this
+  project's actual needs, so a DHCP client (`dhclient` vs. Apple's
+  `bootp`/`ipconfigd` -- see `project_xnu_rpi3_dhcp_ipconfiguration_analysis`
+  memory for the full analysis of why `dhclient` would've been the pick)
+  is shelved as throwaway work until an actual need for it appears.
+  `ifconfig` itself is **DONE** (`e92ab20`, real unmodified Apple
+  `network_cmds/ifconfig.tproj`, QEMU-verified against `lo0` -- manual
+  static-IP assignment on real `en0` not yet separately confirmed but
+  uses the same already-working code path). Real Apple source for
+  `ping`/`ping6`/`netstat`/`arp`/`route` all sit unbuilt at
+  `third_party/network_cmds/{ping,ping6,netstat,arp,route}.tproj` --
+  natural next candidates for basic network usability now that manual
+  addressing is the plan.
 - **Phase 6.5 (dyld)**: planning-only placeholder, deliberately deferred
   until Phase 6 gives it a real concurrent multi-process workload to
   justify the cost. Needs a real `.dylib`-producing link path and an
