@@ -379,12 +379,62 @@ BCM2837DWC2::portReset(void)
 	fRootConnected = true;
 
 	/*
-	 * HFIR must match the bus speed or the frame counter, and with it
-	 * every periodic/split schedule decision, is wrong. High speed counts
-	 * microframes (125us -> 60000 at 480MHz clock), full/low speed counts
-	 * 1ms frames (48000).
+	 * HFIR is deliberately NOT written here, and the reason is narrower and
+	 * more surprising than it looks - so it is worth stating precisely,
+	 * because the obvious reading of this fix is the wrong one.
+	 *
+	 * This line used to be
+	 * `regWrite(kDWC2_HFIR, (fRootSpeed == kUSBSpeedHigh) ? 60000 : 48000)`.
+	 * With it, enumerating the LAN9514's downstream Ethernet function on a
+	 * real Pi 3 failed deterministically: every control transfer to the
+	 * device behind hub port 1 died with XACTERR, byte-for-byte identical
+	 * register state on all three retries, while the hub itself at address 1
+	 * enumerated perfectly over the same channel with identical HCCHAR
+	 * programming. Deleting the write fixed it outright - the Ethernet
+	 * function (0424:ec00) now enumerates.
+	 *
+	 * The value was NOT the problem. With the write gone, HFIR reads back
+	 * 60000 on this board at high speed (see the IOLog below, which exists
+	 * to keep that measurement in every boot log) - exactly what the old
+	 * code was writing into it. Identical byte, opposite outcome. So the
+	 * defect was the *act of writing* HFIR at this moment, not what was
+	 * written: this runs immediately after the root port has come up and
+	 * been enabled, and a plain write to HFIR reloads the frame counter
+	 * mid-operation. The databook only sanctions reprogramming the frame
+	 * interval on a running port through HFIR.HFIRRldCtrl; a raw write
+	 * restarts the microframe cadence under a bus that is already running.
+	 * The directly-attached hub tolerated that glitch; a device one hop
+	 * further downstream, whose transactions the hub has to relay in the
+	 * frame the host schedules them in, did not.
+	 *
+	 * (Do not "restore" this write with a corrected constant. An earlier
+	 * version of this comment argued from the databook's PHY-clock formula
+	 * that high speed on a 60MHz UTMI+ PHY should be 7500 and that 60000
+	 * was an 8x-too-long microframe. The hardware says otherwise - this
+	 * core sits at 60000 at high speed of its own accord and works. The
+	 * formula-based reasoning was never measured; the 60000 above was.)
+	 *
+	 * Writing nothing also matches both reference drivers. u-boot's dwc2.c -
+	 * the driver this one was ported from, and the one that drives this
+	 * exact silicon in this project's own boot chain - never writes HFIR at
+	 * all: it defines DWC2_HFIR_FRINT_MASK and never uses it. Linux's dwc2
+	 * writes it only on the full/low-speed path in dwc2_hprt0_enable(), and
+	 * only under params.reload_ctl - i.e. only where the reload control bit
+	 * makes it legal.
+	 *
+	 * This could only ever have been caught on hardware. QEMU's dwc2 model
+	 * resets hfir to 60000 and its HFIR write handler is a bare `break` -
+	 * the value is stored and never read for any scheduling decision
+	 * (third_party/qemu-zhuowei/hw/usb/hcd-dwc2.c). The QEMU boot that
+	 * verified the rest of this driver could not have exercised this line in
+	 * either branch, which is also why the full-speed branch's 48000 - a
+	 * genuinely different value from the register's contents, unlike the
+	 * high-speed branch's - went unnoticed there too.
 	 */
-	regWrite(kDWC2_HFIR, (fRootSpeed == kUSBSpeedHigh) ? 60000 : 48000);
+
+	IOLog("BCM2837DWC2: root port enumerated: HPRT0=%#x HFIR=%u (core's own "
+	      "value, not overridden) HCFG=%#x\n",
+	    hprt0, regRead(kDWC2_HFIR), regRead(kDWC2_HCFG));
 
 	return true;
 }

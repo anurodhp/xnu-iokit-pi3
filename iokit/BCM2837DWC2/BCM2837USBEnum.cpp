@@ -609,7 +609,51 @@ BCM2837DWC2::hubEnumeratePorts(DWC2USBDevice *hub)
 		DWC2USBDevice *child = NULL;
 		if (!enumerateDevice(speed, hub->address, port,
 		        splitHubAddr, splitHubPort, &child)) {
-			IOLog("BCM2837DWC2: enumeration failed on hub port %u\n", port);
+			/*
+			 * Capture the state that distinguishes the remaining
+			 * explanations for a silent device, so one boot log settles
+			 * it instead of a round trip per hypothesis. Real hardware
+			 * is the only place this path has ever failed, and each
+			 * attempt costs a full flash-and-boot cycle, so it is worth
+			 * paying for all of it at once:
+			 *
+			 *  - port status/change re-read: did the hub drop or disable
+			 *    the port under us (C_PORT_ENABLE set, ENABLE clear -
+			 *    babble or a disconnect), or does it still believe a
+			 *    device is sitting there enabled? The latter means the
+			 *    hub relayed and the device stayed silent; the former
+			 *    means the port died and no amount of retrying the
+			 *    transfer would have helped.
+			 *  - HPRT0/GINTSTS: same question one level up, for the root
+			 *    port and the core.
+			 *  - HFNUM sampled twice across a known 2ms: proves SOFs are
+			 *    actually being generated at all, and at what cadence. A
+			 *    counter that does not move means the core stopped
+			 *    framing the bus, which is a different failure from a
+			 *    device that is framed and silent. HFIR is logged
+			 *    alongside it because the two are read together: this
+			 *    driver deliberately never writes HFIR (see the long
+			 *    note in portReset() - writing it mid-operation is what
+			 *    broke real-hardware enumeration through this very
+			 *    port), so anything other than the core's own value here
+			 *    means something put one there.
+			 */
+			uint16_t afterStatus = 0, afterChange = 0;
+			bool haveAfter = hubGetPortStatus(hub, port,
+			    &afterStatus, &afterChange);
+
+			uint32_t frameBefore = regRead(kDWC2_HFNUM) & kHFNUM_MAX_FRNUM;
+			IOSleep(2);
+			uint32_t frameAfter = regRead(kDWC2_HFNUM) & kHFNUM_MAX_FRNUM;
+
+			IOLog("BCM2837DWC2: enumeration failed on hub port %u "
+			      "(port after: %s status %#x change %#x; HPRT0=%#x "
+			      "GINTSTS=%#x HFIR=%u; HFNUM %u->%u over 2ms)\n",
+			    port, haveAfter ? "read ok" : "READ FAILED",
+			    afterStatus, afterChange,
+			    regRead(kDWC2_HPRT0), regRead(kDWC2_GINTSTS),
+			    regRead(kDWC2_HFIR),
+			    frameBefore, frameAfter);
 			continue;
 		}
 	}
