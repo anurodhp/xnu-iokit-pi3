@@ -155,13 +155,24 @@ def main():
 
             if not pending_cmds and expect and len(matched) == len(expect):
                 # Nothing left to wait for. Give the guest a moment to
-                # flush whatever it was mid-way through printing.
+                # flush whatever it was mid-way through printing, THEN
+                # check readability before reading - a bare os.read() here
+                # is a BLOCKING call on this fd, and once the guest reaches
+                # an idle prompt with no more output coming (e.g. "login: "
+                # with nothing typed), that read never returns. That is a
+                # real hang this harness caused, not the guest: the guest
+                # had already booted successfully and finished 15 minutes
+                # earlier while this call sat blocked, invisible to the
+                # timeout loop above (which never gets a chance to
+                # re-check once execution is inside this read).
                 time.sleep(2)
-                try:
-                    chunk = os.read(master, 65536)
-                    logf.write(chunk)
-                except (OSError, BlockingIOError):
-                    pass
+                r2, _, _ = select.select([master], [], [], 0.5)
+                if r2:
+                    try:
+                        chunk = os.read(master, 65536)
+                        logf.write(chunk)
+                    except OSError:
+                        pass
                 break
     finally:
         logf.close()

@@ -553,6 +553,11 @@ BCM2837DWC2::hubEnumeratePorts(DWC2USBDevice *hub)
 			splitHubPort = port;
 		}
 
+		IOLog("BCM2837DWC2: hub port %u: status %#x -> speed=%s split=%s\n",
+		    port, status,
+		    (speed == kUSBSpeedHigh) ? "high" : (speed == kUSBSpeedLow) ? "low" : "full",
+		    (splitHubAddr != 0) ? "yes" : "no");
+
 		DWC2USBDevice *child = NULL;
 		if (!enumerateDevice(speed, hub->address, port,
 		        splitHubAddr, splitHubPort, &child)) {

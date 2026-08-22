@@ -545,6 +545,30 @@ BCM2837DWC2::transferChunk(uint32_t xferLen, uint32_t *actualLen, uint32_t *hcin
 		return kIOReturnNotResponding; // endpoint stalled: real protocol error
 	}
 
+	/*
+	 * Everything else genuinely is an I/O error, but which one matters for
+	 * diagnosis and kIOReturnIOError alone throws that away. Decode the
+	 * remaining HCINT bits by name (AHBERR/BBLERR/XACTERR/DATATGLERR are
+	 * mutually exclusive in practice - the silicon halts the channel on
+	 * the first one it hits) plus the channel state that produced it, so
+	 * a real-hardware failure is diagnosable from one boot capture instead
+	 * of needing a second pass with more logging added after the fact.
+	 */
+	const char *reason = "unknown";
+	if (hcint & kHCINT_XACTERR) {
+		reason = "XACTERR (transaction error: bad PID/CRC/timeout at the PHY)";
+	} else if (hcint & kHCINT_BBLERR) {
+		reason = "BBLERR (babble: device sent more than expected)";
+	} else if (hcint & kHCINT_AHBERR) {
+		reason = "AHBERR (AHB bus error - DMA address/access problem)";
+	} else if (hcint & kHCINT_DATATGLERR) {
+		reason = "DATATGLERR (data toggle mismatch)";
+	}
+	IOLog("BCM2837DWC2: transfer failed: %s (HCINT=%#x HCCHAR=%#x HCSPLT=%#x "
+	      "HCTSIZ=%#x xferLen=%u)\n",
+	    reason, hcint, regRead(hcOffset(kDWC2Channel, kDWC2_HCCHAR)),
+	    regRead(hcOffset(kDWC2Channel, kDWC2_HCSPLT)), hctsiz, xferLen);
+
 	return kIOReturnIOError;
 }
 
