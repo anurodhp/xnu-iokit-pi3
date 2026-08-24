@@ -124,6 +124,15 @@
 #     `macos-112` manifest method -- `git ls-tree macos-112 -- libutil`
 #     == commit 82b4f3ed687a5226c3404dc290c84f1897874c08 == tag
 #     `libutil-58.40.2` (confirmed via `git ls-remote --tags`).
+#   - ncurses, libresolv, libiconv, OpenPAM, IOKitUser, gnutar,
+#     diskdev_cmds, awk, IOKitTools, OpenSSH (2026-08-24, the
+#     `docs/apple-oss-catalog.md` sweep): same `macos-112` manifest
+#     method for all ten -- each tag below was confirmed via
+#     `git ls-tree macos-112 -- <name>` matching a real release tag's
+#     dereferenced commit on `git ls-remote --tags`, not guessed. Actual
+#     build scripts (`tools/userland_staging/build_*.sh`) for these are
+#     being written incrementally, same as every prior entry in this
+#     file -- a pin here does not by itself mean a working build yet.
 #
 # Usage: ./setup_third_party.sh [--force]
 set -euo pipefail
@@ -175,6 +184,16 @@ CommonCrypto|https://github.com/apple-oss-distributions/CommonCrypto.git|CommonC
 network_cmds|https://github.com/apple-oss-distributions/network_cmds.git|network_cmds-606.40.2|
 cron|https://github.com/apple-oss-distributions/cron.git|cron-40|cron.patch
 libutil|https://github.com/apple-oss-distributions/libutil.git|libutil-58.40.2|
+ncurses|https://github.com/apple-oss-distributions/ncurses.git|ncurses-57|
+libresolv|https://github.com/apple-oss-distributions/libresolv.git|libresolv-68|
+libiconv|https://github.com/apple-oss-distributions/libiconv.git|libiconv-59|
+OpenPAM|https://github.com/apple-oss-distributions/OpenPAM.git|OpenPAM-28.40.1|
+IOKitUser|https://github.com/apple-oss-distributions/IOKitUser.git|IOKitUser-1845.81.1|
+gnutar|https://github.com/apple-oss-distributions/gnutar.git|gnutar-455|
+diskdev_cmds|https://github.com/apple-oss-distributions/diskdev_cmds.git|diskdev_cmds-667.40.1|
+awk|https://github.com/apple-oss-distributions/awk.git|awk-27.40.1|
+IOKitTools|https://github.com/apple-oss-distributions/IOKitTools.git|IOKitTools-114.40.1|
+OpenSSH|https://github.com/apple-oss-distributions/OpenSSH.git|OpenSSH-240.40.1|
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch; do
