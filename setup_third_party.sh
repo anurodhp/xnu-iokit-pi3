@@ -22,6 +22,32 @@
 #     unresolved further.
 #   - hfs, IOStorageFamily, IOUSBFamily, IONetworkingFamily, msdosfs: unmodified Apple
 #     open-source reference sources, pinned to an exact tag, no patching.
+#     CORRECTED 2026-08-24: a full `distribution-macOS` `macos-112` manifest
+#     audit (docs/apple-oss-catalog.md) found IOStorageFamily and msdosfs
+#     had actually been pinned to tags OLDER than what macOS 11.2/Darwin
+#     20.3 really shipped (`IOStorageFamily-218.1.4`/`msdosfs-229.1.4`,
+#     vs. the manifest's real `IOStorageFamily-260.40.5`/`msdosfs-435.60.1`)
+#     -- a real vintage mismatch on this project's own boot/root-filesystem
+#     drivers, not previously caught despite the header comment above's
+#     "pinned to an exact tag" claim. Fixed by re-pinning to the manifest-
+#     exact tags and re-vendoring `third_party/xnu-7195`'s copies
+#     (`iokit/Storage/*.cpp`, `iokit/IOKit/storage/*.h`, `bsd/msdosfs/*`)
+#     via a real 3-way merge (`git merge-file`, base=old pristine tag,
+#     local=this project's own in-tree fixes, other=new pristine tag) so
+#     the project's own local fixes (IOMediaBSDClient.cpp's lazy-singleton
+#     CAS fix for backlog item 12; msdosfs_vfsops.c's root-mount
+#     `copyin(NULL)` fix + `VFS_TBLCANMOUNTROOT`; msdosfs_vnops.c's
+#     DEBUG-gated diagnostics) survived the version bump intact, verified
+#     by diffing the merge result against the new tag's pristine source
+#     (each merge produced zero conflicts and isolated exactly the
+#     project's own hunks, nothing more). `hfs-556.100.11` was NOT
+#     touched -- it's actually *newer* than the manifest's own
+#     `hfs-556.60.1`, an ambiguous case (unlike the other two, which were
+#     unambiguously stale) that needs a deliberate keep-or-revert decision
+#     rather than a mechanical fix; see the doc for detail.
+#     `IOUSBFamily-630.4.5` also NOT touched -- confirmed no Big Sur-era
+#     tag exists in the manifest for it at all (checked, not assumed), so
+#     there is no better tag to move to.
 #   - dyld/Libc/libpthread/.../Csu (Phase 4 libSystem+userland stack) and
 #     bash/shell_cmds/.../misc_cmds (Phase 4 real commands): unmodified
 #     Apple sources, pinned to the tags apple-oss-distributions'
@@ -118,10 +144,10 @@ qemu-zhuowei|git@github.com:anurodhp/qemu-xnu-arm.git|master|
 dtc-AppleDeviceTree|https://github.com/darwin-on-arm/dtc-AppleDeviceTree.git|master|dtc-AppleDeviceTree.patch
 u-boot|https://github.com/FlorentRevest/u-boot.git|master|u-boot.patch
 hfs|https://github.com/apple-oss-distributions/hfs.git|hfs-556.100.11|
-IOStorageFamily|https://github.com/apple-oss-distributions/IOStorageFamily.git|IOStorageFamily-218.1.4|
+IOStorageFamily|https://github.com/apple-oss-distributions/IOStorageFamily.git|IOStorageFamily-260.40.5|
 IOUSBFamily|https://github.com/apple-oss-distributions/IOUSBFamily.git|IOUSBFamily-630.4.5|
 IONetworkingFamily|https://github.com/apple-oss-distributions/IONetworkingFamily.git|IONetworkingFamily-151.40.1|
-msdosfs|https://github.com/apple-oss-distributions/msdosfs.git|msdosfs-229.1.4|
+msdosfs|https://github.com/apple-oss-distributions/msdosfs.git|msdosfs-435.60.1|
 dyld|https://github.com/apple-oss-distributions/dyld.git|dyld-832.7.3|
 Libc|https://github.com/apple-oss-distributions/Libc.git|Libc-1439.40.11|
 libpthread|https://github.com/apple-oss-distributions/libpthread.git|libpthread-454.80.2|

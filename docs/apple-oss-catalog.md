@@ -1,0 +1,255 @@
+# Apple open-source library catalog
+
+Full audit of `apple-oss-distributions` against this project's actual
+needs, done 2026-08-24 at the user's explicit request to systematically
+inventory what's available before further work, rather than continuing to
+pull sources ad hoc per command/phase the way `setup_third_party.sh` has
+so far. Method: cloned `distribution-macOS` (the same cross-project
+version manifest `setup_third_party.sh`'s own header comment already
+relies on) and diffed its `macos-112` tag's full 232-entry tree against
+this project's 32 currently-pinned `apple-oss-distributions` repos, then
+against the roadmap/backlog's open items. `docs/daemon-roadmap.md` already
+covers background daemons in depth (`cron`, `syslogd`, `configd`,
+`mDNSResponder`, `PowerManagement`, `launchd`+XPC, etc.) — this file
+complements it with everything else: libraries, filesystem tools,
+userland commands, and, most importantly, **a correctness audit of pins
+already in use**.
+
+## Part 1: pin correctness audit — 2 of 4 mismatches FIXED 2026-08-24
+
+`setup_third_party.sh`'s comments claim every pin is manifest-verified,
+"not guessed by date proximity." That claim was only partially true.
+Checked all 32 currently-pinned `apple-oss-distributions` repos' exact
+tags against `macos-112`'s own pinned commit for each: **28 match, 4
+don't.**
+
+**`IOStorageFamily` and `msdosfs` are now re-pinned and fixed** (same
+session, right after this audit) — see `setup_third_party.sh`'s own
+updated comment block for the full method. Summary: checked out the
+manifest-exact tags (`IOStorageFamily-260.40.5`/`msdosfs-435.60.1`),
+identified every file in this project's `third_party/xnu-7195` vendored
+copy that actually differs from pristine upstream (exactly 4: this
+project's own local fixes in `IOMediaBSDClient.cpp`,
+`msdosfs_vfsops.c`, `msdosfs_vnops.c`, plus trivial no-op-equivalent
+drift in `msdosfs_lookup.c`/`msdosfs_conv.c`), 3-way merged
+(`git merge-file`, base=old pristine tag, local=this project's fix,
+other=new pristine tag — zero conflicts, each merge isolated exactly
+this project's own hunks) so the fixes (IOMediaBSDClient's lazy-
+singleton CAS fix for backlog item 12; msdosfs's root-mount
+`copyin(NULL)` fix + `VFS_TBLCANMOUNTROOT`; DEBUG-gated diagnostics)
+survived onto the new tags intact, then rebuilt the kernel
+(`tools/build_xnu_7195.sh`, one new build-break found and fixed: the
+newer `IOStorageFamily` tag's `IOBlockStorageDriver.cpp` includes a
+genuinely new header, `IOBlockStoragePerfControlExports.h`, not present
+at the old tag — vendored it, zero other new/missing files). Full real
+pty-driven QEMU boot verified afterward against the current
+`qemu/hfs_root_test.img`: real login, HFS+ root mounts and reports real
+`df` usage, **both real MBR partitions correctly enumerated as
+`disk0s1`/`disk0s2`** (confirms `IOFDiskPartitionScheme`'s parsing
+still works against the new source), a real file write/read/delete
+round-trip succeeded, and all 77 existing commands still listed in
+`/bin` with no regression. `msdosfs`'s own root-mount-specific local
+fixes are confirmed byte-present and compiling clean into the new
+kernel; the actual msdosfs-as-root runtime path itself (this project's
+"older", superseded single-partition test image,
+`qemu/fat32_test.dmg`) no longer exists in this checkout and has no
+regenerating script, so that specific path was not re-exercised this
+pass — flagged here rather than silently assumed fine.
+
+`hfs-556.100.11` and `IOUSBFamily-630.4.5` were deliberately left
+untouched (see below for why); everything else already matched.
+
+| Repo | Currently pinned | `macos-112` manifest actually pins | Status |
+|---|---|---|---|
+| `hfs` | `hfs-556.100.11` | `hfs-556.60.1` | pinned tag is **newer** than the manifest |
+| `IOStorageFamily` | `IOStorageFamily-218.1.4` | `IOStorageFamily-260.40.5` | pinned tag is **older** — real version drift |
+| `msdosfs` | `msdosfs-229.1.4` | `msdosfs-435.60.1` | pinned tag is **older** — real version drift |
+| `IOUSBFamily` | `IOUSBFamily-630.4.5` | *(not in the manifest tree at all)* | no Big Sur-era tag exists to compare against |
+
+Everything else (`dyld`, `Libc`, `libpthread`, `libplatform`,
+`libdispatch`, `libclosure`, `libmalloc`, `libunwind`, `Libinfo`,
+`removefile`, `copyfile`, `Csu`, `bash`, `shell_cmds`, `file_cmds`,
+`text_cmds`, `adv_cmds`, `system_cmds`, `basic_cmds`, `misc_cmds`,
+`gnudiff`, `less`, `libarchive`, `CommonCrypto`, `network_cmds`, `cron`,
+`libutil`, `IONetworkingFamily`) matches the manifest exactly.
+
+**What this means concretely:**
+
+- **`IOStorageFamily-218.1.4` and `msdosfs-229.1.4` are genuinely the
+  wrong vintage** for a Darwin 20.3/macOS 11.2 kernel (`xnu-7195.81.3`,
+  itself confirmed correct against this same manifest). `260.40.5` and
+  `435.60.1` are real tags that exist in both repos and are what
+  `macos-112` actually ships. This is exactly the kind of header/struct-
+  layout skew this project's own history has repeatedly hit the hard way
+  (`CLAUDE.md`: "this project has a long history of 'obvious' fixes
+  turning out to be one layer above or below the real bug") — worth
+  re-pinning and rebuilding deliberately rather than leaving as a latent
+  risk, especially since HFS+/FAT32 are the project's root filesystem and
+  boot device.
+- **`hfs-556.100.11` being newer than the manifest** is a different
+  shape of problem — not necessarily wrong (Apple ships maintenance point
+  releases of individual components between OS drops that don't
+  retroactively update the manifest tag), but it means whatever
+  originally chose `556.100.11` did *not* actually do a manifest lookup
+  for it the way the header comment implies, despite pinning to a real,
+  presumably-still-Darwin-20.3-compatible tag. Worth a deliberate decision
+  (keep `556.100.11` for known reasons, or drop to the manifest's
+  `556.60.1` for byte-for-byte manifest fidelity) rather than an
+  unexamined assumption either way.
+- **`IOUSBFamily` has no Big Sur-era entry in the manifest at all** —
+  confirmed not a naming change either (`IOUSBHostFamily` doesn't exist as
+  a repo under `apple-oss-distributions`). Real macOS likely moved USB to
+  a closed-source successor stack by 11.2 and simply stopped publishing
+  this component's manifest linkage, while the repo itself continued
+  getting tagged releases independently. `630.4.5` may be the best
+  available source regardless, but it isn't and can't be manifest-
+  verified the way the others are — this is an honest ceiling on the
+  verification method itself, not a pin bug to fix.
+
+**Not yet done, scope for a follow-up pass, not this one:** the same
+check for the 5 repos vendored via `third_party-patches/` with local
+fixes on top (`dtc-AppleDeviceTree`, `u-boot`, `Csu`) — `Csu` matched
+above since it's also a plain `apple-oss-distributions` pin, but
+`dtc-AppleDeviceTree`/`u-boot` aren't Apple repos and are out of scope for
+this manifest method entirely.
+
+## Part 2: available repos matching an already-documented gap
+
+Everything below already has a named gap, workaround, or stub in
+`docs/roadmap.md`/`docs/backlog.md` — i.e. this is "stop working around
+it, here's the real source," not speculative scope growth. Tags below are
+each confirmed against `macos-112` the same way as Part 1 (not guessed).
+
+| Repo | Tag (macos-112) | Replaces / closes |
+|---|---|---|
+| [`ncurses`](https://github.com/apple-oss-distributions/ncurses) | `ncurses-57` | Real termcap/terminfo database — closes `docs/backlog.md` P2 item 11's documented gap ("no real termcap/terminfo *database*... `less` always runs in real hardcopy mode"). Bash's own bundled `bash_readline_termcap_compat.c` shim would also become unnecessary. |
+| [`gnutar`](https://github.com/apple-oss-distributions/gnutar) | `gnutar-455` | `tar` — `docs/roadmap.md`'s Tier B explicitly lists `tar` as "no real source cloned into this checkout yet." |
+| [`diskdev_cmds`](https://github.com/apple-oss-distributions/diskdev_cmds) | `diskdev_cmds-667.40.1` | `newfs_hfs`/`fsck_hfs`/`fstyp`/`mount_hfs` — real Apple HFS+ userland tooling; currently the SD image (`tools/make_sd_image.sh`) is built with host macOS tools, not this project's own ported source. Also the real source for `disklib`, used by `diskutil`-adjacent tooling if ever wanted. |
+| [`awk`](https://github.com/apple-oss-distributions/awk) | `awk-27.40.1` | No `awk` exists anywhere in this project (confirmed by grep — not in any `build_*.sh`, not mentioned in roadmap/backlog at all). Common enough that its total absence is itself worth flagging, independent of any documented "gap." |
+| [`OpenPAM`](https://github.com/apple-oss-distributions/OpenPAM) | `OpenPAM-28.40.1` | `docs/roadmap.md`'s Phase 5 explicitly names "OpenPAM as fallback" for real PAM, still unbuilt. |
+| [`libresolv`](https://github.com/apple-oss-distributions/libresolv) | `libresolv-68` | Phase 7a (DNS) is explicitly scoped as "small and clean once Phase 6 lands" and names `libresolv` by that exact name. |
+| [`OpenSSH`](https://github.com/apple-oss-distributions/OpenSSH) | `OpenSSH-240.40.1` | Phase 7b (`sshd`) — blocked on real AES (`docs/backlog.md` P2 item 0a), but the source itself is available now to pin/stage ahead of that gate. |
+| [`IOKitUser`](https://github.com/apple-oss-distributions/IOKitUser) | `IOKitUser-1845.81.1` | Userland IOKit (`IOKitLib`) — not on any phase list today, but directly relevant given this project's whole driver stack is IOKit; would unlock a real `ioreg`-equivalent for on-target driver/personality debugging instead of only QEMU-monitor introspection. |
+| [`IOKitTools`](https://github.com/apple-oss-distributions/IOKitTools) | `IOKitTools-114.40.1` | Real `ioreg`/`ioclasscount`/`ioalloc` sources, consumes `IOKitUser` above. Same rationale. |
+| [`libiconv`](https://github.com/apple-oss-distributions/libiconv) | `libiconv-59` | This project's `libc_locale` work is explicitly documented as "write custom code only as a last resort" — `libiconv` is real, small, and could replace some of the from-scratch locale/charset stand-ins the same session's work built, not yet checked against them. |
+
+**Already scoped in `docs/daemon-roadmap.md`, not re-litigated here** —
+cross-referenced for completeness since they showed up in this same
+manifest sweep: `syslog` (`syslog-385`), `configd` (`configd-1109.60.2`),
+`mDNSResponder` (`mDNSResponder-1310.80.1`), `bootp`
+(`bootp-413.80.1` — DHCP client/`ipconfigd`, deprioritized per
+`project_xnu_rpi3_dhcp_ipconfiguration_analysis` memory), `PowerManagement`
+(`PowerManagement-1132.81.1` — also the eventual real implementation for
+`BCM2837CPU::quiesceCPU()`/`haltCPU()`'s current no-ops, backlog P3 item
+4), `bootstrap_cmds` (`bootstrap_cmds-121` — real `mig` source, though this
+project currently uses the host Xcode's `/usr/bin/mig` directly and that's
+working fine, so no actual need to vendor it).
+
+## Part 3: everything else in the manifest (201 entries total; ~185 after Part 2)
+
+Surveyed, not pinned, and — with the few call-outs below — not worth
+pinning for this project's actual goals (a real Darwin userland shell +
+IOKit driver stack on bare Pi 3 hardware, no GUI, no enterprise auth, no
+scripting-language runtime as a goal in itself):
+
+- **GUI/graphics/WebKit stack** (`WebCore`, `WebKit`, `WebKit2`,
+  `WebInspectorUI`, `JavaScriptCore`, `WTF`, `IOGraphics`, `IOHIDFamily`,
+  `IOAudioFamily`) — this target has no display server, no HID input
+  beyond a serial console, no audio hardware driver. Structurally
+  inapplicable, not merely deprioritized.
+- **Enterprise/network auth & directory services** (`Heimdal`,
+  `OpenLDAP`, `KerberosHelper`, `MITKerberosShim`, `Security`,
+  `security_certificates`, `security_authtrampoline`, `SecurityTokend`,
+  `passwordserver_sasl`, `SmartcardCCID`) — no directory service exists
+  on this target at all (per `CLAUDE.md`, no `opendirectoryd`); this
+  project's account model is the flat-file resolver already built.
+- **Scripting-language runtimes** (`perl`, `python`, `python23`, `ruby`,
+  `RubyGems`, `tcl`, `swig`, `pyobjc`) — no interpreter is a project goal;
+  would each be their own multi-phase undertaking bigger than most
+  existing phases combined, and nothing in the roadmap calls for one.
+- **Web/mail server stack** (`apache`, `apache1`, `apache2`, every
+  `apache_mod_*`, `postfix`, `mailman`, `cups`) — server daemons for
+  services this single-user embedded target has no use case for.
+- **Legacy/alternate shells** (`ksh`, `tcsh`, `zsh`, `screen`) — bash is
+  already the working default login shell; no stated need for another.
+- **Filesystems this target doesn't mount** (`AppleRAID`, `autofs`,
+  `cddafs`, `ntfs`, `NFS`, `webdavfs`, `SMBClient`) — HFS+ and msdosfs are
+  the only two mounted filesystem types anywhere in this project.
+- **Storage/bus families for hardware this board doesn't have**
+  (`IOATAFamily`, `IOATAPIProtocolTransport`, `IOBDStorageFamily`,
+  `IOCDStorageFamily`, `IODVDStorageFamily`, `IOFireWireFamily` and its
+  three siblings, `IOPCIFamily`, `IOSCSIParallelFamily`) — BCM2837 has no
+  ATA/SCSI/FireWire/PCI/optical hardware.
+- **Build/packaging/release infra for Apple's own internal pipeline**
+  (`CoreOSMakefiles`, `pb_makefiles`, `project_makefiles`,
+  `bsdmanpages`, `pbx_jamfiles`, `usertemplate`, `release.json`,
+  `.gitmodules`) — this project already has its own build scripts; these
+  are Apple's Xcode-project scaffolding, not portable build logic.
+- **Kext loading/management tooling** (`kext_tools`) — structurally
+  inapplicable per `CLAUDE.md`: "the handful of IOKit drivers... are
+  compiled directly into the kernel, not loaded as kext bundles."
+  `AvailabilityVersions` (SDK versioning macros) is a similar case —
+  relevant only to a real SDK-header-generation pipeline this project
+  doesn't have.
+- **Networking daemons/tools with no current use case**: `bind9` (DNS
+  *server*, vs. `libresolv`'s client role above, already actionable),
+  `net_snmp`, `ppp`, `eap8021x`, `dcerpc`, `gssd`, `rsync`, `subversion`,
+  `curl`, `netcat`/`lsof`/`tcpdump`/`top`/`remote_cmds` (genuinely useful
+  diagnostic tools eventually, but no current roadmap item calls for
+  them — natural Phase 6c/Tier-C candidates once basic `ping`/`netstat`/
+  `arp`/`route` from the already-pinned `network_cmds` land first).
+- **Misc format/data libraries not currently needed**: `expat`,
+  `libxml2`, `libxslt`, `ICU` (full Unicode tables — this project's
+  locale work is deliberately minimal/C-locale-only), `BerkeleyDB`,
+  `iodbc`, `libpcap` (only useful once `tcpdump` is wanted), `bzip2`,
+  `zip` (zlib itself is already vendored via `third_party/u-boot`'s copy
+  and working), `xar`, `hunspell`, `CrackLib`.
+- **Objective-C/C++ runtime support** (`objc4`, `libcppabi`,
+  `Libcpp_kext`, `libstdcxx`, `libstdcxx_SUPanWheat`) — no Objective-C
+  anywhere in this project; the C++ used by IOKit drivers already builds
+  and links today without these (confirmed — the kernel and kexts build
+  clean), so nothing currently depends on them.
+- **Other package's own already-superseded internals**: `old_ncurses`
+  (superseded by `ncurses` above), `OpenSSL098` (ancient vintage, and
+  crypto work here is explicitly scoped through corecrypto/AES instead —
+  `docs/backlog.md` P2 item 0a — not OpenSSL).
+- **Everything genuinely cosmetic/documentation**: `man`, `doc_cmds`,
+  `texinfo`, `groff`, `tidy`.
+- **Misc single-purpose utilities with no current caller**: `bc`, `nano`,
+  `vim` (Phase 7d names this one explicitly as a future target, just not
+  yet), `patch_cmds`/`gpatch` (only needed if this project starts
+  consuming patch files at runtime, not currently), `modemccl`, `uucp`,
+  `disklabel`/`gpt`/`bless` (bootability tooling for a boot chain this
+  project's `u-boot` already handles differently), `system_config`,
+  `UserNotification`, `Libnotify` (real dependency is Mach IPC only per
+  `docs/daemon-roadmap.md`'s own inventory — filed there, not here).
+- **`Libsystem`** — this is Apple's umbrella/glue project that just
+  aggregates the already-pinned `Libc`/`libpthread`/`libdispatch`/etc.
+  into one `.dylib`; not itself a separate source pull, and irrelevant
+  regardless since this project has no `dyld`/`.dylib` linking at all
+  (`docs/roadmap.md` Phase 6.5).
+
+## Recommended next action
+
+Part 1's two unambiguous mismatches (`IOStorageFamily`/`msdosfs`) are
+fixed and reverified as of 2026-08-24 (see above). Remaining before
+starting Part 2's new-library work:
+
+- **`hfs`'s pin still needs a deliberate keep-or-revert decision**
+  (currently `556.100.11`, newer than the manifest's `556.60.1`) — not
+  mechanical like the other two, needs a call on whether manifest
+  fidelity or the newer maintenance tag matters more here.
+- **`IOUSBFamily` has no better tag to move to** — confirmed no Big
+  Sur-era manifest entry exists at all, nothing to fix.
+- **Not yet done**: regenerating the legacy single-partition
+  msdosfs-as-root test image (or an equivalent narrower test) to
+  directly re-exercise msdosfs's own root-mount fixes at runtime, since
+  the current default boot image never mounts `disk0s1` via msdosfs at
+  all (it's HFS+-rooted; msdosfs's device node is enumerated but never
+  mounted). Low urgency given msdosfs is already documented as the
+  superseded root-fs path, but worth remembering it's an unverified gap
+  before treating this fix as 100% closed rather than "compiles clean +
+  boots clean with zero regression, runtime root-mount path unexercised."
+
+Part 2's new-library list (`ncurses`, `gnutar`, `diskdev_cmds`, `awk`,
+etc.) can proceed independently of the above.
