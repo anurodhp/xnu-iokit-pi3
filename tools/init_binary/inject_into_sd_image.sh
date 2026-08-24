@@ -158,6 +158,17 @@ else
     echo "= tools/pthread_kthread_test/pthread_kthread_test.macho not built -- run tools/pthread_kthread_test/build.py first if wanted, skipping"
 fi
 
+if [ -f tools/ulock_kthread_test/ulock_kthread_test.macho ]; then
+    mkdir -p "$MNT/bin"
+    cp tools/ulock_kthread_test/ulock_kthread_test.macho "$MNT/bin/ulock_kthread_test"
+    chmod 755 "$MNT/bin/ulock_kthread_test"
+    echo "+ wrote $(wc -c < tools/ulock_kthread_test/ulock_kthread_test.macho) bytes to $MNT/bin/ulock_kthread_test"
+    echo "  (Phase 7.5 real ulock_wait/ulock_wake blocking-handoff smoke test --"
+    echo "  run it from the shell, see tools/ulock_kthread_test/ulock_kthread_test.c)"
+else
+    echo "= tools/ulock_kthread_test/ulock_kthread_test.macho not built -- run tools/ulock_kthread_test/build.py first if wanted, skipping"
+fi
+
 # Real Phase 4 step 3 "remaining commands" tiers (docs/roadmap.md) --
 # each build_*_cmds.sh script writes one <name>.macho per real command
 # it built; every one of them lands in /bin, matching real BSD/macOS

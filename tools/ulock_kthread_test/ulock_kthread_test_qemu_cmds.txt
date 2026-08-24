@@ -1,0 +1,19 @@
+root
+darwin
+echo REGRESSION_START
+pwd
+ls /bin
+uname -a
+id
+echo hello_from_regression_check
+ps
+echo REGRESSION_MID
+pthread_kthread_test
+echo PTHREAD_EXIT=$?
+workq_kthread_test
+echo WORKQ_EXIT=$?
+ulock_kthread_test
+echo ULOCK_EXIT=$?
+echo bash_still_alive_after_ulock_test
+ls /bin
+echo DONE_ULOCK_KTHREAD_TEST_MARKER

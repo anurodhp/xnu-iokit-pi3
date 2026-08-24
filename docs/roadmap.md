@@ -873,27 +873,87 @@ need a real implementation later:
     commit history for `bsd/kern/bsd_pthread_workq.c` and
     `bsd/kern/bsd_pthread_stub.c`); not pushed.
 
-    Real next step for whoever continues this: `psynch_mutex*`/
-    `psynch_cvwait`'s real backing primitive is very likely real Mach
-    semaphores/turnstiles already used elsewhere in this kernel
-    (`bsd/pthread/pthread_shims.c`'s own `psynch_wait_prepare`/
-    `psynch_wait_wakeup` already call real `turnstile_prepare`/
-    `waitq_assert_wait64_leeway`/`waitq_wakeup64_thread` -- real,
-    open-source, unexplored in depth this session) -- not yet designed in
-    detail, flagged rather than guessed at. A real minimal
-    libpthread-ABI-compatible userspace `pthread_create()` wrapper is now
-    architecturally much closer than it looked before this session (the
-    kernel side of workqueue thread creation is real and verified) but
-    still needs: real TSD/dispatch-queue-offset wiring end to end (the
-    kernel-side plumbing for it, `proc_set_pthread_tsd_offset`, etc., is
-    real and exercised by `real_bsdthread_register` above, but no real
-    userspace libpthread on this target calls it with real offsets yet --
-    `tools/workq_kthread_test/` deliberately passes 0s, see its own header
-    comment), and `psynch_*` (previous paragraph). `workq_kernreturn`'s
-    other real op codes (`WQOPS_THREAD_RETURN`/`WQOPS_THREAD_KEVENT_RETURN`/
-    `WQOPS_QUEUE_REQTHREADS2`/etc.) were not exercised by this pass either
-    -- `tools/workq_kthread_test/`'s worker thread just spins forever
-    rather than really parking back into the kernel, a real, narrower,
+  - **Real pthread kernel bridge, step 3: `ulock_wait`/`ulock_wake` as a
+    real, non-psynch synchronization path (2026-08-24)**: `psynch_mutex*`/
+    `psynch_cvwait`'s real backing *protocol logic* was never
+    open-sourced -- only the generic primitives it calls
+    (`turnstile_prepare`/`waitq_assert_wait64_leeway`/
+    `waitq_wakeup64_thread`, in `pthread_shims.c`'s `psynch_wait_prepare`/
+    `psynch_wait_wakeup`) are real. Re-implementing the actual psynch
+    wire protocol from scratch was the standing "real next step" note
+    left by step 2 above. This step found a real shortcut instead:
+    `bsd/kern/sys_ulock.c` (`ulock_wait`/`ulock_wake`/`ulock_wait2`, BSD
+    syscalls 515/516/544) is itself real, unmodified, already-open-source
+    Apple code, was already compiled into this kernel the whole time
+    (`bsd/conf/files`: `bsd/kern/sys_ulock.c standard`), and -- confirmed
+    by grep, zero hits -- has **no dependency at all** on the closed
+    `pthread_functions`/`pthread_kern` vtable that gates every `psynch_*`
+    call. And `third_party/libpthread` itself already ships a real,
+    Apple-documented opt-in fast path that uses it instead of psynch:
+    `pthread_mutex.c`'s `PTHREAD_MUTEX_USE_ULOCK=1` env knob (default
+    off, `types_internal.h:187`) routes `pthread_mutex_t` through
+    `__ulock_wait`/`__ulock_wake` (`UL_UNFAIR_LOCK`) instead of
+    `psynch_mutexwait`/`psynch_mutexdrop`, and `pthread_cond.c` has a
+    matching `_PTHREAD_COND_SIG_ulock` state that uses `__ulock_wait2`/
+    `__ulock_wake` once paired with a ulock-mode mutex. (No such path
+    exists for `pthread_rwlock.c` -- rwlocks stay fully psynch-dependent,
+    genuinely deferred, not addressed here.) Per this project's
+    Apple-first source-priority convention, this is strictly better than
+    the originally-flagged option: it needs zero new kernel code and zero
+    reverse-engineered protocol design, just exercising code that was
+    already sitting in the tree unused.
+
+    Verification: `tools/ulock_kthread_test/` -- a new freestanding,
+    no-libc raw-syscall test spawning a second real kernel thread via the
+    already-verified `bsdthread_create()`, where the child writes a magic
+    value and calls `ulock_wake(2)` directly while the main thread
+    genuinely blocks in `ulock_wait(2)` (`UL_COMPARE_AND_WAIT`, bounded
+    5s timeout so a kernel-side bug would show up as a diagnosable
+    timeout, not hang QEMU forever). This is the project's first real
+    exercise of the turnstile/waitq blocking path being driven by actual
+    userland syscalls rather than busy-polling (both `pthread_kthread_test`
+    and `workq_kthread_test` predate any real blocking wait/wake and
+    poll a shared word instead). Race-safety relies on `ulock_wait2`'s own
+    copyin-under-lock "value no longer matches -> return immediately, do
+    not block" check (`sys_ulock.c`), not on any ordering assumption in
+    the test itself. Boot-verified twice on real QEMU
+    (`third_party/qemu-zhuowei`, via `_pty_test_phase5.py`), both runs
+    printing `SUCCESS: real ulock_wait/ulock_wake handoff observed` and
+    exiting 0, with zero regressions in `pthread_kthread_test`/
+    `workq_kthread_test` or the standing shell command set in the same
+    session. Adversarial self-review before commit caught one real latent
+    bug: `lockword` was originally declared `volatile long` (64-bit) but
+    `UL_COMPARE_AND_WAIT` only compares/copies the low 32 bits
+    (`sys_ulock.c`: `lock_size = sizeof(uint32_t)`) -- harmless with the
+    specific `MAGIC` value used and arm64's little-endian layout, but a
+    real type/op mismatch that would silently misbehave for a different
+    magic value or op; fixed by narrowing `lockword` to `volatile
+    uint32_t` and the child's store to a 32-bit `str w1, [x0]` before
+    committing. New artifact wired into
+    `tools/init_binary/inject_into_sd_image.sh`'s copy loop per this
+    project's "every built artifact needs a reproducing script" rule.
+
+    Real next step for whoever continues this: build an actual minimal,
+    linkable subset of `third_party/libpthread` for this project's
+    userland with `PTHREAD_MUTEX_USE_ULOCK` forced on, giving a real
+    `pthread_create()`/`pthread_mutex_lock()`-compatible API backed
+    end-to-end by kernel code that's genuinely open-source top to bottom
+    -- this session's test is a kernel-level stepping stone toward that,
+    not the finish line. `psynch_rw_*` (rwlocks) has no such shortcut and
+    would still need the original harder approach (reverse-engineer the
+    protocol against the real `turnstile`/`waitq` primitives) if ever
+    tackled. A real minimal libpthread-ABI-compatible userspace
+    `pthread_create()` wrapper still separately needs real
+    TSD/dispatch-queue-offset wiring end to end (the kernel-side plumbing
+    for it, `proc_set_pthread_tsd_offset`, etc., is real and exercised by
+    `real_bsdthread_register` from step 2, but no real userspace
+    libpthread on this target calls it with real offsets yet --
+    `tools/workq_kthread_test/` deliberately passes 0s, see its own
+    header comment). `workq_kernreturn`'s other real op codes
+    (`WQOPS_THREAD_RETURN`/`WQOPS_THREAD_KEVENT_RETURN`/
+    `WQOPS_QUEUE_REQTHREADS2`/etc.) also remain unexercised --
+    `tools/workq_kthread_test/`'s worker thread just spins forever rather
+    than really parking back into the kernel, a real, narrower,
     deliberately-scoped simplification documented in the test's own
     header comment.
 - **Phase 8 (`pkg` package management)**: fully planned, not started.

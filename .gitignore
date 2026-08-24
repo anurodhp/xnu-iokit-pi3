@@ -41,6 +41,11 @@ tools/pthread_kthread_test/pthread_kthread_test.macho
 # init.macho above)
 tools/workq_kthread_test/workq_kthread_test.macho
 
+# Phase 7.5 real ulock_wait/ulock_wake blocking-handoff smoke test -- build
+# artifact, rebuild via tools/ulock_kthread_test/build.py (same reasoning as
+# init.macho above)
+tools/ulock_kthread_test/ulock_kthread_test.macho
+
 # Downloaded precompiled binaries and local QEMU test scaffolding -
 # large, reproducible, not our source (precompiled/rpi.dtb is also known-bad,
 # see project memory)
