@@ -24,10 +24,19 @@ P1 = correctness bugs, P2 = known gaps, P3 = hygiene).
 `third_party/` holds: this project's own forks (`xnu-7195`, `xnu-latest`,
 `qemu-zhuowei`) with full port history; small patched upstreams
 (`dtc-AppleDeviceTree`, `u-boot`, patches in `third_party-patches/`); and
-unmodified Apple open-source pinned to exact tags matched against
-apple-oss-distributions' `distribution-macOS` manifest for macOS 11.2
-(`hfs`, `msdosfs`, `IOStorageFamily`, `IOUSBFamily`, `IONetworkingFamily`,
-the libSystem stack, `bash`/coreutils).
+40+ unmodified Apple open-source repos pinned to exact tags matched
+against apple-oss-distributions' `distribution-macOS` `macos-112`
+manifest for macOS 11.2/Darwin 20.3 (the libSystem stack, `bash`/
+coreutils, `hfs`/`msdosfs`/`IOStorageFamily`/`IOUSBFamily`/
+`IONetworkingFamily`, and more). **`docs/apple-oss-catalog.md` is the
+authoritative, up-to-date list** — every pin's tag, whether it matches
+the manifest, and what's cataloged-but-not-yet-pinned; don't trust an
+inline list here to stay current. That doc also documents a real lesson:
+a full pin audit (2026-08-24) found 2 of 32 pins had drifted to a tag
+*older* than what the manifest actually specifies (`IOStorageFamily`,
+`msdosfs`) despite this file's own "pinned to an exact tag" claim — a
+pin is only as trustworthy as the last time someone actually diffed it
+against the manifest, not merely present in this file.
 
 ## Build commands
 
@@ -39,10 +48,12 @@ tools/build_kexts.sh [outdir]    # compile iokit/*/*.cpp standalone (default: bu
 - `build_xnu_7195.sh` requires the live/daily-driver Xcode's `iPhoneOS`
   SDK (`SDKROOT=iphoneos`, `PLATFORM=iPhoneOS` — BCM2837 is embedded-only
   upstream; do not mix with `SDKROOT=macosx`, it desyncs `CONFIG_EMBEDDED`
-  vs `XNU_TARGET_OS_OSX` struct layouts). After a rebuild, manually copy
-  the output to
+  vs `XNU_TARGET_OS_OSX` struct layouts). The script publishes its own
+  output to
   `build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped`
-  — no script does this copy automatically.
+  automatically (via `tools/sync_iokit_drivers.sh` + a `cp` at the end) —
+  this used to be a manual step and isn't anymore; don't manually copy on
+  top of it.
 - `build_kexts.sh` requires **Xcode 12** specifically
   (`DEVELOPER_DIR=/Applications/Xcode-12.app/...`), not the daily-driver
   Xcode — its SDK vintage lines up with xnu-7195's Darwin 20.3, and
@@ -54,10 +65,42 @@ tools/build_kexts.sh [outdir]    # compile iokit/*/*.cpp standalone (default: bu
   freestanding userland Mach-O binaries (see below). Both warn loudly if
   `otool -l` output isn't fully static (`LC_UNIXTHREAD`, zero
   `LC_LOAD_DYLIB`) — that invariant is load-bearing, not cosmetic.
-- `tools/userland_staging/build_*.sh` — incremental libSystem/libc pulls
-  (Phase 4): `build_libc_string.sh`, `build_libc_locale.sh`,
-  `build_crt0_smoketest.sh`, `build_libsyscall_smoketest.sh`,
-  `build_tsd_bootstrap.sh`, `build_pthread_tsd_shim_smoketest.sh`.
+- `tools/userland_staging/build_*.sh` — 30+ scripts, one per curated
+  libSystem/libc library or real command, each producing a static
+  archive/binary under `tools/userland_staging/libc_build/`. This is a
+  DIFFERENT toolchain setup than either build command above: **Xcode 12's
+  `iPhoneOS` SDK** (not the daily-driver Xcode, not the kernel's SDK path)
+  at `/Applications/Xcode-12.app/Contents/Developer/Platforms/
+  iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk`, target
+  `arm64-apple-ios14.4`, invoking `clang`/`clang++` directly (never
+  `xcodebuild`). Every archive is compiled `-ffreestanding -fno-builtin
+  -fno-stack-protector` — this target has no dyld, so nothing here may
+  ever produce a `.dylib` or link one in (`otool -l` must show zero
+  `LC_LOAD_DYLIB` and a real `LC_UNIXTHREAD`, checked by every script's
+  own smoketest step).
+  **`build_libc_regex.sh` is the reference template for porting one more
+  Apple library** (real per-file compile loop reporting gaps, real `ar`
+  archive step, real dependency check against already-built `.a` files,
+  real smoketest linking the new archive against `third_party/Csu`'s
+  `start.s`/`crt.c` plus the existing curated stack, checked via `nm -u`
+  for undefined symbols) — read it before writing a new one rather than
+  inventing a different shape. `build_libc_locale.sh` has the most fully
+  commented version of the shared `CFLAGS` recipe itself. Real dependency
+  order matters (e.g. `libc_regex.a` needs `libc_locale.a` and
+  `libmalloc.a` already built) — each script checks its own prerequisites
+  and fails fast rather than guessing.
+  New library/tool ports follow this exact loop: pin the tag in
+  `setup_third_party.sh` against the `macos-112` manifest (see
+  `docs/apple-oss-catalog.md`), clone it, write `build_<name>.sh` off the
+  template above, run it for real, verify with a real smoketest — no
+  fabricated stubs beyond a clearly-documented, provable architectural
+  gap (e.g. OpenPAM's `dlopen`-based module loader has no home here since
+  there's no dyld at all; that's a real gap to document, not paper over).
+  This kind of independent library port is a good candidate for
+  delegating to parallel background subagents (one per library) to keep
+  context small — but have the orchestrating session make any *shared*
+  file edits (`setup_third_party.sh`'s pins, in particular) itself first,
+  so parallel agents never touch the same file.
 
 ## Boot / test commands
 
@@ -94,7 +137,23 @@ See `architecture.md` for the full write-up (boot chain, driver stack,
 userland). Read it before making non-trivial changes — this project has a
 long history of "obvious" fixes turning out to be one layer above or below
 the real bug (see `docs/backlog.md` and the roadmap's phase write-ups for
-worked examples).
+worked examples). Other `docs/` files worth knowing about beyond
+`roadmap.md`/`backlog.md`: `daemon-roadmap.md` (background-daemon
+porting plan/tiering), `apple-oss-catalog.md` (full apple-oss-
+distributions inventory + pin-correctness audit), `usb-support-plan.md`,
+`multiuser-userland-plan.md`, `hfs-integration-notes.md`,
+`sd-and-ethernet-plan.md`; `docs/historic/` archives full phase-by-phase
+detail once `roadmap.md`/`backlog.md` are condensed.
+
+`third_party/xnu-7195` and `third_party/qemu-zhuowei` are this project's
+own forks with their own real git history and branches — not just a
+pinned tag. `bcm2837-bringup` is the kernel fork's main line
+(`build_xnu_7195.sh` builds it by name). Larger efforts sometimes happen
+on a side branch first (e.g. `phase-6b-inet` for the Phase 6b networking
+work) and get fast-forward-merged back into `bcm2837-bringup` once
+real-hardware/QEMU-verified — check `git branch -vv` in that submodule
+before assuming `bcm2837-bringup` is checked out or up to date; it has
+drifted before.
 
 ## Working conventions specific to this repo
 
