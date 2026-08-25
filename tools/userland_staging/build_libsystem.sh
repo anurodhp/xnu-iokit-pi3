@@ -42,8 +42,12 @@ for a in libc_gen libc_string libc_stdio libc_printf \
         exit 1
     fi
 done
-if [ ! -f "$OUT/libcxx_locale_for_stdio_scratch.a" ] || [ ! -f "$OUT/libcxx_tsd_shim_bootstrap_compat.o" ]; then
-    echo "error: $OUT/libcxx_locale_for_stdio_scratch.a / libcxx_tsd_shim_bootstrap_compat.o not found -- run build_llvm_libcxx.sh first" >&2
+# libc_gen.a/libc_string.a/libc_stdio.a/libc_printf.a/
+# libcxx_locale_for_stdio_scratch.a/libcxx_tsd_shim_bootstrap_compat.o no
+# longer required here (static-to-dylib migration step 4, docs/
+# daemon-roadmap.md) -- real libsystem_c.dylib below instead.
+if [ ! -f "$OUT/system/libsystem_c.dylib" ]; then
+    echo "error: $OUT/system/libsystem_c.dylib not found -- run build_libsystem_c.sh first" >&2
     exit 1
 fi
 # libplatform.a/libclosure.a/cerror_stub.o no longer required here
@@ -131,9 +135,7 @@ rm -f "$OUT/system/libSystem.B.dylib"
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_blocks.dylib" \
     "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" \
     "$OUT/libcxx.a" "$OUT/libcxxabi.a" "$SCRATCH/libunwind_scratch.a" \
-    "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libcxx_locale_for_stdio_scratch.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
-    "$OUT/libc_printf.a" "$OUT/libc_string.a" \
-    "$OUT/libcxx_tsd_shim_bootstrap_compat.o" \
+    "$OUT/system/libsystem_c.dylib" \
     "$OUT/libcopyfile.a" "$OUT/libremovefile.a" "$OUT/libresolv.a" \
     "$RTLIB" \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \

@@ -664,16 +664,25 @@ need a real implementation later:
   Apple's actual modular architecture -- a real migration effort, per
   explicit user direction ("do 2 library at a time and finish all") to
   stop building new static-archive-plus-shim code and instead finish
-  this migration. Steps 1-3 DONE and QEMU-verified same day:
+  this migration. Steps 1-4 DONE and QEMU-verified same day:
   `libsystem_kernel.dylib`; `libsystem_platform.dylib` +
   `libsystem_blocks.dylib`; `libsystem_malloc.dylib` +
-  `libsystem_pthread.dylib`. Each step's own audit found a real
-  duplicate-global-state bug before it could cause a crash --
-  `errno` (step 2), then the single most serious one yet: `libmalloc`'s
-  heap-zone pointer and `libpthread`'s thread registry (step 3), both
-  real silent-corruption risk had they stayed duplicated per-dylib. See
+  `libsystem_pthread.dylib`; `libsystem_c.dylib` (string+gen+stdio+
+  printf+locale+regex combined into ONE dylib, matching real Apple's
+  own granularity -- splitting stdio from printf would have recreated
+  the same duplicate-global bug a third time via `__stdinp`/`__stdoutp`/
+  `__stderrp`). Each step's own audit found a real duplicate-global-state
+  bug before it could cause a crash -- `errno` (step 2), the most
+  serious one yet (`libmalloc`'s heap-zone pointer and `libpthread`'s
+  thread registry, step 3), and step 4's own real, live gap found only
+  once linked against `libdyld.dylib` for real: dyld's own
+  `LibSystemHelpers::mkstemp()` needed a real, working `mkstemp()`,
+  closing out a real `arc4random_uniform()`/Data-Protection-syscall/
+  internal-`sigprocmask` gap chain. `libdyld.dylib`/`libSystem.B.dylib`
+  now link 9 real dylibs total instead of bundling static archives. See
   `docs/daemon-roadmap.md`'s "Static-to-dylib migration" sections for
-  what moved, what's left, and next-step candidates.
+  what moved, what's left, and next-step candidates (libcxx/libcxxabi/
+  libunwind next).
 - **Phase 6.6 (libdispatch/GCD)**: planning-only placeholder, blocked
   behind 6.5. Even once unblocked, real concurrent `dispatch_async` can't
   exist until real threading does (Phase 7.5's pthread ceiling) -- scope

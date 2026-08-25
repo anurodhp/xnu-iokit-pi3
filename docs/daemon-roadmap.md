@@ -1265,24 +1265,151 @@ already succeeds, so `libpthread.a` itself is unaffected and this
 migration's own scripts never hit it, but it's a real, separate
 build-script ordering fragility someone should eventually chase down.
 
-**Next candidates for step 4**: the BSD syscall surface (would retire
-the remaining scattered per-consumer syscall-stub files -- `iokit_trap.s`,
+### Static-to-dylib migration, step 4: `libsystem_c.dylib` -- DONE
+### 2026-08-25, QEMU-verified
+
+Same day. Combines `libc_string.a` + `libc_gen.a` + `libc_stdio.a` +
+`libc_printf.a` + `libc_locale_for_stdio.a` + `libc_regex.a` into ONE
+real dylib -- a deliberate departure from the original "one migration
+step per this project's own `.a` file" pattern, because real Apple does
+not split these into separate dylib images either (real macOS has one
+`libsystem_c.dylib`, not a `libsystem_string.dylib` +
+`libsystem_stdio.dylib` + ...). This project's own `.a` split is purely
+a build-pipeline convenience (see `docs/roadmap.md` Phase 4's tier
+breakdown), and splitting it into separate DYLIB images specifically
+would recreate the exact `mach_task_self_`/`errno`/`g_zone` bug shape a
+third time: `libc_stdio`'s real `__stdinp`/`__stdoutp`/`__stderrp` (the
+actual `FILE*` globals every `printf`/`fprintf`/`fflush` call goes
+through) are plain BSS globals -- splitting stdio from printf (or either
+from anything else touching those three `FILE*`s) would give each image
+independently-buffered, divergent stdin/stdout/stderr state. Bundling
+avoids ever creating that split, rather than fixing it after the fact.
+
+**Real, substantial correction made while writing this script**: a
+first attempt linked the 5 (later 6) archives directly rather than
+`ar x`-extracting them, hoping `ld`'s normal selective archive-member
+scanning would just replicate today's already-working static link. It
+compiled -- but left the dylib missing obviously-needed real exports
+(`_getenv`, `_memchr`, `_memmove`, `_snprintf`, `_strcmp`, `_strlcpy`,
+`_vfprintf`, `_fprintf`, `_mkstemp`), confirmed via `nm -g` showing them
+absent. Root cause: selective archive scanning only pulls a member when
+something *already in that same link* needs it -- in the old monolithic
+static build these get pulled because `libcxx.a`/`libcxxabi.a`/
+`libunwind.a` are linked in the *same* invocation and need them, but a
+real shared dylib has to export a real, complete API surface for *any*
+future consumer, not just whatever else happens to be present today.
+Fixed by extracting every member (`ar x`, same approach every dylib
+since `libsystem_malloc.dylib`) and closing the real gaps that surfaces
+one at a time, same discipline `pthread_atfork.o` already established --
+this is the fourth and by far largest application of that lesson.
+
+**Real gaps found and closed extracting everything**, real source or
+real narrow compat in every case, no fabricated stubs:
+- `sys_siglist`/`strvisx`: real FreeBSD source
+  (`gen/FreeBSD/siglist.c`/`vis.c`) simply never in any tier's file list
+  before -- compiled fresh.
+- 7 real BSD syscalls this project's `create-syscalls.pl` pipeline had
+  never generated before (`access`/`ftruncate`/`mkdirat`/`sigprocmask`/
+  `read`/`rmdir`/`unlink` -- the last two are real cancelable syscalls
+  needing the same triple-underscore-raw-name-plus-public-alias shape
+  `___kill`/`_kill` already established; `fstatat`'s real implementation
+  turned out to be `_fstatat64.s`, not the empty-placeholder
+  `_fstatat.s` the naive per-name loop first tried, discovered by
+  actually reading the generator's real output instead of guessing the
+  filename).
+- `___progname`: a real per-PROCESS global that genuinely lives in the
+  MAIN EXECUTABLE's own `third_party/Csu/crt.c` (set from `argv[0]` at
+  startup), not something `libsystem_c.dylib` itself should define --
+  matches real Apple's own architecture. Marked `-Wl,-U` (same real
+  dynamic-lookup mechanism `_dyld_initializer` already uses), resolving
+  at runtime against whichever process image actually defines it.
+- **A real, live gap discovered only once linked against `libdyld.dylib`
+  for real** (same shape as `pthread_atfork.o`'s discovery in step 3):
+  real dyld's own `LibSystemHelpers::mkstemp()` (`libdyld/
+  LibSystemHelpers.cpp`) needs a real, working `mkstemp()`. Real
+  `mktemp.c`'s `mkstemp()` needs real `arc4random_uniform()` --
+  previously assumed out of scope (corecrypto-coupled), but real
+  `gen/FreeBSD/arc4random.c` already compiles clean under this
+  project's standard `-DVARIANT_STATIC` (its own real `#if
+  defined(__APPLE__) && !defined(VARIANT_STATIC)` condition is exactly
+  Apple's documented gate for routing around `corecrypto/ccrng.h` for
+  static/pre-libSystem-init consumers) -- already proven by
+  `build_libresolv.sh`'s own identical compile for `res_randomid()`,
+  reused verbatim, not re-derived. Closing this cascaded through several
+  more callers needing the same fix (`tmpfile.o`, `tmpnam.o`,
+  `tempnam.o`), plus two more small real gaps: `mkstemp_dprotected_np()`
+  needs real trap 216 (`open_dprotected_np`, `NO_SYSCALL_STUB` in
+  `syscalls.master`, same class of hand-written-raw-syscall gap as
+  `__ulock_wait`/`thread_selfid` elsewhere in this project -- a real,
+  narrowly-scoped wrapper, not a stub, this kernel genuinely implements
+  the trap, tagging-only since there's no real per-file encryption on
+  this target's storage), and `tmpfile.c`'s own real, internal
+  `_sigprocmask` (real Apple's internal single-underscore-prefixed name
+  for the same real `sigprocmask(2)`, distinct from the public symbol
+  the syscall generator emits under a different linker name) -- a real,
+  narrow `asm("__sigprocmask")`-renamed forwarder, correct because this
+  project has no real pthread-cancellation machinery for the two names
+  to ever diverge over.
+- `libc_regex.a` added as a 6th archive for real `regcomp`/`regexec`/
+  `regfree` (`rpmatch.c`'s own real dependency) -- already built and
+  working via `build_libc_regex.sh` (CLAUDE.md's own reference template
+  for this project's whole port methodology), just never previously
+  linked into this specific combination.
+
+**Real, honestly-scoped exclusions** (confirmed unreachable in the
+current, already-working static link too -- not a behavior change,
+documented in `build_libsystem_c.sh`'s own header comment in full):
+`machdep_ldisQ.o` (real gdtoa Quad/128-bit-precision `long double`
+support, genuinely inapplicable to arm64 where `long double` ==
+`double`), and the whole wide-char `strftime`/`wscanf` family
+(`wcsftime.o`, `wscanf.o`/`vwscanf.o`/`fwscanf.o`/`swscanf.o`/
+`vswscanf.o`/`vfwscanf.o`, all cascading to the same real but
+substantial `wcstod_l`/`wcstof_l`/`wcstold_l` locale-integration
+undertaking this project's locale work has repeatedly deferred before
+-- a real follow-up, not a permanent ceiling).
+
+One real, pre-existing overlap to get right (not a new bug): 38 string
+primitives (`strlen.o`, `memcpy.o`, etc) exist in BOTH `libc_string.a`
+and `libc_locale_for_stdio.a`. The current static link lists
+`libcxx_locale_for_stdio_scratch.a` (== `libc_locale_for_stdio.a` minus
+`pthread_tsd_shim.o`) before `libc_string.a`, so locale's copies are
+what's actually linked today -- extraction order replicates this
+(locale extracted after string, so its copies overwrite on disk, same
+outcome as `ld`'s left-to-right archive scan giving the earlier-listed
+archive priority).
+
+**QEMU-verified**: `dyld_test_exec` still runs its own `main()` and
+exits with `EXITCODE:1`, no crash, now loading 9 real dylibs total.
+Full boot-to-login-shell sequence unaffected. A second pre-existing,
+unrelated build-script ordering fragility was noticed (not fixed, out
+of scope, same class as `build_libpthread.sh`'s own from step 3):
+`build_libc_gen.sh`'s own smoketest fails with undefined
+`pthread_mutex_*` symbols in certain rebuild orderings, but `ar rcs
+"$OUT/libc_gen.a"` already succeeds before that point, so `libc_gen.a`
+itself is unaffected and this migration's own scripts never hit it.
+
+**Next candidates**: the BSD syscall surface for the remaining scattered
+per-consumer syscall-stub files (`iokit_trap.s`,
 `notify_mig_special_reply_port_trap.s`, `mach_port_extra_traps.s`,
 `mach_ipc_traps.s` -- confirmed via `grep -rl "svc #0x80"` across
 `tools/userland_staging/*.s`, not yet audited individually for which
 specific consumers still need each one; `libunwind_sched_yield.s` is now
 also duplicated into `libsystem_pthread.dylib`, real but redundant, not
-a correctness risk), or `libc_string`/`libc_stdio`/`libc_gen`/`libc_printf`
-as real dylibs next (getenv/getprogname/isatty's `-Wl,-U` in
-`libsystem_malloc.dylib` would become real dependencies then too).
-Whoever continues this should re-run that same `grep -rl "svc #0x80"
-*.s` scan first -- it's the fastest way to re-derive the current
-scattered-trap-file inventory rather than trusting this list to stay
-current, and should re-audit each new library for the same duplicate-
-global-state risk before assuming "just relink it as a dylib" is safe
-(three real instances of that exact bug found so far -- `mach_task_self_`,
+a correctness risk) -- lower priority now that `libsystem_c.dylib`
+covers the vast majority of real syscall traffic. Bigger remaining
+targets: `libcxx`/`libcxxabi`/`libunwind` as real dylibs (batch 5), and
+the smaller archives (`libcopyfile`/`libremovefile`/`libresolv`, batch
+6) -- once those land, `libSystem.B.dylib`/`libdyld.dylib` should be
+down to just their own real glue code plus real `LC_LOAD_DYLIB`s, no
+bundled static archives left at all. Whoever continues this should
+re-run that same `grep -rl "svc #0x80" *.s` scan first, and should
+re-audit each new library for the same duplicate-global-state risk
+before assuming "just relink it as a dylib" is safe (three real
+instances of that exact bug class found so far -- `mach_task_self_`,
 `errno`, `g_zone`/the pthread registry -- all by deliberately checking
-for it first, not by waiting for a crash).
+for it first, not by waiting for a crash; `libsystem_c.dylib`'s own
+`__stdinp`/`__stdoutp`/`__stderrp` finding is the same risk avoided by
+design rather than fixed after a crash).
 
 **CoreFoundation source options, noted 2026-08-24 (not yet evaluated in
 depth -- flagging for whoever picks up Phase 9), found while a background

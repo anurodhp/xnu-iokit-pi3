@@ -81,15 +81,22 @@ for f in "$OUT/dyld_mig/mach/task.h" "$OUT/dyld_compat_derived/dyld_priv.h" \
         exit 1
     fi
 done
-for a in libc_gen libc_string libc_stdio libc_printf libcxx libcxxabi \
-         libunwind libcopyfile libremovefile libresolv; do
+for a in libcxx libcxxabi libunwind libcopyfile libremovefile libresolv; do
     if [ ! -f "$OUT/$a.a" ]; then
         echo "error: $OUT/$a.a not found -- run its build_$a.sh first" >&2
         exit 1
     fi
 done
-if [ ! -f "$OUT/libcxx_locale_for_stdio_scratch.a" ] || [ ! -f "$OUT/libcxx_tsd_shim_bootstrap_compat.o" ]; then
-    echo "error: $OUT/libcxx_locale_for_stdio_scratch.a / libcxx_tsd_shim_bootstrap_compat.o not found -- run build_llvm_libcxx.sh first (same real getenv/pthread_tsd_shim collision fix build_dyld_link.sh already needs)" >&2
+# libc_gen.a/libc_string.a/libc_stdio.a/libc_printf.a/
+# libcxx_locale_for_stdio_scratch.a/libcxx_tsd_shim_bootstrap_compat.o no
+# longer required here (static-to-dylib migration step 4, docs/
+# daemon-roadmap.md) -- real libsystem_c.dylib below instead, same real
+# source. The old getenv/pthread_tsd_shim collision fix
+# libcxx_tsd_shim_bootstrap_compat.o existed for isn't needed either:
+# real libsystem_pthread.dylib now provides pthread_key_init_np for
+# real via a genuine LC_LOAD_DYLIB dependency.
+if [ ! -f "$OUT/system/libsystem_c.dylib" ]; then
+    echo "error: $OUT/system/libsystem_c.dylib not found -- run build_libsystem_c.sh first" >&2
     exit 1
 fi
 # libplatform.a/libclosure.a no longer required here (static-to-dylib
@@ -230,11 +237,8 @@ rm -f "$OUT/system/libdyld.dylib"
     "$OUT/libdyld/cxa_finalize_ranges_compat.o" "$OUT/libdyld/vproc_compat.o" \
     "$OUT/libdyld/compat_misc.o" \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_blocks.dylib" \
-    "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" \
+    "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" "$OUT/system/libsystem_c.dylib" \
     "$OUT/libcxx.a" "$OUT/libcxxabi.a" "$SCRATCH/libunwind_scratch.a" \
-    "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libcxx_locale_for_stdio_scratch.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
-    "$OUT/libc_printf.a" "$OUT/libc_string.a" \
-    "$OUT/libcxx_tsd_shim_bootstrap_compat.o" \
     "$OUT/libcopyfile.a" "$OUT/libremovefile.a" "$OUT/libresolv.a" \
     "$RTLIB" \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
