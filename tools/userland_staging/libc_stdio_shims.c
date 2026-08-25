@@ -1,84 +1,61 @@
-/* Real-signature, single-threaded stand-ins for the pthread mutex/once and
- * OSAtomic64 API surface third_party/Libc/stdio/FreeBSD/findfp.c (and the
- * rest of the real Apple stdio FILE* implementation) calls to guard its
- * global stream table (__sglue/__sF) and per-FILE `_extra->fl_mutex`.
+/* Real-signature stand-ins for the pthread mutex/once and OSAtomic64 API
+ * surface third_party/Libc/stdio/FreeBSD/findfp.c (and the rest of the
+ * real Apple stdio FILE* implementation) calls to guard its global
+ * stream table (__sglue/__sF) and per-FILE `_extra->fl_mutex`.
  *
- * Same reasoning already established for os_unfair_lock/OSAtomic32Barrier
- * in compat_stubs.c: this target is provably single-threaded (no
- * libpthread bsdthread_create() bootstrap exists anywhere in this
- * project yet - see cerror_stub.c's identical reasoning for why even
- * errno is a single plain global here, not per-thread), so a real no-op
- * lock and a plain (non-atomic) increment/decrement preserve real
- * correctness rather than approximating it. Real mutex/atomics needed
- * only once/if this target ever gets a real libpthread port - tracked as
- * separate future Phase 4 work, not silently faked here.
+ * pthread_mutex_init/lock/trylock/unlock/destroy used to be single-
+ * threaded no-op bodies here (this file's own prior header comment:
+ * "Real mutex/atomics needed only once/if this target ever gets a real
+ * libpthread port - tracked as separate future Phase 4 work, not
+ * silently faked here"). That future landed 2026-08-24 (real
+ * pthread_create()/contended-mutex-under-ulock, see
+ * pthread_main_thread_bootstrap.c) -- libpthread.a now exports real
+ * bodies for all five, and linking both archives together (every
+ * consumer needs libc_stdio.a; several, like ping/bash, now also need
+ * real libpthread.a) hit a real duplicate-symbol link error, confirmed
+ * by actually linking, not guessed preemptively. Removed here rather
+ * than left stale -- standing project rule: when a dependency goes
+ * stub -> real, sweep for and fix stale-assumption code instead of
+ * leaving a shadowing copy.
  *
- * pthread_once() specifically: correct (not just convenient) to implement
- * as a plain "call it if the flag isn't set yet" on a single-threaded
- * target - the entire reason real pthread_once needs atomicity is
- * concurrent first-callers racing, which cannot happen here.
+ * pthread_once() is untouched (still the single-threaded stand-in a few
+ * lines below) -- that symbol was never duplicated by libpthread.a.
  *
  * Types (pthread_mutex_t/pthread_once_t/pthread_mutexattr_t) come from
  * the real Xcode-12 iPhoneOS SDK's <sys/_pthread/_pthread_types.h> via
- * -I $PTHREAD/include already in this build's CFLAGS - only the runtime
- * FUNCTION BODIES are stood in here, not the ABI-facing types.
+ * -I $PTHREAD/include already in this build's CFLAGS.
  */
 
 #include <pthread.h>
-
-int pthread_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *attr) {
-    (void)m;
-    (void)attr;
-    return 0;
-}
-
-int pthread_mutex_lock(pthread_mutex_t *m) {
-    (void)m;
-    return 0;
-}
-
-int pthread_mutex_trylock(pthread_mutex_t *m) {
-    (void)m;
-    return 0;
-}
-
-int pthread_mutex_unlock(pthread_mutex_t *m) {
-    (void)m;
-    return 0;
-}
-
-int pthread_mutex_destroy(pthread_mutex_t *m) {
-    (void)m;
-    return 0;
-}
 
 /* Underscore-prefixed private aliases -
  * third_party/Libc/stdio/FreeBSD/_flock_stub.c (the real flockfile()/
  * funlockfile()/ftrylockfile() public-API implementation, distinct from
  * the FLOCKFILE()/FUNLOCKFILE() internal macros stdio_flockfile_compat.h
  * stands in for) calls these instead of the public pthread_mutex_*()
- * names above. Same single-threaded-target reasoning, same no-op
- * correctness argument - real Apple's own _pthread_mutex_lock etc. are
- * genuine aliases of the public functions on real Darwin too, not a
- * separate implementation. */
+ * names. Real Apple's own _pthread_mutex_lock etc. are genuine aliases
+ * of the public functions on real Darwin too, not a separate
+ * implementation -- now that the public names are real (see above),
+ * these forward to them for real instead of independently no-op'ing. */
+extern int pthread_mutex_lock(pthread_mutex_t *m);
+extern int pthread_mutex_trylock(pthread_mutex_t *m);
+extern int pthread_mutex_unlock(pthread_mutex_t *m);
+extern int pthread_mutex_destroy(pthread_mutex_t *m);
+
 int _pthread_mutex_lock(void *m) {
-    (void)m;
-    return 0;
+    return pthread_mutex_lock((pthread_mutex_t *)m);
 }
 
 int _pthread_mutex_trylock(void *m) {
-    (void)m;
-    return 0;
+    return pthread_mutex_trylock((pthread_mutex_t *)m);
 }
 
 int _pthread_mutex_unlock(void *m) {
-    (void)m;
-    return 0;
+    return pthread_mutex_unlock((pthread_mutex_t *)m);
 }
 
 int _pthread_mutex_destroy(void *m) {
-    (void)m;
-    return 0;
+    return pthread_mutex_destroy((pthread_mutex_t *)m);
 }
 
 /* pthread_once() itself is NOT redefined here - tools/userland_staging/

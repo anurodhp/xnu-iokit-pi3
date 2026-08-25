@@ -11,17 +11,10 @@
  * here rather than left to rot. */
 int __is_threaded = 0;
 
-/* Real call site: pthread_tsd.c's rare destructor-error diagnostic path
- * (dladdr-based "which library owns this leaked TSD destructor"
- * logging). Real Apple implementation (libplatform/src/simple/asl.c) is
- * a full ASL (Apple System Log) client - genuinely pointless to port
- * here regardless of fidelity: this project has no syslogd/ASL daemon
- * anywhere in its process model (no launchd, see project memory), so
- * there is no real destination for this log message to reach even with
- * a byte-perfect port. Documented no-op, same reasoning already
- * established for os/assumes.h's stand-in (build_libc_locale.sh). */
-void _simple_asl_log(int level, const char *label, const char *msg) {
-	(void)level;
-	(void)label;
-	(void)msg;
-}
+/* _simple_asl_log: pthread_tsd.c's rare destructor-error diagnostic path
+ * (dladdr-based "which library owns this leaked TSD destructor" logging)
+ * calls this same real symbol libmalloc_dispatch.c already defines (real
+ * stderr-redirect body, see that file's own header comment) -- NOT
+ * redefined here. A duplicate no-op body used to live in this file too;
+ * removed (real duplicate-symbol link error confirmed, not guessed) now
+ * that any consumer of this file also always links libmalloc.a. */

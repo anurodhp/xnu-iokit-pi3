@@ -426,6 +426,17 @@ if [ "$fail" -eq 0 ]; then
     # _pthread_main_thread_bootstrap before _bash_shell_real_main. Real
     # bash STILL crashes after both fixes, on a separate, real, precisely
     # captured bug (Nineteenth pass) -- not yet fixed, see docs/roadmap.md.
+    # -Wl,-alias,'_mmap$UNIX2003',_mmap (2026-08-25): real pthread_create()
+    # (2026-08-24, pthread_main_thread_bootstrap.c) allocates its second
+    # thread's stack via a plain, unversioned mmap() call site -- real
+    # bsdthread_create() needs a real stack. libpthread.a already exports
+    # a real mmap$UNIX2003 (built by an earlier tier), just never under
+    # the plain name this call site references. Same real gap/fix
+    # build_ping.sh's own header comment documents in more detail; this
+    # link was broken (real "_mmap" undefined error, confirmed by
+    # linking) from the moment bash started linking real libpthread.a
+    # until this alias was added, just not previously caught because
+    # bash.macho hadn't been rebuilt since before that pthread change.
     # -Wl,-alias,_pthread_testcancel,... (2026-08-19): real termios.c
     # (build_libc_gen.sh, real tcgetattr/tcsetattr for real job control -
     # see that script's own header comment) pulls its whole .o member in
@@ -444,6 +455,7 @@ if [ "$fail" -eq 0 ]; then
         -Wl,-alias,_setenv,'_setenv$UNIX2003' \
         -Wl,-alias,_select,'_select$1050' \
         -Wl,-alias,_fopen,'_fopen$UNIX2003' \
+        -Wl,-alias,'_mmap$UNIX2003',_mmap \
         2>"$BOUT/link.err" && echo "wrote bash.macho" || { echo "LINK FAILED, see $BOUT/link.err:"; tail -100 "$BOUT/link.err"; exit 1; }
     otool -l bash.macho | grep -q LC_LOAD_DYLIB && echo "WARNING: LC_LOAD_DYLIB present" >&2
     otool -l bash.macho | grep -q LC_UNIXTHREAD || echo "WARNING: no LC_UNIXTHREAD" >&2

@@ -64,6 +64,17 @@ if [ ! -f "$OUT/libmalloc.a" ]; then
     echo "error: $OUT/libmalloc.a not found -- run build_libmalloc.sh first" >&2
     exit 1
 fi
+# New real dependency 2026-08-24: findfp.c's pthread_mutex_lock/unlock
+# calls now resolve to real libpthread.a (see build_ping.sh-triggered
+# stale-shim sweep in libc_stdio_shims.c's own header comment) instead of
+# a locally-defined no-op, so the smoketest link needs the real archive
+# too.
+for dep in libpthread.a libclosure.a libunwind.a pthread_tsd_shim_libc_bootstrap.o; do
+    if [ ! -f "$OUT/$dep" ]; then
+        echo "error: $OUT/$dep not found -- run its build_*.sh first" >&2
+        exit 1
+    fi
+done
 
 cat > "$OUT/compat_include/spinlock.h" <<'EOF'
 /* Apple-internal header, not part of the public iPhoneOS SDK. Confirmed
@@ -209,6 +220,15 @@ echo "wrote $OUT/libc_locale_for_stdio.a (libc_locale.a minus its now-redundant 
 # existing locale-tier shims (TSD/syscalls/errno) - same archive-not-glob
 # linking discipline build_libc_locale.sh's own comment explains (only
 # referenced members get pulled in).
+#
+# libpthread.a + its two link-time companions (pthread_tsd_shim_libc_
+# bootstrap.o, libclosure.a/libunwind.a for its real pthread_once/TSD
+# machinery) are new here as of 2026-08-24: libc_stdio_shims.c's
+# pthread_mutex_lock/trylock/unlock/destroy no-op bodies were removed
+# (findfp.c's real stream-table locking now calls libpthread.a's real
+# ones instead - see that file's own header comment for the full
+# stub->real sweep), so this standalone smoketest needs the real archive
+# too, not just libc_stdio.a's own now-thinner shim object.
 # No -DVARIANT_DARWINEXTSN/_DARWIN_UNLIMITED_STREAMS here either (see this
 # script's own CFLAGS comment above for the full reasoning) - the
 # smoketest is an ordinary caller, and with the main CFLAGS no longer
@@ -227,7 +247,10 @@ echo "wrote $OUT/libc_locale_for_stdio.a (libc_locale.a minus its now-redundant 
     "$OUT/libc_stdio_smoketest.o" \
     "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_stdio.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
+    "$OUT/libpthread.a" \
+    "$OUT/libclosure.a" \
     "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    "$OUT/libunwind.a" \
     -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
     -Wl,-alias,___kill,'_kill$UNIX2003' \
     -Wl,-alias,___kill,_kill \

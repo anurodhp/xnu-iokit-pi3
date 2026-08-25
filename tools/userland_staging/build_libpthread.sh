@@ -404,6 +404,26 @@ fi
 # pthread_create() FAILING (ENOTSUP) as the pass case - inverted once
 # the kernel side became real, see pthread_smoketest.c's own history.
 $CLANG $CFLAGS pthread_smoketest.c -o "$OUT/pthread_smoketest.o"
+# KNOWN GAP, not fixed in this pass (2026-08-24): this smoketest's link
+# recently started needing libmalloc.a's real _get_zone() ->
+# pthread_tsd_shim_bootstrap() (the PLAIN name -- distinct from
+# pthread_tsd_shim_libc_bootstrap.c's _for_libc variant and
+# pthread_tsd_platform_bootstrap.c's _with_base variant this file's own
+# pthread_main_thread_bootstrap.c uses) plus real getenv()/getprogname(),
+# all three only available bundled in libc_locale.a/libc_locale_for_stdio.a
+# -- but that archive's own pthread_tsd_shim.o ALSO still defines
+# pthread_key_init_np/pthread_setspecific/etc as its OWN pre-real-
+# libpthread shim bodies, which duplicate-symbol-conflict against real
+# libpthread.a(pthread_tsd.o) the moment both are linked together
+# (confirmed by actually trying it, not guessed). Reconciling
+# pthread_tsd_shim.c against the now-real libpthread.a tsd implementation
+# is real, separate follow-up work (same "stub -> real, sweep for stale
+# assumptions" class of task as libc_stdio_shims.c's mutex fix above, but
+# larger -- pthread_tsd_shim.c is still load-bearing for other consumers
+# per this file's own comment a few lines up) -- tracked here rather than
+# silently patched around. This smoketest link is UNCHANGED/still broken
+# pending that work; libpthread.a itself (the archive above) builds and
+# is real either way.
 $CLANG -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o pthread_smoketest.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
