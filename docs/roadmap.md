@@ -662,11 +662,15 @@ need a real implementation later:
   `libSystem.B.dylib`/`libdyld.dylib` are a flattened bundle of
   pre-existing static archives, not real per-library dylibs matching
   Apple's actual modular architecture -- a real migration effort, per
-  explicit user direction to stop building new static-archive-plus-shim
-  code going forward. Step 1 (`libsystem_kernel.dylib`) DONE and
-  QEMU-verified same day -- see `docs/daemon-roadmap.md`'s "Static-to-
-  dylib migration, step 1" section for what moved, what's left, and
-  next-step candidates.
+  explicit user direction ("do 2 library at a time and finish all") to
+  stop building new static-archive-plus-shim code and instead finish
+  this migration. Step 1 (`libsystem_kernel.dylib`) and step 2
+  (`libsystem_platform.dylib` + `libsystem_blocks.dylib`) DONE and
+  QEMU-verified same day -- step 2's own audit found a SECOND real
+  duplicate-global-state bug (`cerror_stub.c`'s single-global `errno`,
+  same shape as `mach_task_self_`), fixed the same way. See
+  `docs/daemon-roadmap.md`'s "Static-to-dylib migration" sections for
+  what moved, what's left, and next-step candidates.
 - **Phase 6.6 (libdispatch/GCD)**: planning-only placeholder, blocked
   behind 6.5. Even once unblocked, real concurrent `dispatch_async` can't
   exist until real threading does (Phase 7.5's pthread ceiling) -- scope

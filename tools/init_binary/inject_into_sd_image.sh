@@ -218,19 +218,30 @@ if [ -f tools/userland_staging/dyld.macho ] && [ -f tools/userland_staging/dyld_
         chmod 755 "$MNT/usr/lib/libSystem.B.dylib"
         echo "+ wrote $(wc -c < tools/userland_staging/libc_build/system/libSystem.B.dylib) bytes to $MNT/usr/lib/libSystem.B.dylib"
     fi
-    # First static-to-dylib migration step (docs/daemon-roadmap.md's
-    # "Static-vs-dylib architecture debt" section, build_libsystem_kernel.sh):
-    # both libdyld.dylib and libSystem.B.dylib above have a real LC_LOAD_DYLIB
-    # on this at its exact real install_name -- dyld resolves that
-    # dependency recursively even though dyld_test_exec.macho itself never
-    # references it directly, so it must be present at this exact path for
-    # either of the two dylibs above to load at all.
-    if [ -f tools/userland_staging/libc_build/system/libsystem_kernel.dylib ]; then
-        mkdir -p "$MNT/usr/lib/system"
-        cp tools/userland_staging/libc_build/system/libsystem_kernel.dylib "$MNT/usr/lib/system/libsystem_kernel.dylib"
-        chmod 755 "$MNT/usr/lib/system/libsystem_kernel.dylib"
-        echo "+ wrote $(wc -c < tools/userland_staging/libc_build/system/libsystem_kernel.dylib) bytes to $MNT/usr/lib/system/libsystem_kernel.dylib"
-    fi
+    # Static-to-dylib migration (docs/daemon-roadmap.md's "Static-vs-dylib
+    # architecture debt" section): every other real per-library dylib
+    # under libc_build/system/ (libsystem_kernel.dylib,
+    # libsystem_platform.dylib, libsystem_blocks.dylib, and whatever
+    # gets added in later migration batches) -- libdyld.dylib/
+    # libSystem.B.dylib above have real LC_LOAD_DYLIB references to
+    # these at their exact real install_names, resolved by dyld
+    # recursively even though dyld_test_exec.macho itself never
+    # references them directly, so each must be present at
+    # /usr/lib/system/<name>.dylib for either of the two dylibs above to
+    # load at all. Looped (not hand-listed one at a time) so a new
+    # migration batch's dylib is picked up automatically the next time
+    # this script runs, without needing its own edit here.
+    mkdir -p "$MNT/usr/lib/system"
+    for d in tools/userland_staging/libc_build/system/*.dylib; do
+        [ -f "$d" ] || continue
+        name="$(basename "$d")"
+        case "$name" in
+            libdyld.dylib|libSystem.B.dylib) continue ;;
+        esac
+        cp "$d" "$MNT/usr/lib/system/$name"
+        chmod 755 "$MNT/usr/lib/system/$name"
+        echo "+ wrote $(wc -c < "$d") bytes to $MNT/usr/lib/system/$name"
+    done
     cp tools/userland_staging/dyld_test_exec.macho "$MNT/bin/dyld_test_exec"
     chmod 755 "$MNT/bin/dyld_test_exec"
     echo "+ wrote $(wc -c < tools/userland_staging/dyld_test_exec.macho) bytes to $MNT/bin/dyld_test_exec"

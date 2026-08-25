@@ -35,7 +35,7 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     echo "error: Xcode-12.app not found at $XCODE12 (see tools/build_kexts.sh for the same dependency)" >&2
     exit 1
 fi
-for a in libc_gen libc_string libc_stdio libc_printf libpthread libmalloc libplatform libclosure \
+for a in libc_gen libc_string libc_stdio libc_printf libpthread libmalloc \
          libcxx libcxxabi libunwind libcopyfile libremovefile libresolv; do
     if [ ! -f "$OUT/$a.a" ]; then
         echo "error: $OUT/$a.a not found -- run its build_$a.sh first" >&2
@@ -46,12 +46,12 @@ if [ ! -f "$OUT/libcxx_locale_for_stdio_scratch.a" ] || [ ! -f "$OUT/libcxx_tsd_
     echo "error: $OUT/libcxx_locale_for_stdio_scratch.a / libcxx_tsd_shim_bootstrap_compat.o not found -- run build_llvm_libcxx.sh first" >&2
     exit 1
 fi
-if [ ! -f "$OUT/cerror_stub.o" ]; then
-    echo "error: $OUT/cerror_stub.o not found -- run build_libplatform.sh first" >&2
-    exit 1
-fi
-if [ ! -f "$OUT/libdyld/alloc_once.o" ] || [ ! -f "$OUT/libdyld/bzero.o" ] || [ ! -f "$OUT/libdyld/memset_pattern.o" ]; then
-    echo "error: $OUT/libdyld/{alloc_once,bzero,memset_pattern}.o not found -- run build_libdyld.sh first (this script reuses those same real, extra libplatform objects)" >&2
+# libplatform.a/libclosure.a/cerror_stub.o no longer required here
+# (static-to-dylib migration batch 1, docs/daemon-roadmap.md) -- real
+# libsystem_kernel.dylib/libsystem_platform.dylib/libsystem_blocks.dylib
+# below instead, same real source.
+if [ ! -f "$OUT/system/libsystem_platform.dylib" ] || [ ! -f "$OUT/system/libsystem_blocks.dylib" ]; then
+    echo "error: $OUT/system/libsystem_platform.dylib / libsystem_blocks.dylib not found -- run build_libsystem_platform.sh and build_libsystem_blocks.sh first" >&2
     exit 1
 fi
 RTLIB="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/12.0.0/lib/darwin/libclang_rt.ios.a"
@@ -93,9 +93,9 @@ EOF
 
 # Unlike build_libdyld.sh, this dylib links no libdyldGlue.o -- there is
 # no better real implementation of _dyld_get_image_slide to prefer here,
-# so only __platform_memset (real conflict with this script's own
-# bzero.o) is hidden; libmalloc_dispatch.o's own _dyld_get_image_slide
-# stays as the sole, real provider.
+# so only __platform_memset (real conflict with libsystem_platform.dylib's
+# own, linked below) is hidden; libmalloc_dispatch.o's own
+# _dyld_get_image_slide stays as the sole, real provider.
 mkdir -p "$SCRATCH/extracted"
 (cd "$SCRATCH/extracted" && ar x "../../libmalloc.a" libmalloc_dispatch.o)
 cat > "$SCRATCH/unexp_malloc_dispatch.txt" << 'EOF'
@@ -144,13 +144,13 @@ rm -f "$OUT/system/libSystem.B.dylib"
     -o "$OUT/system/libSystem.B.dylib" \
     "$SCRATCH/dyld_unwind_shim_compat.o" "$OUT/libsystem/progname_compat.o" \
     "$OUT/libsystem/dyld_initializer_compat.o" \
-    "$OUT/libdyld/compat_misc.o" "$OUT/libdyld/alloc_once.o" "$OUT/libdyld/bzero.o" "$OUT/libdyld/memset_pattern.o" \
-    "$OUT/system/libsystem_kernel.dylib" \
+    "$OUT/libdyld/compat_misc.o" \
+    "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_blocks.dylib" \
     "$OUT/libcxx.a" "$OUT/libcxxabi.a" "$SCRATCH/libunwind_scratch.a" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libcxx_locale_for_stdio_scratch.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/libc_printf.a" "$OUT/libc_string.a" \
     "$OUT/libcxx_tsd_shim_bootstrap_compat.o" \
-    "$OUT/libpthread.a" "$OUT/libclosure.a" "$SCRATCH/libmalloc_scratch.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    "$OUT/libpthread.a" "$SCRATCH/libmalloc_scratch.a" \
     "$OUT/libcopyfile.a" "$OUT/libremovefile.a" "$OUT/libresolv.a" \
     "$RTLIB" \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \

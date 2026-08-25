@@ -95,6 +95,25 @@ fi
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     libsystem_kernel_compat.c -o "$OUT/libsystem_kernel/compat.o"
 
+# Real gap found 2026-08-25 auditing the libplatform/libclosure migration
+# (docs/daemon-roadmap.md's "Static-vs-dylib architecture debt" section)
+# for the same duplicate-global-state risk that caused mach_task_self_'s
+# two bugs closing Phase D: cerror_stub.c's `int errno` (this project's
+# deliberate single-plain-global simplification of real Apple's TSD-based
+# errno -- see that file's own comment) was, until now, compiled as a
+# LOOSE object linked directly into every dylib/binary that needs it
+# (grep -rl cerror_stub.o *.sh), including build_libdyld.sh and
+# build_libsystem.sh separately -- the exact same "two private copies of
+# one process-global" shape as mach_task_self_, just not yet hit by an
+# actual crash (no test here has yet exercised a syscall failure in one
+# dylib whose errno a caller then reads from a different one). Moved
+# here as the one real, shared copy every dylib consumer resolves
+# against instead. Static, single-image binaries (bash, ls, cron, etc)
+# are unaffected -- they never had a duplication problem in the first
+# place (one process, one image, one errno already).
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    cerror_stub.c -o "$OUT/libsystem_kernel/cerror_stub.o"
+
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libsystem_kernel.dylib"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
@@ -103,7 +122,8 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     -o "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/libsystem_kernel/mach_vm.o" "$OUT/libsystem_kernel/mach_init.o" "$OUT/libsystem_kernel/mig_reply_port.o" \
     "$OUT/libsystem_kernel/init_cpu_capabilities.o" "$OUT/libsystem_kernel/libmalloc_vm_traps.o" \
-    "$OUT/libsystem_kernel/libmalloc_vm_mig_stubs.o" "$OUT/libsystem_kernel/compat.o"
+    "$OUT/libsystem_kernel/libmalloc_vm_mig_stubs.o" "$OUT/libsystem_kernel/compat.o" \
+    "$OUT/libsystem_kernel/cerror_stub.o"
 
 echo "wrote $OUT/system/libsystem_kernel.dylib"
 otool -hv "$OUT/system/libsystem_kernel.dylib" | grep -q " DYLIB " || {

@@ -1074,19 +1074,107 @@ message and exits with `EXITCODE:1`, no crash, now loading 4 real
 dylibs (`libtest.dylib`, `libdyld.dylib`, `libSystem.B.dylib`,
 `libsystem_kernel.dylib`) instead of 3.
 
-**Next candidates for step 2** (not started): the BSD syscall surface
-next (would retire the remaining scattered per-consumer syscall-stub
-files -- `libplatform_mach_traps.s`, `iokit_trap.s`,
-`libunwind_sched_yield.s`, `notify_mig_special_reply_port_trap.s`,
-`mach_port_extra_traps.s`, `mach_ipc_traps.s` -- confirmed via `grep -rl
-"svc #0x80"` across `tools/userland_staging/*.s`, not yet audited
-individually for which specific consumers still need each one), or
-`libplatform`/`libmalloc` themselves as real dylibs (larger, since many
-still-static binaries depend on them directly and would need their own
-migration or a compat path). Whoever picks this up next should re-run
-that same `grep -rl "svc #0x80" *.s` scan first -- it's the fastest way
-to re-derive the current scattered-trap-file inventory rather than
-trusting this list to stay current.
+### Static-to-dylib migration, step 2: `libsystem_platform.dylib` +
+### `libsystem_blocks.dylib` -- DONE 2026-08-25, QEMU-verified
+
+Same day, continuing the batch-of-2 pace (user directive: "do 2 library
+at a time and finish all"). `build_libsystem_platform.sh` (new): real,
+unmodified Apple `os/lock.c` (`os_unfair_lock`/`os_once`)/`os/atomic.c`/
+`atomics/arm64/OSAtomic.c`, this project's own `libplatform_mach_traps.s`/
+`libplatform_syscalls.c`/`libplatform_thread_self.c` (same real files
+`build_libplatform.sh` already established, see that script's own header
+comment), linked as `/usr/lib/system/libsystem_platform.dylib` against
+`libsystem_kernel.dylib`. Audited first for the same duplicate-global
+risk that caused Phase D's bugs: none found -- `os_unfair_lock`/`OSAtomic`
+operate on caller-provided memory, TSD reads `TPIDRRO_EL0` directly, not
+an image-local global.
+
+**A second real, independent instance of the mach_task_self_ bug class
+found in the same audit, fixed in the same step**: `cerror_stub.c`'s
+`int errno` (this project's own deliberate single-plain-global
+simplification of real Apple's TSD-based errno -- see that file's own
+comment) was a LOOSE object linked directly into every dylib/binary
+that needs it, including `build_libdyld.sh` and `build_libsystem.sh`
+separately -- two private copies of one process-global, never yet hit by
+an actual crash only because no test here had exercised a syscall
+failure in one dylib whose errno a caller then reads from another.
+Moved into `libsystem_kernel.dylib` (the architecturally correct home --
+real Apple's own errno/cerror machinery lives in libsystem_kernel.dylib
+too) as the one real, shared copy. Static, single-image binaries (bash,
+ls, cron, etc) were never affected -- one process, one image, one errno,
+no duplication possible there in the first place.
+
+Also folded real `os/alloc_once.c`/`string/generic/bzero.c`/
+`string/generic/memset_pattern.c`/`string/generic/memmove.c` into
+`libsystem_platform.dylib` -- these used to be compiled as loose private
+objects by `build_libdyld.sh`/`build_libsystem.sh` (and, for `memmove.c`
+specifically, ALSO independently by `build_libclosure.sh`'s own static
+`libclosure.a`) purely because `build_libplatform.sh`'s own file list
+never included them (real source, simply never added -- see that
+script's own header comment). No correctness bug here (each `os_alloc_once`
+slot is its own independent bump region regardless of which copy of the
+code runs), just real architectural cleanup -- one less duplicate.
+
+`build_libsystem_blocks.sh` (new): real, unmodified Apple `data.c` +
+`runtime.cpp` (same file list/flags `build_libclosure.sh` already
+established, including the real `-fno-exceptions`/`-fno-rtti` reasoning
+-- `runtime.cpp` genuinely throws nothing, confirmed by grep, not
+assumed), linked as `/usr/lib/system/libsystem_blocks.dylib` against
+`libsystem_platform.dylib` for `_platform_memmove` (matching real
+Apple's actual `libsystem_blocks.dylib` -> `libsystem_platform.dylib`
+dependency) instead of bundling its own redundant copy the way
+`libclosure.a` did. **One real, temporary gap flagged, not silently
+worked around**: `_malloc`/`_free` (real `Block_copy`/`Block_release`
+heap-promotion calls) aren't resolvable against a real dylib yet --
+`libmalloc.a` isn't migrated until step 3 -- so they're marked
+`-Wl,-U` (dyld flat-namespace dynamic lookup, same mechanism
+`_dyld_initializer` already uses) rather than bundling yet another
+private static copy. Resolves correctly today via whichever loaded
+image currently exports them (`libdyld.dylib`/`libSystem.B.dylib`'s own
+still-static `libmalloc.a`), but should become a real `LC_LOAD_DYLIB`
+dependency on `libsystem_malloc.dylib` once step 3 lands -- flagged
+explicitly in that script's own comment so this doesn't get forgotten.
+
+`build_libdyld.sh`/`build_libsystem.sh`: `libplatform.a`/`libclosure.a`/
+`cerror_stub.o` removed from both their dependency-check lists and link
+lines entirely (real `LC_LOAD_DYLIB`s on the two new dylibs instead);
+the loose `alloc_once.o`/`bzero.o`/`memset_pattern.o` compiles removed
+too (now provided by `libsystem_platform.dylib`). The shared, committed
+`libplatform.a`/`libclosure.a` archives themselves are untouched -- every
+other still-fully-static consumer keeps building against them
+unchanged. `tools/init_binary/inject_into_sd_image.sh`'s hand-listed
+per-dylib install block was generalized into a loop over
+`libc_build/system/*.dylib` (excluding `libdyld.dylib`/`libSystem.B.dylib`,
+which have their own non-`/usr/lib/system/` install paths) so each new
+migration batch's dylib is picked up automatically without a repeat edit
+here.
+
+**QEMU-verified**: `dyld_test_exec` still runs its own `main()` and
+exits with `EXITCODE:1`, no crash, now loading 6 real dylibs
+(`libtest.dylib`, `libdyld.dylib`, `libSystem.B.dylib`,
+`libsystem_kernel.dylib`, `libsystem_platform.dylib`,
+`libsystem_blocks.dylib`) instead of 4. Full boot-to-login-shell sequence
+in the same test run also unaffected (reached `Welcome, root.` and a
+working prompt before the `dyld_test_exec` invocation, same as every
+prior pass).
+
+**Next candidates for step 3** (in progress): `libmalloc`/`libpthread`
+as real dylibs -- would also let `libsystem_blocks.dylib`'s temporary
+`-Wl,-U,_malloc`/`-Wl,-U,_free` above become a real dependency. The BSD
+syscall surface (would retire the remaining scattered per-consumer
+syscall-stub files -- `iokit_trap.s`, `libunwind_sched_yield.s`,
+`notify_mig_special_reply_port_trap.s`, `mach_port_extra_traps.s`,
+`mach_ipc_traps.s` -- confirmed via `grep -rl "svc #0x80"` across
+`tools/userland_staging/*.s`, not yet audited individually for which
+specific consumers still need each one) is a separate, later candidate,
+lower priority since no active bug points at it yet the way
+`mach_task_self_`/`errno` did. Whoever continues this should re-run that
+same `grep -rl "svc #0x80" *.s` scan first -- it's the fastest way to
+re-derive the current scattered-trap-file inventory rather than trusting
+this list to stay current, and should re-audit each new library for the
+same duplicate-global-state risk before assuming "just relink it as a
+dylib" is safe (two real instances of that exact bug found so far, both
+by deliberately checking for it first).
 
 **CoreFoundation source options, noted 2026-08-24 (not yet evaluated in
 depth -- flagging for whoever picks up Phase 9), found while a background

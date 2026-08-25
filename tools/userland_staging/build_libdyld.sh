@@ -81,7 +81,7 @@ for f in "$OUT/dyld_mig/mach/task.h" "$OUT/dyld_compat_derived/dyld_priv.h" \
         exit 1
     fi
 done
-for a in libc_gen libc_string libc_stdio libc_printf libpthread libmalloc libplatform libclosure libcxx libcxxabi \
+for a in libc_gen libc_string libc_stdio libc_printf libpthread libmalloc libcxx libcxxabi \
          libunwind libcopyfile libremovefile libresolv; do
     if [ ! -f "$OUT/$a.a" ]; then
         echo "error: $OUT/$a.a not found -- run its build_$a.sh first" >&2
@@ -92,8 +92,11 @@ if [ ! -f "$OUT/libcxx_locale_for_stdio_scratch.a" ] || [ ! -f "$OUT/libcxx_tsd_
     echo "error: $OUT/libcxx_locale_for_stdio_scratch.a / libcxx_tsd_shim_bootstrap_compat.o not found -- run build_llvm_libcxx.sh first (same real getenv/pthread_tsd_shim collision fix build_dyld_link.sh already needs)" >&2
     exit 1
 fi
-if [ ! -f "$OUT/cerror_stub.o" ]; then
-    echo "error: $OUT/cerror_stub.o not found -- run build_libplatform.sh first" >&2
+# libplatform.a/libclosure.a no longer required here (static-to-dylib
+# migration batch 1, docs/daemon-roadmap.md) -- real libsystem_platform.dylib/
+# libsystem_blocks.dylib below instead, same real source.
+if [ ! -f "$OUT/system/libsystem_platform.dylib" ] || [ ! -f "$OUT/system/libsystem_blocks.dylib" ]; then
+    echo "error: $OUT/system/libsystem_platform.dylib / libsystem_blocks.dylib not found -- run build_libsystem_platform.sh and build_libsystem_blocks.sh first" >&2
     exit 1
 fi
 RTLIB="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/12.0.0/lib/darwin/libclang_rt.ios.a"
@@ -167,26 +170,11 @@ done
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     libdyld_compat_misc.c -o "$OUT/libdyld/compat_misc.o"
 
-# Real source (third_party/libplatform), simply never added to
-# build_libplatform.sh's own file list (that script's own header comment
-# only documents skipping src/init.c/atomics/init.c -- os/alloc_once.c
-# and string/generic/bzero.c are separate, real, unrelated files it never
-# needed until libdyld's own pthread_atfork()/bzero() calls needed them).
-# Compiled here as extra objects rather than editing the shared,
-# already-widely-depended-on libplatform.a.
-PLATFORM_CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    -Wno-nullability-completeness -Wno-availability -Wno-deprecated-declarations \
-    -D__API_AVAILABLE_PLATFORM_bridgeos(x)=ios,introduced=x \
-    -DPRIVATE=1 -DSWITCH_OPTION_OSLOCK_DEPRESS=4 -DSWITCH_OPTION_OSLOCK_WAIT=5 \
-    -I $PLATFORM/internal -I $PLATFORM/private -I $PLATFORM/include -I $PLATFORM/src \
-    -I $PLATFORM/src/os/resolver \
-    -I $PTHREAD/include -I $PTHREAD/private \
-    -I $XNU/libsyscall -I $XNU/bsd \
-    -I $OUT/compat_include \
-    -idirafter $XNU/osfmk -idirafter $XNU/libkern"
-"$CLANG" $PLATFORM_CFLAGS "$PLATFORM/src/os/alloc_once.c" -o "$OUT/libdyld/alloc_once.o"
-"$CLANG" $PLATFORM_CFLAGS "$PLATFORM/src/string/generic/bzero.c" -o "$OUT/libdyld/bzero.o"
-"$CLANG" $PLATFORM_CFLAGS "$PLATFORM/src/string/generic/memset_pattern.c" -o "$OUT/libdyld/memset_pattern.o"
+# os/alloc_once.c, string/generic/bzero.c, string/generic/memset_pattern.c
+# used to be compiled here as loose private objects (real source, simply
+# never in build_libplatform.sh's own file list) -- now provided by real
+# libsystem_platform.dylib instead (build_libsystem_platform.sh, static-
+# to-dylib migration batch 1, docs/daemon-roadmap.md), linked below.
 
 echo "libdyld: $ok compiled, $fail gaps (see $OUT/libdyld/*.err for full detail)"
 if [ "$fail" -ne 0 ]; then
@@ -215,12 +203,13 @@ ar d "$SCRATCH/libunwind_scratch.a" libunwind_dyld_shim.o
 # Real, separate collision: libmalloc.a's own libmalloc_dispatch.o
 # carries stale hollow stand-ins for __platform_memset/
 # _dyld_get_image_slide (added back when this project's libmalloc port
-# needed SOME definition and neither real libplatform's bzero.o nor real
+# needed SOME definition and neither real libplatform nor real
 # dyld/libdyld existed yet). Now that both real, correct implementations
-# exist (bzero.o's real __platform_memset above; libdyldGlue.o's real
-# _dyld_get_image_slide), hide libmalloc_dispatch.o's stale copies on a
-# scratch copy -- never the shared, committed libmalloc.a, which other
-# binaries still build against successfully as-is.
+# exist (libsystem_platform.dylib's real __platform_memset, linked
+# below; libdyldGlue.o's real _dyld_get_image_slide), hide
+# libmalloc_dispatch.o's stale copies on a scratch copy -- never the
+# shared, committed libmalloc.a, which other binaries still build
+# against successfully as-is.
 mkdir -p "$SCRATCH/extracted"
 (cd "$SCRATCH/extracted" && ar x "../../libmalloc.a" libmalloc_dispatch.o)
 cat > "$SCRATCH/unexp_malloc_dispatch.txt" << 'EOF'
@@ -265,13 +254,13 @@ rm -f "$OUT/system/libdyld.dylib"
     -o "$OUT/system/libdyld.dylib" \
     "$OUT/libdyld/libdyldGlue.o" "$OUT/libdyld/LibSystemHelpers.o" \
     "$OUT/libdyld/cxa_finalize_ranges_compat.o" "$OUT/libdyld/vproc_compat.o" \
-    "$OUT/libdyld/compat_misc.o" "$OUT/libdyld/alloc_once.o" "$OUT/libdyld/bzero.o" "$OUT/libdyld/memset_pattern.o" \
-    "$OUT/system/libsystem_kernel.dylib" \
+    "$OUT/libdyld/compat_misc.o" \
+    "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_blocks.dylib" \
     "$OUT/libcxx.a" "$OUT/libcxxabi.a" "$SCRATCH/libunwind_scratch.a" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libcxx_locale_for_stdio_scratch.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/libc_printf.a" "$OUT/libc_string.a" \
     "$OUT/libcxx_tsd_shim_bootstrap_compat.o" \
-    "$OUT/libpthread.a" "$OUT/libclosure.a" "$SCRATCH/libmalloc_scratch.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    "$OUT/libpthread.a" "$SCRATCH/libmalloc_scratch.a" \
     "$OUT/libcopyfile.a" "$OUT/libremovefile.a" "$OUT/libresolv.a" \
     "$RTLIB" \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
