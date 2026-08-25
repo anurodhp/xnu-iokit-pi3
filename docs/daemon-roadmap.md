@@ -244,7 +244,9 @@ booting real artifacts rather than reading source alone:
   if-built-then-install pattern -- run `/bin/dyld_test_exec` from a real
   shell and check `$? == 42` to reproduce.
 
-### Phase C: the real dyld port -- STARTED 2026-08-25
+### Phase C, part 1: the real dyld port -- prerequisites (libcxx/libcxxabi)
+### and the dyld-940 retarget -- STARTED 2026-08-25 (see "Phase C: CLOSED"
+### below for how this phase actually finished)
 
 Real `dyld` source (`apple-oss-distributions/dyld`, tag `dyld-832.7.3`)
 is cloned at `third_party/dyld`, tag-vs-`macos-112`-manifest confirmed
@@ -618,29 +620,283 @@ end-to-end from a clean run of `build_dyld_core.sh` + `build_dyld_link.sh`,
 no manual steps.** This is a real, complete, working dyld-940 binary --
 not a stub, not a partial link.
 
-**First real QEMU boot test (2026-08-25)**: installed as `/usr/lib/dyld`
-(`tools/init_binary/inject_into_sd_image.sh`, now prefers the real
-`dyld.macho` over the old Phase B stub when both are built), paired with
-the existing Phase B `dyld_test_exec.macho` (real `LC_LOAD_DYLINKER` +
-`LC_LOAD_DYLIB /usr/lib/libtest.dylib`, both already proven against the
-stub). Real, meaningful result: **the kernel's `load_dylinker()` handoff
-succeeds and real dyld actually starts executing** (this is new --
-Phase B only ever proved the handoff with a several-instruction stub,
-never real dyld's actual bootstrap code) -- but the process is killed
-partway through (`Killed: 9`, exit 137) with no kernel panic and no
-diagnostic output; the system stays fully healthy afterward. This is a
-real, new, NOT-YET-ROOT-CAUSED runtime bug in dyld's actual bootstrap
-execution -- a genuinely different class of problem than every
-compile/link-time gap closed so far in this phase, needing real runtime
-investigation (QEMU monitor PC inspection at the kill, temporary kernel-
-side exception diagnostics per this project's established `printf`-not-
-`kprintf` methodology) rather than more header/syscall wiring. Tracked
-as the next real step, not attempted in this pass.
+**First real QEMU boot test (2026-08-25, earlier pass)**: installed as
+`/usr/lib/dyld`, paired with `dyld_test_exec.macho` + `libtest.dylib`.
+Kernel handoff succeeded but the process was killed partway through
+(`Killed: 9`, exit 137) with no diagnostic output -- tracked as the next
+step, not resolved in that pass.
 
-This unlocks, in order once resolved: an actual booting dyld binary
-(finishing Phase C for real), `libdispatch` as a real `.dylib`
-(Phase 6.6), then CoreFoundation (Phase 9), then everything gated behind
-either.
+### Phase C: CLOSED 2026-08-25 (same day, later session) -- real dyld
+### boots and reaches a real dylib's dependency-loading logic
+
+Six real, distinct bugs found and fixed, each via the same "temporary
+kernel/dyld `printf` diagnostic, root-cause, fix permanently, revert the
+diagnostic" cycle (every temporary diagnostic was reverted via `git
+checkout --` before its containing commit; `third_party/xnu-7195` and
+`third_party/dyld` are both real, unmodified-except-where-documented
+forks with clean `git status` as of every commit below):
+
+1. **MH_DYLINKER filetype** -- `dyld.macho` was linked as plain
+   `MH_EXECUTE`; `mach_loader.c`'s `parse_machfile()`/`load_dylinker()`
+   branch on this filetype in several places (e.g.
+   `note_all_image_info_section()` is skipped entirely for non-dylinker
+   files). Fixed in `build_dyld_link.sh` with `-Wl,-dylinker
+   -Wl,-dylinker_install_name,/usr/lib/dyld`.
+2. **Missing `-fno-exceptions`** -- real Apple `dyld.xcconfig` sets
+   `GCC_ENABLE_CPP_EXCEPTIONS = NO`; without the matching compiler flag
+   (the `-D_LIBCPP_NO_EXCEPTIONS=1` macro alone doesn't stop landing-pad
+   codegen), dyld's own code pulled in real `_Unwind_Resume` machinery
+   transitively through libunwind's `libunwind_dyld_shim.o`, which
+   itself needs `__mh_execute_header` -- never synthesized for
+   `MH_DYLINKER` output. Fixed with the real compiler flag in
+   `build_dyld_core.sh`, plus excluding `libunwind_dyld_shim.o` on a
+   scratch copy of `libunwind.a` (real, honestly-scoped 3-function
+   fallback for the genuinely circular "dyld asks itself about its own
+   unwind sections" case -- dyld's own code never throws).
+3. **Missing TSD bootstrap** -- dyld's own `__dyld_start` never sets up
+   `TPIDRRO_EL0` itself (real Apple systems get this from
+   `libSystem.dylib`'s initializer, which this port didn't have until
+   Phase D below) -- the first real MIG call
+   (`_mig_get_reply_port`) dereferenced `TPIDRRO_EL0+0x10` while NULL.
+   Fixed with a new entry trampoline
+   (`tools/userland_staging/dyld_tsd_entry_trampoline.s`,
+   `__dyld_start_tsd_bootstrap`) that runs this project's existing
+   `platform_syscall`-based TSD bootstrap (`pthread_tsd_shim.c`'s real,
+   QEMU-verified mechanism) before branching into real, unmodified
+   `__dyld_start`.
+4. **Missing rebase/fixup-chains on dyld itself** -- the link used
+   `-static`, which suppresses ALL rebase info; the kernel still
+   ASLR-slides dyld's own mapped segments (real, unmodified
+   `mach_loader.c` behavior), but had nothing to fix up dyld's own
+   internal absolute-address globals against, causing a
+   stale-link-time-pointer crash inside `dyld4::halt()`. Fixed by
+   dropping `-static` and adding `-Wl,-fixup_chains` (dyld has zero
+   `LC_LOAD_DYLIB` dependents regardless, so this doesn't reintroduce
+   any real dynamic-linking requirement for dyld itself).
+5. **Wrong side of a real link-time symbol conflict** -- `dyld_core.a`'s
+   own MIG-generated `vm_allocate`/`vm_deallocate`/`vm_map`/`vm_protect`/
+   etc (from `vm_map.defs`) go through the legacy `vm_map_subsystem`,
+   which real, unmodified xnu-7195 **never registers** in its kobject
+   dispatch table (`osfmk/kern/ipc_kobject.c` only registers
+   `mach_vm_subsystem`) -- confirmed via a temporary diagnostic in the
+   generated `vm_map_server.c` showing the per-routine check is never
+   even reached (`kr=-304`, `MIG_BAD_ARGUMENTS`). This is real, general
+   Apple xnu behavior on 64-bit-only modern Darwin, not
+   project-specific. An earlier pass of `build_dyld_link.sh` had hidden
+   `libmalloc.a`'s real `mach_vm.o` (built from real
+   `libsyscall/mach/mach_vm.c`, which calls the always-live
+   `_kernelrpc_vm_allocate_trap` fast path) in favor of `dyld_core.a`'s
+   dead-end MIG stubs -- backwards. Flipped: `vm_mapUser.o`'s 7
+   overlapping names are hidden instead, keeping its other real routines
+   (`vm_copy`, `vm_region`, `vm_map_64`, etc) that `mach_vm.c` doesn't
+   provide.
+6. **Non-variadic `fcntl()`** -- this project's own public `fcntl()`
+   (`tools/userland_staging/libc_gen_syscalls.c`) and its private
+   `_fcntl()` (`libc_stdio_syscalls.c`) were both declared with a fixed
+   third parameter, while every real caller (including real dyld)
+   compiles against the SDK's actual variadic `<fcntl.h>` and pushes
+   extra call-site arguments on the **stack**, per Apple's real arm64
+   ABI rule for variadic calls -- a non-variadic callee reading its
+   third argument from a register got garbage. Hit twice before the
+   general fix: first as `F_GETPATH` returning an empty path for a
+   dylib that genuinely existed (kernel-side `build_path()`/
+   `vn_getpath()` computed the right path internally, confirmed via a
+   temporary `kern_descrip.c` diagnostic, then `copyout()`'d it to
+   userspace address 0), then as `F_CHECK_LV` (`kr` argument address
+   literally became `98`, the command value itself) rejecting every
+   dylib as failing library validation. First attempt widened a
+   hardcoded "which commands take a vararg" whitelist (`F_SETFL` ->
+   `+F_GETPATH`/`F_GETPATH_NOFIRMLINK`) and immediately re-hit the same
+   bug on `F_CHECK_LV` -- the real, general fix removes the whitelist
+   entirely and always reads+forwards the vararg (safe on this ABI: a
+   caller passing only 2 arguments just leaves stale register content
+   the kernel's arg-less-command handlers never read anyway, confirmed
+   by reading every real `kern_descrip.c` case).
+
+**Net result of Phase C**: `dyld_test_exec.macho` + `libtest.dylib`
+(built `-nostdlib`, since a plain `-dynamiclib` link auto-adds an
+`LC_LOAD_DYLIB` on `/usr/lib/libSystem.B.dylib` that didn't exist yet at
+this point) progresses through TSD bootstrap, real Mach VM allocation via
+dyld's own heap allocator, rebasing, file lookup, and code-signature
+validation, then correctly hits dyld's own real, unconditional
+requirement (`dyldMain.cpp`) that every launched process link against
+both `/usr/lib/system/libdyld.dylib` and `/usr/lib/libSystem.B.dylib` --
+which is Phase D, below.
+
+### Phase D: real `libdyld.dylib` + `libSystem.B.dylib` -- DONE
+### 2026-08-25, dyld reaches a real program's real `main()`
+
+`dyldMain.cpp` unconditionally halts (`halt("program does not link with
+libSystem.B.dylib")`, and separately for `libdyld.dylib`) unless the
+process loaded both, matched by exact install-name string in
+`DyldRuntimeState.cpp`'s `RuntimeState::add()`. Both built for the first
+time:
+
+- **`tools/userland_staging/build_libdyld.sh`** (new): real,
+  unmodified dyld-940 source
+  (`third_party/dyld/libdyld/libdyldGlue.cpp` + `LibSystemHelpers.cpp`
+  -- `build_dyld_core.sh`'s own header comment already correctly
+  identified these as belonging to the separate `libdyld.dylib` Xcode
+  target, not `dyld` itself) compiled with `BUILDING_DYLD=0` (the
+  shared `dyld`/`common` headers' own branch for the libdyld side, vs.
+  `=1` for the `dyld` tool), linked into a real `/usr/lib/system/
+  libdyld.dylib` with a correct `__dyld4` section and zero undefined
+  symbols.
+- **`tools/userland_staging/build_libsystem.sh`** (new): this project's
+  existing curated static libc_gen/libc_string/libc_stdio/libpthread/
+  libmalloc/libplatform/libcxx/libcxxabi archives bundled into a real
+  `/usr/lib/libSystem.B.dylib`, reusing `build_libdyld.sh`'s own scratch
+  symbol-collision fixes.
+
+**This is the "simplified" architecture flagged as a real, structural
+problem going forward -- see the new "Static-vs-dylib architecture debt"
+section immediately below.** In short: real Apple's `libSystem.B.dylib`
+is a thin re-export umbrella over ~9 separate real sub-dylibs
+(`libsystem_c`, `libsystem_malloc`, `libsystem_pthread`,
+`libsystem_platform`, `libsystem_blocks`, `libsystem_kernel`,
+`libdispatch`, `libxpc`, `libcompiler_rt`), each with its own real
+Mach-O load-time init sequence. This project instead flattened its
+EXISTING static archives (built for a static-linking-only world back in
+Phase 4) into one dylib -- functional enough to satisfy dyld's
+structural checks, but missing the real per-dylib initializer glue real
+Apple's architecture provides for free, so every touchpoint has to be
+discovered and hand-patched one at a time (see the `_dyld_initializer()`
+gap below for a concrete example of exactly this failure mode).
+
+Real gaps found+closed building both dylibs (each documented in its own
+compat file, not summarized further here -- read the file comments
+before re-deriving): `__cxa_finalize_ranges` (this project's pinned
+upstream libcxxabi never grew Apple's own dlclose-time extension), a
+minimal real `__cxa_atexit`/`__cxa_finalize`, `vproc_swap_integer` (no
+launchd -- honestly always "not managed"), `malloc_size` (real,
+documented "not found" behavior for a pointer this port's simplified
+libmalloc never registers in a zone table), pthread's post-fork re-init
+pair (real dead code -- nothing here calls `fork()` after loading a
+dylib), TLV support (no `__thread` consumer exists yet), `mkdirat` (real
+syscall #475, never wired before), and two real pre-existing
+`libplatform` source files (`os/alloc_once.c`,
+`string/generic/memset_pattern.c`) that had real source in the pinned
+repo but were never added to `build_libplatform.sh`'s file list.
+
+`build_dyld_test_exec.sh` links `dyld_test_exec.macho` directly against
+both new `.dylib` files (embeds their own real `LC_ID_DYLIB`
+install-names regardless of local build path, same mechanism
+`libtest.dylib` already used). `inject_into_sd_image.sh` installs both
+to their real paths.
+
+**Net result, QEMU-verified: `dyld_test_exec`'s own real `main()` runs.**
+Real dyld loads all three dylibs, passes both of `dyldMain.cpp`'s hard
+requirement checks, runs all real initializers, and jumps to the real
+program -- the original Phase 6.5 goal (real dyld booting a real
+dynamically-linked executable) is achieved.
+
+### Open bug (uncommitted work in progress as of 2026-08-25 end of
+### session): `main()` returning triggers a NULL virtual-dispatch SIGSEGV
+
+Symptom: `main()` prints its message and returns normally (doesn't call
+`exit()` itself); the process then `SIGSEGV`s (`subcode=0x0`, a NULL
+dereference) instead of exiting cleanly.
+
+**Root-caused** (via a temporary `handle_ux_exception` PC/LR/SP
+diagnostic plus a temporary `RuntimeState::add()` diagnostic used to
+compute dyld's real runtime load address and disassemble the exact crash
+site): real `dyldbootstrap::start()` calls the main executable's entry,
+then dispatches its return value through a **real C++ virtual call** --
+`state.libSystemHelpers->exit(result)`, i.e. a vtable call through
+`RuntimeState`'s `LibSystemHelpers*` field. That pointer is NULL because
+nothing in this port's `libSystem.B.dylib` ever calls libdyld's real
+`_dyld_initializer()` (`libdyldGlue.cpp:133`, which registers the real
+concrete `LibSystemHelpers` instance via `gDyld.apis->
+_libdyld_initialize(&sHelpers)`). Real `_dyld_initializer()`'s own
+comment says exactly when it's supposed to run: "called during
+libSystem.dylib initialization" -- on real macOS, real Libc's
+`init.c`/`_libc_initializer()` is libSystem.dylib's own real
+Mach-O-constructor (`S_MOD_INIT_FUNC_POINTERS`, which dyld genuinely
+runs automatically for every loaded image) and calls
+`_dyld_initializer()` explicitly as one of its own setup steps. This
+project's flattened `libSystem.B.dylib` has no such real Libc-side
+initializer glue at all -- exactly the "Static-vs-dylib architecture
+debt" failure mode: a real per-dylib load-time behavior that Apple's
+actual modular structure provides for free had to be independently
+discovered here.
+
+**Fix in progress, uncommitted**: `tools/userland_staging/
+libsystem_dyld_initializer_compat.c` (new file) adds a real
+`__attribute__((constructor))` function to `libSystem.B.dylib` that
+calls `_dyld_initializer()` directly -- the same real Mach-O mechanism
+real Libc's own `init.c` uses, just without the rest of Libc's
+additional setup this port doesn't need. First attempt tried linking
+`libSystem.B.dylib` directly against `libdyld.dylib` to resolve the
+cross-dylib `_dyld_initializer` reference at build time -- this backfired:
+once ld64 sees a `.dylib` on the link line, it stops pulling several
+syscall symbols (`_open`/`_read`/`_write`/`_close`/`_fstat`/etc) from
+this project's own static archives (since it now considers them
+"satisfiable via a dependency"), and they didn't bind cleanly that way,
+producing ~30 new undefined symbols. **Corrected, not yet built or
+tested**: removed the `libdyld.dylib` link input, added
+`-Wl,-U,_dyld_initializer` to `build_libsystem.sh`'s link line instead
+(marks specifically that one symbol as an intentional dynamic lookup,
+resolved at runtime once dyld has also loaded `libdyld.dylib` into the
+same process, without disturbing anything else's resolution). **Next
+action for whoever resumes this: run `build_libsystem.sh`, then
+`build_dyld_test_exec.sh`, `inject_into_sd_image.sh`, and the boot test
+(`qemu/dyld_real_boot_cmds.txt` via
+`tools/init_binary/_pty_test_phase5.py`) to confirm this actually
+resolves the NULL pointer and `dyld_test_exec` exits cleanly with
+`EXITCODE:1`** (its own `main()`'s real return value), not a crash.
+
+### Static-vs-dylib architecture debt -- new project convention going
+### forward (user directive, 2026-08-25)
+
+This project's libc/libpthread/libmalloc/libplatform/etc. were built as
+static archives back in Phase 4, when there was no dyld and static
+linking was the only option. Phase D above needed *something* real and
+loadable to exist at `/usr/lib/libSystem.B.dylib`, and took the fast
+path: bundle those same static archives into one flat dylib rather than
+restructuring them into dylibs matching real Apple's actual modular
+`libsystem_*.dylib` architecture.
+
+**This was the wrong tradeoff, repeated all session**: every real
+per-dylib behavior Apple's actual structure provides automatically (a
+dylib's own load-time constructor running its own init code, correct
+two-level-namespace symbol ownership, `_dyld_initializer()`-style
+handshakes with dyld) had to be independently discovered as a crash,
+then hand-patched with a small compat shim -- the `_dyld_initializer()`
+gap immediately above is the clearest example, but the whole session's
+"add archive, hit undefined symbol, add scratch-exclusion fix, repeat"
+cycle is the same pattern at a smaller scale.
+
+**User directive: going forward, the convention on this project is real
+per-library `.dylib`s, not static archives + temporary shims.** Concretely,
+for whoever picks this up next:
+- Do not add new static-archive build scripts for anything that could
+  plausibly be a real dylib consumer of dyld (which, as of Phase C/D
+  above, is now anything -- dyld is real and works).
+- Existing static archives (`libc_gen.a`, `libc_string.a`, `libc_stdio.a`,
+  `libc_printf.a`, `libpthread.a`, `libmalloc.a`, `libplatform.a`,
+  `libclosure.a`, `libcxx.a`, `libcxxabi.a`, `libunwind.a`, and the
+  smaller ones) should be migrated to real, individually-loadable
+  `.dylib`s over time -- not necessarily matching Apple's exact
+  `libsystem_*` sub-dylib boundaries 1:1, but real, separate Mach-O
+  images with their own real load-time init (constructors run
+  automatically by dyld) rather than one flattened bundle.
+  `tools/init_binary/build.py`/`tools/pwtool/build.py`'s existing
+  fully-static builds (no dyld at all, PID-1 and password-tool
+  specifically) are the one legitimate exception -- they predate dyld
+  and have a real reason to stay static (bootstrap-before-dyld-exists
+  concerns) -- everything else built via `tools/userland_staging/
+  build_*.sh` is now a real dylib-conversion candidate.
+- This is a real, multi-session restructuring effort, not a single
+  patch -- not attempted yet as of this write-up. Whoever picks it up
+  next should scope it phase-by-phase the same way Phase C's dyld port
+  itself was scoped (one library/subsystem at a time, real source
+  first, QEMU-verify each step), starting from a stable, exit-cleanly
+  baseline (i.e. land the `_dyld_initializer()` fix above first).
+
+This unlocks, in order once the current bug is resolved: closing Phase D
+for real (clean exit, no crash), then the static-to-dylib migration
+above, then `libdispatch` as a real `.dylib` (Phase 6.6), then
+CoreFoundation (Phase 9), then everything gated behind either.
 
 **CoreFoundation source options, noted 2026-08-24 (not yet evaluated in
 depth -- flagging for whoever picks up Phase 9), found while a background

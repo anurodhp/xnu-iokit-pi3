@@ -6,10 +6,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A from-source port of XNU (Darwin 20.3.0 / xnu-7195) to the Raspberry Pi 3
 (BCM2837), booted primarily under QEMU (`-M raspi3`) with real hardware as
-a secondary target. There is no dyld, no launchd, no opendirectoryd, no
-prelink/kext-cache pipeline — userland is a custom static PID-1
-(`tools/init_binary/`) and the handful of IOKit drivers under `iokit/` are
-compiled directly into the kernel, not loaded as kext bundles. See
+a secondary target. There is no launchd, no opendirectoryd, no
+prelink/kext-cache pipeline — userland's PID-1 (`tools/init_binary/`) is a
+custom static binary and the handful of IOKit drivers under `iokit/` are
+compiled directly into the kernel, not loaded as kext bundles. **As of
+2026-08-25, real dyld-940 exists and boots** (Phase 6.5, see
+`docs/daemon-roadmap.md`) — it loads a real, dynamically-linked test
+executable against real `/usr/lib/system/libdyld.dylib` and
+`/usr/lib/libSystem.B.dylib` and reaches the program's own real `main()`.
+**New project convention going forward: prefer real, per-library
+`.dylib`s over new static archives.** The existing curated libc/
+libpthread/libmalloc/libplatform/etc. stack (`tools/userland_staging/
+build_*.sh`) still ships as static archives from before dyld existed, and
+`libSystem.B.dylib` is currently just that same static stack flattened
+into one dylib rather than real, separate per-library dylibs matching
+Apple's actual modular architecture — a known, flagged migration debt
+(see `docs/daemon-roadmap.md`'s "Static-vs-dylib architecture debt"
+section), not a design goal to replicate for new work.
+`tools/init_binary/build.py`/`tools/pwtool/build.py` (PID-1 and the
+password tool specifically) are the one legitimate exception that should
+stay fully static, since they run before/without dyld by design. See
 `docs/roadmap.md` for the full multi-phase plan and current phase status,
 and `docs/backlog.md` for the open bug/risk list (P0 = real-hardware risk,
 P1 = correctness bugs, P2 = known gaps, P3 = hygiene).
@@ -74,10 +90,17 @@ tools/build_kexts.sh [outdir]    # compile iokit/*/*.cpp standalone (default: bu
   iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk`, target
   `arm64-apple-ios14.4`, invoking `clang`/`clang++` directly (never
   `xcodebuild`). Every archive is compiled `-ffreestanding -fno-builtin
-  -fno-stack-protector` — this target has no dyld, so nothing here may
-  ever produce a `.dylib` or link one in (`otool -l` must show zero
-  `LC_LOAD_DYLIB` and a real `LC_UNIXTHREAD`, checked by every script's
-  own smoketest step).
+  -fno-stack-protector`. Most of this stack predates real dyld and still
+  ships as static archives (`otool -l` shows zero `LC_LOAD_DYLIB` and a
+  real `LC_UNIXTHREAD`, checked by every script's own smoketest step) —
+  but real dyld now exists (Phase 6.5), and `build_libdyld.sh`/
+  `build_libsystem.sh`/`build_dylib_smoketest.sh` DO produce real
+  `.dylib`s on purpose. New work should prefer real per-library dylibs
+  over new static archives going forward (see `docs/daemon-roadmap.md`'s
+  "Static-vs-dylib architecture debt" section) — the "must stay fully
+  static" invariant now applies specifically to `tools/init_binary/
+  build.py`/`tools/pwtool/build.py` (real reasons: they run before/
+  without dyld by design), not to every script in this directory.
   **`build_libc_regex.sh` is the reference template for porting one more
   Apple library** (real per-file compile loop reporting gaps, real `ar`
   archive step, real dependency check against already-built `.a` files,

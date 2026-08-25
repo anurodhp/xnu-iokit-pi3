@@ -112,13 +112,23 @@ ar r "$SCRATCH/libmalloc_scratch.a" "$SCRATCH/libmalloc_dispatch_trimmed.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     libsystem_progname_compat.c -o "$OUT/libsystem/progname_compat.o"
 
+# Real gap: see libsystem_dyld_initializer_compat.c's own comment. Real
+# libSystem.dylib's Libc/init.c calls _dyld_initializer() as part of its
+# own real constructor; this project's simplified libSystem.B.dylib has
+# no such glue, so a small real constructor calling it directly is the
+# minimal correct fix.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    libsystem_dyld_initializer_compat.c -o "$OUT/libsystem/dyld_initializer_compat.o"
+
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libSystem.B.dylib"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
     -install_name /usr/lib/libSystem.B.dylib \
     -Wl,-fixup_chains \
+    -Wl,-U,_dyld_initializer \
     -o "$OUT/system/libSystem.B.dylib" \
     "$SCRATCH/dyld_unwind_shim_compat.o" "$OUT/libsystem/progname_compat.o" \
+    "$OUT/libsystem/dyld_initializer_compat.o" \
     "$OUT/libdyld/compat_misc.o" "$OUT/libdyld/alloc_once.o" "$OUT/libdyld/bzero.o" "$OUT/libdyld/memset_pattern.o" \
     "$OUT/libcxx.a" "$OUT/libcxxabi.a" "$SCRATCH/libunwind_scratch.a" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libcxx_locale_for_stdio_scratch.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
