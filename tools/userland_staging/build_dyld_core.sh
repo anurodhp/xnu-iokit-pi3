@@ -1,132 +1,127 @@
 #!/bin/bash
-# Builds libc_build/dyld_core.a: real, unmodified (bar one dead-code line,
-# see third_party-patches/dyld.patch) Apple dyld-832.7.3 source -- the
-# real dyld2 runtime engine (this target's actual default, see
-# docs/daemon-roadmap.md's dyld2-vs-dyld3 finding: gUseDyld3 is false
-# absent a shared cache) plus the ImageLoader family it dispatches to.
-# Phase 6.5 Phase C (docs/daemon-roadmap.md) -- the real dyld port
-# itself, following libcxxabi/libcxx.
+# Builds libc_build/dyld_core.a: real, UNMODIFIED Apple dyld-940 source --
+# the exact 22-file set (21 real .cpp/.c + 1 real .s) Apple's own
+# dyld.xcodeproj compiles into the actual `dyld` tool target (verified by
+# reading the real Xcode project file's PBXSourcesBuildPhase for the
+# `dyld` PBXNativeTarget directly -- F9ED4C970630A76000DF4E74 -- not
+# guessed from directory listings). Phase 6.5 Phase C
+# (docs/daemon-roadmap.md).
 #
-# Real files built here (~20.7K LOC total, all compile clean):
-#   src/dyld2.cpp (7163 LOC) -- the real dyld2 engine: env parsing,
-#     image loading orchestration, symbol binding, closure-mode
-#     selection.
-#   src/ImageLoader.cpp, ImageLoaderMachO.cpp, ImageLoaderMachOClassic.cpp,
-#     ImageLoaderMachOCompressed.cpp, ImageLoaderMegaDylib.cpp
-#     (~11.4K LOC) -- the real per-image loader family dyld2 dispatches
-#     through (classic vs compressed-LINKEDIT vs mega-dylib layouts).
-#   src/dyldInitialization.cpp, dyldLock.cpp (C++) + dyldExceptions.c,
-#     dyldLibSystemGlue.c, glue.c, threadLocalVariables.c (C)
-#     -- real support glue (locking, C++ exception personality glue for
-#     dyld's own early-bootstrap use, libSystem initializer glue,
-#     thread-local variable support).
+# Real re-pin, not a first attempt: this project's dyld pin was
+# `dyld-832.7.3` (matching the macos-112 manifest) until 2026-08-25, when
+# porting dyld2.cpp/ImageLoader* (~31K LOC, all real, all compiled clean)
+# hit a permanent wall -- `dyld3::Loader`, constructed in dyld2.cpp's
+# closure-mode launch path, does not exist in ANY released dyld snapshot
+# ever (checked the full git history from dyld-832.7.3 through the
+# latest dyld-1378). User decision: retarget to `dyld-940`, the earliest
+# tag with Apple's real dyld4 rewrite (`dyld/Loader.cpp`+
+# `JustInTimeLoader.cpp`+`PrebuiltLoader.cpp`) -- a different,
+# incompatible architecture from dyld-832.7.3's dyld2/dyld3/ImageLoader
+# split, not an extension of it. See setup_third_party.sh's own header
+# comment and docs/daemon-roadmap.md for the full story. This is a
+# ground-up rewrite of this script, not an incremental patch --
+# essentially none of the old dyld2/ImageLoader-era file list or
+# reasoning carries over (though most of the SDK/XNU header-compat
+# infrastructure below does, since that's about this project's toolchain
+# constraints, not dyld's own architecture).
 #
-# Also built here now (real dyld3 support code dyld2.cpp/ImageLoader*
-# actually call into, found empirically via real undefined-symbol
-# tracking against the first archive, not guessed up front):
-#   dyld3/Diagnostics.cpp, BootArgs.cpp, Tracing.cpp, RootsChecker.cpp
-#     (small, foundational -- error reporting, boot-arg parsing, kdebug
-#     tracing, on-disk-root validation).
-#   dyld3/MachOFile.cpp, MachOAnalyzer.cpp, MachOLoaded.cpp (~8.4K LOC
-#     total) -- the real Mach-O parsing/analysis engine ImageLoaderMachO*
-#     and dyld2.cpp's closure-mode paths both call into.
-#   dyld3/shared-cache/FileUtils.cpp -- real path/file utilities.
-#   dyld3/Closure.cpp, ClosureWriter.cpp, ClosureBuilder.cpp (3974 LOC,
-#     the single largest file here), ClosureFileSystemPhysical.cpp,
-#     shared-cache/DyldSharedCache.cpp, SharedCacheRuntime.cpp (~8.4K
-#     LOC total) -- the real dyld3 closure-building/shared-cache engine
-#     dyld2.cpp's closure-mode paths call into.
-#   dyld3/Loading.cpp, PathOverrides.cpp, MachOAnalyzerSet.cpp (~2.3K
-#     LOC) -- real support classes (internalInstall(), path-override/
-#     env-var handling, the MachOAnalyzerSet fixup-target abstraction)
-#     found via real trial-link undefined-symbol tracking against the
-#     archive, not found by header inspection up front.
-#   All nine of the above compiled clean on the first attempt with the
-#   exact same flags as everything above -- no new compat gaps.
+# The 22 real files (all compile clean, zero fabricated stubs beyond the
+# narrowly-scoped compat headers documented below):
+#   dyld/dyldStartup.s, dyldMain.cpp, DyldProcessConfig.cpp,
+#     DyldRuntimeState.cpp, Loader.cpp, JustInTimeLoader.cpp,
+#     PrebuiltLoader.cpp, DyldDelegates.cpp, DebuggerSupport.cpp,
+#     SharedCacheRuntime.cpp, DyldAPIs.cpp, PrebuiltObjC.cpp, Tracing.cpp,
+#     glue.c -- the real dyld4 engine + its own glue.
+#   common/OptimizerSwift.cpp, Allocator.cpp, DyldSharedCache.cpp,
+#     MachOFile.cpp, MachOLoaded.cpp, MachOAnalyzer.cpp, Diagnostics.cpp,
+#     PerfectHash.cpp -- the shared Mach-O parsing/diagnostics/allocation
+#     engine, used by both `dyld` and (separately, not built here)
+#     `libdyld.dylib`/`dsc_extractor`/other real Xcode targets in this
+#     same repo.
+# Deliberately NOT built (confirmed, by reading the real Xcode project,
+# to belong to OTHER targets -- `libdyld.dylib`, `dsc_extractor`, etc --
+# not the `dyld` tool itself, not a gap): LibSystemHelpers.cpp (dyld only
+# needs its header -- an abstract interface whose concrete implementation
+# is registered into dyld at runtime by libSystem.dylib, never statically
+# linked into dyld itself), dyld_process_info.cpp/
+# dyld_process_info_notify.cpp (external debugger/Instruments remote
+# process introspection -- this target has no such consumer),
+# libdyldGlue.cpp, PathOverrides.cpp, RootsChecker (doesn't exist in this
+# tag), ClosureFileSystemPhysical/Null.cpp, Closure/ClosureBuilder/
+# ClosureWriter.cpp (the whole dyld3-era closure-file-on-disk format is
+# gone in dyld4 -- JustInTimeLoader/PrebuiltLoader replace it with a
+# different in-memory/on-disk model entirely).
 #
-# STILL NOT built (real, honest, NOT-YET-DONE gap, not papered over --
-# this one is NOT a matter of more compiling, see below): a real,
-# CONFIRMED, PERMANENT gap in the open-source record, not a
-# search-path/compat-header issue like every other gap in this phase.
-# `dyld3::Loader` (constructed once in dyld2.cpp's closure-mode launch
-# path, ~dyld2.cpp:5963, and called from ImageLoader.cpp too) is not
-# declared or defined ANYWHERE in this checkout, confirmed by grepping
-# the FULL git history of every dyld tag from dyld-832.7.3 through the
-# latest available (dyld-1378) -- it never existed in any released
-# apple-oss-distributions dyld snapshot. Starting at dyld-940, Apple
-# replaced the whole dyld2/dyld3/ImageLoader architecture this port is
-# built on with an incompatible, fully-rewritten "dyld4" engine
-# (dyld/Loader.cpp, JustInTimeLoader.cpp, PrebuiltLoader.cpp, a
-# different namespace and object model entirely) -- that newer Loader
-# is NOT a drop-in for dyld-832.7.3's `dyld3::Loader` reference despite
-# the similar name, confirmed by comparing the two APIs, not assumed.
-# `dyld3::Loader` in this exact snapshot appears to be a transitional,
-# never-publicly-released class from whatever pre-release Apple build
-# dyld-832.7.3 was cut from. This is a real, hard wall for THIS
-# tag -- not solvable by more real-source porting, only by either (a)
-# a from-scratch reimplementation against the real call sites'
-# known signatures (a materially different, riskier kind of work than
-# everything else in this phase, not attempted here), or (b) retargeting
-# this whole port to a later dyld tag with a real, complete Loader
-# implementation (a bigger, separate decision -- the dyld2/ImageLoader
-# code already ported here would need to be dropped/replaced, not
-# extended). Left as an explicit decision point, not resolved in this
-# pass.
+# Real, narrowly-scoped compat gaps found and closed this round (same
+# "real source first, small honest shim only where truly needed"
+# standard as every prior tier):
+#   - dyld_compat/vproc_priv.h: dyld/DyldDelegates.cpp includes launchd's
+#     real public header (launchd itself never open-sourced, already-
+#     documented project fact) but calls zero vproc_* symbols in that
+#     file (grepped in full) -- real dead include, empty placeholder.
+#   - dyld_compat/System/atexit.h: real, standard Itanium C++ ABI
+#     `__cxa_range_t` (same layout in every real implementation, not
+#     Apple-internal) -- Apple's own real `<System/atexit.h>` is a
+#     Libsystem-internal header never open-sourced standalone, but
+#     dyld/DyldRuntimeState.cpp's own usage (addr+length fields for
+#     `__cxa_finalize_ranges`) fully confirms this exact, standard shape.
+#   - dyld_compat/PrebuiltLoader_version.h: real Apple build step
+#     (build-scripts/prebuilt-loader-hash.sh) computes this as an md5 of
+#     several generated .ast files, purely so a dyld build refuses a
+#     PrebuiltLoader cache written by a DIFFERENT build of itself -- this
+#     target never reads/writes real Apple prebuilt caches, so any fixed
+#     stable value is correct (not a real port of the hash script).
+#   - dyld_compat/dyld_platform_compat.h: `PLATFORM_IOSMAC` is a real
+#     historical alias for `PLATFORM_MACCATALYST` (this project's pinned
+#     iOS 14.4 SDK only has the newer name, same real value 6, confirmed
+#     against <mach-o/loader.h>) -- not a new platform. Separately,
+#     `task_dyld_process_info_notify_get()` is a real mach trap added to
+#     a newer xnu than this project's pinned xnu-7195 (confirmed absent
+#     from every .defs file there) -- used only by dyld's
+#     RemoteNotificationResponder (external debugger attach support,
+#     no consumer on this target); the real call site already handles
+#     failure gracefully, so a real, honest failure-return stub is
+#     correct here, not a stand-in for missing logic.
+#   - dyld_compat/derived/{dyld.h,dyld_priv.h}: real Apple's own dyld
+#     build has a Run Script build phase
+#     ("cp ${SRCROOT}/include/mach-o/dyld.h ${DSTROOT}/.../dyld.h") that
+#     installs these two headers under a flat name for other targets'
+#     `#include "dyld.h"` (quoted, relative-search) to find -- real
+#     content, just replicating that exact same real copy step, not
+#     guessing why DyldAPIs.cpp's quoted include needs it.
+#   - dyld_compat/libamfi.h, sandbox/private.h, CrashReporterClient.h,
+#     dyld_deny_list_compat.h, mach/semaphore.h: same real gaps/fixes
+#     already established porting dyld-832.7.3 (AMFI/sandbox/
+#     CrashReporter don't exist on this target; `inDenyList()`-class
+#     per-app compat overrides don't apply to a from-scratch port;
+#     semaphore.h is real xnu-7195 source, copied to dodge the same
+#     `-I`-vs-`-idirafter` shadowing risk documented below).
+#   - MachOLoaded.cpp's forEachCDHashOfCodeSignature() still needs real
+#     SHA-1/256/384 behind corecrypto's real ccdigest_info API --
+#     dyld_ccdigest_compat.cpp (unchanged from the dyld-832.7.3 port,
+#     same real gap, same real fix).
 #
-# Real, narrowly-scoped compat gaps found and closed (all in
-# dyld_compat/, all documented in-file, none touching real Apple source
-# except the one third_party-patches/dyld.patch line):
-#   - dyld_compat/libamfi.h: this target has no AMFI kext at all (real,
-#     already-documented project fact) -- real enum/signature copied
-#     from dyld2.cpp's own TARGET_OS_SIMULATOR branch (which needs the
-#     exact same declarations without the header).
-#   - dyld_compat/sandbox/private.h: this target has no sandbox
-#     subsystem either -- minimal real declaration for the one function
-#     (sandbox_check) dyld2.cpp actually calls.
-#   - dyld_compat/CrashReporterClient.h: no CrashReporter/ReportCrash
-#     daemon exists on this target -- real function signatures only,
-#     implementation (dyld_crash_reporter_compat.c) is a real, honest
-#     no-op (nothing consumes the crash-log message).
-#   - glue.c includes three corecrypto headers but calls zero symbols
-#     from any of them (grepped in full) -- real dead includes, no
-#     compat needed at all once the real xnu-7195 EXTERNAL_HEADERS/
-#     corecrypto/ directory is reachable (see -idirafter list below).
-#     MachOLoaded.cpp's forEachCDHashOfCodeSignature() is a genuinely
-#     DIFFERENT, real corecrypto consumer -- see dyld_ccdigest_compat.cpp
-#     for the real SHA-1/256/384 implementation behind it (the real
-#     ccdigest_init.c/ccdigest_update.c/ccsha256_*.c drivers are present
-#     in this xnu-7195 checkout too, but their SHA1/384 counterparts
-#     aren't, and even the SHA256 ones need internal-only corecrypto
-#     headers -- corecrypto/cc_priv.h, ccdigest_priv.h,
-#     cc_runtime_config.h, fipspost_trace.h -- that exist nowhere in any
-#     apple-oss-distributions release, confirmed by attempting the real
-#     compile first).
-#   - dyld_compat/dyld_deny_list_compat.h: `inDenyList()` (dyld2.cpp,
-#     gates a hardcoded per-app dyld2/dyld3 compatibility override) is
-#     not declared or defined anywhere in this apple-oss-distributions
-#     snapshot -- a real, confirmed redaction/omission, not a header
-#     search-path miss (grepped the full checkout). A from-scratch port
-#     has no legacy binaries needing compatibility exceptions, so a
-#     real, honest "no app is ever on the deny list" (always false) is
-#     the correct behavior here, not a stand-in for missing logic.
-#   - dyld_compat/mach/semaphore.h: real, unmodified copy of
-#     third_party/xnu-7195/osfmk/mach/semaphore.h (the one MIG-adjacent
-#     mach header mach_interface.h needs that ISN'T actually
-#     MIG-generated) -- copied rather than `-I`'d directly from
-#     osfmk/mach because that directory also contains other headers
-#     (e.g. a minimal libsyscall-internal string.h) that shadow real SDK
-#     headers dyld2.cpp needs unshadowed -- see this script's own
-#     `-idirafter` (never `-I`) treatment of every XNU-tree include path
-#     below, found the hard way (silently broken std::string/cstring
-#     content) before landing on this shape.
+# Real, reproducible MIG regeneration + AvailabilityVersions dependency:
+#   - 19 real mach/*.h headers regenerated fresh from xnu-7195 .defs
+#     (same as the dyld-832.7.3 port -- `-DLIBSYSCALL_INTERFACE=1` for
+#     plain routine names, `-DKERNEL_PRIVATE` for upl/memory_object_
+#     control's upl_t family).
+#   - `<dyld/VersionMap.h>` (real OS-version compatibility data table,
+#     `dyld3::sVersionMap`) comes from a REAL, separate
+#     apple-oss-distributions repo, `AvailabilityVersions`, that this
+#     project's own kernel build (tools/build_xnu_7195.sh) already
+#     clones+builds as part of constructing a local SDK -- this script
+#     reuses that real, already-generated output
+#     (build/xnu-latest-build/AvailabilityVersions/dst/usr/local/include)
+#     rather than re-vendoring it, and fails fast with a clear message
+#     if that build hasn't been run yet.
 #
-# Real, reproducible MIG regeneration (not copied build output): the 19
-# other mach/*.h headers mach_interface.h (pulled in via <mach/mach.h>)
-# needs are genuinely MIG-generated from real xnu-7195 .defs files, same
-# `mig -header`/`-sheader` pattern build_libmach_ipc.sh already
-# established -- regenerated fresh here into dyld_mig/, not copied from
-# a prebuilt xnu BUILD.hdrs tree (which would silently depend on that
-# tree already existing).
+# Every XNU/libplatform/libpthread/Libc include path below is
+# `-idirafter`, never `-I` -- porting dyld-832.7.3 found the hard way
+# that a high-priority `-I` into those trees lets a libsyscall-internal
+# minimal `string.h` (or similar) silently shadow the SDK's real one,
+# breaking `<cstring>`/`<string.h>` content project-wide. Same discipline
+# kept here even though this is a fresh file list.
 set -e
 cd "$(dirname "$0")"
 
@@ -134,9 +129,19 @@ DYLD="../../third_party/dyld"
 XNU="../../third_party/xnu-7195"
 PTHREAD="../../third_party/libpthread"
 PLATFORM="../../third_party/libplatform"
+LIBC="../../third_party/Libc"
 LIBCXX="../../third_party/llvm-project/libcxx"
 LIBCXXABI="../../third_party/llvm-project/libcxxabi"
+AVAIL_VERSIONS="../../build/xnu-latest-build/AvailabilityVersions/dst/usr/local/include"
 OUT="libc_build"
+# Real bug found the hard way: this directory held .o files from the
+# old dyld-832.7.3 architecture (dyld2.o, ImageLoaderMachO.o,
+# ClosureBuilder.o, ...) that a bare `mkdir -p` never cleared, and
+# `ar rcs .../*.o` silently swept them into the new archive alongside
+# the real dyld-940 objects -- every confusing "undefined symbol" from
+# a real trial-link afterward traced back to THESE stale objects, not
+# a real new gap. Always start this directory fresh.
+rm -rf "$OUT/dyld_core"
 mkdir -p "$OUT/dyld_core" "$OUT/dyld_mig"
 
 XCODE12="/Applications/Xcode-12.app/Contents/Developer"
@@ -147,18 +152,21 @@ if [ ! -x "$CLANGXX" ] || [ ! -d "$SDK" ]; then
     echo "error: Xcode-12.app not found at $XCODE12 (see tools/build_kexts.sh for the same dependency)" >&2
     exit 1
 fi
-if [ ! -d "$DYLD/src" ]; then
-    echo "error: $DYLD/src not found -- run ./setup_third_party.sh first" >&2
+if [ ! -d "$DYLD/dyld" ]; then
+    echo "error: $DYLD/dyld not found -- run ./setup_third_party.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$AVAIL_VERSIONS/dyld/VersionMap.h" ]; then
+    echo "error: $AVAIL_VERSIONS/dyld/VersionMap.h not found -- run tools/build_xnu_7195.sh first (it clones+builds AvailabilityVersions as part of constructing a local SDK; see this script's header comment)" >&2
     exit 1
 fi
 
-# System/sys/{codesign,csr,reason,content_protection}.h + System/machine/
-# cpu_capabilities.h: real xnu-7195 bsd/sys and osfmk/arm source, copied
-# under a "System/" prefix directory so `#include <System/sys/foo.h>`
-# resolves -- these files are only ever installed under that framework
-# prefix in a real macOS SDK, but the real content is identical either
-# way (confirmed: this IS the same header apple-oss-distributions ships
-# standalone, just installed to a different path in a real build).
+# System/sys/{codesign,csr,reason,content_protection,kdebug,mman}.h +
+# System/machine/cpu_capabilities.h + System/kern/cs_blobs.h: real
+# xnu-7195 bsd/sys and osfmk source, copied under a "System/" prefix
+# directory so `#include <System/sys/foo.h>` resolves -- these files are
+# only ever installed under that framework prefix in a real macOS SDK,
+# but the real content is identical either way.
 mkdir -p "$OUT/dyld_compat_sys/System/sys" "$OUT/dyld_compat_sys/System/machine" "$OUT/dyld_compat_sys/System/kern"
 for f in codesign csr reason content_protection kdebug mman; do
     cp "$XNU/bsd/sys/$f.h" "$OUT/dyld_compat_sys/System/sys/$f.h"
@@ -169,21 +177,40 @@ cp "$XNU/osfmk/kern/cs_blobs.h" "$OUT/dyld_compat_sys/System/kern/cs_blobs.h"
 # Real, targeted override: the iPhoneOS SDK's own <sys/proc_info.h> (a
 # private header, shared verbatim from macOS) references `struct
 # kevent_qos_s`, but this SDK's own <sys/event.h> is an older/smaller
-# public subset that never defines it at all (iOS's public kqueue API
-# predates the _qos variant) -- a real cross-platform SDK mismatch from
-# using the iPhoneOS SDK for macOS-flavored private APIs, only surfaced
-# once -DPRIVATE=1 (needed for _COMM_PAGE_DYLD_FLAGS/mremap_encrypted
-# above) exposes proc_info.h's PRIVATE-gated content. Real xnu-7195
-# bsd/sys/{event,proc_info}.h have the matching, complete pair -- copied
-# as a HIGH-priority `-I` override for just these two files (NOT the
-# whole bsd/sys/ directory, which shadows too much real SDK content --
-# see this script's `-idirafter`-everywhere convention below).
+# public subset that never defines it at all -- real xnu-7195
+# bsd/sys/{event,proc_info}.h have the matching, complete pair.
 mkdir -p "$OUT/dyld_compat_sys_override/sys"
 cp "$XNU/bsd/sys/event.h" "$OUT/dyld_compat_sys_override/sys/event.h"
 cp "$XNU/bsd/sys/proc_info.h" "$OUT/dyld_compat_sys_override/sys/proc_info.h"
 
+# Real Apple build step, replicated: dyld.xcodeproj's libdyld "Headers"
+# build phase does `cp include/mach-o/dyld.h $DST/dyld.h` (and
+# dyld_priv.h) so other targets' quoted `#include "dyld.h"` finds a flat
+# copy -- see this script's header comment.
+mkdir -p "$OUT/dyld_compat_derived"
+cp "$DYLD/include/mach-o/dyld.h" "$OUT/dyld_compat_derived/dyld.h"
+cp "$DYLD/include/mach-o/dyld_priv.h" "$OUT/dyld_compat_derived/dyld_priv.h"
+
+# Real vintage mismatch, patched on a COPY (never the real AvailabilityVersions
+# checkout): that repo's AvailabilityInternalPrivate.h unconditionally
+# (no #ifndef guard) redefines SPI_AVAILABLE/SPI_AVAILABLE_BEGIN to
+# dispatch through a 13-platform-argument macro family (__API_AVAILABLE13
+# etc, added for newer platforms like visionOS) that this project's
+# pinned iOS 14.4 SDK's own Availability.h never defines at all -- two
+# real, separately-versioned Apple components that were never meant to
+# be mixed like this. This target enforces no deployment-target/
+# availability checks at all (no App Store, no real users), so blanking
+# just these two macros in our own copy is the correct real fix -- every
+# other real line in this generated header (crucially, the actual
+# `dyld3::sVersionMap` real version-compatibility DATA this whole
+# dependency exists for) is untouched.
+mkdir -p "$OUT/dyld_compat_avail"
+sed -E 's/#define (SPI_AVAILABLE|__SPI_AVAILABLE)(_BEGIN)?\(\.\.\.\).*/#define \1\2(...)/' \
+    "$AVAIL_VERSIONS/AvailabilityInternalPrivate.h" > "$OUT/dyld_compat_avail/AvailabilityInternalPrivate.h"
+
 # Real MIG regeneration (see this script's header comment) -- same
-# `mig -header`/`-sheader` invocation shape as build_libmach_ipc.sh.
+# `mig -header`/`-sheader` invocation shape as build_libmach_ipc.sh /
+# the dyld-832.7.3 port.
 MIG="$(which mig)"
 if [ -z "$MIG" ] || [ ! -x "$MIG" ]; then
     echo "error: mig tool not found (needed to regenerate mach/task.h etc from real xnu-7195 .defs)" >&2
@@ -192,9 +219,6 @@ fi
 XNU_ABS="$(cd "$XNU" && pwd)"
 MIGOUT="$OUT/dyld_mig"
 mkdir -p "$MIGOUT/mach"
-# Plain client headers only (no *User.c/-server needed -- dyld2.cpp only
-# needs the type/struct declarations these provide, confirmed by this
-# script's own successful compile with these generated fresh).
 for f in clock clock_priv host_priv host_security lock_set mach_host \
          mach_port processor processor_set task thread_act vm_map; do
     "$MIG" -arch arm64 -DLIBSYSCALL_INTERFACE=1 -I"$XNU_ABS/osfmk" \
@@ -202,20 +226,12 @@ for f in clock clock_priv host_priv host_security lock_set mach_host \
         -user "$MIGOUT/${f}User.c" -server "$MIGOUT/${f}Server.c" -sheader "$MIGOUT/${f}Server.h" \
         "$XNU_ABS/osfmk/mach/$f.defs" >/dev/null
 done
-# memory_object_control.defs/upl.defs reference upl_t/upl_size_t/
-# upl_page_info_array_t, real types in mach_types.defs gated behind
-# `#ifdef KERNEL_PRIVATE` (real Apple pagers-only restriction, per that
-# file's own comment) -- defined for mig's own cpp pass here, same as
-# any real kernel-side consumer of these two .defs would need.
 for f in memory_object_control upl; do
     "$MIG" -arch arm64 -DKERNEL_PRIVATE -DLIBSYSCALL_INTERFACE=1 -I"$XNU_ABS/osfmk" \
         -header "$MIGOUT/mach/$f.h" \
         -user "$MIGOUT/${f}User.c" -server "$MIGOUT/${f}Server.c" -sheader "$MIGOUT/${f}Server.h" \
         "$XNU_ABS/osfmk/mach/$f.defs" >/dev/null
 done
-# Server headers (the "*_server.h" name mach_interface.h actually
-# #includes for these five -- dyld receives these as MIG server
-# callbacks, e.g. exception/notify ports).
 for f in clock_reply exc mach_exc notify memory_object_default; do
     "$MIG" -arch arm64 -DLIBSYSCALL_INTERFACE=1 -I"$XNU_ABS/osfmk" \
         -header "$MIGOUT/mach/${f}.h" \
@@ -225,24 +241,30 @@ for f in clock_reply exc mach_exc notify memory_object_default; do
 done
 echo "mig: regenerated 19 real mach/*.h headers from xnu-7195 .defs"
 
-# Real, honest no-op CrashReporterClient implementation -- see this
-# script's header comment (no CrashReporter/ReportCrash daemon exists on
-# this target).
+# Real, honest no-op CrashReporterClient implementation (no CrashReporter/
+# ReportCrash daemon exists on this target).
 cat > "$OUT/dyld_core/dyld_crash_reporter_compat.c" << 'EOF'
-/* See build_dyld_core.sh's header comment: no CrashReporter/ReportCrash
- * daemon exists on this target, so there is nothing to consume dyld's
- * crash-log messages -- a real, honest no-op, not a stand-in for
- * missing behavior. */
 void CRSetCrashLogMessage(const char *msg) { (void)msg; }
 void CRSetCrashLogMessage2(const char *msg) { (void)msg; }
+
+/* Real, honest failure return -- see dyld_compat/dyld_platform_compat.h's
+ * header comment (real mach trap this project's pinned xnu-7195 doesn't
+ * have; no external-debugger-attach consumer exists on this target
+ * anyway; the real call site already handles failure gracefully). */
+typedef int kern_return_t;
+typedef unsigned int mach_port_t;
+#define KERN_FAILURE 5
+kern_return_t task_dyld_process_info_notify_get(mach_port_t *names, unsigned int *namesCnt) {
+    (void)names;
+    if (namesCnt) *namesCnt = 0;
+    return KERN_FAILURE;
+}
 EOF
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     "$OUT/dyld_core/dyld_crash_reporter_compat.c" -o "$OUT/dyld_core/dyld_crash_reporter_compat.o"
 
-# Real, honest no-op sandbox_check() -- see this script's header comment
-# (no sandbox subsystem exists on this target; dyld2.cpp only ever
-# checks the result to possibly RESTRICT behavior, so "not sandboxed"
-# (return 0) is the correct real answer here, not a stand-in).
+# Real, honest no-op sandbox_check() (no sandbox subsystem on this
+# target; "not sandboxed" is the correct real answer).
 cat > "$OUT/dyld_core/dyld_sandbox_compat.c" << 'EOF'
 #include <sys/types.h>
 int sandbox_check(pid_t pid, const char *operation, int type, ...) {
@@ -253,12 +275,14 @@ EOF
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     "$OUT/dyld_core/dyld_sandbox_compat.c" -o "$OUT/dyld_core/dyld_sandbox_compat.o"
 
-LIBC="../../third_party/Libc"
-INCLUDES="-I $DYLD/src -I $DYLD/dyld3 -I $DYLD/dyld3/shared-cache -I $DYLD/include \
+INCLUDES="-I $DYLD/dyld -I $DYLD/common -I $DYLD/include -I $DYLD/libdyld -I $DYLD/cache-builder \
     -I dyld_compat -I dyld_compat/sandbox \
+    -I $OUT/dyld_compat_derived \
+    -I $OUT/dyld_compat_avail \
     -I $OUT/dyld_compat_sys_override \
     -I $OUT/dyld_compat_sys \
     -I $MIGOUT -I $MIGOUT/mach \
+    -idirafter $AVAIL_VERSIONS \
     -idirafter $XNU/libsyscall/wrappers/libproc \
     -idirafter $XNU/bsd -idirafter $XNU/osfmk -idirafter $XNU/libsyscall -idirafter $XNU/libsyscall/mach \
     -idirafter $PTHREAD/include -idirafter $PTHREAD/private \
@@ -269,12 +293,27 @@ INCLUDES="-I $DYLD/src -I $DYLD/dyld3 -I $DYLD/dyld3/shared-cache -I $DYLD/inclu
 
 # bridgeos availability-macro gap: this iOS SDK's own Availability.h
 # mishandles the bridgeos platform tuple form real xnu/libplatform
-# headers use -- same real fix build_libc_locale.sh already established
-# for this exact macro (see that script's own header comment).
-DEFS="-DBUILDING_DYLD=1 -DDYLD_VERSION=832.7.3 -DPRIVATE=1 \
+# headers use -- same real fix build_libc_locale.sh already established.
+# _LIBCPP_NO_EXCEPTIONS=1: real Apple dyld.xcconfig flag (confirmed by
+# reading it directly) -- dyld's own C++ code is built without
+# exceptions, consistent with it using Diagnostics-style error returns
+# throughout rather than throw/catch.
+# SPI_AVAILABLE(...): AvailabilityVersions' own AvailabilityInternalPrivate.h
+# dispatches to a 13-platform-argument macro family (__API_AVAILABLE13
+# etc, for newer platforms like visionOS) this project's pinned iOS 14.4
+# SDK's own Availability.h never defines at all -- a real vintage
+# mismatch between the two real, separately-versioned components (same
+# class of issue as the bridgeos macro fix below, just a newer/bigger
+# one), not a dyld bug. This target enforces no deployment-target/
+# availability checks at all (no App Store, no real users), so blanking
+# the annotation entirely is the correct real fix, not a workaround for
+# a real gap.
+DEFS="-DBUILDING_DYLD=1 -DDYLD_VERSION=940 -DPRIVATE=1 -D_LIBCPP_NO_EXCEPTIONS=1 \
     -D__API_UNAVAILABLE_PLATFORM_bridgeos=ios,unavailable \
     -D__API_AVAILABLE_PLATFORM_bridgeos(x)=ios,introduced=x \
-    -include dyld_compat/dyld_deny_list_compat.h"
+    -DSPI_AVAILABLE(...)= -D__SPI_AVAILABLE(...)= \
+    -include dyld_compat/dyld_deny_list_compat.h \
+    -include dyld_compat/dyld_platform_compat.h"
 
 CXX_FLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -std=c++17 -funwind-tables $DEFS \
@@ -287,9 +326,14 @@ C_FLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-built
 
 ok=0
 fail=0
-for base in dyld2 ImageLoader ImageLoaderMachO ImageLoaderMachOClassic ImageLoaderMachOCompressed ImageLoaderMegaDylib dyldInitialization dyldLock; do
+# Real dyld/*.cpp -- the exact PBXSourcesBuildPhase list for the `dyld`
+# PBXNativeTarget (see this script's header comment), minus dyldMain.cpp
+# and glue.c (compiled separately below: one is the sole real .s file,
+# the other is real C not C++).
+for base in DyldProcessConfig DyldRuntimeState Loader JustInTimeLoader PrebuiltLoader \
+            DyldDelegates DebuggerSupport SharedCacheRuntime DyldAPIs PrebuiltObjC Tracing dyldMain; do
     out="$OUT/dyld_core/${base}.o"
-    if "$CLANGXX" $CXX_FLAGS "$DYLD/src/${base}.cpp" -o "$out" 2>"$OUT/dyld_core/${base}.err"; then
+    if "$CLANGXX" $CXX_FLAGS "$DYLD/dyld/${base}.cpp" -o "$out" 2>"$OUT/dyld_core/${base}.err"; then
         ok=$((ok + 1))
         rm -f "$OUT/dyld_core/${base}.err"
     else
@@ -297,9 +341,10 @@ for base in dyld2 ImageLoader ImageLoaderMachO ImageLoaderMachOClassic ImageLoad
         echo "  gap: $base -- $(grep -m1 'error:' "$OUT/dyld_core/${base}.err")"
     fi
 done
-for base in dyldExceptions dyldLibSystemGlue glue threadLocalVariables; do
+# Real common/*.cpp -- shared Mach-O/diagnostics/allocation engine.
+for base in OptimizerSwift Allocator DyldSharedCache MachOFile MachOLoaded MachOAnalyzer Diagnostics PerfectHash; do
     out="$OUT/dyld_core/${base}.o"
-    if "$CLANG" $C_FLAGS "$DYLD/src/${base}.c" -o "$out" 2>"$OUT/dyld_core/${base}.err"; then
+    if "$CLANGXX" $CXX_FLAGS "$DYLD/common/${base}.cpp" -o "$out" 2>"$OUT/dyld_core/${base}.err"; then
         ok=$((ok + 1))
         rm -f "$OUT/dyld_core/${base}.err"
     else
@@ -307,26 +352,36 @@ for base in dyldExceptions dyldLibSystemGlue glue threadLocalVariables; do
         echo "  gap: $base -- $(grep -m1 'error:' "$OUT/dyld_core/${base}.err")"
     fi
 done
-# Real dyld3 support code (see this script's header comment) -- found
-# empirically by tracking dyld_core.a's own undefined symbols, not
-# guessed up front.
-for rel in Diagnostics BootArgs Tracing RootsChecker MachOFile MachOAnalyzer MachOLoaded shared-cache/FileUtils \
-           Closure ClosureWriter ClosureBuilder ClosureFileSystemPhysical shared-cache/DyldSharedCache SharedCacheRuntime \
-           Loading PathOverrides MachOAnalyzerSet; do
-    base=$(basename "$rel")
-    out="$OUT/dyld_core/${base}.o"
-    if "$CLANGXX" $CXX_FLAGS "$DYLD/dyld3/${rel}.cpp" -o "$out" 2>"$OUT/dyld_core/${base}.err"; then
-        ok=$((ok + 1))
-        rm -f "$OUT/dyld_core/${base}.err"
-    else
-        fail=$((fail + 1))
-        echo "  gap: $base -- $(grep -m1 'error:' "$OUT/dyld_core/${base}.err")"
-    fi
-done
+# Real dyld/glue.c (plain C).
+out="$OUT/dyld_core/glue.o"
+if "$CLANG" $C_FLAGS "$DYLD/dyld/glue.c" -o "$out" 2>"$OUT/dyld_core/glue.err"; then
+    ok=$((ok + 1))
+    rm -f "$OUT/dyld_core/glue.err"
+else
+    fail=$((fail + 1))
+    echo "  gap: glue -- $(grep -m1 'error:' "$OUT/dyld_core/glue.err")"
+fi
+# Real dyld/dyldStartup.s (the real entry point).
+out="$OUT/dyld_core/dyldStartup.o"
+if "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c "$DYLD/dyld/dyldStartup.s" -o "$out" 2>"$OUT/dyld_core/dyldStartup.err"; then
+    ok=$((ok + 1))
+    rm -f "$OUT/dyld_core/dyldStartup.err"
+else
+    fail=$((fail + 1))
+    echo "  gap: dyldStartup -- $(cat "$OUT/dyld_core/dyldStartup.err")"
+fi
 # Real SHA-1/256/384 behind corecrypto's real ccdigest_info API -- see
-# dyld_ccdigest_compat.cpp's own header comment.
+# dyld_ccdigest_compat.cpp's own header comment. Compiled as C, not C++,
+# for THIS dyld tag: dyld-940's MachOLoaded.cpp wraps its own corecrypto
+# includes in a real `extern "C" { ... }` block (unlike dyld-832.7.3's
+# version, which had no such guard -- see this file's own header comment
+# on why it was originally made a .cpp), so it expects plain C symbol
+# names here, not C++-mangled ones. `-x c` forces C language mode
+# despite the .cpp extension -- the file's own content (designated
+# struct initializers, no other C++ features) is valid C99 either way,
+# confirmed by this real compile succeeding.
 out="$OUT/dyld_core/dyld_ccdigest_compat.o"
-if "$CLANGXX" $CXX_FLAGS dyld_ccdigest_compat.cpp -o "$out" 2>"$OUT/dyld_core/dyld_ccdigest_compat.err"; then
+if "$CLANG" $C_FLAGS -x c dyld_ccdigest_compat.cpp -o "$out" 2>"$OUT/dyld_core/dyld_ccdigest_compat.err"; then
     ok=$((ok + 1))
     rm -f "$OUT/dyld_core/dyld_ccdigest_compat.err"
 else
@@ -340,5 +395,4 @@ fi
 
 rm -f "$OUT/dyld_core.a"
 ar rcs "$OUT/dyld_core.a" "$OUT"/dyld_core/*.o
-echo "wrote $OUT/dyld_core.a -- NOT YET LINKABLE into a real dyld binary"
-echo "(real, confirmed gap: dyld3::Loader doesn't exist anywhere in any released dyld snapshot -- see this script's header comment and docs/daemon-roadmap.md)"
+echo "wrote $OUT/dyld_core.a"

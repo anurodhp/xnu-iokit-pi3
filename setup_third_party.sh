@@ -153,6 +153,25 @@
 #     project's "small, real, reproducible" convention for no benefit,
 #     since only the `libcxx`/`libcxxabi` subdirectories are needed.
 #
+#   - dyld: pinned to `dyld-940`, NOT the macos-112-manifest-matching
+#     `dyld-832.7.3` this was originally pinned to. Real, deliberate
+#     re-pin (2026-08-25, see docs/daemon-roadmap.md's Phase 6.5 Phase C
+#     section for the full story): dyld-832.7.3's own dyld2.cpp
+#     references a `dyld3::Loader` class that was confirmed -- by
+#     checking the FULL git history of every dyld tag from dyld-832.7.3
+#     through dyld-1378 -- to never exist in any released
+#     apple-oss-distributions dyld snapshot at all (a transitional,
+#     never-publicly-released class from whatever internal pre-release
+#     build that exact tag was cut from). `dyld-940` is the EARLIEST
+#     tag with a real, complete Loader implementation (Apple's dyld4
+#     rewrite, `dyld/Loader.cpp`+`JustInTimeLoader.cpp`+
+#     `PrebuiltLoader.cpp` -- a different, incompatible architecture
+#     from dyld-832.7.3's dyld2/dyld3/ImageLoader split, not an
+#     extension of it). This is a real, necessary exception to this
+#     project's usual "match the macos-112 manifest exactly" rule --
+#     the manifest's own dyld pin is provably unbuildable for real,
+#     confirmed reasons, not a convenience shortcut.
+#
 # Usage: ./setup_third_party.sh [--force]
 set -euo pipefail
 cd "$(dirname "$0")"
@@ -176,7 +195,7 @@ IOStorageFamily|https://github.com/apple-oss-distributions/IOStorageFamily.git|I
 IOUSBFamily|https://github.com/apple-oss-distributions/IOUSBFamily.git|IOUSBFamily-630.4.5|
 IONetworkingFamily|https://github.com/apple-oss-distributions/IONetworkingFamily.git|IONetworkingFamily-151.40.1|
 msdosfs|https://github.com/apple-oss-distributions/msdosfs.git|msdosfs-435.60.1|
-dyld|https://github.com/apple-oss-distributions/dyld.git|dyld-832.7.3|dyld.patch
+dyld|https://github.com/apple-oss-distributions/dyld.git|dyld-940|
 Libc|https://github.com/apple-oss-distributions/Libc.git|Libc-1439.40.11|
 libpthread|https://github.com/apple-oss-distributions/libpthread.git|libpthread-454.80.2|
 libplatform|https://github.com/apple-oss-distributions/libplatform.git|libplatform-254.80.2|

@@ -509,25 +509,93 @@ the similar name (compared the two APIs directly, not assumed).
 transitional, never-publicly-released class from whatever internal
 pre-release Apple build this tag was cut from.
 
-This is a real decision point, not resolved in this pass -- two honest
-paths forward, materially different from everything done in this phase
-so far (which has been "port real, unmodified Apple source plus small
-compat shims"):
-1. A from-scratch reimplementation of `dyld3::Loader`/the concrete
-   `MachOAnalyzerSet` subclass it needs, built only from the real call
-   sites' known signatures and dyld2.cpp's own usage pattern (no source
-   reference for the internals exists anywhere) -- genuinely new
-   engineering, not porting, with real risk of subtly-wrong image-
-   mapping/fixup semantics.
-2. Retarget this whole effort to a later dyld tag (`dyld-940`+) that has
-   a real, complete `Loader` implementation -- but that means dropping
-   the ~31K LOC of dyld2/ImageLoader source already ported here and
-   starting the dyld4-era port fresh; a bigger, separate architectural
-   decision, not an extension of this work.
-Neither attempted here. This unlocks, in order once resolved: an actual
-bootable dyld binary (finishing Phase C), `libdispatch` as a real
-`.dylib` (Phase 6.6), then CoreFoundation (Phase 9), then everything
-gated behind either.
+**User decision (2026-08-25): retarget to `dyld-940`.** Presented as a
+real fork -- (1) from-scratch `Loader`/`MachOAnalyzerSet` reimplementation
+from known call-site signatures only (genuinely new engineering, real
+risk of subtly-wrong semantics, no source reference exists), vs.
+(2) retarget to `dyld-940`+, dropping the ~31K LOC of dyld2/ImageLoader
+source ported above and porting the dyld4-era tree fresh. User chose
+(2). `setup_third_party.sh`'s dyld pin is now `dyld-940` (see that
+script's own header comment for the full justification -- a real,
+documented exception to this project's usual macos-112-manifest-exact
+rule, since that manifest's own pin is provably unbuildable).
+`third_party-patches/dyld.patch` (the `ImagePair` fix) is retired --
+`ImageLoader.cpp` doesn't exist in the dyld4 architecture at all.
+
+**dyld-940 retarget: DONE compiling AND real-trial-link-verified with
+NO permanent wall (2026-08-25, `build_dyld_core.sh` rewritten from
+scratch)**. Before writing a single line, read the REAL Xcode project
+file (`dyld.xcodeproj/project.pbxproj`) directly to find the exact,
+authoritative file list for the real `dyld` `PBXNativeTarget`
+(`F9ED4C970630A76000DF4E74`) rather than guessing from directory
+listings -- this matters because dyld-940's repo also contains
+`libdyld.dylib`, `dsc_extractor`, and other real targets sharing the
+same `dyld/`/`common/` directories, and several files that LOOK relevant
+(`LibSystemHelpers.cpp`, `PathOverrides.cpp`, `dyld_process_info*.cpp`,
+`ClosureFileSystemPhysical.cpp`) turned out to belong to those OTHER
+targets, not `dyld` itself. The real, complete list is exactly 22 files:
+
+- `dyld/`: `dyldStartup.s` (real entry, `__dyld_start`), `dyldMain.cpp`,
+  `DyldProcessConfig.cpp`, `DyldRuntimeState.cpp`, `Loader.cpp`,
+  `JustInTimeLoader.cpp`, `PrebuiltLoader.cpp`, `DyldDelegates.cpp`,
+  `DebuggerSupport.cpp`, `SharedCacheRuntime.cpp`, `DyldAPIs.cpp`,
+  `PrebuiltObjC.cpp`, `Tracing.cpp`, `glue.c` -- the real dyld4 engine
+  (`Loader`/`JustInTimeLoader`/`PrebuiltLoader` fully replace dyld2/
+  dyld3/ImageLoader's whole object model; no legacy closure-file format
+  survives into this architecture at all).
+- `common/`: `OptimizerSwift.cpp`, `Allocator.cpp`, `DyldSharedCache.cpp`,
+  `MachOFile.cpp`, `MachOLoaded.cpp`, `MachOAnalyzer.cpp`,
+  `Diagnostics.cpp`, `PerfectHash.cpp` -- the shared Mach-O parsing
+  engine, real source shared with (but not exclusive to) `dyld`.
+
+All 22 compile clean, plus `dyld_ccdigest_compat.cpp` (see below) --
+**23 real files, one real archive**. A real trial link (`-e
+__dyld_start` against this archive plus the project's already-real
+libc++/libc++abi/libc/libpthread stack) confirms **there is no
+`dyld3::Loader`-class wall this time** -- the only 39 remaining
+undefined symbols are ordinary real syscalls/mach traps
+(`mach_msg`, `socket`/`connect`, `mkdir`/`rename`/`unlink`, `chmod`/
+`fchmod`, `pread`/`pwrite`, `getxattr`/`fsetxattr`, `arc4random`,
+`vm_copy`, `uuid_is_null`, `strstr`, etc) this project's curated libc
+tier just hasn't generated stubs for yet -- the exact same bounded,
+well-understood "wire up the existing curated libc stack" work every
+prior smoketest in this project has already done (see
+`build_libc_regex.sh`'s template), not a new architectural gap.
+
+Real, narrowly-scoped compat gaps found and closed this round (full
+detail in `build_dyld_core.sh`'s own header comment, same "real source
+first" standard as every prior tier): `vproc_priv.h` (dead include,
+launchd never open-sourced), `System/atexit.h` (real, standard Itanium
+C++ ABI `__cxa_range_t` -- same layout in every implementation, not
+Apple-internal), `PrebuiltLoader_version.h` (real Apple build computes
+this as an md5 self-consistency check that never needs to match real
+Apple's own dyld here), `PLATFORM_IOSMAC` (real historical alias for
+`PLATFORM_MACCATALYST`, same value, this project's pinned iOS 14.4 SDK
+only has the newer name), `task_dyld_process_info_notify_get` (real
+mach trap added to a newer xnu than this project's pinned xnu-7195; no
+external-debugger-attach consumer exists on this target anyway), a real
+`AvailabilityInternalPrivate.h` vintage mismatch (patched on a COPY of
+the real, separately-versioned `AvailabilityVersions` repo output, never
+the original -- see below), and real Apple's own `dyld.h`/`dyld_priv.h`
+flat-copy build step replicated exactly (not guessed).
+
+**Real, reused dependency**: `<dyld/VersionMap.h>` (the real
+`dyld3::sVersionMap` OS-version-compatibility data table) comes from
+`AvailabilityVersions`, a genuinely separate apple-oss-distributions
+repo this project's own kernel build (`tools/build_xnu_7195.sh`) already
+clones+builds while constructing a local SDK -- `build_dyld_core.sh`
+reuses that real, already-generated output rather than re-vendoring it,
+and fails fast with a clear message if the kernel hasn't been built yet.
+
+**Next**: generate the ~15 real missing syscall stubs (same
+`create-syscalls.pl` generator + real wrapper pattern already used
+throughout this project's `tools/userland_staging/build_*.sh` scripts),
+get a real, complete link, then attempt the first real QEMU boot of an
+actual `dyld` binary via the kernel's already-proven
+`LC_LOAD_DYLINKER` handoff (Phase B, `998498f`). This unlocks, in order:
+an actual bootable dyld binary (finishing Phase C), `libdispatch` as a
+real `.dylib` (Phase 6.6), then CoreFoundation (Phase 9), then
+everything gated behind either.
 
 **CoreFoundation source options, noted 2026-08-24 (not yet evaluated in
 depth -- flagging for whoever picks up Phase 9), found while a background
