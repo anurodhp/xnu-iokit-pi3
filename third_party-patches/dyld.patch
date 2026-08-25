@@ -1,0 +1,42 @@
+From b5007a1d0ca3ada4fe8cb65594d760897930f388 Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@gmail.com>
+Date: Tue, 25 Aug 2026 09:03:43 -0400
+Subject: [PATCH] ImageLoader.cpp: remove orphaned
+ VECTOR_NEVER_DESTRUCTED_IMPL(ImagePair)
+
+ImagePair is not declared anywhere in this checkout and has no matching
+VECTOR_NEVER_DESTRUCTED_EXTERN() declaration -- a real, confirmed dead
+macro invocation left over from an upstream rename/removal, not a
+port-specific gap. Blocks compilation under real libc++ (undeclared
+identifier). Dead code, zero behavioral effect.
+---
+ src/ImageLoader.cpp | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/src/ImageLoader.cpp b/src/ImageLoader.cpp
+index 86e9efa..02c4da6 100644
+--- a/src/ImageLoader.cpp
++++ b/src/ImageLoader.cpp
+@@ -1936,7 +1936,18 @@ void ImageLoader::forEachReExportDependent( void (^callback)(const ImageLoader*,
+ 
+ 
+ VECTOR_NEVER_DESTRUCTED_IMPL(ImageLoader::InterposeTuple);
+-VECTOR_NEVER_DESTRUCTED_IMPL(ImagePair);
++/* Real, confirmed bug in this dyld-832.7.3 open-source snapshot, not a
++ * port-specific gap: `ImagePair` is not declared anywhere in this
++ * checkout (ImageLoader.h/.cpp, grepped in full) and has no matching
++ * VECTOR_NEVER_DESTRUCTED_EXTERN() declaration either -- unlike the
++ * InterposeTuple line above it, which is real and paired with one in
++ * ImageLoader.h:913. Orphaned macro invocation left over from a
++ * rename/removal upstream that was never cleaned out of this file.
++ * Dead code with zero behavioral effect (nothing in this codebase ever
++ * instantiates std::vector<ImagePair>) -- removed rather than invented,
++ * see third_party-patches/dyld.patch.
++ * VECTOR_NEVER_DESTRUCTED_IMPL(ImagePair);
++ */
+ 
+ 
+ 
+-- 
+2.50.1 (Apple Git-155)
+

@@ -176,7 +176,7 @@ IOStorageFamily|https://github.com/apple-oss-distributions/IOStorageFamily.git|I
 IOUSBFamily|https://github.com/apple-oss-distributions/IOUSBFamily.git|IOUSBFamily-630.4.5|
 IONetworkingFamily|https://github.com/apple-oss-distributions/IONetworkingFamily.git|IONetworkingFamily-151.40.1|
 msdosfs|https://github.com/apple-oss-distributions/msdosfs.git|msdosfs-435.60.1|
-dyld|https://github.com/apple-oss-distributions/dyld.git|dyld-832.7.3|
+dyld|https://github.com/apple-oss-distributions/dyld.git|dyld-832.7.3|dyld.patch
 Libc|https://github.com/apple-oss-distributions/Libc.git|Libc-1439.40.11|
 libpthread|https://github.com/apple-oss-distributions/libpthread.git|libpthread-454.80.2|
 libplatform|https://github.com/apple-oss-distributions/libplatform.git|libplatform-254.80.2|

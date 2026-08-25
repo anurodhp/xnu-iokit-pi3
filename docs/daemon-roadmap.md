@@ -409,12 +409,78 @@ by `tools/init_binary/inject_into_sd_image.sh` (previously ad hoc/
 undocumented for the libc++abi one -- fixed to follow this project's
 "every built artifact needs a reproducing script" rule for real).
 
-**Next**: attempt compiling `src/dyld2.cpp` + `src/ImageLoader*.cpp` for
-real, tracking real gaps the same way every prior tier in this project
-has. Given the size, treat this as its own multi-session effort, one
-subsystem at a time with a real incremental build+smoketest per step --
-the same methodology as the earlier library-sweep phases, not a single
-push. This unlocks, in order: `libdispatch` as a real `.dylib`
+**Core dyld2/ImageLoader source: DONE compiling, QEMU/link NOT yet
+attempted (2026-08-25, `tools/userland_staging/build_dyld_core.sh`)**:
+all 12 real files -- `src/dyld2.cpp` (7163 LOC), the 5
+`src/ImageLoader*.cpp` files (~11.4K LOC), and 6 support files
+(`dyldInitialization.cpp`, `dyldLock.cpp`, `dyldExceptions.c`,
+`dyldLibSystemGlue.c`, `glue.c`, `threadLocalVariables.c`) -- compile
+clean against the real libc++/libc++abi stack, ~20.7K LOC total, real
+`libc_build/dyld_core.a` archive produced. Only one line of real Apple
+source needed changing (`third_party-patches/dyld.patch`, see below);
+every other gap closed via small, honest compat headers/real header
+relocation, matching this phase's established pattern exactly. Full
+flag/header derivation preserved in the script's own header comment so
+it isn't re-derived next session.
+
+**Real, confirmed bug in Apple's own dyld-832.7.3 snapshot, patched
+(`third_party-patches/dyld.patch`, registered in `setup_third_party.sh`)**:
+`ImageLoader.cpp`'s `VECTOR_NEVER_DESTRUCTED_IMPL(ImagePair)` references
+a type declared nowhere in this checkout, with no matching
+`_EXTERN` declaration either (unlike the real `InterposeTuple` line
+right above it) -- an orphaned macro invocation from an upstream
+rename/removal, confirmed via a full-checkout grep, not guessed. Dead
+code, zero behavioral effect; removed with a comment, not silently
+dropped.
+
+**Real compat gaps found and closed, all narrowly scoped and documented
+in `build_dyld_core.sh`'s own header comment** (none touch real Apple
+source beyond the one patch line above): `dyld_compat/libamfi.h` and
+`dyld_compat/sandbox/private.h` (this target has neither an AMFI kext
+nor a sandbox subsystem -- real enum/signatures only, real honest no-op
+implementations); `dyld_compat/CrashReporterClient.h` (no CrashReporter
+daemon -- real no-op); `dyld_compat/corecrypto/*.h` (glue.c includes
+three corecrypto headers but calls zero symbols from any of them --
+confirmed dead includes, empty placeholders); `dyld_compat/
+dyld_deny_list_compat.h` (`inDenyList()` is referenced once by
+dyld2.cpp but not declared/defined anywhere in this snapshot at all --
+a real omission, not a search-path miss; a from-scratch port has no
+legacy per-app compatibility exceptions to encode, so always-`false` is
+the correct real answer); a real, targeted SDK-mismatch override
+(`sys/event.h`+`sys/proc_info.h`, real xnu-7195 versions substituted for
+the iPhoneOS SDK's own mismatched pair -- the SDK's private
+`proc_info.h` references `struct kevent_qos_s`, which its own public
+`event.h` never defines at all, a genuine macOS/iOS SDK-content skew,
+not a port gap); 19 real MIG headers regenerated fresh from xnu-7195
+`.defs` (needed `-DLIBSYSCALL_INTERFACE=1` for `PREFIX()`/
+`KERNEL_SERVER_SUFFIX()` to produce plain routine names like
+`vm_allocate` instead of `_kernelrpc_vm_allocate`, and `-DKERNEL_PRIVATE`
+for `memory_object_control.defs`/`upl.defs`'s `upl_t` family); real
+`-DPRIVATE=1` (needed for `_COMM_PAGE_DYLD_FLAGS`/`mremap_encrypted`).
+Every XNU/libplatform/libpthread include path in this script is
+`-idirafter`, never `-I` -- an earlier pass silently broke `<string.h>`/
+`<cstring>` content project-wide by letting a libsyscall-internal
+minimal `string.h` shadow the SDK's real one; found and fixed before it
+could cause a much more confusing failure downstream.
+
+**Real, honest, NOT-YET-DONE next step**: `dyld2.cpp` itself compiles
+because its `dyld3/*.h` includes (`Closure.h`, `ClosureBuilder.h`,
+`BootArgs.h`, `RootsChecker.h`, `StringUtils.h`, `Tracing.h`,
+`FileUtils.h`, `DyldSharedCache.h`, `SharedCacheRuntime.h`) are all
+header-only at the point dyld2.cpp uses them -- but it calls real
+functions those headers only *declare* (`dyld3::internalInstall()`,
+`BootArgs::forceDyld2()`/`forceDyld3()`, `MachOAnalyzer`/`MachOFile`
+methods, `RootsChecker` methods, etc), whose *definitions* live in
+`dyld3/{BootArgs,RootsChecker,StringUtils,FileUtils,Closure,
+ClosureBuilder,MachOFile,MachOAnalyzer,MachOLoaded,SharedCacheRuntime,
+Tracing,Diagnostics}.cpp` -- none of those are compiled yet, so
+`dyld_core.a` is a real, verified-compiling archive that is **NOT YET
+LINKABLE** into an actual dyld binary. Confirming exactly which of those
+dyld3 files are truly needed (vs. more dead/simulator-only/shared-cache-
+only code, per this phase's own dyld2-vs-dyld3 scoping precedent) is the
+next real step -- same incremental per-file gap-tracking methodology,
+not attempted in this pass. This unlocks, in order: an actual bootable
+dyld binary (finishing Phase C), `libdispatch` as a real `.dylib`
 (Phase 6.6), then CoreFoundation (Phase 9), then everything gated behind
 either.
 
