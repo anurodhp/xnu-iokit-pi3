@@ -23,8 +23,15 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     exit 1
 fi
 
+# -Wl,-fixup_chains: real dyld-940 (this project's currently pinned
+# tag) expects the modern chained-fixups format -- see
+# build_dyld_test_exec.sh's own header comment for the full real
+# crash this fixed (EXC_BAD_ACCESS, fault address 0x10, in real dyld's
+# JustInTimeLoader bind/fixup code against the older LC_DYLD_INFO_ONLY
+# bind-opcode format ld64 emits by default).
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib \
     -install_name /usr/lib/libtest.dylib \
+    -Wl,-fixup_chains \
     -o "$OUT/libtest.dylib" libtest_dylib.c
 echo "wrote $OUT/libtest.dylib"
 

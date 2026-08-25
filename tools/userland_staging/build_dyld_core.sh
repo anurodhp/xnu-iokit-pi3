@@ -530,6 +530,19 @@ INCLUDES="-I $DYLD/dyld -I $DYLD/common -I $DYLD/include -I $DYLD/libdyld -I $DY
 # availability checks at all (no App Store, no real users), so blanking
 # the annotation entirely is the correct real fix, not a workaround for
 # a real gap.
+# -fno-exceptions (added 2026-08-25, real, confirmed root-cause fix):
+# real Apple's own configs/base.xcconfig sets
+# `GCC_ENABLE_CPP_EXCEPTIONS = NO` for dyld -- without the matching real
+# clang flag, the compiler still emits _Unwind_Resume-based exception
+# cleanup landing pads throughout dyld's own real C++ code (confirmed:
+# every dyld/common .o referenced __Unwind_Resume before this flag was
+# added), which then transitively drags in libunwind's own C++
+# LocalAddressSpace implementation and ITS real dyld-introspection
+# callback needs (__dyld_find_unwind_sections et al) -- circular and
+# wrong for dyld itself to depend on. `-D_LIBCPP_NO_EXCEPTIONS=1` alone
+# (kept below) only stops libc++'s OWN headers from using try/catch
+# internally; it does not stop the compiler from generating landing pads
+# for dyld's own code, hence needing the real compiler flag too.
 DEFS="-DBUILDING_DYLD=1 -DDYLD_VERSION=940 -DPRIVATE=1 -D_LIBCPP_NO_EXCEPTIONS=1 \
     -D__API_UNAVAILABLE_PLATFORM_bridgeos=ios,unavailable \
     -D__API_AVAILABLE_PLATFORM_bridgeos(x)=ios,introduced=x \
@@ -538,7 +551,7 @@ DEFS="-DBUILDING_DYLD=1 -DDYLD_VERSION=940 -DPRIVATE=1 -D_LIBCPP_NO_EXCEPTIONS=1
     -include dyld_compat/dyld_platform_compat.h"
 
 CXX_FLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    -std=c++17 -funwind-tables $DEFS \
+    -std=c++17 -fno-exceptions $DEFS \
     -nostdinc++ -isystem $LIBCXX/include -I $LIBCXXABI/include \
     $INCLUDES \
     -Wno-macro-redefined -Wno-nullability-completeness -Wno-deprecated-declarations -Wno-availability"

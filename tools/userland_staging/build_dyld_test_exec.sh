@@ -66,8 +66,18 @@ fi
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding \
     -fno-builtin -fno-stack-protector -O0 -Wall dyld_test_exec_main.c -o dyld_test_exec_main.o
 
+# -Wl,-fixup_chains: real dyld-940 (this project's currently pinned
+# tag, see docs/daemon-roadmap.md's Phase C retarget) was built and
+# tested by Apple against modern chained-fixups binaries (its own real
+# configs/dyld.xcconfig even links dyld ITSELF with this same flag) --
+# without it, ld64 emits the older LC_DYLD_INFO_ONLY bind-opcode format,
+# which real dyld-940's JustInTimeLoader real bind/fixup code hit a
+# real crash on (EXC_BAD_ACCESS, fault address 0x10, found via a real
+# temporary bsd/uxkern/ux_exception.c diagnostic, 2026-08-25) -- see
+# docs/daemon-roadmap.md for the full writeup.
 rm -f dyld_test_exec.macho
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
+    -Wl,-fixup_chains \
     -o dyld_test_exec.macho \
     "$CSU/start.s" "$CSU/crt.c" dyld_test_exec_main.o "$OUT/libtest.dylib"
 rm -f dyld_test_exec_main.o
