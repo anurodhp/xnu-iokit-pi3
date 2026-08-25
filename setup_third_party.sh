@@ -194,6 +194,7 @@ diskdev_cmds|https://github.com/apple-oss-distributions/diskdev_cmds.git|diskdev
 awk|https://github.com/apple-oss-distributions/awk.git|awk-27.40.1|
 IOKitTools|https://github.com/apple-oss-distributions/IOKitTools.git|IOKitTools-114.40.1|
 OpenSSH|https://github.com/apple-oss-distributions/OpenSSH.git|OpenSSH-240.40.1|
+Libnotify|https://github.com/apple-oss-distributions/Libnotify.git|Libnotify-279.40.4|
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch; do

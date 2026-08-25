@@ -22,6 +22,29 @@ static void die(const char *s) {
 static int check_count = 0;
 static void once_fn(void) { check_count++; }
 
+#define ITER_COUNT 512
+static pthread_mutex_t counter_mutex = PTHREAD_MUTEX_INITIALIZER;
+static volatile int shared_counter = 0;
+static volatile int child_done = 0;
+
+/* Real second-thread entry point. File-scope, not a nested function -
+ * this target is fully static/freestanding with no dyld, and GNU nested
+ * functions need a runtime trampoline (a small blob of code written to
+ * the stack and executed from there) that this project has no reason to
+ * trust/support here; a plain top-level function avoids the question
+ * entirely, same shape tools/pthread_kthread_test/'s child_entry
+ * already uses. */
+static void *child_fn(void *arg) {
+    (void)arg;
+    for (int i = 0; i < ITER_COUNT; i++) {
+        pthread_mutex_lock(&counter_mutex);
+        shared_counter++;
+        pthread_mutex_unlock(&counter_mutex);
+    }
+    child_done = 1;
+    return 0;
+}
+
 int main(void) {
     if (!pthread_main_thread_bootstrap()) {
         die("FAIL: bootstrap\n");
@@ -57,10 +80,41 @@ int main(void) {
     if (check_count != 1) die("FAIL: pthread_once ran wrong number of times\n");
     put("PASS: real pthread_once runs exactly once\n");
 
+    /* Real multi-thread test, now that bsd_pthread_stub.c's
+     * real_bsdthread_create (Phase 7.5 step 1) and this project's own
+     * pthread_create() stack-allocation fix (2026-08-24) make a second
+     * real thread genuinely runnable. child_fn (file scope, above) spins
+     * under real contention with the main thread, both incrementing a
+     * counter under the same real pthread_mutex_t 512 times each -
+     * exercises the real ulock-backed contended path
+     * (__pthread_mutex_use_ulock=true, set in
+     * pthread_main_thread_bootstrap()) since two real threads
+     * incrementing under one real mutex WILL contend at this iteration
+     * count, unlike the single-thread lock/unlock pair above. No
+     * pthread_join() (bsdthread_terminate/thread ports aren't wired -
+     * see pthread_create()'s own header) - the main thread busy-polls a
+     * shared "done" flag instead, same pattern
+     * tools/pthread_kthread_test/ already established. */
     pthread_t t;
-    int rc = pthread_create(&t, 0, 0, 0);
-    if (rc == 0) die("FAIL: pthread_create unexpectedly succeeded (kernel has no real bsdthread_create support)\n");
-    put("PASS: pthread_create is real code, real kernel-level failure (ENOTSUP), as documented\n");
+    int rc = pthread_create(&t, 0, child_fn, 0);
+    if (rc != 0) die("FAIL: pthread_create real failure (unexpected)\n");
+    put("PASS: pthread_create spawned a real second thread\n");
+
+    for (int i = 0; i < ITER_COUNT; i++) {
+        pthread_mutex_lock(&counter_mutex);
+        shared_counter++;
+        pthread_mutex_unlock(&counter_mutex);
+    }
+
+    while (!child_done) {
+        /* busy-poll: no real join available yet, see pthread_create()'s
+         * own header comment for why. */
+    }
+
+    if (shared_counter != ITER_COUNT * 2) {
+        die("FAIL: shared_counter contended-mutex result wrong (real data race if this fires)\n");
+    }
+    put("PASS: real second thread + real contended pthread_mutex, correct result\n");
 
     put("ALL PASS: libpthread smoketest\n");
     register long x0 asm("x0") = 0;

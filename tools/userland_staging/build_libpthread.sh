@@ -331,6 +331,32 @@ SYSFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -I $XNU/BUILD.hdrs/dst/u
 $CLANG $SYSFLAGS "$SYSGEN/___gettimeofday.s" -o "$OUT/pthread_gettimeofday.o"
 $CLANG $SYSFLAGS "$SYSGEN/___pthread_chdir.s" -o "$OUT/pthread___pthread_chdir.o"
 $CLANG $SYSFLAGS "$SYSGEN/___pthread_fchdir.s" -o "$OUT/pthread___pthread_fchdir.o"
+# __mmap/__munmap - same generator, needed by the mmap-backed
+# pthread_create() stack allocation below (build_simple_cmds.sh already
+# generates these same two for its own SYS_STUBS_NEEDED list - same real
+# stubs, regenerated here rather than reused across scripts since this
+# tier doesn't share an object directory with that one).
+$CLANG $SYSFLAGS "$SYSGEN/___mmap.s" -o "$OUT/pthread___mmap.o"
+$CLANG $SYSFLAGS "$SYSGEN/___munmap.s" -o "$OUT/pthread___munmap.o"
+
+# Real mmap(2)/munmap(2) (simple_cmds_mmap_compat.c - real Apple
+# semantics, see that file's own header) - pthread_create()'s real
+# stack-allocation fix (2026-08-24, pthread_main_thread_bootstrap.c)
+# needs it, and until now this file was only ever compiled ad hoc into
+# individual command binaries (build_simple_cmds.sh's tail/grep tiers),
+# never into a shared archive. Bundled directly into libpthread.a here
+# rather than requiring every future libpthread.a consumer to remember
+# to add it separately - same shape as build_libiconv.sh bundling real
+# qsort.c/heapsort.c directly into libiconv.a for its own internal need.
+# Real risk this creates, flagged rather than hidden: a binary that
+# links BOTH libpthread.a and independently compiles
+# simple_cmds_mmap_compat.c itself (as tail/grep currently do) will hit
+# a duplicate-symbol conflict at link time - not hit yet by anything in
+# this tree, but the first real consumer that combines both should drop
+# its own separate copy and rely on libpthread.a's, the same way
+# build_libpthread.sh's own `ar d` step below already retires libmalloc.a's
+# old pthread_tsd_shim.o for an identical reason.
+$CLANG $CFLAGS "simple_cmds_mmap_compat.c" -o "$OUT/pthread_mmap_compat.o"
 
 rm -f "$OUT/libpthread.a"
 ar rcs "$OUT/libpthread.a" \
@@ -339,7 +365,8 @@ ar rcs "$OUT/libpthread.a" \
     "$OUT/pthread_tsd_platform_bootstrap.o" "$OUT/pthread_psynch_syscalls.o" \
     "$OUT/pthread_compat_extras.o" "$OUT/pthread_abort_with_reason_compat.o" \
     "$OUT/pthread_simple_getenv.o" "$OUT/pthread_platform_memcmp.o" \
-    "$OUT/pthread_gettimeofday.o" "$OUT/pthread___pthread_chdir.o" "$OUT/pthread___pthread_fchdir.o"
+    "$OUT/pthread_gettimeofday.o" "$OUT/pthread___pthread_chdir.o" "$OUT/pthread___pthread_fchdir.o" \
+    "$OUT/pthread_mmap_compat.o" "$OUT/pthread___mmap.o" "$OUT/pthread___munmap.o"
 echo "wrote $OUT/libpthread.a"
 
 # Real archive-member removal, not a hack: retires build_libmalloc.sh's
@@ -370,16 +397,21 @@ fi
 # pthread_equal()/pthread_main_np() consistency, real os_unfair_lock-
 # backed pthread_mutex lock/unlock, real pthread_key_create/
 # setspecific/getspecific, real pthread_once (runs exactly once), and
-# real (not fabricated) pthread_create() - real bsdthread_create(2)
-# syscall, real kernel ENOTSUP, confirmed as a genuine failure not a
-# silently-swallowed one.
+# now (2026-08-24) a REAL second thread via pthread_create() - real
+# bsdthread_create(2) syscall, real kernel-side thread spawn (Phase 7.5
+# step 1), real contended pthread_mutex under __pthread_mutex_use_ulock
+# (Phase 7.5 step 3's ulock_wait/ulock_wake). This used to assert
+# pthread_create() FAILING (ENOTSUP) as the pass case - inverted once
+# the kernel side became real, see pthread_smoketest.c's own history.
 $CLANG $CFLAGS pthread_smoketest.c -o "$OUT/pthread_smoketest.o"
 $CLANG -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o pthread_smoketest.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/pthread_smoketest.o" \
     "$OUT/libpthread.a" \
-    "$OUT/libplatform.a" "$OUT/libmalloc.a" "$OUT/libc_stdio.a" "$OUT/cerror_stub.o"
+    "$OUT/libplatform.a" "$OUT/libmalloc.a" "$OUT/libc_stdio.a" "$OUT/cerror_stub.o" \
+    -Wl,-alias,'_mmap$UNIX2003',_mmap \
+    -Wl,-alias,'_munmap$UNIX2003',_munmap
 echo "wrote pthread_smoketest.macho"
 
 otool -l pthread_smoketest.macho | grep -q LC_LOAD_DYLIB && \

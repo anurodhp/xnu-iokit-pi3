@@ -184,6 +184,33 @@ Real scope, now that it's needed for more than its own sake:
 - This unlocks, in order: `libdispatch` as a real `.dylib` (Phase 6.6),
   then CoreFoundation (Phase 9), then everything gated behind either.
 
+**CoreFoundation source options, noted 2026-08-24 (not yet evaluated in
+depth -- flagging for whoever picks up Phase 9), found while a background
+agent hit this exact wall trying to build `IOKitUser` (its `IOKitLib.c`
+needs real `CFDictionaryRef`/`CFMutableDictionaryRef` throughout the API
+surface itself, not just internals -- see the real IOKitUser build
+script's own header comment)**:
+- Apple's own real CF source does exist on `apple-oss-distributions`
+  under the name `CF` (confirmed via `git ls-remote` -- NOT
+  `CoreFoundation`, that name 404s) -- not yet checked against the
+  `macos-112` manifest for an exact tag. Per this project's own source-
+  priority rule this should be the first real option, but real Apple CF
+  is notoriously tightly coupled to Mach ports/ICU/(in later versions)
+  XPC -- expect this to be a substantial port even by this document's
+  standards, not a quick pin-and-build.
+- **GNUstep's `libs-corebase`** (https://github.com/gnustep/libs-corebase,
+  LGPL) is a real, from-scratch, API-compatible CoreFoundation
+  reimplementation, explicitly designed to be portable rather than
+  Darwin/Mach-coupled -- real header layout mirrors Apple's
+  (`Headers/CoreFoundation/CoreFoundation.h`, `CFRuntime.h`, etc,
+  confirmed by browsing the repo, not assumed from the name alone). For
+  a narrow need like `IOKitUser`'s (just `CFDictionary`/`CFString`/
+  `CFArray`/`CFNumber` as matching-dictionary plumbing, not the full CF
+  surface), this is plausibly a much more tractable starting point than
+  porting real Apple CF's Mach/ICU/XPC entanglements just to unblock one
+  narrow consumer. Not yet built or even trial-compiled here -- a real
+  next step, not a conclusion.
+
 Recommend tackling this only after Phase 6c (DHCP/`ping`/`netstat`) and the
 Tier 0 daemons above -- `dyld` is a genuine architecture shift touching the
 kernel's exec path and this project's whole build toolchain, worth doing
@@ -194,12 +221,20 @@ with a stable, well-tested static baseline behind it first.
 Also currently a placeholder, blocked behind 6.5 there; still blocked
 behind it here, plus:
 
-- Blocked behind Phase 7.5's pthread ceiling too, same as
-  `docs/roadmap.md` already notes -- real concurrent `dispatch_async`
-  needs real `pthread_create()`, which needs `psynch_*` (still open, see
-  Phase 7.5's own "Real next step" writeup). Until then, scope is limited
-  to single-thread-honest `dispatch_once`/`dispatch_sync`/kqueue-backed
-  dispatch sources, exactly as already noted.
+- **Partially unblocked 2026-08-24**: `pthread_create()` is now real and
+  QEMU-verified (a genuine second thread, real contended `pthread_mutex`
+  under the real ulock path -- see project memory
+  `project_xnu_rpi3_pthread_wireup_2026-08-24`), so the flat "needs
+  `psynch_*`" framing below is stale -- this target routes contended
+  mutex/cond through `ulock_wait`/`ulock_wake` instead, not `psynch_*`
+  (which is still `ENOTSUP` and stays that way). What's still genuinely
+  missing for real `dispatch_async`: no `pthread_join`/individual thread
+  termination yet (`bsdthread_terminate` still `ENOTSUP`), and no real
+  kqueue/`kevent` in userland at all (checked directly, zero hits) for
+  kqueue-backed dispatch sources. Until those land, scope is still
+  limited to single-thread-honest `dispatch_once`/`dispatch_sync`, but
+  the pthread half of the blocker is smaller than this section
+  previously stated.
 - Real upside once unblocked: `libdispatch` is Apache-2.0 and genuinely
   portability-oriented (existing non-Darwin backends upstream), making it
   the single most realistic "port this mostly as-is" piece among

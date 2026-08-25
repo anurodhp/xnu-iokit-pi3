@@ -169,6 +169,17 @@ else
     echo "= tools/ulock_kthread_test/ulock_kthread_test.macho not built -- run tools/ulock_kthread_test/build.py first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/pthread_smoketest.macho ]; then
+    mkdir -p "$MNT/bin"
+    cp tools/userland_staging/pthread_smoketest.macho "$MNT/bin/pthread_smoketest"
+    chmod 755 "$MNT/bin/pthread_smoketest"
+    echo "+ wrote $(wc -c < tools/userland_staging/pthread_smoketest.macho) bytes to $MNT/bin/pthread_smoketest"
+    echo "  (real libpthread.a smoketest -- now includes a real pthread_create()"
+    echo "  second thread + contended pthread_mutex under ulock, 2026-08-24)"
+else
+    echo "= tools/userland_staging/pthread_smoketest.macho not built -- run tools/userland_staging/build_libpthread.sh first if wanted, skipping"
+fi
+
 # Real Phase 4 step 3 "remaining commands" tiers (docs/roadmap.md) --
 # each build_*_cmds.sh script writes one <name>.macho per real command
 # it built; every one of them lands in /bin, matching real BSD/macOS

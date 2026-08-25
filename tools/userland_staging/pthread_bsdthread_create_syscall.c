@@ -11,11 +11,18 @@
  * libplatform_syscalls.c) - hand-written here with this project's
  * established raw-syscall carry-flag pattern. Real error convention
  * (pthread.c:1270, the only real caller): returns (pthread_t)-1 and
- * sets errno on failure - matched here, not invented. See
- * pthread_main_thread_bootstrap.c's own header for why calling this for
- * real (rather than skipping pthread_create entirely) is the honest
- * choice: this project's kernel-side pthread stand-in
- * (bsd_pthread_stub.c) unconditionally returns ENOTSUP for it.
+ * sets errno on failure - matched here, not invented.
+ *
+ * This kernel-side call is real and working (bsd_pthread_stub.c's
+ * real_bsdthread_create, since Phase 7.5 step 1, 2026-08-20) - this
+ * comment used to say the kernel side unconditionally returns ENOTSUP;
+ * that was true when this file was first written but is stale now.
+ * See pthread_main_thread_bootstrap.c's own pthread_create() header for
+ * the real stack-allocation requirement this syscall's `stack` argument
+ * has (the kernel sets the new thread's sp directly from it, no
+ * kernel-side allocation) and the real gaps that remain (no thread
+ * port returned, so the pthread_t this hands back cannot be joined or
+ * individually terminated).
  */
 
 #include "internal.h"

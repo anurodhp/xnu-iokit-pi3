@@ -1,10 +1,14 @@
 /* Real global (pthread.c:122) - libpthread source outside pthread.c
  * itself (pthread_atfork.c:158, and prototypes_internal.h's own
- * extern declaration) reference it directly. Always 0 here: this
- * target's kernel-side pthread stand-in (bsd_pthread_stub.c)
- * unconditionally returns ENOTSUP for bsdthread_create, so no second
- * thread can ever actually start running - see
- * pthread_main_thread_bootstrap.c's own header comment. */
+ * extern declaration) reference it directly. Starts at 0 (real Apple
+ * initial value, matching a process that hasn't created a second
+ * thread yet); pthread_create() (pthread_main_thread_bootstrap.c) now
+ * flips it to 1 on real success, matching real pthread.c's own
+ * behavior - this comment used to claim it stays permanently 0 because
+ * "no second thread can ever actually start running", which was true
+ * when the kernel-side bsdthread_create was still ENOTSUP but has been
+ * stale since Phase 7.5 step 1 (2026-08-20) made it real; corrected
+ * here rather than left to rot. */
 int __is_threaded = 0;
 
 /* Real call site: pthread_tsd.c's rare destructor-error diagnostic path

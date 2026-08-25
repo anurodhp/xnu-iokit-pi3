@@ -35,14 +35,25 @@ static void *platform_syscall_get_cthread_self(void) {
     return (void *)x0;
 }
 
-static int g_tsd_bootstrapped = 0;
-
+/* REAL BUG FIXED 2026-08-24: TPIDRRO_EL0 is a per-THREAD CPU register,
+ * not global process state - the "only ever run once" guard below was
+ * correct back when this target could only ever have one thread (see
+ * pthread_create()'s own header in pthread_main_thread_bootstrap.c for
+ * when that stopped being true, Phase 7.5 step 1). Left as a static
+ * global, this guard made every thread after the first silently skip
+ * its own TSD-base install - the real, live bug behind a real SIGSEGV
+ * (QEMU boot test, real pthread_smoketest.c: bootstrap/mutex/TSD/once
+ * all passed on the MAIN thread, then a genuine second thread crashed
+ * immediately inside pthread_mutex_lock(), which needs its OWN valid
+ * TPIDRRO_EL0 for the real per-thread TSD/ulock-fast-path machinery -
+ * confirmed via QEMU monitor `x` on the fault PC, not guessed). Fixed
+ * by dropping the once-guard entirely: setting your own thread's
+ * TPIDRRO_EL0 is idempotent and safe to call from any thread, any
+ * number of times - it only ever affects the calling thread's own
+ * register, exactly the semantics `pthread_create()`'s new trampolined
+ * child-thread startup needs. */
 int pthread_tsd_shim_bootstrap_with_base(void *tsd_base) {
-    if (g_tsd_bootstrapped) {
-        return 1;
-    }
     platform_syscall_set_cthread_self(tsd_base);
     void *readback = platform_syscall_get_cthread_self();
-    g_tsd_bootstrapped = (readback == tsd_base);
-    return g_tsd_bootstrapped;
+    return (readback == tsd_base);
 }
