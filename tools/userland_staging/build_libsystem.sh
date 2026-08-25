@@ -125,7 +125,8 @@ rm -f "$OUT/system/libSystem.B.dylib"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
     -install_name /usr/lib/libSystem.B.dylib \
     -Wl,-fixup_chains \
-    -Wl,-U,_dyld_initializer \
+    -Wl,-U,__dyld_initializer \
+    -Wl,-U,_libdyld_mach_init_compat_run \
     -o "$OUT/system/libSystem.B.dylib" \
     "$SCRATCH/dyld_unwind_shim_compat.o" "$OUT/libsystem/progname_compat.o" \
     "$OUT/libsystem/dyld_initializer_compat.o" \

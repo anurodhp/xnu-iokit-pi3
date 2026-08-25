@@ -211,15 +211,17 @@ need a real implementation later:
 - **`libmalloc_vm_mig_stubs.c`** -- real but provably-unreachable
   dead-code MIG-fallback bodies (`KERN_FAILURE`) behind `libmalloc`'s real
   Mach-trap fast path; harmless, kept for completeness only.
-- **`dyld`** -- real dyld-940 now boots and runs a real dynamically-linked
-  program's `main()` (Phase 6.5 Phase C+D, closed 2026-08-25) -- see
-  `docs/daemon-roadmap.md`'s Phase 6.5 section. One open bug (NULL
-  `LibSystemHelpers` dispatch on `main()` return, fix in progress
-  uncommitted) plus a real architecture debt: `libSystem.B.dylib`/
+- **`dyld`** -- real dyld-940 now boots, runs a real dynamically-linked
+  program's `main()`, and exits cleanly with no crash (Phase 6.5 Phase
+  C+D, fully closed 2026-08-25) -- see `docs/daemon-roadmap.md`'s Phase
+  6.5 section. Real architecture debt remains: `libSystem.B.dylib`/
   `libdyld.dylib` are real but this project's OTHER libc/libpthread/etc
   are still static archives flattened into those two dylibs rather than
   real, separate per-library dylibs -- flagged as a real migration to do
-  going forward, not yet started.
+  going forward, not yet started. Two real, independent bugs from exactly
+  this flattening (a duplicated, never-initialized `mach_task_self_` per
+  dylib) were found and fixed closing Phase D -- concrete evidence for
+  why the migration matters, not just a theoretical concern.
 - **`libdispatch`/GCD** -- zero API surface, not attempted at all (Phase
   6.6).
 - **`ed_setjmp_raw.s`/`ed_setjmp_compat.c`** (Phase 4.6 grep/sed/nl/
@@ -644,19 +646,20 @@ need a real implementation later:
 - **Phase 6.5 (dyld)**: started 2026-08-25 (explicit user override of the
   prior "defer until Phase 6 forces it" sequencing below, motivated by
   unlocking a future PureDarwin `launchd` port). Phases A/B/C/D are all
-  DONE as of 2026-08-25 -- real dyld-940 boots and runs a real
-  dynamically-linked program's real `main()`, loading real
-  `libdyld.dylib` + `libSystem.B.dylib`. See `docs/daemon-roadmap.md`'s
-  Phase 6.5 section for the full writeup (6 real bugs found+fixed in
-  Phase C, the libdyld/libSystem build in Phase D). One open bug
-  in-progress (uncommitted): `main()` returning triggers a NULL
-  `LibSystemHelpers` virtual-dispatch SIGSEGV, root-caused, fix written
-  but not yet built/tested. Also flagged: this project's `libSystem.B.
-  dylib` is a flattened bundle of pre-existing static archives, not real
-  per-library dylibs matching Apple's actual modular architecture -- a
-  real migration effort for whoever resumes next, per explicit user
-  direction to stop building new static-archive-plus-shim code going
-  forward.
+  DONE and fully closed as of 2026-08-25 -- real dyld-940 boots, runs a
+  real dynamically-linked program's real `main()` (loading real
+  `libdyld.dylib` + `libSystem.B.dylib`), and exits cleanly with no
+  crash. See `docs/daemon-roadmap.md`'s Phase 6.5 section for the full
+  writeup (6 real bugs found+fixed in Phase C; the libdyld/libSystem
+  build in Phase D; two more real bugs -- both instances of the same
+  duplicated-`mach_task_self_`-per-flattened-dylib failure mode -- found
+  and fixed closing Phase D for real). Also flagged: this project's
+  `libSystem.B.dylib`/`libdyld.dylib` are a flattened bundle of
+  pre-existing static archives, not real per-library dylibs matching
+  Apple's actual modular architecture -- a real migration effort for
+  whoever picks this up next, per explicit user direction to stop
+  building new static-archive-plus-shim code going forward. Not yet
+  started.
 - **Phase 6.6 (libdispatch/GCD)**: planning-only placeholder, blocked
   behind 6.5. Even once unblocked, real concurrent `dispatch_async` can't
   exist until real threading does (Phase 7.5's pthread ceiling) -- scope

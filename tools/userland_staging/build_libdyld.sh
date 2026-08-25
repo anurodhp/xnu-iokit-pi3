@@ -188,6 +188,14 @@ PLATFORM_CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -f
 "$CLANG" $PLATFORM_CFLAGS "$PLATFORM/src/string/generic/bzero.c" -o "$OUT/libdyld/bzero.o"
 "$CLANG" $PLATFORM_CFLAGS "$PLATFORM/src/string/generic/memset_pattern.c" -o "$OUT/libdyld/memset_pattern.o"
 
+# Real gap: see libdyld_mach_init_compat.c's own comment. libdyld.dylib's
+# own private static copy of mach_init.c (bundled in via libmalloc_scratch.a
+# below) never gets its mach_task_self_ initialized otherwise -- the first
+# real call into os_alloc_once's mach_vm_map() reads MACH_PORT_NULL and
+# fails.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    libdyld_mach_init_compat.c -o "$OUT/libdyld/mach_init_compat.o"
+
 echo "libdyld: $ok compiled, $fail gaps (see $OUT/libdyld/*.err for full detail)"
 if [ "$fail" -ne 0 ]; then
     exit 1
@@ -246,6 +254,7 @@ rm -f "$OUT/system/libdyld.dylib"
     "$OUT/libdyld/libdyldGlue.o" "$OUT/libdyld/LibSystemHelpers.o" \
     "$OUT/libdyld/cxa_finalize_ranges_compat.o" "$OUT/libdyld/vproc_compat.o" \
     "$OUT/libdyld/compat_misc.o" "$OUT/libdyld/alloc_once.o" "$OUT/libdyld/bzero.o" "$OUT/libdyld/memset_pattern.o" \
+    "$OUT/libdyld/mach_init_compat.o" \
     "$OUT/libcxx.a" "$OUT/libcxxabi.a" "$SCRATCH/libunwind_scratch.a" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libcxx_locale_for_stdio_scratch.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/libc_printf.a" "$OUT/libc_string.a" \

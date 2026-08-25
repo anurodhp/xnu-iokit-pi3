@@ -27,10 +27,28 @@
  * Real, minimal, correct fix: register a real C constructor (the same
  * genuine Mach-O mechanism -- S_MOD_INIT_FUNC_POINTERS -- real Libc's
  * own init.c uses) that calls the real, already-correct
- * _dyld_initializer() itself. */
+ * _dyld_initializer() itself.
+ *
+ * Also calls mach_init() (for THIS dylib's own private mach_task_self_
+ * copy, same real gap, see libdyld_mach_init_compat.c) and, across the
+ * dylib boundary, libdyld_mach_init_compat_run() (for libdyld.dylib's
+ * separate private copy -- real dyld does not run libdyld.dylib's own
+ * per-image constructors at all, confirmed via a temporary diagnostic,
+ * so this proven-to-run libSystem.B.dylib constructor is the real,
+ * working place to reach across and initialize it too, the same
+ * -Wl,-U dynamic-lookup mechanism already used for _dyld_initializer). */
 extern void _dyld_initializer(void);
+extern int mach_init(void);
+extern void libdyld_mach_init_compat_run(void);
 
 __attribute__((constructor))
 static void libsystem_call_dyld_initializer(void) {
+    /* Order matters: mach_init() must run before _dyld_initializer(),
+     * not after -- _dyld_initializer() itself (real, unmodified dyld
+     * source) does real VM/allocator work while registering the
+     * LibSystemHelpers vtable, which can reach os_alloc_once/
+     * mach_vm_map before a call placed after it ever gets a turn. */
+    mach_init();
+    libdyld_mach_init_compat_run();
     _dyld_initializer();
 }

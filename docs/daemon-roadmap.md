@@ -790,8 +790,116 @@ requirement checks, runs all real initializers, and jumps to the real
 program -- the original Phase 6.5 goal (real dyld booting a real
 dynamically-linked executable) is achieved.
 
-### Open bug (uncommitted work in progress as of 2026-08-25 end of
-### session): `main()` returning triggers a NULL virtual-dispatch SIGSEGV
+### Phase D: CLOSED for real 2026-08-25 (later session) -- clean exit,
+### `dyld_test_exec` runs to completion with no crash
+
+The NULL-dispatch bug below and a second, previously-undiscovered bug
+(also below) are both fixed and QEMU-verified. Real, reproducible
+boot-test result (`qemu/dyld_real_boot_cmds.txt` via
+`tools/init_binary/_pty_test_phase5.py`, `/bin/dyld_test_exec` from a
+real login shell):
+
+```
+dyld_test_exec: own main() ran (real dyld loaded deps then jumped here -- expected)
+EXITCODE:1
+```
+
+No crash, no `Trace/BPT trap`, exit code 1 is `dyld_test_exec_main.c`'s
+own real `return 1`. This is the original Phase 6.5 goal fully closed:
+real dyld loads real per-library dylibs and a real main executable, runs
+real initializers, jumps to the real program, and the process exits
+cleanly on return.
+
+**Bug 1 (the NULL `LibSystemHelpers` dispatch documented below): fixed**
+by `tools/userland_staging/libsystem_dyld_initializer_compat.c`'s
+constructor, with one correction beyond what was scoped when it was
+written mid-session: the `-Wl,-U,__dyld_initializer` symbol name needed
+the compiler's own extra leading underscore (C symbol `_dyld_initializer`
+mangles to linker symbol `__dyld_initializer`) -- the single-underscore
+version silently left the symbol fully undefined instead of marking it
+resolve-at-runtime, so the very first build after this fix was written
+failed to link at all. Found immediately on resuming this work by just
+trying to build it.
+
+**Bug 2 (new, found resuming this session): a second real
+Static-vs-dylib architecture-debt crash, one layer deeper.** After bug 1
+was fixed, `dyld_test_exec` still crashed -- but earlier and differently
+(`Trace/BPT trap: 5`, no `EXITCODE`, not even `main()`'s own message
+printed). Root-caused via the same real-diagnostic method used all
+through Phase C (temporary `handle_ux_exception` PC/register capture in
+`bsd/uxkern/ux_exception.c`, temporary `printf` in
+`osfmk/ipc/mach_kernelrpc.c`'s `_kernelrpc_mach_vm_map_trap`, a temporary
+`RuntimeState::add()` load-address log in `third_party/dyld` -- all
+reverted via `git checkout --` once root-caused, per this project's
+standing convention):
+
+- Crash PC landed exactly on real, unmodified `libplatform/src/os/
+  alloc_once.c`'s `_os_alloc_slow()` -- specifically its own
+  `__LIBPLATFORM_INTERNAL_CRASH__` trap, hit when its
+  `mach_vm_map(mach_task_self(), ...)` call returns a non-success
+  `kern_return_t` (captured directly from the register the crash-site
+  disassembly showed still held it: `x10 = 5 = KERN_INVALID_ADDRESS`).
+- The kernel-side `_kernelrpc_mach_vm_map_trap` diagnostic proved this
+  specific call never even reached the kernel trap, which combined with
+  `mach_task_self()` being a plain `#define mach_task_self()
+  mach_task_self_` macro (real `libsyscall/mach/mach/mach_init.h`)
+  pointed at `mach_task_self_` itself being `MACH_PORT_NULL` -- and real
+  `libsyscall/mach/mach_init.c` has an explicit real comment confirming
+  exactly this failure mode is possible: "mach_init() must be called
+  explicitly in static executables (including dyld)." On real macOS this
+  never comes up because `libsystem_kernel.dylib` is one shared image
+  and dyld calls `__libkernel_init()` once, process-wide. This project's
+  `libdyld.dylib` and `libSystem.B.dylib` each bundle their OWN private
+  static copy of `mach_init.c` (same flattened-static-archive
+  architecture the whole "Static-vs-dylib architecture debt" section
+  below is about), so each has its own **separate, independently
+  never-initialized** `mach_task_self_` global.
+- First fix attempt: a plain `__attribute__((constructor))` in a new
+  `tools/userland_staging/libdyld_mach_init_compat.c` calling
+  `mach_init()`, linked into `libdyld.dylib` itself. Built and linked
+  clean, but a temporary raw-`write()`-syscall diagnostic at the
+  function's own entry/exit (no allocator dependency, safe this early)
+  proved it **never ran** -- real dyld does not run
+  `/usr/lib/system/libdyld.dylib`'s own per-image constructors at all
+  (it's handled specially via `RuntimeState::setDyldLoader()`, not as an
+  ordinary client dependency; real Apple's own libdyld.dylib ships with
+  no C++ static initializers of its own for the same structural reason).
+- **Real, correct, QEMU-verified fix**: `libdyld_mach_init_compat.c`'s
+  function is a plain exported symbol (`libdyld_mach_init_compat_run()`,
+  no constructor attribute) instead. `libsystem_dyld_initializer_compat.c`
+  -- the constructor already proven to run, since it's what fixed bug 1
+  -- now calls three things, **in this exact order**: `mach_init()`
+  directly (for `libSystem.B.dylib`'s own private copy), then
+  `libdyld_mach_init_compat_run()` (an `-Wl,-U` cross-dylib call into
+  `libdyld.dylib`, resolved at runtime the same way `_dyld_initializer`
+  already is, initializing libdyld's separate private copy), *then*
+  `_dyld_initializer()` last. Order is load-bearing, not stylistic: an
+  earlier attempt called `_dyld_initializer()` first and still crashed,
+  because `_dyld_initializer()` itself (real, unmodified dyld source)
+  does real VM/allocator work registering the `LibSystemHelpers` vtable,
+  reaching `os_alloc_once`/`mach_vm_map` before a fix placed after it
+  ever got a turn to run.
+- `build_libsystem.sh` no longer links `$OUT/libdyld/mach_init_compat.o`
+  directly (an earlier intermediate version of this fix did) -- linking
+  that object gives `libSystem.B.dylib` its own local, statically-bound
+  definition of `libdyld_mach_init_compat_run`, which would silently
+  defeat the `-Wl,-U` cross-dylib call (it'd just call back into
+  `libSystem.B.dylib`'s own copy instead of reaching `libdyld.dylib`'s).
+
+Net effect: two real, independent instances of the same
+"flattened-static-archive-into-one-dylib loses Apple's real per-dylib
+load-time behavior" failure mode, found and fixed in the same debugging
+session, on top of the one from Phase D's first pass (`_dyld_initializer`
+itself). Concrete, first-hand evidence for the "Static-vs-dylib
+architecture debt" section immediately below, not just a theoretical
+concern -- every flattened dylib that bundles its own private copy of
+process-global bootstrap state (`mach_task_self_` here; there will be
+others) needs this same kind of independently-discovered, per-symbol fix
+until the real migration to separate, Apple-shaped per-library dylibs
+happens.
+
+### Historical: `main()` returning triggers a NULL virtual-dispatch SIGSEGV
+### (bug 1 above, kept for the original root-cause narrative)
 
 Symptom: `main()` prints its message and returns normally (doesn't call
 `exit()` itself); the process then `SIGSEGV`s (`subcode=0x0`, a NULL
@@ -820,7 +928,9 @@ debt" failure mode: a real per-dylib load-time behavior that Apple's
 actual modular structure provides for free had to be independently
 discovered here.
 
-**Fix in progress, uncommitted**: `tools/userland_staging/
+**Fix, built and QEMU-verified** (see "Phase D: CLOSED for real" above
+for the full closure story, including a second bug this fix's first
+build attempt uncovered): `tools/userland_staging/
 libsystem_dyld_initializer_compat.c` (new file) adds a real
 `__attribute__((constructor))` function to `libSystem.B.dylib` that
 calls `_dyld_initializer()` directly -- the same real Mach-O mechanism
@@ -832,18 +942,14 @@ once ld64 sees a `.dylib` on the link line, it stops pulling several
 syscall symbols (`_open`/`_read`/`_write`/`_close`/`_fstat`/etc) from
 this project's own static archives (since it now considers them
 "satisfiable via a dependency"), and they didn't bind cleanly that way,
-producing ~30 new undefined symbols. **Corrected, not yet built or
-tested**: removed the `libdyld.dylib` link input, added
-`-Wl,-U,_dyld_initializer` to `build_libsystem.sh`'s link line instead
-(marks specifically that one symbol as an intentional dynamic lookup,
-resolved at runtime once dyld has also loaded `libdyld.dylib` into the
-same process, without disturbing anything else's resolution). **Next
-action for whoever resumes this: run `build_libsystem.sh`, then
-`build_dyld_test_exec.sh`, `inject_into_sd_image.sh`, and the boot test
-(`qemu/dyld_real_boot_cmds.txt` via
-`tools/init_binary/_pty_test_phase5.py`) to confirm this actually
-resolves the NULL pointer and `dyld_test_exec` exits cleanly with
-`EXITCODE:1`** (its own `main()`'s real return value), not a crash.
+producing ~30 new undefined symbols. Corrected: removed the
+`libdyld.dylib` link input, added `-Wl,-U,__dyld_initializer` to
+`build_libsystem.sh`'s link line instead (note the double leading
+underscore -- see "Phase D: CLOSED for real" above; the single-underscore
+version silently failed to link) to mark specifically that one symbol as
+an intentional dynamic lookup, resolved at runtime once dyld has also
+loaded `libdyld.dylib` into the same process, without disturbing
+anything else's resolution.
 
 ### Static-vs-dylib architecture debt -- new project convention going
 ### forward (user directive, 2026-08-25)
@@ -893,10 +999,12 @@ for whoever picks this up next:
   first, QEMU-verify each step), starting from a stable, exit-cleanly
   baseline (i.e. land the `_dyld_initializer()` fix above first).
 
-This unlocks, in order once the current bug is resolved: closing Phase D
-for real (clean exit, no crash), then the static-to-dylib migration
-above, then `libdispatch` as a real `.dylib` (Phase 6.6), then
-CoreFoundation (Phase 9), then everything gated behind either.
+**Phase D is now closed for real** (clean exit, no crash -- see "Phase D:
+CLOSED for real" above) -- the stable, exit-cleanly baseline this section
+asks for is in place. This unlocks, in order: the static-to-dylib
+migration above (not yet started), then `libdispatch` as a real
+`.dylib` (Phase 6.6), then CoreFoundation (Phase 9), then everything
+gated behind either.
 
 **CoreFoundation source options, noted 2026-08-24 (not yet evaluated in
 depth -- flagging for whoever picks up Phase 9), found while a background
