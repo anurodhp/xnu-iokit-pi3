@@ -35,8 +35,7 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     echo "error: Xcode-12.app not found at $XCODE12 (see tools/build_kexts.sh for the same dependency)" >&2
     exit 1
 fi
-for a in libc_gen libc_string libc_stdio libc_printf \
-         libcxx libcxxabi libunwind libcopyfile libremovefile libresolv; do
+for a in libcopyfile libremovefile libresolv; do
     if [ ! -f "$OUT/$a.a" ]; then
         echo "error: $OUT/$a.a not found -- run its build_$a.sh first" >&2
         exit 1
@@ -45,9 +44,10 @@ done
 # libc_gen.a/libc_string.a/libc_stdio.a/libc_printf.a/
 # libcxx_locale_for_stdio_scratch.a/libcxx_tsd_shim_bootstrap_compat.o no
 # longer required here (static-to-dylib migration step 4, docs/
-# daemon-roadmap.md) -- real libsystem_c.dylib below instead.
-if [ ! -f "$OUT/system/libsystem_c.dylib" ]; then
-    echo "error: $OUT/system/libsystem_c.dylib not found -- run build_libsystem_c.sh first" >&2
+# daemon-roadmap.md) -- real libsystem_c.dylib below instead. Same for
+# libcxx.a/libcxxabi.a/libunwind.a (step 5) -- real libc++.dylib below.
+if [ ! -f "$OUT/system/libsystem_c.dylib" ] || [ ! -f "$OUT/system/libc++.dylib" ]; then
+    echo "error: $OUT/system/libsystem_c.dylib / libc++.dylib not found -- run build_libsystem_c.sh and build_libcxx_dylib.sh first" >&2
     exit 1
 fi
 # libplatform.a/libclosure.a/cerror_stub.o no longer required here
@@ -73,13 +73,16 @@ if [ ! -f "$OUT/libdyld/compat_misc.o" ]; then
     exit 1
 fi
 
-# Same real scratch fixes as build_libdyld.sh -- see that script's own
-# header comments for the full story on each.
+# libunwind.a scratch-exclusion trick removed (static-to-dylib migration
+# step 5) -- real libc++.dylib below already resolves this internally.
+# dyld_unwind_shim_compat.c itself stays: libc++.dylib DOES now export
+# real (if stub) _dyld_find_unwind_sections/dladdr too (confirmed via
+# nm -g), making this copy redundant rather than load-bearing, but
+# removing it isn't a correctness fix (both are pure, stateless stubs)
+# so it's left as-is rather than risking an unrelated change here.
 SCRATCH="$OUT/libsystem_scratch"
 rm -rf "$SCRATCH"
 mkdir -p "$SCRATCH"
-cp "$OUT/libunwind.a" "$SCRATCH/libunwind_scratch.a"
-ar d "$SCRATCH/libunwind_scratch.a" libunwind_dyld_shim.o
 cat > "$SCRATCH/dyld_unwind_shim_compat.c" << 'EOF'
 int _dyld_find_unwind_sections(void *addr, void *info) {
     (void)addr; (void)info;
@@ -134,8 +137,7 @@ rm -f "$OUT/system/libSystem.B.dylib"
     "$OUT/libdyld/compat_misc.o" \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_blocks.dylib" \
     "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" \
-    "$OUT/libcxx.a" "$OUT/libcxxabi.a" "$SCRATCH/libunwind_scratch.a" \
-    "$OUT/system/libsystem_c.dylib" \
+    "$OUT/system/libsystem_c.dylib" "$OUT/system/libc++.dylib" \
     "$OUT/libcopyfile.a" "$OUT/libremovefile.a" "$OUT/libresolv.a" \
     "$RTLIB" \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \

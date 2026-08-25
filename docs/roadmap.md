@@ -664,25 +664,29 @@ need a real implementation later:
   Apple's actual modular architecture -- a real migration effort, per
   explicit user direction ("do 2 library at a time and finish all") to
   stop building new static-archive-plus-shim code and instead finish
-  this migration. Steps 1-4 DONE and QEMU-verified same day:
+  this migration. Steps 1-5 DONE and QEMU-verified same day:
   `libsystem_kernel.dylib`; `libsystem_platform.dylib` +
   `libsystem_blocks.dylib`; `libsystem_malloc.dylib` +
   `libsystem_pthread.dylib`; `libsystem_c.dylib` (string+gen+stdio+
-  printf+locale+regex combined into ONE dylib, matching real Apple's
-  own granularity -- splitting stdio from printf would have recreated
-  the same duplicate-global bug a third time via `__stdinp`/`__stdoutp`/
-  `__stderrp`). Each step's own audit found a real duplicate-global-state
-  bug before it could cause a crash -- `errno` (step 2), the most
-  serious one yet (`libmalloc`'s heap-zone pointer and `libpthread`'s
-  thread registry, step 3), and step 4's own real, live gap found only
-  once linked against `libdyld.dylib` for real: dyld's own
-  `LibSystemHelpers::mkstemp()` needed a real, working `mkstemp()`,
-  closing out a real `arc4random_uniform()`/Data-Protection-syscall/
-  internal-`sigprocmask` gap chain. `libdyld.dylib`/`libSystem.B.dylib`
-  now link 9 real dylibs total instead of bundling static archives. See
-  `docs/daemon-roadmap.md`'s "Static-to-dylib migration" sections for
-  what moved, what's left, and next-step candidates (libcxx/libcxxabi/
-  libunwind next).
+  printf+locale+regex combined into ONE dylib); `libc++.dylib`
+  (libcxx+libcxxabi combined -- real RTTI-identity correctness reason,
+  not just convenience: splitting them risks `typeid`/`dynamic_cast`
+  silently failing across the dylib boundary). Each step's own audit
+  found real duplicate-global-state bugs before they could cause a
+  crash -- `errno` (step 2); the most serious yet, `libmalloc`'s
+  heap-zone pointer and `libpthread`'s thread registry (step 3); step
+  4's live gap (dyld's `LibSystemHelpers::mkstemp()` needed a real
+  working `mkstemp()`); and step 5 found THREE more identical bugs
+  lurking in an old loose compat file (`libdyld_compat_misc.c`) nobody
+  had re-audited since steps 3-4 landed their real replacements.
+  `libdyld.dylib`/`libSystem.B.dylib` now link 7 real dylibs directly
+  (10 total transitively) instead of bundling static archives. Real,
+  honestly-scoped exclusions remain: `std::thread`/`std::condition_variable`/
+  `std::timed_mutex` are unusable in this project's C++ runtime until
+  real `pthread_join`/`pthread_detach`/`pthread_cond_timedwait` exist
+  (none do yet). See `docs/daemon-roadmap.md`'s "Static-to-dylib
+  migration" sections for what moved, what's left (libunwind + smaller
+  archives next), and next-step candidates.
 - **Phase 6.6 (libdispatch/GCD)**: planning-only placeholder, blocked
   behind 6.5. Even once unblocked, real concurrent `dispatch_async` can't
   exist until real threading does (Phase 7.5's pthread ceiling) -- scope

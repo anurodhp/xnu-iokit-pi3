@@ -168,6 +168,11 @@ SIGLIST_CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fn
 # compiling this file too would just duplicate-define the same symbols.
 "$CLANG" $SIGLIST_CFLAGS libsystem_c_syscall_compat.c -o "$EXTRACT/syscall_compat.o"
 
+# Real __cxa_atexit/__cxa_finalize -- see libsystem_c_cxa_atexit_compat.c's
+# own comment (moved here from libdyld_compat_misc.c during migration
+# step 5, real Apple's own architecture: __cxa_atexit lives in Libc).
+"$CLANG" $SIGLIST_CFLAGS libsystem_c_cxa_atexit_compat.c -o "$EXTRACT/cxa_atexit_compat.o"
+
 # Real gap: real access()/fstatat()/ftruncate()/mkdirat()/rmdir()/
 # unlink()/sigprocmask() raw syscall stubs -- same real create-
 # syscalls.pl generator + recipe build_libmalloc.sh already established

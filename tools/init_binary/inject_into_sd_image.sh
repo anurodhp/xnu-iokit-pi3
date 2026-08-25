@@ -237,6 +237,18 @@ if [ -f tools/userland_staging/dyld.macho ] && [ -f tools/userland_staging/dyld_
         name="$(basename "$d")"
         case "$name" in
             libdyld.dylib|libSystem.B.dylib) continue ;;
+            # libc++.dylib is a second real special case: its real
+            # LC_ID_DYLIB install_name is /usr/lib/libc++.1.dylib
+            # (matching real Apple's own path, NOT under
+            # /usr/lib/system/ like every other migration-step dylib --
+            # confirmed via otool -l, not assumed), so it needs its own
+            # real destination path/filename here too.
+            "libc++.dylib")
+                cp "$d" "$MNT/usr/lib/libc++.1.dylib"
+                chmod 755 "$MNT/usr/lib/libc++.1.dylib"
+                echo "+ wrote $(wc -c < "$d") bytes to $MNT/usr/lib/libc++.1.dylib"
+                continue
+                ;;
         esac
         cp "$d" "$MNT/usr/lib/system/$name"
         chmod 755 "$MNT/usr/lib/system/$name"

@@ -81,7 +81,7 @@ for f in "$OUT/dyld_mig/mach/task.h" "$OUT/dyld_compat_derived/dyld_priv.h" \
         exit 1
     fi
 done
-for a in libcxx libcxxabi libunwind libcopyfile libremovefile libresolv; do
+for a in libcopyfile libremovefile libresolv; do
     if [ ! -f "$OUT/$a.a" ]; then
         echo "error: $OUT/$a.a not found -- run its build_$a.sh first" >&2
         exit 1
@@ -188,24 +188,16 @@ if [ "$fail" -ne 0 ]; then
     exit 1
 fi
 
-# Same real fix as build_dyld_link.sh (see that script's own header
-# comment for the full story): libcxxabi.a is a shared, general-purpose
-# archive compiled WITH exceptions, so linking against it here pulls in
-# its real cxa_exception.o/cxa_personality.o/cxa_demangle.o (typeid/
-# dynamic_cast/vtable machinery LibSystemHelpers' virtual class needs),
-# which in turn want libunwind's real C++ unwinder -- which itself wants
-# libunwind_dyld_shim.o's __dyld_find_unwind_sections et al, needing
-# __mh_execute_header (never synthesized for a dylib, only MH_EXECUTE).
-# UNLIKE dyld itself, libdyld.dylib's own real libdyldGlue.o ALREADY
-# provides real, correct, non-circular implementations of all three
-# (that's genuinely its job -- serving OTHER images' unwind-section/
-# dladdr/dyld queries) -- so here the fix is simply excluding libunwind's
-# OWN conflicting copy, no fallback needed.
-SCRATCH="$OUT/libdyld_scratch"
-rm -rf "$SCRATCH"
-mkdir -p "$SCRATCH"
-cp "$OUT/libunwind.a" "$SCRATCH/libunwind_scratch.a"
-ar d "$SCRATCH/libunwind_scratch.a" libunwind_dyld_shim.o
+# libcxx.a/libcxxabi.a/libunwind.a and the whole libunwind_dyld_shim.o
+# exclusion dance that used to live here are gone as of static-to-dylib
+# migration step 5 (docs/daemon-roadmap.md): real libc++.dylib below
+# instead, which already resolves its OWN equivalent
+# __dyld_find_unwind_sections/dladdr collision internally (see
+# build_libcxx_dylib.sh's own comment) -- nothing left to exclude here.
+if [ ! -f "$OUT/system/libc++.dylib" ]; then
+    echo "error: $OUT/system/libc++.dylib not found -- run build_libcxx_dylib.sh first" >&2
+    exit 1
+fi
 
 # libmalloc.a/libpthread.a and the whole libmalloc_dispatch.o
 # trim-and-rebuild dance that used to live here are gone as of static-
@@ -238,7 +230,7 @@ rm -f "$OUT/system/libdyld.dylib"
     "$OUT/libdyld/compat_misc.o" \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_blocks.dylib" \
     "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" "$OUT/system/libsystem_c.dylib" \
-    "$OUT/libcxx.a" "$OUT/libcxxabi.a" "$SCRATCH/libunwind_scratch.a" \
+    "$OUT/system/libc++.dylib" \
     "$OUT/libcopyfile.a" "$OUT/libremovefile.a" "$OUT/libresolv.a" \
     "$RTLIB" \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \

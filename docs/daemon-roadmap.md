@@ -1388,28 +1388,121 @@ of scope, same class as `build_libpthread.sh`'s own from step 3):
 "$OUT/libc_gen.a"` already succeeds before that point, so `libc_gen.a`
 itself is unaffected and this migration's own scripts never hit it.
 
-**Next candidates**: the BSD syscall surface for the remaining scattered
-per-consumer syscall-stub files (`iokit_trap.s`,
-`notify_mig_special_reply_port_trap.s`, `mach_port_extra_traps.s`,
-`mach_ipc_traps.s` -- confirmed via `grep -rl "svc #0x80"` across
-`tools/userland_staging/*.s`, not yet audited individually for which
-specific consumers still need each one; `libunwind_sched_yield.s` is now
-also duplicated into `libsystem_pthread.dylib`, real but redundant, not
-a correctness risk) -- lower priority now that `libsystem_c.dylib`
-covers the vast majority of real syscall traffic. Bigger remaining
-targets: `libcxx`/`libcxxabi`/`libunwind` as real dylibs (batch 5), and
-the smaller archives (`libcopyfile`/`libremovefile`/`libresolv`, batch
-6) -- once those land, `libSystem.B.dylib`/`libdyld.dylib` should be
-down to just their own real glue code plus real `LC_LOAD_DYLIB`s, no
-bundled static archives left at all. Whoever continues this should
-re-run that same `grep -rl "svc #0x80" *.s` scan first, and should
-re-audit each new library for the same duplicate-global-state risk
-before assuming "just relink it as a dylib" is safe (three real
-instances of that exact bug class found so far -- `mach_task_self_`,
-`errno`, `g_zone`/the pthread registry -- all by deliberately checking
-for it first, not by waiting for a crash; `libsystem_c.dylib`'s own
-`__stdinp`/`__stdoutp`/`__stderrp` finding is the same risk avoided by
-design rather than fixed after a crash).
+### Static-to-dylib migration, step 5: `libc++.dylib` -- DONE
+### 2026-08-25, QEMU-verified
+
+Same day, by far the largest and most involved step of this migration.
+Combines `libcxx.a` + `libcxxabi.a` into ONE real dylib
+(`/usr/lib/libc++.1.dylib`, real Apple's actual install path -- NOT
+under `/usr/lib/system/` like every other migration-step dylib so far,
+confirmed via `otool -l`, needed a real special case in
+`inject_into_sd_image.sh`). `libunwind.a` stays a static archive linked
+into it for now (real EH/RTTI personality-routine dependency, same
+`libunwind_dyld_shim.o` exclusion `build_dyld_link.sh`/`build_libdyld.sh`
+already established) -- not yet its own dylib, that's still batch 6.
+
+**Real correctness reason for combining libcxx+libcxxabi, not just
+convenience**: C++ `typeid` equality is commonly a POINTER comparison
+of `type_info` objects (confirmed in `private_typeinfo.o`'s
+`is_equal()`). Splitting the two into separate dylib images would risk
+two independent copies of "the same" type's RTTI data, which could make
+`dynamic_cast`/`catch` silently fail across that boundary for logically
+identical types -- sidestepped entirely by not creating the split.
+
+**Real gaps found and closed** (each confirmed via `nm -u` tracing to
+the exact needing file, not guessed): `catopen`/`catgets`/`catclose`
+(real POSIX "no NLS catalogs installed" behavior); `_dyld_find_unwind_sections`/
+`_dyld_register_func_for_remove_image`/`dladdr` (same real stub
+`build_libsystem.sh`'s own `dyld_unwind_shim_compat.c` already
+established -- linking against `libdyld.dylib`'s real implementations
+instead would be circular); `___progname` (same real cross-image
+`-Wl,-U` lookup `libsystem_c.dylib` already established); `clock_gettime`
+(not a raw BSD syscall at all -- combined two already-real primitives,
+`gettimeofday`+`mach_absolute_time`/`mach_timebase_info`, behind the
+standard POSIX name); `nanosleep` (reused this project's own real,
+QEMU-verified Mach-IPC implementation verbatim, Phase 4.6 item 5, plus
+its real `libmach_ipc.a` dependency); `strftime_l`/timezone family (real
+`locale.o` needs it directly, not just through the already-excluded
+wide-char `wcsftime.o` -- real, unmodified `localtime.c`/
+`timezone_unix03.c`/`asctime.c`/`strftime.c`/`timelocal.c` compiled
+fresh, same real recipe `build_simple_cmds.sh` already established);
+`__global_locale`/`__locale_key` (real `locale.cpp` needs Apple's
+xlocale "current locale" TSD state directly -- `libsystem_c.dylib`
+already has a copy but compiles it hidden/unreachable across the dylib
+boundary, so `libc_locale.a`'s own copy is bundled here instead: **a
+real, honestly-flagged, currently-inert duplication**, same shape as
+`mach_task_self_`/`errno`/`g_zone` but lower-risk since this project
+never calls `setlocale()` away from "C" anywhere today); `__pthread_cond_wait`/
+rwlock/`pthread_mutexattr_destroy` public aliases (real gaps in
+`libsystem_pthread.dylib` itself, step 3 -- real implementations already
+existed under real `$UNIX2003`/double-underscore-internal names, just
+never got a public alias until `libc++.dylib` needed them, fixed at the
+source in `build_libsystem_pthread.sh`, not a new file).
+
+**`libdyld_compat_misc.c` cleanup, found auditing `__cxa_atexit`'s new
+home**: this file also carried `_os_alloc_once_table` (duplicate with
+`libsystem_kernel.dylib`'s real one from step 3),
+`_pthread_bsdthread_init`/`_pthread_main_thread_postfork_init`
+(duplicate with `libsystem_pthread_atfork_compat.c` from step 3), and
+`mkdirat` (duplicate with `libsystem_c.dylib`'s real syscall from step
+4) -- **three more real instances of the exact duplicate-global-state
+bug class this whole migration exists to close**, missed until this
+specific audit. All three removed; `__cxa_atexit`/`__cxa_finalize`
+moved to a new `libsystem_c_cxa_atexit_compat.c` (real Apple
+architecture: `__cxa_atexit` genuinely lives in Libc, not libc++abi),
+now needed by `libc++.dylib` too.
+
+**Real, honestly-scoped exclusions** (full detail in
+`build_libcxx_dylib.sh`'s own header comment, confirmed unreachable in
+the current static link too): `thread.o` (needs real `pthread_join`/
+`pthread_detach`, neither exists anywhere in this project --
+`std::thread` unusable until they do); `condition_variable.o` (needs
+real `pthread_cond_timedwait`, only the untimed variant exists --
+`std::condition_variable` unusable); `mutex.o` (bundles
+`std::timed_mutex`/`std::recursive_timed_mutex` in the same object as
+plain `std::mutex`, and the timed variants need `condition_variable.o`
+-- **but** its real `__call_once` function, needed pervasively including
+by `locale.o`, only needs the already-real untimed primitives, so it's
+preserved as a real, verbatim, separately-compiled copy,
+`libcxx_call_once_compat.cpp`); `future.o`/`shared_mutex.o` (both real
+`condition_variable` consumers, cascading from the same gap);
+`cxa_thread_atexit.o` (needs real arm64 TLV support, zero `__thread`
+consumers exist); `wcsftime.o` (already-documented wide-char/locale
+gap); `debug.o` (real libc++ debug-mode container checking, never
+defined by this project's build, confirmed dead code);
+`cxa_noexception.o` (real, mutually-exclusive alternate to
+`cxa_exception.o` for a `-fno-exceptions`-wide build this project
+doesn't use -- a real duplicate-symbol error, confirmed the static
+archive never needed both).
+
+**QEMU-verified**: `dyld_test_exec` still runs its own `main()` and
+exits with `EXITCODE:1`, no crash, now loading 10 real dylibs total
+(7 direct `LC_LOAD_DYLIB`s from `libdyld.dylib`/`libSystem.B.dylib`).
+Full boot-to-login-shell sequence unaffected.
+
+**Next candidates**: `libunwind` as its own real dylib (would let
+`libc++.dylib` drop its remaining static-archive input), and the
+smaller archives (`libcopyfile`/`libremovefile`/`libresolv`) -- batch 6.
+The BSD syscall surface for the remaining scattered per-consumer
+syscall-stub files (`iokit_trap.s`, `notify_mig_special_reply_port_trap.s`,
+`mach_port_extra_traps.s`, `mach_ipc_traps.s` -- confirmed via `grep -rl
+"svc #0x80"` across `tools/userland_staging/*.s`; `libunwind_sched_yield.s`
+is now also duplicated into `libsystem_pthread.dylib`, real but
+redundant, not a correctness risk) is lower priority now that
+`libsystem_c.dylib`/`libc++.dylib` cover the vast majority of real
+syscall traffic. Once batch 6 lands, `libSystem.B.dylib`/`libdyld.dylib`
+should be down to just their own real glue code plus real
+`LC_LOAD_DYLIB`s, no bundled static archives left at all. Whoever
+continues this should re-run that same `grep -rl "svc #0x80" *.s` scan
+first, and should re-audit each new library for the same duplicate-
+global-state risk before assuming "just relink it as a dylib" is safe
+(three real instances of that exact bug class found so far --
+`mach_task_self_`, `errno`, `g_zone`/the pthread registry -- plus a real
+but lower-risk fourth, `libc++.dylib`'s own xlocale duplication, and
+three more instances of the SAME bug found lurking in
+`libdyld_compat_misc.c` this same step, missed until this specific
+audit -- worth a deliberate sweep of every remaining loose compat file
+for the same pattern before assuming there aren't more).
 
 **CoreFoundation source options, noted 2026-08-24 (not yet evaluated in
 depth -- flagging for whoever picks up Phase 9), found while a background

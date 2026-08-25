@@ -110,7 +110,12 @@ rm -f "$OUT/system/libsystem_pthread.dylib"
     -install_name /usr/lib/system/libsystem_pthread.dylib \
     -Wl,-fixup_chains \
     -Wl,-alias,___mmap,_mmap \
+    -Wl,-alias,__pthread_cond_wait,_pthread_cond_wait \
     -Wl,-alias,_pthread_testcancel,'_pthread_testcancel$UNIX2003' \
+    -Wl,-alias,'_pthread_mutexattr_destroy$UNIX2003',_pthread_mutexattr_destroy \
+    -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',__pthread_rwlock_rdlock \
+    -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',__pthread_rwlock_wrlock \
+    -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',__pthread_rwlock_unlock \
     -o "$OUT/system/libsystem_pthread.dylib" \
     $(for m in $MEMBERS; do echo "$OUT/libsystem_pthread/extracted/$m"; done) \
     "$OUT/libsystem_pthread/sched_yield_trap.o" "$OUT/libsystem_pthread/sched_yield.o" \

@@ -1,0 +1,269 @@
+#!/bin/bash
+# Builds libc_build/system/libc++.dylib: static-to-dylib migration
+# step 5 (docs/daemon-roadmap.md's "Static-vs-dylib architecture debt"
+# section).
+#
+# Combines libcxx.a + libcxxabi.a into ONE real dylib, matching real
+# Apple's own libc++abi.dylib+libc++.dylib pairing being tightly
+# coupled (this project bundles both together rather than as two
+# separate images specifically because of a real RTTI correctness risk,
+# not just convenience -- see below).
+#
+# THIS ONE IS ALSO A REAL CORRECTNESS CONCERN, related to but distinct
+# from the mach_task_self_/errno/g_zone class: C++ `typeid` equality
+# (`std::type_info::operator==`) is commonly implemented by real libc++abi
+# as a POINTER comparison of the two operands' `type_info` objects
+# (private_typeinfo.o's `is_equal()`), not a string/name comparison in
+# the common case. If libcxx.a and libcxxabi.a's RTTI data
+# (`__ZTI*`/`__ZTS*`/`__ZTV*` symbols, confirmed present via nm) were
+# ever split so that two DIFFERENT dylibs each held their own private
+# copy of the "same" type's type_info, a `dynamic_cast`/`catch` clause
+# comparing types across that dylib boundary could silently fail even
+# for logically identical types. Bundling both into one image sidesteps
+# the question entirely rather than needing to prove real Apple's own
+# two-level-namespace symbol coalescing handles it correctly for every
+# case this project might hit.
+#
+# libunwind.a is still linked as a static archive here (real EH/RTTI
+# personality-routine dependency) -- NOT yet migrated to its own real
+# dylib (that's step 6, alongside the smaller remaining archives). Same
+# real libunwind_dyld_shim.o exclusion build_dyld_link.sh/
+# build_libdyld.sh already established (needs __mh_execute_header, never
+# synthesized for a dylib) applies here too.
+#
+# Real, unmodified LLVM source: same file sets build_llvm_libcxx.sh/
+# build_llvm_libcxxabi.sh already established for their own static
+# archives (each script's own header comment has the full scope/gap
+# writeup, not re-derived here) -- reused by extracting already-built
+# member objects (ar x), same approach every dylib since
+# libsystem_malloc.dylib.
+#
+# Real, honestly-scoped exclusions (not silently worked around),
+# confirmed real via nm -u tracing, not guessed:
+#   - thread.o: needs real pthread_join()/pthread_detach(), neither of
+#     which exists anywhere in this project yet (build_libpthread.sh's
+#     own header comment already scopes real pthread.c -- 2587 lines --
+#     out entirely; this file is effectively real pthread.c's own
+#     <thread> surface by another name). std::thread is UNUSABLE from
+#     C++ code in this project until real pthread_join/pthread_detach
+#     exist -- a real, substantial follow-up (this project's own
+#     pthread memory already flags bsdthread_terminate as still
+#     ENOTSUP), not a permanent ceiling.
+#   - condition_variable.o: needs real pthread_cond_timedwait() (only
+#     the untimed pthread_cond_wait() exists so far, and only
+#     pthread_cond_timedwait_relative_np() -- not the POSIX absolute-
+#     deadline entry point -- exists in real, unmodified
+#     third_party/libpthread/src/pthread_cond.c; a real, non-trivial
+#     addition given real timeout math on top of the already-working
+#     ulock-based wait, not attempted here). std::condition_variable is
+#     UNUSABLE until this lands. Cascades to future.o (std::future/
+#     std::promise) and shared_mutex.o (std::shared_mutex), both real
+#     condition_variable consumers -- excluded for the same reason, not
+#     independent gaps (confirmed via nm -u tracing: nothing else in
+#     this dylib needs either). std::mutex itself does NOT need any of
+#     this -- see build_libsystem_pthread.sh's own real $UNIX2003 alias for the
+#     one real, small, separate gap mutex.o actually has.
+#   - cxa_thread_atexit.o: needs __tlv_bootstrap, real arm64 Thread-Local
+#     Variable support this project has never had (see
+#     libdyld_compat_misc.c's own tlv_get_addr() stub comment -- this
+#     project has zero __thread consumers so far).
+#   - wcsftime.o (from libc_locale.a, added below): needs strftime_l,
+#     same already-documented wide-char/locale gap
+#     build_libsystem_c.sh's own header comment already excludes this
+#     exact file for.
+set -e
+cd "$(dirname "$0")"
+
+LIBC="../../third_party/Libc"
+XNU="../../third_party/xnu-7195"
+OUT="libc_build"
+EXTRACT="$OUT/libcxx_dylib/extracted"
+
+XCODE12="/Applications/Xcode-12.app/Contents/Developer"
+CLANG="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+CLANGXX="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
+SDK="$XCODE12/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
+if [ ! -x "$CLANGXX" ] || [ ! -d "$SDK" ]; then
+    echo "error: Xcode-12.app not found at $XCODE12 (see tools/build_kexts.sh for the same dependency)" >&2
+    exit 1
+fi
+for a in libcxx libcxxabi libunwind libc_locale libmach_ipc; do
+    if [ ! -f "$OUT/$a.a" ]; then
+        echo "error: $OUT/$a.a not found -- run build_$a.sh first (build_llvm_libcxx.sh/build_llvm_libcxxabi.sh/build_libunwind.sh/build_libc_locale.sh)" >&2
+        exit 1
+    fi
+done
+if [ ! -f "$OUT/system/libsystem_kernel.dylib" ] || [ ! -f "$OUT/system/libsystem_platform.dylib" ] || \
+   [ ! -f "$OUT/system/libsystem_malloc.dylib" ] || [ ! -f "$OUT/system/libsystem_pthread.dylib" ] || \
+   [ ! -f "$OUT/system/libsystem_blocks.dylib" ] || [ ! -f "$OUT/system/libsystem_c.dylib" ]; then
+    echo "error: libsystem_kernel/platform/malloc/pthread/blocks/c.dylib not found -- run those build scripts first" >&2
+    exit 1
+fi
+
+rm -rf "$EXTRACT"
+mkdir -p "$EXTRACT"
+(cd "$EXTRACT" && ar x "../../libcxx.a")
+(cd "$EXTRACT" && ar x "../../libcxxabi.a")
+# Real gap: real libc++'s <locale> (locale.cpp) needs __global_locale/
+# __locale_key (real Apple xlocale.c's "current locale" TSD state) --
+# libsystem_c.dylib already has its OWN copy (via libc_locale_for_stdio.a,
+# migration step 4) but compiles it with hidden visibility (not
+# exported from that dylib's own symbol table, confirmed via nm -g),
+# so it isn't reachable across the dylib boundary. Bundling libc_locale.a's
+# own copy here instead of trying to export libsystem_c.dylib's is a
+# real, honestly-scoped compromise: this project's own code never calls
+# setlocale() away from the default "C" locale anywhere today, so the
+# two independent copies staying in sync is a narrow, currently-inert
+# risk, not an active one like g_zone/the pthread registry were -- flagged
+# for whoever eventually wires up real locale switching, not treated as
+# blocking here.
+(cd "$EXTRACT" && ar x "../../libc_locale.a")
+rm -f "$EXTRACT/__.SYMDEF"* \
+    "$EXTRACT/thread.o" "$EXTRACT/mutex.o" "$EXTRACT/condition_variable.o" \
+    "$EXTRACT/future.o" "$EXTRACT/shared_mutex.o" \
+    "$EXTRACT/cxa_thread_atexit.o" "$EXTRACT/wcsftime.o" "$EXTRACT/debug.o" \
+    "$EXTRACT/cxa_noexception.o"
+# mutex.o: first pass tried keeping it (std::mutex/std::recursive_mutex
+# themselves need nothing beyond what libsystem_pthread.dylib already
+# has -- see the real, working $UNIX2003 alias in
+# build_libsystem_pthread.sh for the one small gap that closed). Turned
+# out to still need excluding: the SAME object file also defines
+# std::timed_mutex/std::recursive_timed_mutex, which internally use a
+# real std::condition_variable for the timed-wait path (confirmed via
+# nm -u after the alias fix still showed condition_variable methods
+# undefined) -- since condition_variable.o is excluded for the real
+# pthread_cond_timedwait() gap above, and object-file granularity means
+# the two mutex classes can't be split from each other, all of
+# std::mutex/std::timed_mutex/std::recursive_mutex/
+# std::recursive_timed_mutex go together. A real, disappointing, but
+# honest outcome of this specific gap, not a new one. BUT mutex.o's
+# __call_once() (std::call_once/std::once_flag -- needed pervasively,
+# including by real locale.o's own lazy facet init) genuinely only needs
+# the untimed pthread_cond_wait(), already real and working -- see
+# libcxx_call_once_compat.cpp's own comment for why it's compiled
+# separately below instead of being lost along with the rest of this
+# file.
+#
+# cxa_noexception.o: real libcxxabi ships this as a mutually-exclusive
+# alternate to cxa_exception.o (same real symbol set -- ___cxa_throw/
+# __cxa_current_primary_exception/etc -- for a -fno-exceptions-wide
+# build config this project doesn't use). Confirmed via a real
+# duplicate-symbol link error when both were included -- the static
+# archive never hit this because selective member scanning only ever
+# pulled one of the two. cxa_exception.o (the real, exceptions-enabled
+# implementation) is what stays.
+#
+# debug.o: real libc++ "debug mode" container/iterator checking
+# (_LIBCPP_DEBUG) -- this project's build (same real CXX_FLAGS
+# build_llvm_libcxx.sh already established) never defines that macro,
+# so debug.o's own std::mutex-touching functions are genuinely dead
+# code for this build, confirmed the same way every other exclusion in
+# this script was (nothing else needs debug.o's own exports).
+
+# Real, verbatim __call_once() (see libcxx_call_once_compat.cpp's own
+# header comment) -- same real CXX_FLAGS build_llvm_libcxx.sh already
+# established for every other libcxx source file.
+LIBCXX="../../third_party/llvm-project/libcxx"
+LIBCXXABI="../../third_party/llvm-project/libcxxabi"
+"$CLANGXX" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -std=c++14 -funwind-tables \
+    -nostdinc++ -isystem "$LIBCXX/include" \
+    -I "$LIBCXXABI/include" -I "$LIBCXX/src" \
+    -D_LIBCPP_BUILDING_LIBRARY -DLIBCXX_BUILDING_LIBCXXABI \
+    -Wno-macro-redefined \
+    libcxx_call_once_compat.cpp -o "$EXTRACT/call_once_compat.o"
+
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    libcxx_dylib_compat.c -o "$EXTRACT/compat.o"
+
+# Real, working nanosleep(2) -- real Apple algorithm (host_get_clock_service
+# + semaphore_create + clock_get_time + __semwait_signal, real Mach IPC,
+# already QEMU-verified, see that file's own header comment for the full
+# story), reused verbatim rather than re-deriving a second nanosleep --
+# needed by real atomic.o/chrono.o (std::atomic's wait/notify timeout
+# path). clock_gettime itself has no real source anywhere in this
+# project's pinned checkouts to reuse (it's not a raw BSD syscall at all
+# -- confirmed absent from syscalls.master -- and real Apple's own
+# gen/clock_gettime.c is commpage-accelerated, more machinery than this
+# narrow need justifies porting), so libcxx_dylib_compat.c's own version
+# combines two already-real, already-working primitives
+# (gettimeofday/mach_absolute_time) behind the standard POSIX name
+# instead.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -I "$XNU/osfmk" -I ../../generated \
+    simple_cmds_nanosleep_pub_compat.c -o "$EXTRACT/nanosleep_compat.o"
+
+# Real, self-contained Mach-IPC clock-service plumbing nanosleep_compat.o
+# needs (host_get_clock_service/semaphore_create/clock_get_time/real Mach
+# traps -- same real archive build_libmach_ipc.sh already established
+# and QEMU-verified, see project memory on Phase 4.6 item 5). Extracted
+# wholesale rather than hand-picking members -- confirmed self-contained
+# beyond libsystem_kernel.dylib's own real mach_init/mach_task_self_/
+# mach_port_deallocate/mach_port_mod_refs via nm -u, not guessed.
+(cd "$EXTRACT" && ar x "../../libmach_ipc.a")
+
+# Real timezone/strftime family (real Apple/FreeBSD source, same real
+# files+order build_simple_cmds.sh's own many entries already establish
+# for real commands like date/ls/tar) -- real libc++'s <locale>
+# std::time_put/std::time_get facets (locale.o) call strftime_l()
+# directly, not just through the already-excluded wide-char wcsftime.o.
+LOCALE_CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -Wno-nullability-completeness \
+    -include libc_build_prototypes.h \
+    -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
+    -DVARIANT_STATIC -DVARIANT_CANCELABLE -DVARIANT_DARWINEXTSN -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \
+    -D__ct_rune_t=__darwin_ct_rune_t -D__va_list=__builtin_va_list \
+    -I $OUT/compat_include \
+    -I $LIBC/include -I $LIBC/darwin -I $LIBC/fbsdcompat -I $LIBC/locale -I $LIBC/locale/FreeBSD \
+    -I $LIBC/stdtime/FreeBSD \
+    -I ../../third_party/libpthread/include -I ../../third_party/libpthread/private \
+    -I $XNU/bsd -I $XNU/osfmk -I $XNU/libsyscall \
+    -I ../../generated"
+for f in localtime timezone_unix03 asctime strftime timelocal; do
+    src="$LIBC/stdtime/FreeBSD/${f}.c"
+    [ -f "$src" ] || src="$LIBC/stdtime/${f}.c"
+    "$CLANG" $LOCALE_CFLAGS "$src" -o "$EXTRACT/${f}.o"
+done
+
+# Same real exclusion build_dyld_link.sh/build_libdyld.sh already
+# established: libunwind_dyld_shim.o needs __mh_execute_header, never
+# synthesized for MH_DYLIB output. Scratch copy, shared committed
+# libunwind.a untouched.
+SCRATCH="$OUT/libcxx_dylib_scratch"
+rm -rf "$SCRATCH"
+mkdir -p "$SCRATCH"
+cp "$OUT/libunwind.a" "$SCRATCH/libunwind_scratch.a"
+ar d "$SCRATCH/libunwind_scratch.a" libunwind_dyld_shim.o
+
+mkdir -p "$OUT/system"
+rm -f "$OUT/system/libc++.dylib"
+# ___progname: same real cross-image lookup build_libsystem_c.sh's own
+# comment already documents (real per-process global living in the main
+# executable's own crt.c). _fputs$UNIX2003/_strftime_l: real UNIX2003
+# aliases this dylib's own freshly-compiled strftime.o/asctime.o need,
+# not otherwise exported by libsystem_c.dylib (base _fputs is, the
+# suffixed alias isn't).
+"$CLANGXX" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
+    -install_name /usr/lib/libc++.1.dylib \
+    -Wl,-fixup_chains \
+    -Wl,-U,___progname \
+    -Wl,-alias,_fputs,'_fputs$UNIX2003' \
+    -Wl,-alias,'_strftime_l$UNIX2003',_strftime_l \
+    -o "$OUT/system/libc++.dylib" \
+    "$EXTRACT"/*.o \
+    "$SCRATCH/libunwind_scratch.a" \
+    "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" \
+    "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" \
+    "$OUT/system/libsystem_blocks.dylib" "$OUT/system/libsystem_c.dylib"
+
+echo "wrote $OUT/system/libc++.dylib"
+otool -hv "$OUT/system/libc++.dylib" | grep -q " DYLIB " || {
+    echo "error: filetype is not DYLIB" >&2
+    exit 1
+}
+if nm -u "$OUT/system/libc++.dylib" | grep -q .; then
+    echo "WARNING: undefined symbols present:" >&2
+    nm -u "$OUT/system/libc++.dylib" >&2
+else
+    echo "libc++.dylib: fully self-contained (beyond libsystem_*.dylib), zero undefined symbols"
+fi
