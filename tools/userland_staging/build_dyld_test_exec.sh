@@ -75,11 +75,24 @@ fi
 # real crash on (EXC_BAD_ACCESS, fault address 0x10, found via a real
 # temporary bsd/uxkern/ux_exception.c diagnostic, 2026-08-25) -- see
 # docs/daemon-roadmap.md for the full writeup.
+# Real, unconditional requirement (dyldMain.cpp, found+closed 2026-08-25
+# via build_libdyld.sh/build_libsystem.sh): dyld halts every launch
+# unless the process loaded BOTH /usr/lib/system/libdyld.dylib and
+# /usr/lib/libSystem.B.dylib (RuntimeState::add() matches those exact
+# install_names). Linking directly against the built .dylib files embeds
+# their own real LC_ID_DYLIB install_names into this executable's
+# LC_LOAD_DYLIB entries, regardless of the local build path referenced
+# here -- same mechanism already proven by libtest.dylib.
+if [ ! -f "$OUT/system/libdyld.dylib" ] || [ ! -f "$OUT/system/libSystem.B.dylib" ]; then
+    echo "error: $OUT/system/{libdyld,libSystem.B}.dylib not found -- run build_libdyld.sh and build_libsystem.sh first" >&2
+    exit 1
+fi
 rm -f dyld_test_exec.macho
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
     -Wl,-fixup_chains \
     -o dyld_test_exec.macho \
-    "$CSU/start.s" "$CSU/crt.c" dyld_test_exec_main.o "$OUT/libtest.dylib"
+    "$CSU/start.s" "$CSU/crt.c" dyld_test_exec_main.o "$OUT/libtest.dylib" \
+    "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib"
 rm -f dyld_test_exec_main.o
 
 echo "wrote dyld_test_exec.macho"

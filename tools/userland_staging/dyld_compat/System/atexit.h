@@ -17,4 +17,21 @@ struct __cxa_range_t {
     const void *addr;
     size_t length;
 };
+
+/* Real gap found+documented 2026-08-25 building libdyld.dylib
+ * (build_libdyld.sh): this project's pinned libcxxabi is real, unmodified
+ * upstream llvmorg-11.1.0, which never grew Apple's own libcxxabi fork's
+ * `__cxa_finalize_ranges` dlclose-time extension (only the standard
+ * Itanium `__cxa_finalize(void* dso)`, which this project's libcxxabi.a
+ * does provide, for normal process-exit static-destructor running).
+ * `__cxa_finalize_ranges` is only ever called from
+ * LibSystemHelpers::__cxa_finalize_ranges(), itself only reached from
+ * dyld's own dylib-UNLOAD path (dlclose()) -- a real, structural gap
+ * this port doesn't exercise yet (same class of documented gap as
+ * OpenPAM's dlopen()), not faked logic: honestly a no-op until dlclose()
+ * itself is real. See libdyld_compat_cxa_finalize_ranges.c. */
+#ifdef __cplusplus
+extern "C"
+#endif
+void __cxa_finalize_ranges(const struct __cxa_range_t ranges[], unsigned int count);
 #endif

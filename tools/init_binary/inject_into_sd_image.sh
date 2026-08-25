@@ -203,6 +203,21 @@ if [ -f tools/userland_staging/dyld.macho ] && [ -f tools/userland_staging/dyld_
         chmod 755 "$MNT/usr/lib/libtest.dylib"
         echo "+ wrote $(wc -c < tools/userland_staging/libc_build/libtest.dylib) bytes to $MNT/usr/lib/libtest.dylib"
     fi
+    # Real, unconditional dyldMain.cpp requirement (found+closed
+    # 2026-08-25, see build_libdyld.sh/build_libsystem.sh's own header
+    # comments): every launched process must load both of these at their
+    # exact real install_names.
+    if [ -f tools/userland_staging/libc_build/system/libdyld.dylib ]; then
+        mkdir -p "$MNT/usr/lib/system"
+        cp tools/userland_staging/libc_build/system/libdyld.dylib "$MNT/usr/lib/system/libdyld.dylib"
+        chmod 755 "$MNT/usr/lib/system/libdyld.dylib"
+        echo "+ wrote $(wc -c < tools/userland_staging/libc_build/system/libdyld.dylib) bytes to $MNT/usr/lib/system/libdyld.dylib"
+    fi
+    if [ -f tools/userland_staging/libc_build/system/libSystem.B.dylib ]; then
+        cp tools/userland_staging/libc_build/system/libSystem.B.dylib "$MNT/usr/lib/libSystem.B.dylib"
+        chmod 755 "$MNT/usr/lib/libSystem.B.dylib"
+        echo "+ wrote $(wc -c < tools/userland_staging/libc_build/system/libSystem.B.dylib) bytes to $MNT/usr/lib/libSystem.B.dylib"
+    fi
     cp tools/userland_staging/dyld_test_exec.macho "$MNT/bin/dyld_test_exec"
     chmod 755 "$MNT/bin/dyld_test_exec"
     echo "+ wrote $(wc -c < tools/userland_staging/dyld_test_exec.macho) bytes to $MNT/bin/dyld_test_exec"
