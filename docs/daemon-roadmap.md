@@ -463,26 +463,71 @@ Every XNU/libplatform/libpthread include path in this script is
 minimal `string.h` shadow the SDK's real one; found and fixed before it
 could cause a much more confusing failure downstream.
 
-**Real, honest, NOT-YET-DONE next step**: `dyld2.cpp` itself compiles
-because its `dyld3/*.h` includes (`Closure.h`, `ClosureBuilder.h`,
-`BootArgs.h`, `RootsChecker.h`, `StringUtils.h`, `Tracing.h`,
-`FileUtils.h`, `DyldSharedCache.h`, `SharedCacheRuntime.h`) are all
-header-only at the point dyld2.cpp uses them -- but it calls real
-functions those headers only *declare* (`dyld3::internalInstall()`,
-`BootArgs::forceDyld2()`/`forceDyld3()`, `MachOAnalyzer`/`MachOFile`
-methods, `RootsChecker` methods, etc), whose *definitions* live in
-`dyld3/{BootArgs,RootsChecker,StringUtils,FileUtils,Closure,
-ClosureBuilder,MachOFile,MachOAnalyzer,MachOLoaded,SharedCacheRuntime,
-Tracing,Diagnostics}.cpp` -- none of those are compiled yet, so
-`dyld_core.a` is a real, verified-compiling archive that is **NOT YET
-LINKABLE** into an actual dyld binary. Confirming exactly which of those
-dyld3 files are truly needed (vs. more dead/simulator-only/shared-cache-
-only code, per this phase's own dyld2-vs-dyld3 scoping precedent) is the
-next real step -- same incremental per-file gap-tracking methodology,
-not attempted in this pass. This unlocks, in order: an actual bootable
-dyld binary (finishing Phase C), `libdispatch` as a real `.dylib`
-(Phase 6.6), then CoreFoundation (Phase 9), then everything gated behind
-either.
+**dyld3 support code: DONE compiling (2026-08-25, same
+`build_dyld_core.sh`)** -- all real gaps closed by real trial-link
+undefined-symbol tracking, not guessed up front. 15 more real files
+compiled clean on the first attempt (no new compat gaps at all):
+`Diagnostics.cpp`, `BootArgs.cpp`, `Tracing.cpp`, `RootsChecker.cpp`,
+`MachOFile.cpp`, `MachOAnalyzer.cpp`, `MachOLoaded.cpp`,
+`shared-cache/FileUtils.cpp`, `Closure.cpp`, `ClosureWriter.cpp`,
+`ClosureBuilder.cpp` (3974 LOC, the single largest file in the whole
+port), `ClosureFileSystemPhysical.cpp`, `shared-cache/
+DyldSharedCache.cpp`, `SharedCacheRuntime.cpp`, `Loading.cpp`,
+`PathOverrides.cpp`, `MachOAnalyzerSet.cpp`. Plus one genuinely
+functional (non-dead) corecrypto consumer, `MachOLoaded.cpp`'s
+`forEachCDHashOfCodeSignature()`: real SHA-1/256/384 implemented against
+corecrypto's real, public `ccdigest_info` API contract
+(`dyld_ccdigest_compat.cpp`) -- algorithm ported from this project's own
+already-verified kernel-side `corecrypto_sha2.c` (SHA-256/384) plus a
+fresh, standard SHA-1 (not needed kernel-side). Real corecrypto's actual
+`.c` driver implementations exist in this xnu-7195 checkout too but need
+internal-only headers (`cc_priv.h`, `ccdigest_priv.h`,
+`cc_runtime_config.h`, `fipspost_trace.h`) that were never
+open-sourced -- confirmed by attempting the real compile first.
+Total real, unmodified (bar the one `ImagePair` line) Apple dyld source
+compiling clean against this project's own libc++/libc++abi:
+**~31K LOC, 30 files, one real archive (`libc_build/dyld_core.a`)**.
+
+**Real, confirmed, PERMANENT wall found via real trial-link
+undefined-symbol tracking (not more compat-header grinding -- this one
+doesn't have a compat-header answer)**: `dyld2.cpp`'s real closure-mode
+launch path (`~dyld2.cpp:5963`) constructs a `dyld3::Loader` on the
+stack and calls its methods (`addImage`, `completeAllDependents`,
+`dtraceUserProbesEnabled`, `findImage`, `forEachImage`,
+`mapAndFixupAllImages`, `resolveTarget`) plus needs
+`dyld3::MachOAnalyzerSet`'s vtable. Neither is declared or defined
+ANYWHERE in this checkout. Checked the FULL git history of every dyld
+tag from `dyld-832.7.3` through the latest available (`dyld-1378`) --
+`dyld3::Loader` never existed in any released apple-oss-distributions
+dyld snapshot. Starting at `dyld-940`, Apple replaced the entire dyld2/
+dyld3/ImageLoader architecture (everything ported in this phase) with a
+fully-rewritten, incompatible "dyld4" engine (`dyld/Loader.cpp`,
+`JustInTimeLoader.cpp`, `PrebuiltLoader.cpp` -- different namespace,
+different object model) -- that newer `Loader` is not a drop-in despite
+the similar name (compared the two APIs directly, not assumed).
+`dyld3::Loader` in this exact dyld-832.7.3 snapshot appears to be a
+transitional, never-publicly-released class from whatever internal
+pre-release Apple build this tag was cut from.
+
+This is a real decision point, not resolved in this pass -- two honest
+paths forward, materially different from everything done in this phase
+so far (which has been "port real, unmodified Apple source plus small
+compat shims"):
+1. A from-scratch reimplementation of `dyld3::Loader`/the concrete
+   `MachOAnalyzerSet` subclass it needs, built only from the real call
+   sites' known signatures and dyld2.cpp's own usage pattern (no source
+   reference for the internals exists anywhere) -- genuinely new
+   engineering, not porting, with real risk of subtly-wrong image-
+   mapping/fixup semantics.
+2. Retarget this whole effort to a later dyld tag (`dyld-940`+) that has
+   a real, complete `Loader` implementation -- but that means dropping
+   the ~31K LOC of dyld2/ImageLoader source already ported here and
+   starting the dyld4-era port fresh; a bigger, separate architectural
+   decision, not an extension of this work.
+Neither attempted here. This unlocks, in order once resolved: an actual
+bootable dyld binary (finishing Phase C), `libdispatch` as a real
+`.dylib` (Phase 6.6), then CoreFoundation (Phase 9), then everything
+gated behind either.
 
 **CoreFoundation source options, noted 2026-08-24 (not yet evaluated in
 depth -- flagging for whoever picks up Phase 9), found while a background

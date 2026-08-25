@@ -21,17 +21,57 @@
 #     dyld's own early-bootstrap use, libSystem initializer glue,
 #     thread-local variable support).
 #
-# NOT built here yet (real, honest, NOT-YET-DONE gap, not papered over):
-# dyld2.cpp's own headers (Closure.h, ClosureBuilder.h, BootArgs.h,
-# RootsChecker.h, StringUtils.h, Tracing.h, FileUtils.h,
-# DyldSharedCache.h, SharedCacheRuntime.h) compile fine as HEADERS (this
-# script proves that), but dyld2.cpp calls real functions defined in
-# their corresponding dyld3/*.cpp files (dyld3::internalInstall(),
-# BootArgs::forceDyld2()/forceDyld3(), MachOAnalyzer/MachOFile methods,
-# RootsChecker methods, etc) -- none of those .cpp files are compiled
-# here yet, so this archive is NOT YET LINKABLE into a real dyld binary.
-# That is real Phase C follow-up work, tracked in
-# docs/daemon-roadmap.md, not attempted in this pass.
+# Also built here now (real dyld3 support code dyld2.cpp/ImageLoader*
+# actually call into, found empirically via real undefined-symbol
+# tracking against the first archive, not guessed up front):
+#   dyld3/Diagnostics.cpp, BootArgs.cpp, Tracing.cpp, RootsChecker.cpp
+#     (small, foundational -- error reporting, boot-arg parsing, kdebug
+#     tracing, on-disk-root validation).
+#   dyld3/MachOFile.cpp, MachOAnalyzer.cpp, MachOLoaded.cpp (~8.4K LOC
+#     total) -- the real Mach-O parsing/analysis engine ImageLoaderMachO*
+#     and dyld2.cpp's closure-mode paths both call into.
+#   dyld3/shared-cache/FileUtils.cpp -- real path/file utilities.
+#   dyld3/Closure.cpp, ClosureWriter.cpp, ClosureBuilder.cpp (3974 LOC,
+#     the single largest file here), ClosureFileSystemPhysical.cpp,
+#     shared-cache/DyldSharedCache.cpp, SharedCacheRuntime.cpp (~8.4K
+#     LOC total) -- the real dyld3 closure-building/shared-cache engine
+#     dyld2.cpp's closure-mode paths call into.
+#   dyld3/Loading.cpp, PathOverrides.cpp, MachOAnalyzerSet.cpp (~2.3K
+#     LOC) -- real support classes (internalInstall(), path-override/
+#     env-var handling, the MachOAnalyzerSet fixup-target abstraction)
+#     found via real trial-link undefined-symbol tracking against the
+#     archive, not found by header inspection up front.
+#   All nine of the above compiled clean on the first attempt with the
+#   exact same flags as everything above -- no new compat gaps.
+#
+# STILL NOT built (real, honest, NOT-YET-DONE gap, not papered over --
+# this one is NOT a matter of more compiling, see below): a real,
+# CONFIRMED, PERMANENT gap in the open-source record, not a
+# search-path/compat-header issue like every other gap in this phase.
+# `dyld3::Loader` (constructed once in dyld2.cpp's closure-mode launch
+# path, ~dyld2.cpp:5963, and called from ImageLoader.cpp too) is not
+# declared or defined ANYWHERE in this checkout, confirmed by grepping
+# the FULL git history of every dyld tag from dyld-832.7.3 through the
+# latest available (dyld-1378) -- it never existed in any released
+# apple-oss-distributions dyld snapshot. Starting at dyld-940, Apple
+# replaced the whole dyld2/dyld3/ImageLoader architecture this port is
+# built on with an incompatible, fully-rewritten "dyld4" engine
+# (dyld/Loader.cpp, JustInTimeLoader.cpp, PrebuiltLoader.cpp, a
+# different namespace and object model entirely) -- that newer Loader
+# is NOT a drop-in for dyld-832.7.3's `dyld3::Loader` reference despite
+# the similar name, confirmed by comparing the two APIs, not assumed.
+# `dyld3::Loader` in this exact snapshot appears to be a transitional,
+# never-publicly-released class from whatever pre-release Apple build
+# dyld-832.7.3 was cut from. This is a real, hard wall for THIS
+# tag -- not solvable by more real-source porting, only by either (a)
+# a from-scratch reimplementation against the real call sites'
+# known signatures (a materially different, riskier kind of work than
+# everything else in this phase, not attempted here), or (b) retargeting
+# this whole port to a later dyld tag with a real, complete Loader
+# implementation (a bigger, separate decision -- the dyld2/ImageLoader
+# code already ported here would need to be dropped/replaced, not
+# extended). Left as an explicit decision point, not resolved in this
+# pass.
 #
 # Real, narrowly-scoped compat gaps found and closed (all in
 # dyld_compat/, all documented in-file, none touching real Apple source
@@ -47,9 +87,20 @@
 #     daemon exists on this target -- real function signatures only,
 #     implementation (dyld_crash_reporter_compat.c) is a real, honest
 #     no-op (nothing consumes the crash-log message).
-#   - dyld_compat/corecrypto/{ccdigest,ccsha1,ccsha2}.h: glue.c includes
-#     these three corecrypto headers but calls zero symbols from any of
-#     them (grepped in full) -- real dead includes, empty placeholders.
+#   - glue.c includes three corecrypto headers but calls zero symbols
+#     from any of them (grepped in full) -- real dead includes, no
+#     compat needed at all once the real xnu-7195 EXTERNAL_HEADERS/
+#     corecrypto/ directory is reachable (see -idirafter list below).
+#     MachOLoaded.cpp's forEachCDHashOfCodeSignature() is a genuinely
+#     DIFFERENT, real corecrypto consumer -- see dyld_ccdigest_compat.cpp
+#     for the real SHA-1/256/384 implementation behind it (the real
+#     ccdigest_init.c/ccdigest_update.c/ccsha256_*.c drivers are present
+#     in this xnu-7195 checkout too, but their SHA1/384 counterparts
+#     aren't, and even the SHA256 ones need internal-only corecrypto
+#     headers -- corecrypto/cc_priv.h, ccdigest_priv.h,
+#     cc_runtime_config.h, fipspost_trace.h -- that exist nowhere in any
+#     apple-oss-distributions release, confirmed by attempting the real
+#     compile first).
 #   - dyld_compat/dyld_deny_list_compat.h: `inDenyList()` (dyld2.cpp,
 #     gates a hardcoded per-app dyld2/dyld3 compatibility override) is
 #     not declared or defined anywhere in this apple-oss-distributions
@@ -202,6 +253,7 @@ EOF
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     "$OUT/dyld_core/dyld_sandbox_compat.c" -o "$OUT/dyld_core/dyld_sandbox_compat.o"
 
+LIBC="../../third_party/Libc"
 INCLUDES="-I $DYLD/src -I $DYLD/dyld3 -I $DYLD/dyld3/shared-cache -I $DYLD/include \
     -I dyld_compat -I dyld_compat/sandbox \
     -I $OUT/dyld_compat_sys_override \
@@ -211,7 +263,9 @@ INCLUDES="-I $DYLD/src -I $DYLD/dyld3 -I $DYLD/dyld3/shared-cache -I $DYLD/inclu
     -idirafter $XNU/bsd -idirafter $XNU/osfmk -idirafter $XNU/libsyscall -idirafter $XNU/libsyscall/mach \
     -idirafter $PTHREAD/include -idirafter $PTHREAD/private \
     -idirafter $PLATFORM/private -idirafter $PLATFORM/include -idirafter $PLATFORM/internal \
-    -idirafter $XNU/BUILD.hdrs/dst/usr/local/include"
+    -idirafter $XNU/BUILD.hdrs/dst/usr/local/include \
+    -idirafter $XNU/EXTERNAL_HEADERS \
+    -idirafter $LIBC/darwin"
 
 # bridgeos availability-macro gap: this iOS SDK's own Availability.h
 # mishandles the bridgeos platform tuple form real xnu/libplatform
@@ -253,6 +307,32 @@ for base in dyldExceptions dyldLibSystemGlue glue threadLocalVariables; do
         echo "  gap: $base -- $(grep -m1 'error:' "$OUT/dyld_core/${base}.err")"
     fi
 done
+# Real dyld3 support code (see this script's header comment) -- found
+# empirically by tracking dyld_core.a's own undefined symbols, not
+# guessed up front.
+for rel in Diagnostics BootArgs Tracing RootsChecker MachOFile MachOAnalyzer MachOLoaded shared-cache/FileUtils \
+           Closure ClosureWriter ClosureBuilder ClosureFileSystemPhysical shared-cache/DyldSharedCache SharedCacheRuntime \
+           Loading PathOverrides MachOAnalyzerSet; do
+    base=$(basename "$rel")
+    out="$OUT/dyld_core/${base}.o"
+    if "$CLANGXX" $CXX_FLAGS "$DYLD/dyld3/${rel}.cpp" -o "$out" 2>"$OUT/dyld_core/${base}.err"; then
+        ok=$((ok + 1))
+        rm -f "$OUT/dyld_core/${base}.err"
+    else
+        fail=$((fail + 1))
+        echo "  gap: $base -- $(grep -m1 'error:' "$OUT/dyld_core/${base}.err")"
+    fi
+done
+# Real SHA-1/256/384 behind corecrypto's real ccdigest_info API -- see
+# dyld_ccdigest_compat.cpp's own header comment.
+out="$OUT/dyld_core/dyld_ccdigest_compat.o"
+if "$CLANGXX" $CXX_FLAGS dyld_ccdigest_compat.cpp -o "$out" 2>"$OUT/dyld_core/dyld_ccdigest_compat.err"; then
+    ok=$((ok + 1))
+    rm -f "$OUT/dyld_core/dyld_ccdigest_compat.err"
+else
+    fail=$((fail + 1))
+    echo "  gap: dyld_ccdigest_compat -- $(grep -m1 'error:' "$OUT/dyld_core/dyld_ccdigest_compat.err")"
+fi
 echo "dyld_core: $ok compiled, $fail gaps (see libc_build/dyld_core/*.err for full detail)"
 if [ "$fail" -ne 0 ]; then
     exit 1
@@ -261,4 +341,4 @@ fi
 rm -f "$OUT/dyld_core.a"
 ar rcs "$OUT/dyld_core.a" "$OUT"/dyld_core/*.o
 echo "wrote $OUT/dyld_core.a -- NOT YET LINKABLE into a real dyld binary"
-echo "(needs real dyld3/{BootArgs,RootsChecker,StringUtils,FileUtils,Closure,ClosureBuilder,MachOFile,MachOAnalyzer,MachOLoaded,SharedCacheRuntime,Tracing,Diagnostics}.cpp -- see this script's header comment and docs/daemon-roadmap.md)"
+echo "(real, confirmed gap: dyld3::Loader doesn't exist anywhere in any released dyld snapshot -- see this script's header comment and docs/daemon-roadmap.md)"
