@@ -133,6 +133,25 @@
 #     build scripts (`tools/userland_staging/build_*.sh`) for these are
 #     being written incrementally, same as every prior entry in this
 #     file -- a pin here does not by itself mean a working build yet.
+#   - llvm-libcxx / llvm-libcxxabi (Phase 6.5 Phase C, 2026-08-25): dyld's
+#     C++ source needs a real libc++/libc++abi (`std::string`,
+#     `std::vector`, `<iostream>`, etc.) to compile at all, and neither is
+#     open-sourced by Apple as a standalone repo for this OS era --
+#     confirmed directly (`git ls-remote` 404s on both
+#     apple-oss-distributions/libcxx and .../libcxxabi; PureDarwin's org
+#     only has `libcppabi`, the C++ ABI/RTTI support library, not the STL
+#     itself). Per this project's source-priority rule (Apple real source
+#     first, real open-source fallback second, custom last resort): the
+#     real fallback here is LLVM upstream's own `libcxx`/`libcxxabi`
+#     (Apache-2.0 w/ LLVM exception) -- the actual codebase Apple's
+#     shipped libc++ is downstream of, just not packaged as its own
+#     apple-oss-distributions repo. Pinned to `llvmorg-11.1.0`, matching
+#     Xcode 12's Apple clang 1200.0.32.2 (~LLVM 11 lineage). Cloned via a
+#     dedicated sparse-checkout block below, NOT the generic per-repo loop
+#     -- `llvm/llvm-project` is a multi-GB monorepo (clang/lld/compiler-rt/
+#     etc. all in one tree); a plain full clone would violate this
+#     project's "small, real, reproducible" convention for no benefit,
+#     since only the `libcxx`/`libcxxabi` subdirectories are needed.
 #
 # Usage: ./setup_third_party.sh [--force]
 set -euo pipefail
@@ -219,5 +238,29 @@ echo "$REPOS" | while IFS='|' read -r name url ref patch; do
         git -C "$dest" am "../../third_party-patches/$patch"
     fi
 done
+
+# llvm-project: sparse-checkout only libcxx/libcxxabi (see the header
+# comment above) -- deliberately NOT in the generic REPOS loop above,
+# since a plain `git clone --branch` of the whole monorepo would pull
+# clang/lld/compiler-rt/every other LLVM subproject along with it.
+LLVM_REF="llvmorg-11.1.0"
+LLVM_DEST="third_party/llvm-project"
+if [ -d "$LLVM_DEST" ]; then
+    if [ "$FORCE" = "1" ]; then
+        echo "+ removing existing $LLVM_DEST (--force)"
+        rm -rf "$LLVM_DEST"
+    else
+        echo "= $LLVM_DEST already exists, skipping (use --force to re-clone)"
+        LLVM_DEST=""
+    fi
+fi
+if [ -n "$LLVM_DEST" ]; then
+    echo "+ sparse-cloning llvm-project @ $LLVM_REF (libcxx/libcxxabi only)"
+    git clone --filter=blob:none --no-checkout --depth 1 --branch "$LLVM_REF" \
+        https://github.com/llvm/llvm-project.git "$LLVM_DEST"
+    git -C "$LLVM_DEST" sparse-checkout init --cone
+    git -C "$LLVM_DEST" sparse-checkout set libcxx libcxxabi
+    git -C "$LLVM_DEST" checkout "$LLVM_REF"
+fi
 
 echo "done -- third_party/ populated. See docs/roadmap.md and README.md for what to build next."

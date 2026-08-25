@@ -66,6 +66,19 @@ struct _malloc_zone_t {
     void *(*valloc)(malloc_zone_t *zone, size_t size);
     void (*free)(malloc_zone_t *zone, void *ptr);
     void *(*realloc)(malloc_zone_t *zone, void *ptr, size_t size);
+    /* Real fields, present purely to keep `memalign` below at the same
+     * real offset the genuine header (third_party/libmalloc/include/
+     * malloc/malloc.h) gives it -- this struct is a partial view (see
+     * comment above), but field layout still has to match exactly past
+     * the point any later field is used. None of these six are
+     * dereferenced by this file. */
+    void (*destroy)(malloc_zone_t *zone);
+    const char *zone_name;
+    unsigned (*batch_malloc)(malloc_zone_t *zone, size_t size, void **results, unsigned num_requested);
+    void (*batch_free)(malloc_zone_t *zone, void **to_be_freed, unsigned num_to_be_freed);
+    void *introspect;
+    unsigned version;
+    void *(*memalign)(malloc_zone_t *zone, size_t alignment, size_t size);
 };
 
 static malloc_zone_t *g_zone = 0;
@@ -155,6 +168,26 @@ void free(void *ptr) {
 void *realloc(void *ptr, size_t size) {
     malloc_zone_t *z = get_zone();
     return z->realloc(z, ptr, size);
+}
+
+/* Real Apple posix_memalign() (src/malloc.c), ported verbatim -- needed by
+ * LLVM libc++abi's C++17 aligned-new support (build_llvm_libcxxabi.sh),
+ * which real Apple malloc.c would normally provide but this project's
+ * custom minimal public-API glue (this file, see build_libmalloc.sh's own
+ * header comment for why malloc.c itself isn't built wholesale) didn't
+ * carry over since nothing needed it until now. Dispatches through the
+ * same real zone vtable every other function in this file already uses. */
+int posix_memalign(void **memptr, size_t alignment, size_t size) {
+    malloc_zone_t *z = get_zone();
+    void *retval = z->memalign(z, alignment, size);
+    if (retval == 0) {
+        if (alignment < sizeof(void *) || 0 != (alignment & (alignment - 1))) {
+            return 22; /* EINVAL */
+        }
+        return 12; /* ENOMEM */
+    }
+    *memptr = retval;
+    return 0;
 }
 
 /* Real BSD extension: realloc() but frees ptr on failure too. */

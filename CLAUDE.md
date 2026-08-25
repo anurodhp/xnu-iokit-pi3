@@ -158,11 +158,17 @@ drifted before.
 ## Working conventions specific to this repo
 
 - **Source priority**: try Apple's real open-source version of a component
-  first (apple-oss-distributions, pinned via `setup_third_party.sh`); fall
-  back to FreeBSD only if Apple's is too complex/closed for the current
-  need; write custom code only as a last resort (e.g. `libc_locale`
-  string/locale stubs, the from-scratch SHA-256/384/512 replacing the
-  corecrypto-kext-dependent implementation).
+  first (apple-oss-distributions, pinned via `setup_third_party.sh`); if
+  Apple never open-sourced it as a standalone repo at all (confirmed via a
+  real `git ls-remote`, not assumed), fall back to another real upstream
+  open-source project Apple's own implementation is downstream of or
+  equivalent to (FreeBSD for BSD userland/libc gaps; LLVM upstream for
+  libc++/libc++abi -- the actual codebase Apple's shipped libc++ is
+  downstream of, just not packaged as its own apple-oss-distributions repo
+  for every OS era, e.g. `llvmorg-11.1.0`'s `libcxx`/`libcxxabi`, pinned
+  2026-08-25 for the dyld port); write custom code only as a last resort
+  (e.g. `libc_locale` string/locale stubs, the from-scratch SHA-256/384/512
+  replacing the corecrypto-kext-dependent implementation).
 - **Adversarial review before commit**: run an adversarial review on
   large/significant changes *before* committing, not after — post-hoc
   reviews in this project's history have caught real bugs (a false-positive

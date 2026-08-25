@@ -150,7 +150,15 @@ fi
 # tiers use, plus -I for libunwind's own src/include (self-contained, no
 # Libc dependency for these two files beyond libc_build_prototypes.h's
 # raw-syscall prototypes pulled in transitively where needed).
+# -funwind-tables added 2026-08-25 (Phase 6.5 Phase C, build_llvm_libcxxabi.sh):
+# real C++ exception propagation needs every frame between a `throw` site
+# and its `catch` to have real compact-unwind info, including library-
+# internal frames like UnwindLevel1.c's own _Unwind_RaiseException -- not
+# just the leaf smoketest frame this file's own earlier comment already
+# covers. Empirically required: LLVM libc++abi's throw/catch smoketest
+# aborted via std::terminate() with this flag only on ITS OWN frame.
 C_FLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -funwind-tables \
     -Wno-nullability-completeness \
     -D_LIBC_NO_FEATURE_VERIFICATION -D_FORTIFY_SOURCE=0 \
     -D_LIBUNWIND_IS_NATIVE_ONLY \
@@ -172,7 +180,7 @@ done
 # _Unwind_RaiseException; the C++ engine files below only implement
 # unw_step()'s frame-walking, never throw/catch themselves).
 CXX_FLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    -std=c++14 -fno-exceptions -fno-rtti -fno-threadsafe-statics \
+    -std=c++14 -fno-exceptions -fno-rtti -fno-threadsafe-statics -funwind-tables \
     -Wno-nullability-completeness -Wno-unused-command-line-argument \
     -D_LIBC_NO_FEATURE_VERIFICATION -D_FORTIFY_SOURCE=0 \
     -D_LIBUNWIND_IS_NATIVE_ONLY \

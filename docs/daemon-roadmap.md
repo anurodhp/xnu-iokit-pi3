@@ -244,30 +244,111 @@ booting real artifacts rather than reading source alone:
   if-built-then-install pattern -- run `/bin/dyld_test_exec` from a real
   shell and check `$? == 42` to reproduce.
 
-### Phase C: the real dyld port -- NOT started
+### Phase C: the real dyld port -- STARTED 2026-08-25
 
-- Real `dyld`'s own source (`apple-oss-distributions/dyld`, tag
-  `dyld-832.7.3`) is already cloned at `third_party/dyld`, matching
-  `setup_third_party.sh`'s pin -- tag-vs-`macos-112`-manifest re-
-  confirmation still outstanding (do that first). Full repo is ~195K
-  LOC, but the on-device runtime (`src/` + `dyld3/` excluding
-  `dyld3/shared-cache/`) is ~53K LOC -- the shared-cache builder (~26K
-  LOC) is host-side tooling for building the OS's shared dyld cache and
-  doesn't apply here (this port has no shared cache; dyld3's on-device
-  closure-builder path, which builds launch closures at process-launch
-  time for dylibs *not* in a shared cache, is real existing Apple
-  functionality for exactly this situation). `libdyld` (the libSystem-
-  side `_dyld_*` shim) lives inside the same repo
-  (`dyld3/libdyldEntryVector.*`), no separate pin needed. `libclosure`
-  (`libclosure-78`) is already pinned and is a listed prerequisite in
-  `build_libc_regex.sh`'s dependency-check pattern -- confirm it's
-  already built before starting.
-- This unlocks, in order: `libdispatch` as a real `.dylib` (Phase 6.6),
-  then CoreFoundation (Phase 9), then everything gated behind either.
-- Given the size (~53K LOC of real Apple C++), treat this as its own
-  multi-session effort, one dyld subsystem at a time with a real
-  incremental build+smoketest per step -- the same methodology as the
-  earlier library-sweep phases, not a single push.
+Real `dyld` source (`apple-oss-distributions/dyld`, tag `dyld-832.7.3`)
+is cloned at `third_party/dyld`, tag-vs-`macos-112`-manifest confirmed
+exact (`git ls-tree macos-112 dyld` == commit `59e07dd...` ==
+`third_party/dyld`'s own HEAD, confirmed via `git rev-parse HEAD`).
+
+**Real re-scoping finding (2026-08-25, from reading dyld's own source, not
+guessed)**: `gUseDyld3` (`dyld3/AllImages.cpp:66`, `src/dyld2.cpp:354`)
+defaults to `false` -- the classic dyld2 `ImageLoader`-based runtime is
+what actually runs unless `DYLD_USE_CLOSURES=1` is explicitly set or a
+shared cache turns it on automatically. This port has no shared cache and
+won't set that env var, so **the real, default runtime path for this
+target is dyld2 (`src/dyld2.cpp` + `src/ImageLoader*.cpp`), not dyld3's
+closure-builder** (`dyld3/ClosureBuilder.cpp`, `dyld3/MachOAnalyzer.cpp`,
+`dyld3/AllImages.cpp`, `dyld3/APIs*.cpp` -- all dyld3-only, not needed for
+the default path). This cuts the realistic target scope from ~53K LOC
+(the full on-device runtime) down to roughly `src/dyld2.cpp` (7163 LOC) +
+`src/ImageLoader*.cpp` (~9.4K LOC across 4 files) + `src/dyld*`
+support files (`dyldInitialization.cpp`, `dyldNew.cpp`,
+`dyldLibSystemGlue.c`, `glue.c`, `dyldExceptions.c`,
+`threadLocalVariables.c`, `dyldLock.cpp`) + whatever subset of shared
+`dyld3::MachOFile`/`MachOLoaded`/`Diagnostics`/`Logging`/`BootArgs`
+parsing utilities dyld2-era code in this version still depends on --
+confirm the exact dependency edges when actually compiling `dyld2.cpp`,
+don't assume from grep alone. `libdyld` (the libSystem-side `_dyld_*`
+shim) lives inside the same repo (`dyld3/libdyldEntryVector.*`), no
+separate pin needed. `libclosure` (`libclosure-78`) is already pinned and
+built.
+
+**Real, larger-than-expected prerequisite found and closed (2026-08-25)**:
+dyld's C++ source needs a working `libc++`/`libc++abi` to compile at all
+(`std::string`, `std::vector`, `<iostream>`, etc. -- confirmed via grep
+before assuming). Neither is open-sourced by Apple as a standalone repo
+for this OS era -- confirmed directly, not assumed: `git ls-remote` 404s
+on both `apple-oss-distributions/libcxx` and `.../libcxxabi`; PureDarwin's
+org only has `libcppabi` (the ABI/RTTI support library, not the STL
+itself). Per this project's source-priority rule, extended this session
+to cover this case (see `CLAUDE.md`): the real fallback is **LLVM
+upstream's own `libcxx`/`libcxxabi`** (Apache-2.0 w/ LLVM exception) --
+the actual codebase Apple's shipped libc++ is downstream of, just not
+packaged as its own apple-oss-distributions repo. Pinned
+`llvmorg-11.1.0` (matching Xcode 12's Apple clang 1200.0.32.2), cloned via
+a dedicated sparse-checkout in `setup_third_party.sh` (`libcxx`/`libcxxabi`
+subdirs only -- `llvm-project` is a multi-GB monorepo, a plain full clone
+would be senseless here).
+
+**`libc++abi` DONE and QEMU-verified (2026-08-25,
+`tools/userland_staging/build_llvm_libcxxabi.sh`)**: all 19 real, unmodified
+`libcxxabi/src/*.cpp` files compile clean (`-std=c++14` -- C++17 mode
+removes `std::unexpected_handler`, which `cxa_exception.h`/`cxa_handlers.h`
+still use; RTTI must stay on, `private_typeinfo.cpp` IS the RTTI
+implementation). Links against this project's own already-real, already-
+built `libunwind.a` (`build_libunwind.sh`) for the underlying `unw_*`/
+`_Unwind_*` engine -- not LLVM's own libunwind subproject, deliberately
+not even cloned, per source-priority (Apple's real libunwind already
+covers this). Real gap found and fixed along the way: this project's
+custom minimal `malloc`/`free`/... dispatcher
+(`tools/userland_staging/libmalloc_dispatch.c`, real Apple `malloc.c`'s
+public-API-glue portion is deliberately not built wholesale, see
+`build_libmalloc.sh`) never had a `posix_memalign()` -- needed by
+libc++abi's C++17 aligned-`operator new` support, which the real headers
+enable unconditionally for an iOS 14.4 deployment target regardless of
+`-std=`. Added as a real, verbatim port of Apple `malloc.c`'s own
+`posix_memalign()` body, dispatching through the same real zone vtable
+(`malloc_zone_t`) every other function in that file already uses --
+required manually extending that file's own partial/offset-preserving
+struct redeclaration up through the real `memalign` field (see that file's
+own comment) since it's a hand-trimmed ABI-sensitive view of the real
+header, not the genuine one.
+
+QEMU-verified real dynamic_cast/RTTI/`operator new`+`delete` all work
+(`libcxxabi_smoketest.macho` -- real `Base`/`Derived` polymorphic
+dynamic_cast, real heap allocation through the real magazine allocator).
+Real, **honestly-scoped, not-yet-closed gap**: an actual `throw`/`catch`
+in the same function does not currently unwind successfully on this
+target's `-nostdlib -static` link -- `libc++abi: terminating with
+uncaught exception of type int` is genuinely printed (proving `cxa_throw`,
+the personality routine, and `cxa_demangle` all really run), but
+`_Unwind_RaiseException`'s phase-1 search never finds the local catch.
+This is a **different, deeper gap** than the already-documented
+`build_libunwind.sh` static-link limitation (that one is ld64 dropping
+`__compact_unwind`/`__unwind_info` entirely for static links with no real
+`__eh_frame` either) -- this smoketest's binary genuinely has real,
+non-empty `__eh_frame` (0x1d0 bytes) and `__gcc_except_tab` (0x24c bytes)
+sections (`otool`-verified), so something in the actual DWARF-CFI parsing/
+evaluation path is still wrong, not yet root-caused further. Not treated
+as a blocker for this pass (see `llvm_libcxxabi_smoketest.cpp`'s own
+header comment for the full writeup and why the smoketest is scoped the
+way it is) -- a real, distinct follow-up for whoever picks up unwinding
+next, worth root-causing before dyld code that actually relies on
+exception-driven error handling (rare in dyld2 itself, which mostly uses
+`Diagnostics`-style error returns, but present in some STL container
+paths).
+
+**Next**: `libcxx` itself (`third_party/llvm-project/libcxx`, ~44
+`src/*.cpp` files / ~15K LOC -- the header tree is template-only, no
+separate compilation needed for most of the STL surface), then attempt
+compiling `src/dyld2.cpp` + `src/ImageLoader*.cpp` for real, tracking real
+gaps the same way every prior tier in this project has. Given the size,
+treat this as its own multi-session effort, one subsystem at a time with
+a real incremental build+smoketest per step -- the same methodology as
+the earlier library-sweep phases, not a single push. This unlocks, in
+order: `libdispatch` as a real `.dylib` (Phase 6.6), then CoreFoundation
+(Phase 9), then everything gated behind either.
 
 **CoreFoundation source options, noted 2026-08-24 (not yet evaluated in
 depth -- flagging for whoever picks up Phase 9), found while a background
