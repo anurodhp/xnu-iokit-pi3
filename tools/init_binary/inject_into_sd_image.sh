@@ -193,6 +193,23 @@ else
     echo "= tools/userland_staging/pthread_smoketest.macho not built -- run tools/userland_staging/build_libpthread.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/dyld_stub.macho ] && [ -f tools/userland_staging/dyld_test_exec.macho ]; then
+    mkdir -p "$MNT/usr/lib" "$MNT/bin"
+    cp tools/userland_staging/dyld_stub.macho "$MNT/usr/lib/dyld"
+    chmod 755 "$MNT/usr/lib/dyld"
+    echo "+ wrote $(wc -c < tools/userland_staging/dyld_stub.macho) bytes to $MNT/usr/lib/dyld"
+    cp tools/userland_staging/dyld_test_exec.macho "$MNT/bin/dyld_test_exec"
+    chmod 755 "$MNT/bin/dyld_test_exec"
+    echo "+ wrote $(wc -c < tools/userland_staging/dyld_test_exec.macho) bytes to $MNT/bin/dyld_test_exec"
+    echo "  (Phase 6.5 Phase B kernel-plumbing proof -- NOT real dyld, see"
+    echo "  tools/userland_staging/dyld_stub_main.c; run /bin/dyld_test_exec from"
+    echo "  the shell and check \$? == 42 -- confirms the kernel's real"
+    echo "  load_dylinker()/LC_LOAD_DYLINKER handoff actually reaches"
+    echo "  /usr/lib/dyld's entry point instead of the exec'd binary's own)"
+else
+    echo "= tools/userland_staging/dyld_stub.macho / dyld_test_exec.macho not built -- run build_dyld_stub.sh + build_dyld_test_exec.sh first if wanted, skipping"
+fi
+
 # Real Phase 4 step 3 "remaining commands" tiers (docs/roadmap.md) --
 # each build_*_cmds.sh script writes one <name>.macho per real command
 # it built; every one of them lands in /bin, matching real BSD/macOS

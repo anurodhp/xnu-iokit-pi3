@@ -163,26 +163,111 @@ clock) without waiting on any of the infrastructure phases below.
 
 ## Phase 6.5 (dyld) -- expanded scope
 
-`docs/roadmap.md` currently carries this as a planning-only placeholder.
-Real scope, now that it's needed for more than its own sake:
+**Started 2026-08-25**, ahead of the "only after Phase 6c" sequencing this
+section used to recommend -- explicit user override, motivated by
+unlocking a future PureDarwin `launchd` port. Phase A and Phase B (below)
+are DONE and QEMU-verified; the real dyld port itself (Phase C) is not
+started -- see that subsection for scope.
 
-- A real `.dylib`-producing link path (this project's toolchain currently
-  only ever produces static Mach-O -- `tools/init_binary/build.py` and
-  `tools/pwtool/build.py` explicitly assert full staticness, `otool -l`
-  zero `LC_LOAD_DYLIB`; that invariant needs a *parallel* dynamic path, not
-  a replacement -- the existing static binaries should keep building
-  static).
-- The kernel `LC_LOAD_DYLINKER`/`execve()` path that hands control to
-  `dyld` before `main()` -- currently unexercised at all (this project's
-  own crt0 comment already flags real `_start()`/`crt.c` as dead code on
-  this static-only target -- see `docs/roadmap.md`'s `bash_syscalls.c`
-  entry).
-- Real `dyld`'s own source (`apple-oss-distributions/dyld` -- not yet
-  fetched/inventoried by this document, do that first) needs the same
-  tag-vs-`macos-112`-manifest confirmation as every other pin before
-  cloning.
+### Phase A + B: DONE 2026-08-25 -- toolchain + kernel plumbing proven
+
+Before starting, the assumption was that both the toolchain's dylib-
+producing link path AND the kernel's `LC_LOAD_DYLINKER` handoff were
+completely unexercised and possibly needed real kernel work. Turned out
+better than expected on both counts, confirmed by actually building and
+booting real artifacts rather than reading source alone:
+
+- **Toolchain**: this project's pinned Xcode-12 `ld64` needs zero special
+  flags to produce real dynamic-linking load commands -- `-dynamiclib
+  -install_name ...` alone gives a real `MH_DYLIB`/`LC_ID_DYLIB`
+  (`tools/userland_staging/build_dylib_smoketest.sh`), and any non-`
+  -static` link with at least one dylib on the command line automatically
+  emits `LC_LOAD_DYLINKER /usr/lib/dyld` + `LC_LOAD_DYLIB`
+  (`build_dyld_test_exec.sh`) -- no `-dylinker`/`-execute` flags needed on
+  that side (those are for building the dylinker binary itself, see
+  below). Existing static scripts (`tools/init_binary/build.py`,
+  `tools/pwtool/build.py`, every other `build_*.sh`) are untouched, per
+  the "parallel path, not a replacement" framing below.
+- **Kernel**: `third_party/xnu-7195/bsd/kern/mach_loader.c`'s
+  `load_dylinker()` is stock, unmodified Apple source and needed *no
+  changes at all* -- confirmed via a real QEMU boot test with a throwaway
+  stand-in dylinker (`tools/userland_staging/build_dyld_stub.sh`, built
+  with `-dylinker -dylinker_install_name /usr/lib/dyld`, real `MH_DYLINKER`)
+  installed at `/usr/lib/dyld` and a real dynamic test executable
+  (`build_dyld_test_exec.sh`) referencing it. The kernel correctly:
+  computes an independent ASLR slide for the dylinker separate from the
+  main binary's own, maps it via the same `parse_machfile()` recursion
+  every other image uses, overwrites the process's thread state with the
+  dylinker's entry point, and reaches real user-mode execution there --
+  verified end to end (`echo $?` after running the test binary from a
+  real login shell returned the stub's own exit code, 42, and its
+  `write()` output appeared on console).
+- **Real first-exercise bug found and fixed (not a kernel bug)**: the
+  first attempt crashed with a userspace `SIGSEGV` at a garbage address
+  and zero console output. Root-caused via three rounds of temporary
+  `printf` diagnostics in `mach_loader.c`/`kern_exec.c`/
+  `bsd/uxkern/ux_exception.c` (added, used, then `git checkout`'d back
+  out -- never committed) down to two real, distinct causes:
+  1. `bsd/kern/kern_exec.c` only calls `exec_copyout_strings()`/
+     `thread_setuserstack()` -- what actually initializes the new
+     thread's `SP` -- when `load_result.unixproc` is true, and
+     `load_dylinker()` does not propagate the dylinker's own `unixproc`
+     onto the shared `result`. The first test executable had no valid
+     `LC_MAIN`/`LC_UNIXTHREAD` of its own (an artifact of linking it
+     without `third_party/Csu`'s startup code), so `unixproc` stayed
+     false and the new thread's `SP` was pure garbage. Fix: give the test
+     executable a real `LC_MAIN` by linking Csu's `start.s`/`crt.c` in
+     after all (its own entry is never actually reached, but the load
+     command's presence is what matters) -- see
+     `build_dyld_test_exec.sh`'s header comment. Real Apple executables
+     never hit this because they always link real crt1-equivalent glue
+     and always carry a valid entry command of their own.
+  2. Whenever `load_result.dynlinker` is true, the kernel unconditionally
+     pushes an extra `mach_header` pointer *below* argc on the new stack
+     -- the real ABI `third_party/dyld/src/dyldStartup.s`'s own
+     `__dyld_start` expects and consumes. `third_party/Csu`'s `start.s`
+     has no idea that slot exists (ordinary static binaries never get
+     it), so reusing it for the throwaway dylinker stub silently misread
+     the `mach_header` pointer as argc, corrupting all downstream pointer
+     arithmetic. Fix: a small custom entry,
+     `tools/userland_staging/dyld_stub_start.s`, that skips the extra
+     slot instead of Csu's start.s (the stub's `main()` never uses
+     argc/argv, so unlike real dyld it doesn't need to actually parse
+     them, just consume the slot).
+- New, additive-only build scripts (`build_dylib_smoketest.sh`,
+  `build_dyld_stub.sh`, `build_dyld_test_exec.sh`, plus
+  `libtest_dylib.c`/`dyld_stub_main.c`/`dyld_stub_start.s`/
+  `dyld_test_exec_main.c` sources) live in `tools/userland_staging/`
+  alongside every other tier. `tools/init_binary/inject_into_sd_image.sh`
+  installs the stub at `/usr/lib/dyld` and the test executable at
+  `/bin/dyld_test_exec` when built, matching every other tier's
+  if-built-then-install pattern -- run `/bin/dyld_test_exec` from a real
+  shell and check `$? == 42` to reproduce.
+
+### Phase C: the real dyld port -- NOT started
+
+- Real `dyld`'s own source (`apple-oss-distributions/dyld`, tag
+  `dyld-832.7.3`) is already cloned at `third_party/dyld`, matching
+  `setup_third_party.sh`'s pin -- tag-vs-`macos-112`-manifest re-
+  confirmation still outstanding (do that first). Full repo is ~195K
+  LOC, but the on-device runtime (`src/` + `dyld3/` excluding
+  `dyld3/shared-cache/`) is ~53K LOC -- the shared-cache builder (~26K
+  LOC) is host-side tooling for building the OS's shared dyld cache and
+  doesn't apply here (this port has no shared cache; dyld3's on-device
+  closure-builder path, which builds launch closures at process-launch
+  time for dylibs *not* in a shared cache, is real existing Apple
+  functionality for exactly this situation). `libdyld` (the libSystem-
+  side `_dyld_*` shim) lives inside the same repo
+  (`dyld3/libdyldEntryVector.*`), no separate pin needed. `libclosure`
+  (`libclosure-78`) is already pinned and is a listed prerequisite in
+  `build_libc_regex.sh`'s dependency-check pattern -- confirm it's
+  already built before starting.
 - This unlocks, in order: `libdispatch` as a real `.dylib` (Phase 6.6),
   then CoreFoundation (Phase 9), then everything gated behind either.
+- Given the size (~53K LOC of real Apple C++), treat this as its own
+  multi-session effort, one dyld subsystem at a time with a real
+  incremental build+smoketest per step -- the same methodology as the
+  earlier library-sweep phases, not a single push.
 
 **CoreFoundation source options, noted 2026-08-24 (not yet evaluated in
 depth -- flagging for whoever picks up Phase 9), found while a background
@@ -210,11 +295,6 @@ script's own header comment)**:
   porting real Apple CF's Mach/ICU/XPC entanglements just to unblock one
   narrow consumer. Not yet built or even trial-compiled here -- a real
   next step, not a conclusion.
-
-Recommend tackling this only after Phase 6c (DHCP/`ping`/`netstat`) and the
-Tier 0 daemons above -- `dyld` is a genuine architecture shift touching the
-kernel's exec path and this project's whole build toolchain, worth doing
-with a stable, well-tested static baseline behind it first.
 
 ## Phase 6.6 (libdispatch) -- expanded scope
 

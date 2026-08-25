@@ -634,12 +634,14 @@ need a real implementation later:
   `third_party/network_cmds/{ping,ping6,netstat,arp,route}.tproj` --
   natural next candidates for basic network usability now that manual
   addressing is the plan.
-- **Phase 6.5 (dyld)**: planning-only placeholder, deliberately deferred
-  until Phase 6 gives it a real concurrent multi-process workload to
-  justify the cost. Needs a real `.dylib`-producing link path and an
-  as-yet-unexercised kernel `LC_LOAD_DYLINKER` path. Expanded scope
-  2026-08-22: this is also the real prerequisite for the whole daemon
-  track below -- see `docs/daemon-roadmap.md`.
+- **Phase 6.5 (dyld)**: started 2026-08-25 (explicit user override of the
+  prior "defer until Phase 6 forces it" sequencing below, motivated by
+  unlocking a future PureDarwin `launchd` port). Phase A (real `.dylib`-
+  producing link path) and Phase B (real kernel `LC_LOAD_DYLINKER`
+  handoff, QEMU-verified for the first time) are DONE -- see
+  `docs/daemon-roadmap.md`'s Phase 6.5 section for the full writeup,
+  including a real first-exercise ABI bug found and fixed along the way.
+  The real ~53K-line dyld-832.7.3 port itself (Phase C) is NOT started.
 - **Phase 6.6 (libdispatch/GCD)**: planning-only placeholder, blocked
   behind 6.5. Even once unblocked, real concurrent `dispatch_async` can't
   exist until real threading does (Phase 7.5's pthread ceiling) -- scope
