@@ -193,7 +193,24 @@ else
     echo "= tools/userland_staging/pthread_smoketest.macho not built -- run tools/userland_staging/build_libpthread.sh first if wanted, skipping"
 fi
 
-if [ -f tools/userland_staging/dyld_stub.macho ] && [ -f tools/userland_staging/dyld_test_exec.macho ]; then
+if [ -f tools/userland_staging/dyld.macho ] && [ -f tools/userland_staging/dyld_test_exec.macho ]; then
+    mkdir -p "$MNT/usr/lib" "$MNT/bin"
+    cp tools/userland_staging/dyld.macho "$MNT/usr/lib/dyld"
+    chmod 755 "$MNT/usr/lib/dyld"
+    echo "+ wrote $(wc -c < tools/userland_staging/dyld.macho) bytes to $MNT/usr/lib/dyld"
+    if [ -f tools/userland_staging/libc_build/libtest.dylib ]; then
+        cp tools/userland_staging/libc_build/libtest.dylib "$MNT/usr/lib/libtest.dylib"
+        chmod 755 "$MNT/usr/lib/libtest.dylib"
+        echo "+ wrote $(wc -c < tools/userland_staging/libc_build/libtest.dylib) bytes to $MNT/usr/lib/libtest.dylib"
+    fi
+    cp tools/userland_staging/dyld_test_exec.macho "$MNT/bin/dyld_test_exec"
+    chmod 755 "$MNT/bin/dyld_test_exec"
+    echo "+ wrote $(wc -c < tools/userland_staging/dyld_test_exec.macho) bytes to $MNT/bin/dyld_test_exec"
+    echo "  (Phase 6.5 Phase C -- REAL dyld-940, see"
+    echo "  tools/userland_staging/build_dyld_core.sh + build_dyld_link.sh;"
+    echo "  run /bin/dyld_test_exec from the shell -- this is the first real"
+    echo "  boot test of an actual dyld binary loading a real dylib)"
+elif [ -f tools/userland_staging/dyld_stub.macho ] && [ -f tools/userland_staging/dyld_test_exec.macho ]; then
     mkdir -p "$MNT/usr/lib" "$MNT/bin"
     cp tools/userland_staging/dyld_stub.macho "$MNT/usr/lib/dyld"
     chmod 755 "$MNT/usr/lib/dyld"
@@ -207,7 +224,7 @@ if [ -f tools/userland_staging/dyld_stub.macho ] && [ -f tools/userland_staging/
     echo "  load_dylinker()/LC_LOAD_DYLINKER handoff actually reaches"
     echo "  /usr/lib/dyld's entry point instead of the exec'd binary's own)"
 else
-    echo "= tools/userland_staging/dyld_stub.macho / dyld_test_exec.macho not built -- run build_dyld_stub.sh + build_dyld_test_exec.sh first if wanted, skipping"
+    echo "= neither tools/userland_staging/dyld.macho nor dyld_stub.macho built -- run build_dyld_link.sh (real dyld) or build_dyld_stub.sh (kernel-plumbing-only proof) + build_dyld_test_exec.sh first if wanted, skipping"
 fi
 
 if [ -f tools/userland_staging/libcxxabi_smoketest.macho ]; then

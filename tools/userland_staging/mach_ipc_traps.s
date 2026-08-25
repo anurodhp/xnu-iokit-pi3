@@ -45,3 +45,22 @@ _host_self_trap:
     mov x16, #-29
     svc #0x80
     ret
+
+// mach_msg_overwrite_trap: trap -32 (kernel_trap(mach_msg_overwrite_trap,-32,8),
+// osfmk/mach/syscall_sw.c) -- added 2026-08-25 for real dyld-940's
+// DyldAPIs.cpp (RemoteNotificationResponder::sendMessage(), the first
+// real consumer of mach_msg_overwrite() this project has had -- see
+// mach_msg_real.c's own header comment). Real signature has 9 C
+// parameters (one more than fits in x0-x7), but per this file's own
+// header comment arm64's kernel_trap macro never reads num_args in the
+// __arm64__ branch -- the caller's own AAPCS64 argument setup (registers
+// x0-x7 plus one stack slot) is already correct before control reaches
+// this trivial stub, so the same unmodified 3-instruction shape applies
+// regardless of argument count.
+.text
+.align 2
+.globl _mach_msg_overwrite_trap
+_mach_msg_overwrite_trap:
+    mov x16, #-32
+    svc #0x80
+    ret

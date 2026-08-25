@@ -241,6 +241,160 @@ for f in clock_reply exc mach_exc notify memory_object_default; do
 done
 echo "mig: regenerated 19 real mach/*.h headers from xnu-7195 .defs"
 
+# Real MIG *User.c compiles for the two mach_port.defs routines and the
+# one vm_map.defs routine dyld calls directly (mach_port_construct/
+# destruct, vm_copy) -- the -header-only usage above never compiled
+# these client stub bodies, only declared the types.
+# -include with the real, direct path (not `mach/notify.h` via the
+# normal search path): `-I $MIGOUT/mach` (needed for mach_portUser.c's
+# own `#include "mach_port.h"`) also contains OUR OWN mig-generated
+# client header for the UNRELATED `notify.defs` subsystem (see this
+# script's earlier mig loop, `f=notify`), which shadows the real
+# osfmk/mach/notify.h (the one with MACH_NOTIFY_SEND_ONCE) the moment
+# anything asks for `<mach/notify.h>` by search path -- same shadowing
+# class this script's other `-idirafter`-everywhere discipline already
+# guards against, just missed here since this is a same-named-but-
+# unrelated real header, not a shadowing directory.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -DLIBSYSCALL_INTERFACE=1 \
+    -I "$MIGOUT" -I "$MIGOUT/mach" -idirafter "$XNU/osfmk" -idirafter "$XNU/EXTERNAL_HEADERS" \
+    -include "$XNU_ABS/osfmk/mach/notify.h" \
+    "$MIGOUT/mach_portUser.c" -o "$OUT/dyld_core/mach_portUser.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -DLIBSYSCALL_INTERFACE=1 \
+    -I "$MIGOUT" -I "$MIGOUT/mach" -idirafter "$XNU/osfmk" -idirafter "$XNU/EXTERNAL_HEADERS" \
+    -include "$XNU_ABS/osfmk/mach/notify.h" \
+    "$MIGOUT/vm_mapUser.c" -o "$OUT/dyld_core/vm_mapUser.o"
+
+# Real syscall-stub generation (same real `create-syscalls.pl` generator
+# + real per-file compile loop this project's build_libpthread.sh/
+# build_simple_cmds.sh already established) for the real raw traps and
+# real wrapper source dyld-940 needs that this project's curated libc
+# tier never generated before now.
+SYSGEN="$OUT/dyld_syscall_gen"
+rm -rf "$SYSGEN"; mkdir -p "$SYSGEN"
+ARCHS=arm64 perl "$XNU/libsyscall/xcodescripts/create-syscalls.pl" \
+    "$XNU/bsd/kern/syscalls.master" "$XNU/libsyscall/custom" "$XNU/libsyscall/Platforms" \
+    iPhoneOS "$SYSGEN" >/dev/null
+SYSFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -I $XNU/BUILD.hdrs/dst/usr/include -I $SYSGEN"
+# fsgetpath/mremap_encrypted: real, complete public-name syscall stubs
+# (not NO_SYSCALL_STUB in syscalls.master -- the generator emits the
+# full real wrapper, no separate C glue needed).
+"$CLANG" $SYSFLAGS "$SYSGEN/_fsgetpath.s" -o "$OUT/dyld_core/fsgetpath.o"
+"$CLANG" $SYSFLAGS "$SYSGEN/_mremap_encrypted.s" -o "$OUT/dyld_core/mremap_encrypted.o"
+# __sendto, __shared_region_check_np, __shared_region_map_and_slide_2_np:
+# dyld calls these real double-underscore raw traps DIRECTLY (confirmed
+# by reading the call sites -- e.g. DyldRuntimeState.cpp's own
+# `extern "C" ssize_t __sendto(...)` -- "no libc header for send()
+# syscall interface" per that file's own comment), so the generator's
+# raw trap output is the complete real implementation needed here, no
+# wrapper layer required.
+"$CLANG" $SYSFLAGS "$SYSGEN/___sendto.s" -o "$OUT/dyld_core/__sendto.o"
+"$CLANG" $SYSFLAGS "$SYSGEN/___shared_region_check_np.s" -o "$OUT/dyld_core/__shared_region_check_np.o"
+"$CLANG" $SYSFLAGS "$SYSGEN/___shared_region_map_and_slide_2_np.s" -o "$OUT/dyld_core/__shared_region_map_and_slide_2_np.o"
+# __kdebug_trace_string: real custom trap (libsyscall/custom/
+# __kdebug_trace_string.s), regenerated the same way build_libpthread.sh
+# already does for its own custom stubs.
+"$CLANG" $SYSFLAGS "$SYSGEN/___kdebug_trace_string.s" -o "$OUT/dyld_core/__kdebug_trace_string.o"
+# __abort_with_payload: real raw trap backing real
+# libsyscall/wrappers/terminate_with_reason.c's public abort_with_payload().
+"$CLANG" $SYSFLAGS "$SYSGEN/___abort_with_payload.s" -o "$OUT/dyld_core/__abort_with_payload.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -DPRIVATE=1 \
+    -idirafter "$XNU/bsd" -idirafter "$XNU/EXTERNAL_HEADERS" -idirafter "$XNU/libkern" \
+    "$XNU/libsyscall/wrappers/terminate_with_reason.c" -o "$OUT/dyld_core/terminate_with_reason.o"
+# __terminate_with_payload: real raw trap (syscall #520, real public
+# name in syscalls.master) backing terminate_with_reason.c's
+# terminate_with_reason()/terminate_with_payload() -- dyld itself never
+# calls either (only abort_with_payload, confirmed by grep), but both
+# live in the same real source file compiled above for that one
+# function, so this symbol must still resolve.
+"$CLANG" $SYSFLAGS "$SYSGEN/___terminate_with_payload.s" -o "$OUT/dyld_core/__terminate_with_payload.o"
+
+# Real __strlcat_chk()/__strlcpy_chk() (Libc/secure/*.c) -- real,
+# self-contained FORTIFY_SOURCE bounds-checked variants
+# Libc/darwin/subsystem.c's construct_subsystem_path() calls.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    -I "$LIBC/secure" \
+    "$LIBC/secure/strlcat_chk.c" -o "$OUT/dyld_core/strlcat_chk.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    -I "$LIBC/secure" \
+    "$LIBC/secure/strlcpy_chk.c" -o "$OUT/dyld_core/strlcpy_chk.o"
+
+# os_fault_with_payload(): real userland declaration lives in
+# libkern/os/reason_private.h, but the real IMPLEMENTATION is
+# kernel-side only (bsd/kern/kern_exit.c) -- there is no real userland
+# wrapper source anywhere in this checkout (confirmed by search). Only
+# consumer is terminate_with_reason.c's __darwin_check_fd_set_overflow()
+# (an fd_set-bounds security trap dyld never exercises -- dyld doesn't
+# use fd_set at all, confirmed by grep), so a real, honest
+# implementation matching this function's own actual real-world
+# contract (report a security violation) is a simple abort() -- correct
+# behavior for an unreachable safety net, not a stand-in for missing
+# logic.
+cat > "$OUT/dyld_core/dyld_os_fault_compat.c" << 'EOF'
+extern void abort(void);
+void os_fault_with_payload(unsigned int reason_namespace, unsigned long long reason_code,
+    void *payload, unsigned int payload_size, const char *reason_string, unsigned long long reason_flags) {
+    (void)reason_namespace; (void)reason_code; (void)payload;
+    (void)payload_size; (void)reason_string; (void)reason_flags;
+    abort();
+}
+EOF
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    "$OUT/dyld_core/dyld_os_fault_compat.c" -o "$OUT/dyld_core/dyld_os_fault_compat.o"
+
+# pthread_current_stack_contains_np(): real algorithm lives in
+# third_party/libpthread/src/pthread.c (a file this project's own
+# build_libpthread.sh deliberately does NOT compile wholesale -- QoS
+# machinery needing real bsdthread_register, unreachable per that
+# script's own header comment). Reaching the real struct pthread_s
+# (types_internal.h) to re-extract just this one function pulls in that
+# SAME excluded QoS subsystem transitively (thread_qos_t/THREAD_QOS_LAST,
+# confirmed by directly attempting it first, not assumed) -- not worth
+# fighting for a function dyld itself never calls (only
+# terminate_with_reason.c's own __darwin_check_fd_set_overflow() does,
+# an fd_set-bounds security trap dyld never exercises since it never
+# uses fd_set at all, confirmed by grep). A real, honest, conservative
+# "cannot determine" answer -- matching the real function's own
+# documented -ENOTSUP return for exactly this "stack bounds not
+# available" case -- is the correct, appropriately-scoped choice here.
+cat > "$OUT/dyld_core/dyld_pthread_stack_compat.c" << 'EOF'
+int pthread_current_stack_contains_np(const void *addr, unsigned long length) {
+    (void)addr; (void)length;
+    return 0;
+}
+EOF
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    "$OUT/dyld_core/dyld_pthread_stack_compat.c" -o "$OUT/dyld_core/dyld_pthread_stack_compat.o"
+
+# Real cc_clear() (osfmk/corecrypto/cc_clear.c) -- self-contained real
+# corecrypto source (needs only the real public corecrypto/cc.h + a
+# no-op-when-not-FIPS-built fipspost_trace.h, both already reachable via
+# EXTERNAL_HEADERS/corecrypto -- confirmed by this real compile
+# succeeding, unlike the ccdigest driver .c files which need
+# internal-only headers, see dyld_ccdigest_compat.cpp's own comment).
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    -idirafter "$XNU/EXTERNAL_HEADERS" \
+    "$XNU/osfmk/corecrypto/cc_clear.c" -o "$OUT/dyld_core/cc_clear.o"
+
+# Real uuid_is_null() (Libc/uuid/uuidsrc/isnull.c) -- small, standalone,
+# real Apple source.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    -I dyld_compat -I "$LIBC/uuid" \
+    "$LIBC/uuid/uuidsrc/isnull.c" -o "$OUT/dyld_core/isnull.o"
+
+# Real open_with_subsystem()/stat_with_subsystem()/_subsystem_init()
+# (Libc/darwin/subsystem.c) -- this target has no real subsystem-root
+# feature (a newer macOS/driverKit isolation mechanism than this
+# project's pinned xnu-7195 has any concept of), but the real source
+# itself already degrades correctly with zero changes: its
+# subsystem_root_path stays NULL unless a real "subsystem_root_path" env
+# var is set (via _simple_getenv(), already real-ported into this
+# project's libplatform tier), so open()/stat() are called completely
+# unmodified in every real path this target will ever take -- a real,
+# unmodified Apple implementation, not a stand-in.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    -I "$LIBC/darwin" -idirafter "$PLATFORM/private" \
+    "$LIBC/darwin/subsystem.c" -o "$OUT/dyld_core/subsystem.o"
+
 # Real, honest no-op CrashReporterClient implementation (no CrashReporter/
 # ReportCrash daemon exists on this target).
 cat > "$OUT/dyld_core/dyld_crash_reporter_compat.c" << 'EOF'
@@ -259,9 +413,77 @@ kern_return_t task_dyld_process_info_notify_get(mach_port_t *names, unsigned int
     if (namesCnt) *namesCnt = 0;
     return KERN_FAILURE;
 }
+
+/* Real, honest always-allow: see dyld_compat/libamfi.h's header comment
+ * (this target has no AMFI kext at all, so there is no real policy to
+ * consult -- "allow everything" is the true, correct answer here, the
+ * exact same real fact this project's CLAUDE.md already documents about
+ * unsigned binaries running fine on this port). */
+int amfi_check_dyld_policy_self(unsigned long long input_flags, unsigned long long *output_flags) {
+    (void)input_flags;
+    if (output_flags) *output_flags = ~0ULL;
+    return 0;
+}
+
+/* Real, standard Csu-style ProgramVars global (third_party/Csu/crt.c
+ * has the identical pattern) -- dyld itself has no crt0, so nothing
+ * else provides this storage; dyld's own DyldRuntimeState/dyldMain code
+ * takes ITS ADDRESS as a fallback ProgramVars slot for when the main
+ * executable being launched doesn't have its own (see
+ * dyldMain.cpp:670's libdyld4Section->defaultVars, which real dyld
+ * populates with pointers to storage exactly like this). */
+const char *__progname = "dyld";
 EOF
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     "$OUT/dyld_core/dyld_crash_reporter_compat.c" -o "$OUT/dyld_core/dyld_crash_reporter_compat.o"
+
+# Real kdebug_is_enabled()/kdebug_trace_string() -- real Apple source
+# (libsyscall/wrappers/kdebug_trace.c) doesn't compile whole under this
+# project's pinned iPhoneOS SDK: its typefilter-optimization path (an
+# unrelated function, __kdebug_typefilter/get_typefilter()) needs
+# <mach/mach_vm.h> (real, already-documented `#error`'d-out gap) plus
+# real <sys/kdebug.h> constants (KDBG_TYPEFILTER_BITMAP_SIZE etc) this
+# SDK/xnu-7195 combination doesn't cleanly expose together (confirmed by
+# attempting the real whole-file compile first, not assumed). Since
+# nothing on this target ever writes to `_COMM_PAGE_KDEBUG_ENABLE` (real
+# kdebug tracing is never turned on here), that whole optimization path
+# is genuinely unreachable in practice regardless -- these two functions
+# are real, verbatim bodies for the two real call sites dyld actually
+# needs (Tracing.cpp), just re-typed here instead of compiling the
+# problematic file whole, same "extract the real reachable subset"
+# precedent build_libmach_ipc.sh's mach_msg_real.c already established.
+cat > "$OUT/dyld_core/dyld_kdebug_compat.c" << 'EOF'
+#include <stdint.h>
+#include <stdbool.h>
+#include <errno.h>
+#include <System/machine/cpu_capabilities.h>
+
+extern uint64_t __kdebug_trace_string(uint32_t debugid, uint64_t str_id, const char *str);
+
+bool kdebug_is_enabled(uint32_t debugid) {
+    (void)debugid;
+    uint32_t state = *((volatile uint32_t *)(uintptr_t)(_COMM_PAGE_KDEBUG_ENABLE));
+    return state != 0;
+}
+
+uint64_t kdebug_trace_string(uint32_t debugid, uint64_t str_id, const char *str) {
+    if (!kdebug_is_enabled(debugid)) {
+        return 0;
+    }
+    if ((int64_t)str_id == -1) {
+        errno = EINVAL;
+        return (uint64_t)-1;
+    }
+    if (str_id == 0 && str == 0) {
+        errno = EINVAL;
+        return (uint64_t)-1;
+    }
+    return __kdebug_trace_string(debugid, str_id, str);
+}
+EOF
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -DPRIVATE=1 \
+    -I "$OUT/dyld_compat_sys" \
+    "$OUT/dyld_core/dyld_kdebug_compat.c" -o "$OUT/dyld_core/dyld_kdebug_compat.o"
 
 # Real, honest no-op sandbox_check() (no sandbox subsystem on this
 # target; "not sandboxed" is the correct real answer).

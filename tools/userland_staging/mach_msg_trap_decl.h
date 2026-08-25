@@ -36,4 +36,19 @@ extern mach_msg_return_t mach_msg_trap(
 	mach_msg_timeout_t timeout,
 	mach_port_name_t notify);
 
+/* Real signature, copied verbatim from the same osfmk/mach/mach_traps.h
+ * spot as mach_msg_trap() above (added 2026-08-25 for real dyld-940's
+ * DyldAPIs.cpp, the first real consumer of mach_msg_overwrite() this
+ * project has had -- see mach_msg_real.c's own header comment). */
+extern mach_msg_return_t mach_msg_overwrite_trap(
+	mach_msg_header_t *msg,
+	mach_msg_option_t option,
+	mach_msg_size_t send_size,
+	mach_msg_size_t rcv_size,
+	mach_port_name_t rcv_name,
+	mach_msg_timeout_t timeout,
+	mach_msg_priority_t priority,
+	mach_msg_header_t *rcv_msg,
+	mach_msg_size_t rcv_limit);
+
 #endif

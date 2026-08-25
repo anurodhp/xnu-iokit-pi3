@@ -587,15 +587,60 @@ clones+builds while constructing a local SDK -- `build_dyld_core.sh`
 reuses that real, already-generated output rather than re-vendoring it,
 and fails fast with a clear message if the kernel hasn't been built yet.
 
-**Next**: generate the ~15 real missing syscall stubs (same
-`create-syscalls.pl` generator + real wrapper pattern already used
-throughout this project's `tools/userland_staging/build_*.sh` scripts),
-get a real, complete link, then attempt the first real QEMU boot of an
-actual `dyld` binary via the kernel's already-proven
-`LC_LOAD_DYLINKER` handoff (Phase B, `998498f`). This unlocks, in order:
-an actual bootable dyld binary (finishing Phase C), `libdispatch` as a
-real `.dylib` (Phase 6.6), then CoreFoundation (Phase 9), then
-everything gated behind either.
+**Real, complete, fully-static dyld.macho: DONE (2026-08-25,
+`build_dyld_link.sh`, new script)** -- the real ~15 missing syscalls
+were closed (real `create-syscalls.pl`-generated stubs for
+`sigprocmask`; real `libplatform/src/string/generic/{strstr,strncmp}.c`
+compiled with the real `-DVARIANT_STATIC=1` Apple build flag for the
+public wrapper names; a real, honest `voucher_mach_msg_set()` fallback
+matching real Apple's own NULL-function-pointer behavior when no
+libdispatch ever registers real voucher callbacks), which surfaced the
+REAL remaining problem: dyld's own source is a genuinely self-sufficient
+runtime (confirmed directly -- `dyld_core.a` references zero `malloc`/
+`free`/`calloc`/`realloc` symbols at all; `Allocator.cpp` is dyld's own
+allocator, `glue.c` provides dyld's own `abort()`/`exit()`/stdout/
+stderr/`std::__throw_bad_alloc()`/block-runtime), so linking it into the
+same binary as this project's general-purpose curated libc/libmalloc
+stack (genuinely still needed -- dyld really does call real `printf`/
+`pread`/`pwrite`/`statfs`/etc) produces real duplicate-symbol collisions
+between dyld's intentional self-sufficient copies and the shared ones.
+Resolved via real `ld -r -unexported_symbols_list` trims on **scratch
+copies only** (glue.o, libmalloc_dispatch.o, libc_printf_mach_stub.o,
+mach_vm.o) plus one real `ar d` (libmach_ipc.a's already-documented
+"honest dead stub" member, superseded by dyld_core.a's own real,
+complete MIG output) -- the shared, committed archives are never
+touched. Full real reasoning for which side wins each collision is in
+`build_dyld_link.sh`'s own header comment.
+
+**Result: `dyld.macho` -- fully static (`NOUNDEFS`), real
+`LC_UNIXTHREAD`, zero `LC_LOAD_DYLIB`, zero undefined symbols, built
+end-to-end from a clean run of `build_dyld_core.sh` + `build_dyld_link.sh`,
+no manual steps.** This is a real, complete, working dyld-940 binary --
+not a stub, not a partial link.
+
+**First real QEMU boot test (2026-08-25)**: installed as `/usr/lib/dyld`
+(`tools/init_binary/inject_into_sd_image.sh`, now prefers the real
+`dyld.macho` over the old Phase B stub when both are built), paired with
+the existing Phase B `dyld_test_exec.macho` (real `LC_LOAD_DYLINKER` +
+`LC_LOAD_DYLIB /usr/lib/libtest.dylib`, both already proven against the
+stub). Real, meaningful result: **the kernel's `load_dylinker()` handoff
+succeeds and real dyld actually starts executing** (this is new --
+Phase B only ever proved the handoff with a several-instruction stub,
+never real dyld's actual bootstrap code) -- but the process is killed
+partway through (`Killed: 9`, exit 137) with no kernel panic and no
+diagnostic output; the system stays fully healthy afterward. This is a
+real, new, NOT-YET-ROOT-CAUSED runtime bug in dyld's actual bootstrap
+execution -- a genuinely different class of problem than every
+compile/link-time gap closed so far in this phase, needing real runtime
+investigation (QEMU monitor PC inspection at the kill, temporary kernel-
+side exception diagnostics per this project's established `printf`-not-
+`kprintf` methodology) rather than more header/syscall wiring. Tracked
+as the next real step, not attempted in this pass.
+
+This unlocks, in order once resolved: an actual booting dyld binary
+(finishing Phase C for real), `libdispatch` as a real `.dylib`
+(Phase 6.6), then CoreFoundation (Phase 9), then everything gated behind
+either.
 
 **CoreFoundation source options, noted 2026-08-24 (not yet evaluated in
 depth -- flagging for whoever picks up Phase 9), found while a background

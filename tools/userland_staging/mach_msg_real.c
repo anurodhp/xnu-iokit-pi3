@@ -286,3 +286,56 @@ mach_msg_destroy(mach_msg_header_t *msg)
 		}
 	}
 }
+
+/* Real, unmodified, verbatim mach_msg_overwrite() body (mach_msg.c
+ * lines 148-196 in this pinned xnu-7195 checkout) -- added 2026-08-25
+ * for real dyld-940's DyldAPIs.cpp (RemoteNotificationResponder::
+ * sendMessage() calls this directly, real external-debugger-notify
+ * machinery), the first real consumer this project has ever had for it
+ * (this file's own original header comment explains why it was left
+ * out initially: no MIG client stub this project had at the time
+ * called it). Same real `mach_msg_overwrite_trap()` primitive
+ * mach_msg() above already uses, declared by the same
+ * mach_msg_trap_decl.h -include this file's build step already applies. */
+mach_msg_return_t
+mach_msg_overwrite(msg, option, send_size, rcv_limit, rcv_name, timeout,
+    notify, rcv_msg, rcv_scatter_size)
+mach_msg_header_t *msg;
+mach_msg_option_t option;
+mach_msg_size_t send_size;
+mach_msg_size_t rcv_limit;
+mach_port_t rcv_name;
+mach_msg_timeout_t timeout;
+mach_port_t notify;
+mach_msg_header_t *rcv_msg;
+mach_msg_size_t rcv_scatter_size;
+{
+	mach_msg_return_t mr;
+
+	mr = mach_msg_overwrite_trap(msg, option & ~LIBMACH_OPTIONS,
+	    send_size, rcv_limit, rcv_name,
+	    timeout, notify, rcv_msg, rcv_scatter_size);
+	if (mr == MACH_MSG_SUCCESS) {
+		return MACH_MSG_SUCCESS;
+	}
+
+	if ((option & MACH_SEND_INTERRUPT) == 0) {
+		while (mr == MACH_SEND_INTERRUPTED) {
+			mr = mach_msg_overwrite_trap(msg,
+			    option & ~LIBMACH_OPTIONS,
+			    send_size, rcv_limit, rcv_name,
+			    timeout, notify, rcv_msg, rcv_scatter_size);
+		}
+	}
+
+	if ((option & MACH_RCV_INTERRUPT) == 0) {
+		while (mr == MACH_RCV_INTERRUPTED) {
+			mr = mach_msg_overwrite_trap(msg,
+			    option & ~(LIBMACH_OPTIONS | MACH_SEND_MSG),
+			    0, rcv_limit, rcv_name,
+			    timeout, notify, rcv_msg, rcv_scatter_size);
+		}
+	}
+
+	return mr;
+}
