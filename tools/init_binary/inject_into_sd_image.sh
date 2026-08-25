@@ -128,6 +128,19 @@ else
     echo "= tools/userland_staging/ifconfig.macho not built -- run build_ifconfig.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/ping.macho ]; then
+    mkdir -p "$MNT/sbin"
+    cp tools/userland_staging/ping.macho "$MNT/sbin/ping"
+    chmod 755 "$MNT/sbin/ping"
+    echo "+ wrote $(wc -c < tools/userland_staging/ping.macho) bytes to $MNT/sbin/ping"
+    echo "  (real, unmodified Apple network_cmds ping -- Phase 6c, see"
+    echo "  tools/userland_staging/build_ping.sh; numeric-address-only in"
+    echo "  practice -- gethostbyname2()/gethostbyaddr() honestly degrade,"
+    echo "  no resolver daemon on this target yet)"
+else
+    echo "= tools/userland_staging/ping.macho not built -- run build_ping.sh first if wanted, skipping"
+fi
+
 # cron.macho/crontab.macho intentionally NOT installed here (2026-08-22).
 # Both build real (tools/userland_staging/build_cron.sh still produces
 # working, fully-static Mach-O binaries, and can be run/inspected on its
