@@ -81,7 +81,7 @@ for f in "$OUT/dyld_mig/mach/task.h" "$OUT/dyld_compat_derived/dyld_priv.h" \
         exit 1
     fi
 done
-for a in libc_gen libc_string libc_stdio libc_printf libpthread libmalloc libcxx libcxxabi \
+for a in libc_gen libc_string libc_stdio libc_printf libcxx libcxxabi \
          libunwind libcopyfile libremovefile libresolv; do
     if [ ! -f "$OUT/$a.a" ]; then
         echo "error: $OUT/$a.a not found -- run its build_$a.sh first" >&2
@@ -200,48 +200,22 @@ mkdir -p "$SCRATCH"
 cp "$OUT/libunwind.a" "$SCRATCH/libunwind_scratch.a"
 ar d "$SCRATCH/libunwind_scratch.a" libunwind_dyld_shim.o
 
-# Real, separate collision: libmalloc.a's own libmalloc_dispatch.o
-# carries stale hollow stand-ins for __platform_memset/
-# _dyld_get_image_slide (added back when this project's libmalloc port
-# needed SOME definition and neither real libplatform nor real
-# dyld/libdyld existed yet). Now that both real, correct implementations
-# exist (libsystem_platform.dylib's real __platform_memset, linked
-# below; libdyldGlue.o's real _dyld_get_image_slide), hide
-# libmalloc_dispatch.o's stale copies on a scratch copy -- never the
-# shared, committed libmalloc.a, which other binaries still build
-# against successfully as-is.
-mkdir -p "$SCRATCH/extracted"
-(cd "$SCRATCH/extracted" && ar x "../../libmalloc.a" libmalloc_dispatch.o)
-cat > "$SCRATCH/unexp_malloc_dispatch.txt" << 'EOF'
-__platform_memset
-__dyld_get_image_slide
-EOF
-LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
-"$LD" -r -arch arm64 -unexported_symbols_list "$SCRATCH/unexp_malloc_dispatch.txt" \
-    "$SCRATCH/extracted/libmalloc_dispatch.o" -o "$SCRATCH/libmalloc_dispatch_trimmed.o"
-cp "$OUT/libmalloc.a" "$SCRATCH/libmalloc_scratch.a"
-ar d "$SCRATCH/libmalloc_scratch.a" libmalloc_dispatch.o
-ar r "$SCRATCH/libmalloc_scratch.a" "$SCRATCH/libmalloc_dispatch_trimmed.o"
-
-# First static-to-dylib migration step (docs/daemon-roadmap.md's
-# "Static-vs-dylib architecture debt" section): the real Mach-bootstrap/
-# VM-trap layer (mach_init.c/mach_vm.c/mig_reply_port.c/
-# init_cpu_capabilities.c/libmalloc_vm_traps.s/libmalloc_vm_mig_stubs.c)
-# now lives in a real, separate build_libsystem_kernel.sh dylib instead
-# of a private static copy bundled into libmalloc_scratch.a -- this is
-# exactly the duplicated-mach_task_self_ bug class fixed in "Phase D:
-# CLOSED for real" above, closed properly this time by sharing ONE real
-# image instead of hand-patching each private copy. Removed here (not
-# just hidden -- these real object files now live in
-# libsystem_kernel.dylib, this scratch copy would otherwise define them
-# twice) rather than left in for other, still-fully-static consumers of
-# the shared, committed libmalloc.a to keep using unchanged.
-if [ ! -f "$OUT/system/libsystem_kernel.dylib" ]; then
-    echo "error: $OUT/system/libsystem_kernel.dylib not found -- run build_libsystem_kernel.sh first" >&2
+# libmalloc.a/libpthread.a and the whole libmalloc_dispatch.o
+# trim-and-rebuild dance that used to live here are gone as of static-
+# to-dylib migration step 3 (docs/daemon-roadmap.md): real
+# libsystem_malloc.dylib/libsystem_pthread.dylib below instead. That
+# trim dance existed only to resolve a STATIC-ARCHIVE-flattening
+# collision (libmalloc_dispatch.o's stale __platform_memset/
+# _dyld_get_image_slide stand-ins vs the real implementations linked
+# alongside it in the same flat archive) -- real dylibs don't have this
+# problem at all (two-level namespace symbol resolution is bound per
+# reference at each CONSUMER's own link time, not flattened into one
+# shared symbol table the way `ar`-combined archives work), so there is
+# nothing left to trim.
+if [ ! -f "$OUT/system/libsystem_kernel.dylib" ] || [ ! -f "$OUT/system/libsystem_malloc.dylib" ] || [ ! -f "$OUT/system/libsystem_pthread.dylib" ]; then
+    echo "error: libsystem_kernel.dylib / libsystem_malloc.dylib / libsystem_pthread.dylib not found -- run build_libsystem_kernel.sh, build_libsystem_malloc.sh, and build_libsystem_pthread.sh first" >&2
     exit 1
 fi
-ar d "$SCRATCH/libmalloc_scratch.a" mach_init.o mach_vm.o mig_reply_port.o \
-    init_cpu_capabilities.o libmalloc_vm_traps.o libmalloc_vm_mig_stubs.o
 
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libdyld.dylib"
@@ -256,11 +230,11 @@ rm -f "$OUT/system/libdyld.dylib"
     "$OUT/libdyld/cxa_finalize_ranges_compat.o" "$OUT/libdyld/vproc_compat.o" \
     "$OUT/libdyld/compat_misc.o" \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_blocks.dylib" \
+    "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" \
     "$OUT/libcxx.a" "$OUT/libcxxabi.a" "$SCRATCH/libunwind_scratch.a" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libcxx_locale_for_stdio_scratch.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/libc_printf.a" "$OUT/libc_string.a" \
     "$OUT/libcxx_tsd_shim_bootstrap_compat.o" \
-    "$OUT/libpthread.a" "$SCRATCH/libmalloc_scratch.a" \
     "$OUT/libcopyfile.a" "$OUT/libremovefile.a" "$OUT/libresolv.a" \
     "$RTLIB" \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \

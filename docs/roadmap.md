@@ -664,11 +664,14 @@ need a real implementation later:
   Apple's actual modular architecture -- a real migration effort, per
   explicit user direction ("do 2 library at a time and finish all") to
   stop building new static-archive-plus-shim code and instead finish
-  this migration. Step 1 (`libsystem_kernel.dylib`) and step 2
-  (`libsystem_platform.dylib` + `libsystem_blocks.dylib`) DONE and
-  QEMU-verified same day -- step 2's own audit found a SECOND real
-  duplicate-global-state bug (`cerror_stub.c`'s single-global `errno`,
-  same shape as `mach_task_self_`), fixed the same way. See
+  this migration. Steps 1-3 DONE and QEMU-verified same day:
+  `libsystem_kernel.dylib`; `libsystem_platform.dylib` +
+  `libsystem_blocks.dylib`; `libsystem_malloc.dylib` +
+  `libsystem_pthread.dylib`. Each step's own audit found a real
+  duplicate-global-state bug before it could cause a crash --
+  `errno` (step 2), then the single most serious one yet: `libmalloc`'s
+  heap-zone pointer and `libpthread`'s thread registry (step 3), both
+  real silent-corruption risk had they stayed duplicated per-dylib. See
   `docs/daemon-roadmap.md`'s "Static-to-dylib migration" sections for
   what moved, what's left, and next-step candidates.
 - **Phase 6.6 (libdispatch/GCD)**: planning-only placeholder, blocked

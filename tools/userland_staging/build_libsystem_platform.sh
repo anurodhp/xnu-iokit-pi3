@@ -56,7 +56,7 @@ fi
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness -Wno-availability -Wno-deprecated-declarations \
     -D__API_AVAILABLE_PLATFORM_bridgeos(x)=ios,introduced=x \
-    -DPRIVATE=1 -DSWITCH_OPTION_OSLOCK_DEPRESS=4 -DSWITCH_OPTION_OSLOCK_WAIT=5 \
+    -DPRIVATE=1 -DSWITCH_OPTION_OSLOCK_DEPRESS=4 -DSWITCH_OPTION_OSLOCK_WAIT=5 -DLONG_BIT=64 \
     -I $PLATFORM/internal -I $PLATFORM/private -I $PLATFORM/include -I $PLATFORM/src \
     -I $PLATFORM/src/os/resolver \
     -I $PTHREAD/include -I $PTHREAD/private \
@@ -68,7 +68,8 @@ ok=0
 skip=0
 for f in "$PLATFORM/src/os/lock.c" "$PLATFORM/src/os/atomic.c" "$PLATFORM/src/atomics/arm64/OSAtomic.c" \
          "$PLATFORM/src/os/alloc_once.c" "$PLATFORM/src/string/generic/bzero.c" "$PLATFORM/src/string/generic/memset_pattern.c" \
-         "$PLATFORM/src/string/generic/memmove.c"; do
+         "$PLATFORM/src/string/generic/memmove.c" "$PLATFORM/src/string/generic/strcmp.c" \
+         "$PLATFORM/src/string/generic/strlen.c" "$PLATFORM/src/string/generic/strchr.c"; do
     base=$(basename "$f" .c)
     out="$OUT/libsystem_platform/apple_platform/${base}.o"
     if "$CLANG" $CFLAGS "$f" -o "$out" 2>"$OUT/libsystem_platform/apple_platform/${base}.err"; then

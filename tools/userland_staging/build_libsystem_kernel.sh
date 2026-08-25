@@ -114,6 +114,23 @@ fi
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     cerror_stub.c -o "$OUT/libsystem_kernel/cerror_stub.o"
 
+# Real gap found batch 2 (static-to-dylib migration step 3, docs/
+# daemon-roadmap.md): real dyld's own _dyld_initializer() unconditionally
+# calls pthread_atfork() to register its own fork handlers, which real,
+# unmodified pthread_atfork.c needs a real `_os_alloc_once_table`
+# instance for (libplatform/private/os/alloc_once_impl.h's own extern
+# array every os_alloc_once() consumer expects SOMETHING to define).
+# Real Apple source for exactly this -- third_party/xnu-7195/libsyscall/
+# os/alloc_once.c, NOT the same file as libplatform/src/os/alloc_once.c
+# already in libsystem_platform.dylib (that one only has the
+# _os_alloc_once()/_os_alloc_slow() logic; this one's own comment says
+# "Keep in sync with libplatform alloc_once.c" -- it's real Apple's
+# actual separate table-definition half of the same subsystem, split
+# across the two repos) -- compiled here as real, unmodified source, not
+# a hand-rolled stand-in.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    "$XNU/libsyscall/os/alloc_once.c" -o "$OUT/libsystem_kernel/os_alloc_once_table.o"
+
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libsystem_kernel.dylib"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
@@ -123,7 +140,7 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/mach_vm.o" "$OUT/libsystem_kernel/mach_init.o" "$OUT/libsystem_kernel/mig_reply_port.o" \
     "$OUT/libsystem_kernel/init_cpu_capabilities.o" "$OUT/libsystem_kernel/libmalloc_vm_traps.o" \
     "$OUT/libsystem_kernel/libmalloc_vm_mig_stubs.o" "$OUT/libsystem_kernel/compat.o" \
-    "$OUT/libsystem_kernel/cerror_stub.o"
+    "$OUT/libsystem_kernel/cerror_stub.o" "$OUT/libsystem_kernel/os_alloc_once_table.o"
 
 echo "wrote $OUT/system/libsystem_kernel.dylib"
 otool -hv "$OUT/system/libsystem_kernel.dylib" | grep -q " DYLIB " || {

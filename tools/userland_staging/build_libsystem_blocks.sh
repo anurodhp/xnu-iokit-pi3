@@ -38,6 +38,10 @@ if [ ! -f "$OUT/system/libsystem_platform.dylib" ]; then
     echo "error: $OUT/system/libsystem_platform.dylib not found -- run build_libsystem_platform.sh first (real _platform_memmove dependency)" >&2
     exit 1
 fi
+if [ ! -f "$OUT/system/libsystem_malloc.dylib" ]; then
+    echo "error: $OUT/system/libsystem_malloc.dylib not found -- run build_libsystem_malloc.sh first (real malloc/free dependency, see below)" >&2
+    exit 1
+fi
 
 CFLAGS_COMMON="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -I $CLOSURE -I $PLATFORM/private -I $OUT/compat_include"
@@ -48,27 +52,19 @@ CFLAGS_COMMON="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno
     '-Dos_assert(x)=((x)?(void)0:__builtin_trap())' \
     "$CLOSURE/runtime.cpp" -o "$OUT/libsystem_blocks/runtime.o"
 
-# Real gap, temporary: _malloc/_free (real Block_copy/Block_release
-# heap-promotion calls) aren't resolvable against a real dylib yet --
-# libmalloc.a isn't migrated to libsystem_malloc.dylib until batch 2
-# (see docs/daemon-roadmap.md). Marked as an intentional dynamic lookup
-# (same real -Wl,-U mechanism _dyld_initializer already uses) rather than
-# bundling yet another private static copy -- resolves via dyld's flat-
-# namespace search against whichever loaded image currently exports
-# them (today: libdyld.dylib/libSystem.B.dylib's own still-static
-# libmalloc.a). Batch 2 should replace this with a real LC_LOAD_DYLIB
-# dependency on libsystem_malloc.dylib once it exists, the same upgrade
-# build_libsystem_kernel.sh's own consumers got from -Wl,-U to a real
-# dependency in step 1.
+# _malloc/_free (real Block_copy/Block_release heap-promotion calls):
+# real LC_LOAD_DYLIB dependency on libsystem_malloc.dylib as of
+# migration step 3 (docs/daemon-roadmap.md) -- this used to be a
+# temporary -Wl,-U flat-namespace lookup, upgraded now that
+# libsystem_malloc.dylib is real.
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libsystem_blocks.dylib"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
     -install_name /usr/lib/system/libsystem_blocks.dylib \
     -Wl,-fixup_chains \
-    -Wl,-U,_malloc -Wl,-U,_free \
     -o "$OUT/system/libsystem_blocks.dylib" \
     "$OUT/libsystem_blocks/data.o" "$OUT/libsystem_blocks/runtime.o" \
-    "$OUT/system/libsystem_platform.dylib"
+    "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_malloc.dylib"
 
 echo "wrote $OUT/system/libsystem_blocks.dylib"
 otool -hv "$OUT/system/libsystem_blocks.dylib" | grep -q " DYLIB " || {

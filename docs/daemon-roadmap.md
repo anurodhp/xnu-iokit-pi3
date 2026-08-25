@@ -1158,23 +1158,131 @@ in the same test run also unaffected (reached `Welcome, root.` and a
 working prompt before the `dyld_test_exec` invocation, same as every
 prior pass).
 
-**Next candidates for step 3** (in progress): `libmalloc`/`libpthread`
-as real dylibs -- would also let `libsystem_blocks.dylib`'s temporary
-`-Wl,-U,_malloc`/`-Wl,-U,_free` above become a real dependency. The BSD
-syscall surface (would retire the remaining scattered per-consumer
-syscall-stub files -- `iokit_trap.s`, `libunwind_sched_yield.s`,
+### Static-to-dylib migration, step 3: `libsystem_malloc.dylib` +
+### `libsystem_pthread.dylib` -- DONE 2026-08-25, QEMU-verified
+
+Same day, continuing the batch-of-2 pace (user directive: "do 2 library
+at a time and finish all"). **The most serious instance of the
+duplicate-global-state bug class found in this whole migration --
+real, silent heap-corruption risk, not just a wrong-value bug like
+`mach_task_self_`/`errno` were.**
+
+`libmalloc_dispatch.c`'s `static malloc_zone_t *g_zone` is the live heap
+zone every `malloc`/`free`/`realloc` call in this port goes through
+(`create_scalable_zone()` runs once, lazily, the first time `get_zone()`
+sees `g_zone == NULL`). Until `build_libsystem_malloc.sh`,
+`libdyld.dylib` and `libSystem.B.dylib` EACH bundled their own private
+static copy of the entire magazine allocator, including their own
+separate `g_zone` -- meaning a pointer `malloc`'d by code executing in
+one dylib and `free`'d by code executing in the other would be
+operating on a completely different heap's metadata. Fixed the same way
+as `mach_task_self_`: one real, shared `libsystem_malloc.dylib` (real
+Apple's own architecture), extracting the already-built, already-
+verified member objects out of `libc_build/libmalloc.a` (`ar x`, same
+approach as `libsystem_kernel.dylib`) rather than the 6 objects already
+migrated to `libsystem_kernel.dylib` in step 1 or the 4 generic string
+primitives now in `libsystem_platform.dylib` (added this step:
+`strcmp.c`/`strlen.c`/`strchr.c`, needing a `-DLONG_BIT=64` flag
+`strlen.c` specifically requires and the other three didn't -- found by
+just trying it and reading the real compiler error, not guessed). Real
+UNIX2003/cancelable-variant `-Wl,-alias` flags (`_kill`, `_kdebug_trace`,
+`_mprotect$UNIX2003`, etc) had to be re-applied at this dylib's own link
+line -- real dylib symbol resolution doesn't flatten across image
+boundaries the way `ar`-combined static archives did, so each dylib now
+needs its own copy of whichever aliases its own real source calls.
+`getenv`/`getprogname`/`isatty` resolve via a temporary `-Wl,-U` (libc
+isn't migrated yet) -- flagged in that script's own comment as a
+follow-up once it is. The static-archive-flattening trim dance
+`build_libdyld.sh`/`build_libsystem.sh` used to need for
+`libmalloc_dispatch.o`'s stale `__platform_memset`/`_dyld_get_image_slide`
+stand-ins is gone entirely, not just moved -- real dylibs don't have that
+collision class at all (see `build_libsystem_malloc.sh`'s own comment).
+
+`libsystem_pthread.dylib`, same real bug, arguably *more* central:
+`_pthread_head`/`_pthread_list_lock` (the real, process-wide linked list
+of every live `pthread_t`) and `_main_thread`/`_main_thread_ptr` are
+plain BSS globals with the identical shape. Two private per-dylib copies
+meant a thread `pthread_create()`d from code in one dylib would be
+completely invisible to the other dylib's own copy of the thread
+registry. This was never caught by this project's existing
+`pthread_create()`/contended-mutex QEMU verification (see project
+memory) because that test ran inside a single, fully static binary
+(pre-dyld) -- a single image can't hit this duplication by construction,
+so it's a real gap only this specific migration could have found.
+
+One real, honest gap found and closed while building this dylib, not
+guessed around: real dyld's own `_dyld_initializer()` unconditionally
+calls `pthread_atfork()` to register its own fork handlers. First
+attempt excluded `pthread_atfork.o` entirely (its real
+`_pthread_atfork()` needs a real `_os_alloc_once_table` instance nothing
+in this project's build ever defined, and nothing in the old fully-static
+world ever pulled that member out of the archive either) -- turned out to
+be a real, live gap, not a safe skip, the moment this dylib was actually
+linked against `libdyld.dylib`. Fixed at the source of the gap: real,
+unmodified Apple source for the missing table
+(`third_party/xnu-7195/libsyscall/os/alloc_once.c` -- a *different* file
+from `libplatform/src/os/alloc_once.c` already in
+`libsystem_platform.dylib`; that file's own comment says "Keep in sync
+with libplatform alloc_once.c", real Apple's own definition split across
+the two repos) is now built into `libsystem_kernel.dylib`. A second,
+smaller real gap surfaced right after: `pthread_atfork.c`'s child-side
+handler calls two real `pthread.c` functions
+(`__pthread_bsdthread_init`/`__pthread_main_thread_postfork_init`) this
+project's `build_libpthread.sh` deliberately never compiles (real
+pthread.c is out of scope, ported piecemeal elsewhere instead). Both are
+only reachable from the child side of an actual `fork()` inside a
+pthread-using process -- this project's only `fork()` caller is
+`tools/init_binary/init.c`'s PID-1, fully static, no pthread/dyld
+involvement at all -- so a small, honestly-documented no-op compat file
+(`libsystem_pthread_atfork_compat.c`) stands in; a real fork()-from-a-
+dylib-process consumer would need real `pthread.c` ported first.
+`libsystem_blocks.dylib`'s temporary `-Wl,-U,_malloc`/`-Wl,-U,_free`
+from step 2 is now a real `LC_LOAD_DYLIB` dependency on
+`libsystem_malloc.dylib`, as flagged.
+
+`build_libdyld.sh`/`build_libsystem.sh`: `libmalloc.a`/`libpthread.a`
+and the entire `libmalloc_dispatch.o` trim-and-rebuild dance removed
+from both scripts' dependency checks and link lines; real
+`LC_LOAD_DYLIB`s on the two new dylibs instead. The shared, committed
+`libmalloc.a`/`libpthread.a` archives themselves are untouched -- every
+other still-fully-static consumer (bash, ls, cron, etc) keeps building
+against them unchanged, and was never exposed to either duplication bug
+in the first place (one process, one image, one heap/one thread
+registry, by construction).
+
+**QEMU-verified**: `dyld_test_exec` still runs its own `main()` and
+exits with `EXITCODE:1`, no crash, now loading 8 real dylibs total
+(`libtest.dylib`, `libdyld.dylib`, `libSystem.B.dylib`,
+`libsystem_kernel.dylib`, `libsystem_platform.dylib`,
+`libsystem_blocks.dylib`, `libsystem_malloc.dylib`,
+`libsystem_pthread.dylib`). Full boot-to-login-shell sequence in the
+same test run also unaffected. A pre-existing, unrelated fragility was
+noticed (not fixed, out of scope) while rebuilding from scratch:
+`build_libpthread.sh`'s own `pthread_smoketest.macho` link step fails
+with several undefined symbols (`_getenv`/`_getkill`/etc) when run in
+certain rebuild orderings -- happens AFTER `ar rcs "$OUT/libpthread.a"`
+already succeeds, so `libpthread.a` itself is unaffected and this
+migration's own scripts never hit it, but it's a real, separate
+build-script ordering fragility someone should eventually chase down.
+
+**Next candidates for step 4**: the BSD syscall surface (would retire
+the remaining scattered per-consumer syscall-stub files -- `iokit_trap.s`,
 `notify_mig_special_reply_port_trap.s`, `mach_port_extra_traps.s`,
 `mach_ipc_traps.s` -- confirmed via `grep -rl "svc #0x80"` across
 `tools/userland_staging/*.s`, not yet audited individually for which
-specific consumers still need each one) is a separate, later candidate,
-lower priority since no active bug points at it yet the way
-`mach_task_self_`/`errno` did. Whoever continues this should re-run that
-same `grep -rl "svc #0x80" *.s` scan first -- it's the fastest way to
-re-derive the current scattered-trap-file inventory rather than trusting
-this list to stay current, and should re-audit each new library for the
-same duplicate-global-state risk before assuming "just relink it as a
-dylib" is safe (two real instances of that exact bug found so far, both
-by deliberately checking for it first).
+specific consumers still need each one; `libunwind_sched_yield.s` is now
+also duplicated into `libsystem_pthread.dylib`, real but redundant, not
+a correctness risk), or `libc_string`/`libc_stdio`/`libc_gen`/`libc_printf`
+as real dylibs next (getenv/getprogname/isatty's `-Wl,-U` in
+`libsystem_malloc.dylib` would become real dependencies then too).
+Whoever continues this should re-run that same `grep -rl "svc #0x80"
+*.s` scan first -- it's the fastest way to re-derive the current
+scattered-trap-file inventory rather than trusting this list to stay
+current, and should re-audit each new library for the same duplicate-
+global-state risk before assuming "just relink it as a dylib" is safe
+(three real instances of that exact bug found so far -- `mach_task_self_`,
+`errno`, `g_zone`/the pthread registry -- all by deliberately checking
+for it first, not by waiting for a crash).
 
 **CoreFoundation source options, noted 2026-08-24 (not yet evaluated in
 depth -- flagging for whoever picks up Phase 9), found while a background

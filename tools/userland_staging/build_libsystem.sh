@@ -35,7 +35,7 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     echo "error: Xcode-12.app not found at $XCODE12 (see tools/build_kexts.sh for the same dependency)" >&2
     exit 1
 fi
-for a in libc_gen libc_string libc_stdio libc_printf libpthread libmalloc \
+for a in libc_gen libc_string libc_stdio libc_printf \
          libcxx libcxxabi libunwind libcopyfile libremovefile libresolv; do
     if [ ! -f "$OUT/$a.a" ]; then
         echo "error: $OUT/$a.a not found -- run its build_$a.sh first" >&2
@@ -91,33 +91,16 @@ void *dladdr(const void *addr, void *info) {
 EOF
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c "$SCRATCH/dyld_unwind_shim_compat.c" -o "$SCRATCH/dyld_unwind_shim_compat.o"
 
-# Unlike build_libdyld.sh, this dylib links no libdyldGlue.o -- there is
-# no better real implementation of _dyld_get_image_slide to prefer here,
-# so only __platform_memset (real conflict with libsystem_platform.dylib's
-# own, linked below) is hidden; libmalloc_dispatch.o's own
-# _dyld_get_image_slide stays as the sole, real provider.
-mkdir -p "$SCRATCH/extracted"
-(cd "$SCRATCH/extracted" && ar x "../../libmalloc.a" libmalloc_dispatch.o)
-cat > "$SCRATCH/unexp_malloc_dispatch.txt" << 'EOF'
-__platform_memset
-EOF
-"$LD" -r -arch arm64 -unexported_symbols_list "$SCRATCH/unexp_malloc_dispatch.txt" \
-    "$SCRATCH/extracted/libmalloc_dispatch.o" -o "$SCRATCH/libmalloc_dispatch_trimmed.o"
-cp "$OUT/libmalloc.a" "$SCRATCH/libmalloc_scratch.a"
-ar d "$SCRATCH/libmalloc_scratch.a" libmalloc_dispatch.o
-ar r "$SCRATCH/libmalloc_scratch.a" "$SCRATCH/libmalloc_dispatch_trimmed.o"
-
-# Same static-to-dylib migration step as build_libdyld.sh (see that
-# script's own comment): the Mach-bootstrap/VM-trap layer now lives in
-# real, separate libsystem_kernel.dylib, shared with libdyld.dylib,
-# instead of each dylib bundling its own private (and, for
-# mach_task_self_, independently-never-initialized) static copy.
-if [ ! -f "$OUT/system/libsystem_kernel.dylib" ]; then
-    echo "error: $OUT/system/libsystem_kernel.dylib not found -- run build_libsystem_kernel.sh first" >&2
+# libmalloc.a/libpthread.a and the libmalloc_dispatch.o trim-and-rebuild
+# dance that used to live here are gone as of static-to-dylib migration
+# step 3 (docs/daemon-roadmap.md) -- real libsystem_malloc.dylib/
+# libsystem_pthread.dylib below instead. See build_libdyld.sh's own
+# comment for why the trim dance isn't needed at all for real dylibs
+# (only ever fixed a static-archive-flattening collision).
+if [ ! -f "$OUT/system/libsystem_kernel.dylib" ] || [ ! -f "$OUT/system/libsystem_malloc.dylib" ] || [ ! -f "$OUT/system/libsystem_pthread.dylib" ]; then
+    echo "error: libsystem_kernel.dylib / libsystem_malloc.dylib / libsystem_pthread.dylib not found -- run build_libsystem_kernel.sh, build_libsystem_malloc.sh, and build_libsystem_pthread.sh first" >&2
     exit 1
 fi
-ar d "$SCRATCH/libmalloc_scratch.a" mach_init.o mach_vm.o mig_reply_port.o \
-    init_cpu_capabilities.o libmalloc_vm_traps.o libmalloc_vm_mig_stubs.o
 
 # Real global storage only this dylib needs (see that file's own
 # comment) -- libdyld.dylib already provides it itself.
@@ -146,11 +129,11 @@ rm -f "$OUT/system/libSystem.B.dylib"
     "$OUT/libsystem/dyld_initializer_compat.o" \
     "$OUT/libdyld/compat_misc.o" \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_blocks.dylib" \
+    "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" \
     "$OUT/libcxx.a" "$OUT/libcxxabi.a" "$SCRATCH/libunwind_scratch.a" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libcxx_locale_for_stdio_scratch.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/libc_printf.a" "$OUT/libc_string.a" \
     "$OUT/libcxx_tsd_shim_bootstrap_compat.o" \
-    "$OUT/libpthread.a" "$SCRATCH/libmalloc_scratch.a" \
     "$OUT/libcopyfile.a" "$OUT/libremovefile.a" "$OUT/libresolv.a" \
     "$RTLIB" \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
