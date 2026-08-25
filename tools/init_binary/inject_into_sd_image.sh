@@ -210,6 +210,29 @@ else
     echo "= tools/userland_staging/dyld_stub.macho / dyld_test_exec.macho not built -- run build_dyld_stub.sh + build_dyld_test_exec.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/libcxxabi_smoketest.macho ]; then
+    mkdir -p "$MNT/bin"
+    cp tools/userland_staging/libcxxabi_smoketest.macho "$MNT/bin/libcxxabi_smoketest"
+    chmod 755 "$MNT/bin/libcxxabi_smoketest"
+    echo "+ wrote $(wc -c < tools/userland_staging/libcxxabi_smoketest.macho) bytes to $MNT/bin/libcxxabi_smoketest"
+    echo "  (real LLVM libc++abi smoketest -- dynamic_cast/RTTI/operator"
+    echo "  new+delete OK; real throw/catch reported non-fatally, see"
+    echo "  tools/userland_staging/llvm_libcxxabi_smoketest.cpp)"
+else
+    echo "= tools/userland_staging/libcxxabi_smoketest.macho not built -- run tools/userland_staging/build_llvm_libcxxabi.sh first if wanted, skipping"
+fi
+
+if [ -f tools/userland_staging/libcxx_smoketest.macho ]; then
+    mkdir -p "$MNT/bin"
+    cp tools/userland_staging/libcxx_smoketest.macho "$MNT/bin/libcxx_smoketest"
+    chmod 755 "$MNT/bin/libcxx_smoketest"
+    echo "+ wrote $(wc -c < tools/userland_staging/libcxx_smoketest.macho) bytes to $MNT/bin/libcxx_smoketest"
+    echo "  (real LLVM libc++ smoketest -- std::vector/sort/string/"
+    echo "  shared_ptr, see tools/userland_staging/llvm_libcxx_smoketest.cpp)"
+else
+    echo "= tools/userland_staging/libcxx_smoketest.macho not built -- run tools/userland_staging/build_llvm_libcxx.sh first if wanted, skipping"
+fi
+
 # Real Phase 4 step 3 "remaining commands" tiers (docs/roadmap.md) --
 # each build_*_cmds.sh script writes one <name>.macho per real command
 # it built; every one of them lands in /bin, matching real BSD/macOS

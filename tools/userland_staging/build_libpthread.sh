@@ -302,7 +302,8 @@ echo "apple_pthread: $ok compiled, $skip skipped"
 # instead of the corresponding real pthread.c code.
 for f in pthread_main_thread_bootstrap pthread_bsdthread_create_syscall \
          pthread_tsd_platform_bootstrap pthread_psynch_syscalls \
-         pthread_compat_extras pthread_abort_with_reason_compat; do
+         pthread_compat_extras pthread_abort_with_reason_compat \
+         pthread_guard_compat; do
     $CLANG $CFLAGS "${f}.c" -o "$OUT/${f}.o"
 done
 
@@ -338,6 +339,14 @@ $CLANG $SYSFLAGS "$SYSGEN/___pthread_fchdir.s" -o "$OUT/pthread___pthread_fchdir
 # tier doesn't share an object directory with that one).
 $CLANG $SYSFLAGS "$SYSGEN/___mmap.s" -o "$OUT/pthread___mmap.o"
 $CLANG $SYSFLAGS "$SYSGEN/___munmap.s" -o "$OUT/pthread___munmap.o"
+# __ulock_wait2 (syscall #544, cross-checked against syscalls.master) -
+# real trap pthread_cond.c's __pthread_ulock_cond_wait() already calls
+# (the newer 5-argument ulock_wait variant with a `value2` field) but
+# this tier never actually compiled+archived before now - a real,
+# pre-existing gap (not a regression), found while porting LLVM libc++
+# (build_llvm_libcxx.sh's smoketest pulls pthread_cond.o transitively via
+# cxa_guard.cpp's __libcpp_condvar_wait).
+$CLANG $SYSFLAGS "$SYSGEN/___ulock_wait2.s" -o "$OUT/pthread___ulock_wait2.o"
 
 # Real mmap(2)/munmap(2) (simple_cmds_mmap_compat.c - real Apple
 # semantics, see that file's own header) - pthread_create()'s real
@@ -364,9 +373,11 @@ ar rcs "$OUT/libpthread.a" \
     "$OUT/pthread_main_thread_bootstrap.o" "$OUT/pthread_bsdthread_create_syscall.o" \
     "$OUT/pthread_tsd_platform_bootstrap.o" "$OUT/pthread_psynch_syscalls.o" \
     "$OUT/pthread_compat_extras.o" "$OUT/pthread_abort_with_reason_compat.o" \
+    "$OUT/pthread_guard_compat.o" \
     "$OUT/pthread_simple_getenv.o" "$OUT/pthread_platform_memcmp.o" \
     "$OUT/pthread_gettimeofday.o" "$OUT/pthread___pthread_chdir.o" "$OUT/pthread___pthread_fchdir.o" \
-    "$OUT/pthread_mmap_compat.o" "$OUT/pthread___mmap.o" "$OUT/pthread___munmap.o"
+    "$OUT/pthread_mmap_compat.o" "$OUT/pthread___mmap.o" "$OUT/pthread___munmap.o" \
+    "$OUT/pthread___ulock_wait2.o"
 echo "wrote $OUT/libpthread.a"
 
 # Real archive-member removal, not a hack: retires build_libmalloc.sh's

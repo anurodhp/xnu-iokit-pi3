@@ -339,16 +339,84 @@ exception-driven error handling (rare in dyld2 itself, which mostly uses
 `Diagnostics`-style error returns, but present in some STL container
 paths).
 
-**Next**: `libcxx` itself (`third_party/llvm-project/libcxx`, ~44
-`src/*.cpp` files / ~15K LOC -- the header tree is template-only, no
-separate compilation needed for most of the STL surface), then attempt
-compiling `src/dyld2.cpp` + `src/ImageLoader*.cpp` for real, tracking real
-gaps the same way every prior tier in this project has. Given the size,
-treat this as its own multi-session effort, one subsystem at a time with
-a real incremental build+smoketest per step -- the same methodology as
-the earlier library-sweep phases, not a single push. This unlocks, in
-order: `libdispatch` as a real `.dylib` (Phase 6.6), then CoreFoundation
-(Phase 9), then everything gated behind either.
+**libcxx: DONE, QEMU-verified (2026-08-25,
+`tools/userland_staging/build_llvm_libcxx.sh`)**: all 36 real,
+unmodified top-level `libcxx/src/*.cpp` files this project's target class
+needs (matches `CMakeLists.txt`'s own non-Windows/non-Solaris file list
+exactly) compile clean with the same `-std=c++14`/RTTI-on/
+`-funwind-tables` recipe as libc++abi, plus `-DLIBCXX_BUILDING_LIBCXXABI`
+(routes `exception.cpp`/`new.cpp` to defer to real libc++abi's
+`cxa_default_handlers.o`/`cxa_handlers.o` instead of defining duplicate
+`std::terminate`/`set_new_handler`/etc themselves). Explicitly out of
+scope, matching this phase's own dyld2-vs-dyld3 shape of real, documented
+gap rather than papered-over one: `std::filesystem`
+(`filesystem/*.cpp`) and `experimental/memory_resource.cpp` -- dyld2
+doesn't use either.
+
+Three real, narrow gaps found and closed while linking the first
+consumer that actually touches `std::string`/`std::shared_ptr` (none of
+libc++abi's own smoketest exercised these):
+- `strtoll`/`strtoul`/`strtoull` (real FreeBSD source,
+  `third_party/Libc/stdlib/FreeBSD`) needed the same xlocale-adjacent
+  include recipe `build_libc_locale.sh` already worked out for
+  `strtol.c` -- that tier just never attempted these three siblings.
+  Bundled straight into `libcxx.a` alongside a real, narrowly-scoped
+  `wcstod`/`wcstof`/`wcstold` wrapper (`libcxx_wcstof_compat.c`) that
+  converts the (always-ASCII) numeric prefix and delegates to the
+  already-real gdtoa `strtod`/`strtof`/`strtold` -- real Apple/FreeBSD
+  source for these three specifically needs `_simple.h`, missing from
+  this checkout entirely (same already-documented gap
+  `build_libc_locale.sh` itself skips these files for).
+- `dlopen`/`dlsym`: only referenced by `refstring.h`'s optional
+  libstdc++-COW-string interop probe; a real, correct "not available"
+  answer on a target with no dyld at this tier (`libcxx_dlfcn_stub.c`).
+- A genuine new duplicate-symbol collision: this is the first consumer
+  to link both real `libpthread.a` (libc++abi's `cxa_exception_storage.o`
+  needs real `pthread_key_create` for its thread-local exception-globals
+  storage) AND `libc_locale_for_stdio.a` (needed for `libc_printf.a`'s
+  wide-`printf` `mbrtowc_l`/`wcrtomb_l`) at the same time --
+  `libc_locale_for_stdio.a`'s own now-superseded `pthread_tsd_shim.o`
+  still defines `pthread_key_init_np`, colliding with real
+  `libpthread.a(pthread_tsd.o)`. Same class of duplicate
+  `pthread_tsd_platform_bootstrap.c` already documents and
+  `build_libpthread.sh` already fixed once for `libmalloc.a` via `ar d`
+  -- applied the identical fix to a **local scratch copy** of
+  `libc_locale_for_stdio.a` (never the shared, committed archive; other
+  consumers still need that member until the broader tier reconciliation
+  that file's header comment flags as separate work actually happens),
+  plus a tiny real no-op `pthread_tsd_shim_bootstrap()` compat
+  (`libcxx_tsd_shim_bootstrap_compat.c`) for the one other symbol that
+  member provided -- correct because the smoketest now calls the real
+  `pthread_main_thread_bootstrap()` first, which already does the actual
+  TPIDRRO_EL0 work idempotently.
+- Separately, closed two small **pre-existing, real gaps in the already-
+  committed `libpthread.a` tier itself** (`build_libpthread.sh`), found
+  because this was the first consumer to actually need them:
+  `___ulock_wait2` (syscall #544, real trap already *generated* by the
+  Perl syscall-stub generator this script already runs, just never
+  compiled+archived) and `pthread_mach_thread_np`/`pthread_testcancel`
+  (`pthread_guard_compat.c` -- real, narrowly-scoped implementations for
+  exactly libc++abi's `cxa_guard.cpp` call pattern, not full ports of the
+  deliberately-excluded `pthread.c`/`pthread_cancelable.c`; see that
+  file's own header comment for why each is correct as written, not a
+  stand-in).
+
+Real smoketest (`llvm_libcxx_smoketest.cpp`): `std::vector`+`std::sort`,
+`std::string` concatenation, `std::shared_ptr` (`make_shared`, copy,
+`use_count`) -- all QEMU-confirmed working (`libcxx_smoketest.macho`,
+exit code 0). Both this and `libcxxabi_smoketest.macho` are now injected
+by `tools/init_binary/inject_into_sd_image.sh` (previously ad hoc/
+undocumented for the libc++abi one -- fixed to follow this project's
+"every built artifact needs a reproducing script" rule for real).
+
+**Next**: attempt compiling `src/dyld2.cpp` + `src/ImageLoader*.cpp` for
+real, tracking real gaps the same way every prior tier in this project
+has. Given the size, treat this as its own multi-session effort, one
+subsystem at a time with a real incremental build+smoketest per step --
+the same methodology as the earlier library-sweep phases, not a single
+push. This unlocks, in order: `libdispatch` as a real `.dylib`
+(Phase 6.6), then CoreFoundation (Phase 9), then everything gated behind
+either.
 
 **CoreFoundation source options, noted 2026-08-24 (not yet evaluated in
 depth -- flagging for whoever picks up Phase 9), found while a background
