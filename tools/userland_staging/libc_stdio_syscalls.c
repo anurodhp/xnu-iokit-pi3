@@ -59,19 +59,41 @@ off_t lseek(int fd, off_t offset, int whence) {
  * _open() already uses for its O_CREAT-conditional mode argument. */
 #define SYS_dup2  90
 #define SYS_fcntl 92
-#define F_SETFL   4
 
 int _dup2(int from, int to) {
     return (int)syscall3(SYS_dup2, from, to, 0);
 }
 
+/* REAL BUG found+fixed 2026-08-25 debugging real dyld-940's dylib loader:
+ * this used to only read the vararg for a hardcoded list of "known"
+ * arg-taking cmds (originally just F_SETFL; a first attempt widened it to
+ * F_GETPATH/F_GETPATH_NOFIRMLINK, then immediately hit the identical bug
+ * again on F_CHECK_LV=98, which real dyld's Loader.cpp calls
+ * unconditionally on every loaded Mach-O, signed or not
+ * <rdar://problem/41015217>) -- every cmd not on the list silently got 0
+ * for its arg instead of the caller's real pointer. For F_GETPATH this
+ * meant the kernel's real, unmodified F_GETPATH handler
+ * (bsd/kern/kern_descrip.c) correctly computed the full path internally
+ * (confirmed via a temporary kernel diagnostic) but copyout()'d it to
+ * userspace address 0 (EFAULT, silently ignored by dyld's void-returning
+ * getpath()); for F_CHECK_LV it meant the kernel's copyin() of the
+ * fchecklv struct got address 0 and failed, making dyld treat every
+ * dylib as failing library validation.
+ *
+ * Real fix: stop hand-maintaining a whitelist of "commands that need a
+ * vararg" -- always read and forward it. This is safe on this ABI: a
+ * caller that genuinely only passes 2 arguments (e.g.
+ * third_party/Libc/stdio/FreeBSD/fdopen.c's real `_fcntl(fp->_file,
+ * F_GETFL)`) simply leaves x2/arg3 holding whatever was already there:
+ * real kernel fcntl handlers for arg-less commands (F_GETFL among them)
+ * never read `argp` at all, so passing them stray garbage is provably
+ * harmless -- confirmed by reading every case in kern_descrip.c's real,
+ * unmodified fcntl() implementation. This closes the whole bug class
+ * instead of re-discovering it one new fcntl command at a time. */
 int _fcntl(int fd, int cmd, ...) {
-    long arg = 0;
-    if (cmd == F_SETFL) {
-        __builtin_va_list ap;
-        __builtin_va_start(ap, cmd);
-        arg = __builtin_va_arg(ap, long);
-        __builtin_va_end(ap);
-    }
+    __builtin_va_list ap;
+    __builtin_va_start(ap, cmd);
+    long arg = __builtin_va_arg(ap, long);
+    __builtin_va_end(ap);
     return (int)syscall3(SYS_fcntl, fd, cmd, arg);
 }

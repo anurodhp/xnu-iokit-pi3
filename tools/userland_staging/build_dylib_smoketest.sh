@@ -29,7 +29,19 @@ fi
 # crash this fixed (EXC_BAD_ACCESS, fault address 0x10, in real dyld's
 # JustInTimeLoader bind/fixup code against the older LC_DYLD_INFO_ONLY
 # bind-opcode format ld64 emits by default).
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib \
+#
+# -nostdlib: real bug found+fixed 2026-08-25 -- without this, ld64's
+# default (non-static) dylib link auto-adds a real LC_LOAD_DYLIB on
+# /usr/lib/libSystem.B.dylib (confirmed via otool -l), which this
+# project doesn't have yet (Phase 6.5 Phase D territory, a much larger,
+# separate port -- see CLAUDE.md's own dyld-vs-libSystem architecture
+# note). libtest_dylib.c calls zero real Libc functions, so it never
+# needed that dependency in the first place; -nostdlib drops it so real
+# dyld's own dependency-loading path has nothing left to resolve,
+# letting the Phase 6.5 Phase C kernel-handoff/dyld-bootstrap test
+# actually run dyld_test_exec's real main() to completion instead of
+# stopping at "Library not loaded: /usr/lib/libSystem.B.dylib".
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
     -install_name /usr/lib/libtest.dylib \
     -Wl,-fixup_chains \
     -o "$OUT/libtest.dylib" libtest_dylib.c

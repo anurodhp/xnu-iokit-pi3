@@ -208,7 +208,26 @@ int open(const char *path, int flags, ...) {
     return _open(path, flags, mode);
 }
 
-int fcntl(int fd, int cmd, long arg) {
+/* REAL BUG found+fixed 2026-08-25 debugging real dyld-940's F_CHECK_LV
+ * call: this public fcntl() was declared NON-variadic (fixed `long arg`
+ * parameter) while every real caller compiles against the actual SDK's
+ * <fcntl.h>, which declares the real POSIX `int fcntl(int, int, ...)` --
+ * variadic. Apple's real arm64 ABI passes variadic call-site arguments on
+ * the STACK, not in registers, so a caller believing it's calling a
+ * variadic function (like dyld's `::fcntl(fd, F_CHECK_LV, &checkInfo)`)
+ * pushes the third argument onto the stack, while this NON-variadic
+ * definition read it out of register x2 instead -- garbage every time
+ * (confirmed: the kernel received argp equal to the cmd value itself, not
+ * the real pointer, via a temporary kern_descrip.c diagnostic). Fixed to
+ * genuinely match the real, variadic signature -- same
+ * read-if-present/forward pattern as this file's own open() above and
+ * libc_stdio_syscalls.c's _fcntl(), and safe for the same reason: kernel
+ * fcntl handlers for arg-less commands never read argp at all. */
+int fcntl(int fd, int cmd, ...) {
+    __builtin_va_list ap;
+    __builtin_va_start(ap, cmd);
+    long arg = __builtin_va_arg(ap, long);
+    __builtin_va_end(ap);
     return _fcntl(fd, cmd, arg);
 }
 
