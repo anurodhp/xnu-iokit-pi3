@@ -188,14 +188,6 @@ PLATFORM_CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -f
 "$CLANG" $PLATFORM_CFLAGS "$PLATFORM/src/string/generic/bzero.c" -o "$OUT/libdyld/bzero.o"
 "$CLANG" $PLATFORM_CFLAGS "$PLATFORM/src/string/generic/memset_pattern.c" -o "$OUT/libdyld/memset_pattern.o"
 
-# Real gap: see libdyld_mach_init_compat.c's own comment. libdyld.dylib's
-# own private static copy of mach_init.c (bundled in via libmalloc_scratch.a
-# below) never gets its mach_task_self_ initialized otherwise -- the first
-# real call into os_alloc_once's mach_vm_map() reads MACH_PORT_NULL and
-# fails.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    libdyld_mach_init_compat.c -o "$OUT/libdyld/mach_init_compat.o"
-
 echo "libdyld: $ok compiled, $fail gaps (see $OUT/libdyld/*.err for full detail)"
 if [ "$fail" -ne 0 ]; then
     exit 1
@@ -242,6 +234,26 @@ cp "$OUT/libmalloc.a" "$SCRATCH/libmalloc_scratch.a"
 ar d "$SCRATCH/libmalloc_scratch.a" libmalloc_dispatch.o
 ar r "$SCRATCH/libmalloc_scratch.a" "$SCRATCH/libmalloc_dispatch_trimmed.o"
 
+# First static-to-dylib migration step (docs/daemon-roadmap.md's
+# "Static-vs-dylib architecture debt" section): the real Mach-bootstrap/
+# VM-trap layer (mach_init.c/mach_vm.c/mig_reply_port.c/
+# init_cpu_capabilities.c/libmalloc_vm_traps.s/libmalloc_vm_mig_stubs.c)
+# now lives in a real, separate build_libsystem_kernel.sh dylib instead
+# of a private static copy bundled into libmalloc_scratch.a -- this is
+# exactly the duplicated-mach_task_self_ bug class fixed in "Phase D:
+# CLOSED for real" above, closed properly this time by sharing ONE real
+# image instead of hand-patching each private copy. Removed here (not
+# just hidden -- these real object files now live in
+# libsystem_kernel.dylib, this scratch copy would otherwise define them
+# twice) rather than left in for other, still-fully-static consumers of
+# the shared, committed libmalloc.a to keep using unchanged.
+if [ ! -f "$OUT/system/libsystem_kernel.dylib" ]; then
+    echo "error: $OUT/system/libsystem_kernel.dylib not found -- run build_libsystem_kernel.sh first" >&2
+    exit 1
+fi
+ar d "$SCRATCH/libmalloc_scratch.a" mach_init.o mach_vm.o mig_reply_port.o \
+    init_cpu_capabilities.o libmalloc_vm_traps.o libmalloc_vm_mig_stubs.o
+
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libdyld.dylib"
 # Real alias/compat set reused verbatim from build_dyld_link.sh -- same
@@ -254,7 +266,7 @@ rm -f "$OUT/system/libdyld.dylib"
     "$OUT/libdyld/libdyldGlue.o" "$OUT/libdyld/LibSystemHelpers.o" \
     "$OUT/libdyld/cxa_finalize_ranges_compat.o" "$OUT/libdyld/vproc_compat.o" \
     "$OUT/libdyld/compat_misc.o" "$OUT/libdyld/alloc_once.o" "$OUT/libdyld/bzero.o" "$OUT/libdyld/memset_pattern.o" \
-    "$OUT/libdyld/mach_init_compat.o" \
+    "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/libcxx.a" "$OUT/libcxxabi.a" "$SCRATCH/libunwind_scratch.a" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libcxx_locale_for_stdio_scratch.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/libc_printf.a" "$OUT/libc_string.a" \

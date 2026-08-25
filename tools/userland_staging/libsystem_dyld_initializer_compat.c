@@ -29,17 +29,22 @@
  * own init.c uses) that calls the real, already-correct
  * _dyld_initializer() itself.
  *
- * Also calls mach_init() (for THIS dylib's own private mach_task_self_
- * copy, same real gap, see libdyld_mach_init_compat.c) and, across the
- * dylib boundary, libdyld_mach_init_compat_run() (for libdyld.dylib's
- * separate private copy -- real dyld does not run libdyld.dylib's own
- * per-image constructors at all, confirmed via a temporary diagnostic,
- * so this proven-to-run libSystem.B.dylib constructor is the real,
- * working place to reach across and initialize it too, the same
- * -Wl,-U dynamic-lookup mechanism already used for _dyld_initializer). */
+ * Also calls mach_init() here first. This used to need a second,
+ * cross-dylib call (libdyld_mach_init_compat_run()) to separately
+ * initialize libdyld.dylib's OWN private, independently-never-
+ * initialized copy of mach_task_self_ -- real dyld does not run
+ * libdyld.dylib's own per-image constructors at all (confirmed via a
+ * temporary diagnostic), so this proven-to-run libSystem.B.dylib
+ * constructor was the only place that could reach it. As of the
+ * build_libsystem_kernel.sh migration (docs/daemon-roadmap.md's
+ * "Static-vs-dylib architecture debt" section), both this dylib and
+ * libdyld.dylib link against the same real, separate
+ * libsystem_kernel.dylib instead of each bundling a private static
+ * copy, so there is only ONE mach_task_self_ process-wide again (real
+ * Apple's actual architecture) and a single mach_init() call here
+ * suffices for both. */
 extern void _dyld_initializer(void);
 extern int mach_init(void);
-extern void libdyld_mach_init_compat_run(void);
 
 __attribute__((constructor))
 static void libsystem_call_dyld_initializer(void) {
@@ -49,6 +54,5 @@ static void libsystem_call_dyld_initializer(void) {
      * LibSystemHelpers vtable, which can reach os_alloc_once/
      * mach_vm_map before a call placed after it ever gets a turn. */
     mach_init();
-    libdyld_mach_init_compat_run();
     _dyld_initializer();
 }

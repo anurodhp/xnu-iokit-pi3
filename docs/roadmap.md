@@ -215,13 +215,18 @@ need a real implementation later:
   program's `main()`, and exits cleanly with no crash (Phase 6.5 Phase
   C+D, fully closed 2026-08-25) -- see `docs/daemon-roadmap.md`'s Phase
   6.5 section. Real architecture debt remains: `libSystem.B.dylib`/
-  `libdyld.dylib` are real but this project's OTHER libc/libpthread/etc
-  are still static archives flattened into those two dylibs rather than
-  real, separate per-library dylibs -- flagged as a real migration to do
-  going forward, not yet started. Two real, independent bugs from exactly
-  this flattening (a duplicated, never-initialized `mach_task_self_` per
-  dylib) were found and fixed closing Phase D -- concrete evidence for
-  why the migration matters, not just a theoretical concern.
+  `libdyld.dylib` still bundle most of this project's OTHER libc/
+  libpthread/etc as flattened static archives rather than real, separate
+  per-library dylibs. Migration started 2026-08-25: step 1
+  (`libsystem_kernel.dylib`, the real Mach-bootstrap/VM-trap layer --
+  `mach_init.c`/`mach_vm.c`/`mig_reply_port.c`/the project's own
+  Mach-trap stub files) is DONE and QEMU-verified, both dylibs now share
+  one real `mach_task_self_` via a real `LC_LOAD_DYLIB` instead of each
+  carrying an independently-never-initialized private copy (the exact
+  bug class that closed Phase D). BSD syscalls (`open`/`read`/`write`)
+  and the rest of the curated libc stack are still static-archive copies
+  -- see `docs/daemon-roadmap.md`'s "Static-to-dylib migration, step 1"
+  section for the full writeup and next-step candidates.
 - **`libdispatch`/GCD** -- zero API surface, not attempted at all (Phase
   6.6).
 - **`ed_setjmp_raw.s`/`ed_setjmp_compat.c`** (Phase 4.6 grep/sed/nl/
@@ -656,10 +661,12 @@ need a real implementation later:
   and fixed closing Phase D for real). Also flagged: this project's
   `libSystem.B.dylib`/`libdyld.dylib` are a flattened bundle of
   pre-existing static archives, not real per-library dylibs matching
-  Apple's actual modular architecture -- a real migration effort for
-  whoever picks this up next, per explicit user direction to stop
-  building new static-archive-plus-shim code going forward. Not yet
-  started.
+  Apple's actual modular architecture -- a real migration effort, per
+  explicit user direction to stop building new static-archive-plus-shim
+  code going forward. Step 1 (`libsystem_kernel.dylib`) DONE and
+  QEMU-verified same day -- see `docs/daemon-roadmap.md`'s "Static-to-
+  dylib migration, step 1" section for what moved, what's left, and
+  next-step candidates.
 - **Phase 6.6 (libdispatch/GCD)**: planning-only placeholder, blocked
   behind 6.5. Even once unblocked, real concurrent `dispatch_async` can't
   exist until real threading does (Phase 7.5's pthread ceiling) -- scope

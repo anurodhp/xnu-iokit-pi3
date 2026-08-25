@@ -218,6 +218,19 @@ if [ -f tools/userland_staging/dyld.macho ] && [ -f tools/userland_staging/dyld_
         chmod 755 "$MNT/usr/lib/libSystem.B.dylib"
         echo "+ wrote $(wc -c < tools/userland_staging/libc_build/system/libSystem.B.dylib) bytes to $MNT/usr/lib/libSystem.B.dylib"
     fi
+    # First static-to-dylib migration step (docs/daemon-roadmap.md's
+    # "Static-vs-dylib architecture debt" section, build_libsystem_kernel.sh):
+    # both libdyld.dylib and libSystem.B.dylib above have a real LC_LOAD_DYLIB
+    # on this at its exact real install_name -- dyld resolves that
+    # dependency recursively even though dyld_test_exec.macho itself never
+    # references it directly, so it must be present at this exact path for
+    # either of the two dylibs above to load at all.
+    if [ -f tools/userland_staging/libc_build/system/libsystem_kernel.dylib ]; then
+        mkdir -p "$MNT/usr/lib/system"
+        cp tools/userland_staging/libc_build/system/libsystem_kernel.dylib "$MNT/usr/lib/system/libsystem_kernel.dylib"
+        chmod 755 "$MNT/usr/lib/system/libsystem_kernel.dylib"
+        echo "+ wrote $(wc -c < tools/userland_staging/libc_build/system/libsystem_kernel.dylib) bytes to $MNT/usr/lib/system/libsystem_kernel.dylib"
+    fi
     cp tools/userland_staging/dyld_test_exec.macho "$MNT/bin/dyld_test_exec"
     chmod 755 "$MNT/bin/dyld_test_exec"
     echo "+ wrote $(wc -c < tools/userland_staging/dyld_test_exec.macho) bytes to $MNT/bin/dyld_test_exec"

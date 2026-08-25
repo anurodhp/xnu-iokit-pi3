@@ -107,6 +107,18 @@ cp "$OUT/libmalloc.a" "$SCRATCH/libmalloc_scratch.a"
 ar d "$SCRATCH/libmalloc_scratch.a" libmalloc_dispatch.o
 ar r "$SCRATCH/libmalloc_scratch.a" "$SCRATCH/libmalloc_dispatch_trimmed.o"
 
+# Same static-to-dylib migration step as build_libdyld.sh (see that
+# script's own comment): the Mach-bootstrap/VM-trap layer now lives in
+# real, separate libsystem_kernel.dylib, shared with libdyld.dylib,
+# instead of each dylib bundling its own private (and, for
+# mach_task_self_, independently-never-initialized) static copy.
+if [ ! -f "$OUT/system/libsystem_kernel.dylib" ]; then
+    echo "error: $OUT/system/libsystem_kernel.dylib not found -- run build_libsystem_kernel.sh first" >&2
+    exit 1
+fi
+ar d "$SCRATCH/libmalloc_scratch.a" mach_init.o mach_vm.o mig_reply_port.o \
+    init_cpu_capabilities.o libmalloc_vm_traps.o libmalloc_vm_mig_stubs.o
+
 # Real global storage only this dylib needs (see that file's own
 # comment) -- libdyld.dylib already provides it itself.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
@@ -116,7 +128,10 @@ ar r "$SCRATCH/libmalloc_scratch.a" "$SCRATCH/libmalloc_dispatch_trimmed.o"
 # libSystem.dylib's Libc/init.c calls _dyld_initializer() as part of its
 # own real constructor; this project's simplified libSystem.B.dylib has
 # no such glue, so a small real constructor calling it directly is the
-# minimal correct fix.
+# minimal correct fix. As of the libsystem_kernel.dylib migration above,
+# this constructor's mach_init() call also populates the ONE real, now-
+# shared mach_task_self_ both this dylib and libdyld.dylib bind to (see
+# that file's own updated comment) -- no more per-dylib duplicate.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     libsystem_dyld_initializer_compat.c -o "$OUT/libsystem/dyld_initializer_compat.o"
 
@@ -126,11 +141,11 @@ rm -f "$OUT/system/libSystem.B.dylib"
     -install_name /usr/lib/libSystem.B.dylib \
     -Wl,-fixup_chains \
     -Wl,-U,__dyld_initializer \
-    -Wl,-U,_libdyld_mach_init_compat_run \
     -o "$OUT/system/libSystem.B.dylib" \
     "$SCRATCH/dyld_unwind_shim_compat.o" "$OUT/libsystem/progname_compat.o" \
     "$OUT/libsystem/dyld_initializer_compat.o" \
     "$OUT/libdyld/compat_misc.o" "$OUT/libdyld/alloc_once.o" "$OUT/libdyld/bzero.o" "$OUT/libdyld/memset_pattern.o" \
+    "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/libcxx.a" "$OUT/libcxxabi.a" "$SCRATCH/libunwind_scratch.a" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libcxx_locale_for_stdio_scratch.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/libc_printf.a" "$OUT/libc_string.a" \

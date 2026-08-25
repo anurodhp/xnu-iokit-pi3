@@ -1002,9 +1002,91 @@ for whoever picks this up next:
 **Phase D is now closed for real** (clean exit, no crash -- see "Phase D:
 CLOSED for real" above) -- the stable, exit-cleanly baseline this section
 asks for is in place. This unlocks, in order: the static-to-dylib
-migration above (not yet started), then `libdispatch` as a real
-`.dylib` (Phase 6.6), then CoreFoundation (Phase 9), then everything
-gated behind either.
+migration above (**first real step done, see immediately below**), then
+`libdispatch` as a real `.dylib` (Phase 6.6), then CoreFoundation (Phase
+9), then everything gated behind either.
+
+### Static-to-dylib migration, step 1: `libsystem_kernel.dylib` -- DONE
+### 2026-08-25, QEMU-verified
+
+First real library extracted per this section's own directive, chosen
+deliberately as the Mach-bootstrap/VM-trap layer specifically -- the
+exact surface (`mach_init.c`'s `mach_task_self_`) that caused two real,
+independent bugs closing Phase D (see "Phase D: CLOSED for real" above),
+so this step both starts the migration and permanently retires the
+compat-shim workaround that closure needed.
+
+`tools/userland_staging/build_libsystem_kernel.sh` (new) builds a real,
+separate `/usr/lib/system/libsystem_kernel.dylib` from real, unmodified
+Apple source: `mach_init.c`, `mach_vm.c` (the trap-first/MIG-fallback
+`mach_vm_allocate`/`_deallocate`/`_protect`/`_map` wrappers),
+`mig_reply_port.c`, and `wrappers/init_cpu_capabilities.c` (a real
+`mach_init.c` dependency) -- plus this project's own
+`libmalloc_vm_traps.s` (the hand-written Mach-trap stubs
+`create-syscalls.pl`'s BSD-syscall-only generator doesn't cover, already
+the sole real definition of these traps anywhere in the project, just
+promoted from a `libmalloc`-private file to the shared dylib) and
+`libmalloc_vm_mig_stubs.c` (real, provably-unreachable MIG-fallback dead
+code `mach_vm.c`'s own source unconditionally references). A small new
+`libsystem_kernel_compat.c` supplies the same two narrowly-scoped
+stand-ins `libmalloc_dispatch.c` already established for its own,
+separate static-archive consumers (`pthread_set_self()` no-op,
+`mach_port_deallocate`/`_mod_refs` trap-only wrappers) rather than
+linking that whole file's unrelated malloc-specific glue into the
+kernel-trap dylib. Deliberately NOT included yet: the BSD syscall
+surface (`open`/`read`/`write`/etc) -- those still work correctly as
+static-archive copies today (no observed bug from that duplication, and
+they're scattered across `libc_gen.a`'s own syscall wrappers rather than
+one clean unit), so migrating them is separate, later work, not bundled
+into this narrower step.
+
+`build_libdyld.sh` and `build_libsystem.sh` both now: `ar d` the 6 real
+object files above out of their private `libmalloc_scratch.a` copies
+(the shared, committed `libmalloc.a` itself is untouched -- every other,
+still-fully-static consumer keeps building against it unchanged), and
+link a real `LC_LOAD_DYLIB` against `libsystem_kernel.dylib` directly
+(confirmed via `otool -l`, not the `-Wl,-U` dynamic-lookup-per-symbol
+mechanism `_dyld_initializer` needed -- safe here specifically because
+`libsystem_kernel.dylib` is narrowly scoped and shares zero symbol names
+with the static archives still linked alongside it, confirmed by a real
+`nm` diff before making this change; the earlier `-Wl,-U` requirement
+for linking directly against `libdyld.dylib` was caused by that
+specific dylib ALSO re-exporting `_open`/`_read`/`_write`/etc since it
+bundles the same curated static libc stack internally, not a general
+"any `.dylib` on the link line breaks static resolution" rule).
+`tools/init_binary/inject_into_sd_image.sh` installs the new dylib at
+its real path -- required even though `dyld_test_exec.macho` itself
+never references it directly, since dyld resolves `LC_LOAD_DYLIB`
+dependencies recursively through `libdyld.dylib`/`libSystem.B.dylib`.
+
+This also let two compat-shim layers retire, not just move: the
+`libdyld_mach_init_compat.c` cross-dylib `-Wl,-U` call
+(`libdyld_mach_init_compat_run()`) `libsystem_dyld_initializer_compat.c`
+needed to separately initialize libdyld.dylib's own private copy is
+gone -- deleted, not just unused -- because there is only ONE real,
+shared `mach_task_self_` now (in `libsystem_kernel.dylib`'s own data
+section), the same real Apple architecture, so a single `mach_init()`
+call from the one proven-to-run constructor initializes it for every
+consumer at once.
+
+**QEMU-verified**: `dyld_test_exec` still prints its own `main()`'s
+message and exits with `EXITCODE:1`, no crash, now loading 4 real
+dylibs (`libtest.dylib`, `libdyld.dylib`, `libSystem.B.dylib`,
+`libsystem_kernel.dylib`) instead of 3.
+
+**Next candidates for step 2** (not started): the BSD syscall surface
+next (would retire the remaining scattered per-consumer syscall-stub
+files -- `libplatform_mach_traps.s`, `iokit_trap.s`,
+`libunwind_sched_yield.s`, `notify_mig_special_reply_port_trap.s`,
+`mach_port_extra_traps.s`, `mach_ipc_traps.s` -- confirmed via `grep -rl
+"svc #0x80"` across `tools/userland_staging/*.s`, not yet audited
+individually for which specific consumers still need each one), or
+`libplatform`/`libmalloc` themselves as real dylibs (larger, since many
+still-static binaries depend on them directly and would need their own
+migration or a compat path). Whoever picks this up next should re-run
+that same `grep -rl "svc #0x80" *.s` scan first -- it's the fastest way
+to re-derive the current scattered-trap-file inventory rather than
+trusting this list to stay current.
 
 **CoreFoundation source options, noted 2026-08-24 (not yet evaluated in
 depth -- flagging for whoever picks up Phase 9), found while a background
