@@ -372,16 +372,74 @@ d6. **CLOSED 2026-08-26 — every real file in `launchd/` now compiles
     confirming no real Apple source exists anywhere), mapping between
     the two real, already-working type systems.
 
-    **Next real step**: these files are only proven *compilable*, not
-    yet compiled to real `.o`/archived/linked. `build_launchd_recon.sh`
-    needs to grow into a real build script (matching
-    `build_libdispatch_real.sh`'s own progression) that does that, then
-    a real trial link against `libxpc.a`/`liblaunchd_mig.a`/
-    `libdispatch.dylib`/this project's curated libc stack, then
-    compiling the 5 real SERVER-side MIG files `build_launchd_mig.sh`
-    already generates but doesn't compile (`jobServer.c` etc — these
-    need `core.c`'s own internal `job_t` type, now provably reachable
-    since `core.c` itself compiles clean).
+    **UPDATE, same day**: `build_launchd_core.sh` (new) promoted the
+    recon harness into a real build script — compiles all 9 real daemon
+    files (`runtime.c`, 1512 lines, was mistakenly omitted from the
+    first pass — real fix needed too: this project's pinned SDK's own
+    `<bsm/libbsm.h>` marks `audit_token_to_au32()`
+    `API_UNAVAILABLE(ios,...)` at the resolved-symbol level, a real hard
+    error neither `__asm` nor C-identifier renaming can bypass —
+    resolved via a redirect header, `launchd_compat_headers/bsm/
+    libbsm.h`, pointing at the real, unrestricted upstream BSM repo's
+    own copy instead) plus all 7 real SERVER-side MIG files
+    (`jobServer.c` etc, `job_forwardServer.c` needing one extra
+    `-include core.h`) into `liblaunchd_core.a` (20 objects).
+    `build_launchd_syscalls.sh` (new) then closed a large real BSD-
+    syscall/libc gap (`chown`/`fork`/`posix_spawn`/`wait4`/`uuid_clear`/
+    `getopt`/etc, ~35 real functions) into `liblaunchd_syscalls.a` (46
+    objects). A real, honest trial link (`-Wl,-force_load` — a plain
+    link against `launchd.c`'s own real `main()` was found to not
+    actually pull in `core.c`/`ipc.c` at all, since `main()` only
+    reaches them indirectly through dispatch/XPC handlers, the same
+    "empty main proves nothing" lesson recurring in a subtler form) is
+    down to **~110 genuinely-undefined-anywhere symbols, from 266** at
+    the start of this pass. Remaining, categorized (none fixed yet):
+    - **CoreFoundation** (~14 symbols: `CFArrayGetCount`,
+      `CFPropertyListCreateFromXMLData`, `CFDictionaryApplyFunction`,
+      etc) — the same real structural wall already documented for
+      IOKitUser (`project_xnu_rpi3_iokituser_cf_wall` in memory): no CF
+      port exists on this target. `pd_launchd_plist.c` itself already
+      avoids CF (compiles clean), but `core.c`'s own real plist-parsing
+      path uses it directly.
+    - **pthread QoS/attr API** (~20 symbols) — already tracked as this
+      section's own item **d3**, unchanged by this pass.
+    - **Mach voucher / host-special-port routines** (~10 symbols:
+      `host_reboot`, `host_set_special_port`, `mach_voucher_attr_command`,
+      etc) — already tracked as item **d5**.
+    - **BSM audit-record construction** (`au_open`/`au_write`/`au_to_*`,
+      ~10 symbols) — real source exists (`third_party/BSM/bsm/lib/
+      bsm_audit.c`/`bsm_token.c`) but needs a real private header
+      (`struct au_token`/`au_record_t`/`AU_ARG64_TOKEN`/`ADD_U_CHAR`
+      etc) this project's pinned BSM repo doesn't ship — only `xnu-7195`'s
+      kernel-side `bsd/bsm/audit_internal.h` came close, and pulling
+      that in surfaced further real gaps (`HEADER_SIZE`/`TRAILER_SIZE`/
+      `be32enc`/`be64enc`). Deprioritized as a peripheral, non-critical
+      logging feature, not core job-management.
+    - **`os_log`/`__mach_errors`** — already-documented, genuinely
+      unbuildable gaps (Phase 6.8's own libdispatch/libxpc sections).
+    - **A long tail of smaller items**: `job_mig_look_up2_forward`/
+      `job_mig_parent_forward` (real functions, not yet located —
+      possibly a genuinely-unimplemented job-forwarding feature in this
+      exact PureDarwin branch, same class of gap as `ld2xpc`/`xpc2ld`,
+      not yet checked against the real `launchd-842.92.1` clone the way
+      those were); `runtime_ktrace`/`runtime_ktrace0` (called by
+      `runtime.c` itself but still undefined — likely gated behind a
+      macro this project doesn't define, not yet root-caused); `exec.c`/
+      `signal.c` (need a real internal "private name" alias convention,
+      e.g. `_execve` distinct from public `execve`, not yet ported);
+      `waitpid.c` (a real K&R-style declaration trips this project's
+      clang flags); `atexit.c`/`glob.c` (each need one more real private
+      header not yet cross-referenced); `initgroups` (`NO_SYSCALL_STUB`,
+      no real dedicated wrapper source located yet).
+
+    **Concrete next steps, in priority order**: (1) decide whether to
+    invest in a real CF port now (the single biggest remaining chunk,
+    and a real prerequisite this project has deferred twice already —
+    IOKitUser and now launchd) or keep deferring core.c's plist-parsing
+    path; (2) close the pthread QoS/attr gap (item d3) since it's shared
+    with the still-open `libdispatch.dylib` gap too, so fixing it once
+    helps both; (3) the smaller one-off items above are all real,
+    bounded, and individually quick once picked up.
 
 0a. **No AES implementation exists anywhere in this kernel — HARD
     PREREQUISITE for Phase 7b (`sshd`).** Filed explicitly 2026-08-21 so it
