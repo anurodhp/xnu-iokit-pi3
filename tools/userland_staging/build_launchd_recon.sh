@@ -10,9 +10,12 @@
 # ============================================================
 # HONEST SCOPE STATEMENT -- read this first
 # ============================================================
-# CLEAN (0 real errors): pd_launchd_boot.c, kill2.c, pd_sandbox_check.c,
-# pd_console_login.c, pd_launchd_plist.c, log.c, ipc.c, and -- after the
-# 3 real fixes below -- launchd.c (the PID-1 entry point itself).
+# CLEAN (0 real errors, all 8 real daemon source files): pd_launchd_boot.c,
+# kill2.c, pd_sandbox_check.c, pd_console_login.c, pd_launchd_plist.c,
+# log.c, ipc.c, launchd.c (the PID-1 entry point), and -- as of the real
+# fixes below -- core.c (12,162 real lines, launchd's actual job-
+# management engine). Every real daemon source file in launchd/ now
+# compiles clean.
 #
 # Real fixes needed for launchd.c (all already-established patterns from
 # elsewhere in this project, reused here, not new mechanisms):
@@ -51,23 +54,42 @@
 #   header build_libdispatch_dylib.sh already established (reused
 #   directly, not re-derived) for `mach_vm_deallocate`.
 #
-# STILL OPEN in core.c after all of the above (7 real, distinct errors
-# remain, none investigated further yet):
-# - `LAUNCH_JOBKEY_DEFAULTS` undeclared -- real launchd public API
-#   constant, its real declaring header not yet identified/located.
-# - `ld2xpc`/`xpc2ld` implicit-declaration -- CONFIRMED (via
-#   `git ls-tree` across every real path in PureDarwin's own `next`
-#   branch, not just this sparse checkout) to be called in core.c but
-#   never defined ANYWHERE in the real upstream repository at this
-#   commit -- a genuine incompleteness in PureDarwin's own "next" branch
-#   itself, not a gap on this project's side to fix via includes. Matches
-#   this project's own original Phase 6.8 scoping note ("expect real
-#   work left in the XPC skeleton").
+# The remaining 7 errors are now ALL CLOSED too:
+# - `LAUNCH_JOBKEY_DEFAULTS` (launchd_compat_headers/
+#   launch_jobkey_defaults_compat.h, new): real launch.h has 88
+#   LAUNCH_JOBKEY_* string-key macros but is genuinely missing this one
+#   real embedded-only key (confirmed via grep); value ("Defaults")
+#   matches that header's own uniform CamelCase-plist-key convention.
 # - `struct sandbox_spawnattrs`/`sandbox_spawnattrs_init`/
-#   `_setprofilename`/`_setcontainer` -- real sandbox spawn-attribute
-#   API, presumably from the same real sandbox header
-#   `pd_sandbox_check.c` already uses for its own narrower BSM-based
-#   check -- not yet cross-referenced.
+#   `_setprofilename`/`_setcontainer` (launchd_compat_headers/
+#   sandbox_spawnattrs_compat.h, new): real Apple's actual sandbox
+#   spawn-attributes API, part of the closed-source Sandbox.framework/
+#   libsandbox (never open-sourced -- same class of gap as corecrypto).
+#   Extends this project's own already-established real precedent
+#   (PureDarwin's vendored `launchd/System-compat/sandbox.h`, which
+#   already makes the OLDER sandbox_check()/sandbox_init() API real,
+#   honest "always allow" stand-ins since this target has no
+#   Sandbox.kext policy engine at all) to the newer spawnattrs API the
+#   exact same way -- a real, minimal struct plus no-op setters, not a
+#   functional sandbox implementation this target already lacks.
+# - `ld2xpc`/`xpc2ld` (ld2xpc_compat.c + launchd_compat_headers/
+#   ld2xpc_compat.h, new): CONFIRMED via a fresh clone of the real,
+#   historically-open-sourced apple-oss-distributions/launchd tag
+#   `launchd-842.92.1` (the last launchd Apple ever published source
+#   for) -- not just this project's own PureDarwin checkout -- that
+#   these two launch_data_t<->xpc_object_t converters are called but
+#   NEVER DEFINED anywhere in either real repository. They must come
+#   from a private, closed-source part of Apple's real libxpc that both
+#   real launchd trees link against but never ship source for. Real,
+#   from-scratch recursive implementation (last resort, only after
+#   confirming no real Apple source exists anywhere for it) mapping
+#   between the two real, well-documented, structurally similar tagged-
+#   union type systems (`launch.h`/`xpc/xpc.h`, both already fully
+#   working in this project) -- see that file's own header comment for
+#   the full per-type mapping and the one documented, never-actually-
+#   exercised lossy edge case (raw fd/errno/mach-port values, which
+#   never appear in the real Defaults-plist data this project's only
+#   two real call sites process).
 #
 # See docs/backlog.md's P2 "d6" item for the tracked version of this list.
 set -e
@@ -110,6 +132,9 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-buil
     -DSPI_AVAILABLE\(...\)= -D__SPI_AVAILABLE\(...\)= \
     -include net/if_dl.h \
     -include "$COMPAT/sockaddr_in_4_6_compat.h" \
+    -include "$COMPAT/launch_jobkey_defaults_compat.h" \
+    -include "$COMPAT/sandbox_spawnattrs_compat.h" \
+    -include "$COMPAT/ld2xpc_compat.h" \
     -I "$DCOMPAT" -I "$COMPAT" \
     -I "$OUT/dyld_compat_sys" -I "$OUT/dyld_compat_sys_override" \
     -I "$PD/launchd/System-compat" -I "$MIGOUT" \

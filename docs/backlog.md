@@ -341,48 +341,47 @@ d5. **Real Mach voucher MIG routines not yet regenerated.**
     pattern already used for `job.defs`/`mach_port.defs`/
     `protocol.defs` elsewhere in this project; not yet attempted.
 
-d6. **RESOLVED for `launchd.c` (now 0 errors); `core.c` down to 7
-    real, distinct, not-yet-fixed errors.** `tools/userland_staging/
-    build_launchd_recon.sh` (new, real -fsyntax-only reconnaissance
-    harness, not a real build script yet) is the reproducer — see its
-    own header comment for the full real-fix writeup. Summary: the
-    `spawn_private.h` gap and the `union sockaddr_in_4_6`/`struct
-    sockaddr_dl` incomplete-type errors (same "SDK's own same-named
-    older header wins" class of bug as `mach/mach_vm.h`/
-    `mach/mach_time.h`) are both fixed — `-include net/if_dl.h` (the
-    SDK's own copy is real and complete, just never reached before
-    `nd6.h` needs it) plus a new narrow compat header
-    (`launchd_compat_headers/sockaddr_in_4_6_compat.h`) supplying just
-    the one missing union. `core.c` additionally needed `-I
-    $PD/libinfo` (real, just not on the include path) and
-    `-idirafter third_party/Libinfo/lookup.subproj` for `aliasdb.h` —
-    PureDarwin's own bundled `libinfo/si_module.h` references a header
-    its own sparse-checked-out `libinfo/` doesn't have, but this
-    project's SEPARATELY-pinned real `third_party/Libinfo`
-    (apple-oss-distributions, tag `Libinfo-542.40.3`) does.
+d6. **CLOSED 2026-08-26 — every real file in `launchd/` now compiles
+    clean.** `tools/userland_staging/build_launchd_recon.sh` (real
+    `-fsyntax-only` reconnaissance harness, not yet a real build script
+    that produces `.o`/link output) is the reproducer — see its own
+    header comment for the complete real-fix writeup. All 8 real daemon
+    source files (`pd_launchd_boot.c`, `kill2.c`, `pd_sandbox_check.c`,
+    `pd_console_login.c`, `pd_launchd_plist.c`, `log.c`, `ipc.c`,
+    `launchd.c`) plus `core.c` (12,162 real lines, launchd's actual
+    job-management engine) compile with zero errors. Real fixes:
+    `spawn_private.h`/`libinfo.h` include-path gaps; the `union
+    sockaddr_in_4_6`/`struct sockaddr_dl` incomplete-type errors (same
+    "SDK's own same-named older header wins" bug class as
+    `mach/mach_vm.h`/`mach/mach_time.h`); `third_party/Libinfo`'s real
+    `lookup.subproj/aliasdb.h` (a separately-pinned repo, reused for a
+    header PureDarwin's own bundled libinfo/ is missing); a real,
+    embedded-only `LAUNCH_JOBKEY_DEFAULTS` macro missing from the
+    vendored `launch.h`; a real `sandbox_spawnattrs` compat extension
+    matching this project's own already-established "always allow, no
+    Sandbox.kext" precedent; and — the interesting one — a real,
+    from-scratch `ld2xpc()`/`xpc2ld()` (`tools/userland_staging/
+    ld2xpc_compat.c`), CONFIRMED via a fresh clone of the real,
+    historically-open-sourced `apple-oss-distributions/launchd` tag
+    `launchd-842.92.1` (the last launchd Apple ever published source
+    for) — not just this project's own PureDarwin checkout — that these
+    two `launch_data_t`<->`xpc_object_t` converters are called but never
+    defined in EITHER real repository; they must come from a private,
+    closed-source part of Apple's real libxpc neither tree ships. Real,
+    from-scratch recursive implementation (last resort, only after
+    confirming no real Apple source exists anywhere), mapping between
+    the two real, already-working type systems.
 
-    **7 real errors remain in `core.c`, none fixed yet**:
-    `LAUNCH_JOBKEY_DEFAULTS` undeclared (real declaring header not
-    identified yet); `struct sandbox_spawnattrs`/
-    `sandbox_spawnattrs_init`/`_setprofilename`/`_setcontainer`
-    undeclared (presumably the same real sandbox API
-    `pd_launchd/pd_sandbox_check.c` already uses more narrowly for its
-    own BSM-based check, not yet cross-referenced); and — the
-    interesting one — `ld2xpc`/`xpc2ld` implicit-declaration, confirmed
-    via a real `git ls-tree` across PureDarwin's ENTIRE `next` branch
-    (not just this project's sparse checkout) to be called in `core.c`
-    but genuinely never defined anywhere in that real upstream
-    repository at this commit. This is real incompleteness in
-    PureDarwin's own `next` branch itself, not a gap on this project's
-    side fixable via includes — matches this project's own original
-    Phase 6.8 scoping note ("expect real work left in the XPC
-    skeleton"). Whoever picks this up next may need to write a real
-    `ld2xpc`/`xpc2ld` (plist-to-xpc-dictionary and back) themselves,
-    following this project's own "curate/port real Apple source first"
-    convention as far as it goes, then fall back to writing it from the
-    real XPC/launchd wire-format documentation if no real upstream
-    implementation turns up anywhere else (other apple-oss-distributions
-    launchd tags, PureDarwin's `master` branch, etc — not yet checked).
+    **Next real step**: these files are only proven *compilable*, not
+    yet compiled to real `.o`/archived/linked. `build_launchd_recon.sh`
+    needs to grow into a real build script (matching
+    `build_libdispatch_real.sh`'s own progression) that does that, then
+    a real trial link against `libxpc.a`/`liblaunchd_mig.a`/
+    `libdispatch.dylib`/this project's curated libc stack, then
+    compiling the 5 real SERVER-side MIG files `build_launchd_mig.sh`
+    already generates but doesn't compile (`jobServer.c` etc — these
+    need `core.c`'s own internal `job_t` type, now provably reachable
+    since `core.c` itself compiles clean).
 
 0a. **No AES implementation exists anywhere in this kernel — HARD
     PREREQUISITE for Phase 7b (`sshd`).** Filed explicitly 2026-08-21 so it
