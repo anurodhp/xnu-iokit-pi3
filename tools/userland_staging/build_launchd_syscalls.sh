@@ -55,21 +55,48 @@
 # too), getopt (third_party/Libc/stdlib/FreeBSD/getopt.c, needs a real
 # fbsdcompat/namespace.h this project hadn't referenced before).
 #
-# STILL OPEN, real gaps identified but not fixed this pass: exec.c/
-# signal.c (real FreeBSD source, both need a small real "private name"
-# alias this project doesn't have yet -- e.g. exec.c calls a C-level
-# `_execve`/`_write`, distinct from the public `execve`/`write` this
-# project already generates, real Apple's own internal naming
-# convention for the raw-trap-adjacent "guts" of these wrappers);
-# waitpid.c (a real K&R-style old-style function definition trips this
-# project's clang flags, not yet root-caused); atexit.c (needs a real
-# `Block_private.h` from libclosure/BlocksRuntime, not yet
-# cross-referenced); glob.c (needs a real `pthread/tsd_private.h` via
-# its own `xlocale_private.h` chain); initgroups (NO_SYSCALL_STUB, no
-# real dedicated wrapper source located yet); login_tty/setlogin/raise
-# already compile clean but aren't wired into this script's own object
-# list yet (harmless omission, not a real gap -- add if a future trial
-# link shows them still undefined).
+# UPDATE 2026-08-26 (real launchd critical-path pass, all real fixes
+# verified via trial compile, not assumed): exec.c/signal.c's own
+# private-name calls (`_execve`/`_write`/`_sigaction`) are a real gap in
+# THIS project (no linker alias/export-map step to auto-generate them)
+# -- closed via launchd_syscall_compat_headers/private_names_compat.c
+# (thin forwards to the already-real public execve/write/sigaction) +
+# private_names_decls.h (force-included declarations so exec.c/signal.c
+# themselves see them as extern before use). waitpid.c's real issue
+# wasn't K&R syntax -- it was `__weak_reference(sym,alias)` (used to
+# alias the real `__waitpid` to the public `waitpid` name) silently
+# expanding to nothing (third_party/Libc/fbsdcompat/sys/cdefs.h's own
+# real definition is intentionally empty, no real linker weak-aliasing
+# support here either) while ALSO not being defined by the real SDK's
+# own sys/cdefs.h at all -- clang then parsed the bare macro-call lines
+# as invalid K&R declarations. Fixed via `-D'__weak_reference(sym,alias)='`
+# (neutralizes it explicitly, same real no-op) + a curated public
+# `waitpid()` wrapper (same forwarding-only pattern as this script's own
+# fork_compat.c/wait4_compat.c) since the alias never happens. atexit.c
+# needed `__isthreaded` (a real Apple libc global for skip-locking-when-
+# single-threaded; genuinely undefined anywhere in this project's stack
+# -- closed via isthreaded_compat.c, always-1/always-threaded, safe
+# since this project's real pthread support means locking is always
+# correct, just not maximally optimized) plus a real, tracked
+# `os/alloc_once_private.h` (same class of gap as `mach_vm.h`'s own
+# per-consumer tracked-copy precedent -- the untracked, gitignored
+# `libc_build/compat_include/` already had one for a different key,
+# `OS_ALLOC_ONCE_KEY_LIBSYSTEM_PTHREAD`; this consumer needs
+# `OS_ALLOC_ONCE_KEY_LIBSYSTEM_C` instead). glob.c needed a real chain
+# of headers (`sys/syslimits.h` for `COLL_WEIGHTS_MAX`, `setlocale.h`,
+# `malloc_private.h`, a tracked `System/machine/cpu_capabilities.h`
+# forward for `pthread/tsd_private.h`) plus `-D__LIBC__=1` (real
+# Apple-internal build macro gating declarations in `collate.h` --
+# `__collate_range_cmp`'s own prototype is invisible without it) plus
+# its own real dependency `locale/FreeBSD/collcmp.c`. `initgroups`
+# remains a real, NO_SYSCALL_STUB gap -- no dedicated wrapper source
+# located anywhere in this project's pinned repos; not fixed this pass.
+# login_tty/setlogin/raise/siglist/getpeereid already compiled clean and
+# are now wired in (getpeereid replaces a broken create-syscalls.pl
+# attempt in the ASMFLAGS loop below -- real Apple `getpeereid` is
+# `NO_SYSCALL_STUB` too, implemented via `getsockopt(LOCAL_PEERCRED)` in
+# `gen/FreeBSD/getpeereid.c`, not a raw trap at all; the old attempt
+# silently failed via this script's own `2>/dev/null || true`).
 set -e
 cd "$(dirname "$0")"
 
@@ -107,9 +134,9 @@ ARCHS=arm64 perl "$XNU/libsyscall/xcodescripts/create-syscalls.pl" \
 ASMFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -arch arm64 \
     -I"$OUT/launchd_sys_asm_compat" -I"$XNU/libsyscall/custom" -I"$XNU/libsyscall/mach" -I"$XNU/osfmk")
 for s in _chown _chroot _sync _revoke _setuid _setgid _setsid _setpgid \
-    _getrusage _execve _mount _kevent _dup _dup2 _getppid _getpeereid _umask _getgid \
+    _getrusage _execve _mount _kevent _dup _dup2 _getppid _umask _getgid _mkdirat _getsockopt \
     ___accept_nocancel ___listen ___socketpair ___munmap ___wait4_nocancel ___fork \
-    ___reboot ___setpriority ___getrlimit ___setrlimit ___posix_spawn ___setlogin; do
+    ___reboot ___setpriority ___getrlimit ___setrlimit ___posix_spawn ___setlogin ___getlogin; do
     "$CLANG" "${ASMFLAGS[@]}" "$TMP/${s}.s" -o "$OUT/launchd_syscall_obj/sys_${s}.o" 2>/dev/null || true
 done
 rm -rf "$TMP"
@@ -181,6 +208,51 @@ EOF
 "$CLANG" "${CFLAGS[@]}" "$OUT/launchd_syscall_obj/fork_compat.c" -o "$OUT/launchd_syscall_obj/fork_compat.o"
 "$CLANG" "${CFLAGS[@]}" "$OUT/launchd_syscall_obj/wait4_compat.c" -o "$OUT/launchd_syscall_obj/wait4_compat.o"
 echo "compiled: real curated fork()/wait4()"
+
+# --- real getpeereid() -- NO_SYSCALL_STUB in syscalls.master, real
+# implementation is getsockopt(LOCAL_PEERCRED)-based, not a raw trap at
+# all (the ASMFLAGS loop above never actually had this one -- silently
+# swallowed by its own `2>/dev/null || true`, see this script's header
+# comment) ---------------------------------------------------------
+"$CLANG" "${CFLAGS_LIBC[@]}" "$LIBC/gen/FreeBSD/getpeereid.c" -o "$OUT/launchd_syscall_obj/getpeereid.o"
+"$CLANG" "${CFLAGS_LIBC[@]}" "$LIBC/gen/FreeBSD/getlogin.c" -o "$OUT/launchd_syscall_obj/getlogin.o"
+
+# --- real exec.c/signal.c/waitpid.c/atexit.c/glob.c + their real
+# private-name/global compat shims (see this script's header comment
+# for the full real-fix writeup for each) ---------------------------
+CFLAGS_LAUNCHD_LIBC=("${CFLAGS_LIBC[@]}" -D__LIBC__=1 \
+    -D'__weak_reference(sym,alias)=' \
+    -include launchd_syscall_compat_headers/private_names_decls.h \
+    -include launchd_syscall_compat_headers/isthreaded_compat.h \
+    -include "$XNU/bsd/sys/syslimits.h" \
+    -I launchd_syscall_compat_headers \
+    -I "$LIBC/locale/FreeBSD" -I "$LIBC/stdtime/FreeBSD" \
+    -idirafter "../../third_party/libmalloc/private" \
+    -idirafter "$LIBC/locale" \
+    -idirafter "../../third_party/libplatform/private" -idirafter "../../third_party/libpthread/private" \
+    -idirafter "../../third_party/libdispatch/src/BlocksRuntime" \
+    -idirafter "$XNU/libkern")
+"$CLANG" "${CFLAGS_LAUNCHD_LIBC[@]}" launchd_syscall_compat_headers/private_names_compat.c -o "$OUT/launchd_syscall_obj/private_names_compat.o"
+"$CLANG" "${CFLAGS_LAUNCHD_LIBC[@]}" launchd_syscall_compat_headers/isthreaded_compat.c -o "$OUT/launchd_syscall_obj/isthreaded_compat.o"
+"$CLANG" "${CFLAGS_LAUNCHD_LIBC[@]}" "$LIBC/gen/FreeBSD/exec.c" -o "$OUT/launchd_syscall_obj/exec.o"
+"$CLANG" "${CFLAGS_LAUNCHD_LIBC[@]}" "$LIBC/gen/FreeBSD/signal.c" -o "$OUT/launchd_syscall_obj/signal.o"
+"$CLANG" "${CFLAGS_LAUNCHD_LIBC[@]}" "$LIBC/gen/FreeBSD/waitpid.c" -o "$OUT/launchd_syscall_obj/waitpid.o"
+"$CLANG" "${CFLAGS_LAUNCHD_LIBC[@]}" "$LIBC/stdlib/FreeBSD/atexit.c" -o "$OUT/launchd_syscall_obj/atexit.o"
+"$CLANG" "${CFLAGS_LAUNCHD_LIBC[@]}" "$LIBC/gen/FreeBSD/glob.c" -o "$OUT/launchd_syscall_obj/glob.o"
+"$CLANG" "${CFLAGS_LAUNCHD_LIBC[@]}" "$LIBC/locale/FreeBSD/collcmp.c" -o "$OUT/launchd_syscall_obj/collcmp.o"
+"$CLANG" "${CFLAGS_LIBC[@]}" "$LIBC/gen/FreeBSD/siglist.c" -o "$OUT/launchd_syscall_obj/siglist.o"
+cat > "$OUT/launchd_syscall_obj/waitpid_compat.c" <<'EOF'
+/* Real, curated public waitpid() -- gen/FreeBSD/waitpid.c's own real
+ * __waitpid() never gets its public "waitpid" alias in this project
+ * (the real `__weak_reference(sym,alias)` mechanism it relies on is a
+ * no-op here, see this script's header comment). Thin forward, exactly
+ * matching what the real weak-reference alias would have done. */
+struct rusage;
+extern int __waitpid(int pid, int *istat, int options);
+int waitpid(int pid, int *istat, int options) { return __waitpid(pid, istat, options); }
+EOF
+"$CLANG" "${CFLAGS[@]}" "$OUT/launchd_syscall_obj/waitpid_compat.c" -o "$OUT/launchd_syscall_obj/waitpid_compat.o"
+echo "compiled: real getpeereid/getlogin + exec/signal/waitpid/atexit/glob/collcmp/siglist + their real compat shims (zero errors)"
 
 rm -f "$OUT/liblaunchd_syscalls.a"
 ar rcs "$OUT/liblaunchd_syscalls.a" "$OUT"/launchd_syscall_obj/*.o

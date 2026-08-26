@@ -149,10 +149,10 @@ mkdir -p "$OUT/launchd_libc_extras_obj"
   ar x "../libcopyfile.a" copy.o && \
   ar x "../dyld_core.a" isnull.o && \
   ar x "../libopenpam.a" ls_fenv_compat.o && \
-  ar x "../libremovefile.a" fstatat64.o )
+  ar x "../libremovefile.a" fstatat64.o qsort.o heapsort.o removefile_syscalls.o )
 rm -f "$OUT/launchd_libc_extras.a"
 ar rcs "$OUT/launchd_libc_extras.a" "$OUT"/launchd_libc_extras_obj/*.o
-echo "wrote $OUT/launchd_libc_extras.a ($(ls "$OUT"/launchd_libc_extras_obj/*.o | wc -l | tr -d ' ') objects: chdir/access/strstr/sleep/sigprocmask/sigaction/getifaddrs/freeifaddrs/arc4random_uniform/bind/getentropy/uuid_copy/uuid_is_null/fegetenv/fesetenv/fstatat)"
+echo "wrote $OUT/launchd_libc_extras.a ($(ls "$OUT"/launchd_libc_extras_obj/*.o | wc -l | tr -d ' ') objects: chdir/access/strstr/sleep/sigprocmask/sigaction/getifaddrs/freeifaddrs/arc4random_uniform/bind/getentropy/uuid_copy/uuid_is_null/fegetenv/fesetenv/fstatat/qsort)"
 
 # Real, informational trial link. First attempt linked plainly against
 # liblaunchd_core.a (launchd.c has its own real main(), so unlike every

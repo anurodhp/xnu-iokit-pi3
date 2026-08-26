@@ -526,35 +526,102 @@ d6. **CLOSED 2026-08-26 — every real file in `launchd/` now compiles
       `_is_threaded_np`/`_threadid_np`, `strtoul_l`, `getegid`.
     - **BACKLOG (never open-sourced, item d7's own finding)**: ASL
       (`asl_open`/`_close`/`_free`/`_new`/`_send`/`_set`).
+    - **CLOSED 2026-08-26, same day, second real pass on the "new, not
+      yet triaged" batch above — 11 more symbols, 167 → 156**: real,
+      individually-verified fixes for every one of these turned out to
+      be small and mechanical once actually attempted, not deep rabbit
+      holes:
+      - `mkdirat`/`getsockopt`: plain, non-`NO_SYSCALL_STUB`
+        `create-syscalls.pl` raw-trap entries this project just hadn't
+        listed yet — one-line addition each.
+      - `getpeereid`/`getlogin`: both real `NO_SYSCALL_STUB` entries
+        Apple implements as hand-written wrappers, not raw traps
+        (`getpeereid` via `getsockopt(LOCAL_PEERCRED)`,
+        `getlogin` via a raw `__getlogin` trap this project's own
+        `create-syscalls.pl` step CAN still generate despite
+        `NO_SYSCALL_STUB` — it just skips the convenience-wrapper name,
+        not the trap itself). The old `_getpeereid` entry in the
+        `create-syscalls.pl` loop was actually silently failing the
+        whole time (swallowed by the loop's own `2>/dev/null || true`)
+        since `getpeereid` was never a raw trap in the first place — a
+        real, pre-existing bug in this script, now fixed with the real
+        `third_party/Libc/gen/FreeBSD/getpeereid.c`/`getlogin.c`.
+      - `execl`/`execv`, `signal`, `waitpid`: real, unmodified
+        `third_party/Libc/gen/FreeBSD/{exec,signal,waitpid}.c`. Each
+        needed one real, small, previously-undiagnosed fix:
+        `exec.c`/`signal.c` call internal "private name" aliases
+        (`_execve`/`_write`/`_sigaction`) that real Apple's own build
+        generates via a linker alias/export-map step this project
+        doesn't have — closed via a small, real, thin-forwarding compat
+        file (`launchd_syscall_compat_headers/private_names_compat.c` +
+        `private_names_decls.h`), not a from-scratch implementation.
+        `waitpid.c`'s real issue was never "K&R syntax" as first
+        suspected — it was `__weak_reference(sym,alias)` (meant to
+        alias real `__waitpid` to public `waitpid`) being a genuine
+        no-op in this project's `fbsdcompat/sys/cdefs.h`, AND not
+        defined by the real SDK's own `sys/cdefs.h` at all, so clang
+        parsed the bare macro-call lines as invalid K&R declarations.
+        Fixed via `-D'__weak_reference(sym,alias)='` (makes the real
+        no-op explicit) + a curated public `waitpid()` wrapper (same
+        forwarding-only pattern as this script's existing
+        `wait4_compat.c`).
+      - `atexit`: real `stdlib/FreeBSD/atexit.c`. Needed a real,
+        genuinely-undefined-anywhere `__isthreaded` global (Apple's
+        skip-locking-when-single-threaded optimization flag) — closed
+        via `isthreaded_compat.c`, hardcoded to 1/always-threaded,
+        always correct since this project's pthread support is real,
+        just not maximally optimized. Also needed a new tracked
+        `os/alloc_once_private.h` (same class of per-consumer-tracked-
+        copy as `mach_vm.h`'s own precedent — the untracked, gitignored
+        `libc_build/compat_include/` already has one for a different
+        key this consumer doesn't use).
+      - `glob`, `sys_siglist`, `qsort`: real `gen/FreeBSD/glob.c` needed
+        a chain of real headers (`sys/syslimits.h` for
+        `COLL_WEIGHTS_MAX`, `setlocale.h`, `malloc_private.h`, a new
+        tracked `System/machine/cpu_capabilities.h` forward) plus
+        `-D__LIBC__=1` (a real Apple-internal build macro gating
+        `collate.h`'s own declarations — without it,
+        `__collate_range_cmp` has no visible prototype) plus its own
+        real dependency `locale/FreeBSD/collcmp.c`. `sys_siglist`
+        (`gen/FreeBSD/siglist.c`) and `qsort` (selectively extracted
+        from `libremovefile.a`, same pattern as `cf_libc_extras.a`)
+        needed no fixes at all, just wiring in.
+      - **Not fixed, real gap confirmed, left for a future pass**:
+        `initgroups` — genuinely `NO_SYSCALL_STUB` with no dedicated
+        wrapper source anywhere in this project's pinned repos (checked
+        again this pass, same conclusion as before).
+      All real fixes are now permanent steps in `build_launchd_syscalls.sh`
+      (61 objects, up from 46) and `build_launchd_core.sh`'s
+      `launchd_libc_extras.a` (14 objects, up from 5) — see either
+      script's own header comment for the full per-symbol writeup.
     - **BACKLOG (new this pass, real but not yet triaged as critical-
-      path-or-not)**: `execl`/`execv` (real libc wrappers around
-      `execve`, which this project already has — just not these two
-      convenience forms); `mkdirat`; `mktime`; `glob` (real BSD
-      algorithm, FreeBSD fallback candidate per this project's source-
-      priority convention); `initgroups`; `getpeereid`;
-      `memorystatus_control`/`setiopolicy_np` (real macOS-specific
-      resource-management syscalls, need raw-trap generation);
-      `signal`/`waitpid`/`atexit` (real libc functions, not yet ported —
-      `waitpid` specifically wraps `wait4`, which this project already
-      has real logic for in `liblaunchd_syscalls.a`); `sys_siglist`
-      (static data array); `xpc_copy` (a REAL gap, not just unbuilt —
-      confirmed via source inspection that `libxpc/xpc_misc.c` has
-      `xpc_copy_description`/`_description_level`/
+      path-or-not)**: `mktime` (real source exists but only inside
+      `stdtime/FreeBSD/localtime.c`, the same expensive file already
+      reverted twice for `localtime_r`/`ctime_r` — tried again implicitly
+      via this pass's other fixes, still not worth its own real,
+      deep, not-locally-satisfied dependency chain just for one
+      function); `memorystatus_control`/`setiopolicy_np` (real
+      macOS-specific resource-management syscalls, need real raw-trap
+      generation, not yet attempted); `xpc_copy` (a REAL gap, not just
+      unbuilt — confirmed via source inspection that `libxpc/xpc_misc.c`
+      has `xpc_copy_description`/`_description_level`/
       `_entitlement_for_token` but no plain `xpc_copy(xpc_object_t)`
       deep-copy function at all; needs the same "confirm via historical
       `launchd-842.92.1` clone" treatment `ld2xpc`/`xpc2ld` got before
       concluding it needs a from-scratch implementation);
-      `__logname`/`_mutex` (getlogin/logname caching); `__sprintf_chk`;
-      `__udivti3` (a compiler-rt 128-bit-division builtin — checked
-      `libclang_rt.ios.a`, doesn't provide it for this target, real gap,
-      small and unlikely to matter much); `__mach_errors` (a data table
-      backing `mach_error_string`, which already works — this looks like
-      a separate, real, currently-unused symbol some code references
-      directly).
+      `__logname`/`_mutex` (getlogin/logname caching — `getlogin()`
+      itself is now real, this is a separate caching layer some code
+      calls directly); `__sprintf_chk`; `__udivti3` (a compiler-rt
+      128-bit-division builtin — checked `libclang_rt.ios.a`, doesn't
+      provide it for this target, real gap, small and unlikely to
+      matter much); `__mach_errors` (a data table backing
+      `mach_error_string`, which already works — this looks like a
+      separate, real, currently-unused symbol some code references
+      directly); `_localtime`/`_ctime_r`/`_localtime_r` (all live in the
+      same reverted `localtime.c`, same as `mktime` above).
     Every one of these was spot-checked against the current curated
     stack (`nm -g` across all `.a` files) before being called a real
-    gap, not assumed — see this same pass's real, verified `ar x`
-    extraction work above for the ones that turned out to already exist.
+    gap, not assumed.
 
 d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
     compiles + archives clean; real trial link has ~150 honestly-
