@@ -106,6 +106,35 @@ done
 # real citation and scope.
 "$CLANG" "${CFLAGS[@]}" xpc_copy_compat.c -o "$OUT/launchd_core_obj/xpc_copy_compat.o"
 
+# Real mktime/localtime/localtime_r/ctime_r/asctime_r: tried again
+# (rechecked against this project's now-much-larger curated stack,
+# hoping the earlier-reverted deep dependency chain had shrunk) and
+# reverted a third time -- most of the chain DID resolve this time
+# (pthread rwlock, __isthreaded, _lstat$INODE64 all now real/aliasable),
+# but stdtime/FreeBSD/localtime.c's own real declarations
+# (__LIBC_PTHREAD_KEY_LOCALTIME/_GMTIME, pthread_key_init_np, etc) live
+# behind third_party/Libc/include/sys/cdefs.h, which itself needs a
+# real `libc-features.h` this project has never pinned/generated --
+# a new, deeper real header-chain gap, not the same one as before. Left
+# for a future pass (docs/backlog.md item d7); not worth chasing further
+# in this one.
+
+# Real __sprintf_chk/__vsprintf_chk (core.c calls fortified sprintf
+# directly) + real __mach_errors data table (backing libxpc_syscalls.a's
+# own mach_error_string.o, which this project already links but never
+# had this table for).
+"$CLANG" "${CFLAGS[@]}" "$LIBC/secure/sprintf_chk.c" -o "$OUT/launchd_core_obj/sprintf_chk.o"
+"$CLANG" "${CFLAGS[@]}" "$LIBC/secure/vsprintf_chk.c" -o "$OUT/launchd_core_obj/vsprintf_chk.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -DPRIVATE=1 \
+    -idirafter "$XNU/osfmk" -idirafter "$XNU/bsd" -idirafter "$XNU/libkern" -idirafter "$XNU/iokit" \
+    "$XNU/libsyscall/mach/error_codes.c" -o "$OUT/launchd_core_obj/error_codes.o"
+
+# Real __udivti3 (compiler-rt builtin, real standard binary-long-division
+# algorithm -- no compiler-rt source is pinned anywhere in this project,
+# see udivti3_compat.c's own header) -- runtime.c's real 128-bit
+# fixed-point nanosecond-time math needs it.
+"$CLANG" "${CFLAGS[@]}" udivti3_compat.c -o "$OUT/launchd_core_obj/udivti3_compat.o"
+
 # real, unmodified BSM lib_wrappers.c (audit_token_to_au32() and 9 other
 # real functions) -- see launchd_compat_headers/bsm/libbsm.h's own
 # header comment for why runtime.c needs the real, unmodified upstream
