@@ -329,4 +329,40 @@ if [ -n "$PUREDARWIN_DEST" ]; then
     git -C "$PUREDARWIN_DEST" checkout "$PUREDARWIN_REF"
 fi
 
+# CoreFoundation: real Apple source, but NOT from
+# apple-oss-distributions/CF -- that repo's own last real tag
+# (CF-855.17) is from 2014 (OS X Yosemite), 6 years stale relative to
+# this project's Darwin 20.3/macOS 11.2 target, and confirmed absent
+# from the real macos-112 distribution-macOS manifest entirely (CF is
+# not a tracked component there at all -- verified via a real clone,
+# not assumed). Real, actively-maintained, MUCH more recent CF source
+# instead comes from apple/swift-corelibs-foundation's own vendored
+# CoreFoundation/ subtree -- Apple's own cross-platform (Linux-buildable)
+# fork of the same real CF codebase, kept building without the full
+# macOS Objective-C runtime by design, which is exactly this project's
+# own real requirement too. Pinned to the closest real tag to macOS
+# 11.2 (Feb 2021): swift-5.4-DEVELOPMENT-SNAPSHOT-2021-02-12-a. Sparse-
+# checkout only CoreFoundation/ -- a plain clone would pull the much
+# larger Foundation/TestFoundation/Sources trees this project doesn't
+# need at all.
+SCF_REF="swift-5.4-DEVELOPMENT-SNAPSHOT-2021-02-12-a"
+SCF_DEST="third_party/swift-corelibs-foundation"
+if [ -d "$SCF_DEST" ]; then
+    if [ "$FORCE" = "1" ]; then
+        echo "+ removing existing $SCF_DEST (--force)"
+        rm -rf "$SCF_DEST"
+    else
+        echo "= $SCF_DEST already exists, skipping (use --force to re-clone)"
+        SCF_DEST=""
+    fi
+fi
+if [ -n "$SCF_DEST" ]; then
+    echo "+ sparse-cloning swift-corelibs-foundation @ $SCF_REF (CoreFoundation/ only)"
+    git clone --filter=blob:none --no-checkout --depth 1 --branch "$SCF_REF" \
+        https://github.com/apple/swift-corelibs-foundation.git "$SCF_DEST"
+    git -C "$SCF_DEST" sparse-checkout init --cone
+    git -C "$SCF_DEST" sparse-checkout set CoreFoundation
+    git -C "$SCF_DEST" checkout "$SCF_REF"
+fi
+
 echo "done -- third_party/ populated. See docs/roadmap.md and README.md for what to build next."
