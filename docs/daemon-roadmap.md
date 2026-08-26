@@ -1938,6 +1938,100 @@ NOT attempt at all -- the libxpc client-library work above only proves
 the CLIENT half of Phase 6.8, not the actual PID-1-replacement daemon
 logic itself, which is where most of the remaining real unknowns are.
 
+### `build_libxpc_syscalls2.sh` -- DONE 2026-08-26, closes 14 of the 19
+### still-open symbols above
+
+Second pass over the 19-symbol list, real Apple/FreeBSD source
+throughout (see the script's own HONEST SCOPE STATEMENT header for full
+per-symbol provenance). Real findings worth recording:
+
+- The six `_chk`-suffixed `_FORTIFY_SOURCE` routines
+  (`__memmove_chk`/`__strcpy_chk`/`__stpcpy_chk`/`__stpncpy_chk`/
+  `__strlcpy_chk`/`__strncpy_chk`/`__vsnprintf_chk` -- 7, not 6, one more
+  turned up than the original list named) all have real, unmodified
+  source at `third_party/Libc/secure/*.c`, each just `#include
+  "secure.h"` (the real declaring header, same directory) -- the
+  original "not yet located" note in the 19-symbol list was simply
+  because nobody had looked in `Libc/secure/` yet, not a real gap.
+  `secure.h`'s own 4 declared symbols (`__chk_fail_overflow`/
+  `__chk_fail_overlap`/`__chk_overlap`/`__chk_assert_no_overlap`) are
+  curated from `Libc/secure/chk_fail.c` -- real algorithm, `os_crash()`
+  swapped for plain `abort()` since this target has no crash-reporter/
+  exception-port pipeline (the file's own `PR_13085474_CHECK` compat
+  shim already compiles out to nothing here, `TARGET_OS_OSX` being 0 on
+  this iOS-target build -- same as real Apple's own iOS build of this
+  file).
+- `__darwin_check_fd_set_overflow` -- real bounds-check logic curated
+  from `xnu-7195/libsyscall/wrappers/terminate_with_reason.c`, same
+  `os_fault_with_payload()`-to-`abort()` swap for the same reason.
+- `uuid_unparse_upper` -- the 19-symbol list's own note ("only real
+  source is kernel-only `libkern/uuid/uuid.c`") was an incomplete
+  search: the real userland implementation is
+  `third_party/Libc/uuid/uuidsrc/unparse.c`, small, self-contained,
+  compiles unmodified (needs `-DHAVE_STDINT_H=1` so its own `uuidP.h`
+  takes the `<stdint.h>` branch instead of a `<uuid/uuid_types.h>` this
+  project doesn't have) -- also gives `uuid_unparse`/`uuid_unparse_lower`
+  for free, same file.
+- `task_name_for_pid` -- confirmed genuinely absent from
+  `syscalls.master` (it's a Mach trap, not a BSD syscall);
+  `osfmk/mach/syscall_sw.h` has `kernel_trap(task_name_for_pid,-44,3)`,
+  hand-copied into a 3-instruction stub the same way every other raw
+  Mach trap in this project already is. `task_for_pid` (trap -45)
+  deliberately not stubbed -- no real call site exists yet.
+- `time()` -- real, unmodified `third_party/Libc/gen/FreeBSD/time.c`,
+  a thin `gettimeofday()` wrapper; wasn't in the original 19-symbol
+  list's own writeup at all (an omission in that list, not a new find).
+- `mach_msg_server_once` -- curated from `mach_msg.c`'s real body (same
+  file this project's `mach_msg_send_compat.c` was already curated
+  from). Real, deliberate scope note: the original body's
+  `voucher_mach_msg_adopt()`/`voucher_mach_msg_revert()` calls go to
+  `libdispatch/src/voucher.c`, a large file with its own internal
+  voucher-table refcounting machinery this project has not ported --
+  replaced with honest local no-ops reporting "unchanged" (the real,
+  correct behavior for a message carrying no voucher, the only case this
+  target's single-thread server loop can hit right now).
+- `mach_port_get_context`/`mach_port_set_context` -- turned out to be a
+  real MIG regen, not a raw trap, but a cheap one: `osfmk/mach/
+  mach_port.defs` has its own `UserPrefix _kernelrpc_;` pragma gated
+  `#if !KERNEL && !LIBSYSCALL_INTERFACE`, so a plain client-side mig
+  regen of that file (no special flags needed) produces
+  `_kernelrpc_mach_port_get_context`/`_kernelrpc_mach_port_set_context`
+  directly -- exactly the names `mach_port.c`'s own real
+  `mach_port_get_context`/`mach_port_set_context` wrapper bodies already
+  call. That regen's other ~25 client routines in the same subsystem
+  (`mach_port_allocate`, `mach_port_deallocate`, etc.) come along for
+  free at zero extra cost, since MIG client stubs are self-contained.
+- The two `_OBJC_CLASS_$_OS_xpc_connection`/`_OBJC_CLASS_$_OS_xpc_object`
+  symbols -- confirmed via grep across all of `third_party/PureDarwin`
+  that both are only ever used as `isa` sentinel pointers, compared by
+  address, never dereferenced as real classes. Closed with two minimal,
+  distinct real data symbols under the exact raw linker names (`__asm__`
+  symbol renaming), not a functional stand-in.
+
+**5 real symbols still open, honestly narrowed down** (not fabricated
+over -- see `build_libxpc_syscalls2.sh`'s own header comment):
+`os_log_create`/`os_log_type_enabled`/`_os_log_impl` (os_log's real
+engine -- confirmed via `find`/`grep` across every pinned repo in this
+project that Apple has never open-sourced this as a standalone
+component anywhere in this project's source universe; no logging daemon
+exists on this target either, so even a real port would have nothing to
+talk to yet); `dispatch_data_create_map` (real source exists,
+`libdispatch/src/data.c`, but its `dispatch_data_t` is a fully
+refcounted object built on real libdispatch's object/base machinery --
+incompatible with this project's `libdispatch_min.a`, a deliberately
+minimal single-thread shim with its own, different `dispatch_data_t`
+representation; the one real call site,
+`xpc_data_create_with_dispatch_data()` in `libxpc/xpc_type.c`, is a
+narrow data-conversion helper, not on launchd's own startup path);
+`__mach_errors` (the string table `mach_error_string.c` indexes into --
+confirmed genuinely absent from every pinned Apple source in this
+project; real Apple generates it at build time from a private,
+not-open-sourced err_codes table). `kdebug_trace` was on the original
+19-symbol list but turned out not to be a real gap at all -- it's
+already handled by this project's own established `-Wl,-alias,
+___kdebug_trace,_kdebug_trace` pattern (same as the `$UNIX2003`
+aliases), the raw trap (`libc_build/sys_kdebug_trace.o`) already exists.
+
 ## Phase 6.8 -- original 2026-08-22 scoping (partially superseded above,
 ## kept for the parts still accurate: license/vintage caution, the
 ## "expect real work left in the XPC skeleton" expectation, and the
