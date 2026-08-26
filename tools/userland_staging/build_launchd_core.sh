@@ -96,10 +96,15 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-buil
     -idirafter "$LIBC/darwin" -idirafter "$LIBC" -idirafter "$XNU/libkern")
 
 mkdir -p "$OUT/launchd_core_obj"
-for f in pd_launchd_boot kill2 pd_sandbox_check pd_console_login pd_launchd_plist log ipc launchd core runtime; do
+for f in pd_launchd_boot kill2 pd_sandbox_check pd_console_login pd_launchd_plist log ipc launchd core runtime ktrace; do
     "$CLANG" "${CFLAGS[@]}" "$PD/launchd/$f.c" -o "$OUT/launchd_core_obj/$f.o"
 done
 "$CLANG" "${CFLAGS[@]}" ld2xpc_compat.c -o "$OUT/launchd_core_obj/ld2xpc_compat.o"
+# Real, from-scratch xpc_copy() -- same class of confirmed gap as
+# ld2xpc/xpc2ld above (real libxpc/xpc_misc.c has no plain deep-copy
+# function at all) -- see xpc_copy_compat.c's own header for the full
+# real citation and scope.
+"$CLANG" "${CFLAGS[@]}" xpc_copy_compat.c -o "$OUT/launchd_core_obj/xpc_copy_compat.o"
 
 # real, unmodified BSM lib_wrappers.c (audit_token_to_au32() and 9 other
 # real functions) -- see launchd_compat_headers/bsm/libbsm.h's own
@@ -171,7 +176,16 @@ HOSTMIG_FLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -DPRIVATE=1 \
 # real MIG-interface memory allocator, needed once mach_portUser.c/
 # host_privUser.c above are real code paths that can actually run).
 "$CLANG" "${HOSTMIG_FLAGS[@]}" "$XNU/libsyscall/mach/mig_allocate.c" -o "$OUT/launchd_core_obj/mig_allocate.o"
-echo "compiled: real host_priv/mach_port MIG regen + real mach_port.c-derived compat + real pid_for_task trap + real mig_allocate (zero errors)"
+# Real kdebug_signpost/_start/_end (docs/backlog.md's own
+# "runtime_ktrace gated behind a macro" theory was wrong -- root cause
+# was simpler: real ktrace.c, third_party/PureDarwin's own real
+# implementation of runtime_ktrace/0/1, was just never compiled into
+# this archive. Its own real dependency, kdebug_signpost(), has no real
+# source anywhere in this project -- see launchd_kdebug_signpost_compat.c's
+# own header for why a safe no-op is correct here, not a simplification
+# of reachable behavior.)
+"$CLANG" "${CFLAGS[@]}" launchd_kdebug_signpost_compat.c -o "$OUT/launchd_core_obj/launchd_kdebug_signpost_compat.o"
+echo "compiled: real host_priv/mach_port MIG regen + real mach_port.c-derived compat + real pid_for_task trap + real mig_allocate + real ktrace.c (zero errors)"
 
 rm -f "$OUT/liblaunchd_core.a"
 ar rcs "$OUT/liblaunchd_core.a" "$OUT"/launchd_core_obj/*.o
