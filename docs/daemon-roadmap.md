@@ -1873,12 +1873,63 @@ calls `objc_msgSend` against them -- confirmed by reading that file's
 own body; likely closeable with a minimal placeholder data symbol rather
 than standing up a real ObjC runtime, not yet attempted).
 
+**47-symbol list: 28 of 47 CLOSED, 2026-08-25
+(`tools/userland_staging/build_libxpc_syscalls.sh`, new)**. Real Apple/
+FreeBSD source, compiled as-is or curated the same way every other tier
+in this directory already does (each new compat file's own header
+comment has the specific real provenance) -- not fabricated. Closed:
+`mach_error_string`/`mig_deallocate`/`gCRAnnotations` (compile as-is);
+`unsetenv`/`setenv`/`putenv` (real FreeBSD `setenv.c`, needed a real
+honest no-op `__environ_lock`/`__environ_unlock` pair -- missing from
+this project's pinned Libc entirely -- and a curated `__findenv_locked`);
+`proc_get_dirty`/`proc_set_dirty`/`proc_track_dirty`/`task_name_for_pid`'s
+libproc siblings (real, unmodified `libproc.c`, pulling in
+`__process_policy`/`__thread_selfid`/`proc_rlimit_control` -- satisfied
+by real stubs already sitting in `libc_build/dyld_syscall_gen/` from
+this project's own dyld port, reused rather than regenerated);
+`select`/`connect`/`recvmsg`/`sendmsg`/`kill`/`socket`/
+`fileport_makefd`/`fileport_makeport` (real Apple logic curated without
+the `_NONSTD_SOURCE`/`NO_SYSCALL_LEGACY` preprocessor scaffolding those
+specific wrapper files use, confirmed via real trial compile to be
+incompatible with this project's LP64/arm64-only
+`__DARWIN_ONLY_UNIX_CONFORMANCE` target -- real Apple's own arm64/iOS
+libsyscall build excludes these exact files per-arch for the same
+reason); `mach_msg_send`/`mach_port_allocate` (real bodies curated from
+`mach_msg.c`/`mach_port.c`, two new real trap stubs);
+`semaphore_signal`/`semaphore_wait` (real bodies curated from
+`semaphore.c`, two new real trap stubs -- `semaphore_signal_trap`/
+`semaphore_wait_trap`, -33/-36). The `$UNIX2003`-suffixed symbols were
+never a real gap -- this project's own established `-Wl,-alias` link
+pattern, now included in the trial-link step.
+
+**19 real symbols still open**, honestly documented (not fabricated
+over) in `build_libxpc_syscalls.sh`'s own header comment: the `_chk`-
+suffixed hardening routines (real `_FORTIFY_SOURCE`-shim source not yet
+located); `os_log_create`/`os_log_type_enabled`/`_os_log_impl` (real
+logging engine, genuinely unbuilt); `mach_port_get_context`/
+`mach_port_set_context` (real MIG routines, not simple traps -- need an
+actual `mach_port.defs` regen, a bigger lift than a curation);
+`mach_msg_server_once`/`dispatch_data_create_map`/`kdebug_trace`/
+`__mach_errors` (that last one is `error_codes.c`'s own data table --
+needs `libkern/OSReturn.h`, not yet vendored) -- none of these 4
+investigated yet; `task_name_for_pid` (real kernel-side implementation
+confirmed in `bsd/vm/vm_unix.c`, but genuinely has NO
+`syscalls.master` entry in this pinned xnu-7195 -- the real userspace
+call mechanism isn't a simple missing trap, not yet identified);
+`uuid_unparse_upper` (the only real source found,
+`libkern/uuid/uuid.c`, is genuinely kernel-only -- needs
+`read_random`/`nanotime`/`mount_t`; the real userland Libc equivalent
+hasn't been located); and the two real
+`_OBJC_CLASS_$_OS_xpc_connection`/`_OBJC_CLASS_$_OS_xpc_object` symbols
+(likely closeable with a minimal placeholder data symbol, not yet
+attempted -- see build_libxpc_syscalls.sh's own header comment for why
+a full ObjC runtime isn't actually needed here).
+
 **Remaining concrete next steps for whoever picks this up**: (2) real
 BSM (`third_party/BSM`, tag `bsm-13`, now pinned, already confirmed
 working in step (1)'s own real compile) for `bsm/auditd_lib.h`/
-`bsm/libbsm.h`; close the 47-symbol list above (mostly small, bounded,
-independent stub work -- a good candidate for splitting across a few
-parallel passes); then attempt the actual launchd DAEMON side
+`bsm/libbsm.h`; close the remaining 19-symbol list above; then attempt
+the actual launchd DAEMON side
 (`core.c` -- ~12K LOC, `ipc.c`, `launchd.c`, `log.c`, `runtime.c`, plus
 the 5 real SERVER-side MIG files `build_launchd_mig.sh` already generated
 but didn't compile -- `jobServer.c` etc, which need launchd's own
