@@ -432,14 +432,174 @@ d6. **CLOSED 2026-08-26 — every real file in `launchd/` now compiles
       header not yet cross-referenced); `initgroups` (`NO_SYSCALL_STUB`,
       no real dedicated wrapper source located yet).
 
-    **Concrete next steps, in priority order**: (1) decide whether to
-    invest in a real CF port now (the single biggest remaining chunk,
-    and a real prerequisite this project has deferred twice already —
-    IOKitUser and now launchd) or keep deferring core.c's plist-parsing
-    path; (2) close the pthread QoS/attr gap (item d3) since it's shared
-    with the still-open `libdispatch.dylib` gap too, so fixing it once
-    helps both; (3) the smaller one-off items above are all real,
-    bounded, and individually quick once picked up.
+    **Concrete next steps, in priority order**: (1) ~~decide whether to
+    invest in a real CF port now~~ — DONE, see item **d7**; (2) close the
+    pthread QoS/attr gap (item d3) since it's shared with the still-open
+    `libdispatch.dylib` gap too, so fixing it once helps both; (3) the
+    smaller one-off items above are all real, bounded, and individually
+    quick once picked up.
+
+d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
+    compiles + archives clean; real trial link has ~150 honestly-
+    categorized remaining gaps.** `tools/userland_staging/
+    build_corefoundation.sh` (new) — see its own HONEST SCOPE STATEMENT
+    for the full writeup. Real, unmodified source from
+    `third_party/swift-corelibs-foundation` (Apple's own, actively-
+    maintained CF fork; pinned in `setup_third_party.sh` at
+    `swift-5.4-DEVELOPMENT-SNAPSHOT-2021-02-12-a`), NOT
+    `apple-oss-distributions/CF` — that repo's last real tag
+    (`CF-855.17`) is dated 2014-08-15 and CF isn't part of the real
+    `macos-112` distribution-macOS manifest at all (both confirmed via
+    real clones). This resolves the "try Apple's real source first"
+    question for CF specifically: it works, so the GNUstep fallback the
+    user authorized as a contingency was never needed.
+
+    17 real files compile clean (Base/Collections/NumberDate/String/
+    Parsing subprojs — Array/Dictionary/Data/BasicHash/Set/Bag/
+    BinaryHeap/BitVector/Storage/Tree/Number/Boolean/String/
+    PropertyList/BinaryPList/Base/Runtime/Utilities/UUID/Platform/
+    KnownLocations/SortFunctions), archived into `libCoreFoundation.a`.
+    Real fixes along the way: a genuine upstream `bool`/`Boolean`
+    prototype-conflict bug in `CFPriv.h` (patched via
+    `third_party-patches/swift-corelibs-foundation.patch`, applied by
+    `setup_third_party.sh` — same real-patch convention as `bash.patch`
+    etc); a genuine upstream `TARGET_OS_OSX`/`TARGET_OS_MAC` guard
+    mismatch around `__CFTSDInitialize` (iOS-target-only bug, forward-
+    declared via a compat header rather than patched); `DEPLOYMENT_RUNTIME_C=1`
+    + `INCLUDE_OBJC=1` (matches `CoreFoundation/build.py`'s own real,
+    non-Swift-runtime build path — the CMake default assumes a Swift
+    runtime this project doesn't have); the pinned iPhoneOS SDK's real
+    `<mach/mach_vm.h>` being `#error unsupported` (same gap
+    `build_libmalloc.sh` already found — reused + extended its compat
+    header); `OS_LOG_SUBSYSTEM_RUNTIME_ISSUES` missing from this SDK's
+    older `<os/log.h>`.
+
+    **The bigger structural finding**: `CFRuntime.c` has one monolithic
+    static class-registration table referencing every real CF type by
+    extern symbol, so even a "minimal subset" needs *something* to
+    satisfy symbols for types it doesn't build. Real, safe (never
+    dereferenced unless that specific type is instantiated, which
+    nothing in this project's call graph does) zero-initialized
+    `CFRuntimeClass` stub descriptors for ~26 unbuilt types (RunLoop/
+    Stream/Socket/MachPort/URL family/Locale/Calendar/TimeZone/Date
+    family/Formatters/CharacterSet/AttributedString/Bundle/PlugIn/
+    Preferences/Error) plus a handful of related init-hook/toll-free-
+    bridging no-ops now live in `cf_compat_headers/cf_class_stubs.c`
+    (fully documented per-symbol in that file). One of these
+    (`_CFCompareStringsWithLocale`) got a real ordinal-UTF16-compare
+    fallback instead of a stub, since it's real, reachable logic, not
+    dead code.
+
+    **Real trial link, ~150 symbols remaining, categorized** (none
+    fixed yet — this is the honest state after the above):
+    - **Real ICU dependency** (`_u_getIntPropertyValue`/
+      `_u_hasBinaryProperty` + the entire `CFUniChar*`/
+      `CFCharacterSet*` family + `CFStringUtilities.c`'s own
+      `_CFCompareStringsWithLocale` needing `<unicode/ucol.h>`) — this
+      project has no ICU port; out of scope until/unless one exists.
+      Real impact: CFString's non-ASCII case-mapping/decomposition/
+      collation and CFCharacterSet are unavailable, but basic
+      CFStringGetCString/CFStringCreateWithCString-class ASCII usage is
+      unaffected.
+    - **Real, unported CF subsystems** referenced by API (not just the
+      class table already stubbed above): `CFDateCreate`/
+      `CFDateGetAbsoluteTime`, `CFLocaleCopyCurrent`/`GetIdentifier`/
+      `GetValue`/`GetTypeID`, `CFURLCreate*` (4 functions), `CFError*`
+      (4 functions — probably the cheapest real follow-up, small self-
+      contained real file), `CFNumberFormatter*` (8 functions, real ICU
+      dependency too), `CFRead`/`CFWriteStream*` (6 functions, needs
+      real kqueue/FD integration), `CFBundleCreate`/
+      `CopyLocalizedString`, `CFBurstTrie*` (4 functions — a real
+      CFPropertyList/CFBinaryPList performance helper, not yet located
+      which subproj it lives in).
+    - **ASL legacy logging** (`asl_open`/`_close`/`_free`/`_new`/`_send`/
+      `_set`) — CFUtilities.c's own legacy console-logging fallback;
+      real source may exist in `third_party` already (not yet checked)
+      or may need the same "document as out of scope" treatment as ICU.
+    - **`dispatch_apply`/`_queue_create`/`_release`/`_once` +
+      `os_log_create`/`_type_enabled`/`__os_log_error_impl`/
+      `__os_alloc_once*`** — genuinely present in `libdispatch.dylib`
+      (built, real `MH_DYLIB`), but this trial link uses `-static`
+      linking throughout (matching every other archive-verification
+      trial link in this project) and real `ld64` cannot pull symbols
+      from a `MH_DYLIB` into a fully static link at all. This isn't a
+      missing-symbol gap, it's a **link-mode mismatch in the test
+      harness itself** — the real fix is a real dynamic trial link (or
+      deferring full verification to the actual "wire CF into launchd/
+      IOKitUser" phase, which will already be dynamically linking
+      against `libdispatch.dylib` by that project convention). Do not
+      re-diagnose this as a dispatch gap in a future pass.
+    - **Miscellaneous real libc/libSystem gaps**: `getpwnam`/`getpwuid`/
+      `getegid`/`geteuid`/`getuid`/`gethostname`/`kill`/`mmap`/
+      `mprotect`/`read`/`write`/`writev`/`dlopen`/`dlsym`/`localtime_r`/
+      `flsl`/`fmod`/`modf`/`pow`/`kdebug_trace`/`proc_pidinfo`/
+      `pthread_rwlock_rdlock`/`_unlock`/`pthread_threadid_np`/
+      `_is_threaded_np`/`_getugid_np`/`strtoul_l`/`__memmove_chk`/
+      `__strlcpy_chk`/`__vsnprintf_chk`/`__stack_chk_guard`/
+      `__chkstk_darwin`/`mach_vm_region` (declared in the compat header,
+      but the real definition in `libmalloc.a`'s `mach_vm.c` needs
+      checking — likely just needs exporting)/`malloc_zone_*`(6
+      functions)/`malloc_default_zone`/`malloc_good_size`/
+      `uuid_generate_random`/`_time`/`_NSGetArgc`/`_NSGetExecutablePath`.
+      Spot-checked: most of these (`getpwnam`, `kill`, `read`, `write`,
+      `writev`, `dlopen`, `localtime_r`, `proc_pidinfo`, `strtoul_l`,
+      `__memmove_chk`, `__stack_chk_fail`, `mach_error_string`,
+      `_NSGetArgv`) **already exist** somewhere in this project's
+      curated stack (`libcopyfile.a`/`libxpc_syscalls.a`/`libncurses.a`/
+      `libremovefile.a`/`libopenpam.a`/`libcxx.a`/`dyld_core.a`) — just
+      not linked into this particular trial link, which deliberately
+      keeps a minimal archive list to keep the gap signal clean. Adding
+      `libxpc_syscalls.a`/`libcopyfile.a`/`libopenpam.a`/`dyld_core.a`
+      wholesale was tried and reverted: it pulls in unrelated C++
+      (`libc++abi` vtables, `operator new`/`delete`) and a different set
+      of missing xattr/chmod-family symbols, a net loss for a trial-link
+      whose only job is to report gaps accurately. The real fix, when
+      this is picked back up, is selective `ar x` extraction of just the
+      needed `.o` members (same pattern `build_libdispatch_dylib.sh`
+      already established), not whole-archive linking.
+
+    **Verified, not just assumed**: tried a real, narrow trial link of a
+    tiny probe program calling only IOKitUser's specific documented
+    need (`CFArrayCreate`/`GetCount`/`GetTypeID`/`GetValueAtIndex`,
+    `CFBooleanGetTypeID`/`GetValue`, `CFDataCreateWithBytesNoCopy`,
+    `CFDictionaryCreate`/`ApplyFunction`/`GetTypeID`, `CFGetTypeID`,
+    `CFNumberGetTypeID`/`GetValue`, `CFRelease`) — both with and without
+    `-force_load` — expecting it to link far cleaner than the full
+    `core.c`/launchd-scale trial link above, since none of those calls
+    touch CFString/CFPropertyList. It didn't: the undefined-symbol list
+    came back nearly identical (~146 vs ~150 symbols). Root cause:
+    `CFRuntime.c`'s own `__CFInitialize()` — unconditionally reached by
+    any real `CFRuntimeCreateInstance()` call, i.e. any real CF object
+    creation at all, `CFArrayCreate` included — itself calls into
+    `_CFStringGetUserDefaultEncoding` (stubbed, fine) but real archive-
+    member pull-in also drags in enough of `CFUtilities.c`/
+    `CFPlatform.c`'s own real logging/ASL/time fallbacks to reproduce
+    almost the whole gap list. **Correction to this project's own
+    working assumption**: there is no "cheap partial CF" shortcut here —
+    closing the real gap list above (or at least its non-ICU, non-
+    dynamic-link-mode portion) is a prerequisite for ANY real CF usage
+    in this project, not just CFString-heavy usage.
+
+    **Concrete next steps, in priority order**: (1) resolve the static-
+    vs-dynamic trial-link harness gap first (`dispatch_*`/`os_log_*`
+    aren't really missing, just untestable in `-static` mode) so the
+    *actual* remaining gap count is known precisely, not inflated by a
+    harness artifact; (2) real `CFError.c` port (small, self-contained,
+    no ICU) to close 4 more symbols and replace its class-table stub
+    with the real thing; (3) selective `ar x` extraction of the ~13
+    already-built-elsewhere libc symbols (`getpwnam`, `kill`, `read`,
+    `write`, `writev`, `dlopen`, `localtime_r`, `proc_pidinfo`,
+    `strtoul_l`, `__memmove_chk`, `__stack_chk_fail`, `mach_error_string`,
+    `_NSGetArgv`) into a small, curated compat archive (avoiding the
+    C++/xattr pollution whole-archive linking hit); (4) decide whether
+    `CFPropertyListCreateFromXMLData` (needed by `launchd/core.c`,
+    explicitly out of scope for this pass — only binary-plist parsing
+    was included) is worth a follow-up pass, since XML plists are real
+    launchd/LaunchDaemons input format on real Darwin; (5) the ICU wall
+    (CFUniChar/CFCharacterSet/CFStringUtilities collation, CFLocale,
+    CFNumberFormatter) is the one item on this list that's a genuine
+    scope decision, not just unstarted work — real ICU is a large,
+    separate port this project has never attempted.
 
 0a. **No AES implementation exists anywhere in this kernel — HARD
     PREREQUISITE for Phase 7b (`sshd`).** Filed explicitly 2026-08-21 so it

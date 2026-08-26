@@ -1,0 +1,37 @@
+From b78bd146d854fb4943a6236d8bd63b504fc816f6 Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@gmail.com>
+Date: Wed, 26 Aug 2026 13:07:08 -0400
+Subject: [PATCH] CFPriv.h: fix real bool/Boolean prototype-conflict vs
+ CFPropertyList.c
+
+_CFPropertyListCreateSingleValue/_CFPropertyListCreateFiltered are
+declared 'bool' here but defined 'Boolean' in Parsing.subproj/
+CFPropertyList.c -- a real, hard C prototype-conflict error under
+strict recompilation (confirmed by real trial build against
+arm64-apple-ios14.4, iokit project). Boolean matches every other real
+CFPropertyList SPI signature in this same header; fixing the two
+outliers to match rather than the implementation file.
+---
+ CoreFoundation/Base.subproj/CFPriv.h | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/CoreFoundation/Base.subproj/CFPriv.h b/CoreFoundation/Base.subproj/CFPriv.h
+index 4c70bca..11d3224 100644
+--- a/CoreFoundation/Base.subproj/CFPriv.h
++++ b/CoreFoundation/Base.subproj/CFPriv.h
+@@ -614,10 +614,10 @@ CF_INLINE struct timespec _CFFileTimeSpecFromAbsoluteTime(CFAbsoluteTime at) {
+ }
+ 
+ // The 'filtered' function below is preferred to this older one
+-CF_EXPORT bool _CFPropertyListCreateSingleValue(CFAllocatorRef allocator, CFDataRef data, CFOptionFlags option, CFStringRef keyPath, CFPropertyListRef *value, CFErrorRef *error);
++CF_EXPORT Boolean _CFPropertyListCreateSingleValue(CFAllocatorRef allocator, CFDataRef data, CFOptionFlags option, CFStringRef keyPath, CFPropertyListRef *value, CFErrorRef *error);
+ 
+ // Returns a subset of the property list, only including the keyPaths in the CFSet. If the top level object is not a dictionary, you will get back an empty dictionary as the result.
+-CF_EXPORT bool _CFPropertyListCreateFiltered(CFAllocatorRef allocator, CFDataRef data, CFOptionFlags option, CFSetRef keyPaths, CFPropertyListRef *value, CFErrorRef *error) API_AVAILABLE(macos(10.8), ios(6.0), watchos(2.0), tvos(9.0));
++CF_EXPORT Boolean _CFPropertyListCreateFiltered(CFAllocatorRef allocator, CFDataRef data, CFOptionFlags option, CFSetRef keyPaths, CFPropertyListRef *value, CFErrorRef *error) API_AVAILABLE(macos(10.8), ios(6.0), watchos(2.0), tvos(9.0));
+ 
+ // Returns a set of the keys of the top-level dictionary of a plist. Optimized for bplist (though it works with XML too).  Only supports string keys. 
+ CF_EXPORT CFSetRef _CFPropertyListCopyTopLevelKeys(CFAllocatorRef allocator, CFDataRef data, CFOptionFlags option, CFErrorRef *outError) API_AVAILABLE(macos(10.13), ios(11.0), watchos(4.0), tvos(11.0));
+-- 
+2.50.1 (Apple Git-155)
+

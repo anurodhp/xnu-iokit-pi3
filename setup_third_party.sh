@@ -363,6 +363,8 @@ if [ -n "$SCF_DEST" ]; then
     git -C "$SCF_DEST" sparse-checkout init --cone
     git -C "$SCF_DEST" sparse-checkout set CoreFoundation
     git -C "$SCF_DEST" checkout "$SCF_REF"
+    echo "+ applying third_party-patches/swift-corelibs-foundation.patch to $SCF_DEST"
+    git -C "$SCF_DEST" am "../../third_party-patches/swift-corelibs-foundation.patch"
 fi
 
 echo "done -- third_party/ populated. See docs/roadmap.md and README.md for what to build next."
