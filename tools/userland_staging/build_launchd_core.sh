@@ -60,8 +60,8 @@ if [ ! -d "$PD/launchd" ]; then
     echo "error: $PD/launchd not found -- run setup_third_party.sh first" >&2
     exit 1
 fi
-if [ ! -f "$OUT/libxpc.a" ] || [ ! -f "$OUT/liblaunchd_mig.a" ]; then
-    echo "error: $OUT/libxpc.a and $OUT/liblaunchd_mig.a required -- run build_libxpc.sh / build_launchd_mig.sh first" >&2
+if [ ! -f "$OUT/libxpc.a" ] || [ ! -f "$OUT/liblaunchd_mig.a" ] || [ ! -f "$OUT/liblaunchd_syscalls.a" ]; then
+    echo "error: $OUT/libxpc.a, $OUT/liblaunchd_mig.a, and $OUT/liblaunchd_syscalls.a required -- run build_libxpc.sh / build_launchd_mig.sh / build_launchd_syscalls.sh first" >&2
     exit 1
 fi
 
@@ -147,7 +147,7 @@ echo "wrote $OUT/liblaunchd_core.a ($(ls "$OUT"/launchd_core_obj/*.o | wc -l | t
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     -Wl,-force_load,"$OUT/liblaunchd_core.a" \
     "$OUT/libxpc.a" "$OUT/liblaunchd_mig.a" "$OUT/libdispatch_real.a" \
-    "$OUT/libxpc_syscalls.a" "$OUT/libxpc_syscalls2.a" \
+    "$OUT/libxpc_syscalls.a" "$OUT/libxpc_syscalls2.a" "$OUT/liblaunchd_syscalls.a" \
     "$OUT/libmach_ipc.a" "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
     "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
     2>"$OUT/launchd_trial_link.err" \
