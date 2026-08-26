@@ -161,7 +161,7 @@ if [ -f "$OUT/xpc_trial_main.o" ] && [ -f "$OUT/libxpc.a" ]; then
         -o "$OUT/xpc_trial2.macho" \
         ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
         "$OUT/xpc_trial_main.o" \
-        "$OUT/libxpc.a" "$OUT/liblaunchd_mig.a" "$OUT/libdispatch_min.a" \
+        "$OUT/libxpc.a" "$OUT/liblaunchd_mig.a" "$OUT/libdispatch_real.a" \
         "$OUT/libxpc_syscalls.a" "$OUT/libxpc_syscalls2.a" \
         "$OUT/libmach_ipc.a" "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
         "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" \

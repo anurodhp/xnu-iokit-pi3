@@ -2107,6 +2107,58 @@ a re-enable; (3) rewire `build_libxpc.sh`/`build_libnotify.sh`/etc from
 only after that, decide whether `dispatch_min.a` can be deleted outright
 or should stay as a documented fallback during the migration.
 
+### Real `libdispatch` port continued, same day -- compiled+archived+
+### linked; `build_libxpc.sh`/`build_libxpc_syscalls.sh`/`2.sh` swapped
+### from `libdispatch_min.a` onto the real archive
+
+All 3 concrete next steps above are DONE: `build_libdispatch_real.sh`
+now compiles 19 real files (the original 14 plus `data.c` and the real
+`event/` kqueue backend -- both turned out fully compatible with the
+real object model, `firehose_task_buffer`'s extern didn't even need a
+compat definition since nothing in the compiled set references it
+outside the already-`#if 0`-disabled voucher.c block) plus `block.cpp`
+(real C++11, Blocks-runtime only, no ObjC) and `shims/lock.c` (the real
+semaphore/gate/unfair-lock slow paths), archives `libc_build/
+libdispatch_real.a` (23 objects), and a real functionally-exercising
+trial link narrows the gap to 53 real symbols -- see that script's own
+updated HONEST SCOPE STATEMENT for the full, categorized breakdown
+(overwhelmingly libpthread's own missing standard POSIX/QoS API, not
+libdispatch's own code). Three more real upstream fixes landed in
+`libdispatch.patch` along the way (a real parameter typo in
+`event_kevent.c`, two missing global TSD keys in `init.c`, an explicit
+cast `_dispatch_thread_port()` needed once C++ entered the build).
+
+`libdispatch_min.a` references replaced with `libdispatch_real.a` in all
+three: `build_libxpc.sh`, `build_libxpc_syscalls.sh`,
+`build_libxpc_syscalls2.sh`. Real, verified result: all three still
+compile with **zero errors** (the archive swap only affects linking, not
+compiling libxpc's own sources), and the combined trial link
+(`build_libxpc_syscalls2.sh`'s own, the fullest one: `libxpc.a` +
+`liblaunchd_mig.a` + `libdispatch_real.a` + both syscalls tiers) now
+shows **81 undefined symbols**, up from the pre-swap 5
+(`os_log_create`/`os_log_type_enabled`/`_os_log_impl`/
+`dispatch_data_create_map`/`__mach_errors`) -- the ~76 new ones are the
+same real libpthread-centric gap `build_libdispatch_real.sh` already
+documents (standard `pthread_attr_*`/QoS-override/workqueue API missing
+from this project's curated libpthread, plus a handful of raw traps
+this project hasn't generated stubs for yet: `mmap`/`munmap`/`kqueue`/
+`kevent`/`kevent_qos`/`sigsuspend`/`clock_gettime_nsec_np`/
+`kpersona_get`, plus real Mach voucher MIG routines needing a
+`mach_voucher.defs`/`host_priv.defs` regen this project hasn't done).
+`dispatch_min.a` itself is left in place (not deleted) as the documented
+fallback per the original plan -- nothing currently references it except
+its own build script.
+
+**This does not block starting on launchd's actual daemon source**
+(`core.c`/`ipc.c`/`launchd.c`/`log.c`/`runtime.c`) -- that work needs its
+own real trial-compile pass regardless of this gap, and can surface
+which of these 81 symbols (if any) launchd's own code actually
+exercises vs. which stay purely theoretical (referenced by libxpc/
+libdispatch internals launchd's own real startup path never reaches, the
+same "real gap, but is it on a path that matters" question this project
+has answered narrowly for every prior gap rather than closing
+everything unconditionally).
+
 ## Phase 6.8 -- original 2026-08-22 scoping (partially superseded above,
 ## kept for the parts still accurate: license/vintage caution, the
 ## "expect real work left in the XPC skeleton" expectation, and the

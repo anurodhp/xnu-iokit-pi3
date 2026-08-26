@@ -197,7 +197,7 @@ EOF
     -o xpc_smoketest.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/xpc_trial_main.o" \
-    "$OUT/libxpc.a" "$OUT/liblaunchd_mig.a" "$OUT/libdispatch_min.a" \
+    "$OUT/libxpc.a" "$OUT/liblaunchd_mig.a" "$OUT/libdispatch_real.a" \
     "$OUT/libmach_ipc.a" "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
     "$OUT/libc_string.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_stdio.a" "$OUT/libc_gen.a" "$OUT/libc_printf.a" \
     "$OUT/libpthread.a" \
