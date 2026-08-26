@@ -502,23 +502,32 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
       CFStringGetCString/CFStringCreateWithCString-class ASCII usage is
       unaffected.
     - **Real, unported CF subsystems** referenced by API (not just the
-      class table already stubbed above): `CFDateCreate`/
-      `CFDateGetAbsoluteTime`, `CFLocaleCopyCurrent`/`GetIdentifier`/
-      `GetValue`/`GetTypeID`, `CFURLCreate*` (4 functions),
-      `CFNumberFormatter*` (8 functions, real ICU dependency too),
-      `CFRead`/`CFWriteStream*` (6 functions, needs real kqueue/FD
-      integration), `CFBundleCreate`/`CopyLocalizedString`,
-      `CFBurstTrie*` (4 functions — a real CFPropertyList/CFBinaryPList
-      performance helper, not yet located which subproj it lives in).
+      class table already stubbed above): `CFLocaleCopyCurrent`/
+      `GetIdentifier`/`GetValue`/`GetTypeID`, `CFURLCreate*` (4
+      functions), `CFNumberFormatter*` (8 functions, real ICU dependency
+      too), `CFRead`/`CFWriteStream*` (6 functions, needs real
+      kqueue/FD integration), `CFBundleCreate`/`CopyLocalizedString`/
+      `GetBundleWithIdentifier`, `CFBurstTrie*` (4 functions — a real
+      CFPropertyList/CFBinaryPList performance helper, not yet located
+      which subproj it lives in), `CFCopySearchPathForDirectoriesInDomains`.
       **CLOSED 2026-08-26: `CFError*`** — real `Error.subproj/CFError.c`
       (645 lines) compiled clean with zero extra work needed, added to
-      `build_corefoundation.sh`'s `FILES` array (now 23 objects), its
-      class-table entry in `cf_class_stubs.c` removed in favor of the
-      real one. Closed 6 symbols (`CFErrorCreate`/`GetCode`/`GetDomain`/
-      `CopyUserInfo`, `kCFErrorDomainCocoa`/`OSStatus`/`POSIX`,
-      `kCFErrorDebugDescriptionKey`/`UnderlyingErrorKey`) — real gap
-      count now 111 (dynamic-link count including the curated
-      `cf_libc_extras.a`, see below), down from 138.
+      `build_corefoundation.sh`'s `FILES` array, its class-table entry
+      in `cf_class_stubs.c` removed in favor of the real one. Closed 6
+      symbols (`CFErrorCreate`/`GetCode`/`GetDomain`/`CopyUserInfo`,
+      `kCFErrorDomainCocoa`/`OSStatus`/`POSIX`,
+      `kCFErrorDebugDescriptionKey`/`UnderlyingErrorKey`).
+      **CLOSED 2026-08-26: `CFDate*`** — real
+      `NumberDate.subproj/CFDate.c` (593 lines) also compiled clean with
+      zero extra work, same treatment (class-table stub removed, the
+      real file's own `__CFDateInitialize()` replaces the compat no-op
+      that used to stand in for it). Closed 4 symbols (`CFDateCreate`/
+      `GetAbsoluteTime`, `CFAbsoluteTimeGetCurrent`/`GetGregorianDate`,
+      `CFGregorianDateGetAbsoluteTime`, `kCFAbsoluteTimeIntervalSince1970`).
+      Real gap count now **107** (dynamic-link count including the
+      curated `cf_libc_extras.a`), down from the original 153. Now 24
+      real/compat files in `build_corefoundation.sh`'s `FILES` array
+      (23 real Apple source + 1 compat stub file).
     - **ASL legacy logging** (`asl_open`/`_close`/`_free`/`_new`/`_send`/
       `_set`) — CFUtilities.c's own legacy console-logging fallback;
       real source may exist in `third_party` already (not yet checked)

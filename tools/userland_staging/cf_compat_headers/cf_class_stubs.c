@@ -40,7 +40,6 @@ CF_STUB_CLASS(__CFAttributedStringClass);
 CF_STUB_CLASS(__CFBundleClass);
 CF_STUB_CLASS(__CFCalendarClass);
 CF_STUB_CLASS(__CFCharacterSetClass);
-CF_STUB_CLASS(__CFDateClass);
 CF_STUB_CLASS(__CFDateComponentsClass);
 CF_STUB_CLASS(__CFDateFormatterClass);
 CF_STUB_CLASS(__CFDateIntervalFormatterClass);
@@ -63,11 +62,11 @@ CF_STUB_CLASS(__CFURLClass);
 CF_STUB_CLASS(__CFURLComponentsClass);
 CF_STUB_CLASS(__CFWriteStreamClass);
 
-/* Real init hooks CFRuntime.c's own __CFInitialize() calls unconditionally
- * (CFDate.c/CFCharacterSet.c set up static lookup tables here on real
- * builds) -- safe no-ops since nothing calls into CFDate/CFCharacterSet
- * APIs in this project's minimal build. */
-void __CFDateInitialize(void) {}
+/* Real init hook CFRuntime.c's own __CFInitialize() calls unconditionally
+ * (CFCharacterSet.c sets up static lookup tables here on real builds --
+ * CFDate.c's own real __CFDateInitialize() is now built for real, see
+ * build_corefoundation.sh's FILES array) -- safe no-op since nothing
+ * calls into CFCharacterSet APIs in this project's minimal build. */
 void __CFCharacterSetInitialize(void) {}
 
 /* Real CFBundle/CFLocale globals CFRuntime.c and CFInternal.h declare

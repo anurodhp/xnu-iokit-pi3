@@ -15,19 +15,22 @@
 # This is NOT a full CoreFoundation build. It is the minimal real
 # subset needed to close the specific undefined symbols launchd/core.c
 # and IOKitUser actually call: CFArray/CFDictionary/CFData/CFBasicHash/
-# CFSet/CFBag (Collections.subproj), CFNumber+CFBoolean (NumberDate.
-# subproj), CFString (String.subproj), CFPropertyList+CFBinaryPList
+# CFSet/CFBag/CFBinaryHeap/CFBitVector/CFStorage/CFTree
+# (Collections.subproj), CFNumber+CFBoolean+CFDate (NumberDate.subproj),
+# CFString (String.subproj), CFPropertyList+CFBinaryPList
 # (Parsing.subproj -- XML plist parsing, i.e. CFPropertyListCreateFrom
 # XMLData, is explicitly NOT included; only the binary-plist + basic
-# CFPropertyList API surface these two files provide), plus CFBase/
-# CFRuntime/CFUtilities/CFUUID/CFPlatform/CFKnownLocations/
-# CFSortFunctions (Base.subproj) those all transitively need. Real,
-# unmodified upstream source for all 17 files -- zero fabricated stubs.
+# CFPropertyList API surface these two files provide), CFError
+# (Error.subproj), plus CFBase/CFRuntime/CFUtilities/CFUUID/CFPlatform/
+# CFKnownLocations/CFSortFunctions (Base.subproj) those all transitively
+# need. Real, unmodified upstream source for every real file -- zero
+# fabricated stubs (the one exception, cf_compat_headers/cf_class_stubs.c,
+# is real but NOT upstream source -- see its own header comment).
 #
 # NOT INCLUDED (real, separate subprojs this project doesn't need yet):
 # RunLoop, Stream, PlugIn (bundles), Locale/NumberFormatter/
 # DateFormatter (real ICU dependency, out of scope), URL, Preferences,
-# Error, CharacterSet's Unicode data tables (see CFUniChar.c / the
+# CharacterSet's Unicode data tables (see CFUniChar.c / the
 # CFCharacterSetBitmaps.bitmap/CFUniCharPropertyDatabase.data sectcreate
 # data build.py wires in for full builds -- NOT done here).
 #
@@ -112,7 +115,7 @@ FILES=(Base.subproj/CFBase.c Base.subproj/CFRuntime.c Base.subproj/CFUtilities.c
     Collections.subproj/CFBasicHash.c Collections.subproj/CFSet.c Collections.subproj/CFBag.c \
     Collections.subproj/CFBinaryHeap.c Collections.subproj/CFBitVector.c Collections.subproj/CFStorage.c \
     Collections.subproj/CFTree.c \
-    NumberDate.subproj/CFNumber.c String.subproj/CFString.c \
+    NumberDate.subproj/CFNumber.c NumberDate.subproj/CFDate.c String.subproj/CFString.c \
     Parsing.subproj/CFPropertyList.c Parsing.subproj/CFBinaryPList.c \
     Error.subproj/CFError.c)
 
@@ -123,8 +126,8 @@ for f in "${FILES[@]}"; do
 done
 # Real, minimal CFRuntimeClass stub descriptors for CF subsystems not
 # ported yet (RunLoop/Stream/Socket/MachPort/URL/Locale/Calendar/
-# TimeZone/Date family/Formatters/CharacterSet/AttributedString/Bundle/
-# PlugIn/Preferences/Error) plus two init-hook no-ops -- see
+# TimeZone/DateComponents/Formatters/CharacterSet/AttributedString/
+# Bundle/PlugIn/Preferences) plus one init-hook no-op -- see
 # cf_compat_headers/cf_class_stubs.c's own header comment for the full
 # rationale (safe because nothing in this project's real call graph
 # instantiates these types yet; tracked as docs/backlog.md P2 d7).
