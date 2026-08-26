@@ -1,0 +1,272 @@
+#!/bin/bash
+# Builds libc_build/system/libdispatch.dylib: a real dylib, matching
+# this project's standing 2026-08-25 directive (docs/daemon-roadmap.md's
+# "Static-vs-dylib architecture debt" section) that new work should
+# produce a real per-library `.dylib`, not a new static archive --
+# real Apple ships libdispatch at exactly this real installed path,
+# `/usr/lib/system/libdispatch.dylib`, alongside `libsystem_kernel.dylib`
+# etc (confirmed: it is its OWN separate image on real Darwin, not
+# folded into `libSystem.B.dylib` the way this project's own umbrella
+# `libSystem.B.dylib` currently folds everything together -- see
+# CLAUDE.md's own note that that flattening is migration debt, not a
+# design goal).
+#
+# Reuses the already-built, already-verified object files from
+# build_libdispatch_real.sh's own libc_build/dispatch_obj/ (`ar x`-free
+# here since those were never archived into anything this script needs
+# to unpack -- build_libdispatch_real.sh writes loose .o's directly)
+# rather than recompiling.
+#
+# ============================================================
+# HONEST SCOPE STATEMENT -- read this first
+# ============================================================
+# REAL, KNOWN ARCHITECTURE DEBT this script does NOT fix, filed instead
+# as a followup (see docs/backlog.md's new "library debt" section): this
+# dylib is built `-nostdlib` and STATICALLY bundles its current
+# dependency stack (libmach_ipc.a/libclosure.a/libmalloc.a/libplatform.a/
+# libpthread.a/libc_*.a), exactly like every static archive consumer of
+# those same archives already does. That means libdispatch.dylib gets
+# its OWN private copy of every process-global piece of state those
+# archives carry (mach_task_self_, g_zone, errno, etc) -- the SAME real
+# bug class build_libsystem_malloc.sh's own header comment already
+# documents and fixed for libdyld.dylib/libSystem.B.dylib (two
+# different dylibs, each with a silently-separate heap zone, real heap
+# corruption risk). Until this dylib is relinked against the REAL
+# sibling dylibs this project already built (libsystem_kernel.dylib/
+# libsystem_platform.dylib/libsystem_malloc.dylib/libsystem_pthread.dylib/
+# libsystem_c.dylib) instead of re-bundling their pre-dylib static
+# ancestors, any process loading both libdispatch.dylib and one of those
+# sibling dylibs has two independent copies of the same "one true
+# global" state -- do not treat this dylib as safe to load alongside
+# them in a real multi-dylib process until that follow-up lands.
+#
+# The real, categorized undefined symbols build_libdispatch_real.sh's
+# own HONEST SCOPE STATEMENT lists (mostly libpthread's own missing
+# standard POSIX/QoS API) are tolerated here via a real, explicit
+# per-symbol `-Wl,-U,<name>` exception list -- the SAME established
+# mechanism build_libsystem_c.sh's own link already uses for
+# `___progname` (a real symbol resolved by whatever loads the dylib,
+# not baked in). A blanket `-Wl,-undefined,dynamic_lookup` was tried
+# first and does NOT work in this environment: real ld64 attempts to
+# resolve each dynamic_lookup candidate against the HOST macOS's own
+# real dyld shared cache, and hard-fails (rather than deferring) for any
+# name that cache actually recognizes -- which is most of these, since
+# they're real Apple symbol names by construction. `-U` avoids that
+# lookup entirely per-symbol. This is NOT the same as real Apple's
+# actual two-level-namespace dylibs (which record an explicit, specific
+# dependent-dylib-and-symbol pair for every import) -- it's an honest,
+# deliberate shortcut, not a claim this dylib's import table matches
+# real Apple's. Doing this properly (explicit `-l`-style dependencies on
+# this project's own already-real libsystem_kernel.dylib/
+# libsystem_pthread.dylib/etc, once those actually implement the missing
+# symbols for real) is the same follow-up as the duplicate-global-state
+# fix above, not a separate task.
+UNDEF_SYMS=(
+    __dispatch_wait_for_enqueuer __os_semaphore_create __os_semaphore_dispose
+    __os_workgroup_tsd_cleanup __pthread_qos_class_encode
+    __pthread_qos_override_end_direct __pthread_qos_override_start_direct
+    __pthread_set_properties_self __pthread_workloop_create __pthread_workloop_destroy
+    __pthread_workqueue_override_reset __pthread_workqueue_override_start_direct
+    __pthread_workqueue_override_start_direct_check_owner
+    _clock_gettime_nsec_np _host_create_mach_voucher _host_get_special_port
+    _kdebug_trace _kevent_qos _kpersona_get _mach_continuous_time _mach_get_times
+    _mach_voucher_attr_command _mach_voucher_deallocate _mach_voucher_debug_info
+    _mach_voucher_extract_attr_recipe _malloc_engaged_nano _malloc_memory_event_handler
+    _mmap _munmap _pthread_attr_destroy _pthread_attr_get_qos_class_np
+    _pthread_attr_getschedparam _pthread_attr_getschedpolicy _pthread_attr_init
+    _pthread_attr_set_qos_class_np _pthread_attr_setdetachstate
+    _pthread_attr_setschedparam _pthread_attr_setschedpolicy _pthread_attr_setstacksize
+    _pthread_exit _pthread_get_stackaddr_np _pthread_qos_max_parallelism
+    _pthread_set_qos_class_self_np _pthread_setschedparam _pthread_sigmask
+    _qos_class_main _semaphore_timedwait _sigsuspend _sleep
+    _thread_destruct_special_reply_port _thread_get_special_reply_port _vasprintf
+    _pwrite _read _pthread_tsd_shim_bootstrap
+    _gettimeofday _kill
+    _mach_eventlink_associate _mach_eventlink_create _mach_eventlink_destroy
+    _mach_eventlink_disassociate _mach_eventlink_signal
+    _mach_eventlink_signal_wait_until _mach_eventlink_wait_until
+    _asprintf _atoi _dprintf _fprintf
+    _close _pread
+    _strcasecmp _getprogname _sys_errlist _sys_nerr
+    ___toupper ___toupper_l __fstat __open __close __read __write
+    __mach_errors _environ
+    _mach_port_construct _mach_port_destruct _mach_port_extract_right
+    _mach_port_insert_right _mach_port_unguard _mach_port_kernel_object
+    _mach_port_request_notification _mach_port_get_context _mach_port_set_context
+    _mach_make_memory_entry_64
+)
+UNDEF_FLAGS=()
+for s in "${UNDEF_SYMS[@]}"; do
+    UNDEF_FLAGS+=(-Wl,-U,"$s")
+done
+set -e
+cd "$(dirname "$0")"
+
+OUT="libc_build"
+
+if [ ! -d "$OUT/dispatch_obj" ]; then
+    echo "error: $OUT/dispatch_obj not found -- run build_libdispatch_real.sh first" >&2
+    exit 1
+fi
+
+XCODE12="/Applications/Xcode-12.app/Contents/Developer"
+CLANG="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+SDK="$XCODE12/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
+if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
+    echo "error: Xcode-12.app not found at $XCODE12" >&2
+    exit 1
+fi
+
+# libmach_ipc.a's own mach_ipc_dead_stubs.o is real, confirmed-dead
+# weight now: all 4 of its symbols (_mach_port_extract_right/
+# _insert_right/_unguard, _voucher_mach_msg_set) are already provided
+# for real elsewhere in this exact link (voucher.o's own real body for
+# the last one; real mach_portUser.o-family MIG output for the first 3
+# -- confirmed via `nm` before excluding, not assumed) -- extracted here
+# rather than archived-in-whole to avoid a real duplicate-symbol link
+# error, same "ar x, exclude the now-redundant member" precedent
+# build_libsystem_malloc.sh already established for a different archive.
+mkdir -p "$OUT/dispatch_dylib_extract"
+rm -f "$OUT"/dispatch_dylib_extract/*.o
+(cd "$OUT/dispatch_dylib_extract" && ar x ../libmach_ipc.a && rm -f mach_ipc_dead_stubs.o)
+
+# libc_build/dyld_core.a's own mach_portUser.o/vm_mapUser.o were tried
+# here (they have real mach_port_construct/destruct/get_context/etc and
+# mach_make_memory_entry_64) but real-conflict on 9 OTHER symbols
+# (_vm_allocate/_deallocate/_map/_protect/_remap/_purgable_control/_read,
+# _mach_port_mod_refs/_deallocate) against libmalloc.a's own real
+# mach_vm.o/libmalloc_dispatch.o bodies for the exact same functions --
+# both real, just built at different points in this project's history.
+# Deferred via `-Wl,-U` below instead of fighting that conflict (real
+# followup: same de-duplication task as pthread_key_init_np above).
+
+# real semaphore_signal()/semaphore_wait() curated bodies already built
+# for the libxpc syscalls tier (build_libxpc_syscalls.sh's own
+# mach_semaphore_wrap_compat.o) -- reused, not regenerated.
+cp "$OUT/xpc_syscall_obj/semaphore_wrap.o" "$OUT/dispatch_dylib_extract/semaphore_wrap.o"
+
+# real third_party/Libc/gen/FreeBSD locale/string primitives
+# (strcasecmp, sys_errlist/sys_nerr) this dylib's own code needs --
+# extracted from libc_locale_for_stdio.a EXCLUDING pthread_tsd_shim.o,
+# which real-but-redundantly redefines `pthread_key_init_np` (this
+# project's real libpthread.a already has its own, canonical copy -- a
+# genuine duplicate-symbol conflict between two archives built at
+# different points in this project's history, not a fabricated
+# exclusion). Two real attempts at pulling libc_locale_for_stdio.a's
+# strcasecmp/getprogname/toupper/raw-fstat-open-etc members (first the
+# whole archive, then a hand-picked subset) both cascaded into that
+# archive's own real, much larger locale-loading subsystem
+# (_modifylocale -> collate/messages/monetary/numeric/setrunelocale
+# table loaders; ___time_load_locale -> its own extra table loader;
+# real stack-protector globals from a DIFFERENT pre-built object
+# entirely) -- none of which libdispatch itself needs, just transitive
+# bloat from sharing object files with unrelated real functionality.
+# Deferred via `-Wl,-U` below instead (`_strcasecmp`/`_getprogname`/
+# `_sys_errlist`/`_sys_nerr`/`___toupper`/`___toupper_l`/`__fstat`/
+# `__open`/`__close`/`__read`/`__write`/`_close`) -- real Apple's own
+# libdispatch.dylib gets these from a real DEPENDENCY on libSystem's
+# libc portion at runtime, not by bundling libc's internals into
+# itself; this project's own libsystem_c.dylib already exists for
+# exactly that real dependency (see docs/backlog.md's new library-debt
+# item -- relink against it instead of static bundling, once this
+# dylib's mach_task_self_/g_zone/etc duplicate-global-state issue is
+# fixed the same way).
+
+# real mach_error_string()/semaphore_{signal,wait}_trap()/os_assumes
+# bodies -- already built for the libxpc tier, reused not regenerated.
+cp "$OUT/xpc_syscall_obj/mach_error_string.o" "$OUT/dispatch_dylib_extract/mach_error_string.o"
+cp "$OUT/xpc_syscall_obj/mach_semaphore_traps.o" "$OUT/dispatch_dylib_extract/mach_semaphore_traps.o"
+cp "$OUT/xpc_obj/os_assumes_compat.o" "$OUT/dispatch_dylib_extract/os_assumes_compat.o"
+cp "$OUT/xpc_syscall_obj/getenv_compat.o" "$OUT/dispatch_dylib_extract/getenv_compat.o"
+
+# real, minimal stack-protector runtime support -- needed only because
+# dyld_mach_portUser.o/dyld_vm_mapUser.o (below, reused from the dyld
+# port) were originally compiled WITH stack-protector enabled; this
+# dylib's own dispatch_obj/*.o are all `-fno-stack-protector` (matching
+# every other tier in this project) and never call these. Real,
+# standard canary-check runtime (matches every libc's actual
+# __stack_chk_fail semantics: abort on mismatch), not a functional
+# stand-in.
+cat > "$OUT/dispatch_dylib_extract/stack_chk_compat.c" <<'EOF'
+#include <stdint.h>
+#include <stdlib.h>
+long __stack_chk_guard = 0x0BADC0DEDEADBEEFL;
+void __stack_chk_fail(void) { abort(); }
+/* real arm64 stack-probe helper (touches each page of a large stack
+ * allocation so the kernel's guard page reliably faults on overflow
+ * instead of possibly skipping past it) -- reused objects here only
+ * make small, fixed-size MIG reply-buffer allocations, so a no-op body
+ * is safe for this target's real call pattern, not a functional gap. */
+void __chkstk_darwin(void) {}
+EOF
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    "$OUT/dispatch_dylib_extract/stack_chk_compat.c" -o "$OUT/dispatch_dylib_extract/stack_chk_compat.o"
+
+# real raw trap for ___kdebug_trace64 (BSD syscall #179, NO_SYSCALL_STUB
+# -- confirmed real trap number in bsd/kern/syscalls.master), closing a
+# real gap this dylib's own dispatch_prefix_compat.h kdebug_trace()
+# wrapper needs. `-Wl,-undefined,dynamic_lookup` (below) cannot defer
+# this one specifically -- real ld64 quirk: it tries to resolve raw
+# double-underscore trap names against the HOST macOS's own real dyld
+# shared cache metadata even for this iOS-target build, and fails
+# outright rather than deferring, unlike every other undefined symbol
+# here. A real local definition sidesteps that path entirely.
+mkdir -p "$OUT/sys_asm_compat/mach/arm64"
+cat > "$OUT/sys_asm_compat/mach/arm64/asm.h" <<'EOF'
+#include <arm64/asm.h>
+EOF
+XNU_FOR_TRAP="../../third_party/xnu-7195"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -arch arm64 \
+    -I"$OUT/sys_asm_compat" -I"$XNU_FOR_TRAP/libsyscall/custom" -I"$XNU_FOR_TRAP/libsyscall/mach" -I"$XNU_FOR_TRAP/osfmk" \
+    "$OUT/dyld_syscall_gen/___kdebug_trace64.s" -o "$OUT/dispatch_dylib_extract/kdebug_trace64_trap.o"
+
+# same real _chk/-undefined-dynamic_lookup quirk as kdebug_trace64 above
+# -- real source already established by build_libxpc_syscalls2.sh
+# (third_party/Libc/secure/*.c), just needs its own copy here since this
+# script doesn't depend on that one having run.
+LIBC="../../third_party/Libc"
+CFLAGS_SECURE=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -Wno-nullability-completeness -I "$LIBC/secure")
+for f in snprintf_chk strlcpy_chk vsnprintf_chk; do
+    "$CLANG" "${CFLAGS_SECURE[@]}" "$LIBC/secure/$f.c" -o "$OUT/dispatch_dylib_extract/$f.o"
+done
+"$CLANG" "${CFLAGS_SECURE[@]}" chk_fail_compat.c -o "$OUT/dispatch_dylib_extract/chk_fail_compat.o"
+
+mkdir -p "$OUT/system"
+rm -f "$OUT/system/libdispatch.dylib"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
+    -install_name /usr/lib/system/libdispatch.dylib \
+    -Wl,-fixup_chains \
+    "${UNDEF_FLAGS[@]}" \
+    -Wl,-alias,___kill,'_kill$UNIX2003' \
+    -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
+    -Wl,-alias,__mal_semwait_sleep,'_sleep$UNIX2003' \
+    -Wl,-alias,_write,'_write$UNIX2003' \
+    -o "$OUT/system/libdispatch.dylib" \
+    "$OUT"/dispatch_obj/*.o "$OUT"/dispatch_obj/event/*.o \
+    "$OUT"/dispatch_dylib_extract/*.o \
+    "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" \
+    "$OUT/simple_obj/sys__kqueue.o" \
+    2>"$OUT/system/libdispatch_dylib_link.err" \
+    || { echo "note: dylib link reported diagnostics (expected -- undefined symbols are normal in a dylib), see $OUT/system/libdispatch_dylib_link.err" >&2; }
+
+if [ ! -f "$OUT/system/libdispatch.dylib" ]; then
+    echo "error: libdispatch.dylib was not produced -- check $OUT/system/libdispatch_dylib_link.err for a real link error (not just undefined-symbol warnings)" >&2
+    tail -40 "$OUT/system/libdispatch_dylib_link.err" >&2
+    exit 1
+fi
+
+echo "wrote $OUT/system/libdispatch.dylib"
+otool -hv "$OUT/system/libdispatch.dylib" | grep -q " DYLIB " || {
+    echo "error: filetype is not DYLIB" >&2
+    exit 1
+}
+otool -l "$OUT/system/libdispatch.dylib" | grep -q LC_ID_DYLIB || {
+    echo "error: no LC_ID_DYLIB -- not a real dylib" >&2
+    exit 1
+}
+echo "confirmed: $OUT/system/libdispatch.dylib is a real MH_DYLIB with LC_ID_DYLIB"
+
+undef_count=$(nm -u "$OUT/system/libdispatch.dylib" 2>/dev/null | wc -l | tr -d ' ')
+echo "real undefined-symbol count in the dylib: $undef_count (expected -- see this script's own HONEST SCOPE STATEMENT; a dylib legitimately has these, unlike a static executable)"

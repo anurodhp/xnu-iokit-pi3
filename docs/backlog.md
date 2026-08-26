@@ -246,6 +246,122 @@ this pass even if the change itself is cheap.
 
 ## P2 — known gaps / incomplete work (not bugs, just unfinished)
 
+### Userland library debt (filed 2026-08-26, from the real libdispatch port + dylib conversion)
+
+d1. **`libdispatch.dylib` duplicates process-global state with its own
+    sibling dylibs — real heap-corruption-class risk, same shape as the
+    bug `build_libsystem_malloc.sh` already fixed once.** `tools/
+    userland_staging/build_libdispatch_dylib.sh` builds a real
+    `libdispatch.dylib` (`-nostdlib`, MH_DYLIB confirmed via `otool`) but
+    statically bundles its CURRENT dependency stack
+    (`libmach_ipc.a`/`libclosure.a`/`libmalloc.a`/`libplatform.a`/
+    `libpthread.a`/`libc_gen.a`/`libc_string.a`/`libc_stdio.a`) rather
+    than linking against this project's REAL sibling dylibs
+    (`libsystem_kernel.dylib`/`libsystem_platform.dylib`/
+    `libsystem_malloc.dylib`/`libsystem_pthread.dylib`/
+    `libsystem_c.dylib`, all already built). That means any real process
+    loading both `libdispatch.dylib` and one of those sibling dylibs
+    gets two independent copies of `mach_task_self_`, `g_zone` (the live
+    heap zone — see `build_libsystem_malloc.sh`'s own header comment for
+    why that specific duplicate is real heap-corruption territory, not
+    just "wrong value"), `errno`, etc. **Do not load this dylib alongside
+    the real sibling dylibs in a multi-dylib process until this is
+    fixed.** Real fix: relink against the sibling `.dylib`s (`-l`-style,
+    not static bundling) instead of their static ancestors.
+
+d2. **Real duplicate-symbol conflicts between archives built at
+    different points in this project's history — surfaced while linking
+    `libdispatch.dylib`, not yet de-duplicated for good.** Three
+    confirmed, real cases (not fabricated exclusions — verified via `nm`
+    before excluding each one):
+    - `_pthread_key_init_np`: real in both `libpthread.a` (canonical)
+      and `libc_locale_for_stdio.a`'s `pthread_tsd_shim.o` (an older
+      compat copy from before `libpthread.a` had its own).
+    - `_voucher_mach_msg_set` + `_mach_port_extract_right`/
+      `_insert_right`/`_unguard`: real in both `libmach_ipc.a`'s own
+      `mach_ipc_dead_stubs.o` (now fully redundant — all 4 of its
+      symbols are superseded elsewhere, confirmed via `nm`) and the real
+      voucher.c/MIG-generated bodies that superseded it.
+    - `_vm_allocate`/`_deallocate`/`_map`/`_protect`/`_remap`/
+      `_purgable_control`/`_read`, `_mach_port_mod_refs`/`_deallocate`:
+      real in both `libmalloc.a`'s own `mach_vm.o`/
+      `libmalloc_dispatch.o` and `dyld_core.a`'s `vm_mapUser.o`/
+      `mach_portUser.o` (built for the dyld port, regenerated
+      independently).
+    `build_libdispatch_dylib.sh` works around all three via `ar x`
+    exclusion or by simply not linking the conflicting object (see that
+    script's own comments for exactly which). None of these are fixed
+    at the source — a real followup pass should pick ONE canonical
+    provider per symbol and delete the other, project-wide, not just in
+    this one dylib's link line.
+
+d3. **Standard POSIX/QoS pthread API entirely missing from this
+    project's curated `libpthread.a`/`libsystem_pthread.dylib` — a real
+    completeness gap, confirmed via `nm -g`, not assumed.** Surfaced by
+    the real libdispatch port's own trial link
+    (`tools/userland_staging/build_libdispatch_real.sh`'s own HONEST
+    SCOPE STATEMENT has the full, current list). Two groups:
+    - Standard, simple POSIX API with no real implementation anywhere
+      in this project: `pthread_attr_init`/`_destroy`/`_setdetachstate`/
+      `_setstacksize`/`_setschedparam`/`_setschedpolicy`/
+      `_getschedparam`/`_getschedpolicy`/`_get_qos_class_np`/
+      `_set_qos_class_np`, `pthread_exit`, `pthread_sigmask`,
+      `pthread_setschedparam`, `pthread_get_stackaddr_np`,
+      `qos_class_main`, `pthread_qos_max_parallelism`,
+      `pthread_set_qos_class_self_np`.
+    - Real QoS-override/workqueue-internals API, genuinely more
+      involved (interacts with the kernel workqueue subsystem this
+      project's `DISPATCH_USE_INTERNAL_WORKQUEUE=1` choice was
+      specifically meant to avoid needing):
+      `_pthread_qos_override_start_direct`/`_end_direct`,
+      `_pthread_workqueue_override_start_direct`/`_reset`/
+      `_start_direct_check_owner`, `_pthread_workloop_create`/
+      `_destroy`, `_pthread_set_properties_self`,
+      `_pthread_qos_class_encode`.
+    Real Apple source for both groups should be in
+    `third_party/libpthread` already (pinned repo) — this is a "port the
+    missing files" task, not a "write from scratch" one; not yet
+    attempted.
+
+d4. **A handful of raw syscall traps this project hasn't generated
+    stubs for yet, needed by the real libdispatch port.** `mmap`/
+    `munmap` (raw trap objects exist -- `pthread___mmap.o`/
+    `pthread___munmap.o` -- but only export the triple-underscore raw
+    trap name, not the convenience wrapper libdispatch actually calls),
+    `kevent_qos`, `clock_gettime_nsec_np`, `kpersona_get`,
+    `thread_destruct_special_reply_port`. Small, mechanical, same
+    create-syscalls.pl-based pattern already used throughout `tools/
+    userland_staging/build_libxpc_syscalls*.sh`.
+
+d5. **Real Mach voucher MIG routines not yet regenerated.**
+    `mach_voucher_attr_command`/`_deallocate`/`_debug_info`/
+    `_extract_attr_recipe`, `host_create_mach_voucher`,
+    `host_get_special_port` -- real client routines from
+    `mach_voucher.defs`/`host_priv.defs` (osfmk), same real mig-regen
+    pattern already used for `job.defs`/`mach_port.defs`/
+    `protocol.defs` elsewhere in this project; not yet attempted.
+
+d6. **`spawn_private.h` missing + a real BSD networking header-ordering
+    bug, both surfaced while trial-compiling launchd's real `core.c`/
+    `launchd.c`.** `third_party/xnu-7195/libsyscall/wrappers/spawn/
+    spawn_private.h` exists but isn't on the current include path for
+    those two files. Separately: `core.c`/`launchd.c` both
+    `#include <net/if.h> <net/if_var.h> <netinet/in.h> <netinet/in_var.h>
+    <netinet6/nd6.h>` in that real order, but `union sockaddr_in_4_6`
+    (real, defined in xnu's own `bsd/netinet/in.h`) and `struct
+    sockaddr_dl` (real, defined in `bsd/net/if_dl.h`) both come up
+    incomplete by the time `in_var.h`/`nd6.h` use them — this project's
+    pinned iPhoneOS14.4 SDK ships its own same-named, same-include-guard,
+    older `netinet/in.h` (found first via the normal sysroot search, so
+    xnu's real newer copy's include guard is already tripped and never
+    actually read) — the same "SDK's own same-named older header wins"
+    trap this project has hit before (`mach/mach_vm.h`,
+    `mach/mach_time.h`). Real fix is the same shape as those: a narrow
+    compat header supplying just the missing type(s), not a broad
+    `-I`/`-idirafter` reorder. Not yet fixed — the rest of `core.c`
+    (12,162 real lines) compiles clean with zero other errors, this is
+    the one remaining blocker for that file and `launchd.c`.
+
 0a. **No AES implementation exists anywhere in this kernel — HARD
     PREREQUISITE for Phase 7b (`sshd`).** Filed explicitly 2026-08-21 so it
     is a known gate rather than the fourth surprise NULL dereference.
