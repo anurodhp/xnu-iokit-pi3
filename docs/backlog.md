@@ -551,10 +551,17 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
       curated `cf_libc_extras.a`), starting from 153. Now 25 real/compat
       files in `build_corefoundation.sh`'s `FILES` array (24 real Apple
       source + 1 compat stub file).
-    - **ASL legacy logging** (`asl_open`/`_close`/`_free`/`_new`/`_send`/
-      `_set`) — CFUtilities.c's own legacy console-logging fallback;
-      real source may exist in `third_party` already (not yet checked)
-      or may need the same "document as out of scope" treatment as ICU.
+    - **CONFIRMED out of scope 2026-08-26 (was "not yet checked")**:
+      ASL legacy logging (`asl_open`/`_close`/`_free`/`_new`/`_send`/
+      `_set`) — CFUtilities.c's own legacy console-logging fallback. The
+      real full ASL client library is a separate apple-oss-distributions
+      repo Apple never open-sourced as far as this project's
+      `docs/apple-oss-catalog.md` inventory goes, and isn't pinned in
+      `setup_third_party.sh`; `third_party/libplatform/src/simple/asl.c`
+      only has the much smaller `_simple_asl_*` kernel/early-boot subset,
+      a different real API, not a drop-in. Same "out of scope, no source
+      to port" treatment as ICU, for a genuinely different reason (never
+      open-sourced vs. real, tractable, just-not-attempted).
     - **CLOSED, verified 2026-08-26**: `dispatch_apply`/`_queue_create`/
       `_release`/`_once`, `os_log_create`/`_type_enabled`/
       `__os_log_error_impl`, `__os_alloc_once*`, `__chkstk_darwin`,
