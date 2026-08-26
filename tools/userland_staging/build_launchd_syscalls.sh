@@ -47,11 +47,29 @@
 # thin real wait4() forwarding to the same already-real
 # __wait4_nocancel(), matching waitpid.c's own real logic exactly).
 #
-# STILL OPEN, not attempted this pass: initgroups (NO_SYSCALL_STUB, no
-# real dedicated wrapper source located yet); glob, getopt, login_tty,
-# raise, mktime, atexit (real Libc/gen sources likely exist but not yet
-# cross-referenced); accept4-style _nocancel variants beyond what's
-# reused above.
+# Also real, unmodified: uuid_clear/uuid_compare/uuid_unpack
+# (third_party/Libc/uuid/uuidsrc/, same real repo build_libxpc_syscalls2.sh
+# already used for uuid_unparse_upper), posix_spawnp (third_party/Libc/
+# sys/posix_spawn.c -- a DIFFERENT real file from the xnu-7195
+# posix_spawn.c above, needs -idirafter on that file's own spawn_private.h
+# too), getopt (third_party/Libc/stdlib/FreeBSD/getopt.c, needs a real
+# fbsdcompat/namespace.h this project hadn't referenced before).
+#
+# STILL OPEN, real gaps identified but not fixed this pass: exec.c/
+# signal.c (real FreeBSD source, both need a small real "private name"
+# alias this project doesn't have yet -- e.g. exec.c calls a C-level
+# `_execve`/`_write`, distinct from the public `execve`/`write` this
+# project already generates, real Apple's own internal naming
+# convention for the raw-trap-adjacent "guts" of these wrappers);
+# waitpid.c (a real K&R-style old-style function definition trips this
+# project's clang flags, not yet root-caused); atexit.c (needs a real
+# `Block_private.h` from libclosure/BlocksRuntime, not yet
+# cross-referenced); glob.c (needs a real `pthread/tsd_private.h` via
+# its own `xlocale_private.h` chain); initgroups (NO_SYSCALL_STUB, no
+# real dedicated wrapper source located yet); login_tty/setlogin/raise
+# already compile clean but aren't wired into this script's own object
+# list yet (harmless omission, not a real gap -- add if a future trial
+# link shows them still undefined).
 set -e
 cd "$(dirname "$0")"
 
@@ -90,7 +108,8 @@ ASMFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -arch arm64 \
     -I"$OUT/launchd_sys_asm_compat" -I"$XNU/libsyscall/custom" -I"$XNU/libsyscall/mach" -I"$XNU/osfmk")
 for s in _chown _chroot _sync _revoke _setuid _setgid _setsid _setpgid \
     _getrusage _execve _mount _kevent _dup _dup2 _getppid _getpeereid _umask \
-    ___accept_nocancel ___listen ___socketpair ___munmap ___wait4_nocancel ___fork; do
+    ___accept_nocancel ___listen ___socketpair ___munmap ___wait4_nocancel ___fork \
+    ___reboot ___setpriority ___getrlimit ___setrlimit ___posix_spawn; do
     "$CLANG" "${ASMFLAGS[@]}" "$TMP/${s}.s" -o "$OUT/launchd_syscall_obj/sys_${s}.o" 2>/dev/null || true
 done
 rm -rf "$TMP"
@@ -109,7 +128,29 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-buil
 "$CLANG" "${CFLAGS[@]}" "$XNU/libsyscall/wrappers/setpriority.c" -o "$OUT/launchd_syscall_obj/setpriority.o"
 "$CLANG" "${CFLAGS[@]}" "$XNU/libsyscall/wrappers/unix03/getrlimit.c" -o "$OUT/launchd_syscall_obj/getrlimit.o"
 "$CLANG" "${CFLAGS[@]}" "$XNU/libsyscall/wrappers/unix03/setrlimit.c" -o "$OUT/launchd_syscall_obj/setrlimit.o"
-echo "compiled: real dedicated wrapper files (zero errors)"
+
+# real, unmodified uuid_clear()/uuid_compare() (+ uuid_unpack(), the
+# latter's own real dependency) -- third_party/Libc/uuid/uuidsrc/, same
+# real repo build_libxpc_syscalls2.sh already used for uuid_unparse_upper.
+"$CLANG" "${CFLAGS[@]}" -DHAVE_STDINT_H=1 -I "$LIBC/uuid/uuidsrc" "$LIBC/uuid/uuidsrc/clear.c" -o "$OUT/launchd_syscall_obj/uuid_clear.o"
+"$CLANG" "${CFLAGS[@]}" -DHAVE_STDINT_H=1 -I "$LIBC/uuid/uuidsrc" "$LIBC/uuid/uuidsrc/compare.c" -o "$OUT/launchd_syscall_obj/uuid_compare.o"
+"$CLANG" "${CFLAGS[@]}" -DHAVE_STDINT_H=1 -I "$LIBC/uuid/uuidsrc" "$LIBC/uuid/uuidsrc/unpack.c" -o "$OUT/launchd_syscall_obj/uuid_unpack.o"
+
+# real, unmodified posix_spawnp()/getopt() -- both needed
+# -idirafter "$XNU/libsyscall/wrappers/spawn" (posix_spawnp.c calls
+# real posix_spawn() from the file already compiled above) and no
+# other real gaps once the right include paths are added.
+CFLAGS_LIBC=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+    -idirafter "$XNU/libsyscall/wrappers/spawn" -idirafter "$LIBC/fbsdcompat" \
+    -idirafter "$XNU/bsd" -idirafter "$XNU/osfmk" -idirafter "$XNU/libsyscall/mach" -idirafter "$XNU/libsyscall" \
+    -idirafter "$LIBC/darwin" -idirafter "$LIBC")
+"$CLANG" "${CFLAGS_LIBC[@]}" "$LIBC/sys/posix_spawn.c" -o "$OUT/launchd_syscall_obj/posix_spawnp.o"
+"$CLANG" "${CFLAGS_LIBC[@]}" "$LIBC/stdlib/FreeBSD/getopt.c" -o "$OUT/launchd_syscall_obj/getopt.o"
+"$CLANG" "${CFLAGS_LIBC[@]}" "$LIBC/util/login_tty.c" -o "$OUT/launchd_syscall_obj/login_tty.o"
+"$CLANG" "${CFLAGS_LIBC[@]}" "$LIBC/gen/setlogin.c" -o "$OUT/launchd_syscall_obj/setlogin.o"
+"$CLANG" "${CFLAGS_LIBC[@]}" "$LIBC/gen/raise.c" -o "$OUT/launchd_syscall_obj/raise.o"
+echo "compiled: real dedicated wrapper files + real uuid_clear/compare/unpack + real posix_spawnp/getopt/login_tty/setlogin/raise (zero errors)"
 
 # --- real, curated fork()/wait4() -----------------------------------
 cat > "$OUT/launchd_syscall_obj/fork_compat.c" <<'EOF'
