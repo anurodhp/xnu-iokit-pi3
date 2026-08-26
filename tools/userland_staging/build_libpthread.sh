@@ -301,6 +301,7 @@ echo "apple_pthread: $ok compiled, $skip skipped"
 # script's header comment for what each one is and why it's needed
 # instead of the corresponding real pthread.c code.
 for f in pthread_main_thread_bootstrap pthread_bsdthread_create_syscall \
+         pthread_bsdthread_register_syscall pthread_bsdthread_terminate_syscall \
          pthread_tsd_platform_bootstrap pthread_psynch_syscalls \
          pthread_compat_extras pthread_abort_with_reason_compat \
          pthread_guard_compat; do
@@ -371,6 +372,7 @@ rm -f "$OUT/libpthread.a"
 ar rcs "$OUT/libpthread.a" \
     "$OUT"/apple_pthread/*.o \
     "$OUT/pthread_main_thread_bootstrap.o" "$OUT/pthread_bsdthread_create_syscall.o" \
+    "$OUT/pthread_bsdthread_register_syscall.o" "$OUT/pthread_bsdthread_terminate_syscall.o" \
     "$OUT/pthread_tsd_platform_bootstrap.o" "$OUT/pthread_psynch_syscalls.o" \
     "$OUT/pthread_compat_extras.o" "$OUT/pthread_abort_with_reason_compat.o" \
     "$OUT/pthread_guard_compat.o" \
@@ -415,34 +417,65 @@ fi
 # pthread_create() FAILING (ENOTSUP) as the pass case - inverted once
 # the kernel side became real, see pthread_smoketest.c's own history.
 $CLANG $CFLAGS pthread_smoketest.c -o "$OUT/pthread_smoketest.o"
-# KNOWN GAP, not fixed in this pass (2026-08-24): this smoketest's link
-# recently started needing libmalloc.a's real _get_zone() ->
-# pthread_tsd_shim_bootstrap() (the PLAIN name -- distinct from
-# pthread_tsd_shim_libc_bootstrap.c's _for_libc variant and
+# FIXED 2026-08-25 (was "known gap, unfixed" -- see git history for the
+# prior broken link if needed): this smoketest's link needs libmalloc.a's
+# real _get_zone() -> pthread_tsd_shim_bootstrap() (the PLAIN name --
+# distinct from pthread_tsd_shim_libc_bootstrap.c's _for_libc variant and
 # pthread_tsd_platform_bootstrap.c's _with_base variant this file's own
 # pthread_main_thread_bootstrap.c uses) plus real getenv()/getprogname(),
 # all three only available bundled in libc_locale.a/libc_locale_for_stdio.a
 # -- but that archive's own pthread_tsd_shim.o ALSO still defines
 # pthread_key_init_np/pthread_setspecific/etc as its OWN pre-real-
 # libpthread shim bodies, which duplicate-symbol-conflict against real
-# libpthread.a(pthread_tsd.o) the moment both are linked together
-# (confirmed by actually trying it, not guessed). Reconciling
-# pthread_tsd_shim.c against the now-real libpthread.a tsd implementation
-# is real, separate follow-up work (same "stub -> real, sweep for stale
-# assumptions" class of task as libc_stdio_shims.c's mutex fix above, but
-# larger -- pthread_tsd_shim.c is still load-bearing for other consumers
-# per this file's own comment a few lines up) -- tracked here rather than
-# silently patched around. This smoketest link is UNCHANGED/still broken
-# pending that work; libpthread.a itself (the archive above) builds and
-# is real either way.
+# libpthread.a(pthread_tsd.o) the moment both are linked together.
+# Fixed the same real way build_llvm_libcxx.sh's own smoketest already
+# fixed the identical conflict: a SCRATCH copy of libc_locale_for_stdio.a
+# with pthread_tsd_shim.o removed (`ar d`, never the shared committed
+# archive), plus libcxx_tsd_shim_bootstrap_compat.o for the one other
+# real symbol that member provided. Also needs the real raw syscall
+# stubs (_kdebug_trace/_kill/_mprotect/_write/etc) build_simple_cmds.sh's
+# own SYS_STUBS_NEEDED pass already generates -- linked wholesale here,
+# same reasoning as tools/userland_staging/build_kqueue_smoketest.sh's
+# own SYS_OBJS (this smoketest's real second-thread/mutex/TSD code pulls
+# in an unpredictable transitive subset, easier to link them all than
+# guess which).
+if [ ! -f "$OUT/libcxx_locale_for_stdio_scratch.a" ]; then
+    cp "$OUT/libc_locale_for_stdio.a" "$OUT/libcxx_locale_for_stdio_scratch.a"
+    ar d "$OUT/libcxx_locale_for_stdio_scratch.a" pthread_tsd_shim.o
+fi
+if [ ! -f "$OUT/libcxx_tsd_shim_bootstrap_compat.o" ]; then
+    $CLANG $CFLAGS libcxx_tsd_shim_bootstrap_compat.c -o "$OUT/libcxx_tsd_shim_bootstrap_compat.o"
+fi
+PTHREAD_SMOKETEST_SYS_OBJS=$(ls "$OUT"/simple_obj/sys_*.o 2>/dev/null)
+if [ -z "$PTHREAD_SMOKETEST_SYS_OBJS" ]; then
+    echo "error: $OUT/simple_obj/sys_*.o not found -- run build_simple_cmds.sh first" >&2
+    exit 1
+fi
+eval "$(awk '/^LINK_ALIASES="/{flag=1} flag{print; if ($0 !~ /\\$/) exit}' build_simple_cmds.sh)"
+read -ra _pthread_alias_tokens <<< "$LINK_ALIASES"
+LINK_ALIASES=""
+for tok in "${_pthread_alias_tokens[@]}"; do
+    case "$tok" in
+        -Wl,-alias,___pipe,*|-Wl,-alias,_connect,*|-Wl,-alias,_fchmod,*|-Wl,-alias,_getattrlist,*| \
+        -Wl,-alias,_getopt\$UNIX2003,*|-Wl,-alias,_getrlimit,*|-Wl,-alias,_lchown,*| \
+        -Wl,-alias,_mmap,*|-Wl,-alias,_munmap,*|-Wl,-alias,_nanosleep,*|-Wl,-alias,_read,*| \
+        -Wl,-alias,_reallocarray,*|-Wl,-alias,_regcomp,*|-Wl,-alias,_send,*| \
+        -Wl,-alias,_setattrlist,*|-Wl,-alias,_sigsuspend,*|-Wl,-alias,_waitpid,*|-Wl,-alias,_writev,*)
+            ;;
+        *) LINK_ALIASES="$LINK_ALIASES $tok" ;;
+    esac
+done
+LINK_ALIASES="$LINK_ALIASES -Wl,-alias,_mmap\$UNIX2003,_mmap -Wl,-alias,_munmap\$UNIX2003,_munmap"
 $CLANG -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o pthread_smoketest.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/pthread_smoketest.o" \
-    "$OUT/libpthread.a" \
-    "$OUT/libplatform.a" "$OUT/libmalloc.a" "$OUT/libc_stdio.a" "$OUT/cerror_stub.o" \
-    -Wl,-alias,'_mmap$UNIX2003',_mmap \
-    -Wl,-alias,'_munmap$UNIX2003',_munmap
+    "$OUT/libpthread.a" "$OUT/libc_printf.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
+    "$OUT/libcxx_locale_for_stdio_scratch.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
+    "$OUT/libcxx_tsd_shim_bootstrap_compat.o" \
+    $PTHREAD_SMOKETEST_SYS_OBJS "$OUT/simple_obj/statfs64_compat.o" \
+    "$OUT/libplatform.a" "$OUT/libmalloc.a" "$OUT/libc_stdio.a" "$OUT/libclosure.a" "$OUT/cerror_stub.o" \
+    $LINK_ALIASES
 echo "wrote pthread_smoketest.macho"
 
 otool -l pthread_smoketest.macho | grep -q LC_LOAD_DYLIB && \

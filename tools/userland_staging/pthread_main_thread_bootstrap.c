@@ -369,6 +369,65 @@ struct pthread_create_trampoline_ctx {
 
 extern int pthread_tsd_shim_bootstrap_with_base(void *tsd_base);
 
+/* __bsdthread_register itself: real Apple declares it already, transitively,
+ * via this file's own "internal.h" include (imports_internal.h) - same
+ * precedent __bsdthread_create already established (see this file's own
+ * comment on that one). Do NOT re-declare it here: imports_internal.h's
+ * real declaration has an odd, evidently-stale 4th/5th parameter typing
+ * (a function-pointer type where real callers, including
+ * third_party/libpthread/src/pthread.c's own _pthread_bsdthread_init(),
+ * actually pass a plain data pointer and a size_t respectively -
+ * tolerated there as an implicit-pointer/integer-conversion warning, not
+ * a hard error) - a second, differently-shaped extern declaration in
+ * this file would conflict with it and fail to compile outright (found
+ * by actually trying it, not guessed). Call through the real declaration
+ * as-is, matching pthread.c's own real call site's tolerance for the
+ * same warning. */
+
+/*
+ * _real_pthread_start_abi(): the real Apple pthread ABI entry point
+ * (matches _pthread_start(pthread_t self, mach_port_t kport,
+ * void *(*fun)(void*), void *arg, size_t stacksize, unsigned int pflags)
+ * exactly -- same parameter order, registered once via bsdthread_register
+ * below as this process's real `threadstart`) -- 2026-08-25, needed once
+ * bsd/kern/bsd_pthread_workq.c's real_bsdthread_create started reading
+ * pthread_kern->proc_get_threadstart(p) for the new thread's real entry
+ * PC instead of jumping straight to bsdthread_create's own `func`
+ * argument (see that function's own header comment). The kernel now
+ * ALWAYS enters a newly created thread here (self/kport/fun/arg/
+ * stack/pflags land in x0-x5 per AAPCS64, matching this function's
+ * plain 6-parameter C signature with zero assembly needed), for every
+ * thread this process ever creates via bsdthread_create -- this
+ * project's own pthread_create() (below) still passes
+ * _pthread_create_trampoline/ctx as `fun`/`arg`, unchanged, so this
+ * shim's only real job is to receive the real ABI's extra self/kport/
+ * stack/pflags arguments and then call through exactly the way real
+ * Apple's own _pthread_start() does (`self->fun(self->arg)` there,
+ * `fun(arg)` here since this project doesn't stash fun/arg inside a
+ * real pthread_t the kernel constructed).
+ *
+ * Real, honestly-scoped gap, NOT fixed here: `kport` (the real Mach
+ * thread port bsd_pthread_workq.c's real_bsdthread_create now actually
+ * allocates and hands to every new thread) is received but discarded --
+ * this project's pthread_create() doesn't yet store it anywhere a
+ * future pthread_kill()/individual-thread-lookup could use it. Real,
+ * separate follow-up (this project's pthread_t doesn't have a
+ * MACH_THREAD_SELF-equivalent tsd slot wired to anything yet); not
+ * needed for _pthread_create_trampoline's own existing spin-forever
+ * thread-exit gap (see that function's own header) to keep working
+ * exactly as before.
+ */
+static void
+_real_pthread_start_abi(void *self, void *kport, void *(*fun)(void *),
+    void *arg, void *stack, unsigned int pflags)
+{
+	(void)self;
+	(void)kport;
+	(void)stack;
+	(void)pflags;
+	fun(arg);
+}
+
 static void *
 _pthread_create_trampoline(void *raw_ctx)
 {
@@ -388,16 +447,21 @@ _pthread_create_trampoline(void *raw_ctx)
 	void *arg = ctx->arg;
 	start_routine(arg);
 
-	/* Real, known, still-open gap: no real thread-exit path exists
-	 * here (bsdthread_terminate is still an ENOTSUP stub,
-	 * bsd_pthread_stub.c) - a thread that returns from its real
-	 * start_routine has nowhere real to go. Spin rather than fall off
-	 * into whatever garbage follows this function in the text
-	 * segment - same real constraint tools/pthread_kthread_test/'s
-	 * own child_entry already documented and worked around the same
-	 * way. The whole task's real, pre-existing task_terminate_internal()
-	 * teardown (already QEMU-verified reaping >1 live thread, Phase
-	 * 7.5 step 1) is what actually cleans this up, on process exit. */
+	/* Real thread-exit path (2026-08-25, was an infinite spin loop
+	 * before bsd_pthread_stub.c's bsdthread_terminate was a real
+	 * ENOTSUP stub -- see this file's own top header on
+	 * real_bsdthread_terminate now being real). Real, honestly-scoped
+	 * narrower call than real Apple's own _pthread_terminate() -- see
+	 * pthread_bsdthread_terminate_syscall.c's own header comment for
+	 * exactly which real cleanup (stack deallocation, kport release)
+	 * this doesn't yet do and why passing all-zero args is still a
+	 * real, valid call, not a fabrication. Does not return (real
+	 * kernel-side thread_exception_return(), matching real Apple's own
+	 * PTHREAD_INTERNAL_CRASH-guarded "should never get here" pattern
+	 * right after the equivalent real call in pthread.c) -- the
+	 * following spin is real dead-code-in-practice defense, not the
+	 * primary exit mechanism anymore. */
+	__bsdthread_terminate(NULL, 0, 0, 0);
 	for (;;) {
 		__asm__ volatile("" ::: "memory");
 	}
@@ -442,7 +506,36 @@ pthread_create(pthread_t _Nullable *_Nonnull restrict thread,
 	ctx->arg = arg;
 	ctx->child_thread = child_thread;
 
-	pthread_t t = __bsdthread_create(_pthread_create_trampoline, ctx, (void *)stack_top, NULL, 0);
+	/* Real, one-time-per-process bsdthread_register() call -- lazy on
+	 * first pthread_create(), matching real Apple's own
+	 * _pthread_bsdthread_init() being called once early, not per-thread.
+	 * Required as of 2026-08-25: bsd/kern/bsd_pthread_workq.c's real
+	 * real_bsdthread_create rejects bsdthread_create(2) with EINVAL if
+	 * this process never registered (pthread_kern->proc_get_register(p)
+	 * == 0) -- see that function's own header comment and
+	 * pthread_bsdthread_register_syscall.c's for the full trail. Real
+	 * kernel-side "prevent multiple registrations" check
+	 * (real_bsdthread_register) makes a second call fail with EINVAL
+	 * too, so this must run exactly once -- the `registered` guard
+	 * below is real and load-bearing, not defensive decoration.
+	 * PTHREAD_START_CUSTOM (0x01000000, real value from
+	 * third_party/libpthread/src/pthread.c:222 -- not in any shared
+	 * header, #define'd directly there too) is likewise now required
+	 * on every bsdthread_create() call -- real_bsdthread_create returns
+	 * EINVAL without it. */
+	static int registered = 0;
+	if (!registered) {
+		int rv = __bsdthread_register(_real_pthread_start_abi, NULL, 0,
+				NULL, 0, 0);
+		if (rv < 0) {
+			return errno;
+		}
+		registered = 1;
+	}
+
+#define PTHREAD_START_CUSTOM 0x01000000
+	pthread_t t = __bsdthread_create(_pthread_create_trampoline, ctx,
+			(void *)stack_top, NULL, PTHREAD_START_CUSTOM);
 	if (t == (pthread_t)-1) {
 		return errno;
 	}

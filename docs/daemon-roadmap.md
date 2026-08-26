@@ -1550,6 +1550,29 @@ behind it here, plus:
   limited to single-thread-honest `dispatch_once`/`dispatch_sync`, but
   the pthread half of the blocker is smaller than this section
   previously stated.
+- **kqueue/kevent: real, QEMU-verified 2026-08-25**
+  (`tools/userland_staging/kqueue_smoketest.c` +
+  `build_kqueue_smoketest.sh`) -- a real `kqueue()`+`kevent()`
+  `EVFILT_TIMER` register/wait round-trip passes end to end
+  (`qemu/hfs_root_test.img`, real `PASS` output, exit 0). The raw
+  `_kevent`/`_kqueue` syscall stubs `build_simple_cmds.sh` already
+  compiled and linked defensively into every command (never previously
+  called) work correctly the first time they're actually exercised --
+  no kernel-side gap here, `third_party/xnu-7195/bsd/kern/kern_event.c`
+  is stock, unmodified real kqueue support. Real, separate, still-open
+  gap found while verifying this: `printf()` crashes (real `SIGSEGV`)
+  under this smoketest's own minimal link recipe -- bisected with raw
+  `write(2)` diagnostics (bypassing stdio buffering) to confirm the
+  crash is inside `printf()` itself, not `kqueue()`/`kevent()`; not yet
+  root-caused (build_libc_printf.sh's own working
+  `libc_printf_smoketest.macho` uses a different link recipe and
+  presumably doesn't hit this). `pthread_join`/`bsdthread_terminate`
+  itself was scoped precisely the same day by reading
+  `third_party/libpthread/kern/kern_support.c`'s real `_bsdthread_create`
+  -- the real x0-x5 register ABI and `proc_get_threadstart()`/thread-port
+  requirements are now understood (this project's `real_bsdthread_create`
+  currently only implements a deliberately simplified subset); not yet
+  implemented.
 - Real upside once unblocked: `libdispatch` is Apache-2.0 and genuinely
   portability-oriented (existing non-Darwin backends upstream), making it
   the single most realistic "port this mostly as-is" piece among
@@ -1586,7 +1609,319 @@ Builds on the already-real (but partial) Phase 4.6 item 5 work.
    existing precedent of `getty` being built-but-not-yet-wired-in
    (`docs/roadmap.md` Phase 5.5 item 1). Don't block this phase on 6.8.
 
-## Phase 6.8 (`launchd` + XPC via PureDarwin) -- revised 2026-08-22
+## Phase 6.8 (`launchd` + XPC via PureDarwin) -- RE-SCOPED 2026-08-25,
+## real source swap + two real prerequisite findings
+
+**Real source swap**: everything below this point that cites
+`PureDarwin/XPC` (the standalone, archived, frozen-at-2014-vintage repo)
+is superseded. Found and verified 2026-08-25: **PureDarwin/PureDarwin's
+own `next` branch** (their active-development branch -- `main` is frozen
+releases per their own README, `git ls-remote` confirmed `next` really
+exists and is the actively-pushed one) is a full, current, actively
+maintained monorepo that **already boots real launchd to a shell on this
+project's exact SoC** -- `nix/arm64.nix`/`nix/image-contents.nix` build
+real `kernel-arm64-bcm2837`/`puredarwin-rpi3.img` targets, confirmed by
+direct file read, not assumed from the repo name. This is a categorically
+better real reference than the frozen 2014 base this section originally
+scoped around. Sparse-cloned (`git sparse-checkout`, `src/Libraries/XPC`
++ `src/Libraries/CrashReporterClient` + `cmake/` only, 7.9MB vs. the full
+monorepo's 514MB) as `third_party/PureDarwin`, pinned in
+`setup_third_party.sh` (see that script's own header comment). Real
+directory layout found there: `src/Libraries/XPC/{launchd,libxpc,notify,
+libinfo,libnv,launchctl,logd}` -- notably this also includes a real
+`notify`/`notifyd` port, a second real reference for Phase 6.7's item 2
+alongside the already-pinned `apple-oss-distributions/Libnotify`.
+PureDarwin's own new code in this tree (the `pd_*.c` files --
+`pd_launchd_main.c`, `pd_launchd_boot.c`, `pd_launchd_plist.c`,
+`pd_console_login.c`, `pd_sandbox_check.c`, `pd_xpc_object.c`,
+`pd_xpc_object_class.m`, `pd_xpc_event_publisher.c`, `pd_notifyd_compat.h`
+-- exact names, confirmed by directory listing) is real, already-written,
+already-working compat glue for precisely the CF-free/sandbox-free/no-
+real-XPC-internals gaps this project's own research already anticipated
+-- a real reference implementation to adapt from, not a blank page.
+License: same real per-file `@APPLE_APACHE_LICENSE_HEADER_START@`
+(Apache 2.0) on Apple-originated files as the old source, plus
+PureDarwin's own permissive BSD-style `@PUREDARWIN_LICENSE_HEADER_START@`
+header on their new files -- both confirmed by direct file read, neither
+blocking.
+
+**Real finding 1 (corrects this doc's own "confirm whether
+`bootstrap.defs` exists" open question above): no separate
+`bootstrap.defs` MIG file exists anywhere, and none is needed.** Modern
+(10.5+) launchd never implements the classic NeXT-era bootstrap protocol
+this doc's "newly-surfaced prerequisite gap" framing assumed --
+`bootstrap_look_up2()`/`bootstrap_check_in3()`/etc (the exact client API
+`Libnotify/notify_client.c:894` calls, confirmed) are thin wrappers in
+`libxpc/libbootstrap.c`, implemented entirely in terms of `job.defs`'s
+`vproc_mig_look_up2`/`vproc_mig_check_in2`/`vproc_mig_lookup_per_user_
+context`/etc MIG routines -- confirmed by reading `libbootstrap.c`'s own
+body, not assumed from headers. `job.defs`/`job_types.defs`/
+`job_forward.defs`/`job_reply.defs`/`notify.defs`/`internal.defs`/
+`domain.defs` (the newer XPC-domain concept, PureDarwin's tree has one
+more `.defs` file than the old archived source did) are all real,
+present, complete MIG interface files already in this checkout -- the
+real prerequisite work is regenerating client+server stubs from these
+(same `mig`-regeneration pattern `build_libmach_ipc.sh`/
+`build_iokituser.sh`/`build_libnotify.sh` already established), not
+inventing or sourcing a missing `.defs` file. Kernel-side
+`TASK_BOOTSTRAP_PORT` special-port plumbing (`task_get_special_port`/
+`task_set_special_port`) is real, stock, already-general xnu-7195
+behavior, confirmed via `libbootstrap.c`'s own `task_get_special_port
+(task_self_trap(), TASK_BOOTSTRAP_PORT, &bootstrap_port)` call, which any
+process on this target can already issue today -- what's still genuinely
+missing is a real process holding the *receive* right and answering
+`job_mig_*` requests, i.e. launchd itself.
+
+**Real finding 2, CORRECTED same day after a deeper check (original claim
+was wrong -- flagging the correction rather than quietly editing it away,
+per this project's own verify-before-trusting convention): launchd needs
+neither CoreFoundation nor real ObjC-backed XPC internals, but it DOES
+need a real, working libdispatch main-queue engine -- the original
+"link-graph-only" check below was real but insufficient.** The
+`CMakeLists.txt` link-graph read (`XPC_libxpc_static`'s only declared
+deps are `CrashReporterClient`, `libsystem_kernel_static`,
+`libc_features`; `XPC_launchd_static` adds `XPC_launchd_mig_static`/
+`XPC_libxpc_static`/`XPC_libinfo_static`, still zero explicit CF/
+libdispatch) is accurate as far as it goes, but a follow-up grep for
+actual `dispatch_*` call sites (not just the `dispatch_queue_t`/
+`dispatch_source_t` struct fields checked before) found 45 real, live
+call sites across `libxpc/{pd_xpc_object,libvproc,xpc_connection,
+xpc_type}.c` and, decisively, `launchd/{core,log,runtime}.c` -- i.e.
+launchd's own real main-loop code, not just optional XPC-connection
+plumbing. `runtime.c`'s `launchd_runtime()` -- the actual function
+`launchd.c`'s `main()` calls to run forever -- is `launchd_runtime2(...)`
+(real kqueue event processing) followed unconditionally by
+`dispatch_main()`, which by real Apple/libdispatch semantics never
+returns and drains the default GCD queue forever. So real launchd's
+architecture does genuinely depend on a working dispatch engine at
+runtime; the link graph just doesn't show it explicitly because
+PureDarwin's own monorepo satisfies it at a later, whole-image link
+stage (their own real `src/Libraries/libSystem/libdispatch` port, not yet
+sparse-cloned into this project's `third_party/PureDarwin` -- only
+`src/Libraries/XPC` + `CrashReporterClient` + `cmake` are, see that pin's
+own header comment) rather than per-static-library. Revised, honest
+scope: a header-only `<dispatch/dispatch.h>` (real Apple header, already
+in this project's cloned-but-unbuilt `third_party/libdispatch`) is enough
+to get launchd/libxpc to *compile*, but a real, minimal
+`dispatch_main()`/`dispatch_async()`/`dispatch_source_*` implementation
+-- not necessarily full multi-thread GCD, this project's existing
+single-thread-honest framing elsewhere may still be enough for a first
+cut, since `launchd_runtime2()` appears to do the real kqueue work itself
+and `dispatch_main()`'s job may just be "don't return, run whatever gets
+`dispatch_async`'d" -- is genuinely needed for launchd to *run*, not just
+link. This softens but doesn't fully retract the original conclusion:
+re-sequenced: attempt Phase 6.8 directly against a header-only dispatch
+shim, treat full Phase 6.6 as a later, independent upgrade (real GCD
+semantics for whichever specific XPC code paths turn out to need them at
+actual link/run time, discovered the same real-trial-link way every
+other tier in this project has been, not guessed up front).
+
+**Step (1) DONE 2026-08-25 (`tools/userland_staging/build_launchd_mig.sh`,
+new)**: all 7 real subsystems (`job`, `job_forward`, `job_reply`,
+`internal`, `domain`, `notify`, `mach_exc`) regenerate cleanly (zero
+`mig` errors/warnings) against this project's real xnu-7195 `osfmk`
+headers. The 5 real CLIENT-side files (`job_user.c`,
+`job_forward_user.c`, `job_replyUser.c`, `internal_user.c`,
+`domain_user.c` -- `notify`/`mach_exc` are server-only subsystems, no
+client side exists) compile clean and their entire undefined-symbol
+surface (`mach_msg`, `mach_msg_destroy`, `mig_strncpy`,
+`mig_strncpy_zerofill`, `voucher_mach_msg_set`, `mig_get_reply_port`,
+`mig_put_reply_port`, `mig_dealloc_reply_port`, `NDR_record`) is already
+satisfied by this project's existing `libmach_ipc.a`/`libmalloc.a` --
+zero new compat code needed. One real, narrow header gap closed:
+`bsm/audit_record.h` (pulled in transitively via `vproc_internal.h` ->
+launchd's own `runtime.h` -> the SDK's real `bsm/libbsm.h`) isn't in
+`third_party/BSM` (that repo only ships the userland half,
+`bsm/lib/libbsm.h`) -- found real and already present in
+`third_party/xnu-7195/bsd/bsm/audit_record.h` (the other, xnu-published
+half of the real BSM header split), no fabrication needed. Output:
+`libc_build/liblaunchd_mig.a`, real smoketest
+(`launchd_mig_smoketest.macho`, fully static, verified via `otool -l`)
+calling the real `vproc_mig_look_up2()` -- the exact routine
+`libbootstrap.c`'s `bootstrap_look_up2()` calls -- against
+`MACH_PORT_NULL`, not yet QEMU-run (no real Mach round trip to confirm
+without a real launchd on the other end, same honest-scope caveat
+`libnotify_smoketest.c` documents for its own analogous test). The 5
+real SERVER-side files (`jobServer.c`, `job_forwardServer.c`,
+`job_replyServer.c`, `internalServer.c`, `domainServer.c`, plus
+`notifyServer.c`/`mach_excServer.c`) are generated but deliberately NOT
+compiled by this script -- confirmed by real trial compile that they
+need launchd's own internal `job_t` type (from `launchd.h`/`core.h`,
+launchd-internal headers no client should ever need) and hit one other
+real, narrow, deferred gap of their own (`memchr()` has no prototype in
+this project's minimal `libsyscall/mach/string.h` shim) -- left for
+whoever picks up step (5) below, compiled directly alongside launchd's
+own sources.
+
+**Step (4) DONE 2026-08-25 (`tools/userland_staging/build_libdispatch_min.sh`
++ `dispatch_min_compat.c`, new)**: NOT a header-only shim after all --
+Real finding 2 above was itself corrected the same session (see its own
+"CORRECTED same day" note) after a deeper grep found 45 real
+`dispatch_*` call sites including `launchd/runtime.c`'s unconditional
+`dispatch_main()` tail call, so this step became a real, working,
+honestly single-thread engine instead: `dispatch_once`/`dispatch_once_f`
+(real one-time-init), `dispatch_async`/`dispatch_sync`/their `_f`
+variants (execute immediately, synchronously -- single-thread-honest),
+`dispatch_main()` (a REAL `kqueue(2)`/`kevent(2)` wait loop, this
+project's own already-QEMU-verified syscalls), `dispatch_source_create`/
+`_resume`/`_suspend`/`_cancel` for exactly the 2 real source types
+third_party/PureDarwin's actual source calls
+(`DISPATCH_SOURCE_TYPE_PROC`/`DISPATCH_SOURCE_TYPE_MACH_RECV`, confirmed
+via grep, not guessed), and `dispatch_semaphore_create` (real, wraps
+already-built `semaphore_create`). Real compat details worth knowing for
+whoever touches this next: build with `-DOS_OBJECT_USE_OBJC=0` (real
+Apple opt-out for non-ObjC targets, NOT
+`-D__DISPATCH_BUILDING_DISPATCH__`, which was tried first and found to
+strip the public typedefs this file needs); `dispatch_get_main_queue()`
+is baked as an inline function directly into the real public header, so
+this file defines the real backing global (`_dispatch_main_q`) it reads
+rather than defining the function itself (would collide);
+`dispatch_once`/`dispatch_once_f` need an `#undef` first for the same
+real reason (the header's own inline fastpath macro-renames the public
+name to `_dispatch_once`/`_dispatch_once_f`, which would otherwise
+rewrite this file's real implementations' names out from under them);
+`dispatch_object_t` is a real transparent_union, accessed via its common
+`._do` member. Two real, honest, NOT-yet-closed gaps (documented in the
+script's own header comment, not fabricated over):
+`semaphore_signal`/`semaphore_wait` (the real Mach traps -- a genuinely
+different primitive than `simple_cmds_nanosleep_compat.c`'s
+`__semwait_signal`, checked directly, can't reuse that existing work)
+have no real implementation anywhere in this project yet; `kevent`/
+`kqueue` do (real, QEMU-verified, `libc_build/simple_obj/sys__kevent.o`/
+`sys__kqueue.o`) but need linking in directly at final-executable-link
+time, not from this script's own archive.
+
+**Step (3) DONE 2026-08-25, and much smaller than scoped -- turned out to
+be almost entirely self-resolving, not a header-writing task at all.**
+Real finding: `core.c`'s own `config.h` gates all 4 headers behind
+`__has_include`/`TARGET_OS_EMBEDDED` checks, not unconditional includes
+(confirmed by reading both files directly). On this project's real
+build target (`-target arm64-apple-ios14.4`, confirmed
+`TARGET_OS_EMBEDDED=1` via a real trial preprocess): `HAVE_SYSTEMSTATS`
+and `HAVE_LIBAUDITD` both resolve to `0` automatically (both gated
+`!TARGET_OS_EMBEDDED`) -- systemstats/libauditd code paths simply don't
+compile in, zero stub needed. `HAVE_QUARANTINE`/`HAVE_RESPONSIBILITY`
+also resolve to `0` -- confirmed via real `find` that this project's
+pinned Xcode-12 iPhoneOS14.4 SDK has neither `quarantine.h` nor
+`responsibility.h` at all. Only `HAVE_SANDBOX` resolves to `1` (the SDK
+DOES have a real `sandbox.h`) -- and PureDarwin already has a complete,
+real, honest implementation for exactly this one case:
+`launchd/pd_sandbox_check.c` (47 lines -- `sandbox_check()`/
+`sandbox_init()`/`sandbox_check_by_audit_token()` all real, documented
+"no Sandbox.kext MAC policy exists, so 'allowed' is the correct,
+documented no-profile behavior" no-ops, not fabricated stand-ins) plus
+`launchd/System-compat/sandbox.h` (real type/macro compat that itself
+`#include_next`s the SDK's real `sandbox.h` when present). Net: zero new
+header-writing work needed for this step at all -- just remember to put
+`System-compat/` ahead of the SDK on the include path at trial-link time
+(step (5)) so PureDarwin's own compat header wins, and compile
+`pd_sandbox_check.c` into the launchd archive.
+
+**Step (5) DONE for its libxpc half, 2026-08-25
+(`tools/userland_staging/build_libxpc.sh`, new) -- real, major result:
+all 12 real `libxpc/*.c` files + `helper_user.c`/`helperServer.c` (from
+`libxpc/helper.defs`) + all 3 real `libnv/*.c` files (nvlist/nvpair/
+libsbuf, the real name/value-list library XPC's wire format is built on)
+compile CLEAN against this project's real toolchain -- zero fabrication
+beyond two small, real, narrowly-scoped compat headers
+(`tools/userland_staging/launchd_compat_headers/os/{workgroup,assumes}.h`
+-- see that script's own header comment for exactly why each is real and
+correct, not a stand-in for missing logic). NOT compiled:
+`pd_xpc_object_class.m` (real Objective-C -- this project has no ObjC
+runtime; PureDarwin's own real, working non-ObjC retain/release path in
+`pd_xpc_object.c` is what's actually exercised instead, a deliberate,
+narrower, documented scope choice).**
+
+A real trial link (this script's own smoketest -- genuinely calls
+`xpc_dictionary_create`/`xpc_connection_create`/`bootstrap_look_up`, not
+an empty `main()`, which was tried first and found to prove nothing:
+static linking only pulls in archive members actually referenced
+transitively, so an empty `main()` gave a meaningless "0 undefined
+symbols" result) against this project's full curated stack
+(`libmach_ipc`/`libclosure`/`libmalloc`/`libplatform`/`libc_string`/
+`libc_locale_for_stdio`/`libc_stdio`/`libc_gen`/`libc_printf`/
+`libpthread` + this phase's own `liblaunchd_mig.a`/`libdispatch_min.a`)
+finds exactly **47 real, bounded, categorized undefined symbols** -- a
+real, major de-risking of this whole phase, not a full close-out yet.
+Rough categories (full list in `build_libxpc.sh`'s own header comment):
+real BSD syscalls never wired (`connect`/`dup`/`kill`/`recvmsg`/
+`select`/`sendmsg`/`socket`/`unsetenv`/`time` -- same
+create-syscalls.pl-stub pattern every prior tier already used, some
+siblings like `getuid`/`geteuid`/`dup` already exist in
+`libc_build/simple_obj/`, just need the missing ones added); real Mach
+routines never wired (`mach_error_string`/`mach_msg_send`/
+`mach_msg_server_once`/`mach_port_allocate`/`mach_port_get_context`/
+`mach_port_set_context`/`mig_deallocate`/`semaphore_signal`/
+`semaphore_wait` -- the last pair is `build_libdispatch_min.sh`'s own
+already-flagged gap); `os_log`'s real logging engine (`os_log_create`/
+`os_log_type_enabled`/`_os_log_impl` -- genuinely unbuilt, no logging
+daemon exists here); `gCRAnnotations` (CrashReporterClient.c's own
+global -- the real 13-line source is already sparse-cloned at
+`third_party/PureDarwin/src/Libraries/CrashReporterClient`, just isn't
+compiled into this specific smoketest's link line yet); `proc_get_dirty`/
+`proc_set_dirty`/`proc_track_dirty`/`task_name_for_pid` (real libproc
+routines); `pthread_rwlock_rdlock`/`_unlock` (check `libpthread.a`'s
+exact exported name before assuming missing -- not yet checked);
+`fileport_makefd`/`fileport_makeport`; the `_chk`-suffixed hardening
+routines (`__memmove_chk` etc -- likely need a small real
+`_FORTIFY_SOURCE`-shim, same class of gap other tiers may have already
+solved, not yet checked); and the one genuinely structural item, real
+`_OBJC_CLASS_$_OS_xpc_connection`/`_OBJC_CLASS_$_OS_xpc_object` symbols
+(`pd_xpc_object.c`'s `OS_OBJECT_OBJC_CLASS_DECL()` declares these
+unconditionally even though its own real retain/release logic never
+calls `objc_msgSend` against them -- confirmed by reading that file's
+own body; likely closeable with a minimal placeholder data symbol rather
+than standing up a real ObjC runtime, not yet attempted).
+
+**Remaining concrete next steps for whoever picks this up**: (2) real
+BSM (`third_party/BSM`, tag `bsm-13`, now pinned, already confirmed
+working in step (1)'s own real compile) for `bsm/auditd_lib.h`/
+`bsm/libbsm.h`; close the 47-symbol list above (mostly small, bounded,
+independent stub work -- a good candidate for splitting across a few
+parallel passes); then attempt the actual launchd DAEMON side
+(`core.c` -- ~12K LOC, `ipc.c`, `launchd.c`, `log.c`, `runtime.c`, plus
+the 5 real SERVER-side MIG files `build_launchd_mig.sh` already generated
+but didn't compile -- `jobServer.c` etc, which need launchd's own
+internal `job_t` type from `core.h`/`launchd.h`), which this pass did
+NOT attempt at all -- the libxpc client-library work above only proves
+the CLIENT half of Phase 6.8, not the actual PID-1-replacement daemon
+logic itself, which is where most of the remaining real unknowns are.
+
+## Phase 6.8 -- original 2026-08-22 scoping (partially superseded above,
+## kept for the parts still accurate: license/vintage caution, the
+## "expect real work left in the XPC skeleton" expectation, and the
+## overall "replaces tools/init_binary/'s PID-1 role" migration framing)
+
+**Real, newly-surfaced prerequisite gap, found 2026-08-25 while re-reading
+`build_libnotify.sh`'s own already-committed research (not new
+investigation -- that script's header comment already documented this,
+it just hadn't been promoted into this phase's own scoping yet)**: this
+project has **zero Mach bootstrap-namespace support at all** -- no
+`bootstrap_look_up2()`/`bootstrap_port`, no `servers/bootstrap.h`, no
+`bootstrap.defs` anywhere in `third_party/xnu-7195`
+(`osfmk/mach/bootstrap.h` is Apple's own literal empty placeholder,
+"obsolete: header included only for compatibility"). This is not a
+peripheral gap -- the bootstrap namespace IS what `launchd` implements
+(every `xpc_connection_t`/Mach-service lookup a client does ultimately
+resolves through it), so a real `launchd` port needs this working
+underneath it, not the other way around. Confirmed concretely via
+`third_party/Libnotify/notify_client.c:894`'s
+`bootstrap_look_up2(bootstrap_port, NOTIFY_SERVICE_NAME, ...)`, called
+unconditionally by every one of Libnotify's ~9 real public entry points
+-- this project's own already-ported Libnotify MIG transport is real and
+correct (`build_libnotify.sh`) but cannot reach a live `notifyd` for
+exactly this reason, independent of that script's separate, larger XPC
+wall. Real follow-up work before/alongside Phase 6.8 itself: (1) confirm
+whether xnu-7195's kernel-side `TASK_BOOTSTRAP_PORT` special-port
+plumbing is real/stock (likely yes -- unmodified XNU always initializes a
+task's special ports at creation; what's missing is a userland process
+that actually registers itself as the holder and answers lookups), (2)
+real `bootstrap.defs` MIG generation + client stub, same
+regenerate-every-build pattern `build_libmach_ipc.sh`/
+`build_iokituser.sh`/`build_libnotify.sh` already established, (3) decide
+whether `tools/init_binary/` (current PID-1) needs to become a minimal
+real bootstrap server before a full `launchd` port lands, or whether this
+folds entirely into the `launchd` port itself.
 
 Originally scoped as two separate phases (plain old `launchd`, then a
 custom XPC shim as a last resort, since real Apple XPC is not open
@@ -1610,17 +1945,66 @@ Friends"). Verified directly against the repo, not assumed from its name:
 - Architecturally, `liblaunch.dylib` becomes a thin proxy and
   `libxpc.dylib` carries the real logic -- a real, coherent design, just
   an incomplete implementation of it.
-- **No explicit license is stated in the repo.** Confirm this before
-  building anything on top of it -- Apple's own `launchd` portion carries
-  Apple's APSL license regardless, but the added iXsystems `libxpc`
-  skeleton's terms need checking directly (contact iXsystems/PureDarwin
-  or find a LICENSE file in the actual clone) before treating it as
-  freely portable, same diligence this project already applies to every
-  other third-party source pin.
-- **Repository archived 2026-07-18** (read-only, no further upstream
-  fixes will ever land) -- whatever's there today is permanently the
-  final state; any bugs found while porting it are this project's own to
-  fix, not something to wait on upstream for.
+- **License, resolved 2026-08-25 (real repo/file check, not assumed)**:
+  no repo-level LICENSE file (`license: null` via the GitHub API), but
+  both halves carry real, permissive per-file headers, checked directly
+  -- `src/launchd/launchd.c`/`core.c` (and, per grep pattern, the rest of
+  Apple's own `launchd` files) carry `@APPLE_APACHE_LICENSE_HEADER_START@`
+  / **Apache License 2.0**, correcting this section's earlier "carries
+  Apple's APSL" assumption; iXsystems's `libxpc` files (e.g.
+  `src/libxpc/xpc_connection.c`) carry an explicit
+  **2-clause-BSD-style header**, `Copyright 2014-2015 iXsystems, Inc.`,
+  "Redistribution and use in source and binary forms... AS IS". Net: not
+  blocked -- both real licenses are permissive -- but cite the per-file
+  headers specifically rather than "no license stated" going forward.
+- **Repository archived 2026-07-18** (`pushed_at: 2024-10-06` per the
+  GitHub API -- read-only, no further upstream fixes will ever land) --
+  whatever's there today is permanently the final state; any bugs found
+  while porting it are this project's own to fix, not something to wait
+  on upstream for. Checked for a fresher fork (2026-08-25): all 7 forks
+  found (barracuda156, TheArchitectEngineer, killvxk/XPC-PureDarwin,
+  dariaphoebe, redvelvetcake11, ivanagui2,
+  dothanthitiendiettiende/launchd-and-libxpc) are stale, oldest activity
+  2018, none post-date the origin's own last push -- this really is the
+  most current version available anywhere.
+- **Real file/dependency survey, 2026-08-25** (real repo structure +
+  actual `#include` lists fetched directly, not guessed): top level is
+  `headers/` (a large vendored `CoreFoundation.framework`/
+  `IOKit.framework`/`Kernel.framework` header tree -- build-time only,
+  confirmed NOT a real runtime dependency, see below), `libxpc.xcodeproj/`
+  (the ONLY build system present -- a real 2013/2014-vintage Xcode
+  project, no Makefile; needs the same "hand-extract the real file list
+  from `project.pbxproj`, reimplement as a shell script" treatment as
+  every other tier here, e.g. `build_libc_regex.sh`'s template), `src/`
+  (`launchd/`: `core.c`, `ipc.c`, `job*.defs`/`.c` MIG files, `launchd.c`,
+  `log.c`, `runtime.c`, `launchproxy.c`, `kill2.c`, `ktrace.c`,
+  `wait4path.c`, plus `SystemStarter/`/`init/`/`rc/` subdirs; `libxpc/`:
+  `xpc_array.c`, `xpc_connection.c`, `xpc_dictionary.c`, `xpc_debug.c`,
+  `xpc_error.c`, `xpc_misc.c`, `xpc_private.c`, `xpc_type.c`, `classes.m`,
+  `libbootstrap.c`, `liblaunch.c`, `libvproc.c`; plus `liblaunch/`,
+  `libnv/`, `man/`, `plists/`), `tests/` (only 2 files, thin). Real,
+  **CORRECTING** finding against this section's own dependency framing:
+  **no CoreFoundation include was found in any launchd/libxpc source file
+  actually fetched** (`launchd.c`, `core.c`, `xpc_connection.c`,
+  `xpc_internal.h` all checked directly) -- the vendored CF header tree
+  under `headers/` appears to just be carried along for other PureDarwin
+  consumers, not a real dependency of this specific source. Real
+  dependencies actually found: `bsm/auditd_lib.h`/`bsm/libbsm.h` (BSM
+  audit, not yet ported here), `bootstrap.h`/`servers/bootstrap.h`
+  (confirms Phase 6.8 prereq above), `vproc.h`/`vproc_priv.h`,
+  `launch.h`/`launch_internal.h`; `xpc_internal.h` has no
+  `dispatch.h` include but its structs reference `dispatch_source_t`/
+  `dispatch_queue_t` directly -- confirms a real, if partially deferrable,
+  libdispatch dependency, consistent with this doc's existing
+  Phase-6.6-before-6.8 sequencing. One real NEW gap this survey surfaced,
+  not previously in this project's inventory anywhere: `core.c` also
+  includes `sandbox.h`, `quarantine.h`, `responsibility.h`, and
+  `systemstats/systemstats.h` -- private Apple frameworks with no current
+  port in this project and not mentioned in PureDarwin/XPC's own README
+  dependency list (which only names libSystem/libcoreservices/libedit/
+  libbsm) -- scope these (real vs. stubbable no-op, matching this
+  project's usual per-header judgment call) when Phase 6.8 actually
+  starts, don't assume from the README alone.
 
 Net effect on the plan: still recommended as the starting point over
 writing a from-scratch XPC shim (per source-priority -- a real, if
@@ -1630,9 +2014,8 @@ one combined port, since the two are already integrated in this source.
 But go in with accurate expectations, not the assumption that "has XPC"
 means a complete or vintage-matched one:
 
-1. **License check first** -- before cloning/building anything, confirm
-   PureDarwin/XPC's actual license terms (the WebFetch pass that found
-   this didn't surface one on the repo's main page).
+1. **License check: DONE 2026-08-25**, see above -- real per-file Apache
+   2.0 (`launchd`)/BSD-2-clause (`libxpc`) headers, not blocking.
 2. **Port `launchd`+`libxpc` together** from this source rather than
    plain `apple-oss-distributions/launchd` alone -- same vintage-skew
    risk as originally scoped (expect real ABI/behavior mismatches against

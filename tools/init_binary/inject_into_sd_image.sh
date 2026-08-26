@@ -301,6 +301,17 @@ else
     echo "= tools/userland_staging/libcxx_smoketest.macho not built -- run tools/userland_staging/build_llvm_libcxx.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/libc_build/kqueue_smoketest.macho ]; then
+    mkdir -p "$MNT/bin"
+    cp tools/userland_staging/libc_build/kqueue_smoketest.macho "$MNT/bin/kqueue_smoketest"
+    chmod 755 "$MNT/bin/kqueue_smoketest"
+    echo "+ wrote $(wc -c < tools/userland_staging/libc_build/kqueue_smoketest.macho) bytes to $MNT/bin/kqueue_smoketest"
+    echo "  (real kqueue()/kevent() EVFILT_TIMER round-trip -- Phase 6.6"
+    echo "  libdispatch prereq, see tools/userland_staging/kqueue_smoketest.c)"
+else
+    echo "= tools/userland_staging/libc_build/kqueue_smoketest.macho not built -- run tools/userland_staging/build_kqueue_smoketest.sh first if wanted, skipping"
+fi
+
 # Real Phase 4 step 3 "remaining commands" tiers (docs/roadmap.md) --
 # each build_*_cmds.sh script writes one <name>.macho per real command
 # it built; every one of them lands in /bin, matching real BSD/macOS

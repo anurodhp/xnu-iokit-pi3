@@ -183,6 +183,21 @@ fi
 
 mkdir -p third_party
 
+#   - BSM (Phase 6.8, launchd+XPC): pinned to `bsm-13` (real
+#     apple-oss-distributions repo, needed for `bsm/auditd_lib.h`/
+#     `bsm/libbsm.h`, real launchd/libxpc dependencies per
+#     docs/daemon-roadmap.md's Phase 6.8 file survey).
+#   - PureDarwin (Phase 6.8, launchd+XPC source): sparse-checked-out below
+#     (same pattern as llvm-project), NOT the generic REPOS loop -- see
+#     that block's own comment for why this superseded the originally
+#     scoped `PureDarwin/XPC` archived-repo source (real, verified finding
+#     2026-08-25: PureDarwin/PureDarwin's `next` branch is an actively
+#     maintained monorepo that already boots real launchd to a shell on
+#     this exact SoC, bcm2837/Raspberry Pi 3, under QEMU -- a categorically
+#     better reference than the frozen 2014 `launchd-842.91.1` + iXsystems
+#     skeleton source docs/daemon-roadmap.md originally scoped this phase
+#     around).
+#
 # name | clone_url | ref (branch or tag) | patch file (optional, relative to third_party-patches/)
 REPOS='
 xnu-7195|git@github.com:anurodhp/xnu-pi3-macos11.git|bcm2837-bringup|
@@ -233,6 +248,7 @@ awk|https://github.com/apple-oss-distributions/awk.git|awk-27.40.1|
 IOKitTools|https://github.com/apple-oss-distributions/IOKitTools.git|IOKitTools-114.40.1|
 OpenSSH|https://github.com/apple-oss-distributions/OpenSSH.git|OpenSSH-240.40.1|
 Libnotify|https://github.com/apple-oss-distributions/Libnotify.git|Libnotify-279.40.4|
+BSM|https://github.com/apple-oss-distributions/BSM.git|bsm-13|
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch; do
@@ -280,6 +296,37 @@ if [ -n "$LLVM_DEST" ]; then
     git -C "$LLVM_DEST" sparse-checkout init --cone
     git -C "$LLVM_DEST" sparse-checkout set libcxx libcxxabi
     git -C "$LLVM_DEST" checkout "$LLVM_REF"
+fi
+
+# PureDarwin: sparse-checkout only src/Libraries/XPC (launchd/libxpc/
+# notify/libinfo/libnv/launchctl/logd), src/Libraries/CrashReporterClient
+# (a real, trivial 13-line dependency of libxpc -- just a static
+# annotation struct, no real crash-reporting daemon), and cmake/ (kept for
+# reference only -- this project's build_*.sh scripts hand-translate the
+# real per-target file lists/mig() invocations rather than running cmake
+# itself, same treatment every other Xcode-project-only source in this
+# project already gets). `next` is PureDarwin's own active-development
+# branch (`main` is frozen releases per their own README) -- no tag, HEAD
+# tracked directly, matching this project's llvm-project precedent for
+# "no meaningful tag to pin, track a specific real commit's tree instead."
+PUREDARWIN_REF="next"
+PUREDARWIN_DEST="third_party/PureDarwin"
+if [ -d "$PUREDARWIN_DEST" ]; then
+    if [ "$FORCE" = "1" ]; then
+        echo "+ removing existing $PUREDARWIN_DEST (--force)"
+        rm -rf "$PUREDARWIN_DEST"
+    else
+        echo "= $PUREDARWIN_DEST already exists, skipping (use --force to re-clone)"
+        PUREDARWIN_DEST=""
+    fi
+fi
+if [ -n "$PUREDARWIN_DEST" ]; then
+    echo "+ sparse-cloning PureDarwin @ $PUREDARWIN_REF (src/Libraries/XPC, CrashReporterClient, cmake only)"
+    git clone --filter=blob:none --no-checkout --depth 1 --branch "$PUREDARWIN_REF" \
+        https://github.com/PureDarwin/PureDarwin.git "$PUREDARWIN_DEST"
+    git -C "$PUREDARWIN_DEST" sparse-checkout init --cone
+    git -C "$PUREDARWIN_DEST" sparse-checkout set src/Libraries/XPC src/Libraries/CrashReporterClient cmake
+    git -C "$PUREDARWIN_DEST" checkout "$PUREDARWIN_REF"
 fi
 
 echo "done -- third_party/ populated. See docs/roadmap.md and README.md for what to build next."
