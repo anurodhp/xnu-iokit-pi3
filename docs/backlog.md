@@ -439,6 +439,123 @@ d6. **CLOSED 2026-08-26 — every real file in `launchd/` now compiles
     smaller one-off items above are all real, bounded, and individually
     quick once picked up.
 
+    **UPDATE 2026-08-26: CoreFoundation wired in for real, verified via
+    the actual launchd trial link (not a synthetic CF-only probe).**
+    First checked the real question this raised: does launchd's actual
+    CF usage need ICU? Checked `pd_launchd_plist.c` (the only real
+    launchd file that touches CF) line by line — its full CF surface is
+    `CFGetTypeID`/`CFStringGetTypeID`/`CFStringGetCString`/
+    `CFDictionaryGetTypeID`/`ApplyFunction`/`CFArrayGetTypeID`/
+    `GetCount`/`GetValueAtIndex`/`CFBooleanGetTypeID`/`GetValue`/
+    `CFNumberGetTypeID`/`GetValue`/`CFPropertyListCreateFromXMLData`/
+    `CFRelease`/`kCFAllocatorNull`. **None of it touches CFLocale,
+    CFCharacterSet, collation, or CFNumberFormatter** — the only real
+    ICU-dependent parts of this CF port (item d7). Also corrected a
+    stale assumption in `build_corefoundation.sh`'s own scope comment:
+    `CFPropertyListCreateFromXMLData` was documented as "explicitly not
+    included," but it already works — its real XML parser
+    (`_CFPropertyListCreateFromUTF8Data`) is self-contained inside
+    `CFPropertyList.c` itself, no separate `CFXMLTree`/libxml2
+    dependency needed. **So: no, ICU is not on launchd's critical path.**
+    One real, non-ICU caveat: `CFStringGetCString`'s fast path (a plain
+    `memmove`) only covers strings already stored 8-bit/ASCII-compatible
+    internally; non-ASCII plist string values would hit the still-
+    missing `__CFStringEncodeByteStream` slow path. Real launchd plist
+    content (labels, paths, program arguments) is essentially always
+    ASCII in practice, so this doesn't block the realistic case, but
+    it's a real, tracked gap (see item d7), not eliminated.
+
+    Re-ran `build_launchd_core.sh`'s own real trial link (now updated to
+    a real DYNAMIC link — dropped `-static`, dropped `libdispatch_real.a`
+    for `libdispatch.dylib`, same reason as item d7's own harness fix —
+    and wired in `libCoreFoundation.a` + `cf_libc_extras.a`). Also added
+    a new, permanent `launchd_libc_extras.a` selective-extraction step
+    (same pattern as d7's `cf_libc_extras.a`) closing 15 more real,
+    already-built-elsewhere BSD libc symbols: `chdir`/`access`/`strstr`/
+    `sleep`/`sigprocmask`/`sigaction`/`getifaddrs`/`freeifaddrs`/
+    `arc4random_uniform`/`bind`/`getentropy`/`uuid_copy`/`uuid_is_null`/
+    `fegetenv`/`fesetenv`/`fstatat`. (`ctime_r`/`localtime_r` via
+    `libopenpam.a`'s `localtime.o` and `setlogmask` via its
+    `oldsyslog.o` were tried and reverted the same way item d7 reverted
+    `localtime.o`/`libproc.o`/`strtoul.o` — real, deep, not-locally-
+    satisfied dependency chains for one function each, a net loss.)
+
+    **Real, current count: 167 undefined symbols** (down from the
+    pre-CF ~110 count's own honest baseline, but that number wasn't
+    apples-to-apples — CF's ~14 direct symbols were simply unresolved
+    before, now they're real and working, but exposed ~150 of CF's *own*
+    internal gaps as a side effect of `CFRuntime.c`'s monolithic
+    class-registration init path, see item d7). Categorized, **critical
+    path vs backlog per explicit user instruction (2026-08-26: "continue
+    on the critical path to get launchd done, everything else goes to
+    backlog")**:
+    - **BACKLOG (CF/ICU scope, item d7's own territory, not launchd-
+      specific)**: all remaining `CF*`/`kCF*`/`u_*`/`__CF*` symbols —
+      CFCharacterSet/CFUniChar/CFLocale/CFNumberFormatter (ICU),
+      CFReadStream/CFWriteStream (needs kqueue/FD), CFBundle (tried,
+      reverted — 30-for-3 bad trade), CFBurstTrie, CFURLCreateDataAnd
+      PropertiesFromResource, CFTimeZoneGetSecondsFromGMT,
+      CFCopySearchPathForDirectoriesInDomains, the StringEncodings-
+      internal family (`CFStringEncodeByteStream`/`DecodeByteStream3`/
+      `EncodingByteLengthForCharacters`/`GetConverter`/
+      `ConvertIANACharSetNameToEncoding`/`UnicodeToBytes`,
+      `CFStringGetFileSystemRepresentation`/`GetMaximumSizeOf...`,
+      `CFStringScanDouble`/`Integer`, `CFSetCharToUniCharFunc`,
+      `CFStrConvertBytesToUnicode`, `CFCharToUniCharTable`,
+      `CFCreateOldStylePropertyListOrStringsFile`, `__CFGetSlash`) — not
+      needed by launchd's real plist-parsing CF usage (verified above).
+    - **BACKLOG (already-tracked)**: pthread QoS/attr (item d3);
+      Mach voucher/host-special-port routines (item d5) — this pass
+      found more of the same real category (`host_reboot`/
+      `host_set_exception_ports`/`_special_port`/`_UNDServer`,
+      `mach_port_get_attributes`/`get_set_status`/`move_member`/
+      `request_notification`/`set_attributes`/`set_mscount`,
+      `mig_allocate`, `pid_for_task`) — extend d5's scope to cover
+      these too, same real MIG-client-routine-regeneration fix; BSM
+      audit-record construction (`au_*`, `audit_session_*`,
+      `getaudit_addr`/`setaudit_addr`) — already deprioritized as
+      peripheral logging; `job_mig_look_up2_forward`/`_parent_forward`,
+      `runtime_ktrace`/`runtime_ktrace0` — already-tracked long tail.
+    - **BACKLOG (`libSystem.B.dylib` export-parity gap, item d7's own
+      already-documented architecture debt)**: `__dispatch_queue_attr_
+      concurrent`, `__os_alloc_once*`, `__os_log_*`, `__platform_bzero`,
+      `__pthread_bsdthread_init`/`_main_thread_postfork_init`/
+      `_clear_qos_tsd`, `malloc_zone_*`, `malloc_default_zone`/
+      `_good_size`, `mach_vm_region`, `__NSGetArgc`, `fmod`/`modf`/`pow`,
+      `uuid_generate_random`/`_time`, `pthread_getugid_np`/
+      `_is_threaded_np`/`_threadid_np`, `strtoul_l`, `getegid`.
+    - **BACKLOG (never open-sourced, item d7's own finding)**: ASL
+      (`asl_open`/`_close`/`_free`/`_new`/`_send`/`_set`).
+    - **BACKLOG (new this pass, real but not yet triaged as critical-
+      path-or-not)**: `execl`/`execv` (real libc wrappers around
+      `execve`, which this project already has — just not these two
+      convenience forms); `mkdirat`; `mktime`; `glob` (real BSD
+      algorithm, FreeBSD fallback candidate per this project's source-
+      priority convention); `initgroups`; `getpeereid`;
+      `memorystatus_control`/`setiopolicy_np` (real macOS-specific
+      resource-management syscalls, need raw-trap generation);
+      `signal`/`waitpid`/`atexit` (real libc functions, not yet ported —
+      `waitpid` specifically wraps `wait4`, which this project already
+      has real logic for in `liblaunchd_syscalls.a`); `sys_siglist`
+      (static data array); `xpc_copy` (a REAL gap, not just unbuilt —
+      confirmed via source inspection that `libxpc/xpc_misc.c` has
+      `xpc_copy_description`/`_description_level`/
+      `_entitlement_for_token` but no plain `xpc_copy(xpc_object_t)`
+      deep-copy function at all; needs the same "confirm via historical
+      `launchd-842.92.1` clone" treatment `ld2xpc`/`xpc2ld` got before
+      concluding it needs a from-scratch implementation);
+      `__logname`/`_mutex` (getlogin/logname caching); `__sprintf_chk`;
+      `__udivti3` (a compiler-rt 128-bit-division builtin — checked
+      `libclang_rt.ios.a`, doesn't provide it for this target, real gap,
+      small and unlikely to matter much); `__mach_errors` (a data table
+      backing `mach_error_string`, which already works — this looks like
+      a separate, real, currently-unused symbol some code references
+      directly).
+    Every one of these was spot-checked against the current curated
+    stack (`nm -g` across all `.a` files) before being called a real
+    gap, not assumed — see this same pass's real, verified `ar x`
+    extraction work above for the ones that turned out to already exist.
+
 d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
     compiles + archives clean; real trial link has ~150 honestly-
     categorized remaining gaps.** `tools/userland_staging/

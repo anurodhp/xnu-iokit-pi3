@@ -18,9 +18,11 @@
 # CFSet/CFBag/CFBinaryHeap/CFBitVector/CFStorage/CFTree
 # (Collections.subproj), CFNumber+CFBoolean+CFDate (NumberDate.subproj),
 # CFString (String.subproj), CFPropertyList+CFBinaryPList
-# (Parsing.subproj -- XML plist parsing, i.e. CFPropertyListCreateFrom
-# XMLData, is explicitly NOT included; only the binary-plist + basic
-# CFPropertyList API surface these two files provide), CFError
+# (Parsing.subproj -- CFPropertyListCreateFromXMLData IS included and
+# works: its real XML parser, _CFPropertyListCreateFromUTF8Data, is
+# self-contained inside CFPropertyList.c itself, no separate CFXMLTree/
+# libxml2 dependency needed -- corrected 2026-08-26, an earlier pass
+# wrongly assumed this needed its own file), CFError
 # (Error.subproj), CFURL's core path-creation API (URL.subproj/CFURL.c
 # -- CFURLComponents.c, a genuinely separate file, is NOT included),
 # plus CFBase/CFRuntime/CFUtilities/CFUUID/CFPlatform/CFKnownLocations/

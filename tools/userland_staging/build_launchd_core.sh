@@ -64,6 +64,10 @@ if [ ! -f "$OUT/libxpc.a" ] || [ ! -f "$OUT/liblaunchd_mig.a" ] || [ ! -f "$OUT/
     echo "error: $OUT/libxpc.a, $OUT/liblaunchd_mig.a, and $OUT/liblaunchd_syscalls.a required -- run build_libxpc.sh / build_launchd_mig.sh / build_launchd_syscalls.sh first" >&2
     exit 1
 fi
+if [ ! -f "$OUT/libCoreFoundation.a" ] || [ ! -f "$OUT/cf_libc_extras.a" ]; then
+    echo "error: $OUT/libCoreFoundation.a and $OUT/cf_libc_extras.a required -- run build_corefoundation.sh first" >&2
+    exit 1
+fi
 
 CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness -Wno-deprecated-declarations -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 -DOS_OBJECT_USE_OBJC=0 \
@@ -127,6 +131,29 @@ rm -f "$OUT/liblaunchd_core.a"
 ar rcs "$OUT/liblaunchd_core.a" "$OUT"/launchd_core_obj/*.o
 echo "wrote $OUT/liblaunchd_core.a ($(ls "$OUT"/launchd_core_obj/*.o | wc -l | tr -d ' ') objects)"
 
+# Real, curated extraction of a handful of already-built-elsewhere BSD
+# libc functions launchd/core.c's own trial link needs -- same selective
+# `ar x` pattern build_libdispatch_dylib.sh/build_corefoundation.sh
+# already established, not whole-archive linking (same C++/xattr
+# pollution risk documented in docs/backlog.md item d7). Each member
+# checked via a real trial link before inclusion; several other
+# candidates (ctime_r/localtime_r via libopenpam.a's localtime.o,
+# setlogmask via its oldsyslog.o) were tried and reverted the same way
+# CFError's own selective-extraction pass reverted localtime.o/
+# libproc.o/strtoul.o -- real, deep, not-locally-satisfied dependency
+# chains for one function each, a net loss.
+mkdir -p "$OUT/launchd_libc_extras_obj"
+( cd "$OUT/launchd_libc_extras_obj" && \
+  ar x "../libncurses.a" ncurses_extra_syscalls.o Libc_sys_sigaction.o libplatform_sigaction.o && \
+  ar x "../libresolv.a" getifaddrs.o arc4random.o libresolv_socket_syscalls.o libresolv_getentropy_syscall.o && \
+  ar x "../libcopyfile.a" copy.o && \
+  ar x "../dyld_core.a" isnull.o && \
+  ar x "../libopenpam.a" ls_fenv_compat.o && \
+  ar x "../libremovefile.a" fstatat64.o )
+rm -f "$OUT/launchd_libc_extras.a"
+ar rcs "$OUT/launchd_libc_extras.a" "$OUT"/launchd_libc_extras_obj/*.o
+echo "wrote $OUT/launchd_libc_extras.a ($(ls "$OUT"/launchd_libc_extras_obj/*.o | wc -l | tr -d ' ') objects: chdir/access/strstr/sleep/sigprocmask/sigaction/getifaddrs/freeifaddrs/arc4random_uniform/bind/getentropy/uuid_copy/uuid_is_null/fegetenv/fesetenv/fstatat)"
+
 # Real, informational trial link. First attempt linked plainly against
 # liblaunchd_core.a (launchd.c has its own real main(), so unlike every
 # other tier's own hand-written trial_main.c none was needed) and
@@ -142,14 +169,28 @@ echo "wrote $OUT/liblaunchd_core.a ($(ls "$OUT"/launchd_core_obj/*.o | wc -l | t
 # whether anything visibly references it -- the correct tool for "prove
 # this archive's full, real content links clean standalone", not a
 # workaround) gives the real, honest picture instead.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
+#
+# Real DYNAMIC link (not `-static`): now that CoreFoundation is wired in
+# and depends on the real `libdispatch.dylib`, the static link mode this
+# script used to use can't resolve dispatch/os_log symbols at all (real
+# `ld64` limitation, not a real gap -- see docs/backlog.md item d7's
+# "link-mode artifact" finding). Same recipe `build_dyld_test_exec.sh`/
+# `build_corefoundation.sh` already established: no `-static`, plain
+# dylib links on the command line, `-Wl,-fixup_chains`. `libdispatch_real.a`
+# (the old static archive) is dropped in favor of `libdispatch.dylib`,
+# per this project's 2026-08-25 dylib-first directive.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
+    -Wl,-fixup_chains \
     -o "$OUT/launchd_trial.macho" \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     -Wl,-force_load,"$OUT/liblaunchd_core.a" \
-    "$OUT/libxpc.a" "$OUT/liblaunchd_mig.a" "$OUT/libdispatch_real.a" \
+    "$OUT/libCoreFoundation.a" "$OUT/cf_libc_extras.a" "$OUT/launchd_libc_extras.a" \
+    "$OUT/libxpc.a" "$OUT/liblaunchd_mig.a" \
     "$OUT/libxpc_syscalls.a" "$OUT/libxpc_syscalls2.a" "$OUT/liblaunchd_syscalls.a" \
     "$OUT/libmach_ipc.a" "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
     "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
+    "$OUT/libc_locale_for_stdio.a" \
+    "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     2>"$OUT/launchd_trial_link.err" \
     && echo "real trial link: 0 undefined symbols -- fully closed" \
     || { n=$(grep -c 'Undefined symbol' "$OUT/launchd_trial_link.err" || true); echo "expected-for-now: real trial link found $n undefined symbol group(s):"; grep '^  "' "$OUT/launchd_trial_link.err" | sed 's/,.*//' | sort -u; }
