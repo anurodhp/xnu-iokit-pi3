@@ -289,6 +289,42 @@ class of race, see items 13/14 below).
     `--password` (defaults `root`/`darwin`, matching
     `inject_into_sd_image.sh`'s provisioned account) and fixed `PROMPT`.
 
+11. **[FIXED 2026-08-25, same day as item 10]** Added `fTransferLock`
+    (`IOLock`) to `BCM2837DWC2`, held around the whole body of
+    `transfer()` and `controlTransfer()`. Original problem description
+    below, kept for context.
+
+    **`BCM2837DWC2`'s single shared USB host channel + DMA staging buffer
+    had zero serialization between callers**, despite this file's own
+    header comment already flagging it ("Revisit when Ethernet RX wants
+    to overlap with TX") from before RX existed. Once item 10 above made
+    `SMSC9514Ethernet`'s RX poll timer real, that revisit became live:
+    `fRxTimer` calls `transfer()` from `SMSC9514Ethernet`'s `IOWorkLoop`
+    timer callout while `outputPacket()` (TX) calls it synchronously from
+    whatever arbitrary thread `ifnet_output()` runs on — confirmed by
+    reading `IONetworkInterface::if_output()`
+    (`third_party/IONetworkingFamily/IONetworkInterface.cpp`), which
+    calls the controller's output action directly with no queue at all
+    when `createOutputQueue()` returns `NULL` (the `IONetworkController`
+    default, never overridden here — and this project's vendored
+    `IONetworkingFamily` has no `IOBasicOutputQueue.cpp`/
+    `IOGatedOutputQueue.cpp` to override it *with*, only the headers).
+    Real-hardware symptom this caused: `ping` reporting
+    `sendto: Operation not permitted` on roughly every other echo request
+    while every ICMP sequence number still got a real reply with no
+    gaps — i.e. the transfer really reached the wire, but
+    `doTransfer()`'s own HCINT-based completion readback got corrupted by
+    the concurrently-running RX poll reprogramming the same channel
+    mid-poll. Diagnosed from source (no lock existed, confirmed via grep;
+    both call paths confirmed via direct reads; the real xnu-7195 network
+    stack has no synchronous per-packet `EPERM` path that fits an
+    always-recovers, every-other-packet pattern) and QEMU-boot-regression-
+    tested (`BCM2837USBEnum`'s boot-time enumeration issues many
+    sequential `controlTransfer()` calls through the new lock with no
+    hang/deadlock) — **not yet real-hardware-confirmed** the actual `ping`
+    symptom is gone, since QEMU cannot exercise `SMSC9514Ethernet` at all
+    (see item 10).
+
 ---
 
 ## P1

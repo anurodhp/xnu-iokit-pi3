@@ -462,6 +462,36 @@ private:
 	uint8_t                  fRootSpeed;
 	bool                     fRootConnected;
 
+	/*
+	 * Serializes every call into transfer()/controlTransfer() - both
+	 * ultimately drive the single shared hardware channel (kDWC2Channel)
+	 * and the single shared fDMAVirt staging buffer via doTransfer(), and
+	 * "Revisit when Ethernet RX wants to overlap with TX" (this file's own
+	 * header comment, written before RX existed) is now live:
+	 * SMSC9514Ethernet's fRxTimer calls transfer() from its IOWorkLoop's
+	 * timer callout while outputPacket() calls it synchronously from
+	 * whatever arbitrary thread ifnet_output() runs on (IONetworkController
+	 * has no output queue here - createOutputQueue() was never overridden,
+	 * and this project's IONetworkingFamily vendoring has no
+	 * IOBasicOutputQueue.cpp/IOGatedOutputQueue.cpp to override it with -
+	 * so outputPacket() is never gated onto the workloop at all). Without
+	 * this lock those two genuinely run concurrently on two different
+	 * threads with no serialization at all, confirmed by reading both call
+	 * paths, not just suspected. Diagnosed (not yet register-trace-
+	 * confirmed - no real hardware debugger available this session) as the
+	 * cause of a real-hardware symptom: `ping` intermittently reporting
+	 * "sendto: Operation not permitted" on roughly every other echo
+	 * request while every sequence number still gets a real reply with no
+	 * gaps - consistent with the RX poll's concurrent use of the same
+	 * channel/HCINT registers corrupting doTransfer()'s own completion-
+	 * status readback for a TX transfer that genuinely still reached the
+	 * wire, rather than with any real permission check or genuine
+	 * transmit failure (grepped the real xnu-7195 network stack for every
+	 * synchronous EPERM site reachable from sendto() on a raw ICMP socket;
+	 * none fit an intermittent, always-recovers pattern).
+	 */
+	IOLock                  *fTransferLock;
+
 	// Bring-up scaffolding (see the long comment at the call site in
 	// start()): owned for as long as this controller is, so the Ethernet
 	// driver they back has a live transport past start() returning. NULL

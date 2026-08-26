@@ -906,7 +906,14 @@ BCM2837DWC2::doTransferRetrying(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
 IOReturn
 BCM2837DWC2::transfer(DWC2Endpoint *ep, void *buffer, uint32_t len, uint32_t *actualLen, uint32_t timeoutMS)
 {
-	return doTransferRetrying(ep, &ep->toggle, ep->epIsIn, buffer, len, actualLen, timeoutMS);
+	// See fTransferLock's header comment: this and controlTransfer() are
+	// the only two ways into the shared channel/DMA buffer, and callers
+	// (SMSC9514Ethernet's TX via outputPacket() and RX via fRxTimer) run
+	// on genuinely different, unsynchronized threads.
+	IOLockLock(fTransferLock);
+	IOReturn ret = doTransferRetrying(ep, &ep->toggle, ep->epIsIn, buffer, len, actualLen, timeoutMS);
+	IOLockUnlock(fTransferLock);
+	return ret;
 }
 
 IOReturn
@@ -926,11 +933,19 @@ BCM2837DWC2::controlTransfer(DWC2Endpoint *ep, const USBSetupPacket *setup,
 		*actualLen = 0;
 	}
 
+	// Locked for the whole SETUP+DATA+STATUS sequence, not per-stage: a
+	// foreign transfer (e.g. an RX poll) interleaving between this
+	// transfer's own stages would be just as real a corruption as one
+	// interleaving mid-chunk within a single stage. See fTransferLock's
+	// header comment.
+	IOLockLock(fTransferLock);
+
 	// SETUP stage: always OUT, always the SETUP PID, always 8 bytes.
 	USBSetupPacket setupCopy = *setup;
 	uint8_t pid = kHCPID_SETUP;
 	ret = doTransferRetrying(ep, &pid, false, &setupCopy, sizeof(setupCopy), &dummy, 1000);
 	if (ret != kIOReturnSuccess) {
+		IOLockUnlock(fTransferLock);
 		return ret;
 	}
 
@@ -940,6 +955,7 @@ BCM2837DWC2::controlTransfer(DWC2Endpoint *ep, const USBSetupPacket *setup,
 		pid = kHCPID_DATA1;
 		ret = doTransferRetrying(ep, &pid, dataIn, data, dataLen, &moved, 1000);
 		if (ret != kIOReturnSuccess) {
+			IOLockUnlock(fTransferLock);
 			return ret;
 		}
 		if (actualLen != NULL) {
@@ -954,11 +970,8 @@ BCM2837DWC2::controlTransfer(DWC2Endpoint *ep, const USBSetupPacket *setup,
 	bool statusIn = (dataLen > 0 && data != NULL) ? !dataIn : true;
 	pid = kHCPID_DATA1;
 	ret = doTransferRetrying(ep, &pid, statusIn, fDMAVirt, 0, &dummy, 1000);
-	if (ret != kIOReturnSuccess) {
-		return ret;
-	}
-
-	return kIOReturnSuccess;
+	IOLockUnlock(fTransferLock);
+	return ret;
 }
 
 IOReturn
@@ -985,6 +998,12 @@ BCM2837DWC2::start(IOService *provider)
 	}
 
 	IOLog("BCM2837DWC2: start\n");
+
+	fTransferLock = IOLockAlloc();
+	if (fTransferLock == NULL) {
+		IOLog("BCM2837DWC2: IOLockAlloc failed\n");
+		return false;
+	}
 
 	IODeviceMemory *devMem = provider->getDeviceMemoryWithIndex(0);
 	if (devMem == NULL) {
@@ -1240,5 +1259,9 @@ BCM2837DWC2::free(void)
 		fRegMap = NULL;
 	}
 	fRegBase = NULL;
+	if (fTransferLock != NULL) {
+		IOLockFree(fTransferLock);
+		fTransferLock = NULL;
+	}
 	super::free();
 }
