@@ -8,8 +8,11 @@
  * Storage/Tree/Number/Boolean/String/PropertyList/BinaryPList only, no
  * RunLoop/Stream/Socket/MachPort/URL/Locale/Calendar/TimeZone/Date
  * family/Formatters/CharacterSet/AttributedString/Bundle/PlugIn/
- * Preferences/Error) not link on its own without SOMETHING providing
- * these symbols.
+ * Preferences) not link on its own without SOMETHING providing
+ * these symbols. (CFError was originally in this list too, but a real
+ * port turned out to compile clean with zero extra work -- see
+ * build_corefoundation.sh's own FILES array; its class-table entry now
+ * comes from the real CFError.c, not a stub.)
  *
  * Real CFRuntimeClass descriptors with every function pointer NULL are
  * genuinely safe here (see CFRuntime.h's own struct comment: NULL
@@ -41,7 +44,6 @@ CF_STUB_CLASS(__CFDateClass);
 CF_STUB_CLASS(__CFDateComponentsClass);
 CF_STUB_CLASS(__CFDateFormatterClass);
 CF_STUB_CLASS(__CFDateIntervalFormatterClass);
-CF_STUB_CLASS(__CFErrorClass);
 CF_STUB_CLASS(__CFLocaleClass);
 CF_STUB_CLASS(__CFMachPortClass);
 CF_STUB_CLASS(__CFNumberFormatterClass);

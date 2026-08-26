@@ -101,6 +101,7 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -O0 \
     -I "$COMPAT" \
     -I "$CF/Base.subproj" -I "$CF" -I "$CF/Collections.subproj" -I "$CF/NumberDate.subproj" -I "$CF/String.subproj" \
     -I "$CF/Parsing.subproj" -I "$CF/StringEncodings.subproj" -I "$CF/Locale.subproj" -I "$CF/PlugIn.subproj" \
+    -I "$CF/Error.subproj" \
     -I "$OUT/cf_headers" -I "$DISPATCH" -I "$PD/libxpc/include" -I "$CR/include" \
     -idirafter "$XNU/libsyscall/wrappers/libproc" \
     -idirafter "$XNU/bsd" -idirafter "$XNU/osfmk" -idirafter "$XNU/libkern")
@@ -112,7 +113,8 @@ FILES=(Base.subproj/CFBase.c Base.subproj/CFRuntime.c Base.subproj/CFUtilities.c
     Collections.subproj/CFBinaryHeap.c Collections.subproj/CFBitVector.c Collections.subproj/CFStorage.c \
     Collections.subproj/CFTree.c \
     NumberDate.subproj/CFNumber.c String.subproj/CFString.c \
-    Parsing.subproj/CFPropertyList.c Parsing.subproj/CFBinaryPList.c)
+    Parsing.subproj/CFPropertyList.c Parsing.subproj/CFBinaryPList.c \
+    Error.subproj/CFError.c)
 
 mkdir -p "$OUT/cf_obj"
 for f in "${FILES[@]}"; do
@@ -159,5 +161,28 @@ EOF
     "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
     "$OUT/libc_locale_for_stdio.a" \
     2>"$OUT/cf_trial_link.err" \
-    && echo "real trial link: 0 undefined symbols -- fully closed" \
-    || { n=$(grep -c 'Undefined symbol' "$OUT/cf_trial_link.err" || true); echo "real trial link found $n undefined symbol group(s):"; grep '^  "' "$OUT/cf_trial_link.err" | sed 's/,.*//' | sort -u; }
+    && echo "real STATIC trial link: 0 undefined symbols -- fully closed" \
+    || { n=$(grep -c 'Undefined symbol' "$OUT/cf_trial_link.err" || true); echo "real STATIC trial link found $n undefined symbol group(s) -- NOTE some of these (dispatch_*/os_log_*/__os_alloc_once* etc) are a link-mode artifact, not real gaps, see the dynamic trial link below and docs/backlog.md item d7:"; grep '^  "' "$OUT/cf_trial_link.err" | sed 's/,.*//' | sort -u; }
+
+# Real, informational DYNAMIC trial link -- real ld64 cannot pull
+# symbols from a real MH_DYLIB (libdispatch.dylib) into a fully static
+# link at all, which made the static trial link above over-report
+# dispatch_*/os_log_*/__os_alloc_once* etc as gaps when they're actually
+# fine (found+documented 2026-08-26, docs/backlog.md item d7). Same real
+# recipe build_dyld_test_exec.sh already established: drop `-static`
+# (keep `-nostdlib`), link plain dylibs on the command line, real
+# `-Wl,-fixup_chains` (this project's pinned dyld-940 needs chained
+# fixups, not the older bind-opcode format). This is the more accurate
+# gap count going forward -- prefer this one's output over the static
+# link's above.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
+    -Wl,-fixup_chains \
+    -o "$OUT/cf_trial_dyn.macho" \
+    ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
+    "$OUT/cf_trial_main.o" \
+    "$OUT/libCoreFoundation.a" \
+    "$OUT/system/libdispatch.dylib" \
+    "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
+    2>"$OUT/cf_trial_dyn.err" \
+    && echo "real DYNAMIC trial link: 0 undefined symbols -- fully closed" \
+    || { n=$(grep -c 'Undefined symbol' "$OUT/cf_trial_dyn.err" || true); echo "real DYNAMIC trial link found $n undefined symbol group(s) -- the accurate current gap count:"; grep '^  "' "$OUT/cf_trial_dyn.err" | sed 's/,.*//' | sort -u; }

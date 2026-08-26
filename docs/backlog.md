@@ -504,57 +504,86 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
     - **Real, unported CF subsystems** referenced by API (not just the
       class table already stubbed above): `CFDateCreate`/
       `CFDateGetAbsoluteTime`, `CFLocaleCopyCurrent`/`GetIdentifier`/
-      `GetValue`/`GetTypeID`, `CFURLCreate*` (4 functions), `CFError*`
-      (4 functions — probably the cheapest real follow-up, small self-
-      contained real file), `CFNumberFormatter*` (8 functions, real ICU
-      dependency too), `CFRead`/`CFWriteStream*` (6 functions, needs
-      real kqueue/FD integration), `CFBundleCreate`/
-      `CopyLocalizedString`, `CFBurstTrie*` (4 functions — a real
-      CFPropertyList/CFBinaryPList performance helper, not yet located
-      which subproj it lives in).
+      `GetValue`/`GetTypeID`, `CFURLCreate*` (4 functions),
+      `CFNumberFormatter*` (8 functions, real ICU dependency too),
+      `CFRead`/`CFWriteStream*` (6 functions, needs real kqueue/FD
+      integration), `CFBundleCreate`/`CopyLocalizedString`,
+      `CFBurstTrie*` (4 functions — a real CFPropertyList/CFBinaryPList
+      performance helper, not yet located which subproj it lives in).
+      **CLOSED 2026-08-26: `CFError*`** — real `Error.subproj/CFError.c`
+      (645 lines) compiled clean with zero extra work needed, added to
+      `build_corefoundation.sh`'s `FILES` array (now 23 objects), its
+      class-table entry in `cf_class_stubs.c` removed in favor of the
+      real one. Closed 6 symbols (`CFErrorCreate`/`GetCode`/`GetDomain`/
+      `CopyUserInfo`, `kCFErrorDomainCocoa`/`OSStatus`/`POSIX`,
+      `kCFErrorDebugDescriptionKey`/`UnderlyingErrorKey`) — real gap
+      count now 132 (dynamic-link count, see below), down from 138.
     - **ASL legacy logging** (`asl_open`/`_close`/`_free`/`_new`/`_send`/
       `_set`) — CFUtilities.c's own legacy console-logging fallback;
       real source may exist in `third_party` already (not yet checked)
       or may need the same "document as out of scope" treatment as ICU.
-    - **`dispatch_apply`/`_queue_create`/`_release`/`_once` +
-      `os_log_create`/`_type_enabled`/`__os_log_error_impl`/
-      `__os_alloc_once*`** — genuinely present in `libdispatch.dylib`
-      (built, real `MH_DYLIB`), but this trial link uses `-static`
-      linking throughout (matching every other archive-verification
-      trial link in this project) and real `ld64` cannot pull symbols
-      from a `MH_DYLIB` into a fully static link at all. This isn't a
-      missing-symbol gap, it's a **link-mode mismatch in the test
-      harness itself** — the real fix is a real dynamic trial link (or
-      deferring full verification to the actual "wire CF into launchd/
-      IOKitUser" phase, which will already be dynamically linking
-      against `libdispatch.dylib` by that project convention). Do not
-      re-diagnose this as a dispatch gap in a future pass.
-    - **Miscellaneous real libc/libSystem gaps**: `getpwnam`/`getpwuid`/
-      `getegid`/`geteuid`/`getuid`/`gethostname`/`kill`/`mmap`/
-      `mprotect`/`read`/`write`/`writev`/`dlopen`/`dlsym`/`localtime_r`/
-      `flsl`/`fmod`/`modf`/`pow`/`kdebug_trace`/`proc_pidinfo`/
-      `pthread_rwlock_rdlock`/`_unlock`/`pthread_threadid_np`/
-      `_is_threaded_np`/`_getugid_np`/`strtoul_l`/`__memmove_chk`/
-      `__strlcpy_chk`/`__vsnprintf_chk`/`__stack_chk_guard`/
-      `__chkstk_darwin`/`mach_vm_region` (declared in the compat header,
-      but the real definition in `libmalloc.a`'s `mach_vm.c` needs
-      checking — likely just needs exporting)/`malloc_zone_*`(6
-      functions)/`malloc_default_zone`/`malloc_good_size`/
-      `uuid_generate_random`/`_time`/`_NSGetArgc`/`_NSGetExecutablePath`.
-      Spot-checked: most of these (`getpwnam`, `kill`, `read`, `write`,
-      `writev`, `dlopen`, `localtime_r`, `proc_pidinfo`, `strtoul_l`,
-      `__memmove_chk`, `__stack_chk_fail`, `mach_error_string`,
-      `_NSGetArgv`) **already exist** somewhere in this project's
-      curated stack (`libcopyfile.a`/`libxpc_syscalls.a`/`libncurses.a`/
-      `libremovefile.a`/`libopenpam.a`/`libcxx.a`/`dyld_core.a`) — just
-      not linked into this particular trial link, which deliberately
-      keeps a minimal archive list to keep the gap signal clean. Adding
-      `libxpc_syscalls.a`/`libcopyfile.a`/`libopenpam.a`/`dyld_core.a`
-      wholesale was tried and reverted: it pulls in unrelated C++
-      (`libc++abi` vtables, `operator new`/`delete`) and a different set
-      of missing xattr/chmod-family symbols, a net loss for a trial-link
-      whose only job is to report gaps accurately. The real fix, when
-      this is picked back up, is selective `ar x` extraction of just the
+    - **CLOSED, verified 2026-08-26**: `dispatch_apply`/`_queue_create`/
+      `_release`/`_once`, `os_log_create`/`_type_enabled`/
+      `__os_log_error_impl`, `__os_alloc_once*`, `__chkstk_darwin`,
+      `__stack_chk_fail`/`_guard`, `__strlcpy_chk`/`__vsnprintf_chk`,
+      `__platform_bzero`, `__pthread_bsdthread_init`/
+      `_main_thread_postfork_init`, `_NSGetExecutablePath`, `_dlopen`/
+      `_dlsym`, `_kill`/`_mmap`/`_mprotect`/`_read`/`_write`/`_kdebug_trace`,
+      `_flsl`, `_pthread_rwlock_rdlock`/`_unlock`, `_mach_error_string`,
+      `_CFURLCreateWithFileSystemPathRelativeToBase` (30 symbols) were a
+      **link-mode mismatch in the test harness itself**, not real gaps —
+      confirmed by actually doing the real dynamic trial link this item
+      called for: dropped `-static` (kept `-nostdlib`), linked
+      `libCoreFoundation.a` against `libdispatch.dylib` +
+      `libdyld.dylib` + `libSystem.B.dylib` directly (same real recipe
+      `build_dyld_test_exec.sh` already established: plain dylib links
+      on the command line, `-Wl,-fixup_chains`, no `-static`) — every
+      one of these 30 resolved for real. Real gap count is **138, not
+      153**. This also surfaced a second, smaller, already-documented
+      finding: 15 *new* symbols (`fprintf`/`printf`/`getcwd`/`close`/
+      `isdigit`/`isspace`/`strrchr`/`strnlen`/`memchr`/`asprintf`/
+      `pthread_atfork`/`issetugid`/`fprintf_l`/`snprintf_l`/
+      `strncasecmp_l`) appeared that weren't missing in the static link
+      — `libSystem.B.dylib` doesn't yet export full parity with the
+      curated static libc archives it was flattened from. This is
+      CLAUDE.md's own already-documented "Static-vs-dylib architecture
+      debt", not a new CF-specific problem — no action needed here
+      beyond noting CF's own real future dynamic link (once wired into
+      launchd/IOKitUser) will hit it too.
+    - **Real `libSystem.B.dylib` export-parity gaps** (the *other* half
+      of the already-documented architecture debt found while verifying
+      the dynamic-link-mode item above): `close`/`getcwd`/`isdigit`/
+      `isspace`/`strrchr`/`strnlen`/`memchr`/`asprintf`/`fprintf`/
+      `_fprintf_l`/`printf`/`snprintf_l`/`strncasecmp_l`/`pthread_atfork`/
+      `issetugid`/`__memmove_chk` are all real, ordinary libc functions
+      this project's own static `libc_gen.a`/`libc_string.a`/
+      `libc_stdio.a`/`libc_printf.a` already provide — they only show up
+      as gaps in a *dynamic* link because `libSystem.B.dylib` (the
+      flattened static-stack-as-one-dylib, per CLAUDE.md's own
+      documented debt note) doesn't yet export them. Not a CF-specific
+      problem and not fixed here; real fix is closing that dylib's own
+      export-parity gap, tracked wherever that dylib's own build script
+      lives (not yet cross-referenced from here).
+    - **Real, still-genuinely-missing-everywhere libc/Mach gaps**
+      (present in neither the static curated archives used in this
+      trial link nor `libSystem.B.dylib`): `getpwnam`/`getpwuid`/
+      `getegid`/`geteuid`/`getuid`/`gethostname`/`writev`/`localtime_r`/
+      `proc_pidinfo`/`strtoul_l`/`pthread_getugid_np`/
+      `pthread_is_threaded_np`/`pthread_threadid_np`/`mach_vm_region`
+      (declared in `cf_compat_headers/mach/mach_vm.h`, but the real
+      definition in `libmalloc.a`'s `mach_vm.c` needs checking — likely
+      just needs exporting)/`malloc_zone_*` (6 functions)/
+      `malloc_default_zone`/`malloc_good_size`/`uuid_generate_random`/
+      `_time`/`_NSGetArgc`/`fmod`/`modf`/`pow`/
+      `__dispatch_queue_attr_concurrent`/`__os_log_error_impl`. Several
+      of these (`getpwnam`, `proc_pidinfo`, `strtoul_l`, `mach_error_string`
+      [now resolved via the dylib], `_NSGetArgv` [ditto]) **do exist**
+      somewhere in this project's curated stack (`libcopyfile.a`/
+      `libxpc_syscalls.a`/`dyld_core.a`) — just not linked into this
+      trial link, which deliberately keeps a minimal archive list to
+      keep the gap signal clean. Whole-archive linking was tried and
+      reverted (pulls in unrelated C++/xattr symbols, a net loss). Real
+      fix, when picked back up: selective `ar x` extraction of just the
       needed `.o` members (same pattern `build_libdispatch_dylib.sh`
       already established), not whole-archive linking.
 
@@ -580,26 +609,29 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
     dynamic-link-mode portion) is a prerequisite for ANY real CF usage
     in this project, not just CFString-heavy usage.
 
-    **Concrete next steps, in priority order**: (1) resolve the static-
-    vs-dynamic trial-link harness gap first (`dispatch_*`/`os_log_*`
-    aren't really missing, just untestable in `-static` mode) so the
-    *actual* remaining gap count is known precisely, not inflated by a
-    harness artifact; (2) real `CFError.c` port (small, self-contained,
-    no ICU) to close 4 more symbols and replace its class-table stub
-    with the real thing; (3) selective `ar x` extraction of the ~13
-    already-built-elsewhere libc symbols (`getpwnam`, `kill`, `read`,
-    `write`, `writev`, `dlopen`, `localtime_r`, `proc_pidinfo`,
-    `strtoul_l`, `__memmove_chk`, `__stack_chk_fail`, `mach_error_string`,
-    `_NSGetArgv`) into a small, curated compat archive (avoiding the
-    C++/xattr pollution whole-archive linking hit); (4) decide whether
-    `CFPropertyListCreateFromXMLData` (needed by `launchd/core.c`,
-    explicitly out of scope for this pass — only binary-plist parsing
-    was included) is worth a follow-up pass, since XML plists are real
-    launchd/LaunchDaemons input format on real Darwin; (5) the ICU wall
-    (CFUniChar/CFCharacterSet/CFStringUtilities collation, CFLocale,
-    CFNumberFormatter) is the one item on this list that's a genuine
-    scope decision, not just unstarted work — real ICU is a large,
-    separate port this project has never attempted.
+    **Concrete next steps, in priority order**: (1) ~~resolve the
+    static-vs-dynamic trial-link harness gap~~ — DONE 2026-08-26,
+    real gap count is **132** (dynamic-link, real `CFError.c` included),
+    not the original static-link 153; (2) ~~real `CFError.c` port~~ —
+    DONE same day, see above; (3) selective `ar x` extraction of the
+    real, still-missing-everywhere libc/Mach symbols listed above
+    (`getpwnam`, `proc_pidinfo`, etc — a smaller, more accurate list
+    than before now that the dynamic link already resolved most of what
+    this item originally targeted) into a small, curated compat archive
+    (avoiding the C++/xattr pollution whole-archive linking hit); (4)
+    decide whether `CFPropertyListCreateFromXMLData` (needed by
+    `launchd/core.c`, explicitly out of scope for this pass — only
+    binary-plist parsing was included) is worth a follow-up pass, since
+    XML plists are real launchd/LaunchDaemons input format on real
+    Darwin; (5) the ICU wall (CFUniChar/CFCharacterSet/
+    CFStringUtilities collation, CFLocale, CFNumberFormatter) is the one
+    item on this list that's a genuine scope decision, not just
+    unstarted work — real ICU is a large, separate port this project has
+    never attempted; (6) new, found 2026-08-26: `libSystem.B.dylib`'s
+    own export-parity gap vs the curated static libc stack (see above) —
+    not CF-specific, but CF's real future dynamic link will hit it, so
+    it's worth closing before CF actually gets wired into launchd/
+    IOKitUser.
 
 0a. **No AES implementation exists anywhere in this kernel — HARD
     PREREQUISITE for Phase 7b (`sshd`).** Filed explicitly 2026-08-21 so it
