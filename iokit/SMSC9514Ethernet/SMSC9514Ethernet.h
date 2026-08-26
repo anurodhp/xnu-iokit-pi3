@@ -27,12 +27,20 @@
  *     BCM2837DWC2::start() on real hardware only.
  *
  * Known gaps: outputPacket()/inputPacketAvailable() implement real TX/RX
- * framing but the RX side (inputPacketAvailable()) is not called from
- * anywhere yet - no code drives the bulk IN endpoint to feed it. Link
+ * framing. As of 2026-08-25 the RX side is fully wired: fRxTimer polls
+ * SMSCUSBTransport::bulkIn() on the same IOWorkLoop as fLinkTimer (see
+ * pollReceive()) and hands unpacked frames to inputPacketAvailable() -
+ * it is not interrupt-driven because nothing in BCM2837DWC2 is (see that
+ * driver's "KNOWN LIMITATIONS": one host channel, one transfer at a time,
+ * no async completion callbacks - a second thread polling bulkIn()
+ * independently of outputPacket()/updateLinkStatus() would race the same
+ * shared channel registers and DMA buffer they use, so this has to be a
+ * timer on that one shared, gated workloop, not a separate thread). Link
  * state (updateLinkStatus()) and BSD/ifconfig registration
  * (BCM2837DWC2.cpp's IONetworkStack wiring) are both real as of
  * 2026-08-22 but unverified end-to-end on real hardware (QEMU can't
- * exercise this path at all, see above).
+ * exercise this path at all, see above) - the RX wiring above is equally
+ * unverified on real hardware for the same reason.
  *
  * Register offsets/bits below are from Linux's drivers/net/usb/smsc95xx.h
  * (SCSRs at 0x00-0x3F, MAC-level CSRs at 0x100+, both accessed through the
@@ -104,6 +112,29 @@ private:
 	IONetworkMedium     *fMediumTable[kMediumCount];
 	IOTimerEventSource  *fLinkTimer;
 
+	// RX poll timer - see the header comment above on why this is a timer
+	// on the shared workloop rather than a dedicated thread. fRxBuffer is
+	// reused across polls (allocated in start(), freed in stop()/free())
+	// rather than stack-allocated per poll to keep pollReceive()'s stack
+	// footprint small.
+	IOTimerEventSource  *fRxTimer;
+	uint8_t             *fRxBuffer;
+	enum {
+		// One bulk-IN transfer can pack several frames (each padded to a
+		// 4-byte boundary, see pollReceive()); sized comfortably past one
+		// max-size 802.3 frame (1518 bytes) plus its RX_STS word so a
+		// single poll can usually drain more than one queued frame.
+		kRxBufferSize = 4096,
+	};
+	// Re-poll interval for pollReceive() while the interface is enabled.
+	// SMSC9514USBTransport::bulkIn() itself bounds each individual poll's
+	// NAK-retry loop short (20ms, not transfer()'s 1000ms default) so an
+	// idle poll can't hold up TX/link-status polling on the shared
+	// workloop - this is how often a new poll gets kicked off.
+	enum {
+		kRxPollIntervalMS = 20,
+	};
+
 	// SCSRs (System Control and Status Registers), byte offsets.
 	enum {
 		kRegIdRev   = 0x00,
@@ -141,6 +172,30 @@ private:
 
 		kMiiAddrBusy = 1U << 0,
 		kMiiAddrWrite = 1U << 1,
+	};
+
+	// EEPROM access via E2P_CMD/E2P_DATA (kRegE2pCmd/kRegE2pData above),
+	// from smsc95xx.h's E2P_CMD_* bits - same vendor-request register
+	// space as everything else, no separate transport method needed.
+	enum {
+		kE2pCmdBusy     = 1U << 31,
+		kE2pCmdRead     = 0,        // E2P_CMD_READ_ - value, not a bit
+		kE2pCmdTimeout  = 1U << 10, // set instead of clearing Busy when no EEPROM is present
+		kE2pCmdAddrMask = 0x1FF,
+	};
+
+	// smsc95xx.c's EEPROM_MAC_OFFSET - the 6 bytes at this offset are the
+	// factory-programmed MAC address, when an EEPROM is populated at all.
+	enum {
+		kEepromMacOffset = 0x01,
+	};
+
+	// RX status word prefixing each frame in a bulk-IN transfer, from
+	// smsc95xx.h's RX_STS_* bits - see pollReceive().
+	enum {
+		kRxStsFrameLenMask  = 0x3FFF0000,
+		kRxStsFrameLenShift = 16,
+		kRxStsErrorSummary  = 0x00008000,
 	};
 
 	// LAN9514's internal PHY, at the fixed MDIO address smsc95xx.h calls
@@ -191,9 +246,13 @@ private:
 	bool mdioWrite(uint8_t phyAddr, uint8_t regAddr, uint16_t value);
 	bool resetChip(void);
 	bool programMACAddress(const IOEthernetAddress *addr);
+	bool eepromWait(void);
+	bool readEEPROM(uint8_t offset, uint8_t *data, uint32_t length);
 	bool createMediumTables(void);
 	void updateLinkStatus(void);
 	static void linkTimerFired(OSObject *owner, IOTimerEventSource *sender);
+	void pollReceive(void);
+	static void rxTimerFired(OSObject *owner, IOTimerEventSource *sender);
 
 public:
 	virtual bool init(OSDictionary *properties, SMSCUSBTransport *transport);
@@ -213,8 +272,8 @@ public:
 	virtual IOReturn disable(IONetworkInterface *interface) APPLE_KEXT_OVERRIDE;
 	virtual UInt32   outputPacket(mbuf_t m, void *param) APPLE_KEXT_OVERRIDE;
 
-	// Called by whatever eventually drives the bulk IN endpoint with
-	// received frame data (not wired to anything yet - see header).
+	// Called by pollReceive() with each unpacked frame's data (see header
+	// and fRxTimer).
 	void inputPacketAvailable(void *frameData, uint32_t frameLen);
 
 	// The IONetworkInterface attachInterface() created in start() (fNetif

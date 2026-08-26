@@ -43,11 +43,6 @@
 #define kSMSCVendorWriteRegister 0xA0
 #define kSMSCVendorReadRegister  0xA1
 
-// RX status word, from smsc95xx.h:24-25.
-#define kSMSCRxStsFrameLenMask   0x3FFF0000
-#define kSMSCRxStsFrameLenShift  16
-#define kSMSCRxStsErrorSummary   0x00008000
-
 // SMSC's USB vendor ID; both halves of the LAN9514 (hub and Ethernet)
 // report it, which is why findEthernetFunction() also requires a bulk pair.
 #define kSMSCVendorID            0x0424
@@ -273,11 +268,24 @@ SMSC9514USBTransport::bulkIn(void *buf, uint32_t maxLen)
 		return 0;
 	}
 
+	/*
+	 * SMSC9514Ethernet now drives this from a timer on the shared
+	 * IOWorkLoop (see its fRxTimer) rather than transfer()'s 1000ms
+	 * default NAK-retry bound. "Nothing queued yet" is the normal, common
+	 * case for a poll - BCM2837DWC2 has a single host channel and does
+	 * one transfer at a time (BCM2837DWC2.h's "KNOWN LIMITATIONS"), so
+	 * blocking that shared gate for up to a full second on every idle
+	 * poll would stall TX (outputPacket) and link-status polling behind
+	 * it. A short bound here just makes an empty RX FIFO cheap to observe
+	 * and retry on the next tick.
+	 */
+	static const uint32_t kRxPollTimeoutMS = 20;
+
 	uint32_t actual = 0;
-	IOReturn ret = fController->transfer(&fBulkInEP, buf, maxLen, &actual);
+	IOReturn ret = fController->transfer(&fBulkInEP, buf, maxLen, &actual, kRxPollTimeoutMS);
 	if (ret != kIOReturnSuccess) {
-		// A timeout here is the normal "no packet waiting" case once an
-		// RX poll loop exists, so this is deliberately not logged.
+		// A timeout here is the normal "no packet waiting" case, so this
+		// is deliberately not logged.
 		return 0;
 	}
 	return actual;
@@ -299,61 +307,4 @@ SMSC9514USBTransport::bulkOut(const void *buf, uint32_t len)
 		return 0;
 	}
 	return actual;
-}
-
-/*
- * Pull one bulk-IN transfer apart into Ethernet frames.
- *
- * The chip packs several frames into one bulk transfer, each preceded by a
- * 32-bit RX status word and followed by its FCS, padded so the next status
- * word starts 4-byte aligned (smsc95xx.c's rx_fixup loop). Callers get the
- * frame bytes only - SMSC9514Ethernet::inputPacketAvailable() documents
- * that it expects the status word already stripped and validated.
- *
- * Every step is bounds-checked against the remaining buffer: a corrupt
- * length field in a status word would otherwise walk straight off the end.
- */
-uint32_t
-SMSC9514USBTransport::forEachRxFrame(void *buf, uint32_t len,
-                                     RxFrameHandler handler, void *context)
-{
-	if (buf == NULL || handler == NULL) {
-		return 0;
-	}
-
-	uint8_t *p = (uint8_t *)buf;
-	uint32_t offset = 0;
-	uint32_t frames = 0;
-
-	while (offset + 4 <= len) {
-		uint32_t sts = (uint32_t)p[offset] | ((uint32_t)p[offset + 1] << 8) |
-		               ((uint32_t)p[offset + 2] << 16) | ((uint32_t)p[offset + 3] << 24);
-		offset += 4;
-
-		uint32_t frameLen = (sts & kSMSCRxStsFrameLenMask) >> kSMSCRxStsFrameLenShift;
-
-		if (frameLen == 0 || offset + frameLen > len) {
-			// Either the end of the packed frames or a malformed
-			// length. Either way there is nothing more to safely read.
-			break;
-		}
-
-		if (!(sts & kSMSCRxStsErrorSummary)) {
-			/*
-			 * frameLen includes the 4-byte FCS, which the network
-			 * stack does not want. Guard the subtraction: a runt
-			 * claiming fewer than 4 bytes would underflow into a
-			 * huge length.
-			 */
-			if (frameLen > 4) {
-				handler(context, p + offset, frameLen - 4);
-				frames++;
-			}
-		}
-
-		// Next status word is 4-byte aligned.
-		offset += (frameLen + 3) & ~3U;
-	}
-
-	return frames;
 }

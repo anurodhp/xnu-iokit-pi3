@@ -21,6 +21,8 @@ SMSC9514Ethernet::init(OSDictionary *properties, SMSCUSBTransport *transport)
 	fNetif = NULL;
 	fLinkUp = false;
 	fLinkTimer = NULL;
+	fRxTimer = NULL;
+	fRxBuffer = NULL;
 	bzero(fMediumTable, sizeof(fMediumTable));
 	bzero(&fMACAddress, sizeof(fMACAddress));
 	return true;
@@ -179,6 +181,51 @@ SMSC9514Ethernet::programMACAddress(const IOEthernetAddress *addr)
 }
 
 bool
+SMSC9514Ethernet::eepromWait(void)
+{
+	for (int i = 0; i < 1000; i++) {
+		uint32_t v;
+		if (!fTransport->readRegister(kRegE2pCmd, &v)) {
+			return false;
+		}
+		if (v & kE2pCmdTimeout) {
+			// The chip itself reports "no EEPROM" this way, not via a
+			// transport-level failure - a genuinely absent EEPROM is the
+			// common case on this board (see readEEPROM()'s caller).
+			return false;
+		}
+		if (!(v & kE2pCmdBusy)) {
+			return true;
+		}
+		IODelay(10);
+	}
+	return false;
+}
+
+bool
+SMSC9514Ethernet::readEEPROM(uint8_t offset, uint8_t *data, uint32_t length)
+{
+	if (!eepromWait()) {
+		return false;
+	}
+	for (uint32_t i = 0; i < length; i++) {
+		uint32_t cmd = kE2pCmdBusy | kE2pCmdRead | (((uint32_t)offset + i) & kE2pCmdAddrMask);
+		if (!fTransport->writeRegister(kRegE2pCmd, cmd)) {
+			return false;
+		}
+		if (!eepromWait()) {
+			return false;
+		}
+		uint32_t val;
+		if (!fTransport->readRegister(kRegE2pData, &val)) {
+			return false;
+		}
+		data[i] = (uint8_t)(val & 0xFF);
+	}
+	return true;
+}
+
+bool
 SMSC9514Ethernet::createMediumTables(void)
 {
 	static const struct {
@@ -307,15 +354,55 @@ SMSC9514Ethernet::start(IOService *provider)
 		return false;
 	}
 
-	// No EEPROM-backed MAC address read implemented (E2P_CMD/E2P_DATA,
-	// smsc95xx.c's smsc95xx_read_eeprom) - locally-administered address
-	// used as a placeholder until that's added.
-	fMACAddress.bytes[0] = 0x02;
-	fMACAddress.bytes[1] = 0x00;
-	fMACAddress.bytes[2] = 0x00;
-	fMACAddress.bytes[3] = 0x00;
-	fMACAddress.bytes[4] = 0x00;
-	fMACAddress.bytes[5] = 0x01;
+	/*
+	 * Try the chip's EEPROM for a real, board-programmed MAC address
+	 * first (smsc95xx.c's smsc95xx_read_eeprom(), EEPROM_MAC_OFFSET, 6
+	 * bytes). Most Raspberry Pi boards ship this LAN9514 with no EEPROM
+	 * populated at all - the vendor assigns the MAC a different way -
+	 * so eepromWait() returning false via E2P_CMD_TIMEOUT_ is a real,
+	 * expected board configuration, not a bug. Also reject a read that
+	 * "succeeds" but comes back looking uninitialized: all-zero, all-FF,
+	 * or with the multicast bit set are not values any EEPROM would
+	 * legitimately contain for a station address. Falls back to the
+	 * previous locally-administered placeholder only when the EEPROM
+	 * genuinely isn't usable.
+	 */
+	uint8_t eeprom[6];
+	bool haveEepromMac = readEEPROM(kEepromMacOffset, eeprom, sizeof(eeprom));
+	if (haveEepromMac) {
+		bool allZero = true, allFF = true;
+		for (int i = 0; i < 6; i++) {
+			if (eeprom[i] != 0x00) {
+				allZero = false;
+			}
+			if (eeprom[i] != 0xFF) {
+				allFF = false;
+			}
+		}
+		if (allZero || allFF || (eeprom[0] & 0x01)) {
+			haveEepromMac = false;
+		}
+	}
+
+	if (haveEepromMac) {
+		for (int i = 0; i < 6; i++) {
+			fMACAddress.bytes[i] = eeprom[i];
+		}
+		IOLog("SMSC9514Ethernet: MAC address from EEPROM: "
+		      "%02x:%02x:%02x:%02x:%02x:%02x\n",
+		    fMACAddress.bytes[0], fMACAddress.bytes[1], fMACAddress.bytes[2],
+		    fMACAddress.bytes[3], fMACAddress.bytes[4], fMACAddress.bytes[5]);
+	} else {
+		IOLog("SMSC9514Ethernet: no usable EEPROM MAC (this chip has none "
+		      "populated on most Pi boards) - using a locally-administered "
+		      "placeholder, every board will present the same address\n");
+		fMACAddress.bytes[0] = 0x02;
+		fMACAddress.bytes[1] = 0x00;
+		fMACAddress.bytes[2] = 0x00;
+		fMACAddress.bytes[3] = 0x00;
+		fMACAddress.bytes[4] = 0x00;
+		fMACAddress.bytes[5] = 0x01;
+	}
 	if (!programMACAddress(&fMACAddress)) {
 		IOLog("SMSC9514Ethernet: failed to program MAC address\n");
 		return false;
@@ -342,6 +429,19 @@ SMSC9514Ethernet::start(IOService *provider)
 	fLinkTimer = IOTimerEventSource::timerEventSource(this, &SMSC9514Ethernet::linkTimerFired);
 	if (fLinkTimer == NULL || workLoop->addEventSource(fLinkTimer) != kIOReturnSuccess) {
 		IOLog("SMSC9514Ethernet: link timer setup failed\n");
+		return false;
+	}
+
+	// RX poll timer - see the header comment on why this has to be a
+	// timer on this same gated workloop rather than a dedicated thread.
+	fRxBuffer = (uint8_t *)IOMalloc(kRxBufferSize);
+	if (fRxBuffer == NULL) {
+		IOLog("SMSC9514Ethernet: RX buffer allocation failed\n");
+		return false;
+	}
+	fRxTimer = IOTimerEventSource::timerEventSource(this, &SMSC9514Ethernet::rxTimerFired);
+	if (fRxTimer == NULL || workLoop->addEventSource(fRxTimer) != kIOReturnSuccess) {
+		IOLog("SMSC9514Ethernet: RX timer setup failed\n");
 		return false;
 	}
 
@@ -388,6 +488,20 @@ SMSC9514Ethernet::stop(IOService *provider)
 		fLinkTimer = NULL;
 	}
 
+	if (fRxTimer != NULL) {
+		fRxTimer->cancelTimeout();
+		IOWorkLoop *wl = getWorkLoop();
+		if (wl != NULL) {
+			wl->removeEventSource(fRxTimer);
+		}
+		fRxTimer->release();
+		fRxTimer = NULL;
+	}
+	if (fRxBuffer != NULL) {
+		IOFree(fRxBuffer, kRxBufferSize);
+		fRxBuffer = NULL;
+	}
+
 	if (fNetif != NULL) {
 		detachInterface(fNetif);
 		fNetif = NULL;
@@ -408,6 +522,15 @@ SMSC9514Ethernet::free(void)
 		fLinkTimer->cancelTimeout();
 		fLinkTimer->release();
 		fLinkTimer = NULL;
+	}
+	if (fRxTimer != NULL) {
+		fRxTimer->cancelTimeout();
+		fRxTimer->release();
+		fRxTimer = NULL;
+	}
+	if (fRxBuffer != NULL) {
+		IOFree(fRxBuffer, kRxBufferSize);
+		fRxBuffer = NULL;
 	}
 	for (UInt32 i = 0; i < kMediumCount; i++) {
 		if (fMediumTable[i] != NULL) {
@@ -470,6 +593,9 @@ SMSC9514Ethernet::enable(IONetworkInterface *interface)
 	if (fLinkTimer != NULL) {
 		fLinkTimer->setTimeoutMS(kLinkPollIntervalMS);
 	}
+	if (fRxTimer != NULL) {
+		fRxTimer->setTimeoutMS(kRxPollIntervalMS);
+	}
 	return kIOReturnSuccess;
 }
 
@@ -478,6 +604,9 @@ SMSC9514Ethernet::disable(IONetworkInterface * /*interface*/)
 {
 	if (fLinkTimer != NULL) {
 		fLinkTimer->cancelTimeout();
+	}
+	if (fRxTimer != NULL) {
+		fRxTimer->cancelTimeout();
 	}
 	fLinkUp = false;
 	fInterface = NULL;
@@ -545,4 +674,65 @@ SMSC9514Ethernet::inputPacketAvailable(void *frameData, uint32_t frameLen)
 	}
 	mbuf_copyback(m, 0, frameLen, frameData, MBUF_DONTWAIT);
 	fInterface->inputPacket(m, frameLen);
+}
+
+void
+SMSC9514Ethernet::pollReceive(void)
+{
+	if (fTransport == NULL || fRxBuffer == NULL || fInterface == NULL) {
+		return;
+	}
+
+	// bulkIn() is a short-timeout poll (see SMSC9514USBTransport::bulkIn())
+	// - 0 back just means nothing was queued this tick, the normal case
+	// for an idle link, not a failure.
+	uint32_t actual = fTransport->bulkIn(fRxBuffer, kRxBufferSize);
+	if (actual < 4) {
+		return;
+	}
+
+	/*
+	 * One bulk-IN transfer can pack several frames, each preceded by a
+	 * 32-bit RX_STS word and followed by its FCS, padded so the next
+	 * status word starts 4-byte aligned (smsc95xx.c's rx_fixup loop).
+	 * Every step is bounds-checked against `actual`: a corrupt length
+	 * field in a status word would otherwise walk straight off the end
+	 * of fRxBuffer.
+	 */
+	uint32_t offset = 0;
+	while (offset + 4 <= actual) {
+		uint32_t sts = (uint32_t)fRxBuffer[offset] | ((uint32_t)fRxBuffer[offset + 1] << 8) |
+		    ((uint32_t)fRxBuffer[offset + 2] << 16) | ((uint32_t)fRxBuffer[offset + 3] << 24);
+		offset += 4;
+
+		uint32_t frameLen = (sts & kRxStsFrameLenMask) >> kRxStsFrameLenShift;
+		if (frameLen == 0 || offset + frameLen > actual) {
+			// Either the end of the packed frames or a malformed
+			// length. Either way there is nothing more to safely read.
+			break;
+		}
+
+		if (!(sts & kRxStsErrorSummary)) {
+			// frameLen includes the 4-byte FCS, which the network stack
+			// does not want. Guard the subtraction: a runt claiming
+			// fewer than 4 bytes would underflow into a huge length.
+			if (frameLen > 4) {
+				inputPacketAvailable(fRxBuffer + offset, frameLen - 4);
+			}
+		}
+
+		// Next status word is 4-byte aligned.
+		offset += (frameLen + 3) & ~3U;
+	}
+}
+
+void
+SMSC9514Ethernet::rxTimerFired(OSObject *owner, IOTimerEventSource *sender)
+{
+	SMSC9514Ethernet *self = OSDynamicCast(SMSC9514Ethernet, owner);
+	if (self == NULL) {
+		return;
+	}
+	self->pollReceive();
+	sender->setTimeoutMS(kRxPollIntervalMS);
 }

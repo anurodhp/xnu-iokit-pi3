@@ -185,11 +185,21 @@ this pass even if the change itself is cheap.
     - `getPacketFilters()` advertises multicast filtering while
       `enablePacketFilter()` is a no-op — will break IPv6 ND. Still open,
       now more reachable than when written.
-    - `fInterface` is read without a retain/lock from a USB-completion
-      context that can race `disable()` setting it to NULL — UAF shape.
-      Still open; also still moot in practice since nothing drives the
-      bulk IN endpoint into `inputPacketAvailable()` yet (see the
-      driver's own header comment).
+    - **[RESOLVED 2026-08-25]** ~~`fInterface` is read without a
+      retain/lock from a USB-completion context that can race
+      `disable()` setting it to NULL — UAF shape. Still open; also
+      still moot in practice since nothing drives the bulk IN endpoint
+      into `inputPacketAvailable()` yet.~~ RX is now wired
+      (`fRxTimer`/`pollReceive()`, see below), so this is no longer
+      moot — but it turned out not to be a real race either: RX runs
+      from an `IOTimerEventSource` on the *same gated `IOWorkLoop`* as
+      `outputPacket()`'s output queue and `disable()`'s framework calls,
+      not an independent USB-completion thread (there is no async
+      completion path anywhere in `BCM2837DWC2` — see its own "one
+      transfer at a time, no queueing" limitation), so all of these are
+      already serialized against each other. The original concern was
+      written against a hypothetical async-completion design this
+      driver doesn't have.
     - `frameLen & 0x7FF` truncates silently with no length guard. Still
       open.
     - **[RESOLVED 2026-08-22]** ~~New as of 2026-08-22, not yet verified~~
@@ -198,6 +208,23 @@ this pass even if the change itself is cheap.
       link. BSD/`ifconfig` registration and link-state/auto-negotiation
       logic are now verified end-to-end on silicon, not just build+QEMU-
       regression-tested. No DHCP/address assignment yet — that's Phase 6c.
+    - **2026-08-25, real-hardware report, fixes unverified on hardware
+      yet**: user reported real Pi 3 networking not working — board's
+      Ethernet activity LEDs never lit, the MAC address looked like a
+      placeholder, and inbound traffic never worked at all (self-ping
+      only; nothing external, despite outbound frames visibly reaching
+      the wire). Root-caused from source: `inputPacketAvailable()` was
+      real but **nothing ever called it** — no code drove the bulk IN
+      endpoint (exactly the "moot" gap noted above), so TX worked and
+      RX was completely dead, matching the symptom. Fixed same day: RX
+      poll timer wired up (`fRxTimer`/`pollReceive()`) and MAC address
+      now attempted via a real EEPROM read before falling back to the
+      locally-administered placeholder (see the new P2 item below on
+      why the placeholder may still be what's seen on this board).
+      Board LEDs explicitly out of scope per user — nothing in this
+      driver ever touched LED/GPIO config, so if they're software-
+      controlled at all it's a separate, not-yet-investigated gap.
+      Full kernel build verified; **not yet booted on real hardware**.
 
 ---
 
@@ -352,6 +379,27 @@ this pass even if the change itself is cheap.
     for a smaller-scoped first real fix (hand-written trap wrappers for
     just `host_get_clock_service`/`clock_get_time`/`semaphore_*`, without
     needing full MIG-stub generation).
+
+8. **`SMSC9514Ethernet`'s MAC address is a locally-administered
+    placeholder (`02:00:00:00:00:01`) on any board where the LAN9514 has
+    no EEPROM populated** — filed 2026-08-25 alongside that day's RX-poll
+    fix. `start()` now genuinely tries a real EEPROM read first
+    (`readEEPROM()`/`eepromWait()`, `E2P_CMD`/`E2P_DATA`) and only falls
+    back to the placeholder if that read times out or looks
+    uninitialized, but most Raspberry Pi boards ship this chip with no
+    EEPROM at all, so the placeholder is likely still what real hardware
+    reports — every such board presents the identical address, which
+    will misbehave the moment two of them are on the same network
+    segment (DHCP/ARP collisions). The Raspberry Pi Foundation's own
+    convention doesn't use chip EEPROM either: it derives a real
+    per-board MAC from the VideoCore's unique board serial (mailbox
+    property tag "get board serial", low 3 bytes combined with the
+    Foundation's OUI, e.g. `b8:27:eb:xx:xx:xx`) at firmware/u-boot time.
+    This kernel has no VC-mailbox driver yet reachable from
+    `SMSC9514Ethernet::start()` — would need to either read a value the
+    bootloader already stashed somewhere (devicetree property?) or add a
+    real mailbox "get board serial" call. Not started; scoped here for a
+    follow-up session rather than attempted as part of the RX-poll fix.
 
 3. **`hexdump` prints only the final byte-count address line, never the
     actual hex+ASCII data rows**, against a real non-empty file, for every

@@ -32,10 +32,6 @@
 class SMSC9514USBTransport : public SMSCUSBTransport
 {
 public:
-	// Called for each Ethernet frame unpacked from a bulk-IN transfer.
-	// `frame`/`frameLen` exclude both the RX status word and the FCS.
-	typedef void (*RxFrameHandler)(void *context, void *frame, uint32_t frameLen);
-
 	SMSC9514USBTransport() : fController(NULL), fDevice(NULL) {}
 	virtual ~SMSC9514USBTransport() {}
 
@@ -43,15 +39,14 @@ public:
 	bool init(BCM2837DWC2 *controller, const DWC2USBDevice *device);
 
 	// --- SMSCUSBTransport interface ---
+	// bulkIn()'s RX_STS-framed payload is unpacked into individual
+	// Ethernet frames by SMSC9514Ethernet::pollReceive(), not here - this
+	// class stays pure USB plumbing, matching how outputPacket() already
+	// keeps TX_CMD_A/TX_CMD_B framing in SMSC9514Ethernet rather than here.
 	virtual bool readRegister(uint32_t offset, uint32_t *value) APPLE_KEXT_OVERRIDE;
 	virtual bool writeRegister(uint32_t offset, uint32_t value) APPLE_KEXT_OVERRIDE;
 	virtual uint32_t bulkIn(void *buf, uint32_t maxLen) APPLE_KEXT_OVERRIDE;
 	virtual uint32_t bulkOut(const void *buf, uint32_t len) APPLE_KEXT_OVERRIDE;
-
-	// Unpack the frames packed into one bulk-IN transfer. Returns the
-	// number of good frames handed to `handler`.
-	uint32_t forEachRxFrame(void *buf, uint32_t len,
-	                        RxFrameHandler handler, void *context);
 
 	/*
 	 * Locate the LAN9514's Ethernet function among the devices an

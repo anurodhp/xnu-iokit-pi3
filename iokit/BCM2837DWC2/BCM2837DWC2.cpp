@@ -891,9 +891,9 @@ BCM2837DWC2::doTransferRetrying(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
 }
 
 IOReturn
-BCM2837DWC2::transfer(DWC2Endpoint *ep, void *buffer, uint32_t len, uint32_t *actualLen)
+BCM2837DWC2::transfer(DWC2Endpoint *ep, void *buffer, uint32_t len, uint32_t *actualLen, uint32_t timeoutMS)
 {
-	return doTransferRetrying(ep, &ep->toggle, ep->epIsIn, buffer, len, actualLen, 1000);
+	return doTransferRetrying(ep, &ep->toggle, ep->epIsIn, buffer, len, actualLen, timeoutMS);
 }
 
 IOReturn

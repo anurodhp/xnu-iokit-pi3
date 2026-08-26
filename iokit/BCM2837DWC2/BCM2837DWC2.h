@@ -535,8 +535,15 @@ public:
 	 * Move up to `len` bytes on `ep`. Splits into channel-sized chunks
 	 * internally and updates ep->toggle. Returns kIOReturnSuccess only on
 	 * full or short-but-clean completion; *actualLen gets bytes moved.
+	 * `timeoutMS` bounds the NAK-retry loop (doTransferRetrying) - default
+	 * 1000ms matches every pre-existing caller. A short-poll caller like
+	 * an RX poll loop, where "device NAKed the whole time" just means "no
+	 * packet waiting yet" and is the common case, should pass something
+	 * much smaller so it doesn't block its workloop for a full second on
+	 * every idle poll.
 	 */
-	IOReturn transfer(DWC2Endpoint *ep, void *buffer, uint32_t len, uint32_t *actualLen);
+	IOReturn transfer(DWC2Endpoint *ep, void *buffer, uint32_t len, uint32_t *actualLen,
+	                  uint32_t timeoutMS = 1000);
 
 	/*
 	 * Full control transfer: SETUP, optional DATA, STATUS. `ep` must
