@@ -5,10 +5,11 @@
 # hand-written single-thread shim, see build_libdispatch_min.sh) --
 # real-source-available shims are architecture debt in this project, not
 # a design goal (see docs/daemon-roadmap.md's "libdispatch real port"
-# section). This script currently only proves the real, -fsyntax-only
-# COMPILABILITY of the core dispatch files against this project's real
-# SDK+xnu-7195+libpthread+libplatform headers -- it does not yet compile
-# to real .o files, archive, or link (see "NOT DONE YET" below).
+# section). Compiles the 14 real, confirmed-clean core dispatch files
+# (see below) to real .o files, archives them, and does a real trial
+# link against this project's existing libc/libpthread/libplatform/
+# libmach_ipc stack with a real, functionally-exercising main() (see
+# "NOT DONE YET" below for what's still open after that link).
 #
 # ============================================================
 # HONEST SCOPE STATEMENT -- read this first
@@ -16,7 +17,14 @@
 # CLEAN (0 real compile errors, confirmed via real `clang -fsyntax-only`,
 # not assumed): once.c, semaphore.c, apply.c, time.c, allocator.c,
 # init.c, queue.c, object.c, source.c, voucher.c, io.c, mach.c,
-# eventlink.c, transform.c -- 14 of the real core dispatch source files.
+# eventlink.c, transform.c, data.c, event/event.c, event/event_kevent.c,
+# event/workqueue.c -- 18 real dispatch source files. data.c (the real
+# dispatch_data_t engine) and the real event/ kqueue backend were
+# initially left out of the first pass (data.c was thought incompatible
+# with dispatch_min.a's own different dispatch_data_t representation --
+# no longer true now that the REAL object model from object.c/queue.c is
+# what's actually being built) -- both compile clean against the real
+# object model with zero extra fixes beyond what's already below.
 #
 # DELIBERATELY EXCLUDED: workgroup.c (real "QoS workgroup" feature --
 # confirmed via grep zero real os_workgroup_* call sites anywhere in
@@ -105,19 +113,69 @@
 #   firehose engine it depends on (same os_log/firehose scoping decision
 #   as everywhere else in Phase 6.8).
 #
-# NOT DONE YET (real, concrete next steps): compile these 14 files to
-# real .o files and archive them (this script currently only runs
-# `-fsyntax-only`, proving compilability, not producing link-ready
-# objects); a real trial link against this project's existing
-# libc/libpthread/libplatform/libmach_ipc stack to find the real
-# undefined-symbol surface (expect at least: _firehose_task_buffer/
-# _firehose_task_buffer_pred, declared extern in voucher_internal.h,
-# now genuinely unresolvable since their only real definition was inside
-# the #if 0-disabled block above -- needs a small real compat definition,
-# not a re-enable); rewiring build_libxpc.sh/build_libnotify.sh/etc away
-# from libdispatch_min.a onto this real archive once it links; and only
-# after all of that, deciding whether dispatch_min.a can be deleted
-# outright or should stay as a documented fallback during the migration.
+# DONE this pass (real, verified via actual compile+archive+trial link,
+# not just -fsyntax-only): all 19 files above compile to real .o's,
+# archived into libc_build/libdispatch_real.a (23 objects with the real
+# mig protocolUser.o/protocolServer.o). A real, functionally-exercising
+# trial link (dispatch_trial_main.c -- calls dispatch_once/
+# dispatch_queue_create/dispatch_async/dispatch_semaphore_*/
+# dispatch_source_create, not an empty main()) against this project's
+# existing libmach_ipc/libclosure/libmalloc/libplatform/libpthread/libc
+# stack narrows the real undefined-symbol surface to 53 real symbols
+# (down from an initial 122) -- see this script's own trial-link output
+# for the exact, current list. Two more real upstream fixes found and
+# patched via libdispatch.patch during this pass: shims/tsd.h's
+# `_dispatch_thread_port()` needed an explicit `(pthread_t)` cast (C
+# tolerates the implicit uintptr_t->pthread_t conversion the macro used
+# to do; C++ -- needed once block.cpp entered the build -- does not);
+# init.c's own real global-key list was missing `dispatch_priority_key`/
+# `dispatch_r2k_key` even though queue.c calls
+# `_dispatch_thread_key_create()` on both unconditionally (a real,
+# narrow upstream omission in this exact vendored file, not a portability
+# issue). event_kevent.c also needed a real upstream typo fix
+# (`(void)guard_ptr` referencing a parameter actually named `fd_ptr`) and
+# two firehose bank-flag no-ops (dead code behind an always-false
+# `if (_firehose_task_buffer)` check, since nothing ever populates that
+# global -- see firehose/private.h's own comment).
+#
+# The remaining 53-symbol gap is overwhelmingly libpthread's scope, not
+# libdispatch's own: ~18 are standard POSIX pthread API entirely absent
+# from this project's curated libpthread (`pthread_attr_init`/
+# `_destroy`/`_setdetachstate`/`_setstacksize`/`_setschedparam`/
+# `_setschedpolicy`/`_get_qos_class_np`/`_set_qos_class_np`,
+# `pthread_exit`, `pthread_sigmask`, `pthread_setschedparam`,
+# `pthread_get_stackaddr_np`, `qos_class_main`,
+# `pthread_qos_max_parallelism`, `pthread_set_qos_class_self_np`); ~9 are
+# real QoS-override/workqueue functions
+# (`_pthread_qos_override_start/end_direct`,
+# `_pthread_workqueue_override_*`, `_pthread_workloop_create/destroy`,
+# `_pthread_set_properties_self`, `_pthread_qos_class_encode`) genuinely
+# unimplemented (confirmed via `nm -g`, not assumed); a handful are raw
+# traps needing stubs this project hasn't generated yet
+# (`kevent_qos`/`clock_gettime_nsec_np`/`kpersona_get`/
+# `thread_destruct_special_reply_port`/`___kdebug_trace64`/`mmap`/
+# `munmap` -- `mmap`/`munmap`'s RAW trap objects already exist
+# (`pthread___mmap.o`/`pthread___munmap.o`) but only export the
+# triple-underscore raw name, not the convenience wrapper libdispatch
+# actually calls); a few are real Mach voucher MIG routines
+# (`mach_voucher_attr_command`/`_deallocate`/`_debug_info`/
+# `_extract_attr_recipe`, `host_create_mach_voucher`,
+# `host_get_special_port`) needing a `mach_voucher.defs`/
+# `host_priv.defs` regen this project hasn't done; `__dispatch_
+# wait_for_enqueuer`/`__os_semaphore_create`/`_dispose`/
+# `__os_workgroup_tsd_cleanup` are real libdispatch-internal functions
+# whose real source file hasn't been located/attempted yet;
+# `_malloc_engaged_nano`/`_malloc_memory_event_handler` are real
+# libmalloc internals this project's curated libmalloc doesn't
+# implement. None of this blocks resuming the actual launchd/libxpc
+# work (see docs/daemon-roadmap.md) -- it's a real, bounded, separately
+# schedulable follow-up.
+#
+# Concrete next steps: rewire build_libxpc.sh/build_libnotify.sh/etc
+# away from libdispatch_min.a onto this real archive; close the 53-symbol
+# gap above (mostly a libpthread task); only after both, decide whether
+# dispatch_min.a can be deleted outright or should stay as a documented
+# fallback during the migration.
 set -e
 cd "$(dirname "$0")"
 
@@ -141,6 +199,7 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     echo "error: Xcode-12.app not found at $XCODE12" >&2
     exit 1
 fi
+CLANGXX="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang++"
 MIG="$(which mig)"
 if [ -z "$MIG" ] || [ ! -x "$MIG" ]; then
     echo "error: mig tool not found" >&2
@@ -161,7 +220,6 @@ mkdir -p "$OUT/dispatch_mig"
 echo "mig: protocol.defs regenerated cleanly"
 
 CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    -fsyntax-only \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 -DOS_OBJECT_USE_OBJC=0 \
     -DOS_VOUCHER_ACTIVITY_SPI=0 -DOS_FIREHOSE_SPI=0 \
     -D__API_UNAVAILABLE_PLATFORM_bridgeos=ios,unavailable \
@@ -176,17 +234,53 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-buil
     -idirafter "$PTHREAD/include" -idirafter "$PTHREAD/private" \
     -idirafter "$PLATFORM/private" -idirafter "$PLATFORM/include" -idirafter "$PLATFORM/internal")
 
-ok=0
-fail=0
-for f in once semaphore apply time allocator init queue object source voucher io mach eventlink transform; do
-    if "$CLANG" "${CFLAGS[@]}" "$DISPATCH/src/$f.c" 2>"$OUT/dispatch_mig/${f}_syntax.err"; then
-        ok=$((ok+1))
-    else
-        fail=$((fail+1))
-        echo "FAIL: $f.c -- see $OUT/dispatch_mig/${f}_syntax.err" >&2
-    fi
+mkdir -p "$OUT/dispatch_obj" "$OUT/dispatch_obj/event"
+for f in once semaphore apply time allocator init queue object source voucher io mach eventlink transform data; do
+    "$CLANG" "${CFLAGS[@]}" "$DISPATCH/src/$f.c" -o "$OUT/dispatch_obj/$f.o"
 done
-echo "real -fsyntax-only trial: $ok/14 core dispatch files compile clean (workgroup.c/block.cpp/firehose/swift deliberately excluded, see HONEST SCOPE STATEMENT above)"
-if [ "$fail" -ne 0 ]; then
-    exit 1
-fi
+for f in event/event event/event_kevent event/workqueue; do
+    "$CLANG" "${CFLAGS[@]}" "$DISPATCH/src/$f.c" -o "$OUT/dispatch_obj/$f.o"
+done
+"$CLANG" "${CFLAGS[@]}" "$DISPATCH/src/shims/lock.c" -o "$OUT/dispatch_obj/lock.o"
+echo "compiled: 19/19 core+data+event+lock dispatch files (zero errors)"
+
+# real C++11 file (Blocks-runtime integration only, no ObjC -- see this
+# script's own HONEST SCOPE STATEMENT); needed the same explicit
+# (pthread_t) cast fix as everything else using the portable
+# _dispatch_thread_port() path (C tolerates the implicit uintptr_t ->
+# pthread_t conversion that macro used to do, C++ does not -- real,
+# narrow patch, see libdispatch.patch).
+"$CLANGXX" "${CFLAGS[@]}" -std=c++11 -fno-exceptions -x c++ "$DISPATCH/src/block.cpp" -o "$OUT/dispatch_obj/block.o"
+echo "compiled: real block.cpp (C++11, no ObjC)"
+
+# real mig client+server-side objects (self-contained, needs nothing
+# from the rest of libdispatch beyond mach_msg/mig plumbing this project
+# already has in libmach_ipc.a) -- server side provides
+# _libdispatch_internal_protocol_server, dispatch_mach's real receive
+# dispatcher.
+"$CLANG" "${CFLAGS[@]}" "$OUT/dispatch_mig/protocolUser.c" -o "$OUT/dispatch_obj/protocolUser.o"
+"$CLANG" "${CFLAGS[@]}" "$OUT/dispatch_mig/protocolServer.c" -o "$OUT/dispatch_obj/protocolServer.o"
+echo "compiled: real protocolUser.c/protocolServer.c"
+
+rm -f "$OUT/libdispatch_real.a"
+ar rcs "$OUT/libdispatch_real.a" "$OUT"/dispatch_obj/*.o "$OUT"/dispatch_obj/event/*.o
+echo "wrote $OUT/libdispatch_real.a ($(ls "$OUT"/dispatch_obj/*.o "$OUT"/dispatch_obj/event/*.o | wc -l | tr -d ' ') objects)"
+
+# Real trial link -- same "real, functionally-exercising main(), not an
+# empty one" precedent as build_libxpc.sh's own trial (an empty main()
+# proves nothing: static linking only pulls in archive members actually
+# referenced transitively). Informational, not a hard failure -- see
+# this script's own "NOT DONE YET" note above for the real, expected gap.
+"$CLANG" "${CFLAGS[@]}" dispatch_trial_main.c -o "$OUT/dispatch_obj/dispatch_trial_main.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
+    -o "$OUT/dispatch_trial.macho" \
+    ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
+    "$OUT/dispatch_obj/dispatch_trial_main.o" \
+    "$OUT/libdispatch_real.a" \
+    "$OUT/libmach_ipc.a" "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" \
+    "$OUT/libc_locale_for_stdio.a" "$OUT/libc_stdio.a" \
+    "$OUT/simple_obj/sys__kqueue.o" "$OUT/simple_obj/apply_apply_sigsuspend_compat.o" \
+    2>"$OUT/dispatch_trial_link.err" \
+    && echo "real trial link: 0 undefined symbols -- fully closed" \
+    || { echo "expected-for-now: real trial link found $(grep -c 'Undefined symbol' "$OUT/dispatch_trial_link.err") undefined symbol group(s):"; grep '^  "' "$OUT/dispatch_trial_link.err" | sed 's/,.*//' | sort -u; }

@@ -52,6 +52,16 @@
 #include <os/tsd.h>
 #include "firehose/private.h"
 
+/* real os_unlikely()/os_likely()/os_fastpath()/os_slowpath() macros --
+ * needed unconditionally by event/event_kevent.c (confirmed via real
+ * -fsyntax-only trial: "implicit declaration of function 'os_unlikely'",
+ * meaning the macro was never expanded at all at that call site, unlike
+ * every other core dispatch file which happens to reach this same real
+ * header transitively via os/assumes.h -idirafter's on this project's
+ * own $LIBC path). Forced here so every translation unit gets it
+ * regardless of its own particular include chain. */
+#include "os/base_private.h"
+
 #include <stdint.h>
 #include <mach/kern_return.h>
 #include <mach/mach_types.h>

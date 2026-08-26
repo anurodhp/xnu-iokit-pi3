@@ -65,4 +65,16 @@ typedef struct voucher_activity_hooks_s {
 	void (*vah_debug_channel_handler)(void *context, void *msg);
 } *voucher_activity_hooks_t;
 
+/* real, unconditionally-referenced (VOUCHER_USE_MACH_VOUCHER defaults
+ * to 1 always, internal.h:1003) from event/event_kevent.c's memory-
+ * pressure handler -- guarded at each real call site by
+ * `if (_firehose_task_buffer)`, which is always NULL on this target
+ * (nothing ever calls the real firehose init path, see voucher.c's own
+ * #if 0-disabled block), so these never actually run; real no-op bodies
+ * matching that dead-code reality, not a functional stand-in.
+ */
+#define FIREHOSE_BUFFER_BANK_FLAG_LOW_MEMORY 0x1u
+static inline void firehose_buffer_clear_bank_flags(firehose_buffer_t fb, unsigned long flags) { (void)fb; (void)flags; }
+static inline void firehose_buffer_set_bank_flags(firehose_buffer_t fb, unsigned long flags) { (void)fb; (void)flags; }
+
 #endif /* __DISPATCH_COMPAT_FIREHOSE_PRIVATE_H__ */
