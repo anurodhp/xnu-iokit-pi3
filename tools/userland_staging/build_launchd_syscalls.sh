@@ -162,6 +162,19 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-buil
 "$CLANG" "${CFLAGS[@]}" -DHAVE_STDINT_H=1 -I "$LIBC/uuid/uuidsrc" "$LIBC/uuid/uuidsrc/clear.c" -o "$OUT/launchd_syscall_obj/uuid_clear.o"
 "$CLANG" "${CFLAGS[@]}" -DHAVE_STDINT_H=1 -I "$LIBC/uuid/uuidsrc" "$LIBC/uuid/uuidsrc/compare.c" -o "$OUT/launchd_syscall_obj/uuid_compare.o"
 "$CLANG" "${CFLAGS[@]}" -DHAVE_STDINT_H=1 -I "$LIBC/uuid/uuidsrc" "$LIBC/uuid/uuidsrc/unpack.c" -o "$OUT/launchd_syscall_obj/uuid_unpack.o"
+"$CLANG" "${CFLAGS[@]}" -DHAVE_STDINT_H=1 -I "$LIBC/uuid/uuidsrc" "$LIBC/uuid/uuidsrc/pack.c" -o "$OUT/launchd_syscall_obj/uuid_pack.o"
+# uuid_generate_random()/uuid_generate_time() (real gap found via the
+# full launchd critical-path trial link, docs/backlog.md item d6): real
+# gen_uuid.c needs one real forward declaration this project's
+# freestanding CFLAGS don't surface from <stdlib.h> on their own --
+# arc4random_buf() itself is already real (launchd_libc_extras.a's own
+# arc4random.o, build_launchd_core.sh).
+cat > "$OUT/launchd_syscall_obj/arc4random_buf_decl.h" <<'EOF'
+extern void arc4random_buf(void *, unsigned long);
+EOF
+"$CLANG" "${CFLAGS[@]}" -DHAVE_STDINT_H=1 -I "$LIBC/uuid/uuidsrc" \
+    -include "$OUT/launchd_syscall_obj/arc4random_buf_decl.h" \
+    "$LIBC/uuid/uuidsrc/gen_uuid.c" -o "$OUT/launchd_syscall_obj/gen_uuid.o"
 
 # real, unmodified posix_spawnp()/getopt() -- both needed
 # -idirafter "$XNU/libsyscall/wrappers/spawn" (posix_spawnp.c calls

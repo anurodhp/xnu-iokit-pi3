@@ -304,7 +304,7 @@ for f in pthread_main_thread_bootstrap pthread_bsdthread_create_syscall \
          pthread_bsdthread_register_syscall pthread_bsdthread_terminate_syscall \
          pthread_tsd_platform_bootstrap pthread_psynch_syscalls \
          pthread_compat_extras pthread_abort_with_reason_compat \
-         pthread_guard_compat; do
+         pthread_guard_compat pthread_thread_ops_compat; do
     $CLANG $CFLAGS "${f}.c" -o "$OUT/${f}.o"
 done
 
@@ -339,6 +339,15 @@ $CLANG $SYSFLAGS "$SYSGEN/___pthread_fchdir.s" -o "$OUT/pthread___pthread_fchdir
 # stubs, regenerated here rather than reused across scripts since this
 # tier doesn't share an object directory with that one).
 $CLANG $SYSFLAGS "$SYSGEN/___mmap.s" -o "$OUT/pthread___mmap.o"
+# __thread_selfid (real raw trap, NO_SYSCALL_STUB in syscalls.master --
+# create-syscalls.pl still emits the trap itself, just skips the
+# convenience wrapper, same class of gap as ___getlogin/___setlogin
+# found in tools/userland_staging/build_launchd_syscalls.sh) + getegid
+# (plain, non-NO_SYSCALL_STUB raw trap) -- both needed by this file's
+# own pthread_thread_ops_compat.c below (real
+# pthread_threadid_np()/pthread_getugid_np() implementations).
+$CLANG $SYSFLAGS "$SYSGEN/___thread_selfid.s" -o "$OUT/pthread___thread_selfid.o"
+$CLANG $SYSFLAGS "$SYSGEN/_getegid.s" -o "$OUT/pthread_getegid.o"
 $CLANG $SYSFLAGS "$SYSGEN/___munmap.s" -o "$OUT/pthread___munmap.o"
 # __ulock_wait2 (syscall #544, cross-checked against syscalls.master) -
 # real trap pthread_cond.c's __pthread_ulock_cond_wait() already calls
@@ -375,11 +384,11 @@ ar rcs "$OUT/libpthread.a" \
     "$OUT/pthread_bsdthread_register_syscall.o" "$OUT/pthread_bsdthread_terminate_syscall.o" \
     "$OUT/pthread_tsd_platform_bootstrap.o" "$OUT/pthread_psynch_syscalls.o" \
     "$OUT/pthread_compat_extras.o" "$OUT/pthread_abort_with_reason_compat.o" \
-    "$OUT/pthread_guard_compat.o" \
+    "$OUT/pthread_guard_compat.o" "$OUT/pthread_thread_ops_compat.o" \
     "$OUT/pthread_simple_getenv.o" "$OUT/pthread_platform_memcmp.o" \
     "$OUT/pthread_gettimeofday.o" "$OUT/pthread___pthread_chdir.o" "$OUT/pthread___pthread_fchdir.o" \
     "$OUT/pthread_mmap_compat.o" "$OUT/pthread___mmap.o" "$OUT/pthread___munmap.o" \
-    "$OUT/pthread___ulock_wait2.o"
+    "$OUT/pthread___ulock_wait2.o" "$OUT/pthread___thread_selfid.o" "$OUT/pthread_getegid.o"
 echo "wrote $OUT/libpthread.a"
 
 # Real archive-member removal, not a hack: retires build_libmalloc.sh's
@@ -417,6 +426,17 @@ fi
 # pthread_create() FAILING (ENOTSUP) as the pass case - inverted once
 # the kernel side became real, see pthread_smoketest.c's own history.
 $CLANG $CFLAGS pthread_smoketest.c -o "$OUT/pthread_smoketest.o"
+
+# Real sched_yield()/swtch_pri (pre-existing gap, not introduced by this
+# pass: __pthread_rwlock_lock_slow's real contended-lock backoff path
+# calls sched_yield(), which build_libpthread.sh's own tier never
+# compiled -- see libunwind_sched_yield.c/.s's own header comment,
+# already real and used by build_libunwind.sh's own smoketest for the
+# identical real reason. Reused verbatim here, not reinvented, since
+# this smoketest is this project's first PTHREAD-tier caller of that
+# same contended rwlock path.)
+$CLANG -isysroot "$SDK" -target arm64-apple-ios14.4 -c libunwind_sched_yield.c -o "$OUT/pthread_sched_yield.o"
+$CLANG -isysroot "$SDK" -target arm64-apple-ios14.4 -c libunwind_sched_yield.s -o "$OUT/pthread_swtch_pri.o"
 # FIXED 2026-08-25 (was "known gap, unfixed" -- see git history for the
 # prior broken link if needed): this smoketest's link needs libmalloc.a's
 # real _get_zone() -> pthread_tsd_shim_bootstrap() (the PLAIN name --
@@ -474,6 +494,7 @@ $CLANG -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     "$OUT/libcxx_locale_for_stdio_scratch.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/libcxx_tsd_shim_bootstrap_compat.o" \
     $PTHREAD_SMOKETEST_SYS_OBJS "$OUT/simple_obj/statfs64_compat.o" \
+    "$OUT/pthread_sched_yield.o" "$OUT/pthread_swtch_pri.o" \
     "$OUT/libplatform.a" "$OUT/libmalloc.a" "$OUT/libc_stdio.a" "$OUT/libclosure.a" "$OUT/cerror_stub.o" \
     $LINK_ALIASES
 echo "wrote pthread_smoketest.macho"

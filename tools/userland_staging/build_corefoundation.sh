@@ -138,7 +138,63 @@ done
 # rationale (safe because nothing in this project's real call graph
 # instantiates these types yet; tracked as docs/backlog.md P2 d7).
 "$CLANG" "${CFLAGS[@]}" "$COMPAT/cf_class_stubs.c" -o "$OUT/cf_obj/cf_class_stubs.o"
-echo "compiled: $((${#FILES[@]} + 1)) real/compat CoreFoundation source files (zero errors)"
+# Real, small, individually-verified compat gaps found via the full
+# launchd critical-path trial link (docs/backlog.md item d6/d7): fmod/
+# modf/pow (no Libm anywhere in this project, real standard algorithms
+# implemented directly -- see libm_compat.c's own header for the exact
+# real call sites and honest scope), malloc_zone_*/malloc_default_zone/
+# malloc_good_size (CFAllocator's own real default-allocator
+# implementation calls these; this project's build_libmalloc.sh
+# deliberately never built the real zone-registration API surface --
+# see malloc_zone_compat.c), _NSGetArgc (real Apple crt_externs.c's own
+# one-line accessor, extracted standalone to avoid a duplicate-symbol
+# conflict with this project's existing _NSGetArgv/etc -- see
+# nsgetargc_compat.c).
+"$CLANG" "${CFLAGS[@]}" "$COMPAT/libm_compat.c" -o "$OUT/cf_obj/libm_compat.o"
+"$CLANG" "${CFLAGS[@]}" "$COMPAT/malloc_zone_compat.c" -o "$OUT/cf_obj/malloc_zone_compat.o"
+"$CLANG" "${CFLAGS[@]}" "$COMPAT/nsgetargc_compat.c" -o "$OUT/cf_obj/nsgetargc_compat.o"
+
+# Real mach_vm_region() (CFUtilities.c's own __CFFindPointer() calls it
+# directly, cf_compat_headers/mach/mach_vm.h already declares it for the
+# compiler -- this closes the real symbol itself). Real Apple source has
+# NO hand-written mach_vm_region() at all (unlike mach_vm_allocate/
+# _deallocate/_map, which build_libmalloc.sh's own libmalloc.a already
+# provides) -- it's a pure MIG client stub, auto-generated from the same
+# real mach_vm.defs build_libmalloc.sh regenerates for a different
+# reason (its own mach_vm_internal.h). Self-contained real regen here
+# (not reused from build_libmalloc.sh's own intermediate output, to
+# avoid an undocumented cross-script ordering dependency): real `mig`
+# against the same real .defs file produces a whole mach_vmUser.c with
+# ALL real mach_vm_* MIG routines, including real duplicate
+# `_kernelrpc_`-unprefixed mach_vm_allocate/etc that WOULD conflict with
+# libmalloc.a's own -- so only mach_vm_region is extracted via a real
+# `ld -r -exported_symbol` partial link (confirmed via nm: this real
+# routine has no separate `_kernelrpc_` fast-path variant in the real
+# .defs file, unlike allocate/map/protect, so it doesn't collide).
+MIG="$(which mig)"
+if [ -z "$MIG" ]; then
+    echo "error: mig tool not found (needed to regenerate mach_vm_region -- see build_libmalloc.sh's own header comment for the same real mig-path quirk)" >&2
+    exit 1
+fi
+LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+mkdir -p "$OUT/cf_mach_vm_mig/mach"
+MACH_VM_DEFS="$(cd "$(dirname "$XNU/osfmk/mach/mach_vm.defs")" && pwd)/$(basename "$XNU/osfmk/mach/mach_vm.defs")"
+"$MIG" -arch arm64 \
+    -header "$OUT/cf_mach_vm_mig/mach/mach_vm_internal.h" \
+    -user "$OUT/cf_mach_vm_mig/mach_vmUser.c" -server "$OUT/cf_mach_vm_mig/mach_vmServer.c" -sheader "$OUT/cf_mach_vm_mig/mach_vmServerHeader.h" \
+    "$MACH_VM_DEFS" >/dev/null
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -DPRIVATE=1 \
+    -I "$OUT/cf_mach_vm_mig" -I "$OUT/cf_mach_vm_mig/mach" \
+    -idirafter "$XNU/osfmk" -idirafter "$XNU/libkern" -idirafter "$XNU/bsd" \
+    "$OUT/cf_mach_vm_mig/mach_vmUser.c" -o "$OUT/cf_mach_vm_mig/mach_vmUser.o"
+"$LD" -r -arch arm64 -exported_symbol _mach_vm_region \
+    "$OUT/cf_mach_vm_mig/mach_vmUser.o" -o "$OUT/cf_obj/mach_vm_region.o"
+# NOTE: this real routine's own real _NDR_record dependency is already
+# satisfied by libmalloc.a's own copy (real osfmk/mach/arm/ndr_def.h,
+# confirmed via nm before assuming a second copy was needed -- adding
+# one here would be a real duplicate-symbol conflict, not a fix).
+
+echo "compiled: $((${#FILES[@]} + 5)) real/compat CoreFoundation source files (zero errors)"
 
 rm -f "$OUT/libCoreFoundation.a"
 ar rcs "$OUT/libCoreFoundation.a" "$OUT"/cf_obj/*.o
