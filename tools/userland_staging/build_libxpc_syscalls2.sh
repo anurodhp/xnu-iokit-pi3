@@ -131,7 +131,7 @@ CFLAGS_BSD=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-
     -I "$OUT/dyld_compat_sys_override" -idirafter "$XNU/bsd" -idirafter "$XNU/osfmk" -idirafter "$XNU/libsyscall/mach")
 
 "$CLANG" "${CFLAGS_SECURE[@]}" chk_fail_compat.c -o "$OUT/xpc_syscall2_obj/chk_fail_compat.o"
-for f in memmove_chk strcpy_chk strlcpy_chk strncpy_chk vsnprintf_chk stpcpy_chk stpncpy_chk; do
+for f in memmove_chk strcpy_chk strlcpy_chk strncpy_chk vsnprintf_chk stpcpy_chk stpncpy_chk snprintf_chk; do
     "$CLANG" "${CFLAGS_SECURE[@]}" "$LIBC/secure/$f.c" -o "$OUT/xpc_syscall2_obj/$f.o"
 done
 "$CLANG" "${CFLAGS_LOCAL[@]}" darwin_check_fd_set_overflow_compat.c -o "$OUT/xpc_syscall2_obj/darwin_check_fd_set_overflow_compat.o"

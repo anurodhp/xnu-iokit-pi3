@@ -66,10 +66,19 @@
 # macros -- confirmed zero real os_workgroup_* call sites anywhere in
 # PureDarwin's actual launchd/libxpc source, real honest empty stub, see
 # launchd_compat_headers/os/workgroup.h's own comment); `os/assumes.h`
-# (missing from this project's pinned libplatform tag entirely -- a real,
-# minimal, functionally-correct os_assert*/os_assumes*/their _ctx
-# variants implementation, see launchd_compat_headers/os/assumes.h);
-# reused (not re-derived) build_dyld_core.sh's own already-solved
+# -- CORRECTED 2026-08-26: this project's own earlier hand-written stub
+# here was wrong that real Apple's header was "missing entirely"; it was
+# actually sitting the whole time at third_party/Libc/os/assumes.h (558
+# real lines) + assumes.c (408 real lines), just never found by that
+# pass's search. Now uses the real, unmodified header directly (added
+# via `-idirafter "$LIBC"`, plus `-idirafter "$XNU/libkern"` for its own
+# real `os/base_private.h` dependency) with a curated body,
+# os_assumes_compat.c, providing the 7 real extern functions the header's
+# macros call in their default (non-`OS_CRASH_ENABLE_EXPERIMENTAL_LIBTRACE`)
+# configuration -- see that file's own header for why the real assumes.c
+# itself isn't compiled as-is (it needs a real ASL/dladdr-based syslog
+# transport this project has never ported); reused (not re-derived)
+# build_dyld_core.sh's own already-solved
 # bridgeos/SPI_AVAILABLE macro-vintage-skew fixes and its
 # dyld_compat_sys/dyld_compat_sys_override real header trees (System/
 # kern/cs_blobs.h flat copy, sys/event.h+sys/proc_info.h real xnu-7195
@@ -140,11 +149,12 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-buil
     -idirafter "$PLATFORM/private" -idirafter "$PLATFORM/include" -idirafter "$PLATFORM/internal" \
     -idirafter "$XNU/BUILD.hdrs/dst/usr/local/include" \
     -idirafter "$XNU/EXTERNAL_HEADERS" \
-    -idirafter "$LIBC/darwin")
+    -idirafter "$LIBC/darwin" -idirafter "$LIBC" -idirafter "$XNU/libkern")
 
 for f in xpc_array xpc_connection xpc_debug xpc_dictionary xpc_error xpc_misc xpc_private xpc_type pd_xpc_object liblaunch libvproc libbootstrap; do
     "$CLANG" "${CFLAGS[@]}" "$PD/libxpc/$f.c" -o "$OUT/xpc_obj/$f.o"
 done
+"$CLANG" "${CFLAGS[@]}" os_assumes_compat.c -o "$OUT/xpc_obj/os_assumes_compat.o"
 for f in helper_user helperServer; do
     "$CLANG" "${CFLAGS[@]}" "$MIGOUT/$f.c" -o "$OUT/xpc_obj/$f.o"
 done

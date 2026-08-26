@@ -286,6 +286,48 @@ this pass even if the change itself is cheap.
       existing from-scratch SHA-2/MD5 should be folded in at that point so
       there is one mechanism rather than two.
 
+0b. **`ccsha256_di` can be wired to REAL corecrypto instead of the
+    from-scratch `corecrypto_sha2.c` — found 2026-08-26, not yet acted on.**
+    The SHA256_Init row above says "from-scratch SHA-2, bypasses the table"
+    on the assumption (from an earlier pass) that corecrypto's digest-core
+    bodies were never open-sourced — that check only looked in
+    `EXTERNAL_HEADERS/corecrypto/` (headers only, genuinely empty of
+    bodies). Real, unmodified, APSL-licensed corecrypto digest-core source
+    is actually sitting one directory over at
+    `third_party/xnu-7195/osfmk/corecrypto/`: `ccdigest_init.c`,
+    `ccdigest_update.c`, `ccdigest_final_64be.c`, `ccsha256_di.c`,
+    `ccsha256_initial_state.c`, `ccsha256_K.c`, `ccsha256_ltc_compress.c`,
+    `ccsha256_ltc_di.c` (plus `cchmac*.c`). These are marked `standard` in
+    `osfmk/conf/files` (lines 338-354) — **already compiled into this
+    exact kernel binary** — and `osfmk/prng/prng_random.c:128` already
+    calls the real `ccdigest_init()` from this same file set for the
+    kernel's own PRNG. Only a `register_crypto_functions()` boot-time call
+    filling in `ccsha256_di` from this real source was ever missing, not
+    the whole SHA-256 implementation.
+
+    **Why this matters**: `cs_hash_sha256` (`bsd/kern/ubc_subr.c:185-191`,
+    code-signing hash dispatch), cdhash/boot-session-UUID hashing
+    (`bsd/kern/kern_exec.c:5607-5612`, runs on every real exec), and
+    software-update chunk integrity verification (`bsd/kern/
+    chunklist.c:249-257`) all currently run on the hand-rolled
+    `corecrypto_sha2.c` instead of Apple's real, audited implementation
+    that is already linked into this kernel and one `register_crypto_functions()`
+    call away from being live.
+
+    **Real scope for whoever picks this up**: wire `register_crypto_functions()`
+    to populate `g_crypto_funcs->ccsha256_di` with the real `ccsha256_di()`
+    from `osfmk/corecrypto/ccsha256_di.c`, rebuild, and boot-verify
+    (code-signing/exec paths are hit on every boot, so a real QEMU boot
+    test is a real, cheap verification here — this is a kernel change on a
+    security-relevant path, run the project's adversarial-review-before-
+    commit convention on it). SHA-384/SHA-512 real corecrypto bodies do
+    **not** exist in this project's primary `xnu-7195` checkout (only in
+    the separate, not-currently-built `third_party/xnu-latest`) — leave
+    those on the from-scratch path for now, this item is SHA-256 only.
+    MD5/SHA-1 real corecrypto bodies are confirmed absent from both
+    checkouts (headers only, no bodies) — `corecrypto_md5.c`'s from-scratch
+    implementation is a genuine last resort, not part of this item.
+
     **Do not hand-roll the AES core.** Confirmed 2026-08-21: `corecrypto` is
     **not** in apple-oss-distributions (searched, zero repos), so this
     project's "Apple's real source first" rule cannot be satisfied — the
