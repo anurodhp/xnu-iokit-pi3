@@ -182,9 +182,25 @@ this pass even if the change itself is cheap.
       `HW_CFG`/`PM_CTRL`/`MAC_CR` where Linux does read-modify-write,
       clobbering unrelated bits (`BIR`/`RXDOFF`/`MEF`, full-duplex/
       auto-speed defaults). Still open.
-    - `getPacketFilters()` advertises multicast filtering while
-      `enablePacketFilter()` is a no-op — will break IPv6 ND. Still open,
-      now more reachable than when written.
+    - **[RESOLVED 2026-08-25]** ~~`getPacketFilters()` advertises
+      multicast filtering while `enablePacketFilter()` is a no-op — will
+      break IPv6 ND.~~ Root cause was one layer up from where this was
+      filed: `IOEthernetController`'s own base-class
+      `enablePacketFilter()`/`disablePacketFilter()`
+      (`IOEthernetController.cpp`) already correctly dispatch
+      `kIOPacketFilterMulticast`/`kIOPacketFilterPromiscuous` to the
+      virtual hooks `setMulticastMode()`/`setPromiscuousMode()` — this
+      driver's own no-op override of `enablePacketFilter()`/
+      `disablePacketFilter()` was *shadowing* that real logic entirely,
+      not failing to extend it. Fix removed the shadowing overrides and
+      implemented `setMulticastMode()`/`setPromiscuousMode()` (real
+      MAC_CR MCPAS/PRMS read-modify-write) and `setMulticastList()`
+      (real success — MCPAS already passes all multicast whenever the
+      filter is active, a correct superset of any hash-table filter,
+      which is unimplemented). Also fixed `getPacketFilters()` ignoring
+      `group`, which meant it falsely advertised WOL filter support when
+      `publishProperties()` queries `gIOEthernetWakeOnLANFilterGroup`.
+      Build-verified (kext + full kernel); unverified on real hardware.
     - **[RESOLVED 2026-08-25]** ~~`fInterface` is read without a
       retain/lock from a USB-completion context that can race
       `disable()` setting it to NULL — UAF shape. Still open; also
