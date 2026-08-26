@@ -46,8 +46,13 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOCK = os.path.join(REPO, "qemu", ".qemu_test_lock")
 
 # The shell's own prompt. Used both to know when userland is up and to
-# decide when it is safe to send the next --cmd.
-PROMPT = "% "
+# decide when it is safe to send the next --cmd. Real bash (docs/roadmap.md:
+# "Interactive shell is real bash") prints "-bash-3.2# " for root, not the
+# old custom init-shell's "% " this constant used to hold - a stale value
+# here doesn't error, it just silently makes every --cmd never get sent
+# (since_cmd never ends with PROMPT), which looks exactly like the guest
+# hanging.
+PROMPT = "-bash-3.2# "
 
 
 def acquire_lock(timeout):
@@ -88,12 +93,20 @@ def main():
     ap.add_argument("--cmd", action="append", default=[],
                     help="shell command to type once the prompt appears; "
                          "repeatable, sent in order")
+    ap.add_argument("--login", action="store_true",
+                    help="log in at the 'login:' prompt before sending any "
+                         "--cmd (see tools/init_binary/inject_into_sd_image.sh "
+                         "for where the root/darwin account gets provisioned)")
+    ap.add_argument("--user", default="root")
+    ap.add_argument("--password", default="darwin")
     ap.add_argument("--lock-timeout", type=float, default=600)
     args = ap.parse_args()
 
     expect = [(p, re.compile(p)) for p in args.expect]
     expect_fail = [(p, re.compile(p)) for p in args.expect_fail]
     pending_cmds = list(args.cmd)
+    need_login = args.login
+    need_password = False
 
     acquire_lock(args.lock_timeout)
     log_path = args.log if os.path.isabs(args.log) else os.path.join(REPO, args.log)
@@ -166,6 +179,17 @@ def main():
                     matched.add(pat)
                     print(f"[boot_test] matched --expect {pat!r} at "
                           f"t={time.time() - start:.1f}s")
+
+            if need_login and since_cmd.endswith("login: "):
+                print(f"[boot_test] logging in as {args.user!r}")
+                os.write(master, (args.user + "\n").encode())
+                since_cmd = ""
+                need_login = False
+                need_password = True
+            elif need_password and since_cmd.endswith("Password: "):
+                os.write(master, (args.password + "\n").encode())
+                since_cmd = ""
+                need_password = False
 
             if pending_cmds and since_cmd.endswith(PROMPT):
                 cmd = pending_cmds.pop(0)

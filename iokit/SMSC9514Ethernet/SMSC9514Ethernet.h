@@ -40,7 +40,17 @@
  * (BCM2837DWC2.cpp's IONetworkStack wiring) are both real as of
  * 2026-08-22 but unverified end-to-end on real hardware (QEMU can't
  * exercise this path at all, see above) - the RX wiring above is equally
- * unverified on real hardware for the same reason.
+ * unverified on real hardware for the same reason. It did already surface
+ * one real bug on first real-hardware exercise (2026-08-25): the RX poll
+ * path's `memcpy()` into/out of BCM2837DWC2's DMA buffer paniced with an
+ * unaligned kernel data abort because that buffer was mapped as real ARM64
+ * Device memory (`kIOMapInhibitCache`), which forbids unaligned multi-byte
+ * access outright - fixed in BCM2837DWC2::initDMABuffer() by switching to
+ * `kIOMapWriteCombineCache` (real Normal Non-Cacheable memory, which this
+ * project's SCTLR_EL1 config permits unaligned access on). See
+ * docs/historic/backlog.md's P0 item 10 for the full writeup - still not
+ * re-verified on real hardware since this fix, only QEMU-regression-tested
+ * (QEMU cannot reach this code path at all).
  *
  * Register offsets/bits below are from Linux's drivers/net/usb/smsc95xx.h
  * (SCSRs at 0x00-0x3F, MAC-level CSRs at 0x100+, both accessed through the

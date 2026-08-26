@@ -462,6 +462,19 @@ BCM2837DWC2::allocateDMABuffer(void)
 	 * and this buffer is nowhere near hot enough for the difference to
 	 * matter).
 	 *
+	 * kIOMapWriteCombineCache, not kIOMapInhibitCache: on ARM64 the
+	 * latter maps VM_WIMG_IO (MAIR_DISABLE, Device-nGnRnE), which
+	 * unconditionally faults on any unaligned multi-byte access
+	 * regardless of SCTLR.A. doTransfer()'s memcpy() in/out of this
+	 * buffer runs at arbitrary transfer lengths (e.g. real Ethernet
+	 * frame sizes), essentially never aligned, and reliably took an
+	 * "Unaligned kernel data abort" panic on real RX traffic.
+	 * kIOMapWriteCombineCache maps VM_WIMG_WCOMB (MAIR_WRITECOMB, real
+	 * Normal Non-Cacheable memory), which XNU's SCTLR_EL1 config (no
+	 * SCTLR_A) permits unaligned access on -- matching what this
+	 * comment already assumed ("uncached") without actually being the
+	 * memory type that promise requires.
+	 *
 	 * kIOMemoryMapperNone keeps any IOMapper out of the picture so
 	 * getPhysicalSegment() returns a true physical address rather than a
 	 * remapped DMA one; this platform has no IOMMU, and the bus address
@@ -473,7 +486,7 @@ BCM2837DWC2::allocateDMABuffer(void)
 	fDMABuffer = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
 	    kernel_task,
 	    kIODirectionInOut | kIOMemoryPhysicallyContiguous |
-	    kIOMapInhibitCache | kIOMemoryMapperNone,
+	    kIOMapWriteCombineCache | kIOMemoryMapperNone,
 	    kDWC2DataBufferSize,
 	    0x3FFFFFFFULL & ~0x3ULL); // 4-byte aligned, DWC2 requires it
 

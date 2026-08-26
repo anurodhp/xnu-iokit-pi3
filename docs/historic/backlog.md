@@ -247,6 +247,48 @@ class of race, see items 13/14 below).
    firmware may not. Any source left FIQ-routed arrives at `sleh_fiq()`
    and gets misclassified as a timer tick.
 
+10. **[FIXED 2026-08-25]** `BCM2837DWC2::initDMABuffer()`'s
+    `IOBufferMemoryDescriptor` now uses `kIOMapWriteCombineCache`. Original
+    problem description below, kept for context.
+
+    **Real Pi 3 boot panic, first hit running `ifconfig en0 inet ...
+    netmask ...` against the real LAN9514/SMSC9514 chip**: `Unaligned
+    kernel data abort` (ESR `0x96000021`, DFSC = alignment fault) inside
+    `_memmove`, called from `BCM2837DWC2::doTransfer()`'s
+    `memcpy((uint8_t *)buffer + done, fDMAVirt, actual)` on
+    `SMSC9514Ethernet`'s RX poll path (`rxTimerFired` ->
+    `pollReceive` -> `SMSC9514USBTransport::bulkIn` -> `transfer` ->
+    `doTransfer`). Root cause, confirmed against this project's own
+    `third_party/xnu-7195/osfmk/arm/pmap.c` (`wimg_to_pte()`) and
+    `osfmk/arm64/proc_reg.h`, not guessed: the DMA staging buffer was
+    allocated with `kIOMapInhibitCache`, which maps `VM_WIMG_IO` ->
+    `MAIR_DISABLE` (`0x00`, real Device-nGnRnE memory) — and Device memory
+    unconditionally faults on any unaligned multi-byte access, regardless
+    of `SCTLR.A` (confirmed off in this project's `SCTLR_EL1_DEFAULT`).
+    `doTransfer()`'s `memcpy()` in/out of this buffer runs at whatever
+    length a real Ethernet frame happens to be, essentially never aligned.
+    The buffer's own header comment already claimed it was "uncached", but
+    `kIOMapInhibitCache` is not the ARM64 option that actually means
+    that — `kIOMapWriteCombineCache` (`VM_WIMG_WCOMB` -> `MAIR_WRITECOMB`,
+    `0x44`, real Normal Non-Cacheable memory) is, and Normal memory
+    permits unaligned access under this project's SCTLR config, matching
+    the standard idiom real Linux/U-Boot DMA-coherent buffers use for
+    exactly this reason. **Not yet re-verified on real hardware** —
+    `third_party/qemu-zhuowei` never emulates the real LAN9514 (see
+    project memory "QEMU never emulates LAN9514"; QEMU's `usb-net` stands
+    in as generic CDC/RNDIS, and `SMSC9514Ethernet` correctly never
+    matches it, so `en0` doesn't exist under QEMU at all) — only rebuilt,
+    QEMU-boot-regression-tested (no panic, login/shell/other `ifconfig`
+    paths unaffected), and confirmed via direct architecture-manual +
+    in-tree pmap source reading, not by reproducing the exact crash.
+    Also fixed in passing: `tools/boot_test.py`'s `PROMPT` constant was
+    stale (`"% "`, the old custom init-shell's prompt, silently never
+    matching real bash's `"-bash-3.2# "` and making every `--cmd` a
+    no-op) and it had no login-prompt handling at all, so it could never
+    actually drive a command on current images — added `--login`/`--user`/
+    `--password` (defaults `root`/`darwin`, matching
+    `inject_into_sd_image.sh`'s provisioned account) and fixed `PROMPT`.
+
 ---
 
 ## P1
