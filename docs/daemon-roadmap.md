@@ -2032,6 +2032,81 @@ already handled by this project's own established `-Wl,-alias,
 ___kdebug_trace,_kdebug_trace` pattern (same as the `$UNIX2003`
 aliases), the raw trap (`libc_build/sys_kdebug_trace.o`) already exists.
 
+### Real `libdispatch` port -- STARTED 2026-08-26, 14/14 attempted core
+### files syntax-clean; not yet compiled to real .o/archived/linked
+
+User-directed course correction 2026-08-26: `dispatch_min.a` (the
+393-line hand-written single-thread shim referenced just above) is
+exactly the class of gap this project's own conventions treat as a last
+resort, not a design goal -- real Apple libdispatch (~28K LOC) is
+already cloned at `third_party/libdispatch` (tag
+`libdispatch-1271.40.12`). A background survey (prompted by "are there
+other shims like this that could be resolved by building a library")
+found exactly one more real candidate beyond this one and `os/
+assumes.h`'s stub (see below): the kernel's from-scratch SHA-256 could
+be wired to real, already-compiled-in corecrypto source instead --
+filed as `docs/backlog.md` P2 item 0b, not yet acted on (separate,
+kernel-side, security-relevant change; different risk profile than a
+userland library port).
+
+`build_libdispatch_real.sh` (new) is a real, reproducible
+`clang -fsyntax-only` trial-compile harness -- see that script's own
+HONEST SCOPE STATEMENT for full per-fix detail. Result after this pass:
+**14 of 14 attempted real core dispatch files compile with zero errors**
+(`once.c`, `semaphore.c`, `apply.c`, `time.c`, `allocator.c`, `init.c`,
+`queue.c`, `object.c`, `source.c`, `voucher.c`, `io.c`, `mach.c`,
+`eventlink.c`, `transform.c`). `workgroup.c` is deliberately excluded
+(confirmed zero real `os_workgroup_*` call sites in PureDarwin's actual
+source, same finding that justified `os/workgroup.h`'s own empty stub);
+`block.cpp`/`src/firehose/`/`src/swift/` are out of scope (no ObjC++, no
+os_log engine, no Swift runtime here).
+
+Real, non-obvious findings this pass (each documented in more depth in
+the relevant compat file's own header comment):
+- `DISPATCH_USE_THREAD_LOCAL_STORAGE` must be left **completely
+  undefined**, not defined-as-`0` -- `shims/tsd.h`'s real TSD accessors
+  are gated on *definedness* (`#ifndef`) in one branch and *truthiness*
+  (`#if`) in the other, so `=0` silently satisfies neither and
+  undeclares `_dispatch_thread_port`/`_dispatch_thread_getspecific`/etc
+  with no warning, just a much-later, confusingly-unrelated-looking
+  implicit-declaration error.
+- A real, recurring "needed regardless of this project's SPI flags" gap:
+  `firehose_activity_id_t`, `VOUCHER_CURRENT`, `OS_FIREHOSE_SPI_VERSION`
+  are all referenced unconditionally by `voucher_internal.h`/`queue.c`/
+  `init.c` even though their real declaring headers are gated behind
+  `OS_VOUCHER_ACTIVITY_SPI`/`OS_FIREHOSE_SPI` (both forced off, no logd
+  exists on this target) -- closed via a forced `-include` prefix header
+  rather than re-enabling either SPI flag.
+- Two real upstream source bugs/gaps, fixed via this project's
+  established patch mechanism (`third_party-patches/libdispatch.patch`,
+  applied via `git am`, same as `bash.patch`): (1) a genuine
+  used-before-declared typedef in `queue_internal.h` (illegal in C
+  regardless of platform, not a portability issue); (2) `voucher.c`'s
+  real ~410-line firehose ring-buffer "voucher_activity_t" section,
+  confirmed zero real callers anywhere in this project's actual source,
+  disabled via `#if 0` rather than porting the ~1600-line firehose engine
+  it depends on.
+- Real SDK-vintage shadow gaps for `mach_get_times()`/
+  `thread_get_special_reply_port()`/`<mach/mach_vm.h>` -- this project's
+  pinned iPhoneOS14.4 SDK ships its own older, same-named headers found
+  first via the normal sysroot search, so `-idirafter` (which only wins
+  when the SDK has *no* file of that name at all) can't override them;
+  worked around with narrow forward declarations / a small dedicated
+  compat header instead of fighting search-path precedence.
+
+**Concrete next steps, in order**: (1) compile the 14 clean files to
+real `.o`s and archive them (this script currently only proves
+compilability via `-fsyntax-only`, not link-readiness); (2) a real trial
+link against this project's existing libc/libpthread/libplatform/
+libmach_ipc stack -- expect at minimum `_firehose_task_buffer`/
+`_firehose_task_buffer_pred` (declared `extern` in `voucher_internal.h`,
+now genuinely undefined since their only real definition lived inside
+the `#if 0`-disabled block) to need a small real compat definition, not
+a re-enable; (3) rewire `build_libxpc.sh`/`build_libnotify.sh`/etc from
+`libdispatch_min.a` onto the new real archive once it links cleanly; (4)
+only after that, decide whether `dispatch_min.a` can be deleted outright
+or should stay as a documented fallback during the migration.
+
 ## Phase 6.8 -- original 2026-08-22 scoping (partially superseded above,
 ## kept for the parts still accurate: license/vintage caution, the
 ## "expect real work left in the XPC skeleton" expectation, and the

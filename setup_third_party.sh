@@ -214,7 +214,7 @@ dyld|https://github.com/apple-oss-distributions/dyld.git|dyld-940|
 Libc|https://github.com/apple-oss-distributions/Libc.git|Libc-1439.40.11|
 libpthread|https://github.com/apple-oss-distributions/libpthread.git|libpthread-454.80.2|
 libplatform|https://github.com/apple-oss-distributions/libplatform.git|libplatform-254.80.2|
-libdispatch|https://github.com/apple-oss-distributions/libdispatch.git|libdispatch-1271.40.12|
+libdispatch|https://github.com/apple-oss-distributions/libdispatch.git|libdispatch-1271.40.12|libdispatch.patch
 libclosure|https://github.com/apple-oss-distributions/libclosure.git|libclosure-78|
 libmalloc|https://github.com/apple-oss-distributions/libmalloc.git|libmalloc-317.40.8|
 libunwind|https://github.com/apple-oss-distributions/libunwind.git|libunwind-200.10|

@@ -1,0 +1,137 @@
+From 5715b046fb277c1b73faf05d477642192515f5d3 Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@icloud.com>
+Date: Wed, 26 Aug 2026 08:35:58 -0400
+Subject: [PATCH 1/2] Move dispatch_pthread_root_queue_observer_hooks_s typedef
+ earlier
+
+Real, upstream ordering bug: dispatch_workloop_attr_s (line ~468) embeds
+a dispatch_pthread_root_queue_observer_hooks_s member by value, but the
+typedef itself wasn't defined until ~190 lines later in the same file --
+an incomplete type used by value, illegal in C regardless of platform.
+Moves the typedef immediately after dispatch_queue_specific_head_t
+(before its first use) and removes the now-duplicate later definition.
+
+Found while porting this library for real (not the project's minimal
+single-thread shim) to iokit's Raspberry Pi 3 XNU port -- confirmed via a
+real arm64-apple-ios14.4 clang -fsyntax-only trial compile, not assumed.
+---
+ src/queue_internal.h | 15 +++++++--------
+ 1 file changed, 7 insertions(+), 8 deletions(-)
+
+diff --git a/src/queue_internal.h b/src/queue_internal.h
+index d9425fc..03fc366 100644
+--- a/src/queue_internal.h
++++ b/src/queue_internal.h
+@@ -457,6 +457,13 @@ typedef struct dispatch_queue_specific_head_s {
+ 	TAILQ_HEAD(, dispatch_queue_specific_s) dqsh_entries;
+ } *dispatch_queue_specific_head_t;
+ 
++typedef struct dispatch_pthread_root_queue_observer_hooks_s {
++	void (*queue_will_execute)(dispatch_queue_t queue);
++	void (*queue_did_execute)(dispatch_queue_t queue);
++} dispatch_pthread_root_queue_observer_hooks_s;
++typedef dispatch_pthread_root_queue_observer_hooks_s
++		*dispatch_pthread_root_queue_observer_hooks_t;
++
+ #define DISPATCH_WORKLOOP_ATTR_HAS_SCHED      0x0001u
+ #define DISPATCH_WORKLOOP_ATTR_HAS_POLICY     0x0002u
+ #define DISPATCH_WORKLOOP_ATTR_HAS_CPUPERCENT 0x0004u
+@@ -650,14 +657,6 @@ struct dispatch_queue_global_s {
+ 	DISPATCH_QUEUE_ROOT_CLASS_HEADER(lane);
+ } DISPATCH_CACHELINE_ALIGN;
+ 
+-
+-typedef struct dispatch_pthread_root_queue_observer_hooks_s {
+-	void (*queue_will_execute)(dispatch_queue_t queue);
+-	void (*queue_did_execute)(dispatch_queue_t queue);
+-} dispatch_pthread_root_queue_observer_hooks_s;
+-typedef dispatch_pthread_root_queue_observer_hooks_s
+-		*dispatch_pthread_root_queue_observer_hooks_t;
+-
+ #ifdef __APPLE__
+ #define DISPATCH_IOHID_SPI 1
+ 
+-- 
+2.50.1 (Apple Git-155)
+
+From cfb250c53fc058e28bcaff5db9e3c46c465468f1 Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@icloud.com>
+Date: Wed, 26 Aug 2026 08:51:55 -0400
+Subject: [PATCH 2/2] Add _os_atomic_auto_dependency fallback; disable unported
+ firehose activity block in voucher.c
+
+_os_atomic_auto_dependency is used (never defined) in both the
+os/atomic_private.h-available and portable fallback paths of
+shims/atomic.h -- adds the real no-op body implied by its sibling
+macros (os_atomic_make_dependency already does the same thing).
+
+voucher.c's real "voucher_activity_t" pragma-mark section (~410 lines)
+is Apple's firehose/os_log tracing integration for vouchers -- confirmed
+zero real callers anywhere in this project's actual XPC/launchd source
+or elsewhere in libdispatch itself. No os_log/firehose engine or logd
+daemon exists on this port for it to talk to. Disabled via #if 0 rather
+than fully porting the ~1600-line firehose ring-buffer engine it depends
+on. voucher_activity_initialize_4libtrace() and its _voucher_libkernel_init()
+caller (a separate, always-compiled, EARLIER block) are untouched and
+still need a real (not opaque) voucher_activity_hooks_s body -- provided
+by this port's own dispatch_compat_headers/firehose/private.h.
+---
+ src/shims/atomic.h |  3 +++
+ src/voucher.c      | 20 ++++++++++++++++++++
+ 2 files changed, 23 insertions(+)
+
+diff --git a/src/shims/atomic.h b/src/shims/atomic.h
+index 44af102..78becc0 100644
+--- a/src/shims/atomic.h
++++ b/src/shims/atomic.h
+@@ -135,6 +135,9 @@
+ typedef struct { unsigned long __opaque_zero; } os_atomic_dependency_t;
+ 
+ #define OS_ATOMIC_DEPENDENCY_NONE     ((os_atomic_dependency_t){ 0UL })
++#ifndef _os_atomic_auto_dependency
++#define _os_atomic_auto_dependency(v) ((void)(v), OS_ATOMIC_DEPENDENCY_NONE)
++#endif
+ #define os_atomic_make_dependency(v)  ((void)(v), OS_ATOMIC_DEPENDENCY_NONE)
+ #define os_atomic_inject_dependency(p, e) \
+ 	        ((typeof(*(p)) *)((p) + _os_atomic_auto_dependency(e).__opaque_zero))
+diff --git a/src/voucher.c b/src/voucher.c
+index 46e411c..c2f4898 100644
+--- a/src/voucher.c
++++ b/src/voucher.c
+@@ -1179,6 +1179,24 @@ _voucher_init(void)
+ #pragma mark -
+ #pragma mark voucher_activity_t
+ 
++/* This entire section (through the matching #endif before "_voucher_debug"
++ * below) is real Apple's firehose/os_log tracing integration for
++ * vouchers -- confirmed via grep that zero real callers of any function
++ * in this block exist anywhere in third_party/PureDarwin (this port's
++ * actual XPC/launchd source) or elsewhere in libdispatch/src itself.
++ * iokit's Raspberry Pi 3 XNU port deliberately does not have a real
++ * os_log/firehose engine or a logd daemon for it to hand tracepoint
++ * buffers to (see docs/daemon-roadmap.md's Phase 6.8 os_log scoping
++ * note) -- this block's own real bodies call deep firehose-internal
++ * functions (firehose_buffer_create, firehose_buffer_get_logging_prefs,
++ * etc) and reference incomplete-on-purpose compat types
++ * (voucher_activity_hooks_t, firehose_buffer_t -- see
++ * tools/userland_staging/dispatch_compat_headers/firehose/private.h's
++ * own comment) that were never meant to be dereferenced, only to keep
++ * struct voucher_s's layout stable. Disabled rather than fully ported.
++ */
++#if 0
++
+ DISPATCH_NOINLINE
+ static uint64_t
+ _voucher_activity_id_allocate_slow(uint64_t aid)
+@@ -1591,6 +1609,8 @@ voucher_activity_trace(firehose_stream_t stream,
+ 	return voucher_activity_trace_v(stream, trace_id, stamp, &iov, publen, 0);
+ }
+ 
++#endif /* real firehose/os_log tracing integration, disabled -- see comment above */
++
+ #pragma mark -
+ #pragma mark _voucher_debug
+ 
+-- 
+2.50.1 (Apple Git-155)
+
