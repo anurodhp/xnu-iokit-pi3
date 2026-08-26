@@ -127,6 +127,52 @@ for f in jobServer job_forwardServer job_replyServer internalServer domainServer
 done
 echo "compiled: 9 real launchd daemon source files + ld2xpc_compat.c + real BSM lib_wrappers.c + 7 real SERVER-side MIG files (zero errors)"
 
+# Real Mach host-administration/port-management routines (docs/
+# backlog.md item d5's own "Mach voucher/host-special-port" scope,
+# extended here): host_reboot/host_set_exception_ports/
+# host_set_special_port/host_set_UNDServer (real, clean MIG-generated
+# names, no `_kernelrpc_` fast-path wrapper exists for these on real
+# Apple either -- host_privUser.c compiled whole, checked via `nm`
+# first for zero collisions against this project's existing stack, not
+# assumed) + mach_port_set_mscount/get_set_status/move_member/
+# request_notification/get_attributes/set_attributes (real MIG names
+# from mach_port.defs are ALL `_kernelrpc_`-prefixed -- the clean public
+# names come from a real, separate hand-written libsyscall/mach/
+# mach_port.c; curated here, real logic minus the x86-only kernel fast-
+# path trap optimization for 3 of the 6 -- see
+# launchd_mach_port_compat.c's own header for the full real citation).
+mkdir -p "$OUT/launchd_host_mig/mach"
+MACH_PORT_DEFS="$(cd "$(dirname "$XNU/osfmk/mach/mach_port.defs")" && pwd)/mach_port.defs"
+HOST_PRIV_DEFS="$(cd "$(dirname "$XNU/osfmk/mach/host_priv.defs")" && pwd)/host_priv.defs"
+MIG="$(which mig)"
+if [ -z "$MIG" ]; then
+    echo "error: mig tool not found (needed for real mach_port.defs/host_priv.defs regen)" >&2
+    exit 1
+fi
+"$MIG" -arch arm64 \
+    -header "$OUT/launchd_host_mig/mach/mach_port_internal.h" \
+    -user "$OUT/launchd_host_mig/mach_portUser.c" -server "$OUT/launchd_host_mig/mach_portServer.c" -sheader "$OUT/launchd_host_mig/mach_portServerHeader.h" \
+    "$MACH_PORT_DEFS" >/dev/null
+"$MIG" -arch arm64 \
+    -header "$OUT/launchd_host_mig/mach/host_priv_internal.h" \
+    -user "$OUT/launchd_host_mig/host_privUser.c" -server "$OUT/launchd_host_mig/host_privServer.c" -sheader "$OUT/launchd_host_mig/host_privServerHeader.h" \
+    "$HOST_PRIV_DEFS" >/dev/null
+HOSTMIG_FLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -DPRIVATE=1 \
+    -I "$OUT/launchd_host_mig" -I "$OUT/launchd_host_mig/mach" \
+    -idirafter "$XNU/osfmk" -idirafter "$XNU/libkern" -idirafter "$XNU/bsd")
+"$CLANG" "${HOSTMIG_FLAGS[@]}" "$OUT/launchd_host_mig/mach_portUser.c" -o "$OUT/launchd_core_obj/mach_portUser.o"
+"$CLANG" "${HOSTMIG_FLAGS[@]}" "$OUT/launchd_host_mig/host_privUser.c" -o "$OUT/launchd_core_obj/host_privUser.o"
+"$CLANG" "${HOSTMIG_FLAGS[@]}" launchd_mach_port_compat.c -o "$OUT/launchd_core_obj/launchd_mach_port_compat.o"
+# Real arm64 Mach trap stub for pid_for_task (real trap -46, 2 args --
+# see pid_for_task_trap.s's own header for the full citation).
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -arch arm64 \
+    pid_for_task_trap.s -o "$OUT/launchd_core_obj/pid_for_task_trap.o"
+# Real mig_allocate() (libsyscall/mach/mig_allocate.c, unmodified --
+# real MIG-interface memory allocator, needed once mach_portUser.c/
+# host_privUser.c above are real code paths that can actually run).
+"$CLANG" "${HOSTMIG_FLAGS[@]}" "$XNU/libsyscall/mach/mig_allocate.c" -o "$OUT/launchd_core_obj/mig_allocate.o"
+echo "compiled: real host_priv/mach_port MIG regen + real mach_port.c-derived compat + real pid_for_task trap + real mig_allocate (zero errors)"
+
 rm -f "$OUT/liblaunchd_core.a"
 ar rcs "$OUT/liblaunchd_core.a" "$OUT"/launchd_core_obj/*.o
 echo "wrote $OUT/liblaunchd_core.a ($(ls "$OUT"/launchd_core_obj/*.o | wc -l | tr -d ' ') objects)"
