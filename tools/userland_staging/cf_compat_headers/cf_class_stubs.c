@@ -58,7 +58,6 @@ CF_STUB_CLASS(__CFRunLoopSourceClass);
 CF_STUB_CLASS(__CFRunLoopTimerClass);
 CF_STUB_CLASS(__CFSocketClass);
 CF_STUB_CLASS(__CFTimeZoneClass);
-CF_STUB_CLASS(__CFURLClass);
 CF_STUB_CLASS(__CFURLComponentsClass);
 CF_STUB_CLASS(__CFWriteStreamClass);
 

@@ -21,15 +21,19 @@
 # (Parsing.subproj -- XML plist parsing, i.e. CFPropertyListCreateFrom
 # XMLData, is explicitly NOT included; only the binary-plist + basic
 # CFPropertyList API surface these two files provide), CFError
-# (Error.subproj), plus CFBase/CFRuntime/CFUtilities/CFUUID/CFPlatform/
-# CFKnownLocations/CFSortFunctions (Base.subproj) those all transitively
-# need. Real, unmodified upstream source for every real file -- zero
-# fabricated stubs (the one exception, cf_compat_headers/cf_class_stubs.c,
-# is real but NOT upstream source -- see its own header comment).
+# (Error.subproj), CFURL's core path-creation API (URL.subproj/CFURL.c
+# -- CFURLComponents.c, a genuinely separate file, is NOT included),
+# plus CFBase/CFRuntime/CFUtilities/CFUUID/CFPlatform/CFKnownLocations/
+# CFSortFunctions (Base.subproj) those all transitively need. Real,
+# unmodified upstream source for every real file -- zero fabricated
+# stubs (the one exception, cf_compat_headers/cf_class_stubs.c, is real
+# but NOT upstream source -- see its own header comment).
 #
 # NOT INCLUDED (real, separate subprojs this project doesn't need yet):
 # RunLoop, Stream, PlugIn (bundles), Locale/NumberFormatter/
-# DateFormatter (real ICU dependency, out of scope), URL, Preferences,
+# DateFormatter/CFStringUtilities.c's locale collation (all a real,
+# confirmed-via-trial-compile ICU dependency -- <unicode/uloc.h>/
+# <unicode/ucol.h> -- out of scope), CFURLComponents, Preferences,
 # CharacterSet's Unicode data tables (see CFUniChar.c / the
 # CFCharacterSetBitmaps.bitmap/CFUniCharPropertyDatabase.data sectcreate
 # data build.py wires in for full builds -- NOT done here).
@@ -104,7 +108,7 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -O0 \
     -I "$COMPAT" \
     -I "$CF/Base.subproj" -I "$CF" -I "$CF/Collections.subproj" -I "$CF/NumberDate.subproj" -I "$CF/String.subproj" \
     -I "$CF/Parsing.subproj" -I "$CF/StringEncodings.subproj" -I "$CF/Locale.subproj" -I "$CF/PlugIn.subproj" \
-    -I "$CF/Error.subproj" \
+    -I "$CF/Error.subproj" -I "$CF/URL.subproj" \
     -I "$OUT/cf_headers" -I "$DISPATCH" -I "$PD/libxpc/include" -I "$CR/include" \
     -idirafter "$XNU/libsyscall/wrappers/libproc" \
     -idirafter "$XNU/bsd" -idirafter "$XNU/osfmk" -idirafter "$XNU/libkern")
@@ -117,7 +121,7 @@ FILES=(Base.subproj/CFBase.c Base.subproj/CFRuntime.c Base.subproj/CFUtilities.c
     Collections.subproj/CFTree.c \
     NumberDate.subproj/CFNumber.c NumberDate.subproj/CFDate.c String.subproj/CFString.c \
     Parsing.subproj/CFPropertyList.c Parsing.subproj/CFBinaryPList.c \
-    Error.subproj/CFError.c)
+    Error.subproj/CFError.c URL.subproj/CFURL.c)
 
 mkdir -p "$OUT/cf_obj"
 for f in "${FILES[@]}"; do

@@ -503,13 +503,19 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
       unaffected.
     - **Real, unported CF subsystems** referenced by API (not just the
       class table already stubbed above): `CFLocaleCopyCurrent`/
-      `GetIdentifier`/`GetValue`/`GetTypeID`, `CFURLCreate*` (4
-      functions), `CFNumberFormatter*` (8 functions, real ICU dependency
-      too), `CFRead`/`CFWriteStream*` (6 functions, needs real
-      kqueue/FD integration), `CFBundleCreate`/`CopyLocalizedString`/
-      `GetBundleWithIdentifier`, `CFBurstTrie*` (4 functions — a real
-      CFPropertyList/CFBinaryPList performance helper, not yet located
-      which subproj it lives in), `CFCopySearchPathForDirectoriesInDomains`.
+      `GetIdentifier`/`GetValue`/`GetTypeID` (real ICU dependency,
+      confirmed via trial compile: `CFLocale.c` needs `<unicode/uloc.h>`,
+      same wall as `CFStringUtilities.c`), `CFNumberFormatter*` (8
+      functions, real ICU dependency too), `CFRead`/`CFWriteStream*` (6
+      functions, needs real kqueue/FD integration), `CFBundleCreate`/
+      `CopyLocalizedString`/`GetBundleWithIdentifier`,
+      `CFCopySearchPathForDirectoriesInDomains`, `CFBurstTrie*` (4
+      functions — a real CFPropertyList/CFBinaryPList performance
+      helper, not yet located which subproj it lives in),
+      `CFURLCreateDataAndPropertiesFromResource` (real old-style
+      resource-fork API — CFURL's own basic path-creation functions are
+      closed, see below), `CFTimeZoneGetSecondsFromGMT` (CFURL.c's own
+      real dependency on the still-unported CFTimeZone).
       **CLOSED 2026-08-26: `CFError*`** — real `Error.subproj/CFError.c`
       (645 lines) compiled clean with zero extra work needed, added to
       `build_corefoundation.sh`'s `FILES` array, its class-table entry
@@ -524,10 +530,27 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
       that used to stand in for it). Closed 4 symbols (`CFDateCreate`/
       `GetAbsoluteTime`, `CFAbsoluteTimeGetCurrent`/`GetGregorianDate`,
       `CFGregorianDateGetAbsoluteTime`, `kCFAbsoluteTimeIntervalSince1970`).
-      Real gap count now **107** (dynamic-link count including the
-      curated `cf_libc_extras.a`), down from the original 153. Now 24
-      real/compat files in `build_corefoundation.sh`'s `FILES` array
-      (23 real Apple source + 1 compat stub file).
+      **CLOSED 2026-08-26: `CFURL*`'s core path-creation API** — real
+      `URL.subproj/CFURL.c` (5413 lines, the biggest file added so far)
+      also compiled clean with zero extra work, `__CFURLClass` stub
+      removed (`__CFURLComponentsClass`, a genuinely separate real file
+      not yet built, keeps its stub). Closed 3 real symbols
+      (`CFURLCreateFromFileSystemRepresentation`/
+      `CreateWithFileSystemPath`, `CFURLCopyFileSystemPath`) but honestly
+      surfaced 6 new ones as real, previously-invisible transitive
+      dependencies of CFURL's fuller feature set (`__CFGetSlash`,
+      `__os_log_debug_impl`/`_default` [same os_log-export-gap category
+      as `__os_log_error_impl`], `_CFStringEncodingUnicodeToBytes`,
+      `_CFStringGetMaximumSizeOfFileSystemRepresentation`,
+      `_CFTimeZoneGetSecondsFromGMT`) — a net **worse** raw symbol count
+      (+3) for **more** real capability (the actually-useful path-
+      creation functions now work for real; the newly-exposed gaps are
+      in more peripheral CFURL functionality). Kept rather than reverted
+      — the raw count is a progress signal, not the goal.
+      Real gap count now **108** (dynamic-link count including the
+      curated `cf_libc_extras.a`), starting from 153. Now 25 real/compat
+      files in `build_corefoundation.sh`'s `FILES` array (24 real Apple
+      source + 1 compat stub file).
     - **ASL legacy logging** (`asl_open`/`_close`/`_free`/`_new`/`_send`/
       `_set`) — CFUtilities.c's own legacy console-logging fallback;
       real source may exist in `third_party` already (not yet checked)
