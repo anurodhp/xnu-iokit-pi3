@@ -341,26 +341,48 @@ d5. **Real Mach voucher MIG routines not yet regenerated.**
     pattern already used for `job.defs`/`mach_port.defs`/
     `protocol.defs` elsewhere in this project; not yet attempted.
 
-d6. **`spawn_private.h` missing + a real BSD networking header-ordering
-    bug, both surfaced while trial-compiling launchd's real `core.c`/
-    `launchd.c`.** `third_party/xnu-7195/libsyscall/wrappers/spawn/
-    spawn_private.h` exists but isn't on the current include path for
-    those two files. Separately: `core.c`/`launchd.c` both
-    `#include <net/if.h> <net/if_var.h> <netinet/in.h> <netinet/in_var.h>
-    <netinet6/nd6.h>` in that real order, but `union sockaddr_in_4_6`
-    (real, defined in xnu's own `bsd/netinet/in.h`) and `struct
-    sockaddr_dl` (real, defined in `bsd/net/if_dl.h`) both come up
-    incomplete by the time `in_var.h`/`nd6.h` use them — this project's
-    pinned iPhoneOS14.4 SDK ships its own same-named, same-include-guard,
-    older `netinet/in.h` (found first via the normal sysroot search, so
-    xnu's real newer copy's include guard is already tripped and never
-    actually read) — the same "SDK's own same-named older header wins"
-    trap this project has hit before (`mach/mach_vm.h`,
-    `mach/mach_time.h`). Real fix is the same shape as those: a narrow
-    compat header supplying just the missing type(s), not a broad
-    `-I`/`-idirafter` reorder. Not yet fixed — the rest of `core.c`
-    (12,162 real lines) compiles clean with zero other errors, this is
-    the one remaining blocker for that file and `launchd.c`.
+d6. **RESOLVED for `launchd.c` (now 0 errors); `core.c` down to 7
+    real, distinct, not-yet-fixed errors.** `tools/userland_staging/
+    build_launchd_recon.sh` (new, real -fsyntax-only reconnaissance
+    harness, not a real build script yet) is the reproducer — see its
+    own header comment for the full real-fix writeup. Summary: the
+    `spawn_private.h` gap and the `union sockaddr_in_4_6`/`struct
+    sockaddr_dl` incomplete-type errors (same "SDK's own same-named
+    older header wins" class of bug as `mach/mach_vm.h`/
+    `mach/mach_time.h`) are both fixed — `-include net/if_dl.h` (the
+    SDK's own copy is real and complete, just never reached before
+    `nd6.h` needs it) plus a new narrow compat header
+    (`launchd_compat_headers/sockaddr_in_4_6_compat.h`) supplying just
+    the one missing union. `core.c` additionally needed `-I
+    $PD/libinfo` (real, just not on the include path) and
+    `-idirafter third_party/Libinfo/lookup.subproj` for `aliasdb.h` —
+    PureDarwin's own bundled `libinfo/si_module.h` references a header
+    its own sparse-checked-out `libinfo/` doesn't have, but this
+    project's SEPARATELY-pinned real `third_party/Libinfo`
+    (apple-oss-distributions, tag `Libinfo-542.40.3`) does.
+
+    **7 real errors remain in `core.c`, none fixed yet**:
+    `LAUNCH_JOBKEY_DEFAULTS` undeclared (real declaring header not
+    identified yet); `struct sandbox_spawnattrs`/
+    `sandbox_spawnattrs_init`/`_setprofilename`/`_setcontainer`
+    undeclared (presumably the same real sandbox API
+    `pd_launchd/pd_sandbox_check.c` already uses more narrowly for its
+    own BSM-based check, not yet cross-referenced); and — the
+    interesting one — `ld2xpc`/`xpc2ld` implicit-declaration, confirmed
+    via a real `git ls-tree` across PureDarwin's ENTIRE `next` branch
+    (not just this project's sparse checkout) to be called in `core.c`
+    but genuinely never defined anywhere in that real upstream
+    repository at this commit. This is real incompleteness in
+    PureDarwin's own `next` branch itself, not a gap on this project's
+    side fixable via includes — matches this project's own original
+    Phase 6.8 scoping note ("expect real work left in the XPC
+    skeleton"). Whoever picks this up next may need to write a real
+    `ld2xpc`/`xpc2ld` (plist-to-xpc-dictionary and back) themselves,
+    following this project's own "curate/port real Apple source first"
+    convention as far as it goes, then fall back to writing it from the
+    real XPC/launchd wire-format documentation if no real upstream
+    implementation turns up anywhere else (other apple-oss-distributions
+    launchd tags, PureDarwin's `master` branch, etc — not yet checked).
 
 0a. **No AES implementation exists anywhere in this kernel — HARD
     PREREQUISITE for Phase 7b (`sshd`).** Filed explicitly 2026-08-21 so it

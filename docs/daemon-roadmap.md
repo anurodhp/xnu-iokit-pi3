@@ -2159,6 +2159,39 @@ same "real gap, but is it on a path that matters" question this project
 has answered narrowly for every prior gap rather than closing
 everything unconditionally).
 
+### Real libdispatch dylib conversion + first launchd daemon-source
+### reconnaissance, same day (2026-08-26)
+
+`libdispatch_real.a` corrected to a real `libdispatch.dylib`
+(`build_libdispatch_dylib.sh`) per this project's own standing
+dylib-over-static directive -- confirmed real `MH_DYLIB`/`LC_ID_DYLIB`
+via `otool`, 89 legitimately-deferred `-Wl,-U` imports (a real dylib is
+allowed undefined symbols; a static executable is not). Getting there
+surfaced real duplicate-symbol conflicts between archives built at
+different points in this project's history and a confirmed gap in this
+project's curated libpthread (standard `pthread_attr_*`/QoS/workqueue
+API missing entirely) -- filed as `docs/backlog.md`'s new P2 "d1"-"d6"
+library-debt items rather than silently patched over.
+
+First real reconnaissance pass over launchd's own daemon source
+(`build_launchd_recon.sh`, new, `-fsyntax-only` only -- not a real build
+script yet): **7 of 8 small files were already clean with zero new
+fixes** (`pd_launchd_boot.c`, `kill2.c`, `pd_sandbox_check.c`,
+`pd_console_login.c`, `pd_launchd_plist.c`, `log.c`, `ipc.c`).
+`launchd.c` (the real PID-1 entry point) needed 3 small, already-
+established-pattern fixes and is now **fully clean**. `core.c`
+(12,162 real lines) needed those same 3 fixes plus 2 more (a real,
+separately-pinned `third_party/Libinfo` repo turned out to have a header
+PureDarwin's own bundled copy is missing) and is down to **7 real,
+distinct, uninvestigated errors** -- including a genuinely interesting
+one: `ld2xpc`/`xpc2ld` are called but confirmed (via `git ls-tree`
+across PureDarwin's entire `next` branch, not just this project's sparse
+checkout) to never be defined anywhere in that real upstream repo at
+this commit -- real incompleteness in PureDarwin's own branch, not a
+gap on this project's side. See `docs/backlog.md`'s P2 "d6" item for
+the full, current list and `build_launchd_recon.sh`'s own header
+comment for the complete real-fix writeup.
+
 ## Phase 6.8 -- original 2026-08-22 scoping (partially superseded above,
 ## kept for the parts still accurate: license/vintage caution, the
 ## "expect real work left in the XPC skeleton" expectation, and the
