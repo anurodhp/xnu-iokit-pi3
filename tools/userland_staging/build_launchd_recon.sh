@@ -130,6 +130,7 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-buil
     -D__API_UNAVAILABLE_PLATFORM_bridgeos=ios,unavailable \
     -D__API_AVAILABLE_PLATFORM_bridgeos\(x\)=ios,introduced=x \
     -DSPI_AVAILABLE\(...\)= -D__SPI_AVAILABLE\(...\)= \
+    -DMAX_GROUPS=16 \
     -include net/if_dl.h \
     -include "$COMPAT/sockaddr_in_4_6_compat.h" \
     -include "$COMPAT/launch_jobkey_defaults_compat.h" \
@@ -151,7 +152,7 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-buil
 
 ok=0
 fail=0
-for f in pd_launchd_boot kill2 pd_sandbox_check pd_console_login pd_launchd_plist log ipc launchd; do
+for f in pd_launchd_boot kill2 pd_sandbox_check pd_console_login pd_launchd_plist log ipc launchd runtime; do
     if "$CLANG" "${CFLAGS[@]}" "$PD/launchd/$f.c" 2>/dev/null; then
         ok=$((ok+1))
     else
@@ -159,7 +160,7 @@ for f in pd_launchd_boot kill2 pd_sandbox_check pd_console_login pd_launchd_plis
         echo "FAIL: $f.c" >&2
     fi
 done
-echo "real -fsyntax-only trial: $ok/8 small launchd files compile clean"
+echo "real -fsyntax-only trial: $ok/9 small launchd files compile clean"
 
 echo "=== core.c (12,162 lines) -- real remaining error count ==="
 "$CLANG" "${CFLAGS[@]}" "$PD/launchd/core.c" 2>"$OUT/launchd_core_syntax.err" || true
