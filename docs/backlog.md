@@ -508,7 +508,23 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
       same wall as `CFStringUtilities.c`), `CFNumberFormatter*` (8
       functions, real ICU dependency too), `CFRead`/`CFWriteStream*` (6
       functions, needs real kqueue/FD integration), `CFBundleCreate`/
-      `CopyLocalizedString`/`GetBundleWithIdentifier`,
+      `CopyLocalizedString`/`GetBundleWithIdentifier` — **tried and
+      reverted 2026-08-26**: real `PlugIn.subproj/CFBundle.c` (1738
+      lines) also compiled clean with zero errors, but a real trial link
+      showed it drags in ~30 new symbols (real `dlfcn`/DYLD-introspection
+      bundle-loading machinery — `_CFBundleDlfcnLoadBundle`/
+      `_LoadFramework`/`_CheckLoaded`/`_Preflight`/`_Unload`,
+      `_CFBundleDYLDCopyLoadedImagePaths*`, `_CFBundleGrokBinaryType`,
+      real path-manipulation helpers from a different, not-yet-built
+      file — `__CFGetFileProperties`/`_GetPathProperties`/
+      `_CreateContentsOfDirectory`/`_LengthAfterDeletingLastPathComponent`
+      etc) to close just 3 real symbols — a **30-for-3 trade**, much
+      worse than `CFURL.c`'s own 6-for-3 trade, and reverted for the
+      same reason `localtime.o`/`libproc.o`/`strtoul.o` were: real
+      bundle/plugin discovery is genuinely out of proportion to
+      launchd/IOKitUser's actual need (reading one plist's already-
+      known-path contents, not real bundle resource lookup). Left
+      stubbed;
       `CFCopySearchPathForDirectoriesInDomains`, `CFBurstTrie*` (4
       functions — a real CFPropertyList/CFBinaryPList performance
       helper, not yet located which subproj it lives in),
