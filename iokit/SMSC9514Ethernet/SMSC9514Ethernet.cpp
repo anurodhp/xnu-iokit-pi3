@@ -136,9 +136,12 @@ SMSC9514Ethernet::resetChip(void)
 	}
 
 	// Enable MAC receiver/transmitter and the corresponding FIFO paths.
-	// Promiscuous/multicast filtering left at defaults (off) - packet
-	// filter methods below are real but this reset sequence doesn't yet
-	// apply whatever the current filter state should be at bring-up.
+	// Promiscuous/multicast filtering correctly starts at defaults (off)
+	// here - setMulticastMode()/setPromiscuousMode() are real read-modify-
+	// write over whatever resetChip() leaves MAC_CR at, and the network
+	// stack (IOEthernetInterface) re-applies whichever filters it needs
+	// once the interface actually comes up, so there is nothing for reset
+	// to pre-apply.
 	uint32_t macCr = kMacCrTxEn | kMacCrRxEn;
 	if (!fTransport->writeRegister(kRegMacCr, macCr)) {
 		return false;
@@ -563,25 +566,72 @@ SMSC9514Ethernet::setHardwareAddress(const void *addr, UInt32 addrBytes)
 }
 
 IOReturn
-SMSC9514Ethernet::getPacketFilters(const OSSymbol * /*group*/, UInt32 *filters) const
+SMSC9514Ethernet::getPacketFilters(const OSSymbol *group, UInt32 *filters) const
 {
-	*filters = kIOPacketFilterUnicast | kIOPacketFilterBroadcast | kIOPacketFilterMulticast;
+	// Real support is unicast/broadcast/multicast/promiscuous (see
+	// setMulticastMode()/setPromiscuousMode() below), and only for the
+	// standard RX filter group - this chip has no wake-on-LAN support at
+	// all, so any other group (e.g. gIOEthernetWakeOnLANFilterGroup, which
+	// publishProperties() also queries this through) must report 0,
+	// matching IOEthernetController::getPacketFilters()'s own real
+	// default rather than misreporting WOL support this chip doesn't have.
+	if (group != gIONetworkFilterGroup) {
+		*filters = 0;
+		return kIOReturnSuccess;
+	}
+	*filters = kIOPacketFilterUnicast | kIOPacketFilterBroadcast |
+	    kIOPacketFilterMulticast | kIOPacketFilterPromiscuous;
 	return kIOReturnSuccess;
 }
 
 IOReturn
-SMSC9514Ethernet::enablePacketFilter(const OSSymbol * /*group*/, UInt32 /*aFilter*/,
-    UInt32 /*enabledFilters*/, IOOptionBits /*options*/)
+SMSC9514Ethernet::setMulticastMode(bool active)
 {
-	// TODO: translate into MAC_CR PRMS/MCPAS bits via fTransport. Not
-	// wired up yet - see resetChip()'s comment on filter defaults.
+	if (fTransport == NULL) {
+		return kIOReturnNotReady;
+	}
+	uint32_t macCr;
+	if (!fTransport->readRegister(kRegMacCr, &macCr)) {
+		return kIOReturnIOError;
+	}
+	// MAC_CR_MCPAS_ ("pass all multicast") rather than the hash-table
+	// filter (MAC_CR_HFILT_/HASHH/HASHL, unimplemented) - coarser than a
+	// real per-address filter, but a real, correct superset: anything a
+	// hash filter would have accepted, this accepts too, which is exactly
+	// what IPv6 ND/mDNS need to keep working.
+	macCr = active ? (macCr | kMacCrMcPas) : (macCr & ~(uint32_t)kMacCrMcPas);
+	if (!fTransport->writeRegister(kRegMacCr, macCr)) {
+		return kIOReturnIOError;
+	}
 	return kIOReturnSuccess;
 }
 
 IOReturn
-SMSC9514Ethernet::disablePacketFilter(const OSSymbol * /*group*/, UInt32 /*aFilter*/,
-    UInt32 /*enabledFilters*/, IOOptionBits /*options*/)
+SMSC9514Ethernet::setPromiscuousMode(bool active)
 {
+	if (fTransport == NULL) {
+		return kIOReturnNotReady;
+	}
+	uint32_t macCr;
+	if (!fTransport->readRegister(kRegMacCr, &macCr)) {
+		return kIOReturnIOError;
+	}
+	macCr = active ? (macCr | kMacCrPrmS) : (macCr & ~(uint32_t)kMacCrPrmS);
+	if (!fTransport->writeRegister(kRegMacCr, macCr)) {
+		return kIOReturnIOError;
+	}
+	return kIOReturnSuccess;
+}
+
+IOReturn
+SMSC9514Ethernet::setMulticastList(IOEthernetAddress * /*addrs*/, UInt32 /*count*/)
+{
+	// setMulticastMode(true) above already puts the chip in "pass all
+	// multicast" mode whenever the multicast filter is active at all, so
+	// there is no narrower per-address list to program - this chip has no
+	// hash-table filtering implemented. Real success, not a stub: every
+	// address in the list the caller would have programmed is already
+	// guaranteed to be received.
 	return kIOReturnSuccess;
 }
 

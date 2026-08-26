@@ -261,13 +261,20 @@ public:
 	virtual void free(void) APPLE_KEXT_OVERRIDE;
 
 	// IONetworkController / IOEthernetController required overrides.
+	//
+	// enablePacketFilter()/disablePacketFilter() are deliberately NOT
+	// overridden here (an earlier version of this file did, as no-op
+	// stubs) - IOEthernetController's own real implementation
+	// (IOEthernetController.cpp) already dispatches kIOPacketFilterMulticast/
+	// kIOPacketFilterPromiscuous to setMulticastMode()/setPromiscuousMode()
+	// correctly; overriding it here was shadowing that real logic with a
+	// no-op instead of filling in the two virtual hooks it actually wants.
 	virtual IOReturn getHardwareAddress(IOEthernetAddress *addrP) APPLE_KEXT_OVERRIDE;
 	virtual IOReturn setHardwareAddress(const void *addr, UInt32 addrBytes) APPLE_KEXT_OVERRIDE;
 	virtual IOReturn getPacketFilters(const OSSymbol *group, UInt32 *filters) const APPLE_KEXT_OVERRIDE;
-	virtual IOReturn enablePacketFilter(const OSSymbol *group, UInt32 aFilter,
-	                                     UInt32 enabledFilters, IOOptionBits options = 0) APPLE_KEXT_OVERRIDE;
-	virtual IOReturn disablePacketFilter(const OSSymbol *group, UInt32 aFilter,
-	                                      UInt32 enabledFilters, IOOptionBits options = 0) APPLE_KEXT_OVERRIDE;
+	virtual IOReturn setMulticastMode(bool active) APPLE_KEXT_OVERRIDE;
+	virtual IOReturn setPromiscuousMode(bool active) APPLE_KEXT_OVERRIDE;
+	virtual IOReturn setMulticastList(IOEthernetAddress *addrs, UInt32 count) APPLE_KEXT_OVERRIDE;
 	virtual IOReturn enable(IONetworkInterface *interface) APPLE_KEXT_OVERRIDE;
 	virtual IOReturn disable(IONetworkInterface *interface) APPLE_KEXT_OVERRIDE;
 	virtual UInt32   outputPacket(mbuf_t m, void *param) APPLE_KEXT_OVERRIDE;
