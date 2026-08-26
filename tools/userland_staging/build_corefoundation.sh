@@ -172,15 +172,40 @@ EOF
 # recipe build_dyld_test_exec.sh already established: drop `-static`
 # (keep `-nostdlib`), link plain dylibs on the command line, real
 # `-Wl,-fixup_chains` (this project's pinned dyld-940 needs chained
-# fixups, not the older bind-opcode format). This is the more accurate
-# gap count going forward -- prefer this one's output over the static
-# link's above.
+# fixups, not the older bind-opcode format). Also links the same curated
+# static libc_string/libc_gen/libc_stdio/libc_printf/libc_locale_for_stdio
+# archives the static trial link above already used (real, zero-
+# pollution, already-proven-complete for these) plus a small
+# cf_libc_extras.a of hand-selected already-built-elsewhere objects
+# (getpwnam/getpwuid via libcopyfile.a's copyfile_syscalls.o, getuid/
+# geteuid/gethostname/writev each their own small .o -- same selective
+# `ar x` pattern build_libdispatch_dylib.sh established, not whole-
+# archive linking, which was tried and reverted per docs/backlog.md item
+# d7: pulls in unrelated C++/xattr symbols). localtime.o/libproc.o/
+# strtoul.o (real homes of localtime_r/proc_pidinfo/strtoul_l) were also
+# tried and reverted: each pulls its own deep, not-locally-satisfied
+# dependency chain that a real trial link confirmed is a net LOSS -- more
+# new gaps introduced than symbols closed. Left as real, documented
+# remaining gaps instead of chasing diminishing returns. This is the
+# accurate gap count going forward -- prefer this one's output over the
+# static link's above.
+mkdir -p "$OUT/cf_libc_extras_obj"
+( cd "$OUT/cf_libc_extras_obj" && \
+  ar x "../libcopyfile.a" copyfile_syscalls.o getuid.o && \
+  ar x "../libremovefile.a" geteuid.o && \
+  ar x "../libresolv.a" gethostname.o && \
+  ar x "../libopenpam.a" date_compat.o )
+rm -f "$OUT/cf_libc_extras.a"
+ar rcs "$OUT/cf_libc_extras.a" "$OUT"/cf_libc_extras_obj/*.o
+echo "wrote $OUT/cf_libc_extras.a ($(ls "$OUT"/cf_libc_extras_obj/*.o | wc -l | tr -d ' ') objects: getpwnam/getpwuid/getuid/geteuid/gethostname/writev)"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
     -Wl,-fixup_chains \
     -o "$OUT/cf_trial_dyn.macho" \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/cf_trial_main.o" \
     "$OUT/libCoreFoundation.a" \
+    "$OUT/cf_libc_extras.a" \
+    "$OUT/libc_string.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" "$OUT/libc_locale_for_stdio.a" \
     "$OUT/system/libdispatch.dylib" \
     "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     2>"$OUT/cf_trial_dyn.err" \

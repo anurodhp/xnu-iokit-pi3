@@ -517,7 +517,8 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
       real one. Closed 6 symbols (`CFErrorCreate`/`GetCode`/`GetDomain`/
       `CopyUserInfo`, `kCFErrorDomainCocoa`/`OSStatus`/`POSIX`,
       `kCFErrorDebugDescriptionKey`/`UnderlyingErrorKey`) — real gap
-      count now 132 (dynamic-link count, see below), down from 138.
+      count now 111 (dynamic-link count including the curated
+      `cf_libc_extras.a`, see below), down from 138.
     - **ASL legacy logging** (`asl_open`/`_close`/`_free`/`_new`/`_send`/
       `_set`) — CFUtilities.c's own legacy console-logging fallback;
       real source may exist in `third_party` already (not yet checked)
@@ -564,10 +565,37 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
       problem and not fixed here; real fix is closing that dylib's own
       export-parity gap, tracked wherever that dylib's own build script
       lives (not yet cross-referenced from here).
+    - **CLOSED 2026-08-26 (6 symbols)**: `getpwnam`/`getpwuid`/`getuid`/
+      `geteuid`/`gethostname`/`writev`. Real, selective `ar x` extraction
+      (same pattern `build_libdispatch_dylib.sh` already established) of
+      5 small `.o` members — `copyfile_syscalls.o` (from `libcopyfile.a`,
+      has both `getpwnam`+`getpwuid`), `getuid.o` (`libcopyfile.a`),
+      `geteuid.o` (`libremovefile.a`), `gethostname.o` (`libresolv.a`),
+      `date_compat.o` (`libopenpam.a`, has `writev`) — into a new
+      `cf_libc_extras.a`, now a permanent `build_corefoundation.sh` step.
+      Verified via real trial, not assumed: `localtime.o` (real home of
+      `localtime_r`), `libproc.o` (`proc_pidinfo`), and `strtoul.o`
+      (`strtoul_l`) were tried the same way and reverted — each pulls in
+      its own deep, not-locally-satisfied dependency chain (pthread
+      once/get|setspecific/rwlock_wrlock + open/close/read/fstat/access
+      for `localtime.o`; `__proc_info`/`__thread_selfid`/
+      `__process_policy` for `libproc.o`; locale globals for
+      `strtoul.o`) that a real trial link confirmed is a **net loss** —
+      more new gaps introduced than symbols closed. Left as real,
+      documented remaining gaps (`localtime_r`, `proc_pidinfo`,
+      `strtoul_l` below) rather than chasing diminishing returns. Also
+      added the same curated `libc_string.a`/`libc_gen.a`/`libc_stdio.a`/
+      `libc_printf.a`/`libc_locale_for_stdio.a` archives the static trial
+      link already used to the dynamic one (they'd only ever been linked
+      into the static trial link before — real, zero-pollution, already-
+      proven-complete for these, and closed a further batch:
+      `isdigit`/`isspace`/`strrchr`/`strnlen`/`memchr`/`asprintf`/
+      `fprintf`/`_fprintf_l`/`printf`/`snprintf_l`/`strncasecmp_l`/
+      `close`/`getcwd`/`issetugid`/`__memmove_chk`, 15 more symbols).
     - **Real, still-genuinely-missing-everywhere libc/Mach gaps**
-      (present in neither the static curated archives used in this
-      trial link nor `libSystem.B.dylib`): `getpwnam`/`getpwuid`/
-      `getegid`/`geteuid`/`getuid`/`gethostname`/`writev`/`localtime_r`/
+      (present in neither the curated static archives now linked into
+      this trial link nor `libSystem.B.dylib`, and not worth chasing
+      further per the reverted attempts above): `getegid`/`localtime_r`/
       `proc_pidinfo`/`strtoul_l`/`pthread_getugid_np`/
       `pthread_is_threaded_np`/`pthread_threadid_np`/`mach_vm_region`
       (declared in `cf_compat_headers/mach/mach_vm.h`, but the real
@@ -575,17 +603,10 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
       just needs exporting)/`malloc_zone_*` (6 functions)/
       `malloc_default_zone`/`malloc_good_size`/`uuid_generate_random`/
       `_time`/`_NSGetArgc`/`fmod`/`modf`/`pow`/
-      `__dispatch_queue_attr_concurrent`/`__os_log_error_impl`. Several
-      of these (`getpwnam`, `proc_pidinfo`, `strtoul_l`, `mach_error_string`
-      [now resolved via the dylib], `_NSGetArgv` [ditto]) **do exist**
-      somewhere in this project's curated stack (`libcopyfile.a`/
-      `libxpc_syscalls.a`/`dyld_core.a`) — just not linked into this
-      trial link, which deliberately keeps a minimal archive list to
-      keep the gap signal clean. Whole-archive linking was tried and
-      reverted (pulls in unrelated C++/xattr symbols, a net loss). Real
-      fix, when picked back up: selective `ar x` extraction of just the
-      needed `.o` members (same pattern `build_libdispatch_dylib.sh`
-      already established), not whole-archive linking.
+      `__dispatch_queue_attr_concurrent`/`__os_log_error_impl`/
+      `pthread_atfork`. Not yet spot-checked against the full curated
+      stack one more time — worth a quick pass before assuming any of
+      these need new work.
 
     **Verified, not just assumed**: tried a real, narrow trial link of a
     tiny probe program calling only IOKitUser's specific documented
@@ -610,28 +631,32 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
     in this project, not just CFString-heavy usage.
 
     **Concrete next steps, in priority order**: (1) ~~resolve the
-    static-vs-dynamic trial-link harness gap~~ — DONE 2026-08-26,
-    real gap count is **132** (dynamic-link, real `CFError.c` included),
-    not the original static-link 153; (2) ~~real `CFError.c` port~~ —
-    DONE same day, see above; (3) selective `ar x` extraction of the
-    real, still-missing-everywhere libc/Mach symbols listed above
-    (`getpwnam`, `proc_pidinfo`, etc — a smaller, more accurate list
-    than before now that the dynamic link already resolved most of what
-    this item originally targeted) into a small, curated compat archive
-    (avoiding the C++/xattr pollution whole-archive linking hit); (4)
-    decide whether `CFPropertyListCreateFromXMLData` (needed by
-    `launchd/core.c`, explicitly out of scope for this pass — only
-    binary-plist parsing was included) is worth a follow-up pass, since
-    XML plists are real launchd/LaunchDaemons input format on real
+    static-vs-dynamic trial-link harness gap~~ — DONE 2026-08-26; (2)
+    ~~real `CFError.c` port~~ — DONE same day; (3) ~~selective `ar x`
+    extraction of already-built-elsewhere libc symbols~~ — DONE same
+    day (`cf_libc_extras.a`, 6 symbols, plus 15 more from linking the
+    already-existing curated `libc_string.a`/etc into the dynamic trial
+    link too). **Real gap count is now 111**, down from the original
+    153. Remaining: (4) decide whether `CFPropertyListCreateFromXMLData`
+    (needed by `launchd/core.c`, explicitly out of scope for this pass —
+    only binary-plist parsing was included) is worth a follow-up pass,
+    since XML plists are real launchd/LaunchDaemons input format on real
     Darwin; (5) the ICU wall (CFUniChar/CFCharacterSet/
     CFStringUtilities collation, CFLocale, CFNumberFormatter) is the one
     item on this list that's a genuine scope decision, not just
     unstarted work — real ICU is a large, separate port this project has
-    never attempted; (6) new, found 2026-08-26: `libSystem.B.dylib`'s
-    own export-parity gap vs the curated static libc stack (see above) —
-    not CF-specific, but CF's real future dynamic link will hit it, so
-    it's worth closing before CF actually gets wired into launchd/
-    IOKitUser.
+    never attempted; (6) `libSystem.B.dylib`'s own export-parity gap vs
+    the curated static libc stack (found 2026-08-26, see above) — not
+    CF-specific, but CF's real future dynamic link will hit it, so it's
+    worth closing before CF actually gets wired into launchd/IOKitUser;
+    (7) the remaining real, still-missing-everywhere libc/Mach symbols
+    (`getegid`, `mach_vm_region`, `malloc_zone_*`, `uuid_generate_*`,
+    etc, see above) — smaller and more bounded than the CF subsystem/ICU
+    work, worth a quick pass; (8) once the gap list is as small as it's
+    going to get without ICU/further subsystem ports, wire the working
+    subset into IOKitUser (closing that project's own long-documented
+    "IOKitUser needs CoreFoundation" wall) — the actual original reason
+    this port started.
 
 0a. **No AES implementation exists anywhere in this kernel — HARD
     PREREQUISITE for Phase 7b (`sshd`).** Filed explicitly 2026-08-21 so it
