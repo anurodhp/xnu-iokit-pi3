@@ -107,9 +107,9 @@ ARCHS=arm64 perl "$XNU/libsyscall/xcodescripts/create-syscalls.pl" \
 ASMFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -arch arm64 \
     -I"$OUT/launchd_sys_asm_compat" -I"$XNU/libsyscall/custom" -I"$XNU/libsyscall/mach" -I"$XNU/osfmk")
 for s in _chown _chroot _sync _revoke _setuid _setgid _setsid _setpgid \
-    _getrusage _execve _mount _kevent _dup _dup2 _getppid _getpeereid _umask \
+    _getrusage _execve _mount _kevent _dup _dup2 _getppid _getpeereid _umask _getgid \
     ___accept_nocancel ___listen ___socketpair ___munmap ___wait4_nocancel ___fork \
-    ___reboot ___setpriority ___getrlimit ___setrlimit ___posix_spawn; do
+    ___reboot ___setpriority ___getrlimit ___setrlimit ___posix_spawn ___setlogin; do
     "$CLANG" "${ASMFLAGS[@]}" "$TMP/${s}.s" -o "$OUT/launchd_syscall_obj/sys_${s}.o" 2>/dev/null || true
 done
 rm -rf "$TMP"
