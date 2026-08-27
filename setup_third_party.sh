@@ -187,6 +187,32 @@ mkdir -p third_party
 #     apple-oss-distributions repo, needed for `bsm/auditd_lib.h`/
 #     `bsm/libbsm.h`, real launchd/libxpc dependencies per
 #     docs/daemon-roadmap.md's Phase 6.8 file survey).
+#   - ICU (CoreFoundation's ICU wall, docs/backlog.md item d7): same
+#     `macos-112` manifest method -- `git ls-tree macos-112 -- ICU` ==
+#     commit f7b86563706f76d5267452815c6b6121cf4698b7 == tag `ICU-66109`
+#     (confirmed via `git ls-remote --tags`). Real, unmodified Apple ICU
+#     (their icu4c fork, ~190MB checkout -- icuSources/ is stock upstream
+#     ICU4C autotools/configure, plus cldrFiles/ locale data and Apple's
+#     own ICU.xcodeproj for their internal B&I pipeline, which this
+#     project does not use). Confirmed via `configure.ac` that this is
+#     upstream ICU4C's real `--with-cross-build=<dir>` two-stage
+#     cross-compile mechanism (build ICU natively for the host first to
+#     get `config/icucross.mk` + generated data/tools, then
+#     `--with-cross-build` that directory when configuring the real
+#     target build) -- categorically different from this project's usual
+#     from-scratch clang-per-file-loop template (see `build_libc_regex.sh`)
+#     since ICU already ships its own real build system and generates
+#     locale/charset data tables at build time; do not reinvent that by
+#     hand. `ICU.patch` fixes a real upstream (Apple) oversight found
+#     while getting the host-native build stage working (see
+#     tools/userland_staging/build_icu_host.sh's own header comment):
+#     `common/Makefile.in`'s autotools file list never got
+#     `aaplbfct.cpp` added alongside `localsvc.cpp`, even though
+#     `ICU.xcodeproj`'s real target already builds both -- a plain
+#     `./runConfigureICU && make` hits an undefined-symbol link error for
+#     `AppleLanguageBreakFactory` without it. Not yet built for the
+#     target; this pin exists so the source is reproducible from a fresh
+#     clone while that build work proceeds.
 #   - PureDarwin (Phase 6.8, launchd+XPC source): sparse-checked-out below
 #     (same pattern as llvm-project), NOT the generic REPOS loop -- see
 #     that block's own comment for why this superseded the originally
@@ -249,6 +275,7 @@ IOKitTools|https://github.com/apple-oss-distributions/IOKitTools.git|IOKitTools-
 OpenSSH|https://github.com/apple-oss-distributions/OpenSSH.git|OpenSSH-240.40.1|
 Libnotify|https://github.com/apple-oss-distributions/Libnotify.git|Libnotify-279.40.4|
 BSM|https://github.com/apple-oss-distributions/BSM.git|bsm-13|
+ICU|https://github.com/apple-oss-distributions/ICU.git|ICU-66109|ICU.patch
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch; do

@@ -1016,6 +1016,69 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
     "IOKitUser needs CoreFoundation" wall) — the actual original reason
     this port started.
 
+    **Real ICU port started 2026-08-26** (the wall named in item (5)
+    above is no longer a scope decision — begun for real). First,
+    corrected a stale assumption: `docs/apple-oss-catalog.md` had listed
+    `ICU` under "not currently needed," but Apple did open-source it —
+    confirmed via `git ls-remote apple-oss-distributions/ICU` and the
+    `macos-112` manifest (`git ls-tree macos-112 -- ICU` == commit
+    `f7b86563706f76d5267452815c6b6121cf4698b7` == tag `ICU-66109`), same
+    method every other pin in this project uses. Pinned in
+    `setup_third_party.sh`, cloned to `third_party/ICU` (325MB checkout:
+    `icuSources/` is stock upstream ICU4C with its own real autotools
+    build, plus `cldrFiles/` locale data and Apple's `ICU.xcodeproj` for
+    their internal B&I pipeline, unused here).
+
+    ICU4C's real cross-compile story (confirmed via `configure.ac`) is a
+    two-stage `--with-cross-build=<dir>` mechanism: build ICU natively
+    for the host first (to get working `genrb`/`gencnv`/`gennorm2`/etc.
+    tools plus generated locale/data tables, since generating those
+    requires actually running ICU code), then cross-configure the real
+    target build pointing at that host build root. Categorically
+    different from this project's usual from-scratch clang-per-file-loop
+    template (`build_libc_regex.sh`) — reinventing autotools by hand for
+    a project this size isn't worth it. `tools/userland_staging/
+    build_icu_host.sh` is stage 1 (native host build only, never linked
+    into anything that ships) — **DONE 2026-08-26**: real ICU 66.1 host
+    build succeeded, producing `libicuuc`/`libicui18n`/`libicudata`/
+    `libicuio` dylibs, all host tools, and a real packaged CLDR data
+    library (`icudt66l`), with `config/icucross.mk` present and ready to
+    be the `--with-cross-build` target for stage 2 (not yet written: the
+    real arm64-apple-ios14.4 cross build using this project's usual
+    Xcode-12 iPhoneOS SDK / `-ffreestanding` recipe for `CC`/`CXX`).
+
+    Two real gaps found and fixed getting stage 1 green (both documented
+    in that script's own header comment, and the first is also filed as
+    `third_party-patches/ICU.patch`, applied via `setup_third_party.sh`
+    like this project's other patches):
+    - `common/Makefile.in` never listed `aaplbfct.cpp`
+      (`AppleLanguageBreakFactory`) even though `localsvc.cpp`
+      unconditionally references it and Apple's own `ICU.xcodeproj`
+      builds both — a real upstream (Apple) build-system oversight, not
+      a this-project issue. Plain `configure && make` hits an
+      undefined-symbol link error without it.
+    - Apple's fork flips ICU's normal upstream default of
+      `U_SHOW_CPLUSPLUS_API` from 1 to 0 (deliberate: client code linking
+      the shipped OS dylib must not depend on ICU's non-ABI-stable C++
+      API) but ICU's own internal `.cpp` files are real C++-API consumers
+      and need it back on to build the library itself at all — confirmed
+      via `ICU.xcodeproj/project.pbxproj` that Apple's real internal
+      build passes `U_SHOW_CPLUSPLUS_API=1`. Passed through `CPPFLAGS`,
+      matching Apple's own recipe (not a source patch).
+    - Also disabled `extra`/`tests`/`samples` in this host build
+      (`--disable-extras --disable-tests --disable-samples`): the only
+      real goal here is the `--with-cross-build` reference root, and
+      `extra/uconv`'s sample CLI tool has its own real, separate
+      `UChar`/`char16_t` pointer-type mismatch against any current host
+      clang (an ICU-66-era-vs-modern-libc++ incompatibility, unrelated to
+      this project) that isn't worth fixing for dead-to-this-project
+      sample code.
+
+    **Not yet done**: stage 2 (the real target cross-compile), then
+    working out what CF's own `CFUniChar`/`CFCharacterSet`/
+    `CFStringUtilities` collation/`CFLocale`/`CFNumberFormatter` gap list
+    (documented above in this same item) actually needs linked from it.
+
 0a. **No AES implementation exists anywhere in this kernel — HARD
     PREREQUISITE for Phase 7b (`sshd`).** Filed explicitly 2026-08-21 so it
     is a known gate rather than the fourth surprise NULL dereference.

@@ -699,6 +699,16 @@ need a real implementation later:
   (ICU, ASL, `libSystem.B.dylib` export-parity debt) are scope decisions,
   not unstarted work -- see `docs/backlog.md` item d7 for the full
   categorized list.
+- **Real ICU port started 2026-08-26** (was scoped out of Phase 9 above;
+  no longer a scope decision, now underway for real): pinned
+  `ICU-66109` (confirmed via the `macos-112` manifest, same as every
+  other pin), stage 1 (native host build, a real prerequisite for ICU4C's
+  own `--with-cross-build` two-stage cross-compile) DONE -- real ICU 66.1
+  host dylibs/tools/CLDR data built via `tools/userland_staging/
+  build_icu_host.sh`. Stage 2 (the real arm64-apple-ios14.4 target cross
+  build) not yet started. Full writeup, two real build-system gaps found
+  and fixed along the way: `docs/backlog.md` item d7's own "Real ICU port
+  started" entry.
 - **Phase 6.8 (`launchd`+XPC via PureDarwin): critical-path gap-closing
   pass DONE 2026-08-26**, real port itself still open. Source is
   PureDarwin/PureDarwin's own `next` branch (a current, actively
