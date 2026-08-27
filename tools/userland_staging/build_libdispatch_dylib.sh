@@ -109,29 +109,43 @@
 # __kernelrpc_host_create_mach_voucher from earlier work, just never
 # had the plain-named public forward -- see libpthread_qos_compat.c's
 # own header for the correction. Real, now closed, not deferred.
+#
+# Real Step 2 progress, 2026-08-27: of the ~54 symbols this list used to
+# carry, 20 are real, already-defined exports of sibling dylibs already
+# built in this project (`libc_build/system/libsystem_c.dylib`/
+# `libsystem_malloc.dylib`/`libsystem_pthread.dylib`, confirmed via a
+# real `nm -gU` sweep of each, not assumed) -- exactly the
+# "real DEPENDENCY on libSystem's libc portion at runtime" fix this
+# script's own header comment already called for, rather than more
+# static-archive extraction. Those 20 are removed from this deferred
+# list below and the dylib is now linked against those 3 siblings for
+# real (see the final link command) -- same established pattern
+# `build_libunwind_dylib.sh` already uses for its own sibling deps.
+# `libsystem_kernel.dylib`/`libsystem_platform.dylib`/
+# `libsystem_blocks.dylib` were checked too (real `nm -gU` sweep) and
+# genuinely do NOT export any of the remaining symbols below yet --
+# linking them in would add real LC_LOAD_DYLIB weight for zero symbol
+# resolution, so they're deliberately not added until they actually
+# grow the needed exports.
 UNDEF_SYMS=(
-    _kdebug_trace _kevent_qos _kpersona_get _mach_continuous_time _mach_get_times
+    _kevent_qos _kpersona_get _mach_continuous_time _mach_get_times
     _malloc_engaged_nano _malloc_memory_event_handler
-    _mmap _munmap
     _pthread_get_stackaddr_np
     _pthread_setschedparam
     _semaphore_timedwait _sigsuspend _sleep
-    _thread_destruct_special_reply_port _thread_get_special_reply_port _vasprintf
-    _pwrite _read _pthread_tsd_shim_bootstrap
-    _gettimeofday _kill
+    _thread_destruct_special_reply_port _thread_get_special_reply_port
+    _pwrite
+    _atoi
     _mach_eventlink_associate _mach_eventlink_create _mach_eventlink_destroy
     _mach_eventlink_disassociate _mach_eventlink_signal
     _mach_eventlink_signal_wait_until _mach_eventlink_wait_until
-    _asprintf _atoi _dprintf _fprintf
-    _close _pread
-    _strcasecmp _getprogname _sys_errlist _sys_nerr
-    ___toupper ___toupper_l __fstat __open __close __read __write
+    _pread
     __mach_errors _environ
     _mach_port_construct _mach_port_destruct _mach_port_extract_right
     _mach_port_insert_right _mach_port_unguard _mach_port_kernel_object
     _mach_port_request_notification _mach_port_get_context _mach_port_set_context
     _mach_make_memory_entry_64
-    _geteuid
+    _geteuid _gettimeofday
     _semaphore_create _semaphore_destroy
 )
 UNDEF_FLAGS=()
@@ -145,6 +159,11 @@ OUT="libc_build"
 
 if [ ! -d "$OUT/dispatch_obj" ]; then
     echo "error: $OUT/dispatch_obj not found -- run build_libdispatch_real.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libsystem_c.dylib" ] || [ ! -f "$OUT/system/libsystem_malloc.dylib" ] || \
+   [ ! -f "$OUT/system/libsystem_pthread.dylib" ]; then
+    echo "error: libsystem_c/malloc/pthread.dylib not found -- run those build scripts first" >&2
     exit 1
 fi
 
@@ -288,6 +307,7 @@ rm -f "$OUT/system/libdispatch.dylib"
     "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
     "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" \
     "$OUT/simple_obj/sys__kqueue.o" \
+    "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" \
     2>"$OUT/system/libdispatch_dylib_link.err" \
     || { echo "note: dylib link reported diagnostics (expected -- undefined symbols are normal in a dylib), see $OUT/system/libdispatch_dylib_link.err" >&2; }
 

@@ -1776,26 +1776,54 @@ void init_main(void) {
      *     voucher from earlier work, just needed the plain-named public
      *     forward (tools/userland_staging/libpthread_qos_compat.c).
      *
-     * Real remaining gap, not yet closed: nm -u on the current
-     * libdispatch.dylib shows ~54 more real undefined symbols (kevent_qos,
-     * mach_eventlink_*, kpersona_get, mach_continuous_time/get_times,
-     * malloc_engaged_nano/memory_event_handler, semaphore_timedwait,
-     * sigsuspend, thread_destruct/get_special_reply_port, sys_errlist/
-     * sys_nerr, and more) -- most already have real implementations
-     * somewhere in this project's other archives (confirmed via a real
-     * nm sweep), just not yet wired into this specific dylib's link
-     * without re-triggering the same class of duplicate-symbol conflicts
-     * this pass already resolved several of (dyld_core.a's own
-     * mach_port_* / mach_vm_* copies vs libmalloc.a's, for one already-
-     * documented example). Real next step: continue the same "check
-     * existing archives first, selectively extract or write a narrow
-     * real reproduction, verify via nm, real QEMU reboot" loop this pass
-     * already used successfully ~15 times, until the boot reaches a
-     * shell prompt with syslogd actually running. See
-     * docs/daemon-roadmap.md's Phase 6.7 section for the full real
-     * writeup and the exact current undefined-symbol list. syslogd.macho
-     * is still built and installed at /usr/sbin/syslogd, just not yet
-     * exec'd automatically. */
+     *   - Step 2 (real sibling-dylib relink, not another static
+     *     extraction): a real nm -gU sweep of this project's own already-
+     *     built libsystem_c.dylib/libsystem_malloc.dylib/
+     *     libsystem_pthread.dylib found 20 of the ~54 remaining undefined
+     *     symbols (__close/__fstat/__open/__read/__write/_asprintf/_close/
+     *     _dprintf/_fprintf/_getprogname/_read/_strcasecmp/_sys_errlist/
+     *     _sys_nerr/_vasprintf/_munmap/_kdebug_trace/_kill/
+     *     _pthread_tsd_shim_bootstrap/_mmap) are ALREADY real, defined
+     *     exports there. build_libdispatch_dylib.sh now links
+     *     libdispatch.dylib against those 3 siblings for real (confirmed
+     *     via otool -L showing real LC_LOAD_DYLIB entries, and nm -m
+     *     showing each of those 20 symbols bound "(from libsystem_c)"/
+     *     "(from libsystem_malloc)", not "(dynamically looked up)") --
+     *     same established pattern build_libunwind_dylib.sh already uses
+     *     for its own sibling dependencies. A few of the 20 (_kill,
+     *     _mmap) are real, defined exports of more than one of the 3
+     *     siblings; ld64's two-level namespace binder resolved them
+     *     against whichever sibling is listed first in the link command
+     *     (libsystem_c.dylib) -- both real, neither a conflict, just link
+     *     order. libsystem_kernel.dylib/libsystem_platform.dylib/
+     *     libsystem_blocks.dylib were checked too and genuinely don't
+     *     export any of the rest yet, so they're not linked in (no
+     *     benefit, only weight).
+     *
+     * Real remaining gap, not yet closed: 34 real undefined symbols
+     * (kevent_qos, the mach_eventlink_* family (7 symbols), kpersona_get,
+     * mach_continuous_time/get_times, malloc_engaged_nano/
+     * memory_event_handler, mach_port_construct/destruct/extract_right/
+     * insert_right/kernel_object/request_notification/unguard (7
+     * symbols), mach_make_memory_entry_64, semaphore_create/destroy/
+     * timedwait, sigsuspend, sleep, thread_destruct/get_special_reply_port,
+     * pread/pwrite, pthread_get_stackaddr_np, atoi, environ, geteuid,
+     * gettimeofday, mach_errors) genuinely have NO real implementation
+     * anywhere in this project yet (confirmed absent from every archive
+     * via the same nm sweep) -- unlike the 20 just closed, these need
+     * real new work: some are narrow (atoi/geteuid/gettimeofday/environ
+     * are plain libc/syscall wrappers this project has working patterns
+     * for elsewhere), some are a genuinely deeper port (the
+     * mach_eventlink_* family is real XNU IPC machinery with no existing
+     * userland wrapper anywhere in this tree yet). Real next step:
+     * continue the same "check existing archives first, selectively
+     * extract or write a narrow real reproduction, verify via nm, real
+     * QEMU reboot" loop this pass already used successfully ~15 times,
+     * until the boot reaches a shell prompt with syslogd actually
+     * running. See docs/daemon-roadmap.md's Phase 6.7 section for the
+     * full real writeup and the exact current undefined-symbol list.
+     * syslogd.macho is still built and installed at /usr/sbin/syslogd,
+     * just not yet exec'd automatically. */
     put("\ninit: pid 1 up, forking single-user shell\n");
 
     for (;;) {
