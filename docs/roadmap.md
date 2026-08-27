@@ -692,26 +692,36 @@ need a real implementation later:
   exist until real threading does (Phase 7.5's pthread ceiling) -- scope
   would be limited to single-thread-honest `dispatch_once`/`dispatch_sync`/
   kqueue-backed dispatch sources.
-- **Phase 6.7 (Mach IPC completion + `notifyd`), 6.8 (`launchd`+XPC),
-  Phase 9 (CoreFoundation), Phase 10 (Tier 2/3 daemons: real `configd`,
-  `DiskArbitration`, `mDNSResponder`, `PowerManagement`) -- all new
-  2026-08-22, fully scoped, not started.** User has confirmed
-  `dyld`/`launchd`/XPC are real long-term intents, not permanently out of
-  scope. Full daemon inventory (verified against apple-oss-distributions,
-  which is/isn't actually open source, real dependency tiers), phasing
-  rationale, and Phase 6.8's real caveats all live in
-  `docs/daemon-roadmap.md` -- read that before starting any of these.
-  Phase 6.8 revised same day: use
-  [PureDarwin/XPC](https://github.com/PureDarwin/XPC) (`launchd`+`libxpc`
-  combined) rather than plain `apple-oss-distributions/launchd` alone --
-  verified directly against the repo, not assumed from its name; it's
-  still the same 2014/OS X 10.9.5-vintage `launchd` base with an
-  incomplete, unmaintained (archived 2026-07-18), no-explicit-license
-  third-party XPC skeleton layered on top, not a vintage-matched or
-  complete solution -- see the daemon roadmap for the full real
-  assessment before starting that phase. Immediate actionable next step
-  that needs none of this new infrastructure: Phase 5.5 items 3-4
-  (`cron`/`ntpd`) above.
+- **Phase 9 (CoreFoundation): DONE 2026-08-26** -- real Apple CF (via
+  swift-corelibs-foundation, since apple-oss-distributions/CF is dead/
+  stale) ported and wired into launchd's trial link; ICU confirmed not
+  needed on launchd's actual CF call path. ~150 honest remaining gaps
+  (ICU, ASL, `libSystem.B.dylib` export-parity debt) are scope decisions,
+  not unstarted work -- see `docs/backlog.md` item d7 for the full
+  categorized list.
+- **Phase 6.8 (`launchd`+XPC via PureDarwin): critical-path gap-closing
+  pass DONE 2026-08-26**, real port itself still open. Source is
+  PureDarwin/PureDarwin's own `next` branch (a current, actively
+  maintained monorepo that already boots real launchd on this exact SoC
+  -- see `docs/daemon-roadmap.md`'s Phase 6.8 section for the full
+  source-discovery story superseding the earlier, frozen
+  `PureDarwin/XPC` reference). Real libdispatch ported and converted to
+  a dylib; `launchd`'s own daemon source (`core.c`/`launchd.c`) reached a
+  real trial-compile with `core.c` down to a handful of distinct errors;
+  a dedicated critical-path pass this session closed the userland
+  libc/Mach undefined-symbol gap from 183 to 109 (`docs/backlog.md` item
+  d6's "FINAL STATUS"). Remaining gaps are all categorized: genuine scope
+  walls (ICU, ASL), deprioritized BSM audit, `libSystem.B.dylib`
+  export-parity debt, and one confirmed genuinely-unimplemented feature
+  (multi-instance job-domain forwarding). Not yet attempted: the actual
+  PID-1-replacement daemon logic beyond the client-library trial-compile.
+- **Phase 6.7 (Mach IPC completion + `notifyd`), Phase 10 (Tier 2/3
+  daemons: real `configd`, `DiskArbitration`, `mDNSResponder`,
+  `PowerManagement`) -- scoped 2026-08-22, not started.** User has
+  confirmed `dyld`/`launchd`/XPC are real long-term intents. Full daemon
+  inventory, phasing rationale, and per-phase caveats live in
+  `docs/daemon-roadmap.md`. Immediate actionable next step that needs
+  none of this infrastructure: Phase 5.5 items 3-4 (`cron`/`ntpd`) above.
 - **Phase 7 (usable OS)**: none of 7a-7d started. 7a (DNS via `libresolv`)
   is small and clean once Phase 6 lands. 7b (`sshd` via OpenSSH) is
   blocked on real crypto beyond SHA-2 (Phase 7.5) -- concretely, on

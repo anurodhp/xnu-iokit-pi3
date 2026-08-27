@@ -2343,26 +2343,25 @@ a significant, carefully-staged migration, not a drop-in. Keep the custom
 PID-1 as a fallback boot path during the transition (matches this
 project's general caution around destructive/hard-to-reverse changes).
 
-## Phase 9 (CoreFoundation) -- new
+## Phase 9 (CoreFoundation) -- DONE 2026-08-26
 
-Unlocks every Tier 2 daemon (`configd`, `DiskArbitration`,
-`mDNSResponder`'s daemon shell). Real repo:
-[apple-oss-distributions/CF](https://github.com/apple-oss-distributions/CF).
-Flagged by this document's own research pass as comparable in scope to
-everything this project has built so far, combined -- CFRunLoop, the
-whole CF type system (CFString/CFDictionary/CFArray/CFNumber/etc. with
-their toll-free-bridging assumptions), property-list serialization, and
-CFRunLoop's own real integration with Mach ports (`CFRunLoopSource`'s
-Mach-port-backed variant) and `dyld`/`libdispatch` (CFRunLoop and GCD's
-main queue are intertwined in real Darwin). Do not start this without
-Phase 6.5 (dyld) and Phase 6.6 (libdispatch, at least the single-thread-
-honest subset) already real -- CF assumes both exist underneath it.
-
-No further sub-scoping attempted here; this needs its own dedicated
-planning pass once Phases 6.5/6.6 are real and CF's actual source has
-been surveyed the way this document surveyed the daemons themselves (real
-tag confirmation against `macos-112`, real dependency-by-file audit, not
-assumed from reputation).
+Real repo used: [swift-corelibs-foundation](
+https://github.com/apple/swift-corelibs-foundation), not
+apple-oss-distributions/CF -- that repo was confirmed dead/stale (last
+real CF commit predates this project's macos-112 manifest era), so this
+followed the project's own "Apple first, real equivalent upstream
+second" rule. 25+ real Apple CF source files compiled and archived
+(`Base`/`Collections`/`NumberDate`/`String`/`Parsing`/`Error`/`URL`
+subprojects), one small upstream patch (`CFPriv.h` bool/Boolean prototype
+conflict, applied via `third_party-patches/swift-corelibs-foundation.patch`),
+wired into launchd's real dynamic trial link. GNUstep fallback was never
+needed. ICU confirmed NOT required for launchd's actual CF usage (checked
+`pd_launchd_plist.c` line by line -- it never touches CFLocale/
+CFCharacterSet/collation/CFNumberFormatter). ~150 honest remaining gaps
+(ICU's CFUniChar/CFCharacterSet/collation/CFNumberFormatter family, ASL
+logging -- confirmed never open-sourced by Apple, `libSystem.B.dylib`
+export-parity debt) are real, categorized scope decisions, not unstarted
+work -- full detail in `docs/backlog.md` item d7.
 
 ## Phase 10 (Tier 2/3 daemons) -- new
 
