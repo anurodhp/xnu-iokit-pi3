@@ -213,6 +213,25 @@ mkdir -p third_party
 #     `AppleLanguageBreakFactory` without it. Not yet built for the
 #     target; this pin exists so the source is reproducible from a fresh
 #     clone while that build work proceeds.
+#   - libxml2 (CoreFoundation's CFXMLInterface.c, docs/backlog.md item
+#     d7's full-sweep pass): same `macos-112` manifest method --
+#     `git ls-tree macos-112 -- libxml2` == commit
+#     5809e9164980d9e3bd6bb206ca8d00acb65514aa == tag `libxml2-34.9`
+#     (confirmed via `git ls-remote --tags`), a real, unmodified Apple
+#     fork of real upstream libxml2 2.9.4. Ships a real pregenerated
+#     `Pregenerated Files/include/config.h` (a real `configure` run's
+#     output, checked in for Apple's own Xcode-based iOS/macOS build) --
+#     unlike ICU, no need to run `configure` at all, matching this
+#     project's usual from-scratch clang-per-file-loop template instead
+#     of ICU's own build system. The Xcode 12 iPhoneOS SDK's own bundled
+#     libxml2 headers are the exact same real version (2.9.4, confirmed
+#     via `LIBXML_DOTTED_VERSION`), so no header-version mismatch either.
+#     What actually blocked `CFXMLInterface.c` before this pin existed
+#     was never libxml2 at all -- a real, tiny, unrelated bug in
+#     `swift-corelibs-foundation` itself (`CFXMLInterface.h` declares 3
+#     functions returning `Boolean`, `CFXMLInterface.c` defines them
+#     returning `bool`), fixed via a second commit in the existing
+#     `swift-corelibs-foundation.patch`.
 #   - PureDarwin (Phase 6.8, launchd+XPC source): sparse-checked-out below
 #     (same pattern as llvm-project), NOT the generic REPOS loop -- see
 #     that block's own comment for why this superseded the originally
@@ -276,6 +295,7 @@ OpenSSH|https://github.com/apple-oss-distributions/OpenSSH.git|OpenSSH-240.40.1|
 Libnotify|https://github.com/apple-oss-distributions/Libnotify.git|Libnotify-279.40.4|
 BSM|https://github.com/apple-oss-distributions/BSM.git|bsm-13|
 ICU|https://github.com/apple-oss-distributions/ICU.git|ICU-66109|ICU.patch
+libxml2|https://github.com/apple-oss-distributions/libxml2.git|libxml2-34.9|
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch; do

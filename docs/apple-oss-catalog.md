@@ -199,7 +199,7 @@ scripting-language runtime as a goal in itself):
   them — natural Phase 6c/Tier-C candidates once basic `ping`/`netstat`/
   `arp`/`route` from the already-pinned `network_cmds` land first).
 - **Misc format/data libraries not currently needed**: `expat`,
-  `libxml2`, `libxslt`, `BerkeleyDB`,
+  `libxslt`, `BerkeleyDB`,
   `iodbc`, `libpcap` (only useful once `tcpdump` is wanted), `bzip2`,
   `zip` (zlib itself is already vendored via `third_party/u-boot`'s copy
   and working), `xar`, `hunspell`, `CrackLib`.

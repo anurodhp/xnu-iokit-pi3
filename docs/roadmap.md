@@ -725,19 +725,33 @@ need a real implementation later:
   CFBundle/CFPlugIn family all compile clean on this project's existing
   syscall layer, plus the DateFormatter family (unblocked now that
   Locale/Calendar exist), CFURLComponents, CFAttributedString, and
-  more. CF is now 94 real files (up from the original 17), with only
-  five genuine, verified exclusions left (GUI-only CFUserNotification,
-  libxml2-dependent CFXMLInterface, a real multi-part CFPreferences.c
-  gap, libcurl-dependent CFURLSessionInterface, Windows-only
-  CFWindowsUtilities). Gap count for this trial link is now 101 symbol
-  groups (up from 83, not a regression -- the newly-included
-  subsystems bring their own real, previously-invisible transitive
-  syscall dependencies -- Mach ports, BSD sockets, mk_timer, pthread
-  attrs -- none of which exist in any archive this project has built
-  yet, confirmed via `nm`, real follow-up work not chased this
-  session). `docs/backlog.md` item d7's own "Real ICU port started"
-  entry has the full writeup for the port, the CF wiring, and the
-  full-sweep pass.
+  more. CF is now 95 real files (up from the original 17). Gap count
+  for this trial link is 100 symbol groups (up from 83 pre-sweep, not a
+  regression -- the newly-included subsystems bring their own real,
+  previously-invisible transitive syscall dependencies -- Mach ports,
+  BSD sockets, mk_timer, pthread attrs -- none of which exist in any
+  archive this project has built yet, confirmed via `nm`, real
+  follow-up work not chased this session).
+- **libxml2 DONE 2026-08-27**: investigated whether libxml2/curl were
+  portable enough to close two of the full-sweep's five remaining
+  exclusions; libxml2 was a real, easy win (real pregenerated
+  `config.h` in Apple's own checkout, no `configure` needed unlike
+  ICU -- `tools/userland_staging/build_libxml2.sh`, 45 files, real
+  per-library dylib), closing `CFXMLInterface.c` with **zero new gaps**
+  introduced. The earlier blocker was never really libxml2 at all -- a
+  tiny, unrelated `Boolean`/`bool` mismatch bug in this exact
+  swift-corelibs-foundation checkout. curl was investigated and NOT
+  pursued: Apple's real iOS build needs closed-source Secure Transport
+  for TLS (this project has no TLS stack and isn't adding one per the
+  standing corecrypto/AES-only crypto scope decision), and real
+  networking would need socket syscalls this project doesn't have
+  either -- a much bigger, murkier lift for a smaller real payoff. CF
+  is down to **four** genuine, verified exclusions (GUI-only
+  CFUserNotification, a real multi-part CFPreferences.c gap,
+  libcurl-dependent CFURLSessionInterface, Windows-only
+  CFWindowsUtilities). `docs/backlog.md` item d7's own "Real ICU port
+  started" entry has the full writeup for the port, the CF wiring, the
+  full-sweep pass, and the libxml2 completion.
 - **Phase 6.8 (`launchd`+XPC via PureDarwin): critical-path gap-closing
   pass DONE 2026-08-26**, real port itself still open. Source is
   PureDarwin/PureDarwin's own `next` branch (a current, actively

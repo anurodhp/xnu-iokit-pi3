@@ -35,12 +35,6 @@
 #   API: kCFUserNotificationIconURLKey/SoundURLKey/LocalizationURLKey
 #   are hard `unavailable: not available on iOS` SDK errors. This
 #   project has no GUI to show a user-notification dialog on anyway.
-# - CFXMLInterface.c (Parsing.subproj): real libxml2-backed XML tree
-#   API (conflicting-types errors against a libxml2 version mismatch).
-#   Not needed regardless -- CFPropertyList.c's own XML plist parser
-#   (_CFPropertyListCreateFromUTF8Data) is self-contained, and this
-#   project has already decided against libxml2 entirely (see
-#   docs/apple-oss-catalog.md).
 # - CFPreferences.c / CFXMLPreferencesDomain.c (Preferences.subproj):
 #   real, multi-part gap -- `gethostuuid` marked unavailable on iOS
 #   (guarded by `#if TARGET_OS_MAC`, which is true for iOS too --
@@ -58,6 +52,19 @@
 #   against libcurl entirely (see docs/apple-oss-catalog.md).
 # - CFWindowsUtilities.c (Base.subproj): Windows-only, structurally
 #   inapplicable to a Darwin target.
+#
+# CFXMLInterface.c (Parsing.subproj) ADDED 2026-08-27: the earlier
+# "conflicting types" compile failure was never a real libxml2
+# dependency at all -- a real, tiny, unrelated bug in this exact
+# swift-corelibs-foundation checkout (CFXMLInterface.h declares 3
+# functions returning `Boolean`, CFXMLInterface.c defines them
+# returning `bool`), fixed via a second commit in the existing
+# swift-corelibs-foundation.patch. This project does have a real
+# libxml2 now (third_party/libxml2, tag libxml2-34.9, matching both the
+# macos-112 manifest and the Xcode 12 iPhoneOS SDK's own bundled
+# headers exactly -- real upstream libxml2 2.9.4 either way) --
+# tools/userland_staging/build_libxml2.sh builds it as a real per-
+# library dylib, linked in below.
 #
 # Real fixes discovered getting the original 17 files to compile (all
 # documented at point of use below): a real upstream bool/Boolean
@@ -120,6 +127,10 @@ if [ ! -f "$ICU_LIB/libicuuc.dylib" ]; then
     echo "error: $ICU_LIB/libicuuc.dylib not found -- run build_icu_host.sh then build_icu_target.sh first" >&2
     exit 1
 fi
+if [ ! -f "$OUT/system/libxml2.dylib" ]; then
+    echo "error: $OUT/system/libxml2.dylib not found -- run build_libxml2.sh first" >&2
+    exit 1
+fi
 
 # Real header-staging step, replicating what CoreFoundationAddFramework
 # .cmake's add_framework() does at build time for the real CMake build
@@ -176,6 +187,7 @@ FILES=(Base.subproj/CFBase.c Base.subproj/CFRuntime.c Base.subproj/CFUtilities.c
     StringEncodings.subproj/CFStringEncodingDatabase.c StringEncodings.subproj/CFICUConverters.c \
     StringEncodings.subproj/CFPlatformConverters.c \
     Parsing.subproj/CFPropertyList.c Parsing.subproj/CFBinaryPList.c Parsing.subproj/CFOldStylePList.c \
+    Parsing.subproj/CFXMLInterface.c \
     Error.subproj/CFError.c URL.subproj/CFURL.c URL.subproj/CFURLComponents.c \
     URL.subproj/CFURLComponents_URIParser.c URL.subproj/CFURLAccess.c \
     Locale.subproj/CFLocale.c Locale.subproj/CFLocaleIdentifier.c Locale.subproj/CFLocaleKeys.c \
@@ -319,6 +331,7 @@ EOF
     "$OUT/cf_trial_main.o" \
     "$OUT/system/libdispatch.dylib" \
     "$ICU_LIB/libicuuc.dylib" "$ICU_LIB/libicui18n.dylib" "$ICU_LIB/libicudata.dylib" "$OUT/system/libc++.dylib" \
+    "$OUT/system/libxml2.dylib" \
     "$OUT/libmach_ipc.a" "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/libplatform.a" \
     "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
     "$OUT/libc_locale_for_stdio.a" \
@@ -370,6 +383,7 @@ echo "wrote $OUT/cf_libc_extras.a ($(ls "$OUT"/cf_libc_extras_obj/*.o | wc -l | 
     "$OUT/libc_string.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" "$OUT/libc_locale_for_stdio.a" \
     "$OUT/system/libdispatch.dylib" \
     "$ICU_LIB/libicuuc.dylib" "$ICU_LIB/libicui18n.dylib" "$ICU_LIB/libicudata.dylib" "$OUT/system/libc++.dylib" \
+    "$OUT/system/libxml2.dylib" \
     "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     2>"$OUT/cf_trial_dyn.err" \
     && echo "real DYNAMIC trial link: 0 undefined symbols -- fully closed" \

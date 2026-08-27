@@ -1243,17 +1243,14 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
     multi-part compile failure (see below) unlike everything else on
     the original stub list.
 
-    **Five real, verified (not assumed) exclusions remain**, each a
-    confirmed compile failure, not a scope guess:
+    **Five real, verified (not assumed) exclusions remain at this
+    point** (see below — 2026-08-27's libxml2 pass closed one of them,
+    `CFXMLInterface.c`, down to four), each a confirmed compile
+    failure, not a scope guess:
     - `CFUserNotification.c` (AppServices.subproj): real GUI
       alert-dialog API, `kCFUserNotificationIconURLKey`/`SoundURLKey`/
       `LocalizationURLKey` are hard `unavailable: not available on iOS`
       SDK errors. No GUI on this project's boot target regardless.
-    - `CFXMLInterface.c` (Parsing.subproj): real libxml2-backed XML
-      tree API, conflicting-types errors against a real libxml2 version
-      mismatch. Not needed regardless — `CFPropertyList.c`'s own XML
-      plist parser is self-contained, and this project has already
-      decided against libxml2 entirely (`docs/apple-oss-catalog.md`).
     - `CFPreferences.c` / `CFXMLPreferencesDomain.c`
       (Preferences.subproj): real, multi-part gap — `gethostuuid`
       marked unavailable on iOS behind a `#if TARGET_OS_MAC` guard that
@@ -1296,6 +1293,78 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
     the previously-documented, still-not-root-caused os_log/dispatch
     gap and the already-categorized libSystem.B.dylib export-parity/
     still-missing-everywhere buckets.
+
+    **libxml2 DONE 2026-08-27, closing `CFXMLInterface.c`** (one of the
+    five exclusions above — down to four now). Investigated whether
+    libxml2/curl were portable enough to close the last two real
+    external-dependency exclusions; libxml2 turned out to be a real,
+    easy win, curl a much bigger, murkier one (Apple's real iOS build
+    uses closed-source Secure Transport for TLS, which this project
+    doesn't have and isn't adding per the standing corecrypto/AES-only
+    crypto scope decision — `--without-ssl` would compile but real
+    networking needs socket syscalls this project doesn't have either,
+    so curl wasn't pursued). Pinned `libxml2-34.9` (matches both the
+    `macos-112` manifest and, confirmed via `LIBXML_DOTTED_VERSION`, the
+    Xcode 12 iPhoneOS SDK's own bundled headers exactly — real upstream
+    libxml2 2.9.4 either way). Unlike ICU, no need to run `configure` at
+    all: Apple's checkout ships a real pregenerated `Pregenerated
+    Files/include/config.h` (a real `configure` run's output, checked in
+    for their own Xcode-based build).
+
+    The earlier "conflicting types" compile failure blocking
+    `CFXMLInterface.c` was never a real libxml2 dependency at all — a
+    real, tiny, unrelated bug in this exact swift-corelibs-foundation
+    checkout (`CFXMLInterface.h` declares 3 functions returning
+    `Boolean`, `CFXMLInterface.c` defines them returning `bool`), fixed
+    via a second commit in the existing `swift-corelibs-foundation
+    .patch` (same category as that patch's first, already-existing
+    fix). `tools/userland_staging/build_libxml2.sh` builds real libxml2
+    as a per-library dylib (45 real source files, all compiling clean
+    with Apple's real pregenerated headers) linked into
+    `build_corefoundation.sh`'s dynamic trial link — introduced **zero
+    new gaps** there, confirmed via a real trial link before and after.
+
+    Real gaps found and fixed getting the dylib itself to link clean
+    (all in `build_libxml2.sh`'s own header comment): disabled
+    `LIBXML_HTTP_ENABLED`/`FTP_ENABLED` (real network transport code,
+    `nanohttp.c`/`nanoftp.c` — needs `socket`/`connect`/`bind`/
+    `getaddrinfo`/etc, the same real gap already documented for
+    `CFSocket.c` above) and `LIBXML_ZLIB_ENABLED`/`HAVE_ZLIB_H` (real
+    `gzopen`/`gzread`/etc compressed-I/O — this project's vendored
+    zlib has no `gzFile` family) by editing the *copied* pregenerated
+    headers, not Apple's checked-in files (same pattern
+    `build_icu_target.sh`'s own `DATASUBDIR` fix already used); two
+    more real `<mach-o/dyld_priv.h>` functions needed adding to the
+    existing compat stub (`dyld_get_program_sdk_version` +
+    `DYLD_MACOSX_VERSION_10_9`, a real, historically-stable constant
+    confirmed against an older real `apple-oss-distributions/dyld` tag
+    since this project's own pinned dyld-940 already replaced it);
+    `Libc/secure/{memmove,strncat,strncpy,stpncpy}_chk.c` (already-
+    established pattern, reused not reinvented); real `labs`/`rand_r`
+    (trivial, zero-risk, hand-implemented) and a real from-scratch
+    `log10()` (this project has never had any Libm — see
+    `cf_compat_headers/libm_compat.c`'s own header for the same `fmod`/
+    `pow` gap, reused unmodified here since libxml2's own real call
+    sites match those functions' existing documented scope) using a
+    real IEEE-754 exponent extraction + atanh-series mantissa
+    approximation, verified against real libm to ~1e-10 accuracy with a
+    standalone host-side test before being wired into the real build —
+    catching and fixing one real, self-inflicted bug along the way
+    (brace-initializing a union initializes its first member, not
+    whichever member matches the initializer's type; the fix assigns
+    `.bits` explicitly instead). `_time`/`_sched_yield` (real syscalls
+    with no wrapper anywhere in this project yet) were deliberately
+    deferred via the established per-symbol `-Wl,-U,<name>` mechanism
+    rather than implemented, matching this port's overall "defer real
+    syscall work, don't fake it" boundary. Also caught and fixed a real
+    build-script bug of its own: the first dylib link attempt produced
+    a "clean" but nearly-empty dylib (~33 symbols, none of libxml2's own
+    API) because `-force_load` was missing — without it, ld64's normal
+    archive semantics only pull `.a` members needed to satisfy an
+    already-outstanding reference, and nothing else in that link
+    actually called any real libxml2 function yet. Confirmed fixed via
+    `nm -g` showing real exports (`xmlParseFile`, `xmlNewDoc`,
+    `xmlDocGetRootElement`, etc, ~2000 total) after adding it.
 
 0a. **No AES implementation exists anywhere in this kernel — HARD
     PREREQUISITE for Phase 7b (`sshd`).** Filed explicitly 2026-08-21 so it
