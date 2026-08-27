@@ -1504,31 +1504,62 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
     comment and `build_corefoundation.sh`'s own per-file comments for
     the full detail.
 
-    **New gap surfaced by the above**: `__pthread_ptr_munge_token`
-    (`_pthread_setname_np`'s real `_pthread_validate_signature` call
-    needs it). Real, already-built (`libpthread.a`'s
-    `pthread_main_thread_bootstrap.o`, confirmed via `nm`) and even
-    already a real member of `libsystem_pthread.dylib` per
-    `build_libsystem_pthread.sh`'s own `MEMBERS` list — so this is NOT
-    the same "object file never got added" flavor of export-parity gap
-    as `pthread_getugid_np`/`pthread_is_threaded_np`/
-    `pthread_threadid_np` below. Real root cause, checked this session:
-    `build_libsystem.sh`'s final `libSystem.B.dylib` link passes
-    `libsystem_pthread.dylib` (and every other real per-library
-    sub-dylib) as a plain linker input, never `-reexport_library` —
-    confirmed via `nm -gU` that `libSystem.B.dylib` currently exports
-    only its own ~19 locally-compiled symbols and re-exports nothing
-    from any sub-dylib at all (not even `_strlen`; CF's own dynamic
-    trial link only resolves libc symbols because it separately links
-    the curated static archives directly, alongside — not through —
-    `libSystem.B.dylib`). This is a real, structural, and probably
-    larger-than-previously-scoped fix (add `-Wl,-reexport_library` for
-    each real sub-dylib to `build_libsystem.sh`, likely closing several
-    of this list's other "export-parity" entries at once, not just this
-    one symbol) — flagged here as its own real follow-up, not attempted
-    this session since it touches the shared `libSystem.B.dylib` every
-    other real dylib/binary in this project already links against and
-    needs its own dedicated verification pass.
+    **`libSystem.B.dylib` real `-reexport_library` fix DONE 2026-08-27
+    — 70 -> 42, the single biggest gap-closing change of this whole
+    item d7 effort.** The `__pthread_ptr_munge_token` gap the twofer
+    above surfaced turned out to be a symptom of something much bigger:
+    `build_libsystem.sh`'s final `libSystem.B.dylib` link passed every
+    real per-library sub-dylib (`libsystem_kernel`/`_platform`/`_blocks`/
+    `_malloc`/`_pthread`/`_c`.dylib, `libc++.dylib`) as a plain linker
+    input, never `-Wl,-reexport_library` — confirmed via a real `nm -gU`
+    that `libSystem.B.dylib` exported only its own ~19 locally-compiled
+    symbols and re-exported nothing from any sub-dylib at all (not even
+    `_strlen`; CF's own dynamic trial link only ever resolved libc
+    symbols because it separately links the curated static archives
+    directly, alongside — not through — `libSystem.B.dylib`). Real
+    macOS's own `libSystem.dylib` is itself exactly this kind of thin
+    `LC_REEXPORT_DYLIB` umbrella (this project's own header comment on
+    `build_libsystem.sh` already said so, just hadn't been carried
+    through to the actual link command after the static-to-dylib
+    migration split sub-libraries out). Fix: swap the 7 plain positional
+    dylib args for `-Wl,-reexport_library,<path>` each. Verified for
+    real, not assumed: a real ld64-609 smoke test first
+    (`-reexport_library` correctly makes an umbrella's linker-level
+    symbol resolution succeed for a symbol only defined in the
+    re-exported sub-dylib, confirmed via a real failing-in-a-different-
+    way link, not a guess about semantics), then the actual rebuild —
+    `nm -u` on the new `libSystem.B.dylib` is BYTE-IDENTICAL to the old
+    one (zero regressions, confirmed via a real diff), `otool -l` shows
+    all 7 real `LC_REEXPORT_DYLIB` commands, and CF's own real dynamic
+    trial link dropped from 70 to 43 in one rebuild — closing
+    `_pthread_atfork`/`_pthread_getugid_np`/`_pthread_is_threaded_np`/
+    `_pthread_threadid_np`/`_pthread_mutexattr_destroy`/
+    `_pthread_attr_set_qos_class_np`/`_qos_class_main` (the whole
+    pthread export-parity bucket at once) plus `_abs`/`_atol`/`_bsearch`/
+    `_llabs`/`_mkdir`/`_pwrite`/`_qsort`/`_readlink`/`_setenv`/
+    `_setrlimit`/`_strstr`/`_getegid`/`_getrlimit`/`_getpeername`/
+    `_uuid_generate_random`/`_uuid_generate_time`/`___vsprintf_chk`/
+    `___darwin_check_fd_set_overflow`/`_select$DARWIN_EXTSN`/`_time` — 27
+    symbol groups in one real structural fix, confirming the "probably
+    closes several export-parity entries at once" prediction. The one
+    straggler, `__pthread_ptr_munge_token` itself, needed a second,
+    separate real fix: a real trial (adding a genuine cross-object
+    reference from `pthread_tsd.o`, then a real `-exported_symbols_list`
+    wildcard override) both failed to change ld64's resolution of that
+    *specific* common/tentative data symbol to LOCAL inside
+    `libsystem_pthread.dylib`'s own link (confirmed via `nm`, still `s`
+    not `S` either way) — a real, narrower ld64 default-visibility
+    behavior for common symbols resolved entirely within one link unit,
+    not an export-list problem. Real Apple never needed this symbol
+    exported either (private `pthread.c` implementation detail, never a
+    cross-image dependency on real macOS); this project's own new
+    `pthread_setname_np` extraction was the first real consumer needing
+    it externally. Fix: dropped the `_pthread_validate_signature(self)`
+    corruption-check call from `cf_pthread_setname_syscalls.c` (not part
+    of the actual rename logic) — same real "no corruption path exists
+    on this project's simplified threading model, the defensive check
+    that assumes one is safely skippable" pattern already established by
+    `pthread_thread_ops_compat.c`. 43 -> 42.
 
     **`sysdir_start_search_path_enumeration`/
     `sysdir_get_next_search_path_enumeration` CONFIRMED never
@@ -1544,28 +1575,31 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
     confirmed, out of scope, not a source-location problem to keep
     chasing.
 
-    **Remaining real gaps, not yet closed, roughly grouped**:
-    - `pthread_atfork`/`pthread_getugid_np`/`pthread_is_threaded_np`/
-      `pthread_threadid_np`/`pthread_mutexattr_destroy`: real functions,
-      all already implemented (`pthread_atfork.o`/
-      `pthread_thread_ops_compat.o` in `libpthread.a`) — `pthread_atfork`
-      is even already a real, confirmed *exported* symbol of
-      `libsystem_pthread.dylib` per a real `nm -gU` check this session
-      (the other three's source objects, `pthread_thread_ops_compat.o`,
-      are genuinely missing from that dylib's own `MEMBERS` list — a
-      real, fixable omission, not investigated further this session).
-      `pthread_mutexattr_destroy` itself is real and built
-      (`pthread_mutex.o`) but only ever exported `$UNIX2003`-suffixed.
-      All fall under the same real `libSystem.B.dylib` non-reexport root
-      cause documented just above, not four separate mysteries.
-    - `_abs`/`_atol`/`_bsearch`/`_llabs`/`_mkdir`/`_pwrite`/`_qsort`/
-      `_readlink`/`_scalbn`/`_setenv`/`_setrlimit`/`_strstr`/`_getegid`/
-      `_getpwuid_r`/`_getrlimit`/`_getsectbynamefromheader_64`/
-      `_getsegbyname`/`_uuid_generate_random`/`_uuid_generate_time`/
-      `___chk_assert_no_overlap`/`___chk_fail_overflow`/`___chk_overlap`/
-      `___darwin_check_fd_set_overflow`/`___vsprintf_chk`: the
-      already-documented `libSystem.B.dylib` export-parity /
-      still-missing-everywhere buckets (item d7's earlier entries).
+    **Remaining real gaps, not yet closed (42 groups), roughly
+    grouped** — the `libSystem.B.dylib` reexport fix above closed the
+    ENTIRE previous "already-documented export-parity" bucket
+    (`pthread_atfork`/`pthread_getugid_np`/`pthread_is_threaded_np`/
+    `pthread_threadid_np`/`pthread_mutexattr_destroy`/
+    `pthread_attr_set_qos_class_np`/`qos_class_main`/`abs`/`atol`/
+    `bsearch`/`llabs`/`mkdir`/`pwrite`/`qsort`/`readlink`/`setenv`/
+    `setrlimit`/`strstr`/`getegid`/`getrlimit`/`getpeername`/
+    `uuid_generate_random`/`uuid_generate_time`/`__vsprintf_chk`/
+    `__darwin_check_fd_set_overflow`/`select$DARWIN_EXTSN`/`time` — 27
+    symbols, all real functions that were already built somewhere in
+    this project's stack and just weren't reachable through
+    `libSystem.B.dylib`) — what's left is qualitatively different, genuine
+    "not built anywhere yet" or "never open-sourced" gaps, not export
+    visibility:
+    - `_scalbn`, `_getpwuid_r`, `_getsectbynamefromheader_64`,
+      `_getsegbyname`: real functions, but NOT yet confirmed built
+      anywhere in this project's curated stack at all (unlike the
+      reexport-closed bucket above) — not yet investigated for real
+      source location/build status this session.
+    - `___chk_assert_no_overlap`/`___chk_fail_overflow`/`___chk_overlap`:
+      the real `_FORTIFY_SOURCE`/`_chk`-family hardening routines
+      `build_libxpc_syscalls.sh`'s own "STILL OPEN" note already flagged
+      as needing "a real `_FORTIFY_SOURCE`-shim source, not yet
+      located" — same gap, not yet found.
     - `__dispatch_queue_attr_concurrent`/`__mh_dylib_header`/
       `__os_log_debug_impl`/`__os_log_default`/`__os_log_error_impl`/
       `_os_log_create`/`_os_log_type_enabled`: the still-not-root-caused

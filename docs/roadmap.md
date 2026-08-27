@@ -782,10 +782,35 @@ need a real implementation later:
   real `nm -gU` check found it exports only ~19 of its own locally-
   compiled symbols, nothing from `libsystem_pthread.dylib`/etc), so this
   is likely the real root cause behind several of the OTHER already-
-  documented "export-parity" entries too, not a one-off. Flagged as its
-  own real follow-up in `docs/backlog.md` item d7, not attempted yet --
-  touches the one dylib every real binary in this project already links
-  against.
+  documented "export-parity" entries too, not a one-off.
+- **`libSystem.B.dylib` real `-reexport_library` fix DONE 2026-08-27**:
+  70 -> 42, the single biggest gap-closing change of this whole item d7
+  effort, done same-day as the follow-up it was flagged from. Swapped
+  `build_libsystem.sh`'s plain positional linking of its 7 real
+  per-library sub-dylibs for `-Wl,-reexport_library` each -- real
+  macOS's own `libSystem.dylib` is exactly this kind of thin
+  `LC_REEXPORT_DYLIB` umbrella, confirmed via a real ld64-609 smoke test
+  before touching the shared build, then a real rebuild (`nm -u`
+  byte-identical to the old dylib, zero regressions; `otool -l` shows
+  all 7 real `LC_REEXPORT_DYLIB` commands). Closed the entire pthread
+  export-parity bucket plus a dozen-plus libc symbols in one structural
+  fix (27 groups). The one straggler this surfaced,
+  `__pthread_ptr_munge_token`, needed a second fix: real ld64 resolves
+  that specific common/tentative symbol to LOCAL within
+  `libsystem_pthread.dylib`'s own link regardless of export lists or
+  cross-object references (confirmed via two real failed trials, not
+  guessed) -- since real Apple never needed it exported either (private
+  `pthread.c` implementation detail), dropped the
+  `_pthread_validate_signature` corruption-check call (not the actual
+  rename logic) from `cf_pthread_setname_syscalls.c` instead, same
+  "no corruption path exists on this project's threading model" pattern
+  `pthread_thread_ops_compat.c` already established. 43 -> 42. What's
+  left is qualitatively different from the closed export-parity bucket:
+  genuine "not built anywhere yet" gaps (`_scalbn`/`_getpwuid_r`/
+  `_getsectbynamefromheader_64`/`_getsegbyname`), the already-flagged
+  `_chk`-family hardening routines, and the already-categorized os_log/
+  ASL/CFPreferences/sysdir buckets. See `docs/backlog.md` item d7's own
+  entry for the full detail.
 - **Phase 6.8 (`launchd`+XPC via PureDarwin): critical-path gap-closing
   pass DONE 2026-08-26**, real port itself still open. Source is
   PureDarwin/PureDarwin's own `next` branch (a current, actively

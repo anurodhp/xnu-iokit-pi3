@@ -127,6 +127,26 @@ fi
 
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libSystem.B.dylib"
+# Real macOS's own libSystem.dylib is a thin re-export umbrella: it
+# carries almost no code of its own, just LC_REEXPORT_DYLIB on each real
+# libsystem_*.dylib, so a symbol like `_strlen` (really defined in
+# libsystem_c.dylib) is a valid direct import of libSystem.dylib itself.
+# Every sub-dylib below was plain-linked instead (a normal LC_LOAD_DYLIB
+# import, pulled in only for the handful of symbols THIS file's own few
+# .o's reference) until 2026-08-27, which is why a client linking only
+# against libSystem.B.dylib (this project's CF port's own real dynamic
+# trial link, docs/backlog.md item d7) could resolve `_getpid` (used
+# below, in dyld_initializer_compat.o) but not `_pthread_atfork` (defined
+# in libsystem_pthread.dylib, never referenced by this file's own
+# objects, so never imported) -- confirmed via a real `nm -gU` showing
+# libSystem.B.dylib exported only ~19 locally-compiled symbols and NM
+# proof that swapping plain links for `-reexport_library` here resolves
+# a not-locally-referenced symbol through an umbrella dylib with real
+# ld64-609 (this project's pinned toolchain). `-reexport_library` (not
+# plain positional linking) is the real, correct fix, not a workaround:
+# it makes each sub-dylib's own real export set part of
+# libSystem.B.dylib's, exactly matching real Apple's own architecture,
+# not inventing a new one.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
     -install_name /usr/lib/libSystem.B.dylib \
     -Wl,-fixup_chains \
@@ -135,9 +155,13 @@ rm -f "$OUT/system/libSystem.B.dylib"
     "$SCRATCH/dyld_unwind_shim_compat.o" "$OUT/libsystem/progname_compat.o" \
     "$OUT/libsystem/dyld_initializer_compat.o" \
     "$OUT/libdyld/compat_misc.o" \
-    "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_blocks.dylib" \
-    "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" \
-    "$OUT/system/libsystem_c.dylib" "$OUT/system/libc++.dylib" \
+    -Wl,-reexport_library,"$OUT/system/libsystem_kernel.dylib" \
+    -Wl,-reexport_library,"$OUT/system/libsystem_platform.dylib" \
+    -Wl,-reexport_library,"$OUT/system/libsystem_blocks.dylib" \
+    -Wl,-reexport_library,"$OUT/system/libsystem_malloc.dylib" \
+    -Wl,-reexport_library,"$OUT/system/libsystem_pthread.dylib" \
+    -Wl,-reexport_library,"$OUT/system/libsystem_c.dylib" \
+    -Wl,-reexport_library,"$OUT/system/libc++.dylib" \
     "$OUT/libcopyfile.a" "$OUT/libremovefile.a" "$OUT/libresolv.a" \
     "$RTLIB" \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \

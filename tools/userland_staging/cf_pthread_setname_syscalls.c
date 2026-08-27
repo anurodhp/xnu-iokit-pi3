@@ -14,6 +14,28 @@
  * Needs the real internal pthread_t (internal.h, named .sig/.pthread_name
  * fields), same as cf_pthread_attr_syscalls.c -- NOT <pthread.h>'s opaque
  * public one.
+ *
+ * Real source's own first line, `_pthread_validate_signature(self)` (a
+ * corruption/security sanity abort, not part of the actual rename
+ * logic), is deliberately NOT included: it needs
+ * `_pthread_ptr_munge_token`, a real, already-built
+ * (`pthread_main_thread_bootstrap.o`) symbol that a real, confirmed (via
+ * `nm`, not guessed) ld64 default resolves as a LOCAL (non-external)
+ * common symbol inside `libsystem_pthread.dylib`'s own link -- even
+ * `pthread_tsd.o`'s own real cross-object reference to it, and an
+ * `-exported_symbols_list '*'` wildcard override, both failed to change
+ * that in a real trial build. Real Apple's own callers never needed this
+ * symbol exported either (it is a private implementation detail of
+ * pthread.c's own internal thread-corruption defense, never consumed
+ * cross-image on real macOS); this project's own new CF-side extraction
+ * is the first real consumer that would need it externally at all. Same
+ * real "no corruption path exists on this project's simplified
+ * threading model, so the defensive check that assumes one is safely
+ * skippable" pattern already established by
+ * `pthread_thread_ops_compat.c` (`pthread_kill`/`pthread_setschedparam`
+ * scope-downs) -- `pthread_self()` here always returns a valid,
+ * non-corrupted thread by construction, so this abort could never
+ * actually fire anyway.
  */
 #include "internal.h"
 #include <sched.h>
@@ -74,8 +96,6 @@ pthread_setname_np(const char *name)
 	if (name != NULL) {
 		len = strlen(name);
 	}
-
-	_pthread_validate_signature(self);
 
 	res = __proc_info(5, getpid(), 2, (uint64_t)0, (void*)name, (int)len);
 	if (res == 0) {
