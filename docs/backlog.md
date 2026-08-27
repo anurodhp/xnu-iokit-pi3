@@ -1266,10 +1266,47 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
       that gap alone since it calls into `CFPreferences.c`'s own real
       functions.
     - `CFURLSessionInterface.c` (URL.subproj): real libcurl dependency
-      (`curl/curl.h` not found) — already decided against
-      (`docs/apple-oss-catalog.md`).
+      (`curl/curl.h` not found). No `CFRuntimeClass` and nothing else
+      in the checkout references its symbols (unlike
+      `CFUserNotification.c` above, which needed a real stub) — a real
+      libcurl port doesn't just close a compile gap, it's a
+      **prerequisite for any real `NSURLSession`-style networking at
+      all**, tracked as real future work below, not stubbed, since
+      there's genuinely nothing to stub.
     - `CFWindowsUtilities.c` (Base.subproj): Windows-only, structurally
       inapplicable.
+
+    **libcurl investigated 2026-08-27, real future-work item filed, not
+    pursued this pass**: Apple did open-source it
+    (`apple-oss-distributions/curl`, `macos-112` pins `curl-121.40.2`,
+    confirmed via `git ls-remote`/manifest same as every other pin).
+    Real, hard wall found before any build attempt: Apple's own real
+    iOS/macOS build (`README.APPLE`) configures with `--with-darwinssl`
+    (Secure Transport) for TLS — closed-source, this project has no
+    equivalent, and per the standing crypto-scope decision (P2 item 0a)
+    real crypto work here goes through corecrypto/AES, not
+    OpenSSL/LibreSSL/etc, so swapping in a different TLS backend isn't
+    in scope either. `--without-ssl` would let curl *compile* (real,
+    standard, supported configure option), but real HTTP networking at
+    runtime needs `socket`/`connect`/`bind`/`getaddrinfo`/etc — the
+    exact same real BSD-socket-syscall gap already documented above for
+    `CFSocket.c`/libxml2's own disabled `nanohttp.c`, which this project
+    has no wrapper for anywhere yet. Net assessment: building curl now
+    would only close one more *compile-time* file (mirroring
+    libxml2/`CFXMLInterface.c`'s own "just needs the library to exist"
+    situation), not enable any real functioning network client — a
+    real, substantial, separate lift (implement real socket syscalls,
+    then decide on a real TLS backend) for a much smaller immediate
+    payoff than libxml2 had. **Real prerequisite order for whoever picks
+    this up**: (1) real BSD socket syscall wrappers in userland libc
+    (needed by `CFSocket.c`/`CFRunLoop.c` too, so likely worth doing
+    once for both consumers, not curl-specific), (2) a real TLS backend
+    decision (LibreSSL/BoringSSL/mbedTLS are real, portable,
+    non-corecrypto options if a from-scratch TLS stack is ever wanted;
+    `--without-ssl` HTTP-only curl is a smaller intermediate step that
+    needs only (1)), (3) then a real `build_libcurl.sh` following
+    `build_libxml2.sh`'s own template (check for a pregenerated
+    `config.h` first, same as both ICU and libxml2 had).
 
     **Real gap count for this trial link is now 101 symbol groups**
     (up from 83, not down) — an honest tradeoff, not a regression: the
