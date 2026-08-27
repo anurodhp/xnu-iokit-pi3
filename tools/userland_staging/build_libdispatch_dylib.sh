@@ -61,9 +61,22 @@
 # libsystem_pthread.dylib/etc, once those actually implement the missing
 # symbols for real) is the same follow-up as the duplicate-global-state
 # fix above, not a separate task.
+#
+# Real fix 2026-08-27 (found bringing up syslogd): `__os_semaphore_create`/
+# `__os_semaphore_dispose` used to be deferred here as if they were
+# external Mach-loader dependencies, but they're not -- real, small,
+# self-contained implementations already exist at
+# third_party/libplatform/src/os/semaphore.c (same class of omission as
+# shims/yield.c, see build_libdispatch_real.sh's own updated header),
+# just never compiled into libdispatch_real.a before. Real, still-
+# external Mach traps that file's own body needs instead:
+# `_semaphore_create`/`_semaphore_destroy` (real raw Mach traps, not
+# curated anywhere in this dylib's own dependency stack, unlike
+# `_semaphore_signal`/`_semaphore_wait`, which this script's own
+# `semaphore_wrap.o` extraction below already covers) -- deferred below,
+# same honest `-U` mechanism as every other real Mach trap in this list.
 UNDEF_SYMS=(
-    __dispatch_wait_for_enqueuer __os_semaphore_create __os_semaphore_dispose
-    __os_workgroup_tsd_cleanup __pthread_qos_class_encode
+    __pthread_qos_class_encode
     __pthread_qos_override_end_direct __pthread_qos_override_start_direct
     __pthread_set_properties_self __pthread_workloop_create __pthread_workloop_destroy
     __pthread_workqueue_override_reset __pthread_workqueue_override_start_direct
@@ -94,6 +107,8 @@ UNDEF_SYMS=(
     _mach_port_insert_right _mach_port_unguard _mach_port_kernel_object
     _mach_port_request_notification _mach_port_get_context _mach_port_set_context
     _mach_make_memory_entry_64
+    _geteuid
+    _semaphore_create _semaphore_destroy
 )
 UNDEF_FLAGS=()
 for s in "${UNDEF_SYMS[@]}"; do

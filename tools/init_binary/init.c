@@ -1710,35 +1710,62 @@ void init_main(void) {
      * until the real crash is fixed, not silently left in. crontab(1)
      * itself (a separate binary, no signal()/pidfile code in its own
      * -l/install paths) is unaffected by this and still installed. */
-    /* spawn_syslogd() DISABLED 2026-08-27 -- real, confirmed, OUT-OF-
-     * SCOPE-for-syslogd blocker: this project's own real, dynamically-
-     * linked syslogd.macho (tools/userland_staging/build_syslogd.sh)
-     * builds and links completely clean (every real symbol gap syslogd's
-     * own code has was closed -- mach_errors, atoi, mach_port_destruct/
-     * move_member, __sigaction/__sigtramp, a real UTC-only gmtime_r/
-     * timegm/mktime/ctime_r, getaddrinfo, and a dozen more, each with its
-     * own real fix documented in tools/userland_staging/syslogd_*_compat.c),
-     * and PID-1 successfully forks+execve()s it -- but dyld then crashes
-     * with "symbol not found in flat namespace '__dispatch_wait_for_
-     * enqueuer'", confirmed via real QEMU boot test. This is NOT a gap in
-     * syslogd or in this pass's own work: `nm -m` on this project's own
-     * already-built libc_build/system/libdispatch.dylib (Phase 6.6, a
-     * separate, earlier pass) shows that exact symbol as
-     * "(undefined) external ... (dynamically looked up)" INSIDE the
-     * dylib's own symbol table -- i.e. libdispatch.dylib itself has a
-     * real, pre-existing, latent internal gap (something in its own real
-     * dispatch_sync()/dispatch_barrier_sync() fast path calls a helper
-     * that was never included when this dylib was built), which no prior
-     * real consumer (dyld_test_exec.macho, launchd_trial.macho) ever
-     * actually exercised at runtime. Real next step, out of scope for
-     * this pass: root-cause and close the gap in
-     * tools/userland_staging/build_libdispatch_dylib.sh's own real file
-     * selection, then re-enable this call -- see docs/daemon-roadmap.md's
-     * Phase 6.7 section for the full writeup. Spawning a daemon that
-     * reliably crashes at startup on every boot is worse than not
-     * spawning it at all (same real precedent as spawn_cron() above) --
-     * syslogd.macho is still built and installed at /usr/sbin/syslogd,
-     * just not yet exec'd automatically. */
+    /* spawn_syslogd() STILL DISABLED 2026-08-27 -- real progress, real
+     * remaining blocker, not the same one anymore. The originally
+     * reported crash (dyld "symbol not found in flat namespace
+     * '__dispatch_wait_for_enqueuer'") IS root-caused and fixed for real:
+     * build_libdispatch_real.sh compiled shims/lock.c but never its real
+     * neighbor shims/yield.c (a genuine missing-file omission) --
+     * yield.c's real _dispatch_wait_for_enqueuer() now compiles into
+     * libdispatch_real.a/libdispatch.dylib, confirmed via nm -gU showing
+     * it real, defined, and exported, with the corresponding
+     * build_libdispatch_dylib.sh UNDEF_SYMS entry removed. Two more of
+     * the exact same class of bug were then found and fixed the same
+     * way, one real QEMU boot crash at a time: third_party/libplatform/
+     * src/os/semaphore.c (real _os_semaphore_create/_dispose/_signal/
+     * _wait, needed by shims/lock.c's semaphore cache, never compiled)
+     * and a real, narrow reproduction of workgroup.c's
+     * _os_workgroup_tsd_cleanup() (queue.c's own _libdispatch_init()
+     * references it unconditionally via pthread_key_create(), but the
+     * real defining file pulls in an unrelated <mach/work_interval.h>
+     * dependency chain not otherwise needed -- see
+     * tools/userland_staging/dispatch_workgroup_tsd_compat.c's own
+     * header for the full real justification for reproducing just this
+     * one function rather than compiling the whole file).
+     *
+     * The NEXT real QEMU boot crash after fixing those three
+     * ("__pthread_qos_class_encode") is a DIFFERENT class of gap, not
+     * another missing-file bug: this project's own build_libpthread.sh
+     * already made a real, deliberate, documented decision that
+     * third_party/libpthread/src/qos.c (which defines
+     * pthread_qos_class_encode and ~15 sibling QoS-class/pthread_attr_t
+     * functions -- pthread_attr_set_qos_class_np, qos_class_main,
+     * pthread_qos_max_parallelism, pthread_exit, pthread_attr_init/
+     * destroy/setdetachstate/setstacksize/setschedparam/setschedpolicy/
+     * getschedparam/getschedpolicy, pthread_get_stackaddr_np,
+     * pthread_sigmask, all confirmed real in libdispatch_real.a's own
+     * remaining undefined-symbol list) is "unreachable per the kernel
+     * constraint" and never built it. Confirmed by directly testing the
+     * alternative: forcing HAVE_PTHREAD_WORKQUEUE_QOS=0 (this project's
+     * own dispatch_compat_headers/config/config_ac.h already documents,
+     * and a real trial reproduced, that voucher.c has a hard
+     * `#if !HAVE_PTHREAD_WORKQUEUE_QOS #error` -- QoS-class SUPPORT is a
+     * genuine hard requirement here, distinct from the thread-pool
+     * implementation choice). This project's own dyld appears to bind
+     * eagerly at load time (real chained-fixups behavior, not lazy
+     * per-call binding) -- every one of the ~85 remaining deferred
+     * UNDEF_SYMS entries is a real candidate for the exact same class of
+     * crash, one per boot, regardless of whether the code path is ever
+     * actually exercised. Closing this needs either a bounded set of
+     * real, ABI-correct pthread_attr_t/QoS-class stand-ins (this
+     * project's own pthread_create() already has a real, working
+     * pthread_attr_t layout expectation that any new attr functions
+     * would need to match exactly -- not yet verified) or a real,
+     * scoped port of qos.c's non-kernel-dependent pieces -- genuine new
+     * work, not yet attempted. See docs/daemon-roadmap.md's Phase 6.7
+     * section for the full real writeup. syslogd.macho is still built
+     * and installed at /usr/sbin/syslogd, just not yet exec'd
+     * automatically. */
     put("\ninit: pid 1 up, forking single-user shell\n");
 
     for (;;) {

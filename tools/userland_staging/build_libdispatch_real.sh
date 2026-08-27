@@ -242,7 +242,55 @@ for f in event/event event/event_kevent event/workqueue; do
     "$CLANG" "${CFLAGS[@]}" "$DISPATCH/src/$f.c" -o "$OUT/dispatch_obj/$f.o"
 done
 "$CLANG" "${CFLAGS[@]}" "$DISPATCH/src/shims/lock.c" -o "$OUT/dispatch_obj/lock.o"
-echo "compiled: 19/19 core+data+event+lock dispatch files (zero errors)"
+# Real gap found 2026-08-27 while bringing up syslogd: this script
+# compiled lock.c but never its real neighbor, shims/yield.c -- a
+# genuine missing-file omission, not an architecture gap. yield.c's own
+# real _dispatch_wait_for_enqueuer() (a real arm64 WFE-based spin-wait,
+# used by dispatch_sync()'s real enqueuer-wait fast path) was silently
+# absent from libdispatch_real.a and, downstream, from libdispatch.dylib
+# -- confirmed via a real QEMU crash ("symbol not found in flat
+# namespace '__dispatch_wait_for_enqueuer'") the first time any real
+# consumer (syslogd.macho) actually exercised that code path at runtime.
+"$CLANG" "${CFLAGS[@]}" "$DISPATCH/src/shims/yield.c" -o "$OUT/dispatch_obj/yield.o"
+# Real gap, same class as yield.c above, found immediately after fixing
+# it (removing __dispatch_wait_for_enqueuer from build_libdispatch_dylib.sh's
+# UNDEF_SYMS surfaced the next real crash): shims/lock.c's real semaphore
+# cache (os_get_cached_semaphore()/os_put_cached_semaphore(), via
+# <os/semaphore_private.h>) calls the real os_semaphore_t primitive
+# (_os_semaphore_create/_os_semaphore_dispose/_os_semaphore_signal/
+# _os_semaphore_wait), whose real, small, self-contained implementation
+# lives at third_party/libplatform/src/os/semaphore.c -- NOT
+# third_party/libdispatch/src/semaphore.c (already compiled above, the
+# unrelated higher-level dispatch_semaphore_t public API) -- and was
+# never compiled anywhere in this project. Real, additional include
+# paths needed beyond this script's shared CFLAGS: $OUT/compat_include
+# (real System/arm/cpu_capabilities.h forwarder, already built by an
+# earlier tier) and $XNU/libkern (real os/atomic_private.h, genuinely
+# present in this project's own xnu-7195 fork). Deliberately NOT added to
+# the shared CFLAGS array above -- a real trial showed $XNU/libkern
+# shadows a DIFFERENT, incompatible os/atomic_private.h the other real
+# dispatch files above already resolve correctly through their own
+# existing search order, breaking once.c/queue.c/etc with real atomic-
+# macro type errors. This one file gets its own extended CFLAGS instead.
+# Needs real semaphore_create/semaphore_destroy (Mach traps, deferred via
+# build_libdispatch_dylib.sh's own -U mechanism -- not curated anywhere
+# in this dylib's own dependency stack) and real semaphore_signal/
+# semaphore_wait (already curated via that same script's existing
+# semaphore_wrap.o extraction).
+CFLAGS_OS_SEMAPHORE=("${CFLAGS[@]}" -I "$OUT/compat_include" -idirafter "$XNU/libkern")
+"$CLANG" "${CFLAGS_OS_SEMAPHORE[@]}" "$PLATFORM/src/os/semaphore.c" -o "$OUT/dispatch_obj/os_semaphore.o"
+echo "compiled: 21/21 core+data+event+lock+yield+os_semaphore dispatch files (zero errors)"
+
+# Real gap, same "always-run init reference, not the whole real file"
+# class as os_semaphore.o above, found immediately after fixing it:
+# queue.c's real _libdispatch_init() unconditionally references
+# _os_workgroup_tsd_cleanup (a pthread TSD destructor) -- see
+# dispatch_workgroup_tsd_compat.c's own header comment for the full real
+# finding (real function reproduced exactly, not the whole 1076-line
+# workgroup.c that defines it, which pulls in real <mach/work_interval.h>
+# dependencies this project doesn't otherwise need).
+"$CLANG" "${CFLAGS[@]}" dispatch_workgroup_tsd_compat.c -o "$OUT/dispatch_obj/workgroup_tsd_compat.o"
+echo "compiled: real dispatch_workgroup_tsd_compat.c (zero errors)"
 
 # real C++11 file (Blocks-runtime integration only, no ObjC -- see this
 # script's own HONEST SCOPE STATEMENT); needed the same explicit
