@@ -293,8 +293,17 @@ rm -f syslogd.macho
 
 otool -l syslogd.macho | grep -q LC_LOAD_DYLINKER || \
     echo "WARNING: no LC_LOAD_DYLINKER -- expected a real dynamic executable" >&2
-if nm -u syslogd.macho | grep -q .; then
-    echo "WARNING: undefined symbols present:" >&2
-    nm -u syslogd.macho >&2
+# plain nm -u is misleading for a real dyld-loaded executable: every
+# entry it lists includes symbols already bound to a specific sibling
+# dylib at link time (nm -m annotates these "(from libdispatch)" etc) --
+# those resolve at load time exactly like any other real Apple two-level-
+# namespace binding, not a gap. Only an entry nm -m marks "(dynamically
+# looked up)" is a real unresolved symbol (see build_libsystem_pthread.sh/
+# build_libdispatch_dylib.sh's own identical fix for the same
+# nm -u-vs-nm -m distinction).
+real_gaps=$(nm -m syslogd.macho 2>/dev/null | grep undefined | grep -v "(from " || true)
+if [ -n "$real_gaps" ]; then
+    echo "WARNING: real undefined symbols present (no sibling dylib resolves these):" >&2
+    echo "$real_gaps" >&2
 fi
 echo "wrote syslogd.macho"
