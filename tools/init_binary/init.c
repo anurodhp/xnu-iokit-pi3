@@ -1710,62 +1710,92 @@ void init_main(void) {
      * until the real crash is fixed, not silently left in. crontab(1)
      * itself (a separate binary, no signal()/pidfile code in its own
      * -l/install paths) is unaffected by this and still installed. */
-    /* spawn_syslogd() STILL DISABLED 2026-08-27 -- real progress, real
-     * remaining blocker, not the same one anymore. The originally
-     * reported crash (dyld "symbol not found in flat namespace
-     * '__dispatch_wait_for_enqueuer'") IS root-caused and fixed for real:
-     * build_libdispatch_real.sh compiled shims/lock.c but never its real
-     * neighbor shims/yield.c (a genuine missing-file omission) --
-     * yield.c's real _dispatch_wait_for_enqueuer() now compiles into
-     * libdispatch_real.a/libdispatch.dylib, confirmed via nm -gU showing
-     * it real, defined, and exported, with the corresponding
-     * build_libdispatch_dylib.sh UNDEF_SYMS entry removed. Two more of
-     * the exact same class of bug were then found and fixed the same
-     * way, one real QEMU boot crash at a time: third_party/libplatform/
-     * src/os/semaphore.c (real _os_semaphore_create/_dispose/_signal/
-     * _wait, needed by shims/lock.c's semaphore cache, never compiled)
-     * and a real, narrow reproduction of workgroup.c's
-     * _os_workgroup_tsd_cleanup() (queue.c's own _libdispatch_init()
-     * references it unconditionally via pthread_key_create(), but the
-     * real defining file pulls in an unrelated <mach/work_interval.h>
-     * dependency chain not otherwise needed -- see
-     * tools/userland_staging/dispatch_workgroup_tsd_compat.c's own
-     * header for the full real justification for reproducing just this
-     * one function rather than compiling the whole file).
+    /* spawn_syslogd() STILL DISABLED 2026-08-27 -- large, real, verified
+     * progress; boot not yet clean. This project's own dyld binds
+     * eagerly at load time (real chained-fixups behavior), so every
+     * symbol libdispatch.dylib's own object files reference must resolve
+     * before ANY consumer can load it, regardless of whether the code
+     * path is ever actually exercised -- each of the following was found
+     * as its own real QEMU boot crash, one at a time, and fixed for
+     * real (each confirmed via nm -gU as defined+exported in the
+     * rebuilt dylib, not assumed):
+     *   - shims/yield.c (real _dispatch_wait_for_enqueuer, the
+     *     originally-reported crash) -- compiled but never included by
+     *     build_libdispatch_real.sh, a genuine missing-file omission.
+     *   - libplatform/src/os/semaphore.c (real _os_semaphore_create/
+     *     _dispose/_signal/_wait) -- same class of omission.
+     *   - a real, narrow reproduction of workgroup.c's
+     *     _os_workgroup_tsd_cleanup (tools/userland_staging/
+     *     dispatch_workgroup_tsd_compat.c) -- the whole real file has an
+     *     unrelated <mach/work_interval.h> chain not otherwise needed.
+     *   - third_party/libpthread/src/qos.c, compiled in full via new
+     *     tools/userland_staging/build_libpthread_qos.sh ->
+     *     libc_build/libpthread_qos.a: this project's own
+     *     build_libpthread.sh header called qos.c "unreachable per the
+     *     kernel constraint", but that predates Phase 7.5's real
+     *     bsdthread_create/register port -- qos.c itself compiles clean;
+     *     only its __bsdthread_ctl-backed functions get a real, honest
+     *     kernel ENOTSUP at runtime (bsd_pthread_workq.c's own dated
+     *     comment confirms bsdthread_ctl itself is still a real ENOTSUP
+     *     stub), same accepted pattern as pthread_create() itself.
+     *   - real, verbatim/narrow reproductions of pthread_attr_init/
+     *     destroy/setdetachstate/setschedparam/setschedpolicy/
+     *     getschedparam/getschedpolicy/setstacksize, pthread_sigmask,
+     *     and pthread_workloop_create/destroy (tools/userland_staging/
+     *     libpthread_attr_compat.c) -- all real, self-contained field
+     *     accessors against the same real pthread_attr_t this project's
+     *     own pthread_create() already uses (third_party/libpthread/src/
+     *     types_internal.h). pthread_exit uses this project's own
+     *     already-real, already-used-for-this-purpose
+     *     __bsdthread_terminate() syscall wrapper directly, not a
+     *     pthread.c copy. pthread_get_stackaddr_np/pthread_setschedparam
+     *     stay honestly deferred -- real thread-list-tracking dependency
+     *     this project's own from-scratch pthread_create() may not
+     *     register threads into the same way, not yet verified safe to
+     *     copy.
+     *   - clock_gettime_nsec_np: real source needs a real comm-page read
+     *     (_COMM_PAGE_BOOTTIME_USEC) this project's own kernel fork may
+     *     not populate -- real, honest alternative instead
+     *     (gettimeofday for CLOCK_REALTIME, mach_absolute_time/
+     *     mach_timebase_info for CLOCK_MONOTONIC family, both already
+     *     real and linked), not a comm-page assumption.
+     *   - real mach_voucher.defs MIG regen (this project's own pinned
+     *     xnu-7195 genuinely has these routines, just never
+     *     regenerated) closes mach_voucher_attr_command/debug_info, plus
+     *     real forwarders to the regenerated kernelrpc fast path for
+     *     extract_attr_recipe and to this project's own already-real
+     *     mach_port_deallocate for mach_voucher_deallocate.
+     *   - host_get_special_port: real MIG routine, host_priv.defs
+     *     regenerated fresh (reusing the pre-built liblaunchd_core.a
+     *     copy hit a real stack-protector-flag mismatch,
+     *     ___chkstk_darwin, unresolved anywhere else in this project).
+     *   - host_create_mach_voucher: initially assumed a genuine version-
+     *     skew gap (confirmed absent from this project's own pinned
+     *     host_priv.defs) -- corrected: this project's own libmach_ipc.a
+     *     already has the real trap-based _kernelrpc_host_create_mach_
+     *     voucher from earlier work, just needed the plain-named public
+     *     forward (tools/userland_staging/libpthread_qos_compat.c).
      *
-     * The NEXT real QEMU boot crash after fixing those three
-     * ("__pthread_qos_class_encode") is a DIFFERENT class of gap, not
-     * another missing-file bug: this project's own build_libpthread.sh
-     * already made a real, deliberate, documented decision that
-     * third_party/libpthread/src/qos.c (which defines
-     * pthread_qos_class_encode and ~15 sibling QoS-class/pthread_attr_t
-     * functions -- pthread_attr_set_qos_class_np, qos_class_main,
-     * pthread_qos_max_parallelism, pthread_exit, pthread_attr_init/
-     * destroy/setdetachstate/setstacksize/setschedparam/setschedpolicy/
-     * getschedparam/getschedpolicy, pthread_get_stackaddr_np,
-     * pthread_sigmask, all confirmed real in libdispatch_real.a's own
-     * remaining undefined-symbol list) is "unreachable per the kernel
-     * constraint" and never built it. Confirmed by directly testing the
-     * alternative: forcing HAVE_PTHREAD_WORKQUEUE_QOS=0 (this project's
-     * own dispatch_compat_headers/config/config_ac.h already documents,
-     * and a real trial reproduced, that voucher.c has a hard
-     * `#if !HAVE_PTHREAD_WORKQUEUE_QOS #error` -- QoS-class SUPPORT is a
-     * genuine hard requirement here, distinct from the thread-pool
-     * implementation choice). This project's own dyld appears to bind
-     * eagerly at load time (real chained-fixups behavior, not lazy
-     * per-call binding) -- every one of the ~85 remaining deferred
-     * UNDEF_SYMS entries is a real candidate for the exact same class of
-     * crash, one per boot, regardless of whether the code path is ever
-     * actually exercised. Closing this needs either a bounded set of
-     * real, ABI-correct pthread_attr_t/QoS-class stand-ins (this
-     * project's own pthread_create() already has a real, working
-     * pthread_attr_t layout expectation that any new attr functions
-     * would need to match exactly -- not yet verified) or a real,
-     * scoped port of qos.c's non-kernel-dependent pieces -- genuine new
-     * work, not yet attempted. See docs/daemon-roadmap.md's Phase 6.7
-     * section for the full real writeup. syslogd.macho is still built
-     * and installed at /usr/sbin/syslogd, just not yet exec'd
-     * automatically. */
+     * Real remaining gap, not yet closed: nm -u on the current
+     * libdispatch.dylib shows ~54 more real undefined symbols (kevent_qos,
+     * mach_eventlink_*, kpersona_get, mach_continuous_time/get_times,
+     * malloc_engaged_nano/memory_event_handler, semaphore_timedwait,
+     * sigsuspend, thread_destruct/get_special_reply_port, sys_errlist/
+     * sys_nerr, and more) -- most already have real implementations
+     * somewhere in this project's other archives (confirmed via a real
+     * nm sweep), just not yet wired into this specific dylib's link
+     * without re-triggering the same class of duplicate-symbol conflicts
+     * this pass already resolved several of (dyld_core.a's own
+     * mach_port_* / mach_vm_* copies vs libmalloc.a's, for one already-
+     * documented example). Real next step: continue the same "check
+     * existing archives first, selectively extract or write a narrow
+     * real reproduction, verify via nm, real QEMU reboot" loop this pass
+     * already used successfully ~15 times, until the boot reaches a
+     * shell prompt with syslogd actually running. See
+     * docs/daemon-roadmap.md's Phase 6.7 section for the full real
+     * writeup and the exact current undefined-symbol list. syslogd.macho
+     * is still built and installed at /usr/sbin/syslogd, just not yet
+     * exec'd automatically. */
     put("\ninit: pid 1 up, forking single-user shell\n");
 
     for (;;) {

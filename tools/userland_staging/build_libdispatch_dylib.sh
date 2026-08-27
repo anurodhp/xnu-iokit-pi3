@@ -75,23 +75,47 @@
 # `_semaphore_signal`/`_semaphore_wait`, which this script's own
 # `semaphore_wrap.o` extraction below already covers) -- deferred below,
 # same honest `-U` mechanism as every other real Mach trap in this list.
+#
+# Real fix 2026-08-27 (pthread QoS/attr subsystem): ~20 of the entries
+# this list used to carry (pthread_qos_class_encode and its QoS-class/
+# workqueue-override siblings, pthread_attr_init/destroy/setdetachstate/
+# setschedparam/setschedpolicy/getschedparam/getschedpolicy/
+# setstacksize, pthread_exit, pthread_sigmask) are now real, closed by
+# build_libpthread_qos.sh's new libc_build/libpthread_qos.a -- see that
+# script's own HONEST SCOPE STATEMENT for the full real finding
+# (build_libpthread.sh's "qos.c unreachable per the kernel constraint"
+# comment predates Phase 7.5's real bsdthread_create/register port and
+# is now only true for the narrower __bsdthread_ctl-backed functions,
+# which get a real, honest kernel ENOTSUP at runtime -- same accepted
+# pattern as pthread_create() itself). Kept in this project's master
+# libpthread.a is deliberately NOT touched (real regression risk to
+# bash/ncurses/getty/syslogd, already real+QEMU-verified consumers) --
+# libpthread_qos.a is its own separate, isolated archive, used only
+# here. pthread_get_stackaddr_np/pthread_setschedparam stay honestly
+# deferred below -- real thread-list-tracking ABI risk, not yet verified
+# against this project's own from-scratch pthread_create() (see
+# libpthread_attr_compat.c's own header for the full real trace).
+# pthread_workloop_create/destroy, clock_gettime_nsec_np, and the real
+# mach_voucher_*/host_get_special_port MIG routines are now real too
+# (same libpthread_qos.a / libpthread_attr_compat.c /
+# libpthread_qos_compat.c, plus a real mach_voucher.defs MIG regen and a
+# reused host_privUser.o already built elsewhere in this project) --
+# see those files' own headers for the full per-symbol trace.
+#
+# host_create_mach_voucher() (plain name) was initially thought to be a
+# genuine version-skew gap (confirmed absent from this project's own
+# pinned xnu-7195 osfmk/mach/host_priv.defs entirely) -- but this
+# project's own libmach_ipc.a already has the real, trap-based
+# __kernelrpc_host_create_mach_voucher from earlier work, just never
+# had the plain-named public forward -- see libpthread_qos_compat.c's
+# own header for the correction. Real, now closed, not deferred.
 UNDEF_SYMS=(
-    __pthread_qos_class_encode
-    __pthread_qos_override_end_direct __pthread_qos_override_start_direct
-    __pthread_set_properties_self __pthread_workloop_create __pthread_workloop_destroy
-    __pthread_workqueue_override_reset __pthread_workqueue_override_start_direct
-    __pthread_workqueue_override_start_direct_check_owner
-    _clock_gettime_nsec_np _host_create_mach_voucher _host_get_special_port
     _kdebug_trace _kevent_qos _kpersona_get _mach_continuous_time _mach_get_times
-    _mach_voucher_attr_command _mach_voucher_deallocate _mach_voucher_debug_info
-    _mach_voucher_extract_attr_recipe _malloc_engaged_nano _malloc_memory_event_handler
-    _mmap _munmap _pthread_attr_destroy _pthread_attr_get_qos_class_np
-    _pthread_attr_getschedparam _pthread_attr_getschedpolicy _pthread_attr_init
-    _pthread_attr_set_qos_class_np _pthread_attr_setdetachstate
-    _pthread_attr_setschedparam _pthread_attr_setschedpolicy _pthread_attr_setstacksize
-    _pthread_exit _pthread_get_stackaddr_np _pthread_qos_max_parallelism
-    _pthread_set_qos_class_self_np _pthread_setschedparam _pthread_sigmask
-    _qos_class_main _semaphore_timedwait _sigsuspend _sleep
+    _malloc_engaged_nano _malloc_memory_event_handler
+    _mmap _munmap
+    _pthread_get_stackaddr_np
+    _pthread_setschedparam
+    _semaphore_timedwait _sigsuspend _sleep
     _thread_destruct_special_reply_port _thread_get_special_reply_port _vasprintf
     _pwrite _read _pthread_tsd_shim_bootstrap
     _gettimeofday _kill
@@ -260,6 +284,7 @@ rm -f "$OUT/system/libdispatch.dylib"
     -o "$OUT/system/libdispatch.dylib" \
     "$OUT"/dispatch_obj/*.o "$OUT"/dispatch_obj/event/*.o \
     "$OUT"/dispatch_dylib_extract/*.o \
+    -Wl,-force_load,"$OUT/libpthread_qos.a" \
     "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
     "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" \
     "$OUT/simple_obj/sys__kqueue.o" \
