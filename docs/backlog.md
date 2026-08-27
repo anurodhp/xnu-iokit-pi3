@@ -1403,6 +1403,99 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
     `nm -g` showing real exports (`xmlParseFile`, `xmlNewDoc`,
     `xmlDocGetRootElement`, etc, ~2000 total) after adding it.
 
+    **Real syscall work started 2026-08-27 — 27 of the 100 remaining
+    gap-groups closed** (100→73), all via real hand-written raw
+    syscall/Mach-trap wrappers or verbatim-extracted real Apple
+    functions, same established per-consumer-wrapper-file convention
+    this project already uses (`ifconfig_extra_syscalls.c`/
+    `libresolv_socket_syscalls.c`):
+    - **BSD socket family (12 symbols) DONE**:
+      `cf_socket_syscalls.c` — `socket`/`bind`/`listen`/`accept`/
+      `connect`/`getsockname`/`getsockopt`/`setsockopt`/`socketpair`/
+      `recvfrom`/`sendto`/`recv`, real syscall numbers cross-checked
+      against `syscalls.master` (using the `_nocancel` trap numbers
+      directly for `accept`/`connect`/`recvfrom`/`sendto`, matching
+      real Apple's own `libsyscall/wrappers/legacy/*.c`, which do the
+      same — this project has no real pthread cancellation to make the
+      cancelable variant meaningfully different anyway).
+    - **`mach_port_*` family (7 symbols) DONE**: `cf_mach_port_syscalls
+      .c` — `mach_port_allocate`/`construct`/`destruct`/
+      `extract_member`/`get_attributes`/`insert_member`/`type`,
+      extracted verbatim from `libsyscall/mach/mach_port.c` (each
+      citing its real origin line) rather than compiling that whole
+      file — its other functions (`move_member`/`insert_right`/`guard`/
+      `unguard`/`request_notification`/`mach_voucher_extract_attr_recipe`)
+      pull in a genuinely different, unneeded MIG subsystem
+      (`mach_voucher.defs`). Each function tries a real fast-path Mach
+      trap first (`mach_port_traps.s`, 7 real trap numbers cross-checked
+      against `syscall_sw.h`, confirmed backed by a real kernel
+      implementation in `osfmk/ipc/mach_kernelrpc.c`) and only falls
+      back to full MIG RPC on `MACH_SEND_INVALID_DEST` — since the real
+      trap always succeeds on this project's real from-source kernel,
+      that fallback is dead code in practice, so it's an honest,
+      documented stub (`cf_mach_port_mig_fallback_stub.c`, returns
+      `KERN_NOT_SUPPORTED`) rather than the real MIG marshaling, which
+      would need this project's still-unbuilt real `mach_msg()` (item 7
+      below — a real, substantial, already-tracked separate task, not
+      something to pull in as a side effect of `mach_port_allocate`).
+      Real fix once `mach_msg()` lands: replace the stub with the real
+      `mig`-generated `mach_portUser.c` (already proven to compile
+      clean against this project's headers during this investigation —
+      same real recipe as `build_corefoundation.sh`'s own
+      `mach_vm_region` precedent).
+    - **`mk_timer_*` family (4 symbols) DONE**: `mk_timer_traps.s` —
+      plain Mach traps, no MIG fallback at all (confirmed absent from
+      real Apple source), real trap numbers `-91`/`-92`/`-93`/`-94`.
+    - **`pthread_attr_*` (4 of 6 symbols) DONE**:
+      `cf_pthread_attr_syscalls.c` — `pthread_attr_init`/`destroy`/
+      `setdetachstate`/`setscope`, extracted verbatim from
+      `libpthread/src/pthread.c` (pure struct-field manipulation, zero
+      syscalls, no real dependency on that file's own excluded
+      `pthread_create`-stack-allocation header conflict). Needed the
+      real internal `pthread_attr_t` struct (named fields like `.sig`/
+      `.detached`) from `libpthread/src/internal.h`, not the public
+      SDK's opaque one — confirmed the hard way (first attempt using
+      plain `<pthread.h>` failed with "no member named 'sig'"), not
+      assumed. `pthread_attr_set_qos_class_np`/`qos_class_main` remain
+      real gaps: both live in `libpthread/src/qos.c`, already
+      documented by `build_libpthread.sh` as unreachable ("needs real
+      `bsdthread_register`") — a real, already-diagnosed kernel-
+      registration wall, not chased further here.
+
+    **Remaining real gaps, not yet closed, roughly grouped**:
+    - `pthread_atfork`/`pthread_getugid_np`/`pthread_is_threaded_np`/
+      `pthread_threadid_np`/`pthread_mutexattr_destroy`: the last one is
+      a real `libSystem.B.dylib` export-parity gap (the function exists
+      in `libpthread.a` already, just isn't exported from the
+      flattened static-stack dylib) — same already-documented category
+      as `_getegid`/etc below. The other three not yet investigated.
+    - `_proc_pidinfo`/`_pthread_setname_np`: both need a real
+      `__proc_info` raw syscall wrapper (real syscall this project
+      hasn't hand-written yet) — a real twofer once done.
+    - `NXFindBestFatArch`/`NXGetLocalArchInfo` (CFBundle's fat-binary
+      detection), `sysdir_start_search_path_enumeration`/
+      `_get_next_search_path_enumeration` (CFBundle's real search-path
+      API): not yet investigated for real source availability.
+    - `_abs`/`_atol`/`_bsearch`/`_llabs`/`_mkdir`/`_pwrite`/`_qsort`/
+      `_readlink`/`_scalbn`/`_setenv`/`_setrlimit`/`_strstr`/`_getegid`/
+      `_getpwuid_r`/`_getrlimit`/`_getsectbynamefromheader_64`/
+      `_getsegbyname`/`_uuid_generate_random`/`_uuid_generate_time`/
+      `___chk_assert_no_overlap`/`___chk_fail_overflow`/`___chk_overlap`/
+      `___darwin_check_fd_set_overflow`/`___vsprintf_chk`: the
+      already-documented `libSystem.B.dylib` export-parity /
+      still-missing-everywhere buckets (item d7's earlier entries).
+    - `__dispatch_queue_attr_concurrent`/`__mh_dylib_header`/
+      `__os_log_debug_impl`/`__os_log_default`/`__os_log_error_impl`/
+      `_os_log_create`/`_os_log_type_enabled`: the still-not-root-caused
+      os_log/dispatch gap.
+    - `_asl_*` (6 symbols): confirmed never-open-sourced, out of scope.
+    - `___CFPreferencesAllocator`/`__CFPreferencesDomain*`/
+      `_CFPreferencesCopyValue`/`_kCFPreferences*`/`_kCFLocale*`/
+      `_kCFDateFormatter*`/`_kCFGregorianCalendar`: all real
+      `CFPreferences.c`-family gaps, already documented above as a
+      genuine, verified exclusion (real `gethostuuid`-unavailable-on-iOS
+      bug), not re-litigated here.
+
 0a. **No AES implementation exists anywhere in this kernel — HARD
     PREREQUISITE for Phase 7b (`sshd`).** Filed explicitly 2026-08-21 so it
     is a known gate rather than the fourth surprise NULL dereference.

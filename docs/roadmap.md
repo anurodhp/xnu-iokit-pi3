@@ -752,6 +752,21 @@ need a real implementation later:
   CFWindowsUtilities). `docs/backlog.md` item d7's own "Real ICU port
   started" entry has the full writeup for the port, the CF wiring, the
   full-sweep pass, and the libxml2 completion.
+- **Real syscall work started 2026-08-27**: 27 of the trial link's 100
+  remaining undefined-symbol groups closed (100 -> 73), via real
+  hand-written raw syscall/Mach-trap wrappers and verbatim-extracted
+  real Apple functions -- the full BSD socket family (12 symbols:
+  socket/bind/listen/accept/connect/getsockname/getsockopt/setsockopt/
+  socketpair/recvfrom/sendto/recv), the `mach_port_*` family (7
+  symbols, real trap-first with an honest stubbed MIG fallback since
+  real `mach_msg()` doesn't exist yet), the `mk_timer_*` family (4
+  symbols, plain traps), and 4 of 6 `pthread_attr_*` functions (the
+  other 2 need real `bsdthread_register`, an already-diagnosed wall).
+  `docs/backlog.md` item d7's own entry has the full per-category
+  writeup and what's left (proc_pidinfo/pthread_setname_np need one
+  more real syscall; NXFindBestFatArch/sysdir_* not yet investigated;
+  the rest are already-categorized libSystem export-parity/os_log/ASL/
+  CFPreferences buckets).
 - **Phase 6.8 (`launchd`+XPC via PureDarwin): critical-path gap-closing
   pass DONE 2026-08-26**, real port itself still open. Source is
   PureDarwin/PureDarwin's own `next` branch (a current, actively

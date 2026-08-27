@@ -302,7 +302,68 @@ MACH_VM_DEFS="$(cd "$(dirname "$XNU/osfmk/mach/mach_vm.defs")" && pwd)/$(basenam
 # confirmed via nm before assuming a second copy was needed -- adding
 # one here would be a real duplicate-symbol conflict, not a fix).
 
-echo "compiled: $((${#FILES[@]} + 12)) real/compat CoreFoundation source files (zero errors)"
+# Real BSD socket raw syscall wrappers CFSocket.c/CFRunLoop.c need --
+# see cf_socket_syscalls.c's own header comment for the full real
+# syscall-number cross-check and this project's established
+# "each consumer gets its own small hand-rolled wrapper file" convention
+# (ifconfig_extra_syscalls.c/libresolv_socket_syscalls.c are the closest
+# analogs). 12 real symbols: socket/bind/listen/accept/connect/
+# getsockname/getsockopt/setsockopt/socketpair/recvfrom/sendto/recv.
+"$CLANG" "${CFLAGS[@]}" "$COMPAT/cf_socket_syscalls.c" -o "$OUT/cf_obj/cf_socket_syscalls.o"
+
+# Real mach_port_* client wrappers CFMachPort.c/CFRunLoop.c need -- see
+# cf_mach_port_syscalls.c's own header comment for the full real
+# extraction rationale (7 functions copied verbatim from
+# libsyscall/mach/mach_port.c, each citing its real origin line, rather
+# than compiling that whole file -- its OTHER functions pull in a
+# genuinely different, unneeded MIG subsystem, mach_voucher.defs).
+CFLAGS_MACH_PORT=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+    -I "$XNU/libsyscall/mach" -I "$XNU/libsyscall/os" -idirafter "$XNU/osfmk" \
+    -I "$LIBC/include" -I "$LIBC/darwin")
+"$CLANG" "${CFLAGS_MACH_PORT[@]}" cf_mach_port_syscalls.c -o "$OUT/cf_obj/cf_mach_port_syscalls.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c mach_port_traps.s -o "$OUT/cf_obj/mach_port_traps.o"
+# Real, honest stub for the MIG-fallback half of the above (the trap
+# entry points these fall back FROM are all confirmed backed by a real
+# kernel-side implementation, osfmk/ipc/mach_kernelrpc.c -- so this path
+# is dead code on a real working boot). Real mach_msg()/MIG marshaling
+# needs this project's still-unbuilt real Mach IPC (docs/backlog.md
+# item 7); see cf_mach_port_mig_fallback_stub.c's own header comment for
+# the full reasoning and the real fix once that lands.
+"$CLANG" "${CFLAGS[@]}" cf_mach_port_mig_fallback_stub.c -o "$OUT/cf_obj/cf_mach_port_mig_fallback_stub.o"
+
+# Real mk_timer_* Mach trap stubs CFRunLoop.c's timer sources need --
+# plain traps, no MIG fallback at all (see mk_timer_traps.s's own header
+# comment).
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c mk_timer_traps.s -o "$OUT/cf_obj/mk_timer_traps.o"
+
+# Real pthread_attr_* functions CFRunLoop.c/CFMachPort.c call -- see
+# cf_pthread_attr_syscalls.c's own header comment for the full real
+# extraction rationale (4 functions copied verbatim from
+# third_party/libpthread/src/pthread.c, same "extract just what's
+# needed" pattern as cf_mach_port_syscalls.c, since that whole file
+# hits a real header conflict elsewhere -- build_libpthread.sh's own
+# header comment has the story).
+PTHREAD="$XNU/../libpthread"
+PLATFORM="$XNU/../libplatform"
+MALLOC="$XNU/../libmalloc"
+CFLAGS_PTHREAD_ATTR=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -Wno-nullability-completeness -Wno-availability -Wno-deprecated-declarations \
+    -D__LIBC__ -D__POSIX_LIB__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_NON_CANCELABLE=1 \
+    -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 -D__PTHREAD_BUILDING_PTHREAD__=1 -D__PTHREAD_EXPOSE_INTERNALS__ \
+    -DOS_ATOMIC_CONFIG_MEMORY_ORDER_DEPENDENCY=1 -DPRIVATE=1 \
+    -D_os_xbs_chrooted=0 \
+    '-D__API_UNAVAILABLE_PLATFORM_bridgeos=ios,unavailable' \
+    '-D__API_AVAILABLE_PLATFORM_bridgeos(x)=ios,introduced=x' \
+    -I "$PTHREAD" -I "$PTHREAD/src" -I "$PTHREAD/src/resolver" -I "$PTHREAD/private" -I "$PTHREAD/include" -I "$PTHREAD/kern" \
+    -I "$PLATFORM/internal" -I "$PLATFORM/private" -I "$PLATFORM/include" \
+    -I "$OUT/compat_include" \
+    -I "$MALLOC/private" \
+    -I "$XNU/libsyscall" -I "$XNU/libsyscall/mach" -I "$XNU/bsd" \
+    -idirafter "$XNU/osfmk" -idirafter "$XNU/libkern")
+"$CLANG" "${CFLAGS_PTHREAD_ATTR[@]}" cf_pthread_attr_syscalls.c -o "$OUT/cf_obj/cf_pthread_attr_syscalls.o"
+
+echo "compiled: $((${#FILES[@]} + 18)) real/compat CoreFoundation source files (zero errors)"
 
 rm -f "$OUT/libCoreFoundation.a"
 ar rcs "$OUT/libCoreFoundation.a" "$OUT"/cf_obj/*.o
