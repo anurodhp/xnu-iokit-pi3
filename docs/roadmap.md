@@ -133,10 +133,13 @@ need a real implementation later:
   `tools/workq_kthread_test/` for the real, minimal, verified exercises
   of each path, and the Phase 7.5 entry below for the fuller design
   writeup.
-- **From-scratch SHA-256/384/512** standing in for corecrypto
-  (`g_crypto_funcs` is never registered) -- covers hashing/integrity only;
-  no AES/HMAC/RSA/ECDSA/DH/ECDH. Blocks real `sshd` (Phase 7b) and `pkg`'s
-  `libecc` signature verification (Phase 8).
+- **SHA-384/512 from-scratch, SHA-256 now real corecrypto** (2026-08-27:
+  `SHA256_Init`/`_Update`/`_Final` call the real, audited
+  `ccdigest_init`/`ccsha256_di()` core already compiled into this kernel;
+  SHA-384/512 stay from-scratch, real corecrypto bodies for those don't
+  exist in this checkout -- see `docs/backlog.md` P2 item 0b). Hashing/
+  integrity only either way; no AES/HMAC/RSA/ECDSA/DH/ECDH. Blocks real
+  `sshd` (Phase 7b) and `pkg`'s `libecc` signature verification (Phase 8).
 - **`cerror_stub.c`** -- minimal errno/`cerror` stand-in used where real
   Apple `errno.c`'s TSD dependency wasn't available yet.
 - **Residual no-op `os_once`/`pthread_mutex_*` copies** in

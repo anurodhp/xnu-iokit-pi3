@@ -1652,8 +1652,30 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
       existing from-scratch SHA-2/MD5 should be folded in at that point so
       there is one mechanism rather than two.
 
-0b. **`ccsha256_di` can be wired to REAL corecrypto instead of the
-    from-scratch `corecrypto_sha2.c` — found 2026-08-26, not yet acted on.**
+0b. **[DONE 2026-08-27] `ccsha256_di` wired to REAL corecrypto instead of
+    the from-scratch `corecrypto_sha2.c`.** Found 2026-08-26, acted on
+    2026-08-27. Turned out `register_crypto_functions()`/`g_crypto_funcs`
+    was never the right mechanism for this one (see below) — the real
+    fix was smaller: `SHA256_Init`/`_Update`/`_Final`
+    (`libkern/crypto/corecrypto_sha2.c`) now call real
+    `ccdigest_init`/`_update`/`_final` + `ccsha256_di()` directly, the
+    same real corecrypto entry points `osfmk/prng/prng_random.c`'s
+    `bootseed_init()` already used successfully. SHA-384/512 deliberately
+    left on the from-scratch path (see below, unchanged). QEMU-verified:
+    real login, real shell, real `/bin/ls`/`md5` exec (each real Mach-O
+    exec runs `cs_hash_sha256` for code-signing), no panic — commit
+    `ceb6d419c` in the `xnu-7195` checkout.
+
+    **Correction to the original plan below**: `SHA256_Init` et al were
+    never `g_crypto_funcs`-backed in the current tree (only an *earlier*,
+    already-superseded revision of this file was) — `cs_hash_sha256`,
+    `kern_exec.c`'s cdhash hashing, and `chunklist.c` all call
+    `SHA256_Init`/`_Update`/`_Final` directly with zero table indirection.
+    So `register_crypto_functions()` wiring, as originally scoped just
+    below, would not actually have touched any of those real call sites —
+    filed as a real, corrected finding, not a rewrite of the history below
+    (kept for the real detective work it documents).
+
     The SHA256_Init row above says "from-scratch SHA-2, bypasses the table"
     on the assumption (from an earlier pass) that corecrypto's digest-core
     bodies were never open-sourced — that check only looked in
@@ -1711,6 +1733,39 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
     BCM2837's Cortex-A53 implements the optional ARMv8 Crypto Extensions
     (AESE/AESMC) before assuming a hardware path exists — believed absent on
     Pi 3, NOT verified.
+
+    **Update 2026-08-27: `PureDarwin/corecrypto` investigated as a source
+    for this, real findings, not yet acted on.** `src/kext/
+    register_crypto.h` in that repo is byte-for-byte the same
+    `struct crypto_functions` layout as this project's real
+    `libkern/libkern/crypto/register_crypto.h` (verified by hand against
+    every offset in the crash table above: `ccmd5_di`=0x20,
+    `ccsha256_di`=0x30, `ccaes_cbc_encrypt`=0x78, all match) — real
+    upstream precedent for the `register_crypto_functions()` adapter this
+    item needs either way. Its AES core (`src/algorithms/aes128.c`/
+    `aes_cbc.c`/`aes_ecb.c`) is a real, small, KAT-verified implementation
+    adapted from `kokke/tiny-AES128-C` (public domain) — but AES-128
+    ECB/CBC only, no CTR/AES-256/GCM/XTS, and real `sshd` (this item's
+    actual reason for existing) defaults to `aes128-ctr`/`aes256-ctr`, so
+    this alone would close the gate only partway. License provenance is
+    also genuinely messy: `LICENSE.md` claims Apache-2.0 (mbedTLS-based),
+    `README.md` says Botan + `rafirafi/pdcrypto`, the AES core's own
+    header credits `tiny-AES128-C` — three different stated lineages, not
+    a clean single license to adopt wholesale.
+
+    **Decided direction (2026-08-27)**: use PureDarwin's `corecrypto` for
+    now — its `register_crypto.h`-compatible interface/adapter shape in
+    particular — but treat it as an interim source, not a final one:
+    file a follow-up to revisit any part of it whose actual crypto logic
+    (as opposed to the interface/struct plumbing) has unclear or mixed
+    provenance, and prefer swapping just that logic for FreeBSD's
+    `sys/crypto/rijndael/` (already the documented, cleanly-licensed
+    fallback for the AES core specifically) where that's possible without
+    changing the corecrypto-shaped interface itself. In short: PureDarwin
+    for the adapter/struct shape (real, verified-matching ABI), FreeBSD
+    for the actual cipher body wherever the two can be kept separate.
+    Whoever picks this up should re-check this tradeoff before writing
+    code — it was not implemented this session, only scoped.
 
 0. **DWC2 transfer completion is polled, not interrupt-driven** (added
     2026-08-21 with `iokit/BCM2837DWC2/`). `docs/usb-support-plan.md` task 2
