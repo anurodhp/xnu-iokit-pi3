@@ -195,6 +195,19 @@ drifted before.
   2026-08-25 for the dyld port); write custom code only as a last resort
   (e.g. `libc_locale` string/locale stubs, the from-scratch SHA-256/384/512
   replacing the corecrypto-kext-dependent implementation).
+- **Resolve known dependencies before booting QEMU**: before a real QEMU
+  boot test on a new/changed userland binary that links libdispatch/
+  libsystem_*/etc, run `tools/userland_staging/gap_audit.sh` against it
+  (target dylib/macho + the other images it loads alongside) and close
+  every real gap the script marks `FREEWIN` (already a real, defined
+  export of some already-built archive, just not linked in yet) first.
+  A QEMU boot-and-crash cycle finds real gaps one dyld-abort at a time
+  (real, but slow); `gap_audit.sh` finds the same real gaps from `nm -m`
+  in seconds, plus classifies each one against real Apple source (BSD
+  syscall/Mach trap/MIG routine/needs manual investigation) so the next
+  real port step is obvious. Written 2026-08-27 after closing 20 of a
+  dylib's 30 real remaining-gap symbols in one pass and needing this
+  exact triage by hand each time — don't re-derive it manually again.
 - **Adversarial review before commit**: run an adversarial review on
   large/significant changes *before* committing, not after — post-hoc
   reviews in this project's history have caught real bugs (a false-positive

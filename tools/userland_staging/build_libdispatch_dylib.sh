@@ -164,25 +164,58 @@
 # real architecture (same as real Apple's own libSystem: `environ` is
 # provided by the loading executable's own crt, not by libSystem itself).
 # Left deferred/dynamically-looked-up on purpose, not fixed further.
+# 2026-08-27: closed kevent_qos, kpersona_get, pread/pwrite, sigsuspend,
+# sleep, semaphore_timedwait, malloc_engaged_nano/memory_event_handler,
+# mach_continuous_time/mach_get_times, mach_make_memory_entry_64, and all
+# 7 mach_port_* + thread_destruct_special_reply_port real gaps -- see
+# tools/init_binary/init.c's spawn_syslogd() comment for the full trail
+# and gap_audit.sh's own output for how each was found/verified. Real,
+# still-open gaps kept below: the 7-symbol mach_eventlink_* family
+# (genuinely needs new MIG regen against mach_eventlink.defs, out of
+# this pass's scope) and pthread_get_stackaddr_np (thread-list-tracking
+# risk, not yet verified safe -- see this file's own earlier note).
+# __mach_errors/_environ stay listed but are NOT real gaps -- see this
+# script's own header comment above (both are the correct real
+# architecture, resolved by whatever loads this dylib, same as real
+# Apple). _pthread_setschedparam/_semaphore_create/_semaphore_destroy/
+# _mach_port_get_context/_mach_port_set_context were never real gaps in
+# the first place (already resolved elsewhere, confirmed via gap_audit.sh
+# -- -U on an already-defined symbol is a harmless no-op, not removed to
+# avoid churn).
 UNDEF_SYMS=(
-    _kevent_qos _kpersona_get _mach_continuous_time _mach_get_times
-    _malloc_engaged_nano _malloc_memory_event_handler
     _pthread_get_stackaddr_np
     _pthread_setschedparam
-    _semaphore_timedwait _sigsuspend _sleep
-    _thread_destruct_special_reply_port _thread_get_special_reply_port
-    _pwrite
     _mach_eventlink_associate _mach_eventlink_create _mach_eventlink_destroy
     _mach_eventlink_disassociate _mach_eventlink_signal
     _mach_eventlink_signal_wait_until _mach_eventlink_wait_until
-    _pread
     __mach_errors _environ
-    _mach_port_construct _mach_port_destruct _mach_port_extract_right
-    _mach_port_insert_right _mach_port_unguard _mach_port_kernel_object
-    _mach_port_request_notification _mach_port_get_context _mach_port_set_context
-    _mach_make_memory_entry_64
+    _mach_port_get_context _mach_port_set_context
     _semaphore_create _semaphore_destroy
+    _thread_get_special_reply_port
 )
+# Real, defined-elsewhere-in-the-process symbols this dylib's own
+# gap-closure .o's (mach_port_gap_closures2.o/cf_mach_port_syscalls.o/
+# dispatch_gap_closures4.o) reference but can't resolve at THIS dylib's
+# own standalone `-nostdlib` link time, because the archives that really
+# define them (libxpc_syscalls2.a's mach_portUser.o for the 11
+# _kernelrpc_mach_port_* MIG fallbacks; syslogd_libc_extras.a for
+# _nanosleep) are deliberately NOT linked into this narrow dylib -- same
+# real flat-namespace mechanism as every other -U symbol here: they
+# resolve for real once syslogd.macho (which DOES link both archives)
+# loads this dylib, confirmed via nm -g syslogd.macho showing the MIG
+# fallbacks and nanosleep already real+defined there. NOT the same class
+# as this dylib's own honestly-still-open gaps above -- kept in a
+# separate array to avoid muddying that list's meaning.
+UNDEF_SYMS_ELSEWHERE_IN_PROCESS=(
+    __kernelrpc_mach_port_allocate __kernelrpc_mach_port_construct
+    __kernelrpc_mach_port_destruct __kernelrpc_mach_port_extract_member
+    __kernelrpc_mach_port_extract_right __kernelrpc_mach_port_get_attributes
+    __kernelrpc_mach_port_insert_member __kernelrpc_mach_port_insert_right
+    __kernelrpc_mach_port_kernel_object __kernelrpc_mach_port_request_notification
+    __kernelrpc_mach_port_type __kernelrpc_mach_port_unguard
+    _nanosleep
+)
+UNDEF_SYMS+=("${UNDEF_SYMS_ELSEWHERE_IN_PROCESS[@]}")
 UNDEF_FLAGS=()
 for s in "${UNDEF_SYMS[@]}"; do
     UNDEF_FLAGS+=(-Wl,-U,"$s")
@@ -208,6 +241,7 @@ fi
 
 XCODE12="/Applications/Xcode-12.app/Contents/Developer"
 CLANG="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
 SDK="$XCODE12/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
 if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     echo "error: Xcode-12.app not found at $XCODE12" >&2
@@ -358,6 +392,26 @@ XNU_FOR_TRAP="../../third_party/xnu-7195"
     -I"$OUT/sys_asm_compat" -I"$XNU_FOR_TRAP/libsyscall/custom" -I"$XNU_FOR_TRAP/libsyscall/mach" -I"$XNU_FOR_TRAP/osfmk" \
     "$OUT/dyld_syscall_gen/___kdebug_trace64.s" -o "$OUT/dispatch_dylib_extract/kdebug_trace64_trap.o"
 
+# _kevent_qos: real syscall #374 (bsd/kern/syscalls.master), NOT
+# NO_SYSCALL_STUB -- a plain Apple-generated trap stub
+# ($OUT/pthread_syscall_gen/_kevent_qos.s, already produced as a byproduct
+# of build_libpthread.sh's own create-syscalls.pl run against the same
+# syscalls.master; regenerating here would just reproduce it byte-for-
+# byte). Its kernel-side implementation (bsd/kern/kern_event.c) is real
+# and complete, not an ENOTSUP stub -- confirmed by reading it, not
+# assumed -- so this is a real, working syscall, not a stub-on-stub.
+# Only real dependency is _cerror_nocancel (confirmed via nm before
+# adding), already resolved via the libsystem_c.dylib sibling link below,
+# same as geteuid.o above -- adds zero new gaps. Closes one entry off
+# this dylib's own real remaining-gap list (see
+# tools/init_binary/init.c's spawn_syslogd() comment for the full current
+# list and why it's still disabled: kevent_qos was the FIRST symbol dyld's
+# eager chained-fixups binding aborted on when syslogd was actually
+# exec'd, found via a real QEMU boot test, not the only one left).
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    -I "$XNU_FOR_TRAP/BUILD.hdrs/dst/usr/include" -I "$OUT/pthread_syscall_gen" \
+    "$OUT/pthread_syscall_gen/_kevent_qos.s" -o "$OUT/dispatch_dylib_extract/kevent_qos_trap.o"
+
 # same real _chk/-undefined-dynamic_lookup quirk as kdebug_trace64 above
 # -- real source already established by build_libxpc_syscalls2.sh
 # (third_party/Libc/secure/*.c), just needs its own copy here since this
@@ -369,6 +423,110 @@ for f in snprintf_chk strlcpy_chk vsnprintf_chk; do
     "$CLANG" "${CFLAGS_SECURE[@]}" "$LIBC/secure/$f.c" -o "$OUT/dispatch_dylib_extract/$f.o"
 done
 "$CLANG" "${CFLAGS_SECURE[@]}" chk_fail_compat.c -o "$OUT/dispatch_dylib_extract/chk_fail_compat.o"
+
+# 2026-08-27 gap-closure pass: real remaining-gap symbols closed at once
+# (see tools/init_binary/init.c's spawn_syslogd() comment for the full
+# real trail of what each needed and why -- not re-derived here).
+XNU_FOR_GAPS="../../third_party/xnu-7195"
+
+# kpersona_get: real, unmodified libsyscall/wrappers/persona.c (all 9
+# kpersona_* functions -- only kpersona_get is a real gap here, the rest
+# are free real functionality from the same self-contained file, not
+# extra risk) + its own real raw NO_SYSCALL_STUB trap (___persona.s,
+# already generated by build_libpthread.sh's own create-syscalls.pl run
+# against the same syscalls.master -- reused, not regenerated). Only
+# real deps: ___persona (this trap) and ___strlcpy_chk (already compiled
+# above in this exact script).
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -DPRIVATE=1 \
+    -I "$XNU_FOR_GAPS/libsyscall/wrappers/string" -I "$XNU_FOR_GAPS/bsd" -I "$XNU_FOR_GAPS/BUILD.hdrs/dst/usr/include" \
+    "$XNU_FOR_GAPS/libsyscall/wrappers/persona.c" -o "$OUT/dispatch_dylib_extract/persona.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -I "$XNU_FOR_GAPS/BUILD.hdrs/dst/usr/include" -I "$OUT/pthread_syscall_gen" \
+    "$OUT/pthread_syscall_gen/___persona.s" -o "$OUT/dispatch_dylib_extract/persona_trap.o"
+
+# pread/pwrite: plain Apple-generated syscall stubs (#153/#154, NOT
+# NO_SYSCALL_STUB), already produced by build_libpthread.sh's own
+# create-syscalls.pl run -- reused verbatim, not regenerated. Only real
+# dep is _cerror (already linked into this dylib below via cerror_stub.o).
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -I "$XNU_FOR_GAPS/BUILD.hdrs/dst/usr/include" -I "$OUT/pthread_syscall_gen" \
+    "$OUT/pthread_syscall_gen/_pread.s" -o "$OUT/dispatch_dylib_extract/pread_trap.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -I "$XNU_FOR_GAPS/BUILD.hdrs/dst/usr/include" -I "$OUT/pthread_syscall_gen" \
+    "$OUT/pthread_syscall_gen/_pwrite.s" -o "$OUT/dispatch_dylib_extract/pwrite_trap.o"
+
+# mach_port_construct: real, already-built CoreFoundation objects
+# (cf_obj/cf_mach_port_syscalls.o + cf_obj/mach_port_traps.o, built by
+# build_corefoundation.sh -- see that pair's own header comments for the
+# full real extraction rationale) reused as-is, not recompiled. Its own
+# real MIG fallback (_kernelrpc_mach_port_construct, on
+# MACH_SEND_INVALID_DEST) is already a real, defined export of
+# libc_build/libxpc_syscalls2.a's own mach_portUser.o -- confirmed via
+# nm before reusing, not assumed. Only extern-declared here, not linked
+# in directly (this dylib doesn't otherwise depend on libxpc_syscalls2.a;
+# it resolves at the whole-process level once syslogd.macho, which does
+# link that archive, loads this dylib -- same real flat-namespace
+# mechanism this dylib's own -Wl,-U symbols already rely on).
+cp "$OUT/cf_obj/cf_mach_port_syscalls.o" "$OUT/dispatch_dylib_extract/cf_mach_port_syscalls.o"
+cp "$OUT/cf_obj/mach_port_traps.o" "$OUT/dispatch_dylib_extract/mach_port_traps.o"
+
+# mach_port_extract_right/insert_right/unguard/request_notification/
+# kernel_object + thread_destruct_special_reply_port: real trap-first
+# (mach_port_gap_closures2.s, 3 more real kernelrpc traps not already
+# covered by cf_obj/mach_port_traps.o) + real MIG fallback (same
+# already-real libxpc_syscalls2.a mach_portUser.o as mach_port_construct
+# above). See mach_port_gap_closures2.c's own header for the real bug
+# this also fixes: build_libdispatch_dylib.sh's own dispatch_dylib_extract
+# step (below) excludes libmach_ipc.a's mach_ipc_dead_stubs.o, whose 3
+# narrowly-scoped KERN_FAILURE stand-ins for these exact symbol names
+# would otherwise have been the ONLY definition available process-wide.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+    -I "$XNU_FOR_GAPS/libsyscall/mach" -I "$XNU_FOR_GAPS/libsyscall/os" -idirafter "$XNU_FOR_GAPS/osfmk" \
+    -I "$LIBC/include" -I "$LIBC/darwin" \
+    mach_port_gap_closures2.c -o "$OUT/dispatch_dylib_extract/mach_port_gap_closures2.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    mach_port_gap_closures2.s -o "$OUT/dispatch_dylib_extract/mach_port_gap_closures2_traps.o"
+
+# mach_make_memory_entry_64: real, already-built MIG output
+# (libc_build/dyld_core.a's own vm_mapUser.o, generated from real
+# osfmk/mach/vm_map.defs) narrowed via `ld -r -exported_symbol` to just
+# this one routine -- that .o also defines ~25 OTHER vm_*() names
+# (vm_allocate/vm_deallocate/vm_map/etc) that real-conflict with
+# libmalloc.a's own already-linked mach_vm.c definitions of the same
+# names (confirmed via nm before doing this, not guessed; same
+# "ar x, exclude/isolate the now-redundant member" precedent this
+# script's own mach_ipc_dead_stubs.o exclusion already established, just
+# via `ld -r -exported_symbol` instead of `ar x` + `rm` since this
+# routine needs to come OUT of a multi-routine .o rather than being one
+# whole member). Remaining real deps (_NDR_record, _mach_msg,
+# _mach_msg_destroy, _memcpy, _mig_dealloc_reply_port/_get_reply_port/
+# _put_reply_port, _voucher_mach_msg_set, ___stack_chk_guard) are all
+# already real and linked elsewhere in this exact build -- confirmed via
+# nm before adding, not assumed.
+ar p "$OUT/dyld_core.a" vm_mapUser.o > "$OUT/dispatch_dylib_extract/vm_mapUser_raw.o"
+"$LD" -r -arch arm64 -exported_symbol _mach_make_memory_entry_64 \
+    "$OUT/dispatch_dylib_extract/vm_mapUser_raw.o" -o "$OUT/dispatch_dylib_extract/mach_make_memory_entry_64.o"
+rm -f "$OUT/dispatch_dylib_extract/vm_mapUser_raw.o"
+
+# sigsuspend, semaphore_timedwait(+trap), malloc_engaged_nano,
+# malloc_memory_event_handler: see dispatch_gap_closures3.c/.s's own
+# header comments for the full real rationale on each (raw NO_SYSCALL_STUB
+# trap reusing this project's established carry-flag pattern; real Mach
+# trap -38, same class as this project's own existing
+# mach_semaphore_traps.s; and 2 narrow-but-real Apple-source-matching
+# fallback bodies for functionality this project's curated libmalloc
+# never built, not fabrications).
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    dispatch_gap_closures3.c -o "$OUT/dispatch_dylib_extract/dispatch_gap_closures3.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    dispatch_gap_closures3.s -o "$OUT/dispatch_dylib_extract/dispatch_gap_closures3_trap.o"
+
+# sleep, mach_continuous_time, mach_get_times: see dispatch_gap_closures4.c's
+# own header comment for the full real rationale (real algorithm/bodies,
+# narrowed against symbols that actually exist in this project rather
+# than the exact real internal split Apple's own source assumes).
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -DPRIVATE=1 -I "$XNU_FOR_GAPS/osfmk" \
+    dispatch_gap_closures4.c -o "$OUT/dispatch_dylib_extract/dispatch_gap_closures4.o"
 
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libdispatch.dylib"
