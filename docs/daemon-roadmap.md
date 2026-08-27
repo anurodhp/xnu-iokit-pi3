@@ -34,8 +34,9 @@ each one -- not one big flat daemon list.
 |---|---|---|---|
 | `cron` | [cron](https://github.com/apple-oss-distributions/cron) | none -- pure BSD/POSIX C | 0 |
 | `ntpd` | [ntp](https://github.com/apple-oss-distributions/ntp) | none -- pure BSD/POSIX C (standard ntp.org codebase) | 0 |
-| `notifyd` | [Libnotify](https://github.com/apple-oss-distributions/Libnotify) | Mach IPC only (notify transport is raw Mach ports, no CF) | 1 |
-| `syslogd`/`aslmanager` | [syslog](https://github.com/apple-oss-distributions/syslog) | mostly POSIX C; some CF in newer log-store code -- core daemon can likely be built CF-light | 1 (see note below) |
+| `notifyd` | [Libnotify](https://github.com/apple-oss-distributions/Libnotify) | Mach IPC only (notify transport is raw Mach ports, no CF); client-side `notify_register_*()` needs bootstrap-namespace resolution -- see ASL row below, same real dependency | 1 |
+| ASL (`libsystem_asl` client + `syslogd`'s `dbserver.c`) | [syslog](https://github.com/apple-oss-distributions/syslog)'s `libsystem_asl.tproj/` | **REVISED 2026-08-27, was wrong**: not "mostly POSIX C" -- real `asl_open()` (`libsystem_asl.tproj/src/asl.c:271`) calls `bootstrap_look_up2(bootstrap_port, ASL_SERVICE_NAME, ...)`, the *same* bootstrap-namespace mechanism `notifyd` needs (see Phase 6.7 below), not just Mach IPC in the abstract. `syslogd`'s `dbserver.c` (the live-client-facing ASL service) additionally uses real XPC (`xpc_copy_entitlement_for_token` etc). Genuinely fundamental: `syslog(3)` itself is a thin wrapper over `asl_open()`/`asl_log()` (`libsystem_asl.tproj/src/syslog.c`), so anything calling plain `syslog()` -- including this project's own existing `ifconfig_syslog_compat.c`/cron's syslog fallback -- is really depending on ASL, not a separate simpler thing. **Correction**: this project's `docs/backlog.md` (CF/launchd port items) and `tools/userland_staging/ifconfig_syslog_compat.c`'s own header comment both previously said the real ASL client library was "confirmed never open-sourced" -- wrong; it's real, Apple-licensed, 14,555 lines, bundled inside this same `syslog` repo pin, just not under a repo named "ASL". | 1, shares Phase 6.7's bootstrap-registrar prerequisite with `notifyd` |
+| `syslogd`/`aslmanager` (legacy compat path only) | [syslog](https://github.com/apple-oss-distributions/syslog)'s `syslogd.tproj/` | `bsd_in.c` (Unix-domain-socket `/var/run/syslog` listener, real `dispatch_source_t`-based, no Mach dependency) + `udp_in.c`/`klog_in.c`/`bsd_out.c` are genuinely lighter and Mach-free -- a real, useful legacy-only `syslogd` (no live ASL query service, no `dbserver.c`/`remote.c`) is a smaller, more tractable first cut than the full ASL daemon. See Phase 6.7 below for the real scoped plan. | 1 |
 | `configd` | [configd](https://github.com/apple-oss-distributions/configd) | CoreFoundation (SCDynamicStore is CF-typed), Mach IPC, XPC-adjacent IPC | 2 |
 | `mDNSResponder` | [mDNSResponder](https://github.com/apple-oss-distributions/mDNSResponder) | core protocol engine (`mDNSCore`) is portable plain C by design; the Darwin daemon shell adds launchd/XPC/CF glue | 2 (core), 3 (daemon shell) |
 | `diskarbitrationd` | [DiskArbitration](https://github.com/apple-oss-distributions/DiskArbitration) | heavy CoreFoundation (CFRunLoop-driven), IOKit notifications | 2 |
@@ -1586,7 +1587,7 @@ behind it here, plus:
   `mDNSResponder`'s/`configd`'s real daemon shells, which do use GCD
   directly, not just CF.
 
-## Phase 6.7 (Mach IPC completion + `notifyd`) -- new
+## Phase 6.7 (Mach IPC completion + `notifyd`/`syslogd`/ASL) -- new
 
 Builds on the already-real (but partial) Phase 4.6 item 5 work.
 
@@ -1609,6 +1610,173 @@ Builds on the already-real (but partial) Phase 4.6 item 5 work.
    (`tools/init_binary/`) to spawn it once during boot, matching the
    existing precedent of `getty` being built-but-not-yet-wired-in
    (`docs/roadmap.md` Phase 5.5 item 1). Don't block this phase on 6.8.
+
+**Real current status, 2026-08-27**: `build_libnotify.sh` already builds
+a real `libnotify.a` client library, and the `notify` MIG subsystem is
+already regenerated both directions (`notify_ipcUser.c` client-side,
+`notifyServer.c` server-side, via `build_launchd_mig.sh`), with a passing
+smoketest (`libnotify_smoketest.macho`) -- see `tools/userland_staging/`.
+So `notifyd` itself (Tier 1, Mach IPC only) is NOT the blocker; it never
+was. **The real, single remaining blocker is Mach bootstrap-namespace
+resolution**: every one of Libnotify's ~9 public entry points calls
+`bootstrap_look_up2(bootstrap_port, NOTIFY_SERVICE_NAME, ...)`
+(`third_party/Libnotify/notify_client.c:894`) before it can even reach a
+live `notifyd`, and nothing in this project currently holds
+`TASK_BOOTSTRAP_PORT` and answers that lookup.
+
+**This does NOT require porting full `launchd`.** Confirmed via
+`libbootstrap.c`'s own real source (see this file's own "Real finding 1"
+under Phase 6.8's RE-SCOPED section below): `bootstrap_look_up2()`/
+`bootstrap_check_in3()` are thin wrappers over `job.defs`'s
+`vproc_mig_look_up2`/`vproc_mig_check_in2` MIG routines -- there is no
+separate bootstrap protocol to invent or source. The real server-side
+code for those routines (`jobServer.c`) is *already generated* by
+`build_launchd_mig.sh` and sitting unused (deliberately not compiled yet
+-- it needs launchd-internal `job_t`/`launchd.h`/`core.h` types no client
+should need, per that script's own header comment). Full `launchd` also
+needs a real, working `dispatch_main()` event loop (Phase 6.8's own
+"Real finding 2") and 12,162 lines of `core.c` job-management logic that
+`notifyd` has zero use for.
+
+**Fastest real path specifically for `notifyd`**: a small, standalone
+bootstrap-namespace registrar -- hold `TASK_BOOTSTRAP_PORT`, answer
+`job_mig_check_in2`/`job_mig_look_up2` for a handful of well-known
+service names (starting with just `NOTIFY_SERVICE_NAME`), reusing
+`jobServer.c`'s already-generated code rather than launchd's full job
+table. Spawn it from PID-1 before `notifyd` itself, same as item 3 above.
+This is a few-hundred-line shim, not a launchd port -- don't wait on
+Phase 6.8 to unblock `notifyd`. Not yet implemented; scoped here so the
+bootstrap-namespace requirement (and that it's smaller than "needs
+launchd") isn't rediscovered from scratch next time this is picked up.
+The same shim unblocks real `syslog(3)`/ASL too -- see below, they share
+the identical dependency.
+
+### `syslogd` / ASL -- source pinned 2026-08-27, legacy-scope recon DONE (10/10 clean)
+
+**Provenance note, checked directly across `Libc`'s tag history (not
+assumed)**: ASL source used to live inside `apple-oss-distributions/Libc`
+itself (`gen/asl*.c` + `include/asl.h`) -- confirmed present through
+`Libc-825.40.1` (~Lion/Mountain Lion era), confirmed **absent** starting
+at `Libc-997.90.3` and every later tag checked, including this project's
+own pinned `Libc-1439.40.11` (Darwin 20.3/Big Sur). Apple split it out
+into the standalone `syslog` repo sometime in that window. So "ASL is
+part of Libc" is real history, just not for this project's actual target
+vintage -- the pin below (`syslog-385`) is the correct real source for
+Darwin 20.3, independently confirmed against the `macos-112` manifest.
+
+**Real source pinned**: `apple-oss-distributions/syslog` tag
+`syslog-385`, confirmed matching the `macos-112` manifest directly
+(`git ls-tree macos-112 -- syslog` == commit
+`19b7828778996ac0d6d8c6c13d01c816677c5f03` == `syslog-385^{}`, not just
+cited from the earlier `apple-oss-catalog.md` sweep). Cloned to
+`third_party/syslog`. Real layout, read directly rather than assumed
+from the repo name: `syslogd.tproj/` (the daemon, 8552 lines across
+`syslogd.c`/`daemon.c`/`bsd_in.c`/`bsd_out.c`/`udp_in.c`/`klog_in.c`/
+`asl_action.c`/`dbserver.c`/`remote.c`), `libsystem_asl.tproj/src/`
+(the real ASL **client** library -- `asl.c`/`asl_client.c`/`syslog.c`/
+etc, 14,555 lines, this is real `asl_open`/`asl_log`/`syslog(3)` source,
+not a stub), `aslcommon/` (shared `asl_ipc.defs` MIG interface +
+`asl_memory.c`), `aslmanager.tproj/` (log rotation/archival), `util.tproj/`
+(the `syslog(1)` CLI).
+
+**Real finding, corrects an earlier wrong assumption**: this is NOT the
+old-style Unix-socket-only BSD syslogd from memory -- it's the full
+Big Sur-era ASL daemon. Confirmed directly: `libsystem_asl.tproj/src/
+asl.c:271`'s `asl_open()` calls `bootstrap_look_up2(bootstrap_port,
+ASL_SERVICE_NAME, ...)` unconditionally (checked, no Unix-domain-socket
+fallback exists anywhere in the client library -- grepped `asl.c`/
+`asl_client.c`/`asl_core.c` for `AF_UNIX`/`/var/run/syslog`/`sun_path`,
+zero hits). `syslog(3)` itself (`libsystem_asl.tproj/src/syslog.c`) is a
+thin wrapper over `asl_open()`/`asl_log()`, so it inherits the same
+dependency. `syslogd.tproj/dbserver.c` (the live ASL query/ingest
+service real `asl_log()` clients actually reach) additionally uses real
+XPC (`xpc_copy_entitlement_for_token` etc, confirmed via grep) for
+per-client entitlement checks. **Same real blocker as `notifyd`
+above: bootstrap-namespace resolution, not a separate gap.**
+
+**But a real, smaller, Mach-free legacy path exists inside the same
+pin, verified by reading it, not assumed**: `bsd_in.c` (172 lines) is a
+plain `AF_UNIX`/`sockaddr_un` listener on `/var/run/syslog` (real
+`recvfrom()`, dispatched via a real `dispatch_source_t`/`dispatch_queue_t`
+-- this project already has a working `libdispatch.dylib`, see Phase
+6.6), receiving old-style datagram `syslog()` calls from processes that
+don't link the ASL client at all. `udp_in.c` (network syslog receiver)
+and `klog_in.c` (kernel message reader) are similarly small and
+Mach-free. `daemon.c`/`syslogd.c` are the real event-loop glue tying
+input modules to output modules (`bsd_out.c` writing to real log files
+being the relevant one for a first cut).
+
+**Real scoped recommendation, not yet implemented**: build a
+**legacy-only `syslogd`** first -- `syslogd.c` + `daemon.c` + `bsd_in.c`
++ `udp_in.c` + `klog_in.c` + `bsd_out.c`, explicitly excluding
+`dbserver.c` (real ASL live-query Mach/XPC service) and `remote.c`
+(network log forwarding, not needed yet). This gives every command a
+real place to log to (`docs/roadmap.md`'s original Phase 5.5 motivation
+for this item) via the Unix-domain-socket path, with zero bootstrap
+dependency -- and can replace this project's existing
+`ifconfig_syslog_compat.c` stderr-only `syslog()` fallback for real,
+once wired. The full ASL client library (`libsystem_asl.tproj`, real
+`asl_open`/`asl_log`/`syslog()`) and `dbserver.c` both wait on the same
+bootstrap-namespace registrar shim scoped above for `notifyd` -- build
+that once, it unblocks both. `aslmanager.tproj`/`util.tproj` are lower
+priority (log rotation, the `syslog(1)` query CLI) and depend on
+whichever of the above lands first.
+
+**Also corrects two now-stale "confirmed never open-sourced" claims**
+found while investigating this (both filed during earlier CF/launchd
+work, before this pin existed): `docs/backlog.md`'s item d6/d7 ASL
+notes, and `tools/userland_staging/ifconfig_syslog_compat.c`'s own
+header comment -- fixed in the former, the latter still functions
+correctly as a fallback and doesn't need code changes yet, just flagging
+that its comment is now stale (the real replacement exists, just isn't
+wired in).
+
+**Real recon DONE 2026-08-27 -- `tools/userland_staging/
+build_syslogd_recon.sh` (new): 10/10 legacy-scope files compile clean,
+more than expected.** Real `-fsyntax-only` trial compile (same
+methodology as `build_launchd_recon.sh`) of the full legacy-only file
+set: `klog_in.c`/`bsd_in.c`/`bsd_out.c`/`udp_in.c` (Mach-free input/
+output modules), `daemon.c`/`syslogd.c` (event-loop glue -- real
+exercises this project's actual `libdispatch`, not just a syntax
+formality: `daemon.c`'s tail calls `database_server()` then
+`dispatch_main()`), `aslcommon/asl_common.c`/`asl_memory.c` (shared
+support code), and -- a real surprise, both had been provisionally
+scoped as "probably needs XPC/CF, defer" based on their `#include` lines
+alone -- `asl_action.c` and `remote.c`, neither of which turned out to
+have any real `xpc_*`/CoreFoundation call site once actually compiled
+against real headers. Only `dbserver.c` itself (the live ASL Mach/XPC
+query service) remains unattempted, needing a real `asl_ipc.h` MIG
+regen from `aslcommon/asl_ipc.defs` first (bounded, same pattern as
+`notify_ipc.defs`, just not done yet).
+
+Three real, narrow compat headers were needed (all in
+`tools/userland_staging/syslog_compat_headers/`, each documented in its
+own header comment): `sys/kevent_qos_compat.h` (real `struct
+kevent_qos_s`/`kqueue_id_t`, verbatim from `xnu-7195`'s kernel-internal
+`bsd/sys/event.h` -- confirmed absent from this project's pinned SDK's
+exported `<sys/event.h>` even under `-DPRIVATE=1`, needed because
+`daemon.c` directly `#include <libproc.h>` -> `<sys/proc_info.h>`, which
+has a real `PRIVATE`-gated struct field of this exact type);
+`os/transaction_private.h` (real `os_transaction_t` SPI has no source
+anywhere in this project -- honest no-op, since this project's PID-1 has
+no idle-exit lifecycle for spawned daemons to hook into regardless);
+`configuration_profile.h` (real MDM/enterprise-profile API, confirmed
+never open-sourced as its own repo -- honest no-op, both real call sites
+already null-check the return, confirmed by reading them before writing
+the stub). `servers/bootstrap.h` (`syslogd.c`'s own real `#include`)
+resolves for real via PureDarwin's already-pinned libxpc port, not a new
+gap.
+
+**Concrete next steps, in priority order**: (1) real `asl_ipc.defs` MIG
+regen to unblock `dbserver.c` (bounded, mechanical); (2) compile the
+10 clean files to real `.o`s and archive them -- this recon script only
+proves compilability, not link-readiness, same next-step shape
+`build_launchd_recon.sh` had before `build_launchd_core.sh`; (3) a real
+trial link against this project's existing libc/libpthread/libdispatch/
+libmach_ipc stack to find the real remaining undefined-symbol list; (4)
+wire the resulting `syslogd.macho` into PID-1's spawn list (matching
+`getty`'s built-but-not-yet-wired-in precedent) once it links and runs
+clean under QEMU.
 
 ## Phase 6.8 (`launchd` + XPC via PureDarwin) -- RE-SCOPED 2026-08-25,
 ## real source swap + two real prerequisite findings

@@ -257,6 +257,17 @@ mkdir -p third_party
 #     skeleton source docs/daemon-roadmap.md originally scoped this phase
 #     around).
 #
+#   - syslog (Phase 5.5 item 2 / daemon-roadmap Tier 1, 2026-08-27): same
+#     `macos-112` manifest method -- `git ls-tree macos-112 -- syslog` ==
+#     commit 19b7828778996ac0d6d8c6c13d01c816677c5f03 == tag `syslog-385`
+#     (confirmed via `git ls-remote --tags`, matching
+#     `docs/apple-oss-catalog.md`'s earlier manifest-sweep finding, now
+#     directly re-verified rather than just cited). Real, unmodified
+#     Apple `syslogd`/`syslog`/`aslmanager` source. Classic BSD `syslogd`
+#     listens on a Unix-domain socket (`/var/run/syslog`), NOT a Mach
+#     service -- no bootstrap-namespace/launchd dependency at all, unlike
+#     `notifyd` (see `docs/daemon-roadmap.md`'s Phase 6.7 section).
+#
 # name | clone_url | ref (branch or tag) | patch file (optional, relative to third_party-patches/)
 REPOS='
 xnu-7195|git@github.com:anurodhp/xnu-pi3-macos11.git|bcm2837-bringup|
@@ -295,6 +306,7 @@ libarchive|https://github.com/apple-oss-distributions/libarchive.git|libarchive-
 CommonCrypto|https://github.com/apple-oss-distributions/CommonCrypto.git|CommonCrypto-60178.40.2|
 network_cmds|https://github.com/apple-oss-distributions/network_cmds.git|network_cmds-606.40.2|
 cron|https://github.com/apple-oss-distributions/cron.git|cron-40|cron.patch
+syslog|https://github.com/apple-oss-distributions/syslog.git|syslog-385|
 libutil|https://github.com/apple-oss-distributions/libutil.git|libutil-58.40.2|
 ncurses|https://github.com/apple-oss-distributions/ncurses.git|ncurses-57|
 libresolv|https://github.com/apple-oss-distributions/libresolv.git|libresolv-68|

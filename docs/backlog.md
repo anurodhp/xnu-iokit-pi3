@@ -296,8 +296,17 @@ d6. **CLOSED 2026-08-26 (critical path) — launchd's full daemon +
       real ICU (~50 symbols: CFCharacterSet/CFUniChar/CFLocale/
       CFNumberFormatter/StringEncodings-internal — since ported for CF
       generally, see item d7, but not yet re-verified against launchd's
-      own trial link specifically); real ASL client library (`asl_*`,
-      6 symbols) — confirmed never open-sourced by Apple.
+      own trial link specifically); `asl_*` (6 symbols) — **CORRECTED
+      2026-08-27, was wrong**: previously filed as "confirmed never
+      open-sourced by Apple." That was true only in the narrow sense
+      that no standalone `ASL` repo exists — the real ASL client library
+      (`asl_open`/`asl_log`/`syslog()`, 14,555 real lines, Apple-
+      licensed) is bundled inside `apple-oss-distributions/syslog`'s
+      `libsystem_asl.tproj/src/` and is real and pinnable (pinned
+      2026-08-27 as `syslog-385` for the `syslogd` port, see
+      `docs/daemon-roadmap.md`'s Phase 6.7 syslogd section) — not yet
+      wired into this project's CF/launchd trial links, but no longer a
+      genuine scope wall, just unattempted.
     - **Deprioritized, real, peripheral**: BSM audit-record
       construction (`au_*`/`audit_session_*`, ~10 symbols) — needs a
       private header this project's pinned BSM repo doesn't ship.
@@ -319,8 +328,9 @@ d6. **CLOSED 2026-08-26 (critical path) — launchd's full daemon +
       wrapper source anywhere in this project's pinned repos.
 
     **Bottom line**: launchd is not a zero-gap link (needs the real ICU
-    and ASL ports above, both separate, large undertakings) — but the
-    critical-path work is exhausted for this pass.
+    port above, a separate, large undertaking — ASL is real and pinned
+    now, just not yet wired in) — but the critical-path work is
+    exhausted for this pass.
 
 d7. **CoreFoundation + real ICU + real libxml2 ports DONE 2026-08-26/27
     — CF dynamic trial link down to 42 undefined-symbol groups, from a
@@ -386,8 +396,13 @@ d7. **CoreFoundation + real ICU + real libxml2 ports DONE 2026-08-26/27
       `_os_log_create`/`_os_log_type_enabled`: a real, not-yet-root-
       caused os_log/dispatch gap — confirmed genuinely absent from both
       `libdispatch.dylib` and `libSystem.B.dylib` via `nm`.
-    - `_asl_*` (6 symbols): confirmed never open-sourced by Apple, out
-      of scope.
+    - `_asl_*` (6 symbols): **CORRECTED 2026-08-27** — not actually
+      out of scope, see the parallel correction under item d6 above.
+      The real ASL client library is bundled in
+      `apple-oss-distributions/syslog`'s `libsystem_asl.tproj/src/`
+      (pinned as `syslog-385`, see `docs/daemon-roadmap.md`'s Phase 6.7
+      syslogd section) — genuine, just not yet wired into CF's own
+      trial link.
     - `___CFPreferencesAllocator`/`__CFPreferencesDomain*`/
       `_CFPreferencesCopyValue`/`_kCFPreferences*`/`_kCFLocale*`/
       `_kCFDateFormatter*`/`_kCFGregorianCalendar`: real
@@ -727,6 +742,26 @@ d7. **CoreFoundation + real ICU + real libxml2 ports DONE 2026-08-26/27
     separately exercised (only single RETURN + quit). Porting a real
     terminal-capability database is a distinct, larger, not-yet-scoped
     follow-up if full-screen paging is ever needed.
+
+17. **Once `syslogd`/ASL land, switch real callers off the stderr-only
+    `syslog(3)` fallback onto the real thing — but only via the legacy
+    Unix-socket path first, not `libsystem_asl`'s real `asl_open()`
+    client.** Filed 2026-08-27 alongside the `syslog-385` pin
+    (`docs/daemon-roadmap.md`'s Phase 6.7) so this sequencing isn't lost:
+    `tools/userland_staging/ifconfig_syslog_compat.c`'s `syslog()`/
+    `openlog()`/`closelog()` stand-ins (also used by `cron`, see
+    `build_cron.sh`'s own header comment) are correct and should stay
+    exactly as-is until a real legacy-only `syslogd` (`bsd_in.c`-based,
+    Unix-domain-socket `/var/run/syslog`, no Mach dependency) is actually
+    running. Do **not** wire callers onto `libsystem_asl`'s real
+    `asl_open()`/`syslog()` (`third_party/syslog/libsystem_asl.tproj/`)
+    until the bootstrap-namespace registrar shim scoped for `notifyd`
+    also exists — that client unconditionally calls
+    `bootstrap_look_up2(bootstrap_port, ASL_SERVICE_NAME, ...)`
+    (`asl.c:271`, confirmed no non-Mach fallback path exists anywhere in
+    the client library), so wiring it in early would produce code that
+    compiles clean but silently fails to log anything, exactly the kind
+    of regression this project's own conventions exist to avoid.
 
 ---
 
