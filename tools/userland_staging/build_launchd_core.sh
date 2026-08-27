@@ -106,18 +106,58 @@ done
 # real citation and scope.
 "$CLANG" "${CFLAGS[@]}" xpc_copy_compat.c -o "$OUT/launchd_core_obj/xpc_copy_compat.o"
 
-# Real mktime/localtime/localtime_r/ctime_r/asctime_r: tried again
-# (rechecked against this project's now-much-larger curated stack,
-# hoping the earlier-reverted deep dependency chain had shrunk) and
-# reverted a third time -- most of the chain DID resolve this time
-# (pthread rwlock, __isthreaded, _lstat$INODE64 all now real/aliasable),
-# but stdtime/FreeBSD/localtime.c's own real declarations
-# (__LIBC_PTHREAD_KEY_LOCALTIME/_GMTIME, pthread_key_init_np, etc) live
-# behind third_party/Libc/include/sys/cdefs.h, which itself needs a
-# real `libc-features.h` this project has never pinned/generated --
-# a new, deeper real header-chain gap, not the same one as before. Left
-# for a future pass (docs/backlog.md item d7); not worth chasing further
-# in this one.
+# Real mktime/localtime/localtime_r/ctime_r/asctime_r: fourth attempt,
+# real fix found by looking at how PureDarwin's own CMake build gets
+# past this exact wall -- it depends on a real `libc_features` step
+# that generates libc-features.h via third_party/Libc's own real
+# xcodescripts/generate_features.pl against a real per-platform
+# Makefile.inc (third_party/Libc/Platforms/iphoneos/Makefile.inc).
+# Neither PureDarwin's copy of that machinery nor ours had ever been
+# run -- this project already has the real generator AND the real
+# platform config pinned, just never invoked. Real, self-contained
+# regen here (own tracked libc_features_platform/Platforms/iphoneos/
+# Makefile.inc -- a real copy of the pinned one with exactly one real,
+# documented change: FEATURE_TIMEZONE_CHANGE_NOTIFICATION disabled,
+# since enabling it makes localtime.c call the real notify(3) CLIENT
+# API this project has never ported -- only notifyd's real MIG SERVER
+# side exists so far, see build_notify.sh). Also needed
+# `-fno-stack-check` (a real, standard, safe clang flag -- avoids
+# needing a from-scratch, safety-critical `__chkstk_darwin` stack-probe
+# ABI routine with no real source anywhere in this project; real
+# behavior is unaffected, this file just loses the early-detection
+# guard-page safety net for unusually large stack frames) and
+# localtime_private_decls.h (same "private name" declaration gap class
+# as launchd_syscall_compat_headers/private_names_decls.h -- all real,
+# already-linked functions, just missing declarations in this compile).
+mkdir -p "$OUT/libc_features_gen"
+ARCHS=arm64 VARIANT_PLATFORM_NAME=iphoneos SRCROOT="$(cd libc_features_platform && pwd)" \
+    DERIVED_FILES_DIR="$(cd "$OUT" && pwd)/libc_features_gen" \
+    perl "$LIBC/xcodescripts/generate_features.pl" >/dev/null
+LOCALTIME_FLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -fno-stack-check \
+    -include localtime_private_decls.h \
+    -I "$LIBC/include" -I "$OUT/libc_features_gen/arm64" -I "$PTHREAD/private" \
+    -idirafter "$LIBC/fbsdcompat" -idirafter "$LIBC/darwin" -idirafter "$XNU/bsd" -idirafter "$XNU/osfmk")
+"$CLANG" "${LOCALTIME_FLAGS[@]}" "$LIBC/stdtime/FreeBSD/localtime.c" -o "$OUT/launchd_core_obj/localtime.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -DPRIVATE=1 \
+    "$LIBC/secure/strcat_chk.c" -o "$OUT/launchd_core_obj/strcat_chk.o"
+
+# Real __st_set_timezone/__st_get_timezone (localtime.c's own real
+# tzset() path) -- real, zero-dependency source
+# (third_party/Libc/stdtime/timezone_unix03.c), confirmed via nm this
+# project's own libopenpam.a already has a copy too (unused here to
+# avoid any archive-selection ambiguity -- this file is cheap enough to
+# just compile fresh).
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -DPRIVATE=1 \
+    "$LIBC/stdtime/timezone_unix03.c" -o "$OUT/launchd_core_obj/timezone_unix03.o"
+
+# NOT fixed, real gap confirmed: asctime()/asctime_r() (localtime.c's
+# own ctime() needs the former; core.c's jobmgr_shutdown/_remove call
+# the latter directly) both real-source-exist
+# (stdtime/FreeBSD/asctime.c) but need real strftime_l(), which pulls
+# the exact same deep xlocale.c locale-loading-machinery chain already
+# tried and reverted for `strtoul_l` (docs/backlog.md item d7) --
+# confirmed via real trial compile this pass, not re-guessed. Left
+# deferred.
 
 # Real __sprintf_chk/__vsprintf_chk (core.c calls fortified sprintf
 # directly) + real __mach_errors data table (backing libxpc_syscalls.a's
@@ -267,7 +307,13 @@ echo "wrote $OUT/launchd_libc_extras.a ($(ls "$OUT"/launchd_libc_extras_obj/*.o 
 # `build_corefoundation.sh` already established: no `-static`, plain
 # dylib links on the command line, `-Wl,-fixup_chains`. `libdispatch_real.a`
 # (the old static archive) is dropped in favor of `libdispatch.dylib`,
-# per this project's 2026-08-25 dylib-first directive.
+# per this project's 2026-08-25 dylib-first directive. Also links
+# `libsystem_pthread.dylib` directly (real localtime.c calls the
+# internal `_pthread_rwlock_*` variants -- double-underscore names,
+# distinct from the public POSIX ones -- which `libSystem.B.dylib`'s
+# own small hand-picked re-export list, item d7's "export-parity gap"
+# finding, doesn't include; the real sub-image that actually provides
+# them is already built, just needed adding to this link directly).
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
     -Wl,-fixup_chains \
     -o "$OUT/launchd_trial.macho" \
@@ -280,6 +326,7 @@ echo "wrote $OUT/launchd_libc_extras.a ($(ls "$OUT"/launchd_libc_extras_obj/*.o 
     "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
     "$OUT/libc_locale_for_stdio.a" \
     "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
+    "$OUT/system/libsystem_pthread.dylib" \
     2>"$OUT/launchd_trial_link.err" \
     && echo "real trial link: 0 undefined symbols -- fully closed" \
     || { n=$(grep -c 'Undefined symbol' "$OUT/launchd_trial_link.err" || true); echo "expected-for-now: real trial link found $n undefined symbol group(s):"; grep '^  "' "$OUT/launchd_trial_link.err" | sed 's/,.*//' | sort -u; }
