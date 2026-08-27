@@ -1074,10 +1074,69 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
       this project) that isn't worth fixing for dead-to-this-project
       sample code.
 
-    **Not yet done**: stage 2 (the real target cross-compile), then
-    working out what CF's own `CFUniChar`/`CFCharacterSet`/
-    `CFStringUtilities` collation/`CFLocale`/`CFNumberFormatter` gap list
-    (documented above in this same item) actually needs linked from it.
+    **Stage 2 (real arm64-apple-ios14.4 target cross build) DONE
+    2026-08-26** — `tools/userland_staging/build_icu_target.sh`: real
+    `libicuuc`/`libicui18n`/`libicuio`/`libicudata` dylibs, confirmed
+    genuine arm64 Mach-O (`file`/`otool -l`), correctly linking
+    `/usr/lib/libSystem.B.dylib` + `/usr/lib/libc++.1.dylib` (this
+    project's own dylibs resolve those install names at actual link
+    time, same as every other real per-library dylib here).
+    `libicudata.66.1.dylib` is a real 29MB packaged CLDR/Unicode data
+    library — built by having the HOST's own real `genrb`/`pkgdata`
+    (stage 1's output, run natively on the build machine, per ICU4C's
+    own `--with-cross-build` design) generate+package data for the
+    target arch, never executing target-arch code during the build.
+    Confirmed the two exact symbols item (5) above named as ICU's real
+    wall are now real exports: `_u_hasBinaryProperty`/
+    `_u_getIntPropertyValue` in `libicuuc`, `_ucol_open` in `libicui18n`.
+
+    Three more real gaps found and fixed getting stage 2 green (all
+    documented in `build_icu_target.sh`'s own header comment; none
+    needed a source patch):
+    - This project's usual `-ffreestanding` flag (every other
+      `build_*.sh` here uses it) breaks ICU's `./configure` outright:
+      per the C++ standard, `-ffreestanding` makes `main()` an ordinary,
+      mangled function (`__Z4mainv`) instead of the special unmangled
+      `_main` a linked executable's entry stub expects, so every one of
+      configure's own full-link compiler-sanity checks (AC_PROG_CXX, the
+      namespace-support probe, etc) fails with "_main ... referenced".
+      Confirmed with a standalone repro isolating the flag. Fix: drop
+      `-ffreestanding` (confirmed `-fno-builtin`/`-fno-stack-protector`
+      alone don't cause this), since samples/tests/extras — the only
+      real ICU components that ever link a full executable — are
+      already disabled.
+    - `common/aaplbfct.cpp` unconditionally `#include`s
+      `<NSSystemDirectories.h>` (missing entirely from the iPhoneOS
+      SDK), but its only real use is already dead code on this target
+      (wrapped in the file's own `#if !TARGET_OS_EMBEDDED` / `#if 0`,
+      and `TARGET_OS_EMBEDDED=1` confirmed for arm64-apple-ios14.4) —
+      just the `#include` itself was left unguarded. Fixed by moving it
+      inside the same `#if !TARGET_OS_EMBEDDED` guard its usage already
+      has (second commit in `third_party-patches/ICU.patch`).
+    - `--disable-tools` (needed to avoid `tools/pkgdata.cpp`'s real
+      `system()` call, which the iPhoneOS SDK marks `__IOS_PROHIBITED` —
+      a hard unavailable-on-iOS error, not a warning, for a build-time
+      tool binary that would never run on this project's actual boot
+      target) turned out to also disable the real `data` subdir
+      entirely: `Makefile.in` ties `DATASUBDIR` to the same `TOOLS`
+      autoconf conditional, even though `data/Makefile.in`'s own
+      packaging rule already resolves through `--with-cross-build`'s
+      `TOOLBINDIR` to the *host's* tools regardless of whether local
+      target-arch tools get built. A real ICU build-system gap specific
+      to combining `--disable-tools` with `--with-cross-build` (Apple
+      never needed to hit this, since they don't build pkgdata for an
+      iOS device target in their public source drops) — fixed by
+      uncommenting `DATASUBDIR = data` in the *generated* top-level
+      `Makefile` after configure (scoped to this build tree, not filed
+      as a general `ICU.patch` change, since it's specific to that flag
+      combination rather than a general upstream inconsistency).
+
+    **Not yet done**: wiring these real dylibs into
+    `build_corefoundation.sh`'s link and working out what CF's own
+    `CFUniChar`/`CFCharacterSet`/`CFStringUtilities` collation/
+    `CFLocale`/`CFNumberFormatter` files (currently stubbed/omitted, per
+    this same item above) actually need from them — the libraries exist
+    now, but nothing in this project links against them yet.
 
 0a. **No AES implementation exists anywhere in this kernel — HARD
     PREREQUISITE for Phase 7b (`sshd`).** Filed explicitly 2026-08-21 so it

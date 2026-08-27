@@ -702,13 +702,19 @@ need a real implementation later:
 - **Real ICU port started 2026-08-26** (was scoped out of Phase 9 above;
   no longer a scope decision, now underway for real): pinned
   `ICU-66109` (confirmed via the `macos-112` manifest, same as every
-  other pin), stage 1 (native host build, a real prerequisite for ICU4C's
-  own `--with-cross-build` two-stage cross-compile) DONE -- real ICU 66.1
-  host dylibs/tools/CLDR data built via `tools/userland_staging/
-  build_icu_host.sh`. Stage 2 (the real arm64-apple-ios14.4 target cross
-  build) not yet started. Full writeup, two real build-system gaps found
-  and fixed along the way: `docs/backlog.md` item d7's own "Real ICU port
-  started" entry.
+  other pin). Both stages DONE the same day: stage 1 (native host build,
+  a real prerequisite for ICU4C's own `--with-cross-build` two-stage
+  cross-compile, via `build_icu_host.sh`) and stage 2 (the real
+  arm64-apple-ios14.4 target cross build, via `build_icu_target.sh`) --
+  real `libicuuc`/`libicui18n`/`libicuio`/`libicudata` arm64 dylibs with
+  real packaged CLDR/Unicode data, confirmed exporting the exact symbols
+  (`u_hasBinaryProperty`, `ucol_open`, etc) CF's own CFUniChar/
+  CFCharacterSet/CFLocale gap list needs. Five real build-system gaps
+  found and fixed across both stages (none required faking any
+  behavior): `docs/backlog.md` item d7's own "Real ICU port started"
+  entry has the full writeup. Not yet done: wiring these dylibs into
+  `build_corefoundation.sh`'s link and closing CF's actual ICU-dependent
+  gap list against them.
 - **Phase 6.8 (`launchd`+XPC via PureDarwin): critical-path gap-closing
   pass DONE 2026-08-26**, real port itself still open. Source is
   PureDarwin/PureDarwin's own `next` branch (a current, actively
