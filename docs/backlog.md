@@ -623,8 +623,29 @@ d6. **CLOSED 2026-08-26 — every real file in `launchd/` now compiles
     stack (`nm -g` across all `.a` files) before being called a real
     gap, not assumed.
 
-    **FINAL STATUS, end of the 2026-08-26 critical-path pass: 183 → 114
-    undefined symbols** (a 38% reduction, every single fix real and
+    **UPDATE, same day, real 5th fix on `mktime`/`localtime`/
+    `localtime_r`/`ctime_r`**: unblocked for real by looking at how
+    PureDarwin's own CMake build gets past this exact wall — it depends
+    on a real `libc_features` step that runs `third_party/Libc`'s own
+    real `xcodescripts/generate_features.pl` against a real per-
+    platform `Makefile.inc`. Both pieces were already pinned in this
+    project's own Libc checkout, just never run. Real, self-contained
+    regen via a new tracked `libc_features_platform/Platforms/iphoneos/
+    Makefile.inc` (one documented change from the real pinned copy:
+    `FEATURE_TIMEZONE_CHANGE_NOTIFICATION` disabled, since enabling it
+    needs the real `notify(3)` client API this project has only built
+    the MIG server side of) + `-fno-stack-check` (avoids needing a
+    from-scratch, safety-critical `__chkstk_darwin` ABI routine with no
+    real source anywhere in this project) + `libsystem_pthread.dylib`
+    linked directly (localtime.c calls the internal
+    `_pthread_rwlock_*` variants, outside `libSystem.B.dylib`'s own
+    limited re-export list — the same already-documented export-parity
+    gap, not a new one). `asctime`/`asctime_r` confirmed to hit the
+    identical deep `xlocale.c` chain already reverted for `strtoul_l` —
+    left deferred, not re-chased. **Real gap count now 109.**
+
+    **FINAL STATUS, end of the 2026-08-26 critical-path pass: 183 → 109
+    undefined symbols** (a 40% reduction, every single fix real and
     individually trial-link-verified — no fabricated stubs beyond the
     honestly-scoped compat forwards documented throughout this section
     and item d7). Real, closed this pass: CF wired in for real (item
@@ -682,15 +703,17 @@ d6. **CLOSED 2026-08-26 — every real file in `launchd/` now compiles
       `CFURLCreateDataAndPropertiesFromResource`,
       `CFTimeZoneGetSecondsFromGMT` — real, unported CF subsystems
       (`CFBundle` specifically tried+reverted, 30-for-3 bad trade).
+    - **CLOSED, same day**: `mktime`/`localtime`/`localtime_r`/
+      `ctime_r` — unblocked via `generate_features.pl` (see this
+      section's own "UPDATE, same day" entry above). `asctime`/
+      `asctime_r` remain real, deferred gaps (see below).
     - **Real, individually tried-and-reverted this pass (deep
-      dependency chains, not worth the trade)**: `mktime`/`localtime`/
-      `localtime_r`/`ctime_r`/`asctime_r` — got much closer than
-      before (most of the old chain now resolves) but hit a new,
-      deeper real gap (`third_party/Libc/include/sys/cdefs.h` needs a
-      real `libc-features.h` this project has never pinned/generated);
-      `strtoul_l` — real `__c_locale` turned out to need the same
-      locale-loading-machinery chain as before, even via a filtered
-      `ld -r -exported_symbol` extraction.
+      dependency chains, not worth the trade)**: `asctime`/
+      `asctime_r` — real source exists but needs `strftime_l()`, which
+      pulls the same deep `xlocale.c` locale-loading-machinery chain as
+      `strtoul_l` below; `strtoul_l` — real `__c_locale` turned out to
+      need the same chain, even via a filtered `ld -r -exported_symbol`
+      extraction.
     - **Real, no source located anywhere in this project's pinned
       repos**: `initgroups` (confirmed `NO_SYSCALL_STUB` with no
       dedicated wrapper file, checked multiple times); `setiopolicy_np`
