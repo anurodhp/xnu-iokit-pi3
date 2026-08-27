@@ -773,19 +773,38 @@ d7. **CoreFoundation + real ICU + real libxml2 ports DONE 2026-08-26/27
     file bug, not an architecture gap; two more of the exact same class
     (`os/semaphore.c`, a narrow reproduction of `workgroup.c`'s TSD
     cleanup) were found and fixed the same way via iterative real QEMU
-    boot-testing. **A real, different-kind blocker remains**: the next
-    crash, `__pthread_qos_class_encode`, is part of a real ~16-symbol
-    pthread QoS-class/attr subsystem (`qos.c`) this project's own
-    `build_libpthread.sh` already deliberately never built ("unreachable
-    per the kernel constraint" — confirmed still true; forcing
-    `HAVE_PTHREAD_WORKQUEUE_QOS=0` was tried and hits a real hard
-    `#error` in `voucher.c`, reverted). See `docs/daemon-roadmap.md`'s
-    Phase 6.7 section for the full real writeup and next step (real,
-    ABI-correct `pthread_attr_t`/QoS stand-ins or a scoped `qos.c` port,
-    then re-enable `tools/init_binary/init.c`'s already-written
-    `spawn_syslogd()` call, currently disabled with a full postmortem).
-    Once that's closed and `syslogd` boots clean, this item (switching
-    real callers onto the legacy Unix-socket path) becomes actionable.
+    boot-testing.
+
+    **UPDATE 2026-08-27, later same day**: the pthread QoS-class/attr
+    blocker (`__pthread_qos_class_encode` and ~30 real siblings) is now
+    substantially closed too — `qos.c` turned out to compile clean
+    against this project's real toolchain (the "unreachable per the
+    kernel constraint" note in `build_libpthread.sh` predates Phase
+    7.5's real kernel thread-creation port and is now stale for the pure
+    encode/decode pieces); new, isolated `build_libpthread_qos.sh` +
+    `libpthread_qos_compat.c`/`libpthread_attr_compat.c` close real
+    `pthread_attr_*`, `pthread_sigmask`, `pthread_exit`,
+    `pthread_workloop_create`/`destroy`, `clock_gettime_nsec_np`, and the
+    `mach_voucher`/`host_priv` MIG-regenerated routines this needed along
+    the way. Kept deliberately separate from the master `libpthread.a` to
+    avoid regression risk to bash/ncurses/getty/syslogd. `pthread_get_
+    stackaddr_np`/`pthread_setschedparam` stay honestly deferred (would
+    need this project's from-scratch thread-bootstrap to match `pthread.c`'s
+    real thread-list ABI, not yet verified safe to copy). Full writeup:
+    `docs/daemon-roadmap.md`'s Phase 6.7 section.
+
+    **Real blocker remaining**: a fresh `nm -u` sweep on the current
+    `libdispatch.dylib` shows ~54 more real undefined symbols (`kevent_qos`,
+    `mach_eventlink_*`, `kpersona_get`, `mach_continuous_time`/`get_times`,
+    `malloc_engaged_nano`/`memory_event_handler`, `semaphore_timedwait`,
+    `sigsuspend`, `thread_destruct`/`get_special_reply_port`, `sys_errlist`/
+    `sys_nerr`, more) — most already have real implementations somewhere
+    else in this project and need conflict-free wiring, not new code.
+    `tools/init_binary/init.c`'s `spawn_syslogd()` call is written but
+    stays disabled, with a full real postmortem in its own comment, until
+    this gap closes and a real QEMU boot reaches a shell with `syslogd`
+    actually running. Once that's closed, this item (switching real
+    callers onto the legacy Unix-socket path) becomes actionable.
 
 ---
 

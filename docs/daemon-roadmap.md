@@ -1927,43 +1927,121 @@ each with its own fix already committed:
   for the full real justification for reproducing just this one function
   rather than compiling the whole 1076-line file). All three committed.
 
-  **Real, deeper blocker found next -- NOT the same class, NOT yet
-  fixed**: the crash after those three is
-  `symbol not found in flat namespace '__pthread_qos_class_encode'`.
-  Confirmed this is a genuinely different kind of gap, not another
-  missing-file bug: `third_party/libpthread/src/qos.c` (which defines
-  `pthread_qos_class_encode` and ~15 real siblings --
-  `pthread_attr_set_qos_class_np`/`get_qos_class_np`, `qos_class_main`,
-  `pthread_qos_max_parallelism`, `pthread_set_qos_class_self_np`,
-  `pthread_exit`, `pthread_attr_init`/`destroy`/`setdetachstate`/
-  `setstacksize`/`setschedparam`/`setschedpolicy`/`getschedparam`/
-  `getschedpolicy`, `pthread_get_stackaddr_np`, `pthread_sigmask`, all
-  confirmed real, still-undefined references in `libdispatch_real.a`)
-  was **already** deliberately never built by this project's own
-  `build_libpthread.sh`, whose own header comment already says why:
-  "unreachable per the kernel constraint". Directly tested the
-  alternative (forcing `HAVE_PTHREAD_WORKQUEUE_QOS=0` to make
-  `libdispatch`'s own feature-detection match reality) and confirmed it's
-  not viable either: this project's own
-  `dispatch_compat_headers/config/config_ac.h` already documents, and a
-  real trial reproduced, that `voucher.c` has a hard
-  `#if !HAVE_PTHREAD_WORKQUEUE_QOS #error` -- QoS-class *support* is a
-  genuine hard requirement here, distinct from the thread-pool
-  *implementation* choice (`DISPATCH_USE_INTERNAL_WORKQUEUE=1`, already
-  correctly set). Reverted that attempt; it is not committed.
+  **Real pthread QoS/attr subsystem port, 2026-08-27 -- ~31 more symbols
+  closed, boot still not clean**: the crash after those three was
+  `symbol not found in flat namespace '__pthread_qos_class_encode'`, a
+  genuinely different kind of gap -- `third_party/libpthread/src/qos.c`
+  (which defines `pthread_qos_class_encode` and ~15 real siblings) was
+  **already** deliberately never built by this project's own
+  `build_libpthread.sh`, whose own header calls it "unreachable per the
+  kernel constraint". That reasoning predates Phase 7.5's real
+  `bsdthread_create`/`register` kernel port, though: a real trial compile
+  shows `qos.c` itself compiles with **zero errors** against this
+  project's real toolchain. The real, narrower remaining constraint:
+  `qos.c`'s `__bsdthread_ctl`-backed functions (`pthread_set_qos_class_
+  self_np`, the override/workqueue family, `pthread_qos_max_parallelism`)
+  get a real, honest kernel `ENOTSUP` at runtime, confirmed directly in
+  `bsd_pthread_workq.c`'s own dated header comment that `bsdthread_ctl`
+  specifically was never ported (unlike `bsdthread_create`/`register`,
+  which were) -- the same "real code, real kernel-returned failure, not
+  a fake success" pattern already accepted for `pthread_create()` itself.
+  The pure encode/decode functions never reach that syscall at all --
+  real, correct bit-packing math regardless of kernel QoS-override
+  support.
 
-  **Real next step, not yet attempted**: close this bounded (~16-symbol)
-  gap with either real, ABI-correct `pthread_attr_t`/QoS-class stand-ins
-  (this project's own already-working `pthread_create()` has a real
-  `pthread_attr_t` layout expectation any new attr functions would need
-  to match exactly -- not yet verified whether that's straightforward)
-  or a real, scoped port of `qos.c`'s non-kernel-dependent pieces. Then
-  re-enable `tools/init_binary/init.c`'s `spawn_syslogd()` call (present,
-  written, currently disabled with a full real postmortem in its own
-  comment -- same "built but not yet wired to run every boot" precedent
-  as `spawn_cron()`'s own disablement above) and re-verify via real QEMU
-  boot. `syslogd.macho` is still built and installed at `/usr/sbin/syslogd`
-  by `inject_into_sd_image.sh` when built; it just isn't exec'd
+  New `tools/userland_staging/build_libpthread_qos.sh` compiles `qos.c`
+  plus real, narrow support pieces (`libpthread_qos_compat.c`: `_main_qos`,
+  a real 3-line `_pthread_atomic_xchg_uint32_relaxed` copy from
+  `pthread_dependency.c` -- not that whole file, which stays correctly
+  excluded as os_workgroup-adjacent -- `_pthread_malloc`/`free` function
+  pointers initialized to this project's real `malloc`/`free`,
+  `__bsdthread_ctl`'s own real raw syscall #478, a real `_os_alloc_once`
+  reuse of the identical fix already applied for syslogd (a separate link
+  unit, no duplicate-symbol risk), real `posix_spawnattr_*_qos_clamp_np`
+  accessors against the real `struct _posix_spawnattr`, and a real
+  `clock_gettime_nsec_np` using `gettimeofday`/`mach_absolute_time`
+  instead of an unverified comm-page read -- `mach_boottime_usec()`'s
+  real implementation reads a fixed `_COMM_PAGE_BOOTTIME_USEC` address
+  this project's own kernel fork may not populate) into its own isolated
+  `libc_build/libpthread_qos.a`. Deliberately **NOT** folded into the
+  master `libpthread.a` -- that archive is real, widely reused, and
+  already QEMU-verified by bash/ncurses/getty/syslogd; any regression
+  risk from adding a whole new file there is unacceptable for this fix.
+
+  `libpthread_attr_compat.c` adds real, verbatim copies of
+  `pthread_attr_init`/`destroy`/`setdetachstate`/`setschedparam`/
+  `setschedpolicy`/`getschedparam`/`getschedpolicy`/`setstacksize` (real,
+  self-contained field accessors against the exact same real
+  `pthread_attr_t` -- `third_party/libpthread/src/types_internal.h` --
+  this project's own `pthread_create()` already uses), `pthread_sigmask`
+  (real syscall #329, plus a real `__asm("_pthread_sigmask")`-labeled
+  second entry point working around a genuine **ld64 internal assertion
+  crash** hit when trying `-Wl,-alias` from a `$UNIX2003`-suffixed real
+  symbol to a plain name inside a `-dynamiclib` link -- reproduced
+  directly, not assumed, and confirmed to be an ld64 limitation specific
+  to that alias direction in dylib mode), a real `pthread_exit()` using
+  this project's own already-working, already-used-for-this-purpose
+  `__bsdthread_terminate()` syscall directly (not pthread.c's real
+  thread-list machinery), and real `pthread_workloop_create`/`destroy`
+  (real syscall #530, `kqueue_workloop_ctl`, same attr-struct pattern --
+  initially scoped out as "niche, no real consumer", but turned out
+  self-contained once actually checked). `pthread_get_stackaddr_np`/
+  `pthread_setschedparam` stay honestly deferred: both need
+  `pthread.c`'s own real `_pthread_list_lock`/thread-registration
+  machinery, and this project's own `pthread_create()` was built from a
+  from-scratch bootstrap (`pthread_main_thread_bootstrap.c`), not from
+  `pthread.c`'s real thread-list code -- copying those bodies without
+  verifying ABI/registration consistency would be a real, unverified
+  risk, not a safe accessor copy.
+
+  Three more real gaps closed the same way (iterative real QEMU
+  boot-crash, root-cause, fix): a real `mach_voucher.defs` MIG regen
+  (this project's own pinned xnu-7195 genuinely has these routines, just
+  never regenerated) closes `mach_voucher_attr_command`/`debug_info`,
+  plus real forwarders to the regenerated kernelrpc fast path for
+  `extract_attr_recipe` and to this project's own already-real
+  `mach_port_deallocate` for `mach_voucher_deallocate`; a real
+  `host_priv.defs` MIG regen for `host_get_special_port` (regenerated
+  fresh rather than reusing a pre-built `liblaunchd_core.a` copy, which
+  hit a real stack-protector-flag mismatch, `___chkstk_darwin`,
+  unresolved anywhere else in this project); and `host_create_mach_
+  voucher` -- initially assumed a genuine version-skew gap (confirmed
+  absent from this project's own pinned `host_priv.defs` entirely) but
+  corrected: this project's own `libmach_ipc.a` already has the real
+  trap-based `_kernelrpc_host_create_mach_voucher` from earlier work,
+  just needed the plain-named public forward (a real bug in an early
+  version of this exact fix -- an extra leading underscore in the
+  extern declaration, caught by a real "undefined symbol" link error,
+  not assumed correct).
+
+  **Real remaining gap, not yet closed**: `nm -u` on the current
+  `libdispatch.dylib` shows **~54 more real undefined symbols**
+  (`kevent_qos`, the `mach_eventlink_*` family, `kpersona_get`,
+  `mach_continuous_time`/`get_times`, `malloc_engaged_nano`/
+  `memory_event_handler`, `semaphore_timedwait`, `sigsuspend`,
+  `thread_destruct`/`get_special_reply_port`, `sys_errlist`/`sys_nerr`,
+  and more). A real sweep against every other archive in this project
+  shows most of these already have real implementations *somewhere*
+  (`libncurses.a`, `libresolv.a`, `launchd_libc_extras.a`, `dyld_core.a`,
+  `libmach_ipc.a`, etc) -- the remaining work is wiring each in without
+  re-triggering the same class of duplicate-symbol conflicts this pass
+  already resolved several instances of (e.g. `dyld_core.a`'s own
+  `mach_port_*`/`mach_vm_*` copies vs. `libmalloc.a`'s real, different
+  ones, already documented above). Real next step: continue the same
+  "check existing archives first, selectively extract or write a narrow
+  real reproduction, verify via `nm`, real QEMU reboot" loop this pass
+  already used successfully ~15 times, until the boot reaches a shell
+  prompt with `syslogd` actually running, then re-enable
+  `tools/init_binary/init.c`'s `spawn_syslogd()` call (present, written,
+  currently disabled with a full real postmortem in its own comment --
+  same "built but not yet wired to run every boot" precedent as
+  `spawn_cron()`'s own disablement above), and finally proceed to
+  relinking `libdispatch.dylib` against the real sibling dylibs
+  (`libsystem_kernel.dylib`/`libsystem_pthread.dylib`/etc) instead of
+  statically bundling them, per this doc's own "library debt" note
+  above -- not yet started, correctly sequenced after a clean boot.
+  `syslogd.macho` is still built and installed at `/usr/sbin/syslogd` by
+  `inject_into_sd_image.sh` when built; it just isn't exec'd
   automatically yet.
 
 ## Phase 6.8 (`launchd` + XPC via PureDarwin) -- RE-SCOPED 2026-08-25,
