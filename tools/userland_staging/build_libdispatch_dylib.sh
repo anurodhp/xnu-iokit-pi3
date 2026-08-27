@@ -138,10 +138,32 @@
 # own syslogd_libc_extras.a -- its only dependency, _cerror_nocancel, is
 # already resolved for real via the libsystem_c.dylib sibling link above
 # (confirmed via nm before extracting, not assumed), so this adds zero
-# new gaps, unlike atoi.o in that same archive (needs
-# ___global_locale/___locale_key, neither defined anywhere in this
-# project yet -- correctly left deferred instead of trading one gap for
-# two).
+# new gaps.
+#
+# _atoi closed the same way, one level deeper: atoi.o (same archive as
+# geteuid.o) needs ___global_locale/___locale_key. Pulling in the whole
+# xlocale.o that defines them was tried and rejected (real-cascades into
+# __collate_load_tables/__monetary_load_locale/__numeric_load_locale/
+# __time_load_locale/__messages_load_locale/__setrunelocale/
+# __detect_path_locale/__get_locale_env -- confirmed via a real nm sweep
+# of libc_build/libc_locale.a's own xlocale.o member, same bloat class
+# already rejected for strcasecmp/getprogname above). Instead:
+# libc_locale_globals_compat.c (new sibling file, see its own header for
+# the full real trace) defines just the two real globals verbatim from
+# xlocale.c, plus real table.o/none.o (locale/FreeBSD/table.c's own
+# _DefaultRuneXLocale + its self-contained __none_* dependency) extracted
+# from libc_build/libc_locale.a -- confirmed via nm that their only real
+# deps (___error/_memchr) are already resolved elsewhere in this link.
+#
+# _environ, checked but NOT changed: confirmed via a real `nm -m` on
+# syslogd.macho itself that it has a real, defined, external `_environ`
+# (`third_party/Csu/crt.c`'s own real global, populated by `start.s`
+# before `main()`, per that project's own Phase 4.6 writeup in
+# simple_cmds_getenv_compat.c's header) -- so `_environ` deferred via
+# `-Wl,-U` below is NOT a real gap needing new code, it's the CORRECT
+# real architecture (same as real Apple's own libSystem: `environ` is
+# provided by the loading executable's own crt, not by libSystem itself).
+# Left deferred/dynamically-looked-up on purpose, not fixed further.
 UNDEF_SYMS=(
     _kevent_qos _kpersona_get _mach_continuous_time _mach_get_times
     _malloc_engaged_nano _malloc_memory_event_handler
@@ -150,7 +172,6 @@ UNDEF_SYMS=(
     _semaphore_timedwait _sigsuspend _sleep
     _thread_destruct_special_reply_port _thread_get_special_reply_port
     _pwrite
-    _atoi
     _mach_eventlink_associate _mach_eventlink_create _mach_eventlink_destroy
     _mach_eventlink_disassociate _mach_eventlink_signal
     _mach_eventlink_signal_wait_until _mach_eventlink_wait_until
@@ -209,9 +230,43 @@ rm -f "$OUT"/dispatch_dylib_extract/*.o
 # real, narrow single-object extraction: geteuid.o's only dependency
 # (_cerror_nocancel) is already resolved for real via the
 # libsystem_c.dylib sibling link below (confirmed via nm before
-# extracting) -- see this script's own UNDEF_SYMS header comment for why
-# atoi.o from the same archive is NOT extracted the same way.
+# extracting).
 (cd "$OUT/dispatch_dylib_extract" && ar x ../syslogd_libc_extras.a geteuid.o)
+
+# atoi: real body is atoi.o, same archive as geteuid.o above. Its only
+# real deps (___global_locale/___locale_key) are NOT provided by pulling
+# in the whole xlocale.o (real-cascades into
+# __collate_load_tables/__monetary_load_locale/etc, same bloat class
+# already rejected for strcasecmp/getprogname elsewhere in this file) --
+# instead: a real, narrow libc_locale_globals_compat.c (this script's own
+# sibling file, see its header for the full trace) defines just those
+# two real globals, verbatim from xlocale.c, plus real table.o/none.o
+# (locale/FreeBSD/table.c's own _DefaultRuneXLocale + its own
+# self-contained __none_* charset-conversion dependency) extracted from
+# libc_build/libc_locale.a -- confirmed via nm that table.o/none.o's only
+# real deps (___error/_memchr) are already resolved elsewhere in this
+# exact link, so this whole chain adds zero new gaps.
+if [ ! -f "$OUT/libc_locale.a" ]; then
+    echo "error: $OUT/libc_locale.a not found -- run build_libc_locale.sh first" >&2
+    exit 1
+fi
+(cd "$OUT/dispatch_dylib_extract" && ar x ../syslogd_libc_extras.a atoi.o && \
+ ar x ../libc_locale.a table.o none.o)
+LIBC="../../third_party/Libc"
+PTHREAD_FOR_LOCALE="../../third_party/libpthread"
+XNU_FOR_LOCALE="../../third_party/xnu-7195"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -Wno-nullability-completeness \
+    -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
+    -DVARIANT_STATIC -DVARIANT_CANCELABLE -DVARIANT_DARWINEXTSN -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \
+    -D__ct_rune_t=__darwin_ct_rune_t -D__va_list=__builtin_va_list \
+    -I "$OUT/compat_include" \
+    -I "$LIBC/include" -I "$LIBC/darwin" -I "$LIBC/fbsdcompat" -I "$LIBC/locale" -I "$LIBC/locale/FreeBSD" \
+    -I "$LIBC/stdtime/FreeBSD" \
+    -I "$PTHREAD_FOR_LOCALE/include" -I "$PTHREAD_FOR_LOCALE/private" \
+    -I "$XNU_FOR_LOCALE/osfmk" -I "$XNU_FOR_LOCALE/libsyscall" \
+    -I ../../generated \
+    libc_locale_globals_compat.c -o "$OUT/dispatch_dylib_extract/libc_locale_globals_compat.o"
 
 # libc_build/dyld_core.a's own mach_portUser.o/vm_mapUser.o were tried
 # here (they have real mach_port_construct/destruct/get_context/etc and
@@ -354,4 +409,14 @@ otool -l "$OUT/system/libdispatch.dylib" | grep -q LC_ID_DYLIB || {
 echo "confirmed: $OUT/system/libdispatch.dylib is a real MH_DYLIB with LC_ID_DYLIB"
 
 undef_count=$(nm -u "$OUT/system/libdispatch.dylib" 2>/dev/null | wc -l | tr -d ' ')
-echo "real undefined-symbol count in the dylib: $undef_count (expected -- see this script's own HONEST SCOPE STATEMENT; a dylib legitimately has these, unlike a static executable)"
+# plain nm -u conflates two different things: symbols already bound to a
+# sibling dylib on this link line (nm -m: "(from libsystem_X)", safe --
+# resolves exactly like any other real Apple dylib's cross-image call)
+# vs symbols with no resolving dylib at all (nm -m: "(dynamically looked
+# up)", the real UNDEF_SYMS/-Wl,-U gap list this script documents above).
+# Only the second group is a real gap; report both so the raw undef_count
+# doesn't overstate it (see build_libsystem_pthread.sh's own nm -m fix,
+# same distinction).
+real_gap_count=$(nm -m "$OUT/system/libdispatch.dylib" 2>/dev/null | grep undefined | grep -vc "(from " | tr -d ' ')
+sibling_bound_count=$((undef_count - real_gap_count))
+echo "undefined-symbol table count in the dylib: $undef_count total -- $sibling_bound_count resolved via sibling dylib (real, safe), $real_gap_count real gap requiring flat-namespace runtime lookup (expected -- see this script's own HONEST SCOPE STATEMENT)"

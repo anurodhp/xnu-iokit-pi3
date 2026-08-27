@@ -67,8 +67,19 @@ if [ ! -f "$OUT/system/libsystem_kernel.dylib" ] || [ ! -f "$OUT/system/libsyste
     exit 1
 fi
 
+# pthread_bsdthread_register_syscall.o/pthread_bsdthread_terminate_
+# syscall.o added 2026-08-27: pthread_main_thread_bootstrap.o (already in
+# this list) now makes real __bsdthread_register()/__bsdthread_terminate()
+# calls (see that file's own git history, part of the real pthread QoS/
+# attr subsystem port, commits d3a69cc/6b346f9) -- this MEMBERS list
+# wasn't updated when that landed, a real stale-extraction gap found by
+# actually rebuilding this dylib (both symbols are self-contained raw
+# syscall traps, only depending on `errno`, already resolved via the
+# libsystem_kernel.dylib sibling link below -- confirmed via nm before
+# adding, not assumed).
 MEMBERS="pthread_atfork.o pthread_cond.o pthread_cwd.o pthread_mutex.o pthread_rwlock.o pthread_tsd.o \
     pthread_main_thread_bootstrap.o pthread_bsdthread_create_syscall.o pthread_tsd_platform_bootstrap.o \
+    pthread_bsdthread_register_syscall.o pthread_bsdthread_terminate_syscall.o \
     pthread_psynch_syscalls.o pthread_compat_extras.o pthread_abort_with_reason_compat.o \
     pthread_guard_compat.o pthread_simple_getenv.o pthread_platform_memcmp.o pthread_gettimeofday.o \
     pthread___pthread_chdir.o pthread___pthread_fchdir.o pthread_mmap_compat.o pthread___mmap.o \
@@ -127,9 +138,19 @@ otool -hv "$OUT/system/libsystem_pthread.dylib" | grep -q " DYLIB " || {
     echo "error: filetype is not DYLIB" >&2
     exit 1
 }
-if nm -u "$OUT/system/libsystem_pthread.dylib" | grep -q .; then
-    echo "WARNING: undefined symbols present:" >&2
-    nm -u "$OUT/system/libsystem_pthread.dylib" >&2
+# plain `nm -u` is misleading here: every undefined-symbol-table entry
+# in a real two-level-namespace dylib includes symbols already bound to
+# a specific sibling dylib at link time (nm -m annotates these
+# "(from libsystem_X)") -- those are NOT gaps, they resolve exactly like
+# any other real Apple dylib's cross-image call. The only real gap is an
+# entry nm -m marks "(dynamically looked up)", meaning no sibling dylib
+# on this link line claims it and it's only resolvable via flat-namespace
+# lookup at runtime (same distinction build_libdispatch_dylib.sh's own
+# UNDEF_SYMS/-Wl,-U gap list makes explicit).
+real_gaps=$(nm -m "$OUT/system/libsystem_pthread.dylib" 2>/dev/null | grep undefined | grep -v "(from " || true)
+if [ -n "$real_gaps" ]; then
+    echo "WARNING: real undefined symbols present (no sibling dylib resolves these):" >&2
+    echo "$real_gaps" >&2
 else
-    echo "libsystem_pthread.dylib: fully self-contained (beyond libsystem_kernel/platform/malloc.dylib), zero undefined symbols"
+    echo "libsystem_pthread.dylib: fully self-contained (beyond libsystem_kernel/platform/malloc.dylib), zero real undefined symbols"
 fi
