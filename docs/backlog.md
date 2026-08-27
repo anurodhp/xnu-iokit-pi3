@@ -763,6 +763,23 @@ d7. **CoreFoundation + real ICU + real libxml2 ports DONE 2026-08-26/27
     compiles clean but silently fails to log anything, exactly the kind
     of regression this project's own conventions exist to avoid.
 
+    **UPDATE 2026-08-27, same day**: `syslogd.macho` itself now builds
+    and links completely clean (`tools/userland_staging/build_syslogd.sh`,
+    real dynamic Mach-O) and PID-1 can fork+`execve()` it for real — but
+    it is **not yet auto-spawned at boot**. Real, confirmed blocker: dyld
+    crashes on `__dispatch_wait_for_enqueuer`, a symbol this project's
+    own existing `libdispatch.dylib` (Phase 6.6, built in an earlier,
+    separate pass) itself references internally but never actually
+    exports — confirmed via `nm -m` showing it `(undefined) external ...
+    (dynamically looked up)` inside the dylib's own symbol table. This is
+    a real, pre-existing gap in that dylib build, not in `syslogd` or in
+    this item's own scope; see `docs/daemon-roadmap.md`'s Phase 6.7
+    section for the full real writeup and the exact next step (fix
+    `build_libdispatch_dylib.sh`'s file selection, then re-enable
+    `tools/init_binary/init.c`'s already-written `spawn_syslogd()` call).
+    Once that's closed and `syslogd` boots clean, this item (switching
+    real callers onto the legacy Unix-socket path) becomes actionable.
+
 ---
 
 ## P3 — hygiene / cleanup

@@ -1778,6 +1778,136 @@ wire the resulting `syslogd.macho` into PID-1's spawn list (matching
 `getty`'s built-but-not-yet-wired-in precedent) once it links and runs
 clean under QEMU.
 
+### Real build/link/wire-in pass, 2026-08-27 -- syslogd.macho builds and
+### links clean; blocked at real QEMU boot by a pre-existing libdispatch.dylib gap
+
+Steps (2)-(4) above are now done for real, via the new
+`tools/userland_staging/build_syslogd.sh`. Real, substantive findings,
+each with its own fix already committed:
+
+- **Real dependency, not previously scoped**: PureDarwin's real
+  `notify/notify_client.c`/`libnotify.c`/`table.c` (the actual public
+  `notify_post()`/`notify_register_dispatch()`/etc API -- `syslogd`/
+  `daemon.c`/`asl_action.c` call these unconditionally, and this
+  project's existing `libnotify.a` only ever held the raw MIG transport,
+  never the real client API, per that script's own header comment) now
+  compile and link clean, in a new `build_libnotify_client.sh` ->
+  `libnotify_client.a`. The two real gaps `build_libnotify.sh` originally
+  flagged as blocking this (no real XPC, no real dispatch queue engine)
+  are both closed now (Phase 6.8 PureDarwin XPC, Phase 6.6 real
+  libdispatch) -- only 3 small, genuinely new compat pieces were needed:
+  a real `os/alloc_once_private.h` forwarder to the already-real
+  `alloc_once_impl.h` mechanism, a real `dispatch/private.h` ->
+  `third_party/libdispatch/private/` symlink (Apple's real SDK installs
+  this via a copy-headers build phase this project has none of), and a
+  real, always-safe `_dyld_is_memory_immutable()` stand-in (this build
+  has no dyld at all involved in its own compile step; the one real call
+  site only uses the answer to skip an optional defensive `strdup`).
+  `fileport_makeport`/`fileport_makefd` (real syscalls #430/#431, never
+  wired before) got real raw-syscall wrappers, same shape as
+  `getty_syscalls.c`'s precedent.
+- **Real dependency chain beyond the original 10-file scope**: `syslogd`'s
+  own real `main()`/`daemon.c`/`asl_action.c`/`bsd_out.c` turned out to
+  have real, unconditional static references into the full ASL message/
+  storage layer (`asl_msg.c`/`asl_msg_list.c`/`asl_core.c`/`asl_file.c`/
+  `asl_store.c`/`asl_legacy1.c`/`asl_object.c`/`asl_string.c`/
+  `asl_util.c`) and even a handful of symbols only `dbserver.c` (still
+  out of scope) defines (`database_server`/`disaster_message`/`db_query`/
+  `db_save_message`/`remove_lockdown_session`/`asl_client_jump_table`/
+  `asl_client_match`/`asl_client_search`) -- none of this was visible from
+  `-fsyntax-only` recon alone, only a real trial link surfaces missing
+  cross-file symbol resolution. All of the ASL message/storage files
+  turned out to be real and Mach/XPC-free (a second pleasant surprise,
+  same shape as the original recon's `asl_action.c`/`remote.c` finding)
+  and are now compiled in for real. The `dbserver.c`-only symbols got
+  real, honest, narrowly-scoped stand-ins in
+  `tools/userland_staging/syslogd_dbserver_compat.c` --
+  `db_save_message()`/`disaster_message()` are REAL, working
+  implementations (they persist to the real in-process ASL memory store,
+  `asl_memory_save()`, already compiled in; only the on-disk
+  `asl_store.c`-backed file store is not yet wired for these two callers,
+  a smaller separate follow-up), while `database_server()`/`db_query()`/
+  `remove_lockdown_session()` are honest no-ops matching this project's
+  own already-scoped "live ASL query/remote-forwarding service, not built
+  yet" boundary.
+- **`remote.c` handled without touching it**: `syslogd.c`'s own module
+  table takes a direct, unconditional function-pointer reference to
+  `remote_init()`/`remote_close()`/`remote_reset()` regardless of whether
+  the module is ever enabled at runtime -- real, unavoidable link-time
+  need even though this project's own real scoping already excluded
+  `remote.c` (its own internals need `dbserver.c`'s live-query symbols
+  plus real `pthread_attr_*` support this project's curated
+  `libpthread.a` deliberately never built, see `build_libpthread.sh`'s
+  own header comment). `syslogd_remote_stub.c` provides the 3 real
+  entry points as honest "module unavailable" (`return -1`), matching
+  `remote.c`'s own established real failure contract exactly (every real
+  failure path in `remote_init_lockdown()`/`remote_init_tcp()` already
+  returns -1 non-fatally) -- not a fabricated behavior.
+- **Dynamic link, not static, and why**: `daemon.c`/`syslogd.c`'s real
+  `dispatch_source_create()`/`dispatch_main()` usage pulls in
+  `libdispatch_real.a`'s `queue.o` wholesale, which needs ~19 real
+  `pthread` QOS-class extension symbols (`pthread_attr_set_qos_class_np`,
+  `qos_class_main`, etc) this project's curated `libpthread.a`
+  deliberately never built -- the exact same wall `build_launchd_core.sh`
+  already hit and solved by linking dynamically against the real
+  `libdispatch.dylib`/`libsystem_pthread.dylib`/`libSystem.B.dylib`/
+  `libdyld.dylib` instead (real, already-built, Phase 6.5/6.6) rather
+  than trying to close ~19 new pthread symbols. Real, unconditional
+  requirement per this project's 2026-08-25 dylib-first directive
+  anyway, and confirmed the kernel's real exec path genuinely supports
+  `LC_LOAD_DYLINKER` for a normal `execve()` by a forked child (real,
+  QEMU-verified precedent: `dyld_test_exec.macho`, invoked from this
+  project's own interactive shell -- the same `execve()` mechanism
+  PID-1's own direct-spawn functions use).
+- **Real export-parity gaps closed one real QEMU crash at a time**: a
+  dynamically-linked executable's dyld load-time symbol binding surfaces
+  missing symbols one at a time (crash on the first unresolved bind, not
+  an exhaustive report) -- real, iterative QEMU boot-testing found and
+  closed: `_mach_errors` (real table, `third_party/xnu-7195/libsyscall/
+  mach/error_codes.c`, compiled in directly so the symbol resolves
+  locally rather than needing a dylib), `_atoi`/`_atol`/`_atoll` and
+  ~20 other basic libc functions this project's static stack had real
+  implementations of somewhere, just never linked into any earlier
+  consumer (selectively `ar x`'d from their real archives, documented
+  member-by-member in `build_syslogd.sh`'s own header comment), a real
+  `mach_port_destruct`/`mach_port_move_member` duplicate-symbol conflict
+  (solved with 2 narrow real Mach trap stubs instead of pulling in a
+  whole conflicting MIG-generated object), `__sigaction`/`__sigtramp`
+  (real raw syscall + the real signal-delivery trampoline, copied
+  verbatim from this project's own already-verified
+  `ncurses_extra_syscalls.c` since that whole file bundles unrelated
+  duplicate-conflicting symbols), and a real, self-contained UTC-only
+  `gmtime_r`/`timegm`/`mktime`/`ctime_r`/`localtime_r` (the well-known
+  public-domain "civil calendar" algorithm -- this project's only other
+  real source, `libopenpam.a`'s `localtime.o`, pulls in a deep real
+  timezone-database dependency chain already flagged as "a net loss" by
+  `build_launchd_core.sh`'s own header comment).
+- **Real, confirmed, OUT-OF-SCOPE blocker found at the very last step**:
+  with every one of the above closed, `syslogd.macho` links with zero
+  undefined symbols and PID-1 successfully forks+`execve()`s it under
+  real QEMU -- but dyld then crashes: `symbol not found in flat
+  namespace '__dispatch_wait_for_enqueuer'`. Confirmed via
+  `nm -m libc_build/system/libdispatch.dylib` that this exact symbol is
+  `(undefined) external ... (dynamically looked up)` **inside
+  libdispatch.dylib's own symbol table** -- i.e. this is a real,
+  pre-existing, latent gap in this project's own Phase 6.6
+  `libdispatch.dylib` build (something in its real `dispatch_sync()`/
+  `dispatch_barrier_sync()` fast path calls a helper that was never
+  included when that dylib was built), not something `syslogd`'s own
+  code does, and not something this pass touched. No prior real consumer
+  of that dylib (`dyld_test_exec.macho`, `launchd_trial.macho`) ever
+  actually executed the real code path that reaches it. **Real next
+  step, out of scope for this pass**: root-cause and close the gap in
+  `build_libdispatch_dylib.sh`'s own real file selection (the symbol's
+  name suggests it's part of `dispatch_sync`'s enqueuer-wait fast path,
+  likely in `libdispatch/src/queue.c` or `src/semaphore.c`), then
+  re-enable `tools/init_binary/init.c`'s `spawn_syslogd()` call (present,
+  written, just not called yet -- same real "built but not yet wired to
+  run every boot" precedent as `spawn_cron()`'s own disablement above).
+  `syslogd.macho` is still built and installed at `/usr/sbin/syslogd` by
+  `inject_into_sd_image.sh` when built; it just isn't exec'd
+  automatically until that dylib gap is closed.
+
 ## Phase 6.8 (`launchd` + XPC via PureDarwin) -- RE-SCOPED 2026-08-25,
 ## real source swap + two real prerequisite findings
 

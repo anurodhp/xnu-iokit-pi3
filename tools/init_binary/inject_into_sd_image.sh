@@ -278,6 +278,18 @@ else
     echo "= neither tools/userland_staging/dyld.macho nor dyld_stub.macho built -- run build_dyld_link.sh (real dyld) or build_dyld_stub.sh (kernel-plumbing-only proof) + build_dyld_test_exec.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/syslogd.macho ]; then
+    mkdir -p "$MNT/usr/sbin"
+    cp tools/userland_staging/syslogd.macho "$MNT/usr/sbin/syslogd"
+    chmod 755 "$MNT/usr/sbin/syslogd"
+    echo "+ wrote $(wc -c < tools/userland_staging/syslogd.macho) bytes to $MNT/usr/sbin/syslogd"
+    echo "  (Phase 6.7 legacy-scope syslogd, tools/userland_staging/build_syslogd.sh --"
+    echo "  real dynamic Mach-O, spawned by PID-1's spawn_syslogd(); see"
+    echo "  docs/daemon-roadmap.md for the real, current scope/gap list)"
+else
+    echo "= tools/userland_staging/syslogd.macho not built -- run tools/userland_staging/build_syslogd.sh first if wanted, skipping"
+fi
+
 if [ -f tools/userland_staging/libcxxabi_smoketest.macho ]; then
     mkdir -p "$MNT/bin"
     cp tools/userland_staging/libcxxabi_smoketest.macho "$MNT/bin/libcxxabi_smoketest"

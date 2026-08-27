@@ -1645,6 +1645,44 @@ static void spawn_cron(void) {
     put("init: cron spawned\n");
 }
 
+/* Real /usr/sbin/syslogd (Phase 6.7, docs/daemon-roadmap.md --
+ * tools/userland_staging/build_syslogd.sh) -- same real role as
+ * spawn_cron() above: this project has no launchd to launch-on-demand
+ * it, so PID-1 spawns it directly, fire-and-forget (not wait4()'d;
+ * same known, accepted gap as spawn_cron()'s own comment -- a real
+ * syslogd crash would sit as an unreaped zombie rather than being
+ * respawned, acceptable for now). Real, current scope: legacy-only
+ * (Unix-domain-socket /var/run/syslog input, UDP/kernel-log input, real
+ * on-disk ASL file store) -- the live Mach/XPC ASL query service
+ * (dbserver.c) and remote network forwarding are both real, documented,
+ * deliberately-deferred gaps (see build_syslogd.sh's own header comment
+ * and docs/daemon-roadmap.md), not silently missing. Every real
+ * notify_post()/notify_register_*() call syslogd makes internally is
+ * expected to fail cleanly (no bootstrap-namespace registrar exists in
+ * this project yet) rather than hang or crash -- confirmed by reading
+ * Libnotify's own real synchronous bootstrap_look_up2() error path
+ * before this was ever spawned for real. */
+static void spawn_syslogd(void) {
+    int is_child = 0;
+    long pid = sys_fork(&is_child);
+
+    if (pid < 0) {
+        put("init: fork failed spawning syslogd -- no system log destination will be available\n");
+        return;
+    }
+
+    if (is_child) {
+        static char *const argv0[] = { (char *)"/usr/sbin/syslogd", 0 };
+        sys_execve("/usr/sbin/syslogd", argv0, build_envp());
+        /* Only reached if execve() itself failed (e.g. an older SD image
+         * missing /usr/sbin/syslogd) -- exit quietly, same precedent as
+         * spawn_cron()'s identical fallback above. */
+        sys_exit(1);
+    }
+
+    put("init: syslogd spawned\n");
+}
+
 void init_main(void) {
     open_console();
     remount_root_rw();
@@ -1672,6 +1710,35 @@ void init_main(void) {
      * until the real crash is fixed, not silently left in. crontab(1)
      * itself (a separate binary, no signal()/pidfile code in its own
      * -l/install paths) is unaffected by this and still installed. */
+    /* spawn_syslogd() DISABLED 2026-08-27 -- real, confirmed, OUT-OF-
+     * SCOPE-for-syslogd blocker: this project's own real, dynamically-
+     * linked syslogd.macho (tools/userland_staging/build_syslogd.sh)
+     * builds and links completely clean (every real symbol gap syslogd's
+     * own code has was closed -- mach_errors, atoi, mach_port_destruct/
+     * move_member, __sigaction/__sigtramp, a real UTC-only gmtime_r/
+     * timegm/mktime/ctime_r, getaddrinfo, and a dozen more, each with its
+     * own real fix documented in tools/userland_staging/syslogd_*_compat.c),
+     * and PID-1 successfully forks+execve()s it -- but dyld then crashes
+     * with "symbol not found in flat namespace '__dispatch_wait_for_
+     * enqueuer'", confirmed via real QEMU boot test. This is NOT a gap in
+     * syslogd or in this pass's own work: `nm -m` on this project's own
+     * already-built libc_build/system/libdispatch.dylib (Phase 6.6, a
+     * separate, earlier pass) shows that exact symbol as
+     * "(undefined) external ... (dynamically looked up)" INSIDE the
+     * dylib's own symbol table -- i.e. libdispatch.dylib itself has a
+     * real, pre-existing, latent internal gap (something in its own real
+     * dispatch_sync()/dispatch_barrier_sync() fast path calls a helper
+     * that was never included when this dylib was built), which no prior
+     * real consumer (dyld_test_exec.macho, launchd_trial.macho) ever
+     * actually exercised at runtime. Real next step, out of scope for
+     * this pass: root-cause and close the gap in
+     * tools/userland_staging/build_libdispatch_dylib.sh's own real file
+     * selection, then re-enable this call -- see docs/daemon-roadmap.md's
+     * Phase 6.7 section for the full writeup. Spawning a daemon that
+     * reliably crashes at startup on every boot is worse than not
+     * spawning it at all (same real precedent as spawn_cron() above) --
+     * syslogd.macho is still built and installed at /usr/sbin/syslogd,
+     * just not yet exec'd automatically. */
     put("\ninit: pid 1 up, forking single-user shell\n");
 
     for (;;) {
