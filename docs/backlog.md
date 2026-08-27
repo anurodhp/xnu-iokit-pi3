@@ -766,17 +766,24 @@ d7. **CoreFoundation + real ICU + real libxml2 ports DONE 2026-08-26/27
     **UPDATE 2026-08-27, same day**: `syslogd.macho` itself now builds
     and links completely clean (`tools/userland_staging/build_syslogd.sh`,
     real dynamic Mach-O) and PID-1 can fork+`execve()` it for real — but
-    it is **not yet auto-spawned at boot**. Real, confirmed blocker: dyld
-    crashes on `__dispatch_wait_for_enqueuer`, a symbol this project's
-    own existing `libdispatch.dylib` (Phase 6.6, built in an earlier,
-    separate pass) itself references internally but never actually
-    exports — confirmed via `nm -m` showing it `(undefined) external ...
-    (dynamically looked up)` inside the dylib's own symbol table. This is
-    a real, pre-existing gap in that dylib build, not in `syslogd` or in
-    this item's own scope; see `docs/daemon-roadmap.md`'s Phase 6.7
-    section for the full real writeup and the exact next step (fix
-    `build_libdispatch_dylib.sh`'s file selection, then re-enable
-    `tools/init_binary/init.c`'s already-written `spawn_syslogd()` call).
+    it is **not yet auto-spawned at boot**. The originally-found blocker
+    (dyld crashing on `__dispatch_wait_for_enqueuer`, a real symbol
+    `libdispatch.dylib` itself referenced but never exported) is fixed —
+    `shims/yield.c` was compiled-but-never-included, a genuine missing-
+    file bug, not an architecture gap; two more of the exact same class
+    (`os/semaphore.c`, a narrow reproduction of `workgroup.c`'s TSD
+    cleanup) were found and fixed the same way via iterative real QEMU
+    boot-testing. **A real, different-kind blocker remains**: the next
+    crash, `__pthread_qos_class_encode`, is part of a real ~16-symbol
+    pthread QoS-class/attr subsystem (`qos.c`) this project's own
+    `build_libpthread.sh` already deliberately never built ("unreachable
+    per the kernel constraint" — confirmed still true; forcing
+    `HAVE_PTHREAD_WORKQUEUE_QOS=0` was tried and hits a real hard
+    `#error` in `voucher.c`, reverted). See `docs/daemon-roadmap.md`'s
+    Phase 6.7 section for the full real writeup and next step (real,
+    ABI-correct `pthread_attr_t`/QoS stand-ins or a scoped `qos.c` port,
+    then re-enable `tools/init_binary/init.c`'s already-written
+    `spawn_syslogd()` call, currently disabled with a full postmortem).
     Once that's closed and `syslogd` boots clean, this item (switching
     real callers onto the legacy Unix-socket path) becomes actionable.
 

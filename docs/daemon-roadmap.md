@@ -1882,31 +1882,89 @@ each with its own fix already committed:
   real source, `libopenpam.a`'s `localtime.o`, pulls in a deep real
   timezone-database dependency chain already flagged as "a net loss" by
   `build_launchd_core.sh`'s own header comment).
-- **Real, confirmed, OUT-OF-SCOPE blocker found at the very last step**:
-  with every one of the above closed, `syslogd.macho` links with zero
-  undefined symbols and PID-1 successfully forks+`execve()`s it under
-  real QEMU -- but dyld then crashes: `symbol not found in flat
-  namespace '__dispatch_wait_for_enqueuer'`. Confirmed via
-  `nm -m libc_build/system/libdispatch.dylib` that this exact symbol is
+- **Real, confirmed blocker found at the very last step, 3 sub-bugs of
+  it closed for real, one deeper layer still open**: with every one of
+  the above closed, `syslogd.macho` links with zero undefined symbols
+  and PID-1 successfully forks+`execve()`s it under real QEMU -- but
+  dyld crashed: `symbol not found in flat namespace
+  '__dispatch_wait_for_enqueuer'`. Confirmed via `nm -m
+  libc_build/system/libdispatch.dylib` that this exact symbol was
   `(undefined) external ... (dynamically looked up)` **inside
-  libdispatch.dylib's own symbol table** -- i.e. this is a real,
-  pre-existing, latent gap in this project's own Phase 6.6
-  `libdispatch.dylib` build (something in its real `dispatch_sync()`/
-  `dispatch_barrier_sync()` fast path calls a helper that was never
-  included when that dylib was built), not something `syslogd`'s own
-  code does, and not something this pass touched. No prior real consumer
-  of that dylib (`dyld_test_exec.macho`, `launchd_trial.macho`) ever
-  actually executed the real code path that reaches it. **Real next
-  step, out of scope for this pass**: root-cause and close the gap in
-  `build_libdispatch_dylib.sh`'s own real file selection (the symbol's
-  name suggests it's part of `dispatch_sync`'s enqueuer-wait fast path,
-  likely in `libdispatch/src/queue.c` or `src/semaphore.c`), then
+  libdispatch.dylib's own symbol table** -- a real, pre-existing, latent
+  gap in this project's own Phase 6.6 `libdispatch.dylib` build, not
+  something `syslogd`'s own code does.
+
+  **Root-caused and fixed, 2026-08-27**: `build_libdispatch_real.sh`
+  compiled `shims/lock.c` but never its real neighbor `shims/yield.c` --
+  a genuine missing-file omission, not an architecture gap. `yield.c`'s
+  real `_dispatch_wait_for_enqueuer()` (an arm64 WFE-based spin-wait used
+  by `dispatch_sync()`'s real enqueuer-wait fast path) now compiles into
+  `libdispatch_real.a`/`libdispatch.dylib` for real, confirmed via
+  `nm -gU` showing it defined and exported; the corresponding
+  `build_libdispatch_dylib.sh` `UNDEF_SYMS` deferral was removed since
+  it's no longer actually undefined.
+
+  Real, iterative re-boot-testing after that fix (this project's own
+  dyld appears to bind **eagerly** at load time -- real chained-fixups
+  behavior, not lazy per-call binding, so every one of
+  `build_libdispatch_dylib.sh`'s deferred `UNDEF_SYMS` entries is a real
+  candidate for the same class of crash regardless of whether the code
+  path is ever actually exercised) found and fixed two more of the exact
+  same "real file exists, never compiled" class, one crash at a time:
+  `third_party/libplatform/src/os/semaphore.c` (real
+  `_os_semaphore_create`/`_dispose`/`_signal`/`_wait`, needed by
+  `lock.c`'s real semaphore cache via `<os/semaphore_private.h>`, never
+  compiled anywhere in this project -- needed its own extended CFLAGS,
+  not folded into the shared array, since `$XNU/libkern` shadows a
+  different, incompatible `os/atomic_private.h` the other real dispatch
+  files already resolve correctly through a different search order), and
+  a real, narrow reproduction of `workgroup.c`'s
+  `_os_workgroup_tsd_cleanup()` (`queue.c`'s own `_libdispatch_init()`
+  references it unconditionally via `pthread_key_create()`, but the real
+  defining file pulls in an unrelated `<mach/work_interval.h>`
+  dependency chain not otherwise needed -- see
+  `tools/userland_staging/dispatch_workgroup_tsd_compat.c`'s own header
+  for the full real justification for reproducing just this one function
+  rather than compiling the whole 1076-line file). All three committed.
+
+  **Real, deeper blocker found next -- NOT the same class, NOT yet
+  fixed**: the crash after those three is
+  `symbol not found in flat namespace '__pthread_qos_class_encode'`.
+  Confirmed this is a genuinely different kind of gap, not another
+  missing-file bug: `third_party/libpthread/src/qos.c` (which defines
+  `pthread_qos_class_encode` and ~15 real siblings --
+  `pthread_attr_set_qos_class_np`/`get_qos_class_np`, `qos_class_main`,
+  `pthread_qos_max_parallelism`, `pthread_set_qos_class_self_np`,
+  `pthread_exit`, `pthread_attr_init`/`destroy`/`setdetachstate`/
+  `setstacksize`/`setschedparam`/`setschedpolicy`/`getschedparam`/
+  `getschedpolicy`, `pthread_get_stackaddr_np`, `pthread_sigmask`, all
+  confirmed real, still-undefined references in `libdispatch_real.a`)
+  was **already** deliberately never built by this project's own
+  `build_libpthread.sh`, whose own header comment already says why:
+  "unreachable per the kernel constraint". Directly tested the
+  alternative (forcing `HAVE_PTHREAD_WORKQUEUE_QOS=0` to make
+  `libdispatch`'s own feature-detection match reality) and confirmed it's
+  not viable either: this project's own
+  `dispatch_compat_headers/config/config_ac.h` already documents, and a
+  real trial reproduced, that `voucher.c` has a hard
+  `#if !HAVE_PTHREAD_WORKQUEUE_QOS #error` -- QoS-class *support* is a
+  genuine hard requirement here, distinct from the thread-pool
+  *implementation* choice (`DISPATCH_USE_INTERNAL_WORKQUEUE=1`, already
+  correctly set). Reverted that attempt; it is not committed.
+
+  **Real next step, not yet attempted**: close this bounded (~16-symbol)
+  gap with either real, ABI-correct `pthread_attr_t`/QoS-class stand-ins
+  (this project's own already-working `pthread_create()` has a real
+  `pthread_attr_t` layout expectation any new attr functions would need
+  to match exactly -- not yet verified whether that's straightforward)
+  or a real, scoped port of `qos.c`'s non-kernel-dependent pieces. Then
   re-enable `tools/init_binary/init.c`'s `spawn_syslogd()` call (present,
-  written, just not called yet -- same real "built but not yet wired to
-  run every boot" precedent as `spawn_cron()`'s own disablement above).
-  `syslogd.macho` is still built and installed at `/usr/sbin/syslogd` by
-  `inject_into_sd_image.sh` when built; it just isn't exec'd
-  automatically until that dylib gap is closed.
+  written, currently disabled with a full real postmortem in its own
+  comment -- same "built but not yet wired to run every boot" precedent
+  as `spawn_cron()`'s own disablement above) and re-verify via real QEMU
+  boot. `syslogd.macho` is still built and installed at `/usr/sbin/syslogd`
+  by `inject_into_sd_image.sh` when built; it just isn't exec'd
+  automatically yet.
 
 ## Phase 6.8 (`launchd` + XPC via PureDarwin) -- RE-SCOPED 2026-08-25,
 ## real source swap + two real prerequisite findings
