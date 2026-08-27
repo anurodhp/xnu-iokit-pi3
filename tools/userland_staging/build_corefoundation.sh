@@ -12,58 +12,54 @@
 # ============================================================
 # HONEST SCOPE STATEMENT -- read this first
 # ============================================================
-# This is NOT a full CoreFoundation build. It is the minimal real
-# subset needed to close the specific undefined symbols launchd/core.c
-# and IOKitUser actually call: CFArray/CFDictionary/CFData/CFBasicHash/
-# CFSet/CFBag/CFBinaryHeap/CFBitVector/CFStorage/CFTree
-# (Collections.subproj), CFNumber+CFBoolean+CFDate (NumberDate.subproj),
-# CFString (String.subproj), CFPropertyList+CFBinaryPList
-# (Parsing.subproj -- CFPropertyListCreateFromXMLData IS included and
-# works: its real XML parser, _CFPropertyListCreateFromUTF8Data, is
-# self-contained inside CFPropertyList.c itself, no separate CFXMLTree/
-# libxml2 dependency needed -- corrected 2026-08-26, an earlier pass
-# wrongly assumed this needed its own file), CFError
-# (Error.subproj), CFURL's core path-creation API (URL.subproj/CFURL.c
-# -- CFURLComponents.c, a genuinely separate file, is NOT included),
-# plus CFBase/CFRuntime/CFUtilities/CFUUID/CFPlatform/CFKnownLocations/
-# CFSortFunctions (Base.subproj) those all transitively need. Real,
-# unmodified upstream source for every real file -- zero fabricated
-# stubs (the one exception, cf_compat_headers/cf_class_stubs.c, is real
-# but NOT upstream source -- see its own header comment).
+# History: started 2026-08-25 as a genuinely minimal subset (just what
+# launchd/core.c and IOKitUser called). Real ICU landed 2026-08-26/27
+# (docs/backlog.md item d7), which unblocked CharacterSet/UniChar/
+# StringUtilities collation/Locale/NumberFormatter/Calendar/TimeZone.
+# Once those were in, a full sweep of every remaining real .c file in
+# this checkout (2026-08-27, "just try compiling it" -- the same method
+# that already proved CFError/CFDate/CFURL/CFCalendar/etc were free)
+# found almost everything else compiles clean too: RunLoop/MachPort/
+# Socket/Stream, PlugIn (bundles), DateFormatter family, URLComponents,
+# AttributedString, RegularExpression, RunArray, StringTransform. The
+# earlier assumption that RunLoop/Stream/Socket/MachPort structurally
+# needed new kqueue+Mach port infrastructure was never actually
+# verified by trial compile -- it didn't, this project's existing real
+# syscall layer was already sufficient. This is now a large real
+# majority of CoreFoundation, not a narrow subset -- but still not
+# ALL of it; see the real, structural exclusions below.
 #
-# NOT INCLUDED (real, separate subprojs this project doesn't need yet):
-# RunLoop, Stream, PlugIn (bundles), CFURLComponents, Preferences,
-# DateFormatter/DateComponents/DateInterval/DateIntervalFormatter (a
-# real, separate Locale.subproj feature layered on top of
-# CFLocale/CFCalendar, not needed by anything in this project's actual
-# call graph -- unlike CFLocale/CFCalendar themselves, which CFString's
-# locale-aware comparison path and CFNumberFormatter now need for real).
+# NOT INCLUDED -- each a real, verified (not assumed) compile failure,
+# not a scope guess:
+# - CFUserNotification.c (AppServices.subproj): real GUI alert-dialog
+#   API: kCFUserNotificationIconURLKey/SoundURLKey/LocalizationURLKey
+#   are hard `unavailable: not available on iOS` SDK errors. This
+#   project has no GUI to show a user-notification dialog on anyway.
+# - CFXMLInterface.c (Parsing.subproj): real libxml2-backed XML tree
+#   API (conflicting-types errors against a libxml2 version mismatch).
+#   Not needed regardless -- CFPropertyList.c's own XML plist parser
+#   (_CFPropertyListCreateFromUTF8Data) is self-contained, and this
+#   project has already decided against libxml2 entirely (see
+#   docs/apple-oss-catalog.md).
+# - CFPreferences.c / CFXMLPreferencesDomain.c (Preferences.subproj):
+#   real, multi-part gap -- `gethostuuid` marked unavailable on iOS
+#   (guarded by `#if TARGET_OS_MAC`, which is true for iOS too --
+#   TARGET_OS_MAC means "any Apple OS", not "specifically macOS", so
+#   this guard doesn't actually exclude iOS the way it looks like it
+#   should) plus a missing CFUUID.h-family declaration and an
+#   undeclared `prefDir`; CFXMLPreferencesDomain.c separately has no
+#   `sleep()` definition for this platform in its own `#if` chain. Real
+#   preference-file storage (`CFPreferencesCopyAppValue` et al) stays
+#   unimplemented as a result -- CFApplicationPreferences.c (which
+#   compiles clean and IS included) can't close that gap alone since it
+#   calls into CFPreferences.c's own real functions.
+# - CFURLSessionInterface.c (URL.subproj): real libcurl dependency
+#   (`curl/curl.h` not found) -- this project has already decided
+#   against libcurl entirely (see docs/apple-oss-catalog.md).
+# - CFWindowsUtilities.c (Base.subproj): Windows-only, structurally
+#   inapplicable to a Darwin target.
 #
-# ICU-dependent CharacterSet/Locale/NumberFormatter/Calendar/TimeZone
-# subset ADDED 2026-08-26/27 now that this project has a real ICU port
-# (docs/backlog.md item d7's own "Real ICU port" entry,
-# tools/userland_staging/build_icu_host.sh + build_icu_target.sh):
-# CFUniChar.c/CFCharacterSet.c (StringEncodings.subproj/String.subproj)
-# plus their real embedded Unicode property/bitmap data (String.subproj/
-# CFCharacterSetData.S + CFUniCharPropertyDatabase.S, real Apple
-# `.incbin` assembly wrapping CharacterSets/CFCharacterSetBitmaps.bitmap
-# + CFUniCharPropertyDatabase.data -- NOT ICU-generated, a separate,
-# already-present real data blob this checkout ships), CFStringUtilities.c
-# (real ICU collation, <unicode/ucol.h>) + CFStringEncodings.c (real
-# _CFStringGetUserDefaultEncoding), CFLocale.c/CFLocaleIdentifier.c/
-# CFLocaleKeys.c/CFNumberFormatter.c (String.subproj/Locale.subproj),
-# and CFCalendar.c/CFCalendar_Enumerate.c (NumberDate.subproj/
-# Locale.subproj) + CFTimeZone.c (NumberDate.subproj) -- pulled in
-# because CFLocale.c unconditionally calls real
-# _CFCalendarCreateCoWWithIdentifier and dereferences the result (a real
-# crash risk if stubbed to NULL, unlike this file's other safe-because-
-# unreachable stubs), and CFCalendar.c in turn unconditionally calls
-# real CFTimeZoneCopyDefault/CFTimeZoneGetSecondsFromGMT. All of these
-# turned out to compile clean or near-clean once ICU's own headers were
-# reachable -- see the real gaps list below for the two genuine ones
-# that weren't free.
-#
-# Real fixes discovered getting these 17 files to compile (all
+# Real fixes discovered getting the original 17 files to compile (all
 # documented at point of use below): a real upstream bool/Boolean
 # prototype-conflict bug in CFPriv.h (patched via third_party-patches/
 # swift-corelibs-foundation.patch, applied by setup_third_party.sh); a
@@ -82,6 +78,18 @@
 # one more real declaration for mach_vm_region); and
 # OS_LOG_SUBSYSTEM_RUNTIME_ISSUES missing from this SDK's older
 # <os/log.h> (real value hand-supplied via a small compat header).
+#
+# Two more real gaps found in the 2026-08-27 full-sweep pass, both
+# fixed via small additions to the existing compat headers (never a
+# source patch): `<mach-o/dyld_priv.h>` (already stubbed empty for
+# CFLocale.c's own vestigial include, see the ICU-port-era comment at
+# point of use) needed one more real declaration,
+# `dyld_image_path_containing_address`, for CFBundle_Binary.c's real
+# dlfcn-based bundle-loading introspection; and CFSocket.c's
+# `#include <libc.h>` (a real macOS-only umbrella header the iPhoneOS
+# SDK never shipped) needed a small compat header re-including the
+# handful of specific standard headers (`unistd.h`/`fcntl.h`/
+# `string.h`/`stdlib.h`/`sys/socket.h`) it actually pulls symbols from.
 set -e
 cd "$(dirname "$0")"
 
@@ -137,10 +145,12 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -O0 \
     -include "$CF/Base.subproj/ForSwiftFoundationOnly.h" \
     -include "$COMPAT/cf_tsd_forward_decl.h" \
     -include "$COMPAT/cf_os_log_compat.h" \
+    -I "$COMPAT/libc_umbrella" \
     -I "$COMPAT" \
     -I "$CF/Base.subproj" -I "$CF" -I "$CF/Collections.subproj" -I "$CF/NumberDate.subproj" -I "$CF/String.subproj" \
     -I "$CF/Parsing.subproj" -I "$CF/StringEncodings.subproj" -I "$CF/Locale.subproj" -I "$CF/PlugIn.subproj" \
-    -I "$CF/Error.subproj" -I "$CF/URL.subproj" \
+    -I "$CF/Error.subproj" -I "$CF/URL.subproj" -I "$CF/RunLoop.subproj" -I "$CF/Stream.subproj" \
+    -I "$CF/Preferences.subproj" \
     -I "$ICU/common" -I "$ICU/i18n" \
     -idirafter "$LIBC/stdtime/FreeBSD" \
     -I "$OUT/cf_headers" -I "$DISPATCH" -I "$PD/libxpc/include" -I "$CR/include" \
@@ -149,7 +159,7 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -O0 \
 
 FILES=(Base.subproj/CFBase.c Base.subproj/CFRuntime.c Base.subproj/CFUtilities.c Base.subproj/CFUUID.c \
     Base.subproj/CFPlatform.c Base.subproj/CFKnownLocations.c Base.subproj/CFSortFunctions.c \
-    Base.subproj/CFFileUtilities.c \
+    Base.subproj/CFFileUtilities.c Base.subproj/CFSystemDirectories.c \
     Collections.subproj/CFArray.c Collections.subproj/CFDictionary.c Collections.subproj/CFData.c \
     Collections.subproj/CFBasicHash.c Collections.subproj/CFSet.c Collections.subproj/CFBag.c \
     Collections.subproj/CFBinaryHeap.c Collections.subproj/CFBitVector.c Collections.subproj/CFStorage.c \
@@ -158,13 +168,29 @@ FILES=(Base.subproj/CFBase.c Base.subproj/CFRuntime.c Base.subproj/CFUtilities.c
     NumberDate.subproj/CFBigNumber.c \
     String.subproj/CFString.c String.subproj/CFStringEncodings.c String.subproj/CFStringUtilities.c \
     String.subproj/CFCharacterSet.c String.subproj/CFStringScanner.c String.subproj/CFBurstTrie.c \
+    String.subproj/CFAttributedString.c String.subproj/CFRegularExpression.c String.subproj/CFRunArray.c \
+    String.subproj/CFStringTransform.c \
     StringEncodings.subproj/CFUniChar.c StringEncodings.subproj/CFUnicodeDecomposition.c \
+    StringEncodings.subproj/CFUnicodePrecomposition.c \
     StringEncodings.subproj/CFStringEncodingConverter.c StringEncodings.subproj/CFBuiltinConverters.c \
     StringEncodings.subproj/CFStringEncodingDatabase.c StringEncodings.subproj/CFICUConverters.c \
+    StringEncodings.subproj/CFPlatformConverters.c \
     Parsing.subproj/CFPropertyList.c Parsing.subproj/CFBinaryPList.c Parsing.subproj/CFOldStylePList.c \
-    Error.subproj/CFError.c URL.subproj/CFURL.c \
+    Error.subproj/CFError.c URL.subproj/CFURL.c URL.subproj/CFURLComponents.c \
+    URL.subproj/CFURLComponents_URIParser.c URL.subproj/CFURLAccess.c \
     Locale.subproj/CFLocale.c Locale.subproj/CFLocaleIdentifier.c Locale.subproj/CFLocaleKeys.c \
-    Locale.subproj/CFNumberFormatter.c Locale.subproj/CFCalendar.c Locale.subproj/CFCalendar_Enumerate.c)
+    Locale.subproj/CFNumberFormatter.c Locale.subproj/CFCalendar.c Locale.subproj/CFCalendar_Enumerate.c \
+    Locale.subproj/CFDateFormatter.c Locale.subproj/CFDateComponents.c Locale.subproj/CFDateInterval.c \
+    Locale.subproj/CFDateIntervalFormatter.c \
+    RunLoop.subproj/CFRunLoop.c RunLoop.subproj/CFMachPort.c RunLoop.subproj/CFMachPort_Lifetime.c \
+    RunLoop.subproj/CFMessagePort.c RunLoop.subproj/CFSocket.c \
+    Stream.subproj/CFStream.c Stream.subproj/CFSocketStream.c Stream.subproj/CFConcreteStreams.c \
+    PlugIn.subproj/CFBundle.c PlugIn.subproj/CFBundle_Binary.c PlugIn.subproj/CFBundle_DebugStrings.c \
+    PlugIn.subproj/CFBundle_Executable.c PlugIn.subproj/CFBundle_Grok.c PlugIn.subproj/CFBundle_InfoPlist.c \
+    PlugIn.subproj/CFBundle_Locale.c PlugIn.subproj/CFBundle_Main.c PlugIn.subproj/CFBundle_ResourceFork.c \
+    PlugIn.subproj/CFBundle_Resources.c PlugIn.subproj/CFBundle_SplitFileName.c \
+    PlugIn.subproj/CFBundle_Strings.c PlugIn.subproj/CFBundle_Tables.c PlugIn.subproj/CFPlugIn.c \
+    Preferences.subproj/CFApplicationPreferences.c)
 
 mkdir -p "$OUT/cf_obj"
 for f in "${FILES[@]}"; do

@@ -717,11 +717,27 @@ need a real implementation later:
   CFStringUtilities' real ICU collation, CFLocale/CFLocaleIdentifier/
   CFLocaleKeys/CFNumberFormatter, CFCalendar/CFTimeZone, and several
   supporting String/StringEncodings files) and links the real ICU
-  dylibs. Gap count for this trial link: 83 symbol groups, all in
-  already-categorized buckets (out-of-scope subsystems, ASL, libSystem
-  export-parity debt, one newly-surfaced os_log/dispatch gap not yet
-  root-caused). `docs/backlog.md` item d7's own "Real ICU port started"
-  entry has the full writeup for both the port and the CF wiring.
+  dylibs. **Full-sweep pass DONE same day**: rather than trust the
+  original scope note's untested assumption that RunLoop/Stream/
+  Socket/MachPort/PlugIn needed new kqueue+Mach port infrastructure, a
+  real "just try compiling it" pass across every remaining file found
+  it was wrong -- CFRunLoop/CFMachPort/CFSocket/CFStream and the entire
+  CFBundle/CFPlugIn family all compile clean on this project's existing
+  syscall layer, plus the DateFormatter family (unblocked now that
+  Locale/Calendar exist), CFURLComponents, CFAttributedString, and
+  more. CF is now 94 real files (up from the original 17), with only
+  five genuine, verified exclusions left (GUI-only CFUserNotification,
+  libxml2-dependent CFXMLInterface, a real multi-part CFPreferences.c
+  gap, libcurl-dependent CFURLSessionInterface, Windows-only
+  CFWindowsUtilities). Gap count for this trial link is now 101 symbol
+  groups (up from 83, not a regression -- the newly-included
+  subsystems bring their own real, previously-invisible transitive
+  syscall dependencies -- Mach ports, BSD sockets, mk_timer, pthread
+  attrs -- none of which exist in any archive this project has built
+  yet, confirmed via `nm`, real follow-up work not chased this
+  session). `docs/backlog.md` item d7's own "Real ICU port started"
+  entry has the full writeup for the port, the CF wiring, and the
+  full-sweep pass.
 - **Phase 6.8 (`launchd`+XPC via PureDarwin): critical-path gap-closing
   pass DONE 2026-08-26**, real port itself still open. Source is
   PureDarwin/PureDarwin's own `next` branch (a current, actively

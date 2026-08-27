@@ -1202,6 +1202,101 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
     "GNU Make self-regeneration" gotcha already documented, just at the
     level of remembering to invoke the build at all.
 
+    **Full-sweep pass DONE 2026-08-27** — with ICU-dependent Locale/
+    Calendar/CharacterSet in place, did a real "just try compiling it"
+    pass (the same method that already proved CFError/CFDate/CFURL/etc
+    free) across literally every remaining `.c` file in the
+    swift-corelibs-foundation checkout, rather than trusting the
+    original scope note's assumption that RunLoop/Stream/Socket/
+    MachPort/PlugIn structurally needed new kqueue+Mach port
+    infrastructure. That assumption was never actually verified and
+    turned out to be wrong: **RunLoop.subproj (CFRunLoop.c/CFMachPort.c/
+    CFMachPort_Lifetime.c/CFMessagePort.c/CFSocket.c), Stream.subproj
+    (CFStream.c/CFSocketStream.c/CFConcreteStreams.c), and the entire
+    PlugIn.subproj bundle family (CFBundle.c + all 10 of its
+    CFBundle_*.c helper files + CFPlugIn.c) all compile clean** — this
+    project's existing real syscall layer was already sufficient for
+    the *compile* step (whether the real runtime *semantics* work is a
+    separate, unverified question — this pass only proves compilation
+    and linking, not correctness). Also newly added: the DateFormatter
+    family (`CFDateFormatter.c`/`CFDateComponents.c`/`CFDateInterval.c`/
+    `CFDateIntervalFormatter.c`, excluded from the original scope note
+    specifically because Locale/Calendar didn't exist yet — they do
+    now), `CFURLComponents.c`/`CFURLComponents_URIParser.c`/
+    `CFURLAccess.c`, `CFAttributedString.c`, `CFRegularExpression.c`,
+    `CFRunArray.c`, `CFStringTransform.c`, `CFPlatformConverters.c`,
+    `CFUnicodePrecomposition.c`, `CFSystemDirectories.c`, and
+    `CFApplicationPreferences.c`. **37 more real files, bringing the
+    total to 94** (up from 57), every one compiling with zero errors
+    except two needing a one-line real fix each (both compat-header
+    additions, no source patches): `CFBundle_Binary.c`'s real dlfcn
+    introspection call `dyld_image_path_containing_address` (added to
+    the existing `cf_compat_headers/mach-o/dyld_priv.h` stub), and
+    `CFSocket.c`'s `#include <libc.h>` (a real macOS-only umbrella
+    header the iPhoneOS SDK never shipped — new
+    `cf_compat_headers/libc_umbrella/libc.h` re-including just the
+    specific standard headers it needs).
+
+    Removed all now-superseded `cf_class_stubs.c` `CF_STUB_CLASS`
+    entries except one — `__CFPreferencesDomainClass` is the only class
+    stub left, since `CFPreferences.c` itself has a real, genuine,
+    multi-part compile failure (see below) unlike everything else on
+    the original stub list.
+
+    **Five real, verified (not assumed) exclusions remain**, each a
+    confirmed compile failure, not a scope guess:
+    - `CFUserNotification.c` (AppServices.subproj): real GUI
+      alert-dialog API, `kCFUserNotificationIconURLKey`/`SoundURLKey`/
+      `LocalizationURLKey` are hard `unavailable: not available on iOS`
+      SDK errors. No GUI on this project's boot target regardless.
+    - `CFXMLInterface.c` (Parsing.subproj): real libxml2-backed XML
+      tree API, conflicting-types errors against a real libxml2 version
+      mismatch. Not needed regardless — `CFPropertyList.c`'s own XML
+      plist parser is self-contained, and this project has already
+      decided against libxml2 entirely (`docs/apple-oss-catalog.md`).
+    - `CFPreferences.c` / `CFXMLPreferencesDomain.c`
+      (Preferences.subproj): real, multi-part gap — `gethostuuid`
+      marked unavailable on iOS behind a `#if TARGET_OS_MAC` guard that
+      doesn't actually exclude iOS (`TARGET_OS_MAC` means "any Apple
+      OS," not "specifically macOS" — a real bug in this exact
+      checkout, or at least a guard that doesn't do what it looks like
+      it does), plus a missing CFUUID-family declaration and an
+      undeclared `prefDir`; `CFXMLPreferencesDomain.c` separately hits
+      "Dont know how to define sleep for this platform" in its own
+      `#if` chain. Real preference-file storage
+      (`CFPreferencesCopyAppValue` et al) stays unimplemented as a
+      result — `CFApplicationPreferences.c` (built, clean) can't close
+      that gap alone since it calls into `CFPreferences.c`'s own real
+      functions.
+    - `CFURLSessionInterface.c` (URL.subproj): real libcurl dependency
+      (`curl/curl.h` not found) — already decided against
+      (`docs/apple-oss-catalog.md`).
+    - `CFWindowsUtilities.c` (Base.subproj): Windows-only, structurally
+      inapplicable.
+
+    **Real gap count for this trial link is now 101 symbol groups**
+    (up from 83, not down) — an honest tradeoff, not a regression: the
+    newly-included RunLoop/Socket/MachPort/Bundle subsystems pull in
+    their own real, previously-invisible transitive dependencies this
+    project's userland stack doesn't expose yet anywhere (confirmed via
+    `nm` against every existing archive, not assumed) — real Mach port
+    syscalls (`mach_port_allocate`/`_construct`/`_destruct`/
+    `_get_attributes`/`_insert_member`/`_extract_member`/`_type`), real
+    BSD socket syscalls (`socket`/`bind`/`connect`/`listen`/`accept`/
+    `recv`/`recvfrom`/`sendto`/`getsockname`/`getpeername`/
+    `getsockopt`/`setsockopt`/`socketpair`), real Mach timer syscalls
+    (`mk_timer_create`/`_arm`/`_cancel`/`_destroy`, CFRunLoop's timer
+    sources), real `pthread_attr_*` thread-creation-attribute calls,
+    `NXFindBestFatArch`/`NXGetLocalArchInfo` (CFBundle's fat-binary
+    architecture detection), and `sysdir_start_search_path_enumeration`/
+    `_get_next_search_path_enumeration` (CFBundle's real search-path
+    API). None of these exist in any archive this project has already
+    built (confirmed via `nm`, not assumed) — real follow-up work, not
+    a quick link-order fix, and not chased further this session. Plus
+    the previously-documented, still-not-root-caused os_log/dispatch
+    gap and the already-categorized libSystem.B.dylib export-parity/
+    still-missing-everywhere buckets.
+
 0a. **No AES implementation exists anywhere in this kernel — HARD
     PREREQUISITE for Phase 7b (`sshd`).** Filed explicitly 2026-08-21 so it
     is a known gate rather than the fourth surprise NULL dereference.
