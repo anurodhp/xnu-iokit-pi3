@@ -793,18 +793,36 @@ d7. **CoreFoundation + real ICU + real libxml2 ports DONE 2026-08-26/27
     real thread-list ABI, not yet verified safe to copy). Full writeup:
     `docs/daemon-roadmap.md`'s Phase 6.7 section.
 
-    **Real blocker remaining**: a fresh `nm -u` sweep on the current
-    `libdispatch.dylib` shows ~54 more real undefined symbols (`kevent_qos`,
-    `mach_eventlink_*`, `kpersona_get`, `mach_continuous_time`/`get_times`,
-    `malloc_engaged_nano`/`memory_event_handler`, `semaphore_timedwait`,
-    `sigsuspend`, `thread_destruct`/`get_special_reply_port`, `sys_errlist`/
-    `sys_nerr`, more) — most already have real implementations somewhere
-    else in this project and need conflict-free wiring, not new code.
-    `tools/init_binary/init.c`'s `spawn_syslogd()` call is written but
-    stays disabled, with a full real postmortem in its own comment, until
-    this gap closes and a real QEMU boot reaches a shell with `syslogd`
-    actually running. Once that's closed, this item (switching real
-    callers onto the legacy Unix-socket path) becomes actionable.
+    **UPDATE 2026-08-27, later still**: Step 2 (the sibling-dylib relink
+    from this doc's own userland-library-debt section, `d1`) was applied
+    to `libdispatch.dylib` specifically, ahead of the general cleanup:
+    it now links for real against this project's own already-built
+    `libsystem_c.dylib`/`libsystem_malloc.dylib`/`libsystem_pthread.dylib`
+    (real `LC_LOAD_DYLIB` entries, confirmed via `otool -L`), closing 20
+    of the ~54 remaining undefined symbols that a real `nm -gU` sweep
+    found were already real, defined exports there. Two more closed by
+    narrow, non-import fixes the same day: `gettimeofday` (real raw
+    syscall #116 body) and `geteuid` (real single-object extraction from
+    `syslogd_libc_extras.a`).
+
+    **Real blocker remaining**: 32 real undefined symbols (`kevent_qos`,
+    `mach_eventlink_*` (7 symbols), `kpersona_get`,
+    `mach_continuous_time`/`get_times`, `malloc_engaged_nano`/
+    `memory_event_handler`, `mach_port_construct`/`destruct`/etc (7
+    symbols, the already-documented `dyld_core.a`-vs-`libmalloc.a`
+    de-duplication task), `semaphore_create`/`destroy`/`timedwait`,
+    `sigsuspend`, `sleep`, `thread_destruct`/`get_special_reply_port`,
+    `pread`/`pwrite`, `pthread_get_stackaddr_np`, `atoi`, `environ`,
+    `mach_errors`) — confirmed genuinely absent from every archive in
+    this project (unlike the 22 just closed), so real new work, not just
+    wiring, for most of what's left; the `mach_eventlink_*` family in
+    particular is real XNU IPC machinery with no existing userland
+    wrapper anywhere in this tree yet. `tools/init_binary/init.c`'s
+    `spawn_syslogd()` call is written but stays disabled, with a full
+    real postmortem in its own comment, until this gap closes and a real
+    QEMU boot reaches a shell with `syslogd` actually running. Once
+    that's closed, this item (switching real callers onto the legacy
+    Unix-socket path) becomes actionable.
 
 ---
 

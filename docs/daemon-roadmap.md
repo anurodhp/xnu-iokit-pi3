@@ -2014,35 +2014,73 @@ each with its own fix already committed:
   extern declaration, caught by a real "undefined symbol" link error,
   not assumed correct).
 
+  **Step 2 done for `libdispatch.dylib` specifically, same day**: this
+  doc's own "library debt" note above (the duplicate-global-state /
+  static-bundling gap) called for relinking against the real sibling
+  dylibs instead of static-bundling their pre-dylib ancestors. Applied
+  to the *remaining-symbol* problem first (not the full duplicate-state
+  cleanup, which is still open): a real `nm -gU` sweep of this project's
+  own already-built `libsystem_c.dylib`/`libsystem_malloc.dylib`/
+  `libsystem_pthread.dylib` found 20 of the (then) 54 remaining
+  undefined symbols were already real, defined exports there
+  (`__close`/`__fstat`/`__open`/`__read`/`__write`/`_asprintf`/`_close`/
+  `_dprintf`/`_fprintf`/`_getprogname`/`_read`/`_strcasecmp`/
+  `_sys_errlist`/`_sys_nerr`/`_vasprintf`/`_munmap`/`_kdebug_trace`/
+  `_kill`/`_pthread_tsd_shim_bootstrap`/`_mmap`). `build_libdispatch_
+  dylib.sh` now links `libdispatch.dylib` against those 3 siblings for
+  real (`otool -L` confirms real `LC_LOAD_DYLIB` entries; `nm -m` on the
+  rebuilt dylib confirms each of the 20 binds `(from libsystem_c)`/`(from
+  libsystem_malloc)`, not `(dynamically looked up)`) -- same pattern
+  `build_libunwind_dylib.sh` already established.
+  `libsystem_kernel.dylib`/`libsystem_platform.dylib`/
+  `libsystem_blocks.dylib` were checked too and genuinely don't export
+  any of the rest, so they're not linked in.
+
+  Two more closed the same day by real, narrow, non-import fixes:
+  `gettimeofday` (real raw syscall #116 body, verbatim copy of the
+  already-QEMU-verified pattern in `ncurses_extra_syscalls.c`, added to
+  `libpthread_qos_compat.c`) and `geteuid` (real single-object
+  extraction, `geteuid.o`, from this project's own
+  `syslogd_libc_extras.a` -- its only dependency, `_cerror_nocancel`, was
+  already resolved via the `libsystem_c.dylib` sibling link, so this adds
+  zero new gaps). `atoi.o` from that same archive was checked and NOT
+  extracted the same way -- needs `___global_locale`/`___locale_key`,
+  neither defined anywhere in this project yet, which would trade one
+  gap for two.
+
   **Real remaining gap, not yet closed**: `nm -u` on the current
-  `libdispatch.dylib` shows **~54 more real undefined symbols**
-  (`kevent_qos`, the `mach_eventlink_*` family, `kpersona_get`,
+  `libdispatch.dylib` shows **32 more real undefined symbols**
+  (`kevent_qos`, the `mach_eventlink_*` family (7 symbols), `kpersona_get`,
   `mach_continuous_time`/`get_times`, `malloc_engaged_nano`/
-  `memory_event_handler`, `semaphore_timedwait`, `sigsuspend`,
-  `thread_destruct`/`get_special_reply_port`, `sys_errlist`/`sys_nerr`,
-  and more). A real sweep against every other archive in this project
-  shows most of these already have real implementations *somewhere*
-  (`libncurses.a`, `libresolv.a`, `launchd_libc_extras.a`, `dyld_core.a`,
-  `libmach_ipc.a`, etc) -- the remaining work is wiring each in without
-  re-triggering the same class of duplicate-symbol conflicts this pass
-  already resolved several instances of (e.g. `dyld_core.a`'s own
-  `mach_port_*`/`mach_vm_*` copies vs. `libmalloc.a`'s real, different
-  ones, already documented above). Real next step: continue the same
-  "check existing archives first, selectively extract or write a narrow
-  real reproduction, verify via `nm`, real QEMU reboot" loop this pass
-  already used successfully ~15 times, until the boot reaches a shell
-  prompt with `syslogd` actually running, then re-enable
+  `memory_event_handler`, `mach_port_construct`/`destruct`/
+  `extract_right`/`insert_right`/`kernel_object`/`request_notification`/
+  `unguard` (7 symbols), `mach_make_memory_entry_64`,
+  `semaphore_create`/`destroy`/`timedwait`, `sigsuspend`, `sleep`,
+  `thread_destruct`/`get_special_reply_port`, `pread`/`pwrite`,
+  `pthread_get_stackaddr_np`, `atoi`, `environ`, `mach_errors`) --
+  confirmed absent from every archive in this project via the same `nm`
+  sweep, unlike the 22 just closed. Some are narrow (`environ` needs only
+  a real global matching `third_party/Csu/crt.c`'s own
+  `const char** environ = NULL` pattern, just not yet wired into a
+  dylib-context build); the `mach_port_construct`/`destruct` family is
+  the already-documented `dyld_core.a`-vs-`libmalloc.a` de-duplication
+  task above, not yet done; the `mach_eventlink_*` family is a genuinely
+  deeper port -- real XNU IPC machinery with no existing userland wrapper
+  anywhere in this tree yet. Real next step: continue the same "check
+  existing archives first, selectively extract or write a narrow real
+  reproduction, verify via `nm`, real QEMU reboot" loop this pass already
+  used successfully ~17 times, until the boot reaches a shell prompt with
+  `syslogd` actually running, then re-enable
   `tools/init_binary/init.c`'s `spawn_syslogd()` call (present, written,
   currently disabled with a full real postmortem in its own comment --
   same "built but not yet wired to run every boot" precedent as
-  `spawn_cron()`'s own disablement above), and finally proceed to
-  relinking `libdispatch.dylib` against the real sibling dylibs
-  (`libsystem_kernel.dylib`/`libsystem_pthread.dylib`/etc) instead of
-  statically bundling them, per this doc's own "library debt" note
-  above -- not yet started, correctly sequenced after a clean boot.
-  `syslogd.macho` is still built and installed at `/usr/sbin/syslogd` by
-  `inject_into_sd_image.sh` when built; it just isn't exec'd
-  automatically yet.
+  `spawn_cron()`'s own disablement above). The remaining, broader
+  duplicate-global-state cleanup (fully retiring the static
+  `libmalloc.a`/`libplatform.a`/`libpthread.a`/etc bundling in favor of
+  the sibling dylibs across the board) is still open, correctly
+  sequenced after a clean boot. `syslogd.macho` is still built and
+  installed at `/usr/sbin/syslogd` by `inject_into_sd_image.sh` when
+  built; it just isn't exec'd automatically yet.
 
 ## Phase 6.8 (`launchd` + XPC via PureDarwin) -- RE-SCOPED 2026-08-25,
 ## real source swap + two real prerequisite findings
