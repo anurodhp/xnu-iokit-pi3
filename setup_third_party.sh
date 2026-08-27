@@ -232,6 +232,20 @@ mkdir -p third_party
 #     functions returning `Boolean`, `CFXMLInterface.c` defines them
 #     returning `bool`), fixed via a second commit in the existing
 #     `swift-corelibs-foundation.patch`.
+#   - cctools (CoreFoundation's NXFindBestFatArch/NXGetLocalArchInfo gap,
+#     docs/backlog.md item d7): NOT part of the `macos-112` manifest at
+#     all (confirmed via a real `git show macos-112:.gitmodules` --
+#     cctools ships with Xcode/the Command Line Tools, not the OS
+#     distribution, same category as llvmCore above). Pinned instead to
+#     `cctools-973.0.1`, confirmed via this project's own pinned
+#     `/Applications/Xcode-12.app` toolchain's real
+#     `otool --version` output ("Apple Inc. version cctools-973.0.1") --
+#     the exact cctools these two functions need to match, not a guess.
+#     Only `libmacho/arch.c` is needed (real, unmodified, confirmed by a
+#     real trial compile to need nothing beyond this project's existing
+#     Mach-port stack: `host_info`/`mach_host_self`
+#     (`libmach_ipc.a`), `mach_port_deallocate`/`mach_task_self_`
+#     (`libmalloc.a`) -- zero new gaps).
 #   - PureDarwin (Phase 6.8, launchd+XPC source): sparse-checked-out below
 #     (same pattern as llvm-project), NOT the generic REPOS loop -- see
 #     that block's own comment for why this superseded the originally
@@ -296,6 +310,7 @@ Libnotify|https://github.com/apple-oss-distributions/Libnotify.git|Libnotify-279
 BSM|https://github.com/apple-oss-distributions/BSM.git|bsm-13|
 ICU|https://github.com/apple-oss-distributions/ICU.git|ICU-66109|ICU.patch
 libxml2|https://github.com/apple-oss-distributions/libxml2.git|libxml2-34.9|
+cctools|https://github.com/apple-oss-distributions/cctools.git|cctools-973.0.1|
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch; do

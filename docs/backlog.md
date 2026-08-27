@@ -1462,20 +1462,102 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
       `bsdthread_register`") — a real, already-diagnosed kernel-
       registration wall, not chased further here.
 
+    **`_proc_pidinfo`/`_pthread_setname_np`/`NXFindBestFatArch`/
+    `NXGetLocalArchInfo` CLOSED 2026-08-27** (real twofer + real easy
+    win, 4 symbol groups, 73 -> 70 net — see below for the 1 new gap
+    this surfaced): `_proc_pidinfo`/`_pthread_setname_np` both needed
+    one real `__proc_info` raw syscall wrapper, generated fresh via
+    `create-syscalls.pl` against xnu-7195's real `syscalls.master` (same
+    recipe `build_libxpc_syscalls.sh` already used for this exact
+    symbol) — `cf_libproc_syscalls.c` (real `proc_pidinfo`, extracted
+    verbatim from `libsyscall/wrappers/libproc/libproc.c:100-110`) and
+    `cf_pthread_setname_syscalls.c` (real `pthread_setname_np`,
+    extracted verbatim from `libpthread/src/pthread.c:1130-1153`, same
+    "whole file has an unrelated real header conflict, extract just this
+    function" pattern as `cf_pthread_attr_syscalls.c`). The latter also
+    needed real `_platform_bzero`/`_platform_strlcpy`
+    (`third_party/libplatform/src/string/generic/{bzero,strlcpy}.c`),
+    adapted rather than compiled as-is: each real file also defines its
+    own generic `_platform_memset`/`_platform_memset_pattern4` under the
+    same `#if !_PLATFORM_OPTIMIZED_*` this project's arm64 target takes,
+    which duplicate-symbol-conflicts with `libmalloc.a`'s already-built
+    copies — confirmed via a real trial compile, not assumed. `sys/
+    proc_info.h`/`sys/event.h` are deliberately NOT included by either
+    new file: pulling them drags in `struct kevent_qos_s`
+    (`PRIVATE`-gated, stripped from this project's exported userspace
+    headers) for proc_info flavors this extraction doesn't use — real
+    Apple's own `pthread.c` takes the same raw-literal-call-number
+    shortcut for this exact call, confirmed by reading it, not guessed.
+    `NXFindBestFatArch`/`NXGetLocalArchInfo` (CFBundle's fat-binary
+    detection) needed a new pin, real `cctools`, NOT part of the
+    `macos-112` manifest at all (`cctools` ships with Xcode/the Command
+    Line Tools, not the OS distribution — confirmed via a real
+    `git show macos-112:.gitmodules`) — pinned instead to
+    `cctools-973.0.1`, matched against this project's own pinned Xcode
+    12's real `otool --version` output ("Apple Inc. version
+    cctools-973.0.1"), not guessed by date proximity. Only
+    `libmacho/arch.c` needed, real and unmodified, confirmed by a real
+    trial compile to need nothing this project doesn't already have
+    (`host_info`/`mach_host_self` from `libmach_ipc.a`,
+    `mach_port_deallocate`/`mach_task_self_` from `libmalloc.a`) — zero
+    new gaps from this one. See `setup_third_party.sh`'s own header
+    comment and `build_corefoundation.sh`'s own per-file comments for
+    the full detail.
+
+    **New gap surfaced by the above**: `__pthread_ptr_munge_token`
+    (`_pthread_setname_np`'s real `_pthread_validate_signature` call
+    needs it). Real, already-built (`libpthread.a`'s
+    `pthread_main_thread_bootstrap.o`, confirmed via `nm`) and even
+    already a real member of `libsystem_pthread.dylib` per
+    `build_libsystem_pthread.sh`'s own `MEMBERS` list — so this is NOT
+    the same "object file never got added" flavor of export-parity gap
+    as `pthread_getugid_np`/`pthread_is_threaded_np`/
+    `pthread_threadid_np` below. Real root cause, checked this session:
+    `build_libsystem.sh`'s final `libSystem.B.dylib` link passes
+    `libsystem_pthread.dylib` (and every other real per-library
+    sub-dylib) as a plain linker input, never `-reexport_library` —
+    confirmed via `nm -gU` that `libSystem.B.dylib` currently exports
+    only its own ~19 locally-compiled symbols and re-exports nothing
+    from any sub-dylib at all (not even `_strlen`; CF's own dynamic
+    trial link only resolves libc symbols because it separately links
+    the curated static archives directly, alongside — not through —
+    `libSystem.B.dylib`). This is a real, structural, and probably
+    larger-than-previously-scoped fix (add `-Wl,-reexport_library` for
+    each real sub-dylib to `build_libsystem.sh`, likely closing several
+    of this list's other "export-parity" entries at once, not just this
+    one symbol) — flagged here as its own real follow-up, not attempted
+    this session since it touches the shared `libSystem.B.dylib` every
+    other real dylib/binary in this project already links against and
+    needs its own dedicated verification pass.
+
+    **`sysdir_start_search_path_enumeration`/
+    `sysdir_get_next_search_path_enumeration` CONFIRMED never
+    open-sourced 2026-08-27** (not merely "not yet investigated"): real
+    `apple-oss-distributions/Libc`'s FULL git history (every tag through
+    `Libc-1592.100.35`, not just the pinned `Libc-1439.40.11`) has no
+    `gen/sysdir.c` and never has; no standalone `sysdir`/`libsysdir` repo
+    exists in the org either (checked via `git ls-remote`); a real GitHub
+    code search across the whole `apple-oss-distributions` org for
+    `sysdir_start_search_path_enumeration` (via `gh api search/code`,
+    not guessed) turns up only real CALLERS (`system_cmds`, `configd`) —
+    zero definitions anywhere. Same category as `_asl_*` below: real,
+    confirmed, out of scope, not a source-location problem to keep
+    chasing.
+
     **Remaining real gaps, not yet closed, roughly grouped**:
     - `pthread_atfork`/`pthread_getugid_np`/`pthread_is_threaded_np`/
-      `pthread_threadid_np`/`pthread_mutexattr_destroy`: the last one is
-      a real `libSystem.B.dylib` export-parity gap (the function exists
-      in `libpthread.a` already, just isn't exported from the
-      flattened static-stack dylib) — same already-documented category
-      as `_getegid`/etc below. The other three not yet investigated.
-    - `_proc_pidinfo`/`_pthread_setname_np`: both need a real
-      `__proc_info` raw syscall wrapper (real syscall this project
-      hasn't hand-written yet) — a real twofer once done.
-    - `NXFindBestFatArch`/`NXGetLocalArchInfo` (CFBundle's fat-binary
-      detection), `sysdir_start_search_path_enumeration`/
-      `_get_next_search_path_enumeration` (CFBundle's real search-path
-      API): not yet investigated for real source availability.
+      `pthread_threadid_np`/`pthread_mutexattr_destroy`: real functions,
+      all already implemented (`pthread_atfork.o`/
+      `pthread_thread_ops_compat.o` in `libpthread.a`) — `pthread_atfork`
+      is even already a real, confirmed *exported* symbol of
+      `libsystem_pthread.dylib` per a real `nm -gU` check this session
+      (the other three's source objects, `pthread_thread_ops_compat.o`,
+      are genuinely missing from that dylib's own `MEMBERS` list — a
+      real, fixable omission, not investigated further this session).
+      `pthread_mutexattr_destroy` itself is real and built
+      (`pthread_mutex.o`) but only ever exported `$UNIX2003`-suffixed.
+      All fall under the same real `libSystem.B.dylib` non-reexport root
+      cause documented just above, not four separate mysteries.
     - `_abs`/`_atol`/`_bsearch`/`_llabs`/`_mkdir`/`_pwrite`/`_qsort`/
       `_readlink`/`_scalbn`/`_setenv`/`_setrlimit`/`_strstr`/`_getegid`/
       `_getpwuid_r`/`_getrlimit`/`_getsectbynamefromheader_64`/

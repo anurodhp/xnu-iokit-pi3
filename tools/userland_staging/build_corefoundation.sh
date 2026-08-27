@@ -363,7 +363,54 @@ CFLAGS_PTHREAD_ATTR=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestand
     -idirafter "$XNU/osfmk" -idirafter "$XNU/libkern")
 "$CLANG" "${CFLAGS_PTHREAD_ATTR[@]}" cf_pthread_attr_syscalls.c -o "$OUT/cf_obj/cf_pthread_attr_syscalls.o"
 
-echo "compiled: $((${#FILES[@]} + 18)) real/compat CoreFoundation source files (zero errors)"
+# Real __proc_info raw syscall + proc_pidinfo()/pthread_setname_np() --
+# see cf_libproc_syscalls.c's and cf_pthread_setname_syscalls.c's own
+# header comments for the full real extraction rationale (both closing
+# docs/backlog.md item d7's own "need one more real syscall" note, a
+# real twofer since both live off the same __proc_info trap). The trap
+# itself is generated fresh here, same real create-syscalls.pl recipe
+# build_libxpc_syscalls.sh already established for this exact symbol
+# (real xnu-7195 syscalls.master, not hand-guessed).
+CF_SYSCALL_GEN="$(mktemp -d)"
+trap 'rm -rf "$CF_SYSCALL_GEN"' EXIT
+ARCHS=arm64 perl "$XNU/libsyscall/xcodescripts/create-syscalls.pl" \
+    "$XNU/bsd/kern/syscalls.master" \
+    "$XNU/libsyscall/custom" \
+    "$XNU/libsyscall/Platforms" \
+    iPhoneOS \
+    "$CF_SYSCALL_GEN" >/dev/null
+mkdir -p "$OUT/cf_sys_asm_compat/mach/arm64"
+cat > "$OUT/cf_sys_asm_compat/mach/arm64/asm.h" <<'EOF'
+#include <arm64/asm.h>
+EOF
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -arch arm64 \
+    -I "$OUT/cf_sys_asm_compat" -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" -I "$XNU/osfmk" \
+    "$CF_SYSCALL_GEN/___proc_info.s" -o "$OUT/cf_obj/proc_info_trap.o"
+rm -rf "$CF_SYSCALL_GEN"
+trap - EXIT
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -O0 \
+    cf_libproc_syscalls.c -o "$OUT/cf_obj/cf_libproc_syscalls.o"
+"$CLANG" "${CFLAGS_PTHREAD_ATTR[@]}" cf_pthread_setname_syscalls.c -o "$OUT/cf_obj/cf_pthread_setname_syscalls.o"
+
+# Real NXFindBestFatArch()/NXGetLocalArchInfo() CFBundle_Grok.c/
+# CFBundle_Binary.c need -- see setup_third_party.sh's own header comment
+# for the full real cctools-973.0.1 pin rationale (not part of the
+# macos-112 manifest; matched instead against this project's own pinned
+# Xcode 12's real `otool --version`). Real, unmodified
+# third_party/cctools/libmacho/arch.c, confirmed by a real trial compile
+# to need nothing this project doesn't already have (host_info/
+# mach_host_self from libmach_ipc.a, mach_port_deallocate/
+# mach_task_self_ from libmalloc.a).
+CCTOOLS="../../third_party/cctools"
+if [ ! -f "$CCTOOLS/libmacho/arch.c" ]; then
+    echo "error: $CCTOOLS/libmacho/arch.c not found -- run setup_third_party.sh first" >&2
+    exit 1
+fi
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -O0 \
+    -I "$CCTOOLS/include" -I "$CCTOOLS" \
+    "$CCTOOLS/libmacho/arch.c" -o "$OUT/cf_obj/cctools_arch.o"
+
+echo "compiled: $((${#FILES[@]} + 22)) real/compat CoreFoundation source files (zero errors)"
 
 rm -f "$OUT/libCoreFoundation.a"
 ar rcs "$OUT/libCoreFoundation.a" "$OUT"/cf_obj/*.o

@@ -763,10 +763,29 @@ need a real implementation later:
   symbols, plain traps), and 4 of 6 `pthread_attr_*` functions (the
   other 2 need real `bsdthread_register`, an already-diagnosed wall).
   `docs/backlog.md` item d7's own entry has the full per-category
-  writeup and what's left (proc_pidinfo/pthread_setname_np need one
-  more real syscall; NXFindBestFatArch/sysdir_* not yet investigated;
-  the rest are already-categorized libSystem export-parity/os_log/ASL/
-  CFPreferences buckets).
+  writeup and what was left at that point (since closed, see next
+  bullet).
+- **Next-steps pass DONE 2026-08-27**: 73 -> 70. Real `__proc_info` raw
+  syscall (fresh `create-syscalls.pl` generation) closed both
+  `proc_pidinfo`/`pthread_setname_np` (a real twofer, as scoped); a new
+  real `cctools-973.0.1` pin (NOT part of the `macos-112` manifest --
+  matched instead against this project's own pinned Xcode 12's real
+  `otool --version`) closed `NXFindBestFatArch`/`NXGetLocalArchInfo` via
+  its real, unmodified `libmacho/arch.c`, zero new gaps. Investigating
+  `sysdir_*` found a real, confirmed answer instead of a fix: never
+  open-sourced by Apple anywhere (full `Libc` git history + an org-wide
+  GitHub code search both checked, not guessed) -- same category as
+  ASL, folded into that bucket. The `__proc_info` twofer surfaced one
+  real new gap, `__pthread_ptr_munge_token`, which turned up something
+  bigger than itself: `libSystem.B.dylib`'s build never
+  `-reexport_library`s its own real per-library sub-dylibs at all (a
+  real `nm -gU` check found it exports only ~19 of its own locally-
+  compiled symbols, nothing from `libsystem_pthread.dylib`/etc), so this
+  is likely the real root cause behind several of the OTHER already-
+  documented "export-parity" entries too, not a one-off. Flagged as its
+  own real follow-up in `docs/backlog.md` item d7, not attempted yet --
+  touches the one dylib every real binary in this project already links
+  against.
 - **Phase 6.8 (`launchd`+XPC via PureDarwin): critical-path gap-closing
   pass DONE 2026-08-26**, real port itself still open. Source is
   PureDarwin/PureDarwin's own `next` branch (a current, actively
