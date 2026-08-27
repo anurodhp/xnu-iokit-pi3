@@ -95,6 +95,23 @@ static inline long syscall4(long num, long a0, long a1, long a2, long a3) {
     return x0;
 }
 
+static inline long syscall3(long num, long a0, long a1, long a2) {
+    register long x0 asm("x0") = a0;
+    register long x1 asm("x1") = a1;
+    register long x2 asm("x2") = a2;
+    register long x16 asm("x16") = num;
+    long is_error;
+    asm volatile("svc #0x80\n"
+                 "cset %1, cs"
+                 : "+r"(x0), "=r"(is_error)
+                 : "r"(x1), "r"(x2), "r"(x16)
+                 : "memory", "cc");
+    if (is_error) {
+        return cerror_nocancel((int)x0);
+    }
+    return x0;
+}
+
 #define SYS_bsdthread_ctl 478
 uint32_t __bsdthread_ctl(uintptr_t cmd, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3) {
     return (uint32_t)syscall4(SYS_bsdthread_ctl, (long)cmd, (long)arg1, (long)arg2, (long)arg3);
@@ -202,7 +219,20 @@ typedef int clockid_t_compat;
 #define CLOCK_MONOTONIC_RAW_COMPAT 4
 #define CLOCK_UPTIME_RAW_COMPAT 8
 
-extern int gettimeofday(void *tv, void *tz);
+/* Real raw syscall #116 (bsd/kern/syscalls.master: "AUE_GETTIMEOFDAY ...
+ * gettimeofday(struct timeval *tp, struct timezone *tzp, uint64_t
+ * *mach_absolute_time) NO_SYSCALL_STUB"), verbatim reuse of the exact
+ * pattern already established and QEMU-verified in
+ * ncurses_extra_syscalls.c's own gettimeofday() (that file's own header
+ * has the full real trace) -- kept as its own small definition here
+ * rather than sharing an object file, so this dylib doesn't pull in
+ * ncurses_extra_syscalls.c's unrelated strstr()/lib_termcap.c compat
+ * bodies. The 3rd (mach_absolute_time out-param) arg is unused by every
+ * real caller in this project (both here and in ncurses's copy), passed
+ * as 0/NULL like the existing precedent. */
+int gettimeofday(void *tp, void *tzp) {
+    return (int)syscall3(116, (long)tp, (long)tzp, 0);
+}
 extern uint64_t mach_absolute_time(void);
 struct mach_timebase_info_compat { uint32_t numer; uint32_t denom; };
 extern int mach_timebase_info(struct mach_timebase_info_compat *info);

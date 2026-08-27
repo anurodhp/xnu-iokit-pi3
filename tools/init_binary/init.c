@@ -1800,25 +1800,41 @@ void init_main(void) {
      *     export any of the rest yet, so they're not linked in (no
      *     benefit, only weight).
      *
-     * Real remaining gap, not yet closed: 34 real undefined symbols
+     *   - geteuid/gettimeofday, same day: real, narrow closures, NOT
+     *     sibling-dylib imports this time. gettimeofday() got a real raw
+     *     syscall #116 body added directly to libpthread_qos_compat.c
+     *     (verbatim copy of the already-QEMU-verified pattern in
+     *     ncurses_extra_syscalls.c, kept as its own definition rather
+     *     than sharing that file's object, to avoid pulling in its
+     *     unrelated strstr()/lib_termcap.c compat bodies). geteuid() is a
+     *     real, narrow single-object extraction (geteuid.o) from this
+     *     project's own syslogd_libc_extras.a -- its only dependency,
+     *     _cerror_nocancel, was already resolved for real via the
+     *     libsystem_c.dylib sibling link above, so this added zero new
+     *     gaps. atoi.o from that same archive was checked too and NOT
+     *     extracted the same way: it needs ___global_locale/
+     *     ___locale_key, neither defined anywhere in this project yet --
+     *     would trade one gap for two, so atoi stays honestly deferred.
+     *
+     * Real remaining gap, not yet closed: 32 real undefined symbols
      * (kevent_qos, the mach_eventlink_* family (7 symbols), kpersona_get,
      * mach_continuous_time/get_times, malloc_engaged_nano/
      * memory_event_handler, mach_port_construct/destruct/extract_right/
      * insert_right/kernel_object/request_notification/unguard (7
      * symbols), mach_make_memory_entry_64, semaphore_create/destroy/
      * timedwait, sigsuspend, sleep, thread_destruct/get_special_reply_port,
-     * pread/pwrite, pthread_get_stackaddr_np, atoi, environ, geteuid,
-     * gettimeofday, mach_errors) genuinely have NO real implementation
-     * anywhere in this project yet (confirmed absent from every archive
-     * via the same nm sweep) -- unlike the 20 just closed, these need
-     * real new work: some are narrow (atoi/geteuid/gettimeofday/environ
-     * are plain libc/syscall wrappers this project has working patterns
-     * for elsewhere), some are a genuinely deeper port (the
-     * mach_eventlink_* family is real XNU IPC machinery with no existing
-     * userland wrapper anywhere in this tree yet). Real next step:
-     * continue the same "check existing archives first, selectively
-     * extract or write a narrow real reproduction, verify via nm, real
-     * QEMU reboot" loop this pass already used successfully ~15 times,
+     * pread/pwrite, pthread_get_stackaddr_np, atoi, environ, mach_errors)
+     * genuinely have NO real implementation anywhere in this project yet
+     * (confirmed absent from every archive via the same nm sweep) --
+     * unlike the 22 just closed, these need real new work: environ needs
+     * only a real global matching third_party/Csu/crt.c's own
+     * `const char** environ = NULL` pattern, just not yet wired into a
+     * dylib-context build; the mach_eventlink_* family is a genuinely
+     * deeper port -- real XNU IPC machinery with no existing userland
+     * wrapper anywhere in this tree yet. Real next step: continue the
+     * same "check existing archives first, selectively extract or write
+     * a narrow real reproduction, verify via nm, real QEMU reboot" loop
+     * this pass already used successfully ~15 times,
      * until the boot reaches a shell prompt with syslogd actually
      * running. See docs/daemon-roadmap.md's Phase 6.7 section for the
      * full real writeup and the exact current undefined-symbol list.

@@ -127,6 +127,21 @@
 # linking them in would add real LC_LOAD_DYLIB weight for zero symbol
 # resolution, so they're deliberately not added until they actually
 # grow the needed exports.
+#
+# _gettimeofday and _geteuid closed the same day, real code not sibling-
+# dylib import: _gettimeofday now has a real, narrow raw-syscall #116
+# body added directly to libpthread_qos_compat.c (verbatim copy of the
+# already-QEMU-verified pattern in ncurses_extra_syscalls.c, kept
+# separate rather than sharing that file's object to avoid pulling in
+# its unrelated strstr()/lib_termcap.c compat bodies). _geteuid is a
+# real, narrow single-object extraction (geteuid.o) from this project's
+# own syslogd_libc_extras.a -- its only dependency, _cerror_nocancel, is
+# already resolved for real via the libsystem_c.dylib sibling link above
+# (confirmed via nm before extracting, not assumed), so this adds zero
+# new gaps, unlike atoi.o in that same archive (needs
+# ___global_locale/___locale_key, neither defined anywhere in this
+# project yet -- correctly left deferred instead of trading one gap for
+# two).
 UNDEF_SYMS=(
     _kevent_qos _kpersona_get _mach_continuous_time _mach_get_times
     _malloc_engaged_nano _malloc_memory_event_handler
@@ -145,7 +160,6 @@ UNDEF_SYMS=(
     _mach_port_insert_right _mach_port_unguard _mach_port_kernel_object
     _mach_port_request_notification _mach_port_get_context _mach_port_set_context
     _mach_make_memory_entry_64
-    _geteuid _gettimeofday
     _semaphore_create _semaphore_destroy
 )
 UNDEF_FLAGS=()
@@ -164,6 +178,10 @@ fi
 if [ ! -f "$OUT/system/libsystem_c.dylib" ] || [ ! -f "$OUT/system/libsystem_malloc.dylib" ] || \
    [ ! -f "$OUT/system/libsystem_pthread.dylib" ]; then
     echo "error: libsystem_c/malloc/pthread.dylib not found -- run those build scripts first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/syslogd_libc_extras.a" ]; then
+    echo "error: $OUT/syslogd_libc_extras.a not found -- run build_syslogd.sh first" >&2
     exit 1
 fi
 
@@ -187,6 +205,13 @@ fi
 mkdir -p "$OUT/dispatch_dylib_extract"
 rm -f "$OUT"/dispatch_dylib_extract/*.o
 (cd "$OUT/dispatch_dylib_extract" && ar x ../libmach_ipc.a && rm -f mach_ipc_dead_stubs.o)
+
+# real, narrow single-object extraction: geteuid.o's only dependency
+# (_cerror_nocancel) is already resolved for real via the
+# libsystem_c.dylib sibling link below (confirmed via nm before
+# extracting) -- see this script's own UNDEF_SYMS header comment for why
+# atoi.o from the same archive is NOT extracted the same way.
+(cd "$OUT/dispatch_dylib_extract" && ar x ../syslogd_libc_extras.a geteuid.o)
 
 # libc_build/dyld_core.a's own mach_portUser.o/vm_mapUser.o were tried
 # here (they have real mach_port_construct/destruct/get_context/etc and
