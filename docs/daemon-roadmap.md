@@ -14,7 +14,8 @@ pthread/corecrypto gaps are.
 
 `docs/roadmap.md` is the authoritative phase tracker; this file is the
 detailed scoping doc it points to for the daemon work specifically, same
-relationship `docs/usb-support-plan.md` has to Phase 6.
+relationship `docs/historic/usb-support-plan.md` (archived — USB/Ethernet
+are done and real-hardware-verified) had to Phase 6.
 
 ## Why order matters here
 

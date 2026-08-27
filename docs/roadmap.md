@@ -540,7 +540,7 @@ need a real implementation later:
   protocol subset are implemented and QEMU-verified: a real device
   descriptor is read from the root-port device, and a second device is
   enumerated through a downstream hub port, which is the exact topology the
-  LAN9514 presents. See `docs/usb-support-plan.md`'s STATUS section for the
+  LAN9514 presents. See `docs/historic/usb-support-plan.md`'s STATUS section for the
   boot-log evidence.
   Testing USB at all first required backporting a DWC2 model into
   `third_party/qemu-zhuowei` (QEMU 2.12.91 modelled no USB for `-M raspi3`),

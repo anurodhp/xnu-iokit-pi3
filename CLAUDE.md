@@ -163,10 +163,13 @@ the real bug (see `docs/backlog.md` and the roadmap's phase write-ups for
 worked examples). Other `docs/` files worth knowing about beyond
 `roadmap.md`/`backlog.md`: `daemon-roadmap.md` (background-daemon
 porting plan/tiering), `apple-oss-catalog.md` (full apple-oss-
-distributions inventory + pin-correctness audit), `usb-support-plan.md`,
-`multiuser-userland-plan.md`, `hfs-integration-notes.md`,
-`sd-and-ethernet-plan.md`; `docs/historic/` archives full phase-by-phase
-detail once `roadmap.md`/`backlog.md` are condensed.
+distributions inventory + pin-correctness audit),
+`multiuser-userland-plan.md`, `hfs-integration-notes.md`;
+`docs/historic/` archives full phase-by-phase detail once
+`roadmap.md`/`backlog.md` are condensed, plus one-shot planning docs
+whose work is now done and real-hardware-verified (`usb-support-plan.md`,
+`sd-and-ethernet-plan.md` — USB/SD/Ethernet are all real-hardware-
+verified, see `docs/roadmap.md`'s Phase 3/6a/6b).
 
 `third_party/xnu-7195` and `third_party/qemu-zhuowei` are this project's
 own forks with their own real git history and branches — not just a

@@ -55,7 +55,7 @@
 # is a combo hub+Ethernet chip soldered to the single root port, with its
 # Ethernet function behind one of its own internal hub ports, so a bare
 # device on the root port would NOT exercise the code path real hardware
-# needs (docs/usb-support-plan.md's "hub-in-the-path" note).
+# needs (docs/historic/usb-support-plan.md's "hub-in-the-path" note).
 #
 # QEMU has no LAN9514 model, so usb-net (an RNDIS device) stands in for the
 # Ethernet function. That is deliberate and its limit is known: it exercises

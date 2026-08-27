@@ -1,5 +1,15 @@
 # SD card + Ethernet: what's needed after XNU boots
 
+**ARCHIVED 2026-08-27 — superseded, kept for history only.** Both halves
+of this plan are done and verified on real hardware: the SD/HFS+ boot
+chain has been the project's standard boot path for a long time (see
+`docs/roadmap.md`'s Phase 3/3.5 sections), and Ethernet — gated here on
+`docs/usb-support-plan.md`, itself now archived alongside this file —
+reached real-hardware `en0` link-up, ping, and RX (2026-08-22/25, see
+`docs/roadmap.md`'s Phase 6a/6b and `docs/backlog.md`'s P1 item 2 for the
+one real remaining SMSC9514Ethernet gap). This file's own text below is a
+historical snapshot from before either milestone landed.
+
 Written while the main investigation thread was separately debugging the
 QEMU direct-boot panic. Assumes that gets resolved and XNU reaches a
 running, interactive state; this plan doesn't depend on when that happens.

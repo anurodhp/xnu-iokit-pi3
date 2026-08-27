@@ -169,15 +169,17 @@ if they were.
 
 ## Known structural gaps (context for future work, not bugs to silently fix)
 
-- **No USB host controller driver exists anywhere accessible to this
-  project.** The Pi 3's host controller is DWC2 (Synopsys USB2 OTG);
-  Apple's own open-source `IOUSBFamily` only ships EHCI/OHCI/UHCI/XHCI.
-  This blocks both real keyboard input (HID over USB) and Ethernet
-  (`SMSC9514Ethernet` is USB-attached). Writing a DWC2 driver from scratch
-  is flagged in `docs/usb-support-plan.md` as materially larger than
-  everything else in this repository combined — treat as its own large,
-  separately-scoped front, not something to casually pull in. Current
-  console I/O is serial UART, not keyboard/HDMI.
+- **USB (DWC2) and Ethernet (SMSC9514) are done and real-hardware-
+  verified** (`iokit/BCM2837DWC2/`, `iokit/SMSC9514Ethernet/` — device
+  enumeration, hub protocol, real LAN9514 link-up/ping on silicon; see
+  `docs/roadmap.md`'s Phase 6a/6b and `docs/historic/usb-support-plan.md`/
+  `docs/historic/sd-and-ethernet-plan.md` for the archived planning
+  history). Apple's own open-source `IOUSBFamily` was never usable
+  as-is (only ships EHCI/OHCI/UHCI/XHCI, no DWC2), so this project wrote
+  a minimal purpose-built DWC2 stack instead of subclassing it. Real
+  keyboard input (HID over USB) is not implemented — current console I/O
+  is serial UART, not keyboard/HDMI. Transfer completion is still polled
+  rather than interrupt-driven (`docs/backlog.md` P2 item 0).
 - **Secondary CPU cores are parked below IOKit** — `BCM2837CPU` models a
   single effectively-running core; multi-core is not wired up.
 - See `docs/backlog.md` for the live, prioritized (P0-P3) list of specific

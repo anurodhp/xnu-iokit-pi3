@@ -1,5 +1,16 @@
 # USB host controller support: what Ethernet is actually blocked on
 
+**ARCHIVED 2026-08-27 — superseded, kept for history only.** All of this
+plan's tasks are done and verified on real hardware, not just QEMU:
+DWC2 bring-up, enumeration, and the hub protocol subset (Phase 6a, DONE
+2026-08-21, QEMU-verified per the STATUS section below); real-hardware
+LAN9514 enumeration and `SMSC9514USBTransport` (DONE 2026-08-22, see
+project history); interrupt-driven completion is the one item from this
+plan still genuinely open, tracked live as `docs/backlog.md` item 0. For
+current status see `docs/roadmap.md`'s Phase 6a/6b sections; this file's
+own STATUS/task list below is a historical snapshot from when USB was
+still blocking Ethernet.
+
 ## STATUS 2026-08-21: tasks 1-4 DONE and QEMU-verified; 5-6 written, not verified
 
 Implemented and confirmed on a real QEMU boot (`tools/boot_test.py`, full
