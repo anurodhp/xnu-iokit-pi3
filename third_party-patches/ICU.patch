@@ -1,7 +1,7 @@
 From da2d1092bdfcfe83b53553073211df11f747f594 Mon Sep 17 00:00:00 2001
 From: Anurodh Pokharel <anurodhp@icloud.com>
 Date: Wed, 26 Aug 2026 20:41:40 -0400
-Subject: [PATCH 1/2] common/Makefile.in: build aaplbfct.cpp alongside
+Subject: [PATCH 1/3] common/Makefile.in: build aaplbfct.cpp alongside
  localsvc.cpp
 
 Real upstream (Apple) build-system oversight, not a this-project-specific
@@ -46,7 +46,7 @@ index 699466282..11fe4a316 100644
 From 000424254bdeee45c1dd692325aee83f8db70237 Mon Sep 17 00:00:00 2001
 From: Anurodh Pokharel <anurodhp@icloud.com>
 Date: Wed, 26 Aug 2026 20:56:17 -0400
-Subject: [PATCH 2/2] common/aaplbfct.cpp: guard NSSystemDirectories.h include
+Subject: [PATCH 2/3] common/aaplbfct.cpp: guard NSSystemDirectories.h include
  by TARGET_OS_EMBEDDED
 
 Real header gap on any iOS/embedded SDK (confirmed: Xcode 12's
@@ -81,6 +81,41 @@ index 7dbafa700..f80c6e645 100644
  #include <sys/types.h>
  #include <sys/stat.h>
  #include <sys/mman.h>
+-- 
+2.50.1 (Apple Git-155)
+
+
+From 96a2aa7fd4c079303dd167003ad4f97d5345bb2c Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@icloud.com>
+Date: Wed, 26 Aug 2026 21:30:08 -0400
+Subject: [PATCH 3/3] i18n/Makefile.in: build uameasureformat.cpp
+
+Same real upstream (Apple) build-system oversight class as
+common/Makefile.in's own aaplbfct.cpp gap (see that commit): real
+i18n/uameasureformat.cpp (Apple's own U_CAPI uameasfmt_getUnitsForUsage
+and friends) exists in this checkout and is a real, guarded
+(U_ICU_VERSION_MAJOR_NUM > 53 && __has_include(<unicode/uameasureformat.h>))
+dependency of swift-corelibs-foundation's CFLocale.c, but was never
+added to the plain autotools i18n/Makefile.in's manually-maintained
+OBJECTS list -- Apple's own ICU.xcodeproj builds it, the generic
+configure/make path silently doesn't.
+---
+ icuSources/i18n/Makefile.in | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/icuSources/i18n/Makefile.in b/icuSources/i18n/Makefile.in
+index 38b1e0d10..759bdbd5e 100644
+--- a/icuSources/i18n/Makefile.in
++++ b/icuSources/i18n/Makefile.in
+@@ -88,7 +88,7 @@ cpdtrans.o rbt.o rbt_data.o rbt_pars.o rbt_rule.o rbt_set.o \
+ nultrans.o remtrans.o casetrn.o titletrn.o tolowtrn.o toupptrn.o anytrans.o \
+ name2uni.o uni2name.o nortrans.o quant.o transreg.o brktrans.o \
+ regexcmp.o rematch.o repattrn.o regexst.o regextxt.o regeximp.o uregex.o uregexc.o \
+-measfmt.o currfmt.o curramt.o currunit.o measure.o utmscale.o \
++measfmt.o currfmt.o curramt.o currunit.o measure.o utmscale.o uameasureformat.o \
+ csdetect.o csmatch.o csr2022.o csrecog.o csrmbcs.o csrsbcs.o csrucode.o csrutf8.o inputext.o \
+ wintzimpl.o windtfmt.o winnmfmt.o basictz.o dtrule.o rbtz.o tzrule.o tztrans.o vtzone.o zonemeta.o \
+ standardplural.o upluralrules.o plurrule.o plurfmt.o selfmt.o dtitvfmt.o dtitvinf.o udateintervalformat.o \
 -- 
 2.50.1 (Apple Git-155)
 

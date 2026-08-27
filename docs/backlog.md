@@ -1131,12 +1131,76 @@ d7. **Real CoreFoundation port started 2026-08-26 — real minimal subset
       as a general `ICU.patch` change, since it's specific to that flag
       combination rather than a general upstream inconsistency).
 
-    **Not yet done**: wiring these real dylibs into
-    `build_corefoundation.sh`'s link and working out what CF's own
-    `CFUniChar`/`CFCharacterSet`/`CFStringUtilities` collation/
-    `CFLocale`/`CFNumberFormatter` files (currently stubbed/omitted, per
-    this same item above) actually need from them — the libraries exist
-    now, but nothing in this project links against them yet.
+    **CF wiring DONE 2026-08-27** — `build_corefoundation.sh` now links
+    the real ICU dylibs and builds 21 more real, previously-stubbed CF
+    source files: `CFUniChar.c`/`CFCharacterSet.c` (+ their real embedded
+    Unicode data, `CFCharacterSetData.S`/`CFUniCharPropertyDatabase.S`
+    wrapping `.incbin`-included `CharacterSets/CFCharacterSetBitmaps
+    .bitmap`/`CFUniCharPropertyDatabase.data` — real Apple data already in
+    this checkout, NOT ICU-generated), `CFStringUtilities.c` (real ICU
+    collation) + `CFStringEncodings.c`, `CFLocale.c`/`CFLocaleIdentifier.c`
+    /`CFLocaleKeys.c`/`CFNumberFormatter.c`, `CFCalendar.c`/
+    `CFCalendar_Enumerate.c` + `CFTimeZone.c` (pulled in because
+    `CFLocale.c` unconditionally calls `_CFCalendarCreateCoWWithIdentifier`
+    and dereferences the result — a real crash risk if stubbed to NULL,
+    unlike this file's other safe-because-unreachable stubs — and
+    `CFCalendar.c` in turn unconditionally calls
+    `CFTimeZoneCopyDefault`/`CFTimeZoneGetSecondsFromGMT`), plus
+    `CFBigNumber.c`/`CFUnicodeDecomposition.c`/`CFStringScanner.c`/
+    `CFBurstTrie.c`/`CFStringEncodingConverter.c`/`CFBuiltinConverters.c`/
+    `CFStringEncodingDatabase.c`/`CFICUConverters.c`/`CFFileUtilities.c`/
+    `CFOldStylePList.c` — each pulled in only after a real trial compile
+    confirmed it, matching the same "just try it, it's often free"
+    pattern CFError.c/CFDate.c/CFURL.c already established. All 21 files
+    compiled clean or near-clean (`CFCalendar.c`'s only diagnostics are
+    harmless `-Wswitch` "not all enum cases handled" warnings). Removed
+    the now-superseded `cf_class_stubs.c` entries these real files
+    replace: 5 `CF_STUB_CLASS` descriptors (CharacterSet/Locale/
+    NumberFormatter/Calendar/TimeZone), `__CFCharacterSetInitialize`,
+    `__kCFLocaleCollatorID`, `__CFLocaleGetNullLocale`/
+    `__CFLocaleSetNullLocale`, `_CFStringGetUserDefaultEncoding`, and
+    `_CFCompareStringsWithLocale` (the exact stub docs/backlog.md's own
+    d7 entry above already named as the one needing real ICU).
+    Real gap count for this specific trial link is now **83 symbol
+    groups** (down from ~150 when ICU was entirely stubbed out), and
+    every one left falls into an already-categorized bucket: the
+    genuinely-out-of-scope subsystems this project has already decided
+    not to port (`CFBundle*`/`CFPreferences*`/`CFDateFormatter*`/
+    `CFDateComponents*`/`CFDateInterval*`/`CFReadStream*`/
+    `CFWriteStream*`), confirmed-never-open-sourced ASL, the
+    already-documented `libSystem.B.dylib` export-parity gap (`_abs`/
+    `_bsearch`/`_qsort`/`_strstr`/`_scalbn`/`_llabs`/`_readlink`/
+    `_setenv`/`_time`/`_getpwuid_r`/`_mkdir`/`_pwrite`/`_atol`/
+    `_getsectbynamefromheader_64`/`_pthread_atfork`), the already-
+    documented "still genuinely missing everywhere" list (`_getegid`/
+    `_proc_pidinfo`/`_pthread_getugid_np`/`_pthread_is_threaded_np`/
+    `_pthread_threadid_np`/`_uuid_generate_random`/`_uuid_generate_time`),
+    a handful of non-ICU "platform" (built-in-table, not ICU-backed)
+    string-encoding-converter symbols and one lone `_CFUniCharPrecomposeCharacter`
+    not yet traced to their real source file, and a real but
+    **newly-surfaced, not-yet-root-caused** `os_log`/`dispatch` gap
+    (`__os_log_debug_impl`/`__os_log_default`/`__os_log_error_impl`/
+    `_os_log_create`/`_os_log_type_enabled`/
+    `__dispatch_queue_attr_concurrent`/`__mh_dylib_header`) — these were
+    confirmed genuinely absent from both `libdispatch.dylib` and
+    `libSystem.B.dylib` via `nm` (not the static-link-mode artifact the
+    similarly-named symbols in this item's earlier "CLOSED 2026-08-26"
+    entry turned out to be), so CFLocale/CFCalendar's new code paths
+    exercise more of the real os_log API surface than earlier CF files
+    did. Worth a dedicated follow-up pass, not chased further this
+    session.
+
+    Also found+fixed along the way: this session's own ICU stage 2
+    `uameasureformat.o` fix (see above) had gone stale — patched
+    `i18n/Makefile.in` mid-session but never re-ran
+    `build_icu_target.sh` afterward, so the on-disk dylib didn't actually
+    have the symbol until a real rebuild (third commit now in
+    `third_party-patches/ICU.patch`, verified via a fresh-clone `git am`
+    same as the other two). Real lesson: after editing anything under
+    `third_party/ICU`, always rebuild both ICU stages before trusting
+    the dylibs on disk are current — same class of staleness this port's
+    "GNU Make self-regeneration" gotcha already documented, just at the
+    level of remembering to invoke the build at all.
 
 0a. **No AES implementation exists anywhere in this kernel — HARD
     PREREQUISITE for Phase 7b (`sshd`).** Filed explicitly 2026-08-21 so it

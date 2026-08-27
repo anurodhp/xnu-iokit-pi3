@@ -32,13 +32,36 @@
 # but NOT upstream source -- see its own header comment).
 #
 # NOT INCLUDED (real, separate subprojs this project doesn't need yet):
-# RunLoop, Stream, PlugIn (bundles), Locale/NumberFormatter/
-# DateFormatter/CFStringUtilities.c's locale collation (all a real,
-# confirmed-via-trial-compile ICU dependency -- <unicode/uloc.h>/
-# <unicode/ucol.h> -- out of scope), CFURLComponents, Preferences,
-# CharacterSet's Unicode data tables (see CFUniChar.c / the
-# CFCharacterSetBitmaps.bitmap/CFUniCharPropertyDatabase.data sectcreate
-# data build.py wires in for full builds -- NOT done here).
+# RunLoop, Stream, PlugIn (bundles), CFURLComponents, Preferences,
+# DateFormatter/DateComponents/DateInterval/DateIntervalFormatter (a
+# real, separate Locale.subproj feature layered on top of
+# CFLocale/CFCalendar, not needed by anything in this project's actual
+# call graph -- unlike CFLocale/CFCalendar themselves, which CFString's
+# locale-aware comparison path and CFNumberFormatter now need for real).
+#
+# ICU-dependent CharacterSet/Locale/NumberFormatter/Calendar/TimeZone
+# subset ADDED 2026-08-26/27 now that this project has a real ICU port
+# (docs/backlog.md item d7's own "Real ICU port" entry,
+# tools/userland_staging/build_icu_host.sh + build_icu_target.sh):
+# CFUniChar.c/CFCharacterSet.c (StringEncodings.subproj/String.subproj)
+# plus their real embedded Unicode property/bitmap data (String.subproj/
+# CFCharacterSetData.S + CFUniCharPropertyDatabase.S, real Apple
+# `.incbin` assembly wrapping CharacterSets/CFCharacterSetBitmaps.bitmap
+# + CFUniCharPropertyDatabase.data -- NOT ICU-generated, a separate,
+# already-present real data blob this checkout ships), CFStringUtilities.c
+# (real ICU collation, <unicode/ucol.h>) + CFStringEncodings.c (real
+# _CFStringGetUserDefaultEncoding), CFLocale.c/CFLocaleIdentifier.c/
+# CFLocaleKeys.c/CFNumberFormatter.c (String.subproj/Locale.subproj),
+# and CFCalendar.c/CFCalendar_Enumerate.c (NumberDate.subproj/
+# Locale.subproj) + CFTimeZone.c (NumberDate.subproj) -- pulled in
+# because CFLocale.c unconditionally calls real
+# _CFCalendarCreateCoWWithIdentifier and dereferences the result (a real
+# crash risk if stubbed to NULL, unlike this file's other safe-because-
+# unreachable stubs), and CFCalendar.c in turn unconditionally calls
+# real CFTimeZoneCopyDefault/CFTimeZoneGetSecondsFromGMT. All of these
+# turned out to compile clean or near-clean once ICU's own headers were
+# reachable -- see the real gaps list below for the two genuine ones
+# that weren't free.
 #
 # Real fixes discovered getting these 17 files to compile (all
 # documented at point of use below): a real upstream bool/Boolean
@@ -75,11 +98,18 @@ XNU="../../third_party/xnu-7195"
 DISPATCH="../../third_party/libdispatch"
 PD="../../third_party/PureDarwin/src/Libraries/XPC"
 CR="../../third_party/PureDarwin/src/Libraries/CrashReporterClient"
+ICU="../../third_party/ICU/icuSources"
+LIBC="../../third_party/Libc"
+ICU_LIB="icu_build/target/lib"
 OUT="libc_build"
 COMPAT="cf_compat_headers"
 
 if [ ! -d "$CF/Base.subproj" ]; then
     echo "error: $CF not found -- run setup_third_party.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$ICU_LIB/libicuuc.dylib" ]; then
+    echo "error: $ICU_LIB/libicuuc.dylib not found -- run build_icu_host.sh then build_icu_target.sh first" >&2
     exit 1
 fi
 
@@ -111,29 +141,69 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -O0 \
     -I "$CF/Base.subproj" -I "$CF" -I "$CF/Collections.subproj" -I "$CF/NumberDate.subproj" -I "$CF/String.subproj" \
     -I "$CF/Parsing.subproj" -I "$CF/StringEncodings.subproj" -I "$CF/Locale.subproj" -I "$CF/PlugIn.subproj" \
     -I "$CF/Error.subproj" -I "$CF/URL.subproj" \
+    -I "$ICU/common" -I "$ICU/i18n" \
+    -idirafter "$LIBC/stdtime/FreeBSD" \
     -I "$OUT/cf_headers" -I "$DISPATCH" -I "$PD/libxpc/include" -I "$CR/include" \
     -idirafter "$XNU/libsyscall/wrappers/libproc" \
     -idirafter "$XNU/bsd" -idirafter "$XNU/osfmk" -idirafter "$XNU/libkern")
 
 FILES=(Base.subproj/CFBase.c Base.subproj/CFRuntime.c Base.subproj/CFUtilities.c Base.subproj/CFUUID.c \
     Base.subproj/CFPlatform.c Base.subproj/CFKnownLocations.c Base.subproj/CFSortFunctions.c \
+    Base.subproj/CFFileUtilities.c \
     Collections.subproj/CFArray.c Collections.subproj/CFDictionary.c Collections.subproj/CFData.c \
     Collections.subproj/CFBasicHash.c Collections.subproj/CFSet.c Collections.subproj/CFBag.c \
     Collections.subproj/CFBinaryHeap.c Collections.subproj/CFBitVector.c Collections.subproj/CFStorage.c \
     Collections.subproj/CFTree.c \
-    NumberDate.subproj/CFNumber.c NumberDate.subproj/CFDate.c String.subproj/CFString.c \
-    Parsing.subproj/CFPropertyList.c Parsing.subproj/CFBinaryPList.c \
-    Error.subproj/CFError.c URL.subproj/CFURL.c)
+    NumberDate.subproj/CFNumber.c NumberDate.subproj/CFDate.c NumberDate.subproj/CFTimeZone.c \
+    NumberDate.subproj/CFBigNumber.c \
+    String.subproj/CFString.c String.subproj/CFStringEncodings.c String.subproj/CFStringUtilities.c \
+    String.subproj/CFCharacterSet.c String.subproj/CFStringScanner.c String.subproj/CFBurstTrie.c \
+    StringEncodings.subproj/CFUniChar.c StringEncodings.subproj/CFUnicodeDecomposition.c \
+    StringEncodings.subproj/CFStringEncodingConverter.c StringEncodings.subproj/CFBuiltinConverters.c \
+    StringEncodings.subproj/CFStringEncodingDatabase.c StringEncodings.subproj/CFICUConverters.c \
+    Parsing.subproj/CFPropertyList.c Parsing.subproj/CFBinaryPList.c Parsing.subproj/CFOldStylePList.c \
+    Error.subproj/CFError.c URL.subproj/CFURL.c \
+    Locale.subproj/CFLocale.c Locale.subproj/CFLocaleIdentifier.c Locale.subproj/CFLocaleKeys.c \
+    Locale.subproj/CFNumberFormatter.c Locale.subproj/CFCalendar.c Locale.subproj/CFCalendar_Enumerate.c)
 
 mkdir -p "$OUT/cf_obj"
 for f in "${FILES[@]}"; do
     base=$(basename "$f" .c)
     "$CLANG" "${CFLAGS[@]}" "$CF/$f" -o "$OUT/cf_obj/$base.o"
 done
+# Real embedded Unicode data CFCharacterSet.c/CFUniChar.c need at
+# runtime (property/bitmap tables, NOT ICU-generated -- see this
+# script's own header comment): real Apple `.incbin` assembly
+# (String.subproj/CFCharacterSetData.S/CFUniCharPropertyDatabase.S)
+# wrapping the real binary blobs already checked into this fork
+# (CharacterSets/CFCharacterSetBitmaps.bitmap/CFUniCharPropertyDatabase
+# .data). CF_CHARACTERSET_BITMAP/CF_CHARACTERSET_UNICHAR_DB are the same
+# defines build.py's own real build passes, just with an absolute path
+# (robust regardless of this script's cwd, unlike build.py's
+# cwd-relative one).
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    -I "$OUT/cf_headers" \
+    -DCF_CHARACTERSET_BITMAP="\"$(cd "$CF" && pwd)/CharacterSets/CFCharacterSetBitmaps.bitmap\"" \
+    "$CF/String.subproj/CFCharacterSetData.S" -o "$OUT/cf_obj/CFCharacterSetData.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    -I "$OUT/cf_headers" \
+    -DCF_CHARACTERSET_UNICHAR_DB="\"$(cd "$CF" && pwd)/CharacterSets/CFUniCharPropertyDatabase.data\"" \
+    "$CF/String.subproj/CFUniCharPropertyDatabase.S" -o "$OUT/cf_obj/CFUniCharPropertyDatabase.o"
+# Real fortify/compiler-rt symbols the newly-added CFStringEncodingConverter.c/
+# CFOldStylePList.c/CFCalendar.c chain calls (___memmove_chk/__sprintf_chk/
+# __strlcat_chk/__strncpy_chk/__udivti3) -- same real files
+# build_launchd_core.sh already uses for the identical real gap (Libc's own
+# secure/*.c fortified-libc sources, udivti3_compat.c a real standard
+# 128-bit division algorithm already checked into this directory), just
+# compiled here too rather than sharing launchd_core's own object dir.
+"$CLANG" "${CFLAGS[@]}" "$LIBC/secure/memmove_chk.c" -o "$OUT/cf_obj/memmove_chk.o"
+"$CLANG" "${CFLAGS[@]}" "$LIBC/secure/sprintf_chk.c" -o "$OUT/cf_obj/sprintf_chk.o"
+"$CLANG" "${CFLAGS[@]}" "$LIBC/secure/strlcat_chk.c" -o "$OUT/cf_obj/strlcat_chk.o"
+"$CLANG" "${CFLAGS[@]}" "$LIBC/secure/strncpy_chk.c" -o "$OUT/cf_obj/strncpy_chk.o"
+"$CLANG" "${CFLAGS[@]}" udivti3_compat.c -o "$OUT/cf_obj/udivti3_compat.o"
 # Real, minimal CFRuntimeClass stub descriptors for CF subsystems not
-# ported yet (RunLoop/Stream/Socket/MachPort/URL/Locale/Calendar/
-# TimeZone/DateComponents/Formatters/CharacterSet/AttributedString/
-# Bundle/PlugIn/Preferences) plus one init-hook no-op -- see
+# ported yet (RunLoop/Stream/Socket/MachPort/URL/DateComponents/
+# Formatters/AttributedString/Bundle/PlugIn/Preferences) -- see
 # cf_compat_headers/cf_class_stubs.c's own header comment for the full
 # rationale (safe because nothing in this project's real call graph
 # instantiates these types yet; tracked as docs/backlog.md P2 d7).
@@ -194,7 +264,7 @@ MACH_VM_DEFS="$(cd "$(dirname "$XNU/osfmk/mach/mach_vm.defs")" && pwd)/$(basenam
 # confirmed via nm before assuming a second copy was needed -- adding
 # one here would be a real duplicate-symbol conflict, not a fix).
 
-echo "compiled: $((${#FILES[@]} + 5)) real/compat CoreFoundation source files (zero errors)"
+echo "compiled: $((${#FILES[@]} + 12)) real/compat CoreFoundation source files (zero errors)"
 
 rm -f "$OUT/libCoreFoundation.a"
 ar rcs "$OUT/libCoreFoundation.a" "$OUT"/cf_obj/*.o
@@ -222,6 +292,7 @@ EOF
     -Wl,-force_load,"$OUT/libCoreFoundation.a" \
     "$OUT/cf_trial_main.o" \
     "$OUT/system/libdispatch.dylib" \
+    "$ICU_LIB/libicuuc.dylib" "$ICU_LIB/libicui18n.dylib" "$ICU_LIB/libicudata.dylib" "$OUT/system/libc++.dylib" \
     "$OUT/libmach_ipc.a" "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/libplatform.a" \
     "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
     "$OUT/libc_locale_for_stdio.a" \
@@ -272,6 +343,7 @@ echo "wrote $OUT/cf_libc_extras.a ($(ls "$OUT"/cf_libc_extras_obj/*.o | wc -l | 
     "$OUT/cf_libc_extras.a" \
     "$OUT/libc_string.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" "$OUT/libc_locale_for_stdio.a" \
     "$OUT/system/libdispatch.dylib" \
+    "$ICU_LIB/libicuuc.dylib" "$ICU_LIB/libicui18n.dylib" "$ICU_LIB/libicudata.dylib" "$OUT/system/libc++.dylib" \
     "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     2>"$OUT/cf_trial_dyn.err" \
     && echo "real DYNAMIC trial link: 0 undefined symbols -- fully closed" \

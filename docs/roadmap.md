@@ -709,12 +709,19 @@ need a real implementation later:
   real `libicuuc`/`libicui18n`/`libicuio`/`libicudata` arm64 dylibs with
   real packaged CLDR/Unicode data, confirmed exporting the exact symbols
   (`u_hasBinaryProperty`, `ucol_open`, etc) CF's own CFUniChar/
-  CFCharacterSet/CFLocale gap list needs. Five real build-system gaps
+  CFCharacterSet/CFLocale gap list needs. Six real build-system gaps
   found and fixed across both stages (none required faking any
-  behavior): `docs/backlog.md` item d7's own "Real ICU port started"
-  entry has the full writeup. Not yet done: wiring these dylibs into
-  `build_corefoundation.sh`'s link and closing CF's actual ICU-dependent
-  gap list against them.
+  behavior). **CF wiring DONE same day**: `build_corefoundation.sh` now
+  builds 21 more real CF source files this ICU port unblocks
+  (CFCharacterSet/CFUniChar + real embedded Unicode data,
+  CFStringUtilities' real ICU collation, CFLocale/CFLocaleIdentifier/
+  CFLocaleKeys/CFNumberFormatter, CFCalendar/CFTimeZone, and several
+  supporting String/StringEncodings files) and links the real ICU
+  dylibs. Gap count for this trial link: 83 symbol groups, all in
+  already-categorized buckets (out-of-scope subsystems, ASL, libSystem
+  export-parity debt, one newly-surfaced os_log/dispatch gap not yet
+  root-caused). `docs/backlog.md` item d7's own "Real ICU port started"
+  entry has the full writeup for both the port and the CF wiring.
 - **Phase 6.8 (`launchd`+XPC via PureDarwin): critical-path gap-closing
   pass DONE 2026-08-26**, real port itself still open. Source is
   PureDarwin/PureDarwin's own `next` branch (a current, actively
