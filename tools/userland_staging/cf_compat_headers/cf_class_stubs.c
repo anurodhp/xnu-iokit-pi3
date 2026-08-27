@@ -23,10 +23,18 @@
  * CFNumberFormatter/CFCalendar/CFTimeZone/CFAttributedString/CFBundle/
  * CFRunLoop/CFMachPort/CFSocket/CFStream/CFURLComponents/CFRunArray/
  * etc) now has its class-table entry come from the real file, not a
- * stub here. Only CFPreferences.c remains stubbed: real, multi-part
- * gap (gethostuuid unavailable on iOS, missing CFUUID declarations, an
- * undeclared prefDir) -- see build_corefoundation.sh's own header
- * comment for the full breakdown.
+ * stub here. CFPreferences.c (real, multi-part gap: gethostuuid
+ * unavailable on iOS, missing CFUUID declarations, an undeclared
+ * prefDir) and CFUserNotification.c (real GUI alert-dialog API, hard
+ * unavailable-on-iOS SDK errors on its Icon/Sound/LocalizationURL
+ * keys -- no GUI on this project's boot target regardless) are the
+ * two real types left with a genuine compile failure -- see
+ * build_corefoundation.sh's own header comment for the full
+ * breakdown. (CFWindowsUtilities.c, the third real exclusion, has no
+ * stub here because it has nothing to stub: its entire body is one
+ * `#if TARGET_OS_WIN32` block, so on this Darwin target it preprocesses
+ * to a completely empty translation unit -- zero symbols, confirmed by
+ * reading the file, not assumed.)
  */
 #include <CoreFoundation/CFBase.h>
 #include "CFRuntime.h"
@@ -36,6 +44,7 @@
 }
 
 CF_STUB_CLASS(__CFPreferencesDomainClass);
+CF_STUB_CLASS(__CFUserNotificationClass);
 
 /* __kCFLocaleCollatorID / __CFLocaleGetNullLocale / __CFLocaleSetNullLocale /
  * _CFStringGetUserDefaultEncoding removed 2026-08-27: real CFLocale.c
