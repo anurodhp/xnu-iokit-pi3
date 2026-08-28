@@ -1258,14 +1258,17 @@ CMD_LIST=(
     # alongside this pass after finding the existing auto-generated
     # "_statfs" stub was wired to the WRONG, legacy 32-bit-struct kernel
     # syscall). getbsize.c/humanize_number.c already proven by du/ls.
-    # simple_cmds_libm_compat.c: real fabs()/trunc()/ilogb() -- df.c's
-    # own unit_adjust() (-h/-H human-readable sizes) and prtstat()'s
-    # Unix2003 round-up-percentage rule call all three; this project has
-    # no libm at all (see that file's own header comment for why a
-    # narrow custom bit-level implementation was used instead of pulling
-    # fdlibm's private math_private.h infrastructure for three
-    # functions).
-    "df:$FILE_CMDS/df/df.c:$FILE_CMDS/df/vfslist.c|$LIBC/gen/FreeBSD/getmntinfo.c|$LIBC/gen/FreeBSD/getbsize.c|$OUT/freebsd_extra/humanize_number.c|$LIBC/gen/get_compat.c|simple_cmds_libm_compat.c"
+    # fabs()/trunc()/ilogb() -- df.c's own unit_adjust() (-h/-H
+    # human-readable sizes) and prtstat()'s Unix2003 round-up-percentage
+    # rule call all three. UPDATED 2026-08-27: these now come from real
+    # libc_build/libm.a (real Apple Libm, tag Libm-2026 -- see
+    # setup_third_party.sh's own header comment and build_libm.sh)
+    # instead of simple_cmds_libm_compat.c's narrow hand-rolled bit-level
+    # implementation -- linked via this command's own extra_libs entry
+    # below (df), not compiled into this file list.
+    # simple_cmds_libm_compat.c itself is left in the tree (confirmed via
+    # grep nothing else references it) but is no longer compiled here.
+    "df:$FILE_CMDS/df/df.c:$FILE_CMDS/df/vfslist.c|$LIBC/gen/FreeBSD/getmntinfo.c|$LIBC/gen/FreeBSD/getbsize.c|$OUT/freebsd_extra/humanize_number.c|$LIBC/gen/get_compat.c"
     # killall: real, unmodified shell_cmds/killall/killall.c. Real
     # KERN_PROC/KERN_PROC_ALL process enumeration via the same sysctl()
     # already proven by hostname(1) (libc_gen.a, in LINK_COMMON); struct
@@ -1594,6 +1597,16 @@ for spec in "${CMD_LIST[@]}"; do
             ;;
         nl)
             extra_libs="$OUT/libc_regex.a"
+            ;;
+        df)
+            # Real fabs()/trunc()/ilogb() (see this command's own
+            # CMD_LIST comment above) -- libc_build/libm.a, scoped to
+            # just this command since it's the only current simple_cmds
+            # consumer of any of the three (confirmed via grep before
+            # adding this project-wide to LINK_COMMON, which would widen
+            # blast radius for every other command in this tier with no
+            # current benefit).
+            extra_libs="$OUT/libm.a"
             ;;
         xargs)
             # regcomp/regexec/regfree for -p's real y/n confirmation

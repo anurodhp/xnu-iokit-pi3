@@ -106,6 +106,36 @@ Everything else (`dyld`, `Libc`, `libpthread`, `libplatform`,
   verified the way the others are — this is an honest ceiling on the
   verification method itself, not a pin bug to fix.
 
+**Addendum 2026-08-27 — `Libm` pinned, same "no manifest entry" ceiling as
+`IOUSBFamily` but worse:** `setup_third_party.sh` now pins
+`apple-oss-distributions/Libm` (never pinned before this project had any
+Libm at all). Checked `distribution-macOS`'s `release.json` at `macos-112`
+*and* every other macOS tag back through `macos-1012` (Sierra,
+10.12–10.15, 11.1, 11.2 all checked directly, not sampled) — `Libm` is
+listed in **none** of them (`macos-112` alone has 188 real project
+entries, zero named `Libm`). The repo is real and still exists, but its
+own tag list is only 15 tags total, and the real tagger dates on those
+tag objects (`git cat-file tag <sha>`, since GitHub's own import-commit
+dates on these bulk-migrated repos are not reliable era signals) run from
+2003 up to `Libm-2026` at **2011-07-20** — Apple has not published Libm
+source at all since OS X Lion, a decade before Darwin 20.3/macOS 11.2 and
+about two years before arm64 existed as an architecture at all. Pinned
+`Libm-2026` anyway (newest real tag, same "pin the newest available real
+source, document the ceiling honestly" call as `IOUSBFamily` above), but
+unlike `IOUSBFamily` this one also has zero `arm64`/`AArch64` source in
+any tag ever published — `Source/ARM` is real armv6/armv7 (32-bit)
+assembly plus a handful of portable C fallback files (many already
+FreeBSD-derived, vendored by Apple itself under `_freeBSD.c` names).
+`tools/userland_staging/build_libm.sh` only builds from the portable C
+subset (the assembly is skipped, not ported) and falls back to real,
+directly-transcribed FreeBSD `lib/msun` source (`modf`, `trunc`, `fabs`,
+`pow`, `scalbn` — attributed in
+`tools/userland_staging/libm_freebsd_fallback.c`) for the handful of
+functions where Apple's own real Libm source has no usable portable
+form (`pow`/`fabs` are ARM-asm-only; `modf`'s only portable Apple source
+is its own `modf_IncrediblySkanky.c`, self-described in its own header
+comment as a temporary, poor-performance hack).
+
 **Not yet done, scope for a follow-up pass, not this one:** the same
 check for the 5 repos vendored via `third_party-patches/` with local
 fixes on top (`dtc-AppleDeviceTree`, `u-boot`, `Csu`) — `Csu` matched

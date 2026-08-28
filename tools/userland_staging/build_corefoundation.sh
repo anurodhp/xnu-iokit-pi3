@@ -247,18 +247,29 @@ done
 # instantiates these types yet; tracked as docs/backlog.md P2 d7).
 "$CLANG" "${CFLAGS[@]}" "$COMPAT/cf_class_stubs.c" -o "$OUT/cf_obj/cf_class_stubs.o"
 # Real, small, individually-verified compat gaps found via the full
-# launchd critical-path trial link (docs/backlog.md item d6/d7): fmod/
-# modf/pow (no Libm anywhere in this project, real standard algorithms
-# implemented directly -- see libm_compat.c's own header for the exact
-# real call sites and honest scope), malloc_zone_*/malloc_default_zone/
-# malloc_good_size (CFAllocator's own real default-allocator
-# implementation calls these; this project's build_libmalloc.sh
-# deliberately never built the real zone-registration API surface --
-# see malloc_zone_compat.c), _NSGetArgc (real Apple crt_externs.c's own
-# one-line accessor, extracted standalone to avoid a duplicate-symbol
-# conflict with this project's existing _NSGetArgv/etc -- see
-# nsgetargc_compat.c).
-"$CLANG" "${CFLAGS[@]}" "$COMPAT/libm_compat.c" -o "$OUT/cf_obj/libm_compat.o"
+# launchd critical-path trial link (docs/backlog.md item d6/d7):
+# malloc_zone_*/malloc_default_zone/malloc_good_size (CFAllocator's own
+# real default-allocator implementation calls these; this project's
+# build_libmalloc.sh deliberately never built the real
+# zone-registration API surface -- see malloc_zone_compat.c),
+# _NSGetArgc (real Apple crt_externs.c's own one-line accessor,
+# extracted standalone to avoid a duplicate-symbol conflict with this
+# project's existing _NSGetArgv/etc -- see nsgetargc_compat.c).
+#
+# UPDATED 2026-08-27: fmod/modf/pow (CFNumber.c's __CFNumberHash(),
+# CFUtilities.c's millisecond-logging path, CFString.c's
+# scientific-notation threshold check) now come from libc_build/libm.a
+# (real Apple Libm, tag Libm-2026 -- see setup_third_party.sh's own
+# header comment and build_libm.sh) instead of cf_compat_headers/
+# libm_compat.c's hand-written approximations -- linked in at the two
+# trial-link steps below (both static and dynamic), not compiled into
+# cf_obj/, since libm.a is a real archive of its own, not a per-file
+# compat source. libm_compat.c itself is left in the tree (not deleted
+# -- confirmed via grep that nothing else references it) but is no
+# longer compiled into this tier; note real libm's pow() also handles
+# fractional exponents, unlike libm_compat.c's own documented
+# integer-exponent-only limitation, a strict correctness improvement
+# for CFString.c's real call site.
 "$CLANG" "${CFLAGS[@]}" "$COMPAT/malloc_zone_compat.c" -o "$OUT/cf_obj/malloc_zone_compat.o"
 "$CLANG" "${CFLAGS[@]}" "$COMPAT/nsgetargc_compat.c" -o "$OUT/cf_obj/nsgetargc_compat.o"
 
@@ -437,6 +448,7 @@ EOF
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     -Wl,-force_load,"$OUT/libCoreFoundation.a" \
     "$OUT/cf_trial_main.o" \
+    "$OUT/libm.a" \
     "$OUT/system/libdispatch.dylib" \
     "$ICU_LIB/libicuuc.dylib" "$ICU_LIB/libicui18n.dylib" "$ICU_LIB/libicudata.dylib" "$OUT/system/libc++.dylib" \
     "$OUT/system/libxml2.dylib" \
@@ -487,6 +499,7 @@ echo "wrote $OUT/cf_libc_extras.a ($(ls "$OUT"/cf_libc_extras_obj/*.o | wc -l | 
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/cf_trial_main.o" \
     "$OUT/libCoreFoundation.a" \
+    "$OUT/libm.a" \
     "$OUT/cf_libc_extras.a" \
     "$OUT/libc_string.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" "$OUT/libc_locale_for_stdio.a" \
     "$OUT/system/libdispatch.dylib" \

@@ -67,12 +67,17 @@
 #     dns_async.c out of for the identical reason. ping.c's own two call
 #     sites already try inet_aton() first and only reach this on a
 #     genuine hostname argument -- see ping_resolver_compat.c.
-#   - sqrt(): real Apple Libm (a separate apple-oss-distributions project)
-#     isn't vendored in this checkout's third_party/ and this task is
-#     explicitly scoped not to add a new pin. Thin __builtin_sqrt()
-#     wrapper instead -- lowers to the real arm64 hardware FSQRT
-#     instruction, not a software approximation -- see
-#     ping_libm_compat.c.
+#
+# UPDATED 2026-08-27: sqrt() now comes from libc_build/libm.a (real
+# Apple Libm, tag Libm-2026 -- see setup_third_party.sh's own header
+# comment and build_libm.sh for the pin/build). Its own real
+# Source/ARM/sqrt.c already takes the identical __builtin_sqrt()
+# hardware-FSQRT branch ping_libm_compat.c's now-retired hand-written
+# wrapper used -- same real algorithm, now from the real library instead
+# of a narrow local shim. ping_libm_compat.c itself is left in the tree
+# (not deleted -- nothing else references it, confirmed via grep, but no
+# other consumer has been swapped over yet either) and no longer
+# compiled into this tier.
 #   - alarm(): real Apple alarm(3) needs setitimer(2)'s real interval-
 #     timer/SIGALRM delivery subsystem, which bash_syscalls.c's own
 #     header comment already documents as never wired up end-to-end in
@@ -190,7 +195,7 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     exit 1
 fi
 
-for dep in libplatform.a libmalloc.a libpthread.a libclosure.a libc_gen.a libc_stdio.a libc_printf.a libc_string.a libc_locale_for_stdio.a libunwind.a; do
+for dep in libplatform.a libmalloc.a libpthread.a libclosure.a libc_gen.a libc_stdio.a libc_printf.a libc_string.a libc_locale_for_stdio.a libunwind.a libm.a; do
     if [ ! -f "$OUT/$dep" ]; then
         echo "error: $OUT/$dep not found -- run its build_*.sh first" >&2
         exit 1
@@ -237,7 +242,6 @@ for spec in \
     "libresolv_socket_syscalls.c:" \
     "ping_extra_syscalls.c:" \
     "ping_resolver_compat.c:" \
-    "ping_libm_compat.c:" \
     "ping_alarm_compat.c:" \
     "ping_main_wrapper.c:" \
     "hexdump_bcmp_compat.c:" \
@@ -269,6 +273,7 @@ fi
     -o ping.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/ping_obj/*.o \
+    "$OUT/libm.a" \
     "$OUT/libc_printf.a" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_string.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
