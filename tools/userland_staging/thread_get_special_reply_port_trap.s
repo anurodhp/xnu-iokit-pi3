@@ -1,11 +1,12 @@
-// Real arm64 Mach trap stub for thread_get_special_reply_port -- same
-// class of gap, same real-macro-copied-by-hand fix, as
-// mach_semaphore_traps.s/mach_port_allocate_trap.s/
-// task_name_for_pid_trap.s. Real trap number cross-checked directly
-// against osfmk/mach/syscall_sw.h:
-//   kernel_trap(thread_get_special_reply_port,-50,0)
-// Needed by third_party/libdispatch's real src/mach.c (dispatch_mach's
-// reply-port fast path).
+// Real arm64 Mach trap stub for thread_get_special_reply_port (-50, 0
+// args) -- same real kernel_trap macro pattern as pid_for_task_trap.s
+// (-46, 2 args), see that file's header for the full rationale. Real
+// trap number cross-checked against
+// third_party/xnu-7195/osfmk/mach/syscall_sw.h:133
+// (`kernel_trap(thread_get_special_reply_port,-50,0)`), not guessed.
+// Needed by libsyscall/mach/mach_port.c's real
+// mig_get_special_reply_port() -- launchd's real MIG client calls hit
+// this via the regenerated MIG _user.c stubs (build_launchd_core.sh).
 .text
 .align 2
 .globl _thread_get_special_reply_port

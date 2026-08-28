@@ -128,8 +128,8 @@ for a in libc_string libc_gen libc_stdio libc_printf libc_locale_for_stdio libc_
 done
 if [ ! -f "$OUT/system/libsystem_kernel.dylib" ] || [ ! -f "$OUT/system/libsystem_platform.dylib" ] || \
    [ ! -f "$OUT/system/libsystem_malloc.dylib" ] || [ ! -f "$OUT/system/libsystem_pthread.dylib" ] || \
-   [ ! -f "$OUT/system/libsystem_blocks.dylib" ]; then
-    echo "error: libsystem_kernel/platform/malloc/pthread/blocks.dylib not found -- run those build scripts first" >&2
+   [ ! -f "$OUT/system/libsystem_blocks.dylib" ] || [ ! -f "$OUT/system/libdyld.dylib" ]; then
+    echo "error: libsystem_kernel/platform/malloc/pthread/blocks/libdyld.dylib not found -- run those build scripts first" >&2
     exit 1
 fi
 
@@ -187,6 +187,70 @@ SIGLIST_CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fn
 # own comment (moved here from libdyld_compat_misc.c during migration
 # step 5, real Apple's own architecture: __cxa_atexit lives in Libc).
 "$CLANG" $SIGLIST_CFLAGS libsystem_c_cxa_atexit_compat.c -o "$EXTRACT/cxa_atexit_compat.o"
+
+# Real gaps found booting launchd as PID 1 (docs/backlog.md item d10):
+# ICU's own dylibs reference ___chkstk_darwin/strstr/os_log's real
+# never-open-sourced-engine stubs directly, expected from libSystem.
+"$CLANG" $SIGLIST_CFLAGS libsystem_c_gap_compat.c -o "$EXTRACT/libsystem_c_gap_compat.o"
+"$CLANG" $SIGLIST_CFLAGS os_log_compat.c -o "$EXTRACT/os_log_compat.o"
+
+# Real gap: ICU's own dylibs also reference acos/asin/fabs/sqrt/trunc/
+# fmod/modf, expected from libSystem. Real, already-built Apple/FreeBSD
+# Libm objects (build_libm.sh) -- extracted rather than re-compiled,
+# same real selective-extraction pattern this script already uses for
+# libncurses.a/libremovefile.a elsewhere in this project. pow/scalbn
+# also come along for free (same source objects bundle them, see
+# libm_freebsd_fallback.o) -- harmless, this is a separate dylib image
+# from launchd.macho's own already-extracted libm_scalbn_only_compat.o,
+# no duplicate-symbol conflict is possible across separate Mach-O images.
+if [ ! -f "$OUT/libm.a" ]; then
+    echo "error: $OUT/libm.a not found -- run build_libm.sh first" >&2
+    exit 1
+fi
+(cd "$EXTRACT" && ar x "../../libm.a" acos_freeBSD.o asin_freeBSD.o libm_freebsd_fallback.o sqrt.o fmod.o)
+
+# Real gap: ICU also references qsort, expected from libSystem. Real
+# Apple source (qsort_b.c) already built once for libremovefile.a
+# (build_removefile.sh) -- qsort.o itself only needs heapsort.o (also
+# extracted) + flsl (small enough to define directly in
+# libsystem_c_gap_compat.c above rather than pull in
+# removefile_syscalls.o's own much larger, already-duplicate-prone
+# object for one 6-line function).
+if [ ! -f "$OUT/libremovefile.a" ]; then
+    echo "error: $OUT/libremovefile.a not found -- run build_removefile.sh first" >&2
+    exit 1
+fi
+(cd "$EXTRACT" && ar x "../../libremovefile.a" qsort.o heapsort.o)
+
+# Real gap: ICU also references mktime, expected from libSystem. Real
+# Apple source (stdtime/FreeBSD/localtime.c) already compiled once for
+# liblaunchd_core.a (build_launchd_core.sh's own real LOCALTIME_FLAGS
+# recipe -- -fno-stack-check + a real libc-features.h regen, not
+# re-derived here, just reusing the already-built object) -- extracted
+# rather than recompiled, same pattern as the libm/libremovefile pulls
+# above. Needs real __strcat_chk/__strcpy_chk/__strncpy_chk (also
+# already-built elsewhere, pulled alongside) and asctime/asctime_r/
+# __isthreaded (this file's own real definitions above).
+if [ ! -f "$OUT/liblaunchd_core.a" ] || [ ! -f "$OUT/libxpc_syscalls2.a" ]; then
+    echo "error: $OUT/liblaunchd_core.a or libxpc_syscalls2.a not found -- run build_launchd_core.sh first" >&2
+    exit 1
+fi
+(cd "$EXTRACT" && ar x "../../liblaunchd_core.a" localtime.o timezone_unix03.o strcat_chk.o)
+(cd "$EXTRACT" && ar x "../../libxpc_syscalls2.a" chk_fail_compat.o strcpy_chk.o strncpy_chk.o)
+
+# Real gap: ICU also references time, expected from libSystem. Real
+# Apple source (gen/FreeBSD/time.c) already compiled once for
+# libopenpam.a (build_openpam.sh), pulled here the same real-extraction
+# way as everything else above -- needs real gettimeofday()/
+# fegetenv()/fesetenv() (also already built there) plus the raw
+# ___gettimeofday/___commpage_gettimeofday traps that back it, and
+# localtime.o (already extracted above) for the underlying date/time
+# support real time.c depends on transitively.
+if [ ! -f "$OUT/libopenpam.a" ]; then
+    echo "error: $OUT/libopenpam.a not found -- run build_openpam.sh first" >&2
+    exit 1
+fi
+(cd "$EXTRACT" && ar x "../../libopenpam.a" time.o gettimeofday.o ls_fenv_compat.o ps_commpage_gettimeofday_stub.o simple_cmds_time_compat.o)
 
 # Real gap: real access()/fstatat()/ftruncate()/mkdirat()/rmdir()/
 # unlink()/sigprocmask() raw syscall stubs -- same real create-
@@ -316,7 +380,15 @@ rm -f "$OUT/system/libsystem_c.dylib"
     -o "$OUT/system/libsystem_c.dylib" \
     "$EXTRACT"/*.o \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" \
-    "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" "$OUT/system/libsystem_blocks.dylib"
+    "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" "$OUT/system/libsystem_blocks.dylib" \
+    -Wl,-reexport_library,"$OUT/system/libdyld.dylib"
+    # ^ real gap found booting launchd as PID 1 (docs/backlog.md item
+    # d10): ICU's own libicuuc.66.dylib expects _dlclose specifically
+    # from libSystem (its own two-level-namespace bind, baked in at
+    # ICU's build time) even though _dlopen/_dlsym happened to already
+    # resolve via libc++.dylib being a sibling -- matches real Apple's
+    # actual architecture (libSystem.B.dylib really does reexport
+    # dyld's dl* API on real macOS, this was simply never wired here).
 
 echo "wrote $OUT/system/libsystem_c.dylib"
 otool -hv "$OUT/system/libsystem_c.dylib" | grep -q " DYLIB " || {

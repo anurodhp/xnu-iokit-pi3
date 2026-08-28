@@ -130,6 +130,14 @@ $LIBC/gen/uname.c
 $LIBC/gen/FreeBSD/getpagesize.c
 $LIBC/gen/confstr.c
 $LIBC/stdlib/FreeBSD/merge.c
+$LIBC/stdlib/FreeBSD/abs.c
+$LIBC/stdlib/FreeBSD/labs.c
+$LIBC/stdlib/FreeBSD/llabs.c
+$LIBC/stdlib/FreeBSD/bsearch.c
+$LIBC/stdlib/FreeBSD/atol.c
+$LIBC/stdlib/FreeBSD/atoi.c
+$LIBC/stdlib/FreeBSD/strtoll.c
+$LIBC/stdlib/FreeBSD/strtoul.c
 $LIBC/gen/FreeBSD/termios.c
 $LIBC/gen/FreeBSD/ttyname.c
 $LIBC/gen/devname.c

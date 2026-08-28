@@ -1,0 +1,86 @@
+#!/bin/bash
+# Builds pd_console_login.macho: real dynamic Mach-O for PureDarwin's
+# src/Libraries/XPC/launchd/pd_console_login.c. This is launchd's own
+# real getty/login-equivalent helper -- launchd opens StandardInPath with
+# O_NOCTTY, so a bare LaunchDaemon has fds for /dev/console but no
+# controlling tty; this helper does the classic getty dance (open
+# non-blocking to avoid wedging on carrier, CLOCAL, TIOCSCTTY) then
+# exec()s a real login shell. Kept as its own executable rather than
+# folded into liblaunchd_core.a because its own real main() hard-conflicts
+# with launchd.c's (see build_launchd_core.sh's own header comment) --
+# launchd supervises it as a separate process (org.puredarwin.console-login
+# LaunchDaemon, see inject_into_sd_image.sh), doesn't link into it.
+#
+# Plain standalone C (termios/ioctl/setsid/execv/setenv, no launchd-
+# internal headers), so unlike build_launchd_core.sh it needs none of
+# that script's compat-header/-include machinery -- just the same real
+# dynamic-executable recipe as build_dyld_test_exec.sh, linked against
+# the same already-built static archives (real syscalls/libc pieces
+# launchd.macho itself already proved sufficient for a clean link) plus
+# libdyld.dylib/libSystem.B.dylib (dyldMain.cpp's unconditional
+# requirement, see build_dyld_test_exec.sh's own header comment).
+set -e
+cd "$(dirname "$0")"
+
+XCODE12="/Applications/Xcode-12.app/Contents/Developer"
+CLANG="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+SDK="$XCODE12/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
+if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
+    echo "error: Xcode-12.app not found at $XCODE12" >&2
+    exit 1
+fi
+
+DAILY_XCODE="$(xcode-select -p 2>/dev/null)"
+NEWLD_BINDIR="$DAILY_XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+if [ ! -x "$NEWLD_BINDIR/ld" ]; then
+    echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE) -- run 'xcode-select -p' to check, see docs/backlog.md item d9" >&2
+    exit 1
+fi
+
+PD="../../third_party/PureDarwin/src/Libraries/XPC"
+OUT="libc_build"
+
+for a in liblaunchd_syscalls.a libxpc_syscalls.a launchd_libc_extras.a cf_libc_extras.a \
+         libc_gen.a libc_string.a libc_stdio.a libc_printf.a libc_locale_for_stdio.a \
+         libmalloc.a libplatform.a libpthread.a; do
+    if [ ! -f "$OUT/$a" ]; then
+        echo "error: $OUT/$a not found -- run build_launchd_core.sh first" >&2
+        exit 1
+    fi
+done
+if [ ! -f "$OUT/cerror_stub.o" ]; then
+    echo "error: $OUT/cerror_stub.o not found -- run build_launchd_core.sh first" >&2
+    exit 1
+fi
+for d in libdyld.dylib libSystem.B.dylib; do
+    if [ ! -f "$OUT/system/$d" ]; then
+        echo "error: $OUT/system/$d not found -- run build_libdyld.sh/build_libsystem.sh first" >&2
+        exit 1
+    fi
+done
+
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding \
+    -fno-builtin -fno-stack-protector -O0 -Wall \
+    "$PD/launchd/pd_console_login.c" -o "$OUT/pd_console_login.o"
+
+rm -f "$OUT/pd_console_login.macho"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
+    -B"$NEWLD_BINDIR" \
+    -Wl,-fixup_chains \
+    -o "$OUT/pd_console_login.macho" \
+    ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
+    "$OUT/pd_console_login.o" \
+    "$OUT/liblaunchd_syscalls.a" "$OUT/libxpc_syscalls.a" \
+    "$OUT/launchd_libc_extras.a" "$OUT/cf_libc_extras.a" \
+    "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
+    "$OUT/libc_locale_for_stdio.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    "$OUT/libpthread.a" \
+    "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
+    2>"$OUT/pd_console_login_link.err" \
+    || { echo "error: real link failed -- see $OUT/pd_console_login_link.err" >&2; tail -60 "$OUT/pd_console_login_link.err" >&2; exit 1; }
+
+echo "wrote $OUT/pd_console_login.macho"
+otool -hv "$OUT/pd_console_login.macho" | grep -q " EXECUTE " || echo "WARNING: not a real MH_EXECUTE" >&2
+otool -hv "$OUT/pd_console_login.macho" | grep -q NOUNDEFS || echo "WARNING: NOUNDEFS not set -- real undefined symbols may remain" >&2
+echo "linked against:"
+otool -L "$OUT/pd_console_login.macho" 2>/dev/null | tail -n +2

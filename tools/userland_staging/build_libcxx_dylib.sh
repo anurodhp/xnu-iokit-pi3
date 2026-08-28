@@ -188,6 +188,33 @@ LIBCXXABI="../../third_party/llvm-project/libcxxabi"
     -Wno-macro-redefined \
     libcxx_call_once_compat.cpp -o "$EXTRACT/call_once_compat.o"
 
+# Real gap found booting launchd as PID 1 (docs/backlog.md item d10):
+# ICU's own umutex.cpp/unifiedcache.cpp need real
+# condition_variable::notify_all()/wait() -- see
+# condition_variable_trimmed.cpp's own header for the full real writeup
+# (real, unmodified upstream source minus __do_timed_wait/
+# notify_all_at_thread_exit, which need the still-missing
+# pthread_cond_timedwait()).
+"$CLANGXX" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -std=c++14 -funwind-tables \
+    -nostdinc++ -isystem "$LIBCXX/include" \
+    -I "$LIBCXXABI/include" -I "$LIBCXX/src" \
+    -D_LIBCPP_BUILDING_LIBRARY -DLIBCXX_BUILDING_LIBCXXABI \
+    -Wno-macro-redefined \
+    condition_variable_trimmed.cpp -o "$EXTRACT/condition_variable.o"
+
+# Real gap: ICU's own umutex.cpp needs real std::mutex::lock()/unlock()
+# too -- see mutex_trimmed.cpp's own header for the full real writeup
+# (real, unmodified upstream mutex.cpp, only __call_once() omitted since
+# libcxx_call_once_compat.cpp already provides it separately).
+"$CLANGXX" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -std=c++14 -funwind-tables \
+    -nostdinc++ -isystem "$LIBCXX/include" \
+    -I "$LIBCXXABI/include" -I "$LIBCXX/src" \
+    -D_LIBCPP_BUILDING_LIBRARY -DLIBCXX_BUILDING_LIBCXXABI \
+    -Wno-macro-redefined \
+    mutex_trimmed.cpp -o "$EXTRACT/mutex.o"
+
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     libcxx_dylib_compat.c -o "$EXTRACT/compat.o"
 

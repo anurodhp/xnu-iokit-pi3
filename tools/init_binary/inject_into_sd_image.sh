@@ -1,10 +1,22 @@
 #!/bin/bash
-# Rebuilds init.macho and pwtool.macho and writes them into an SD card
-# image's real HFS+ root (/sbin/launchd, /sbin/pwtool), replacing whatever's
-# there. This is a manual macOS-only hdiutil/diskutil operation (attach the
-# raw MBR image, mount just the HFS+ partition, copy, unmount, detach) that
-# had previously been done by hand each time init.c changed -- see project
-# memory (userspace libc/dyld) for why this needed a script.
+# Rebuilds pwtool.macho and writes it, plus real launchd.macho, into an SD
+# card image's real HFS+ root (/sbin/launchd, /sbin/pwtool), replacing
+# whatever's there. This is a manual macOS-only hdiutil/diskutil operation
+# (attach the raw MBR image, mount just the HFS+ partition, copy, unmount,
+# detach) that had previously been done by hand each time init.c changed --
+# see project memory (userspace libc/dyld) for why this needed a script.
+#
+# PID 1 boot-path integration (2026-08-28, docs/daemon-roadmap.md Phase 6.8
+# Milestone 4): /sbin/launchd is now real, dynamically-linked
+# tools/userland_staging/libc_build/launchd.macho -- an explicit, user-
+# picked "outright replace" of tools/init_binary/'s custom static PID-1
+# (the alternative considered was init_binary exec()ing into launchd;
+# outright replace was chosen instead). tools/init_binary/init.macho is
+# still built by build.py below (still a real, working artifact, still
+# useful standalone/for host_test) but is no longer installed as
+# /sbin/launchd -- the kernel's own load_init_program() hardcodes that
+# exact path (bsd/kern/kern_exec.c), unmodified stock XNU behavior, so no
+# kernel change was needed for this swap.
 #
 # Also ensures /etc exists on the image -- fresh images have no /etc dir,
 # so pwtool's lock-file open(O_CREAT, "/etc/.pwtool.lock") fails ENOENT on
@@ -63,9 +75,54 @@ if [ -z "$MNT" ]; then
     exit 1
 fi
 
-cp tools/init_binary/init.macho "$MNT/sbin/launchd"
-chmod 700 "$MNT/sbin/launchd"
-echo "+ wrote $(wc -c < tools/init_binary/init.macho) bytes to $MNT/sbin/launchd"
+if [ -f tools/userland_staging/libc_build/launchd.macho ]; then
+    cp tools/userland_staging/libc_build/launchd.macho "$MNT/sbin/launchd"
+    chmod 700 "$MNT/sbin/launchd"
+    echo "+ wrote $(wc -c < tools/userland_staging/libc_build/launchd.macho) bytes to $MNT/sbin/launchd"
+    echo "  (real, dynamically-linked launchd -- Phase 6.8 Milestone 4, see"
+    echo "  tools/userland_staging/build_launchd.sh; needs /usr/lib/dyld +"
+    echo "  the full dylib stack already installed above)"
+
+    # Real gap found wiring launchd up for its first actual boot: ICU's
+    # LC_ID_DYLIB install names are RELATIVE ("libicuuc.66.dylib", not an
+    # absolute /usr/lib/... path -- confirmed via otool -D), so dyld
+    # resolves them against launchd's own cwd at exec time, which the
+    # kernel leaves as "/" for the very first process (no parent to
+    # inherit a cwd from). Installing at image root, matching that
+    # relative name literally, rather than rebuilding ICU with real
+    # absolute install names (a separate, larger follow-up -- this is a
+    # known simplification, not the real Apple convention).
+    ICU_LIB="tools/userland_staging/icu_build/target/lib"
+    for d in libicuuc.66.dylib libicui18n.66.dylib libicudata.66.dylib; do
+        if [ -f "$ICU_LIB/$d" ]; then
+            cp "$ICU_LIB/$d" "$MNT/$d"
+            chmod 755 "$MNT/$d"
+            echo "+ wrote $(wc -c < "$ICU_LIB/$d") bytes to $MNT/$d (launchd's real ICU dep, relative install name)"
+        else
+            echo "error: $ICU_LIB/$d not found -- run build_icu_target.sh first" >&2
+            exit 1
+        fi
+    done
+else
+    echo "error: tools/userland_staging/libc_build/launchd.macho not built -- run build_launchd.sh first" >&2
+    exit 1
+fi
+
+if [ -f tools/userland_staging/libc_build/pd_console_login.macho ]; then
+    mkdir -p "$MNT/usr/libexec" "$MNT/Library/LaunchDaemons"
+    cp tools/userland_staging/libc_build/pd_console_login.macho "$MNT/usr/libexec/pd-console-login"
+    chmod 755 "$MNT/usr/libexec/pd-console-login"
+    echo "+ wrote $(wc -c < tools/userland_staging/libc_build/pd_console_login.macho) bytes to $MNT/usr/libexec/pd-console-login"
+    cp "third_party/PureDarwin/src/Libraries/XPC/launchd/org.puredarwin.console-login.plist" \
+        "$MNT/Library/LaunchDaemons/org.puredarwin.console-login.plist"
+    chmod 644 "$MNT/Library/LaunchDaemons/org.puredarwin.console-login.plist"
+    echo "+ wrote org.puredarwin.console-login.plist to $MNT/Library/LaunchDaemons/"
+    echo "  (launchd's real getty/login-equivalent -- see"
+    echo "  tools/userland_staging/build_pd_console_login.sh; loaded at boot via"
+    echo "  launchd.c's pd_launchd_load_daemons_dir() call, iokit project patch)"
+else
+    echo "= tools/userland_staging/libc_build/pd_console_login.macho not built -- run build_pd_console_login.sh first if wanted, skipping (no console login without it)"
+fi
 
 cp tools/pwtool/pwtool.macho "$MNT/sbin/pwtool"
 chmod 700 "$MNT/sbin/pwtool"

@@ -1,8 +1,8 @@
 From d6c5fabb51d37c2c42ecf30bcbf2fefadef8bbb8 Mon Sep 17 00:00:00 2001
 From: Anurodh Pokharel <anurodhp@icloud.com>
 Date: Fri, 28 Aug 2026 13:45:12 -0400
-Subject: [PATCH] launchd/shim.h: remove redundant posix_spawnattr NP-setter
- no-op shims
+Subject: [PATCH 1/2] launchd/shim.h: remove redundant posix_spawnattr
+ NP-setter no-op shims
 
 posix_spawnattr_setprocesstype_np()/posix_spawnattr_set_
 importancewatch_port_np()/posix_spawnattr_setcpumonitor_default() are
@@ -61,6 +61,138 @@ index e772d61..7d6c208 100644
 + */
  
  #endif
+-- 
+2.50.1 (Apple Git-155)
+
+
+From 73084672ea616e76e4a131a3f56805af997caaa1 Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@icloud.com>
+Date: Fri, 28 Aug 2026 14:06:58 -0400
+Subject: [PATCH 2/2] launchd/pd_launchd_boot/pd_console_login: iokit project
+ boot-integration fixes
+
+- launchd.c: call pd_launchd_load_daemons_dir("/Library/LaunchDaemons")
+  after pd_launchd_boot()/jobmgr_init() in pid1_magic -- real PureDarwin
+  source defines this but never calls it anywhere upstream, so without
+  this launchd boots with an empty job table.
+- pd_launchd_boot.c: remount / read-write before anything else (root is
+  always mounted read-only by vfs_mountroot(); same struct/approach as
+  tools/init_binary/init.c's remount_root_rw() in the iokit project).
+- pd_console_login.c: /bin/zsh -> /bin/bash (this project's real shell,
+  no zsh port exists).
+---
+ src/Libraries/XPC/launchd/launchd.c          | 10 +++++
+ src/Libraries/XPC/launchd/pd_console_login.c |  8 ++--
+ src/Libraries/XPC/launchd/pd_launchd_boot.c  | 39 ++++++++++++++++++++
+ 3 files changed, 54 insertions(+), 3 deletions(-)
+
+diff --git a/src/Libraries/XPC/launchd/launchd.c b/src/Libraries/XPC/launchd/launchd.c
+index 36b7df1..7dc6e06 100644
+--- a/src/Libraries/XPC/launchd/launchd.c
++++ b/src/Libraries/XPC/launchd/launchd.c
+@@ -290,6 +290,16 @@ main(int argc, char *const *argv)
+ 		/* PureDarwin: mount /dev before launchctl bootstraps the system domain. */
+ 		extern void pd_launchd_boot(void);
+ 		pd_launchd_boot();
++
++		/* iokit project: pd_launchd_load_daemons_dir() is real PureDarwin
++		 * source (pd_launchd_plist.c) but was never actually called from
++		 * anywhere upstream -- this project has no launchctl client to load
++		 * jobs after the fact, so without this call launchd boots with an
++		 * empty job table and nothing (console login, syslogd, ...) ever
++		 * starts. Load system daemons directly at boot, matching real
++		 * launchd's own pre-launchctl-load-message-era behavior. */
++		extern void pd_launchd_load_daemons_dir(const char *dir);
++		pd_launchd_load_daemons_dir("/Library/LaunchDaemons");
+ 	}
+ 	launchd_runtime_init2();
+ 	launchd_runtime();
+diff --git a/src/Libraries/XPC/launchd/pd_console_login.c b/src/Libraries/XPC/launchd/pd_console_login.c
+index 820d793..1ecf96f 100644
+--- a/src/Libraries/XPC/launchd/pd_console_login.c
++++ b/src/Libraries/XPC/launchd/pd_console_login.c
+@@ -87,7 +87,9 @@ main(void)
+ 	setenv("HOME", "/var/root", 1);
+ 	setenv("USER", "root", 1);
+ 	setenv("LOGNAME", "root", 1);
+-	setenv("SHELL", "/bin/zsh", 1);
++	/* iokit project: no /bin/zsh on this image -- real bash 3.2 is this
++	 * project's actual shell, installed at both /bin/bash and /bin/sh. */
++	setenv("SHELL", "/bin/bash", 1);
+ 	setenv("PATH", "/bin:/sbin:/usr/bin:/usr/sbin", 1);
+ 	setenv("TERM", "vt220", 0);
+ 	{
+@@ -103,8 +105,8 @@ main(void)
+ 		}
+ 	}
+ 
+-	char *argv[] = { "/bin/zsh", "-l", NULL };
+-	ctrace("pd-console-login: exec /bin/zsh\n");
++	char *argv[] = { "/bin/bash", "-l", NULL };
++	ctrace("pd-console-login: exec /bin/bash\n");
+ 	execv(argv[0], argv);
+ 	ctrace("pd-console-login: execv failed\n");
+ 	_exit(127);
+diff --git a/src/Libraries/XPC/launchd/pd_launchd_boot.c b/src/Libraries/XPC/launchd/pd_launchd_boot.c
+index 62a9cb0..f06c702 100644
+--- a/src/Libraries/XPC/launchd/pd_launchd_boot.c
++++ b/src/Libraries/XPC/launchd/pd_launchd_boot.c
+@@ -2,6 +2,7 @@
+ #include <sys/mount.h>
+ #include <errno.h>
+ #include <stdio.h>
++#include <string.h>
+ 
+ #include "launch.h"
+ #include "launch_priv.h"
+@@ -25,9 +26,47 @@ pd_launchd_boot_try_mount(const char *src, const char *target, int flags, void *
+ 	}
+ }
+ 
++/* iokit project: root is always mounted read-only by vfs_mountroot()
++ * (bsd/vfs/vfs_subr.c hardcodes MNT_RDONLY|MNT_ROOTFS) -- userland PID 1
++ * is expected to remount it read-write itself, the real-world equivalent
++ * of `mount -uw /`. Without this every write anywhere on "/" fails EROFS.
++ * __mac_mount() special-cases the root vnode and forces MNT_UPDATE
++ * automatically for path "/", so flags=0 is sufficient, but hfs_mount()
++ * (bsd/hfs/hfs_vfsops.c) asserts `data` is non-NULL whenever MNT_UPDATE
++ * is set -- a zeroed struct is fine for a plain write-upgrade, those
++ * fields only matter for a fresh/wrapper mount. Layout matches the
++ * KERNEL-side struct hfs_mount_args (bsd/hfs/hfs_mount.h) field-for-field,
++ * not the userspace-visible one -- same struct tools/init_binary/init.c's
++ * own remount_root_rw() already uses and documents in more detail. */
++struct pd_hfs_mount_args_stub {
++	unsigned int hfs_uid;
++	unsigned int hfs_gid;
++	unsigned short hfs_mask;
++	unsigned short _pad;
++	unsigned int hfs_encoding;
++	int tz_minuteswest;
++	int tz_dsttime;
++	int flags;
++	int journal_tbuffer_size;
++	int journal_flags;
++	int journal_disable;
++};
++
++static void
++pd_launchd_boot_remount_root_rw(void)
++{
++	struct pd_hfs_mount_args_stub args;
++	memset(&args, 0, sizeof(args));
++	if (mount("hfs", "/", 0, &args) < 0) {
++		fprintf(stderr, "pd_launchd_boot: remount / read-write failed: ");
++		perror("");
++	}
++}
++
+ void
+ pd_launchd_boot(void)
+ {
++	pd_launchd_boot_remount_root_rw();
+ 	pd_launchd_boot_mkdir_p("/dev", 0755);
+ 	pd_launchd_boot_try_mount("devfs", "/dev", 0, NULL);
+ }
 -- 
 2.50.1 (Apple Git-155)
 

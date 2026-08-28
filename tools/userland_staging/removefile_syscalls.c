@@ -129,6 +129,7 @@ struct _iopol_param_t {
 };
 
 #define IOPOL_CMD_GET 0x00000001
+#define IOPOL_CMD_SET 0x00000002
 
 /* reallocarray: real Apple libmalloc source (third_party/libmalloc/src/
  * malloc.c) defines this, but that file itself isn't compiled here
@@ -177,4 +178,25 @@ int getiopolicy_np(int iotype, int scope) {
         return -1;
     }
     return p.iop_policy;
+}
+
+/* iokit project: launchd's real core.c/launchd.c call setiopolicy_np()
+ * unconditionally at daemon/thread setup (IOPOL_TYPE_DISK throttling),
+ * checked via job_assumes_zero_p()/posix_assumes_zero() -- non-fatal on
+ * failure, just logged, but still needs a real definition to link at
+ * all. Same real iopolicysys(2) syscall as getiopolicy_np() above, same
+ * last-resort from-scratch-but-ABI-correct port (no real Apple
+ * setiopolicy_np.c source exists in this project's pinned Libc tag
+ * either, confirmed by the same grep as getiopolicy_np's own header
+ * comment). */
+int setiopolicy_np(int iotype, int scope, int policy) {
+    struct _iopol_param_t p;
+    p.iop_scope = scope;
+    p.iop_iotype = iotype;
+    p.iop_policy = policy;
+    long rc = syscall3(SYS_iopolicysys, IOPOL_CMD_SET, (long)&p, 0);
+    if (rc < 0) {
+        return -1;
+    }
+    return 0;
 }

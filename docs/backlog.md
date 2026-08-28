@@ -1437,6 +1437,95 @@ d9. **`build_simple_cmds.sh` converted from fully-static to real dynamic
 
 ---
 
+### d10: launchd PID-1 boot-path integration, in progress 2026-08-28
+
+Real Milestone 4/5 work (docs/daemon-roadmap.md Phase 6.8): `/sbin/launchd`
+on the SD image is now real, dynamically-linked `launchd.macho` (explicit
+user choice: outright replace `tools/init_binary/`'s custom static PID-1,
+not exec-into). Kernel needed zero changes -- `load_init_program()`
+already hardcodes `/sbin/launchd`, stock unmodified XNU behavior.
+`pd_launchd_load_daemons_dir()` (real PureDarwin source, previously
+defined but never called anywhere upstream) is now wired into
+`launchd.c`'s `main()`; `pd_launchd_boot()` now also remounts `/` rw
+(same real kernel quirk `init.c`'s own `remount_root_rw()` already
+documented). `pd_console_login.c` (real PureDarwin getty/login-equivalent
+helper, built standalone as `/usr/libexec/pd-console-login`) had its
+hardcoded `/bin/zsh` swapped for this project's real `/bin/bash` --
+**note this drops password authentication entirely** (no login prompt,
+auto-execs a root shell) versus `init.c`'s own real login/su support;
+scoped as a known simplification to get first boot working, not a
+permanent design choice -- revisit once launchd boots reliably.
+
+Iterating real dyld "Symbol not found" aborts one at a time via real
+QEMU boots (`_abs`/`_llabs` missing from `libSystem.B.dylib`'s real
+export chain, then `_atol`/`_bsearch`/`_readlink`/`_getpeername`/
+`_gethostuuid`/`_setiopolicy_np`/`_audit_session_self`/
+`_audit_session_port`/`_audit_session_join`/`_asctime`/`_asctime_r`/
+`_strtoll`/`_strtoll_l`/`_strtoul_l`) -- same shape as every other real
+gap-closure pass in this project, see `tools/userland_staging/
+launchd_audit_syscalls_compat.c` (new) for the honest-stub writeups on
+the three `audit_session_*` routines (no real userland client source
+exists anywhere in this project's pinned repos, only the kernel side).
+
+**Real, not-yet-implemented follow-up surfaced by this pass**: this
+project has no `launchctl` client at all. Real macOS's actual job-load
+flow is `launchctl load <plist>` sending an IPC/XPC message to a running
+launchd, not launchd reading `/Library/LaunchDaemons` itself at boot --
+the `pd_launchd_load_daemons_dir()` wiring above is a real, working, but
+simplified stand-in for that (loads once at boot, no dynamic
+load/unload/list/start/stop after that). A real `launchctl` port is a
+separate, sizeable follow-up (needs the real `vproc_mig_*`/job-control
+MIG client side `libvproc.c` already has some of) -- filed here so it
+isn't rediscovered from scratch; not blocking first boot.
+
+### d11: real locale (xlocale) source exists and is pinned -- partially wired, `strftime_l` still a real wall
+
+In response to a real question raised while closing d10's `asctime`/
+`atol`/`strtoll_l`/`strtoul_l` gaps: **locale is not a "never
+open-sourced" wall like ASL/corecrypto** -- real Apple/FreeBSD source is
+already pinned at `third_party/Libc/locale/` (`xlocale.c`, `isctype.c`,
+`FreeBSD/*.c`) and partially built into `libc_locale.a`
+(`build_libc_locale.sh`): `isspace_l`/`toupper_l`/`__global_locale`/
+`__locale_key`/`__current_locale()` (a header-inline function,
+`xlocale_private.h`) all already compile and link real, confirmed by
+`nm`. A real, already-committed patch (`third_party-patches/Libc.patch`)
+fixed `__locale_key`'s init-order bug (added a real ctor calling
+`__xlocale_init()`, since nothing in this project calls Apple's real
+`_libc_initializer()`). **Good news, re-tested 2026-08-28**: with that
+fix already in place, real `atol.c`/`strtoll.c`/`strtoul.c` (which all
+route through `isspace_l`/`__current_locale()`) now compile and link
+completely clean against `libc_locale.a` with zero changes needed --
+the "tried and reverted" history below predates that fix landing.
+`atol`/`strtoll`/`strtoll_l`/`strtoul`/`strtoul_l` are now real,
+unmodified Apple/FreeBSD source in `libc_gen.a`, not a workaround.
+
+**TEMPORARY FIX, revisit later -- what's still genuinely missing**:
+`strftime_l` itself -- a large, locale-aware date/time formatter
+(`stdtime/FreeBSD/strftime.c`) that `asctime_r()` calls internally just
+to format a 4-digit year (a real implementation shortcut on FreeBSD's
+part, not a functional need -- `asctime`'s output format is fixed by
+the C standard regardless of locale). A prior pass tried pulling
+`strftime_l` in for real and reverted it as a deep, disproportionate
+dependency chain for what it bought at the time; unlike atol/strtoll/
+strtoul above, this one is NOT yet re-tested against the current
+`libc_locale.a` state, so it may or may not still be as deep a wall --
+genuinely unknown, not re-attempted this pass. d10 worked around it for
+`asctime`/`asctime_r` specifically with a small, honest,
+locale-independent from-scratch implementation instead
+(`launchd_audit_syscalls_compat.c`'s `asctime`/`asctime_r`/`put2`/
+`wday_name`/`mon_name`) -- this is a real, deliberately temporary
+stand-in, not a permanent design choice: it duplicates real FreeBSD
+logic by hand instead of linking the real `asctime.c`, and should be
+replaced with the real source the moment `strftime_l` is actually
+ported (re-test it first -- it may already "just work" the same way
+atol/strtoll did). `strftime_l`/full `strftime` itself remains a real,
+open, not-yet-closed gap for any future caller that needs actual
+locale-aware formatting (not just a fixed year digit
+string) -- real source is right there, pinned, just needs the same
+kind of dedicated pass CF's own locale work got.
+
+---
+
 ## P3 — hygiene / cleanup
 
 1. **Two headers overclaim a nonexistent IOKit matching-engine bug.**

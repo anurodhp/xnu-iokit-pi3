@@ -156,6 +156,11 @@ mkdir -p "$OUT/pd_console_login_obj"
 # own header for why the whole libm.a can't be linked here (real
 # duplicate pow()/modf() vs CoreFoundation's own libm_compat.o).
 "$CLANG" "${CFLAGS[@]}" libm_scalbn_only_compat.c -o "$OUT/launchd_core_obj/libm_scalbn_only_compat.o"
+# Real gaps found booting launchd as PID 1 (2026-08-28, docs/backlog.md
+# item d10): audit_session_self/_port/_join honest stubs, getpeername/
+# gethostuuid raw NO_SYSCALL_STUB traps, locale-independent asctime/
+# asctime_r -- see launchd_audit_syscalls_compat.c's own header.
+"$CLANG" "${CFLAGS[@]}" launchd_audit_syscalls_compat.c -o "$OUT/launchd_core_obj/launchd_audit_syscalls_compat.o"
 
 # Real mktime/localtime/localtime_r/ctime_r/asctime_r: fourth attempt,
 # real fix found by looking at how PureDarwin's own CMake build gets
@@ -292,6 +297,14 @@ HOSTMIG_FLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -DPRIVATE=1 \
 # see pid_for_task_trap.s's own header for the full citation).
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -arch arm64 \
     pid_for_task_trap.s -o "$OUT/launchd_core_obj/pid_for_task_trap.o"
+# Real arm64 Mach trap stub for thread_get_special_reply_port (real trap
+# -50, 0 args -- see thread_get_special_reply_port_trap.s's own header).
+# Real gap found booting launchd as PID 1 (docs/backlog.md item d10):
+# libsyscall/mach/mach_port.c's real mig_get_special_reply_port() (every
+# real MIG client call launchd's regenerated _user.c stubs make) calls
+# this directly.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -arch arm64 \
+    thread_get_special_reply_port_trap.s -o "$OUT/launchd_core_obj/thread_get_special_reply_port_trap.o"
 # Real mig_allocate() (libsyscall/mach/mig_allocate.c, unmodified --
 # real MIG-interface memory allocator, needed once mach_portUser.c/
 # host_privUser.c above are real code paths that can actually run).
@@ -356,7 +369,7 @@ ar p "$OUT/libncurses.a" ncurses_extra_syscalls.o > "$OUT/launchd_libc_extras_ob
 rm -f "$OUT/launchd_libc_extras_obj/ncurses_extra_syscalls_raw.o"
 ar p "$OUT/libremovefile.a" removefile_syscalls.o > "$OUT/launchd_libc_extras_obj/removefile_syscalls_raw.o"
 "$LD" -r -arch arm64 \
-    -exported_symbol _flsl -exported_symbol _getiopolicy_np -exported_symbol _gettimeofday \
+    -exported_symbol _flsl -exported_symbol _getiopolicy_np -exported_symbol _setiopolicy_np -exported_symbol _gettimeofday \
     -exported_symbol _read -exported_symbol _reallocarray -exported_symbol _rename \
     -exported_symbol _rmdir -exported_symbol _unlink -exported_symbol _unlinkat \
     "$OUT/launchd_libc_extras_obj/removefile_syscalls_raw.o" \

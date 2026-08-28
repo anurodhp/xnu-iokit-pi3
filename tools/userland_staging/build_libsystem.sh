@@ -188,28 +188,47 @@ rm -f "$OUT/system/libSystem.B.dylib"
     -Wl,-reexport_library,"$OUT/system/libsystem_c.dylib" \
     -Wl,-reexport_library,"$OUT/system/libc++.dylib" \
     "$OUT/libcopyfile.a" "$OUT/libremovefile.a" "$OUT/libresolv.a" \
-    "$RTLIB" \
-    -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
-    -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
-    -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
-    -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
-    -Wl,-alias,___kill,'_kill$UNIX2003' \
-    -Wl,-alias,___kill,_kill \
-    -Wl,-alias,_write,'_write$UNIX2003' \
-    -Wl,-alias,__mal_semwait_sleep,'_sleep$UNIX2003' \
-    -Wl,-alias,___kdebug_trace,_kdebug_trace \
-    -Wl,-alias,_open,'_open$UNIX2003' \
-    -Wl,-alias,_close,'_close$UNIX2003' \
-    -Wl,-alias,_fcntl,'_fcntl$UNIX2003' \
-    -Wl,-alias,_fstat,'_fstat$INODE64' \
-    -Wl,-alias,_lstat,'_lstat$INODE64' \
-    -Wl,-alias,_stat,'_stat$INODE64' \
-    -Wl,-alias,_fsync,'_fsync$UNIX2003' \
-    -Wl,-alias,_read,'_read$UNIX2003' \
-    -Wl,-alias,_reallocarray,'_reallocarray$DARWIN_EXTSN' \
-    -Wl,-alias,'_mmap$UNIX2003',_mmap \
-    -Wl,-alias,'_munmap$UNIX2003',_munmap \
-    -Wl,-alias,_pthread_testcancel,'_pthread_testcancel$UNIX2003'
+    "$RTLIB"
+    # ALL -Wl,-alias entries REMOVED 2026-08-28 (docs/backlog.md item
+    # d10): real, systemic gap, first found via _mmap specifically --
+    # every single alias in this dylib's own former list had a BASE
+    # symbol only reachable via -reexport_library here, never local to
+    # this dylib's own 4 compiled objects (checked directly, confirmed
+    # for all ~19 entries, not just _mmap). ld64 silently accepts this
+    # and still emits an export-trie REEXPORT node, but with an invalid
+    # ordinal (0) -- confirmed via a real `xcrun dyld_info -exports`
+    # dump showing every one of them as a suspicious
+    # "[re-export] X (Y from <this-image>)" entry, and via
+    # third_party/dyld's own real Loader.cpp source, which explicitly
+    # rejects ordinal 0 as "out of range" at real symbol-resolution
+    # time -- same real bug class already documented and fixed for
+    # _fputs/_strerror in build_libsystem_c.sh (search that file for
+    # "REAL BUG FOUND"), just far more widespread here, and silent until
+    # a real consumer (ICU's own dylib) actually needed to resolve one
+    # of these alias NAMES externally instead of via a name that never
+    # needed the broken alias to begin with.
+    #
+    # Real fix, verified for every removed entry via a real
+    # `xcrun dyld_info -exports` sweep after rebuilding: every alias
+    # NAME this list used to create is already provided correctly
+    # elsewhere, either as a genuinely local symbol in the sub-dylib
+    # that actually owns it (open$UNIX2003/close$UNIX2003/fcntl$UNIX2003/
+    # fstat$INODE64/lstat$INODE64/stat$INODE64/read$UNIX2003 -- all
+    # already real, local aliases in build_libsystem_c.sh, confirmed via
+    # its own $EXTRACT contents; pthread_testcancel$UNIX2003/
+    # pthread_rwlock_*$UNIX2003 -- already real, local in
+    # build_libsystem_pthread.sh) or fixed by moving the alias to where
+    # its base genuinely is local (_mmap/_munmap -> libsystem_pthread.sh,
+    # this same pass). _kdebug_trace/_write/_mprotect/_kill/_sleep$UNIX2003
+    # were already redundant with real, direct (non-alias) exports in
+    # libsystem_malloc.dylib. _fsync$UNIX2003/_reallocarray$DARWIN_EXTSN
+    # are genuinely gone from this dylib now (their old aliases here were
+    # ALSO broken the same way, not a working fallback this removal took
+    # away) -- confirmed via a real sweep that neither launchd.macho nor
+    # ICU's dylibs need them from libSystem specifically: launchd needs
+    # plain _fsync and _reallocarray$DARWIN_EXTSN from libdyld.dylib
+    # instead (a real, separate, already-valid local alias there, unlike
+    # this dylib's dead copy), and ICU needs neither at all.
     # __pthread_cond_wait alias removed 2026-08-28 (see docs/backlog.md
     # item d9's NEWLD_BINDIR sweep): not local to this link either, same
     # "silently dead under ld64-609" class as build_libsystem_c.sh's own

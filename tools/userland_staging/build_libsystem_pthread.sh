@@ -146,6 +146,7 @@ rm -f "$OUT/system/libsystem_pthread.dylib"
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -Wl,-alias,___mmap,_mmap \
+    -Wl,-alias,___munmap,_munmap \
     -Wl,-alias,__pthread_cond_wait,_pthread_cond_wait \
     -Wl,-alias,_pthread_testcancel,'_pthread_testcancel$UNIX2003' \
     -Wl,-alias,'_pthread_mutexattr_destroy$UNIX2003',_pthread_mutexattr_destroy \

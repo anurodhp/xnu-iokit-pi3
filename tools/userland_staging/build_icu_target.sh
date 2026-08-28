@@ -77,13 +77,34 @@ fi
 
 TARGET_FLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -fno-builtin -fno-stack-protector"
 
+# Real gap found booting launchd as PID 1 (docs/backlog.md item d10):
+# ICU's own real autoconf/gmake build never passed -Wl,-fixup_chains,
+# unlike every other real dylib in this project (all hand-linked via a
+# single clang invocation that always includes it) -- so ICU's dylibs
+# link with the older, classic LC_DYLD_INFO lazy-binding format, which
+# needs a real `dyld_stub_binder` this project's dyld doesn't provide
+# (every other dylib here sidesteps this entirely via chained fixups,
+# which bind everything eagerly, no lazy stub/binder needed at all).
+# Same real ld64-609-crashes-under-fixup_chains issue as everywhere else
+# in this project (docs/backlog.md item d9) applies here too -- LDFLAGS
+# routes both -B (the daily-driver Xcode's newer ld) and -fixup_chains
+# itself to ICU's own real link steps (autoconf-generated Makefiles
+# honor LDFLAGS for the final .dylib link).
+DAILY_XCODE="$(xcode-select -p 2>/dev/null)"
+NEWLD_BINDIR="$DAILY_XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+if [ ! -x "$NEWLD_BINDIR/ld" ]; then
+    echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE) -- run 'xcode-select -p' to check, see docs/backlog.md item d9" >&2
+    exit 1
+fi
+ICU_LDFLAGS="-B$NEWLD_BINDIR -Wl,-fixup_chains"
+
 mkdir -p "$OUT"
 cd "$OUT"
 
 if [ ! -f config.status ]; then
     echo "+ configuring ICU for target (arm64-apple-ios14.4, cross build against $HOST_BUILD)"
     CC="$CLANG $TARGET_FLAGS" CXX="$CLANGXX $TARGET_FLAGS" \
-    CPPFLAGS="-DU_SHOW_CPLUSPLUS_API=1" \
+    CPPFLAGS="-DU_SHOW_CPLUSPLUS_API=1" LDFLAGS="$ICU_LDFLAGS" \
         "$ICU_SRC/runConfigureICU" MacOSX \
         --host=arm64-apple-darwin --with-cross-build="$HOST_BUILD" \
         --disable-extras --disable-tests --disable-samples --disable-tools
