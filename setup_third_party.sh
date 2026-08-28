@@ -465,6 +465,8 @@ if [ -n "$PUREDARWIN_DEST" ]; then
     git -C "$PUREDARWIN_DEST" sparse-checkout init --cone
     git -C "$PUREDARWIN_DEST" sparse-checkout set src/Libraries/XPC src/Libraries/CrashReporterClient cmake
     git -C "$PUREDARWIN_DEST" checkout "$PUREDARWIN_REF"
+    echo "+ applying third_party-patches/PureDarwin.patch to $PUREDARWIN_DEST"
+    git -C "$PUREDARWIN_DEST" am "../../third_party-patches/PureDarwin.patch"
 fi
 
 # CoreFoundation: real Apple source, but NOT from

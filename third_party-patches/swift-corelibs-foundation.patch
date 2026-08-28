@@ -1,7 +1,7 @@
 From b78bd146d854fb4943a6236d8bd63b504fc816f6 Mon Sep 17 00:00:00 2001
 From: Anurodh Pokharel <anurodhp@gmail.com>
 Date: Wed, 26 Aug 2026 13:07:08 -0400
-Subject: [PATCH 1/2] CFPriv.h: fix real bool/Boolean prototype-conflict vs
+Subject: [PATCH 1/3] CFPriv.h: fix real bool/Boolean prototype-conflict vs
  CFPropertyList.c
 
 _CFPropertyListCreateSingleValue/_CFPropertyListCreateFiltered are
@@ -39,7 +39,7 @@ index 4c70bca..11d3224 100644
 From 6c6ae81c25a11601f0a30a52e1f137b4e9a1354f Mon Sep 17 00:00:00 2001
 From: Anurodh Pokharel <anurodhp@icloud.com>
 Date: Wed, 26 Aug 2026 22:25:54 -0400
-Subject: [PATCH 2/2] CFXMLInterface.c: fix real bool/Boolean
+Subject: [PATCH 2/3] CFXMLInterface.c: fix real bool/Boolean
  prototype-conflict vs CFXMLInterface.h
 
 _CFXMLCopyNode/_CFXMLDocStandalone/_CFXMLDocSetStandalone/
@@ -90,6 +90,78 @@ index 0d56c42..424eb4a 100644
      CFMutableStringRef errorMessage = __CFSwiftXMLParserBridgeCF.CFStringCreateMutable(NULL, 0);
  
      xmlValidCtxtPtr ctxt = xmlNewValidCtxt();
+-- 
+2.50.1 (Apple Git-155)
+
+
+From bd536c669bdda786dc9b383aaf32dc285434e0e0 Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@gmail.com>
+Date: Fri, 28 Aug 2026 13:29:18 -0400
+Subject: [PATCH 3/3] CFPreferences.c/CFXMLPreferencesDomain.c: fix real
+ TARGET_OS guard mismatches
+
+Three real upstream guard-mismatch bugs, confirmed by a real trial
+build against arm64-apple-ios14.4 (iokit project):
+
+- CFPreferences.c gates `#include <unistd.h>`/
+  `#include <CoreFoundation/CFUUID.h>` behind `#if TARGET_OS_OSX`, but
+  the code needing them (gethostuuid()/CFUUIDBytes/CFUUIDRef/etc, ~15
+  lines below) is gated behind the broader `#if TARGET_OS_MAC` -- on an
+  iOS-target build the code compiles but its prerequisite includes
+  don't. Widened the include guard to TARGET_OS_MAC to match.
+- CFPreferences.c's _CFPreferencesURLForStandardDomainWithSafetyLevel():
+  `prefDir` is declared inside
+  `#if TARGET_OS_OSX || TARGET_OS_WIN32 || TARGET_OS_LINUX`, but the
+  function's own trailing `if (prefDir) CFRelease(prefDir);` cleanup
+  line sits after that block's #endif, unconditional -- undeclared
+  identifier on any other platform. Wrapped the cleanup line in the
+  same guard as the declaration.
+- CFXMLPreferencesDomain.c's __CFMilliSleep(): the nanosleep(2) branch
+  is gated `#elif TARGET_OS_OSX || TARGET_OS_LINUX || TARGET_OS_BSD`,
+  missing TARGET_OS_MAC despite nanosleep being ordinary, always-
+  available Darwin/POSIX API -- falls through to a real #error on any
+  non-macOS Apple target. Widened to TARGET_OS_MAC.
+---
+ CoreFoundation/Preferences.subproj/CFPreferences.c          | 4 +++-
+ CoreFoundation/Preferences.subproj/CFXMLPreferencesDomain.c | 2 +-
+ 2 files changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/CoreFoundation/Preferences.subproj/CFPreferences.c b/CoreFoundation/Preferences.subproj/CFPreferences.c
+index ff7a4b8..f351872 100644
+--- a/CoreFoundation/Preferences.subproj/CFPreferences.c
++++ b/CoreFoundation/Preferences.subproj/CFPreferences.c
+@@ -21,7 +21,7 @@
+ #include <CoreFoundation/CFPriv.h>
+ #include "CFInternal.h"
+ #include <sys/stat.h>
+-#if TARGET_OS_OSX
++#if TARGET_OS_MAC
+ #include <unistd.h>
+ #include <CoreFoundation/CFUUID.h>
+ #endif
+@@ -464,7 +464,9 @@ static CFURLRef _CFPreferencesURLForStandardDomainWithSafetyLevel(CFStringRef do
+ #else
+ //#error Do not know where to store NSUserDefaults on this platform
+ #endif
++#if TARGET_OS_OSX || TARGET_OS_WIN32 || TARGET_OS_LINUX
+     if (prefDir) CFRelease(prefDir);
++#endif
+     return theURL;
+ }
+ 
+diff --git a/CoreFoundation/Preferences.subproj/CFXMLPreferencesDomain.c b/CoreFoundation/Preferences.subproj/CFXMLPreferencesDomain.c
+index 2c03765..ca0befd 100644
+--- a/CoreFoundation/Preferences.subproj/CFXMLPreferencesDomain.c
++++ b/CoreFoundation/Preferences.subproj/CFXMLPreferencesDomain.c
+@@ -55,7 +55,7 @@ static void __CFMilliSleep(uint32_t msecs) {
+     SleepEx(msecs, false);
+ #elif defined(__svr4__) || defined(__hpux__)
+     sleep((msecs + 900) / 1000);
+-#elif TARGET_OS_OSX || TARGET_OS_LINUX || TARGET_OS_BSD
++#elif TARGET_OS_MAC || TARGET_OS_LINUX || TARGET_OS_BSD
+     struct timespec input;
+     input.tv_sec = msecs / 1000;
+     input.tv_nsec = (msecs - input.tv_sec * 1000) * 1000000;
 -- 
 2.50.1 (Apple Git-155)
 

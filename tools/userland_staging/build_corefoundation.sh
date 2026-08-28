@@ -36,17 +36,34 @@
 #   are hard `unavailable: not available on iOS` SDK errors. This
 #   project has no GUI to show a user-notification dialog on anyway.
 # - CFPreferences.c / CFXMLPreferencesDomain.c (Preferences.subproj):
-#   real, multi-part gap -- `gethostuuid` marked unavailable on iOS
-#   (guarded by `#if TARGET_OS_MAC`, which is true for iOS too --
-#   TARGET_OS_MAC means "any Apple OS", not "specifically macOS", so
-#   this guard doesn't actually exclude iOS the way it looks like it
-#   should) plus a missing CFUUID.h-family declaration and an
-#   undeclared `prefDir`; CFXMLPreferencesDomain.c separately has no
-#   `sleep()` definition for this platform in its own `#if` chain. Real
-#   preference-file storage (`CFPreferencesCopyAppValue` et al) stays
-#   unimplemented as a result -- CFApplicationPreferences.c (which
-#   compiles clean and IS included) can't close that gap alone since it
-#   calls into CFPreferences.c's own real functions.
+#   ADDED 2026-08-28 -- previously excluded for a real, multi-part gap,
+#   now closed. Root cause was narrower than first diagnosed: lines
+#   24-27 gate `#include <unistd.h>`/`#include <CoreFoundation/CFUUID.h>`
+#   behind `#if TARGET_OS_OSX`, while the code needing them (gethostuuid/
+#   CFUUIDBytes/CFUUIDRef/etc, ~15 lines below) is gated behind the
+#   broader `#if TARGET_OS_MAC` -- a real upstream guard mismatch, same
+#   class of bug as this file's own already-documented __CFTSDInitialize
+#   TARGET_OS_OSX/TARGET_OS_MAC mismatch. Fixed via a third commit in
+#   the existing `swift-corelibs-foundation.patch`: widened the include
+#   guard to match (closes the CFUUID-family errors for free), plus
+#   `gethostuuid`'s own real "unavailable on iOS" SDK annotation
+#   (separate issue -- the real kernel syscall, #142, genuinely exists
+#   in this project's own xnu-7195 fork; the SDK header's restriction is
+#   an iOS-app-store policy artifact, not a real functional gap) is
+#   overridden via a new `cf_compat_headers/gethostuuid.h` forwarding
+#   shim, same pattern as this directory's `mach/mach_vm.h`. A separate
+#   real bug, an undeclared `prefDir` used outside its own declaration's
+#   `#if TARGET_OS_OSX || TARGET_OS_WIN32 || TARGET_OS_LINUX` guard, is
+#   fixed the same "make the guards agree" way (wrapped the one cleanup
+#   line in the matching guard instead). CFXMLPreferencesDomain.c's
+#   `__CFMilliSleep()` separately had no nanosleep(2) branch for
+#   TARGET_OS_MAC (only TARGET_OS_OSX/LINUX/BSD) despite nanosleep being
+#   ordinary, always-available Darwin/POSIX -- widened the same way.
+#   Real preference-file storage (`CFPreferencesCopyAppValue` et al) now
+#   compiles and links for real -- not yet QEMU-verified end-to-end
+#   against a real flat preferences file on disk, just closes the real
+#   trial-link gap this was blocking (see `docs/daemon-roadmap.md`'s
+#   launchd gap-closure entries).
 # - CFURLSessionInterface.c (URL.subproj): real libcurl dependency
 #   (`curl/curl.h` not found) -- this project has already decided
 #   against libcurl entirely (see docs/apple-oss-catalog.md).
@@ -217,7 +234,8 @@ FILES=(Base.subproj/CFBase.c Base.subproj/CFRuntime.c Base.subproj/CFUtilities.c
     PlugIn.subproj/CFBundle_Locale.c PlugIn.subproj/CFBundle_Main.c PlugIn.subproj/CFBundle_ResourceFork.c \
     PlugIn.subproj/CFBundle_Resources.c PlugIn.subproj/CFBundle_SplitFileName.c \
     PlugIn.subproj/CFBundle_Strings.c PlugIn.subproj/CFBundle_Tables.c PlugIn.subproj/CFPlugIn.c \
-    Preferences.subproj/CFApplicationPreferences.c)
+    Preferences.subproj/CFApplicationPreferences.c \
+    Preferences.subproj/CFPreferences.c Preferences.subproj/CFXMLPreferencesDomain.c)
 
 mkdir -p "$OUT/cf_obj"
 for f in "${FILES[@]}"; do

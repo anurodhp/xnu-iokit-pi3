@@ -272,6 +272,34 @@ those - noted individually above rather than glossed over.
       still writes `kMacCrTxEn | kMacCrRxEn` directly, no RMW).
     - `frameLen & 0x7FF` truncates silently with no length guard.
 
+3. **Six `g_crypto_funcs->` call sites have zero null-checking at all**
+   (filed 2026-08-28, found while closing `docs/backlog.md` item 0a's AES
+   gate): `libkern/crypto/corecrypto_des.c`, `corecrypto_rsa.c`,
+   `corecrypto_aesxts.c`, `corecrypto_chacha20poly1305.c`,
+   `bsd/nfs/gss/ccrypto.c`, and `bsd/netinet/flow_divert.c` all
+   dereference `g_crypto_funcs->somefield` directly — not even a bare
+   `if (g_crypto_funcs)` guard, let alone a check of the specific field
+   — because they were written assuming real macOS's corecrypto kext
+   always fills every field atomically. Now that `g_crypto_funcs` is a
+   real, non-NULL, *partially*-filled table (AES ecb/cbc/ctr only, see
+   item 0a), every one of these is a live NULL-pointer function call the
+   instant anything reaches DES, RSA, AES-XTS, ChaCha20-Poly1305, NFS
+   GSS-API crypto, or flow-divert's HMAC-SHA1 token signing — the exact
+   same crash class (`Kernel instruction fetch abort at pc 0x0`) already
+   hit once and fixed in `corecrypto_rand.c`'s `cc_rand_generate()`
+   during this same work (that one *did* have a bare
+   `if (g_crypto_funcs)` guard, just not a field-specific one — these
+   six don't even have that much).
+
+   Not currently reached by anything exercised through a full QEMU boot
+   to login (verified), so this is latent, not currently crashing — but
+   it is a real, load-bearing landmine for whoever next touches DES/RSA/
+   AES-XTS/ChaCha20-Poly1305/NFS-GSS/flow-divert. Fix is mechanical
+   either way: add a field-specific null check (`corecrypto_aes.c`'s
+   `aes_encrypt_key()` is the reference pattern) before wiring up real
+   functionality that would exercise the call site for the first time,
+   the same guard `corecrypto_rand.c` needed once its own gap got found.
+
 ---
 
 ## P2 — known gaps / incomplete work (not bugs, just unfinished)
@@ -464,12 +492,16 @@ d7. **CoreFoundation + real ICU + real libxml2 ports DONE 2026-08-26/27
     - `CFUserNotification.c`: real GUI alert-dialog API, hard
       `unavailable: not available on iOS` SDK errors. No GUI on this
       target regardless.
-    - `CFPreferences.c`/`CFXMLPreferencesDomain.c`: a real, multi-part
-      gap — `gethostuuid` marked unavailable-on-iOS behind a
-      `TARGET_OS_MAC` guard that doesn't actually exclude iOS (a real
-      bug in this exact checkout), plus a missing CFUUID declaration and
-      an undeclared `prefDir`. Real preference-file storage
-      (`CFPreferencesCopyAppValue` et al) stays unimplemented.
+    - `CFPreferences.c`/`CFXMLPreferencesDomain.c`: **CLOSED 2026-08-28,
+      stale below** — both now compile and link for real (three real
+      `TARGET_OS_OSX`/`TARGET_OS_MAC` guard mismatches, not the vaguer
+      "gethostuuid unavailable" framing this entry used to have; full
+      writeup in `docs/daemon-roadmap.md`'s "Milestone 2 CLOSED,
+      2026-08-28" section). Whether `CFPreferencesCopyAppValue` et al are
+      *behaviorally* correct against a real flat preferences file on disk
+      is a separate, not-yet-QEMU-verified question this pass didn't
+      address — but the exclusion itself (this bullet's original claim)
+      no longer holds.
     - `CFURLSessionInterface.c`: real libcurl dependency. Apple did
       open-source curl (`curl-121.40.2`, pinned per the manifest), but
       its real build needs closed-source Secure Transport for TLS (out
@@ -557,6 +589,76 @@ d8. **Every curated support library built since the real per-library-dylib
     and narrow the convention's own wording in `CLAUDE.md` to say so —
     but don't leave the stated convention and the actual practice
     silently diverging the way they are today.
+
+    **RESOLVED 2026-08-28 — explicit user directive: option (a), no
+    narrowing of the convention.** Real dyld-loaded consumers now exist
+    for real (item d9 below: all 76 `build_simple_cmds.sh` commands,
+    plus this project's real per-library `libsystem_*.dylib`/
+    `libdispatch.dylib`/`libc++.dylib`/`libunwind.dylib`/`libxml2.dylib`
+    conversions, plus this same day's launchd trial link now linking
+    real dylibs throughout) — the "no real dyld-loaded consumer to
+    justify it yet" reasoning every `.a`-choosing script above cited is
+    no longer true project-wide, even for scripts that individually
+    predate a consumer of their own. Standing rule going forward, not
+    just for the five libraries above: **do not add a new static archive
+    for anything that is a real, standalone, nameable library** (as
+    opposed to a per-consumer curated-extraction bundle like
+    `launchd_libc_extras.a`/`cf_libc_extras.a`/`syslogd_libc_extras.a` —
+    those stay `.a` by design, they're not independent libraries) —
+    build a real `.dylib` instead, even if today's only consumer is
+    still static (mirrors `tools/init_binary/build.py`'s own real,
+    narrow exception: PID-1 and `pwtool` stay fully static because they
+    run before/without dyld by design — everything else doesn't get that
+    exemption just because it hasn't been asked yet).
+
+    **Full current static-archive inventory** (`ls libc_build/*.a` +
+    `ls libc_build/system/*.dylib`, re-derived 2026-08-28, not copied
+    from the five-library list above — that list is now a subset of
+    this one):
+    - **Already real dylibs, `.a` retired/superseded** (confirmed by
+      reading each dylib's own build script, not guessed): libc_gen/
+      libc_string/libc_stdio/libc_printf/libc_locale_for_stdio/
+      libc_regex → bundled into `libsystem_c.dylib`; libcxx/libcxxabi/
+      libc_locale (selectively) → `libc++.dylib`; libmalloc →
+      `libsystem_malloc.dylib`; libplatform → `libsystem_platform.dylib`;
+      libpthread → `libsystem_pthread.dylib`; libunwind →
+      `libunwind.dylib`; libxml2 → `libxml2.dylib`. `libclosure.a` is a
+      **partial** case: `libsystem_blocks.dylib` already builds the real
+      Blocks runtime from source independently (confirmed via
+      `build_libsystem_blocks.sh`), but `libclosure.a` itself is still a
+      live, real dependency of `build_launchd_core.sh`'s own static-ish
+      trial-link line — retire the `.a` only once that trial link (or
+      its eventual real `build_launchd.sh`) links `libsystem_blocks.dylib`
+      directly instead.
+    - **Real, standalone libraries still static, genuine conversion
+      candidates** (each has a real Apple `.dylib` counterpart on actual
+      macOS, confirmed for the starred ones by reading that library's own
+      real upstream `Makefile`/build config, not assumed for the rest):
+      `libCoreFoundation.a`* (Phase 9, by far the largest and riskiest —
+      real load-time global state/constructors, scope its own session,
+      see `docs/daemon-roadmap.md`'s "Static-vs-dylib architecture debt"),
+      `libbsm.a`* (real `bsm/lib/Makefile` already targets
+      `libbsm.dylib`, see this item's own note above), `libresolv.a`,
+      `libopenpam.a` (real PAM modules are themselves per-module
+      dylib-shaped on macOS, not just the base library), `libnotify.a`/
+      `libnotify_client.a`, `libncurses.a`, `libiconv.a`,
+      `libcopyfile.a`, `libremovefile.a`, `libm.a`, `libxpc.a`/
+      `libxpc_syscalls.a`/`libxpc_syscalls2.a` (real `libxpc.dylib`),
+      `libiokituser.a` (real `IOKit.framework`, not a plain dylib, but
+      the same "should be independently loadable" concern applies).
+    - **Not real conversion candidates, stay `.a` on purpose** (this
+      project's own internal glue, not independent Apple libraries):
+      `cf_libc_extras.a`, `launchd_libc_extras.a`, `syslogd_libc_extras.a`,
+      `libcxx_locale_for_stdio_scratch.a` (per-consumer curated-extraction
+      bundles); `liblaunchd_core.a`/`liblaunchd_mig.a`/
+      `liblaunchd_syscalls.a`/`libsyslogd.a` (per-daemon object archives
+      feeding a real executable link, not a runtime-loadable library);
+      `libmach_ipc.a` (this project's own MIG-regen compat layer, no real
+      Apple equivalent to match).
+    - **Possibly dead, not yet confirmed**: `libdispatch_min.a`/
+      `libdispatch_real.a` — likely superseded now that
+      `libdispatch.dylib` is real (Phase 6.6); check for remaining real
+      consumers before deleting, don't assume.
 
 d9. **`build_simple_cmds.sh` converted from fully-static to real dynamic
     linking (2026-08-28) — RESOLVED: 76 of 76 commands now build, the
@@ -878,20 +980,17 @@ d9. **`build_simple_cmds.sh` converted from fully-static to real dynamic
        registration call disabled booted cleanly past this point, proving
        the crash was caused by AES becoming active, not a pre-existing
        gap.
-    3. **Known, deliberately NOT fixed**: `corecrypto_des.c`,
-       `corecrypto_rsa.c`, `corecrypto_aesxts.c`,
-       `corecrypto_chacha20poly1305.c`, `bsd/nfs/gss/ccrypto.c`, and
-       `bsd/netinet/flow_divert.c` all dereference `g_crypto_funcs->`
-       fields with **no null check at all** (not even a bare
-       `if (g_crypto_funcs)`) — they assume real macOS's kext-filled,
-       all-fields-populated table. These are *not* reached by anything
-       exercised up through a full boot to login (QEMU-verified), so
-       they're the same latent-landmine risk they always were, not made
-       worse by this change — but whoever next touches DES/RSA/XTS/
-       ChaCha20-Poly1305/NFS-GSS/flow-divert should add a field-specific
-       guard (or fill the relevant field for real) *before* exercising
-       that code path, rather than rediscovering this exact class of bug
-       a sixth time.
+    3. **Known, deliberately NOT fixed — now filed as its own bug, P1
+       item 3**: six other `g_crypto_funcs->` call sites
+       (`corecrypto_des.c`, `corecrypto_rsa.c`, `corecrypto_aesxts.c`,
+       `corecrypto_chacha20poly1305.c`, `bsd/nfs/gss/ccrypto.c`,
+       `bsd/netinet/flow_divert.c`) have **no null check at all**, not
+       even the bare `if (g_crypto_funcs)` that `corecrypto_rand.c` had.
+       Not reached by anything exercised up through a full boot to login
+       (QEMU-verified), so not made worse by this change — but a live
+       NULL-function-pointer call waiting for whoever next touches DES/
+       RSA/AES-XTS/ChaCha20-Poly1305/NFS-GSS/flow-divert. Full writeup:
+       P1 item 3 above.
 
     Context sizing: `libkern/libkern/crypto/aes.h`'s
     `AES_CBC_CTX_MAX_SIZE` (a hardcoded ~280-byte budget baked into the

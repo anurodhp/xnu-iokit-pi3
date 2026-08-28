@@ -21,7 +21,6 @@ extern kern_return_t _kernelrpc_mach_port_set_mscount(ipc_space_t task, mach_por
 extern kern_return_t _kernelrpc_mach_port_get_set_status(ipc_space_t task, mach_port_name_t name, mach_port_name_array_t *members, mach_msg_type_number_t *membersCnt);
 extern kern_return_t _kernelrpc_mach_port_move_member(ipc_space_t task, mach_port_name_t member, mach_port_name_t after);
 extern kern_return_t _kernelrpc_mach_port_request_notification(ipc_space_t task, mach_port_name_t name, mach_msg_id_t msgid, mach_port_mscount_t sync, mach_port_t notify, mach_msg_type_name_t notifyPoly, mach_port_t *previous);
-extern kern_return_t _kernelrpc_mach_port_get_attributes(ipc_space_t task, mach_port_name_t name, mach_port_flavor_t flavor, mach_port_info_t port_info_out, mach_msg_type_number_t *port_info_outCnt);
 extern kern_return_t _kernelrpc_mach_port_set_attributes(ipc_space_t task, mach_port_name_t name, mach_port_flavor_t flavor, mach_port_info_t port_info, mach_msg_type_number_t port_infoCnt);
 
 kern_return_t mach_port_set_mscount(ipc_space_t task, mach_port_name_t name, mach_port_mscount_t mscount) {
@@ -40,9 +39,13 @@ kern_return_t mach_port_request_notification(ipc_space_t task, mach_port_name_t 
 	return _kernelrpc_mach_port_request_notification(task, name, msgid, sync, notify, notifyPoly, previous);
 }
 
-kern_return_t mach_port_get_attributes(ipc_space_t task, mach_port_name_t name, mach_port_flavor_t flavor, mach_port_info_t port_info_out, mach_msg_type_number_t *port_info_outCnt) {
-	return _kernelrpc_mach_port_get_attributes(task, name, flavor, port_info_out, port_info_outCnt);
-}
+/* mach_port_get_attributes() used to be forwarded here too -- real
+ * cf_mach_port_syscalls.c (CoreFoundation's own tier) already provides
+ * a more complete version (real kernel fast-path trap first, MIG
+ * fallback only on MACH_SEND_INVALID_DEST, matching real Apple's
+ * mach_port.c:309 exactly) -- a real trial link found both, as a hard
+ * duplicate-symbol conflict once CoreFoundation is linked alongside
+ * this tier. Dropped here in favor of the more complete one. */
 
 kern_return_t mach_port_set_attributes(ipc_space_t task, mach_port_name_t name, mach_port_flavor_t flavor, mach_port_info_t port_info, mach_msg_type_number_t port_infoCnt) {
 	return _kernelrpc_mach_port_set_attributes(task, name, flavor, port_info, port_infoCnt);

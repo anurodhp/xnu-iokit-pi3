@@ -146,9 +146,13 @@ int accept(int s, struct sockaddr *addr, socklen_t *addrlen) {
     return (int)syscall3(SYS_accept_nocancel, s, (long)addr, (long)addrlen);
 }
 
-int connect(int s, const struct sockaddr *name, socklen_t namelen) {
-    return (int)syscall3(SYS_connect_nocancel, s, (long)name, namelen);
-}
+/* connect() used to be defined here too (plain raw-syscall version, no
+ * errno remapping) -- real xpc_syscall_wrappers_compat.c (launchd's own
+ * tier, libxpc_syscalls.a) already provides a more faithful one, curated
+ * verbatim from real Apple libsyscall/wrappers/legacy/connect.c (real
+ * EOPNOTSUPP->ENOTSUP errno remap included) -- a real trial link found
+ * both, as a hard duplicate-symbol conflict once CoreFoundation links
+ * alongside launchd. Dropped here in favor of the more faithful one. */
 
 int getsockname(int fdes, struct sockaddr * __restrict asa, socklen_t * __restrict alen) {
     return (int)syscall3(SYS_getsockname, fdes, (long)asa, (long)alen);

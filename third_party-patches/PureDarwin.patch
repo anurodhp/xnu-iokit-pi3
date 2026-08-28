@@ -1,0 +1,66 @@
+From d6c5fabb51d37c2c42ecf30bcbf2fefadef8bbb8 Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@icloud.com>
+Date: Fri, 28 Aug 2026 13:45:12 -0400
+Subject: [PATCH] launchd/shim.h: remove redundant posix_spawnattr NP-setter
+ no-op shims
+
+posix_spawnattr_setprocesstype_np()/posix_spawnattr_set_
+importancewatch_port_np()/posix_spawnattr_setcpumonitor_default() are
+defined here as plain `__inline` (not `static __inline`) no-op
+placeholders returning 0 -- real, functional definitions of all three
+already exist in xnu-7195's own libsyscall/wrappers/spawn/
+posix_spawn.c, which core.c's own build also links against. A real
+trial build (arm64-apple-ios14.4, iokit project) found this file's own
+plain-inline copies producing real, externally-linkable definitions
+(non-static `inline` in GNU/C99 semantics still emits an out-of-line
+copy when nothing else provides one) that hard-conflict with the real
+posix_spawn.c ones as duplicate symbols once both are linked together.
+Real, working implementations should win over no-op placeholders that
+only ever existed because posix_spawn.c's own definitions weren't
+available in whatever build this shim originally targeted.
+---
+ src/Libraries/XPC/launchd/shim.h | 29 +++++++++++------------------
+ 1 file changed, 11 insertions(+), 18 deletions(-)
+
+diff --git a/src/Libraries/XPC/launchd/shim.h b/src/Libraries/XPC/launchd/shim.h
+index e772d61..7d6c208 100644
+--- a/src/Libraries/XPC/launchd/shim.h
++++ b/src/Libraries/XPC/launchd/shim.h
+@@ -135,23 +135,16 @@ xpc_domain_add_services(job_t j, vm_offset_t services_buff, mach_msg_type_number
+ #define XPC_LPI_VERSION 20141120
+ 
+ 
+-__inline int
+-posix_spawnattr_setprocesstype_np(posix_spawnattr_t * a __unused, const int b __unused)
+-{
+-	return 0;
+-}
+-
+-__inline int
+-posix_spawnattr_set_importancewatch_port_np(posix_spawnattr_t * __restrict attr __unused,
+-											int count __unused, mach_port_t portarray[] __unused)
+-{
+-	return 0;
+-}
+-
+-__inline int
+-posix_spawnattr_setcpumonitor_default(posix_spawnattr_t * __restrict a __unused)
+-{
+-	return 0;
+-}
++/* posix_spawnattr_setprocesstype_np()/posix_spawnattr_set_
++ * importancewatch_port_np()/posix_spawnattr_setcpumonitor_default() no-
++ * op placeholders removed 2026-08-28 (iokit project): real
++ * third_party/xnu-7195/libsyscall/wrappers/spawn/posix_spawn.c already
++ * provides real, functional definitions of all three (confirmed by
++ * reading that file directly) -- a real trial link found this file's
++ * own plain `__inline` (non-static, so a real external definition even
++ * when not actually inlined) copies hard-conflicting with them as
++ * duplicate symbols. Real, working implementations win over no-op
++ * placeholders.
++ */
+ 
+ #endif
+-- 
+2.50.1 (Apple Git-155)
+

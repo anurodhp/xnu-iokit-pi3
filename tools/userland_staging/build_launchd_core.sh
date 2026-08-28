@@ -9,9 +9,17 @@
 # ============================================================
 # HONEST SCOPE STATEMENT -- read this first
 # ============================================================
-# All 9 files (pd_launchd_boot.c, kill2.c, pd_sandbox_check.c,
-# pd_console_login.c, pd_launchd_plist.c, log.c, ipc.c, launchd.c,
-# core.c) compile to real .o's with zero errors, archived here.
+# All files (pd_launchd_boot.c, kill2.c, pd_sandbox_check.c,
+# pd_launchd_plist.c, pd_job_forward_server.c -- added 2026-08-28, real
+# honest job_mig_look_up2_forward()/job_mig_parent_forward() stubs
+# already returning BOOTSTRAP_NOT_PRIVILEGED in PureDarwin's own real,
+# pinned source, just never compiled in before -- log.c, ipc.c,
+# launchd.c, core.c, runtime.c, ktrace.c) compile to real .o's with zero
+# errors, archived here. pd_console_login.c also compiles clean (real,
+# zero errors) but is deliberately kept OUT of the archive -- it's its
+# own separate real executable (launchd supervises it as a process, does
+# not link into it), and its own real main() hard-conflicts with
+# launchd.c's real main() otherwise (found via a real trial link).
 #
 # NOT DONE YET: an actual link into a real launchd executable. This
 # script's own trial link (below) is informational only, against this
@@ -35,6 +43,7 @@ cd "$(dirname "$0")"
 
 XCODE12="/Applications/Xcode-12.app/Contents/Developer"
 CLANG="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
 SDK="$XCODE12/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
 if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     echo "error: Xcode-12.app not found at $XCODE12" >&2
@@ -111,16 +120,51 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-buil
     -idirafter "$XNU/BUILD.hdrs/dst/usr/local/include" -idirafter "$XNU/EXTERNAL_HEADERS" \
     -idirafter "$LIBC/darwin" -idirafter "$LIBC" -idirafter "$XNU/libkern")
 
+rm -rf "$OUT/launchd_core_obj"
 mkdir -p "$OUT/launchd_core_obj"
-for f in pd_launchd_boot kill2 pd_sandbox_check pd_console_login pd_launchd_plist log ipc launchd core runtime ktrace; do
+for f in pd_launchd_boot kill2 pd_sandbox_check pd_launchd_plist pd_job_forward_server log ipc launchd core runtime ktrace; do
     "$CLANG" "${CFLAGS[@]}" "$PD/launchd/$f.c" -o "$OUT/launchd_core_obj/$f.o"
 done
+# pd_console_login.c: real, but a genuinely separate real executable
+# (its own header: "PureDarwin console login helper... launchd
+# supervises this helper" -- launchd spawns it as its own process, does
+# not exec/link into it) -- its own real main() duplicate-symbol-
+# conflicts with launchd.c's real main() if bundled into the same
+# archive (found via a real trial link, not assumed). Compiled here
+# into a separate directory (still verified real, zero errors) but
+# deliberately kept OUT of liblaunchd_core.a's own object glob below --
+# needs its own real standalone build/binary target eventually, out of
+# scope for this gap-closing pass.
+mkdir -p "$OUT/pd_console_login_obj"
+"$CLANG" "${CFLAGS[@]}" "$PD/launchd/pd_console_login.c" -o "$OUT/pd_console_login_obj/pd_console_login.o"
 "$CLANG" "${CFLAGS[@]}" ld2xpc_compat.c -o "$OUT/launchd_core_obj/ld2xpc_compat.o"
 # Real, from-scratch xpc_copy() -- same class of confirmed gap as
 # ld2xpc/xpc2ld above (real libxpc/xpc_misc.c has no plain deep-copy
 # function at all) -- see xpc_copy_compat.c's own header for the full
 # real citation and scope.
 "$CLANG" "${CFLAGS[@]}" xpc_copy_compat.c -o "$OUT/launchd_core_obj/xpc_copy_compat.o"
+# Real os_log(3) engine: confirmed never open-sourced (no daemon to
+# deliver to here regardless) -- see os_log_compat.c's own header for
+# the full real-fix writeup (same honest-no-op shape as this project's
+# existing pd_sandbox_check.c).
+"$CLANG" "${CFLAGS[@]}" os_log_compat.c -o "$OUT/launchd_core_obj/os_log_compat.o"
+# Real sysdir_start_search_path_enumeration()/_get_next_...(): confirmed
+# never open-sourced -- see sysdir_compat.c's own header for the full
+# real-fix writeup.
+"$CLANG" "${CFLAGS[@]}" sysdir_compat.c -o "$OUT/launchd_core_obj/sysdir_compat.o"
+# Real ASL client shim -- see asl_client_compat.c's own header for the
+# full real-fix writeup (Phase 6.7/6.8's bootstrap-registrar
+# prerequisite, not wired here on purpose).
+"$CLANG" "${CFLAGS[@]}" asl_client_compat.c -o "$OUT/launchd_core_obj/asl_client_compat.o"
+# Real setlogmask(3) -- see setlogmask_compat.c's own header for the
+# full real-fix writeup (previously attempted via oldsyslog.o and
+# reverted as a net loss; this standalone extraction avoids that
+# dependency chain).
+"$CLANG" "${CFLAGS[@]}" setlogmask_compat.c -o "$OUT/launchd_core_obj/setlogmask_compat.o"
+# Real scalbn(3), extracted standalone -- see libm_scalbn_only_compat.c's
+# own header for why the whole libm.a can't be linked here (real
+# duplicate pow()/modf() vs CoreFoundation's own libm_compat.o).
+"$CLANG" "${CFLAGS[@]}" libm_scalbn_only_compat.c -o "$OUT/launchd_core_obj/libm_scalbn_only_compat.o"
 
 # Real mktime/localtime/localtime_r/ctime_r/asctime_r: fourth attempt,
 # real fix found by looking at how PureDarwin's own CMake build gets
@@ -287,14 +331,46 @@ echo "wrote $OUT/liblaunchd_core.a ($(ls "$OUT"/launchd_core_obj/*.o | wc -l | t
 # CFError's own selective-extraction pass reverted localtime.o/
 # libproc.o/strtoul.o -- real, deep, not-locally-satisfied dependency
 # chains for one function each, a net loss.
+rm -rf "$OUT/launchd_libc_extras_obj"
 mkdir -p "$OUT/launchd_libc_extras_obj"
 ( cd "$OUT/launchd_libc_extras_obj" && \
   ar x "../libncurses.a" ncurses_extra_syscalls.o Libc_sys_sigaction.o libplatform_sigaction.o && \
-  ar x "../libresolv.a" getifaddrs.o arc4random.o libresolv_socket_syscalls.o libresolv_getentropy_syscall.o && \
+  ar x "../libresolv.a" getifaddrs.o arc4random.o libresolv_getentropy_syscall.o && \
   ar x "../libcopyfile.a" copy.o && \
   ar x "../dyld_core.a" isnull.o && \
   ar x "../libopenpam.a" ls_fenv_compat.o && \
   ar x "../libremovefile.a" fstatat64.o qsort.o heapsort.o removefile_syscalls.o )
+# Real, narrowed re-exports (ld -r -exported_symbol, same precedent
+# build_libdispatch_dylib.sh's own mach_make_memory_entry_64 extraction
+# already established) for ncurses_extra_syscalls.o/removefile_syscalls.o:
+# a real trial link found both objects independently define public
+# read()/gettimeofday() (and ncurses_extra_syscalls.o also
+# pthread_testcancel()) -- real, redundant, hard duplicate-symbol
+# conflicts once both land in the same launchd_libc_extras.a, not a
+# fabricated concern. Narrowing here (rather than editing either shared
+# source file, both used by other consumers too) keeps every OTHER real
+# symbol each object provides while dropping just the collisions --
+# read()/gettimeofday() come from removefile_syscalls.o instead (kept,
+# not duplicated), pthread_testcancel() comes from libpthread.a's own
+# real pthread_guard_compat.o (already linked, more authoritative).
+ar p "$OUT/libncurses.a" ncurses_extra_syscalls.o > "$OUT/launchd_libc_extras_obj/ncurses_extra_syscalls_raw.o"
+"$LD" -r -arch arm64 \
+    -exported_symbol ___darwin_check_fd_set_overflow -exported_symbol ___sigaction \
+    -exported_symbol __sigtramp -exported_symbol _access -exported_symbol _chdir \
+    -exported_symbol _fpathconf -exported_symbol _getpgrp -exported_symbol _kill \
+    -exported_symbol _link -exported_symbol _mkdir -exported_symbol _select \
+    -exported_symbol _sigprocmask -exported_symbol _sleep -exported_symbol _strstr \
+    "$OUT/launchd_libc_extras_obj/ncurses_extra_syscalls_raw.o" \
+    -o "$OUT/launchd_libc_extras_obj/ncurses_extra_syscalls.o"
+rm -f "$OUT/launchd_libc_extras_obj/ncurses_extra_syscalls_raw.o"
+ar p "$OUT/libremovefile.a" removefile_syscalls.o > "$OUT/launchd_libc_extras_obj/removefile_syscalls_raw.o"
+"$LD" -r -arch arm64 \
+    -exported_symbol _flsl -exported_symbol _getiopolicy_np -exported_symbol _gettimeofday \
+    -exported_symbol _read -exported_symbol _reallocarray -exported_symbol _rename \
+    -exported_symbol _rmdir -exported_symbol _unlink -exported_symbol _unlinkat \
+    "$OUT/launchd_libc_extras_obj/removefile_syscalls_raw.o" \
+    -o "$OUT/launchd_libc_extras_obj/removefile_syscalls.o"
+rm -f "$OUT/launchd_libc_extras_obj/removefile_syscalls_raw.o"
 rm -f "$OUT/launchd_libc_extras.a"
 ar rcs "$OUT/launchd_libc_extras.a" "$OUT"/launchd_libc_extras_obj/*.o
 echo "wrote $OUT/launchd_libc_extras.a ($(ls "$OUT"/launchd_libc_extras_obj/*.o | wc -l | tr -d ' ') objects: chdir/access/strstr/sleep/sigprocmask/sigaction/getifaddrs/freeifaddrs/arc4random_uniform/bind/getentropy/uuid_copy/uuid_is_null/fegetenv/fesetenv/fstatat/qsort)"
@@ -330,9 +406,44 @@ echo "wrote $OUT/launchd_libc_extras.a ($(ls "$OUT"/launchd_libc_extras_obj/*.o 
 # own small hand-picked re-export list, item d7's "export-parity gap"
 # finding, doesn't include; the real sub-image that actually provides
 # them is already built, just needed adding to this link directly).
+    # __mh_dylib_header alias: real CFUniChar.c's __CFGetSectDataPtr()
+    # hunts _dyld_get_image_header() results for a match against
+    # &_mh_dylib_header to find ITS OWN image's __UNICODE section -- a
+    # real assumption that CoreFoundation is always its own separate
+    # dylib (true on real Apple systems, ld64 always synthesizes
+    # _mh_dylib_header for a -dynamiclib link). This project statically
+    # archives CoreFoundation into the executable instead (known dylib-
+    # migration debt, docs/daemon-roadmap.md), so CF's own __UNICODE
+    # section actually lives in the executable's image -- the real
+    # equivalent ld64-synthesized symbol for THAT image is
+    # _mh_execute_header. Aliasing makes the address comparison match
+    # for real, not a fabrication: for this specific static-linked
+    # build, the executable's own image IS the one CF's data lives in.
+    # Legacy short-form CFLocale/CFDateFormatter constant aliases
+    # (kCFLocaleLanguageCode etc): real CFLocaleKeys.c only defines these
+    # via `__attribute__((alias(...)))` under `#if TARGET_OS_LINUX ||
+    # TARGET_OS_BSD || TARGET_OS_WIN32` -- real macOS/iOS are excluded on
+    # the assumption Apple's own proprietary CoreFoundation.framework
+    # provides them some other way. Tried widening that guard to
+    # TARGET_OS_MAC directly (2026-08-28) and reverted: clang rejects
+    # `__attribute__((alias(...)))` outright on Darwin ("aliases are not
+    # supported on darwin") -- confirms exactly why the guard excluded
+    # Darwin in the first place. Real fix has to be a linker alias at
+    # final-link time instead, same mechanism as __mh_dylib_header above
+    # -- this project statically links this exact source as its entire
+    # CoreFoundation, so these real, already-defined ...Key-suffixed
+    # constants are the correct alias base.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
+    -Wl,-alias,__mh_execute_header,__mh_dylib_header \
+    -Wl,-alias,_kCFDateFormatterCalendarKey,_kCFDateFormatterCalendar \
+    -Wl,-alias,_kCFDateFormatterTimeZoneKey,_kCFDateFormatterTimeZone \
+    -Wl,-alias,_kCFCalendarIdentifierGregorian,_kCFGregorianCalendar \
+    -Wl,-alias,_kCFLocaleCalendarKey,_kCFLocaleCalendar \
+    -Wl,-alias,_kCFLocaleCountryCodeKey,_kCFLocaleCountryCode \
+    -Wl,-alias,_kCFLocaleLanguageCodeKey,_kCFLocaleLanguageCode \
+    -Wl,-alias,_kCFLocaleScriptCodeKey,_kCFLocaleScriptCode \
     -o "$OUT/launchd_trial.macho" \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     -Wl,-force_load,"$OUT/liblaunchd_core.a" \
@@ -341,7 +452,7 @@ echo "wrote $OUT/launchd_libc_extras.a ($(ls "$OUT"/launchd_libc_extras_obj/*.o 
     "$OUT/libxpc_syscalls.a" "$OUT/libxpc_syscalls2.a" "$OUT/liblaunchd_syscalls.a" \
     "$OUT/libmach_ipc.a" "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
     "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
-    "$OUT/libc_locale_for_stdio.a" "$OUT/libm.a" "$OUT/libbsm.a" \
+    "$OUT/libc_locale_for_stdio.a" "$OUT/libbsm.a" \
     "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
     "$ICU_LIB/libicuuc.dylib" "$ICU_LIB/libicui18n.dylib" "$ICU_LIB/libicudata.dylib" "$OUT/system/libc++.dylib" \

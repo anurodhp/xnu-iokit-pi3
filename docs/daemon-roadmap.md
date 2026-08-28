@@ -2944,7 +2944,175 @@ before this pass started -- left untouched, not this effort's scope.
 Whoever commits this pass's own changes should stage narrowly (the
 launchd/pthread/dispatch/cctools files this entry lists), not
 `git add -A`, to avoid bundling the other session's still-in-flight work
-into this commit.
+into this commit. (Committed as `18aba29`; the other session's own work
+landed separately as `e0b8dab` before this pass continued.)
+
+### Milestone 2 CLOSED, 2026-08-28 -- real launchd.macho links clean, 38 -> 0
+
+Continued the same pass after the 51 -> 38 result above and the
+concurrent BSM/dylib session finished. **Real result: 0 undefined
+symbols, 0 duplicate symbols -- `launchd_trial.macho` is a real,
+complete, fully-linked `MH_EXECUTE` (confirmed via `otool -hv`:
+`NOUNDEFS` flag set; `otool -L` shows exactly the 8 real dylibs this
+project has built: libdispatch/libdyld/libSystem.B/libsystem_pthread/
+libicuuc/libicui18n/libicudata/libc++).** This is the first time in
+this project's history real launchd has linked into a complete
+executable, not just compiled. Not yet run (Milestone 3/4/5 below are
+still open) -- this is a real, honest link-only result.
+
+**CFPreferences family (20 symbols) closed** -- the single largest
+remaining chunk from the 38-symbol pass, and the one this session
+expected to need its own dedicated pass. Turned out smaller than
+expected: two real, narrow upstream bugs in swift-corelibs-foundation's
+exact checkout, not the "real preference-file storage stays
+unimplemented" structural gap `docs/backlog.md` item d7 previously
+described (that characterization is now stale -- see below):
+- `CFPreferences.c`/`CFXMLPreferencesDomain.c`: three real `#if
+  TARGET_OS_OSX`/`TARGET_OS_MAC` guard mismatches (an `#include` block
+  narrower than the code needing it three lines below; an unconditional
+  cleanup line referencing a variable declared inside a narrower guard;
+  a missing `TARGET_OS_MAC` branch in a sleep-helper's platform switch)
+  -- all three fixed via a third commit in the existing
+  `swift-corelibs-foundation.patch`, plus a new `cf_compat_headers/
+  gethostuuid.h` forwarding shim overriding the real SDK's iOS-
+  unavailable annotation on `gethostuuid()` (the real syscall, #142,
+  genuinely exists in this project's own xnu-7195 fork -- the SDK
+  restriction is an iOS-app-store policy artifact, not a real functional
+  gap). CFPreferences.c/CFXMLPreferencesDomain.c added to
+  `build_corefoundation.sh`'s `FILES` list for real.
+- `CFLocaleKeys.c`'s ~30 legacy short-form constant aliases
+  (`kCFLocaleLanguageCode` etc) are real but only compiled under `#if
+  TARGET_OS_LINUX || TARGET_OS_BSD || TARGET_OS_WIN32` via
+  `__attribute__((alias(...)))` -- **tried widening that guard to
+  TARGET_OS_MAC directly and reverted**: clang rejects
+  `__attribute__((alias(...)))` outright on Darwin ("aliases are not
+  supported on darwin"), confirming exactly why the guard excluded
+  Darwin. Real fix instead: 7 `-Wl,-alias` pairs added to
+  `build_launchd_core.sh`'s own trial-link line (same technique as
+  `__mh_dylib_header` below), aliasing each short-form name to its
+  already-real `...Key`-suffixed definition.
+
+**`docs/backlog.md` item d7 is now stale on this specific point** --
+"real preference-file storage (`CFPreferencesCopyAppValue` et al) stays
+unimplemented" no longer describes the compile-time gap (both files
+compile and link for real now); whether the runtime *behavior* is
+correct against a real flat preferences file on disk is a separate,
+not-yet-QEMU-verified question, not addressed by this pass.
+
+**`__mh_dylib_header` closed** the same session, before the
+CFPreferences work: real `CFUniChar.c`'s `__CFGetSectDataPtr()` hunts
+loaded dyld images for a match against `&_mh_dylib_header` to find its
+own image's `__UNICODE` section -- a real assumption that CoreFoundation
+is always its own separate dylib (true on real Apple systems). This
+project statically archives CoreFoundation into the executable instead,
+so the real equivalent ld64-synthesized symbol is `_mh_execute_header`
+-- `-Wl,-alias,__mh_execute_header,__mh_dylib_header` makes the address
+comparison match for real.
+
+**`_setlogmask` closed** -- the one symbol left over from the
+"mechanical" group in the 51->38 pass, previously documented as a real
+attempt-and-revert (deep `oldsyslog.o` dependency chain, a net loss).
+The function itself is tiny and self-contained (a plain per-process
+priority-mask store); a new standalone `setlogmask_compat.c` avoids the
+whole `oldsyslog.o` chain the earlier attempt got stuck in.
+
+**10 real duplicate-symbol conflicts found and fixed closing the last
+mile** (0 undefined -> a real, complete link), each a genuine redundant-
+implementation collision between two independently-written real
+sources, not a fabricated concern -- every one confirmed via an actual
+`ld` duplicate-symbol error, not guessed:
+- `_scalbn`: `libm.a`'s own object bundles `scalbn`/`pow`/`modf`
+  together; CoreFoundation's own `libm_compat.o` already provides
+  `pow`/`modf` independently. New `libm_scalbn_only_compat.c` (a real,
+  standalone extraction of just FreeBSD's `s_scalbn.c`, same real source
+  `libm_freebsd_fallback.c` already cites) sidesteps the conflict --
+  `libm.a` dropped from the trial-link line entirely.
+- `posix_spawnattr_setprocesstype_np`/`_set_importancewatch_port_np`/
+  `_setcpumonitor_default`: PureDarwin's own `launchd/shim.h` defines
+  these as plain (non-`static`) `__inline` no-op placeholders, which
+  still emit real external definitions -- real, functional versions
+  already exist in xnu-7195's own `libsyscall/wrappers/spawn/
+  posix_spawn.c`, linked via `liblaunchd_syscalls.a`. Removed the
+  redundant no-ops from `shim.h` (committed as a new, first-ever real
+  patch for this project's PureDarwin checkout -- `third_party-patches/
+  PureDarwin.patch`, wired into `setup_third_party.sh` via `git am`, same
+  pattern the swift-corelibs-foundation patch already established).
+  (First attempt added `static` instead of removing the functions --
+  wrong, since `spawn_private.h`'s real prototype is already visible in
+  the same translation unit and C forbids a static redeclaration of a
+  non-static one; caught by the very next real compile, reverted.)
+- `__write`/`__sigaction_nobind`: `launchd_syscall_compat_headers/
+  private_names_compat.c` used to forward both, but real, independent
+  implementations already exist elsewhere in this exact link
+  (`libc_locale_syscalls.c`'s own `_write`; `third_party/Libc/sys/
+  sigaction.c`'s own `_sigaction_nobind`, via `launchd_libc_extras.a`).
+  Dropped from `private_names_compat.c` in favor of those.
+- `___CFPreferencesDomainClass`: `cf_class_stubs.c`'s placeholder
+  removed now that real `CFPreferences.c` provides it for real (same
+  "real file replaces stub" pattern that file's own header already
+  documents for every other CF type).
+- `_mach_port_get_attributes`: `launchd_mach_port_compat.c`'s own
+  version (plain MIG-stub forward) removed in favor of
+  `cf_mach_port_syscalls.c`'s more complete one (real kernel fast-path
+  trap first, MIG fallback only on `MACH_SEND_INVALID_DEST`, matching
+  real Apple's `mach_port.c:309` exactly -- `launchd_mach_port_compat.c`'s
+  own header already conceded this gap for this one routine).
+- `_connect`: `cf_compat_headers/cf_socket_syscalls.c`'s plain raw-
+  syscall version removed in favor of `xpc_syscall_wrappers_compat.c`'s
+  more faithful one (curated verbatim from real Apple `libsyscall/
+  wrappers/legacy/connect.c`, including the real `EOPNOTSUPP`->`ENOTSUP`
+  errno remap).
+- `_bind`/`_setsockopt`/`_sendto`/`_socket`/`_select`/`_send`/`_connect`
+  (a second, broader wave): `libresolv_socket_syscalls.o` turned out to
+  be **completely redundant** for this link -- every single symbol it
+  provides was already covered elsewhere (`cf_socket_syscalls.o`:
+  socket/bind/setsockopt/sendto; `ncurses_extra_syscalls.o`: select;
+  `date_compat.o`: send; `xpc_syscall_wrappers_compat.o`: connect).
+  Dropped entirely from `build_launchd_core.sh`'s own `ar x` extraction
+  line rather than narrowing it symbol-by-symbol.
+- `_gettimeofday`/`_read` (within `ncurses_extra_syscalls.o` vs
+  `removefile_syscalls.o`, both independently real) and
+  `_pthread_testcancel` (`ncurses_extra_syscalls.o` vs libpthread.a's
+  own, more authoritative `pthread_guard_compat.o`): both shared-source
+  files (used by other consumers too, not safe to edit directly) --
+  narrowed via `ld -r -exported_symbol` at extraction time instead (same
+  real precedent `build_libdispatch_dylib.sh`'s own
+  `mach_make_memory_entry_64` extraction already established), keeping
+  every other real symbol each object provides.
+- `_main`: `pd_console_login.c` is a genuinely separate real executable
+  (PureDarwin's own header: "launchd supervises this helper" as its own
+  process, does not link into it) that was incorrectly being compiled
+  into the same archive as `launchd.c`'s own `main()`. Still compiled
+  (verified real, zero errors) but into a separate, non-archived
+  directory -- needs its own real standalone build/binary target
+  eventually, out of scope here. A stale leftover `.o` from before this
+  fix (the compile loop stopped producing it, but the old file was still
+  swept into the archive by a bare `*.o` glob) surfaced the exact same
+  symptom again on the next rebuild -- `launchd_core_obj`/
+  `launchd_libc_extras_obj` are now `rm -rf`'d before every rebuild to
+  close that whole class of staleness bug for good.
+
+**New/changed files this pass**: `cf_compat_headers/gethostuuid.h`,
+`libm_scalbn_only_compat.c`, `setlogmask_compat.c` (new);
+`third_party-patches/swift-corelibs-foundation.patch` (3rd commit added
+then reverted, net: unchanged from the 51->38 pass's version, since the
+CFLocaleKeys.c source fix was abandoned in favor of a link-time alias);
+`third_party-patches/PureDarwin.patch` (new, first-ever patch for this
+checkout); `setup_third_party.sh` (wired the new PureDarwin patch's
+`git am` step); `build_launchd_core.sh`/`build_corefoundation.sh`/
+`private_names_compat.c`/`launchd_mach_port_compat.c`/
+`cf_compat_headers/cf_socket_syscalls.c`/`cf_compat_headers/
+cf_class_stubs.c` (edited).
+
+**Not started yet**: producing a real `build_launchd.sh` (promoting this
+trial link into a real, reproducible, checked-in build script per this
+project's own "every built artifact needs a reproducing script"
+convention -- the trial link today lives inline in
+`build_launchd_core.sh`, informational-only), standalone run of
+`launchd_trial.macho` (Milestone 3), boot-path integration (Milestone 4,
+needs explicit user sign-off between (a) launchd replaces `tools/
+init_binary/` outright vs (b) `init_binary` execs into it -- (b)
+recommended default), or QEMU verification (Milestone 5).
 
 ## Phase 6.8 -- original 2026-08-22 scoping (partially superseded above,
 ## kept for the parts still accurate: license/vintage caution, the
