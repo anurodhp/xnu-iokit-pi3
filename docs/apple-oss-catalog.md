@@ -136,6 +136,82 @@ form (`pow`/`fabs` are ARM-asm-only; `modf`'s only portable Apple source
 is its own `modf_IncrediblySkanky.c`, self-described in its own header
 comment as a temporary, poor-performance hack).
 
+**Addendum 2026-08-27/28 — `BSM` built (`tools/userland_staging/build_bsm.sh`),
+same "no manifest entry" ceiling as `Libm`/`IOUSBFamily`, plus a real
+cross-repo API skew found and patched:** `apple-oss-distributions/BSM`
+(`bsm-13`) was pinned earlier the same day for Phase 6.8's real, named
+`bsm/auditd_lib.h`/`bsm/libbsm.h` launchd/libxpc dependency but never
+actually built until this pass — ported proactively ahead of any real
+consumer, same spirit as `Libm` above and the user's own explicit ask
+("other apple oss libraries like libm that we have not built"). Checked
+`distribution-macOS`'s `macos-112` manifest directly (`git cat-file -p
+macos-112^{tree}`, all 232 real entries) — no entry named `BSM` or
+`audit` exists at all, same real ceiling as `Libm`/`IOUSBFamily`.
+`bsm-13` confirmed the newest real tag (`git ls-remote --tags`: `bsm-13`
+> `bsm-8` > `bsm-2.11` > `bsm-2.10`), not guessed.
+
+All 11 real files in `third_party/BSM/bsm/lib/*.c` (BSM's own real
+Makefile's exact file list) compile clean and archive into a real
+`libc_build/libbsm.a` (99 exported functions) — zero files excluded,
+unlike `Libm`'s honest partial-exclusion list. Real gaps found and
+closed, all documented in `build_bsm.sh`'s own header comment and
+`tools/userland_staging/bsm_compat_headers/bsm_internal_compat.h`: a
+real, confirmed omission in BSM-13's own `libbsm.h` (`au_groups_t` uses a
+bare `MAX_GROUPS` that is defined nowhere in the checkout at all); a real
+naming-convention drift between BSM-13's userland lib source and this
+project's paired `xnu-7195` `bsd/bsm/audit_internal.h`/`audit_record.h`
+(`HEADER_SIZE`/`TRAILER_SIZE`/`AU_*_TOKEN`/`AU_NULL`/`AUR_LONG` vs. the
+real, current `AUDIT_HEADER_SIZE`/`AUDIT_TRAILER_SIZE`/`AUT_*`/
+`AUT_INVALID`/`AUR_INT32` names — BSM-13's own lib source predates a
+later xnu-side rename it was never resynced against); missing
+`be16enc`/`be32enc`/`be64enc` (real, standard BSD `<sys/endian.h>`
+big-endian-encode API used by xnu-7195's own `ADD_U_INT16/32/64` macros,
+not present anywhere in this project's vendored Libc — a real, standard,
+unambiguous algorithm transcribed directly rather than pinning a whole
+extra repo for 3 one-line functions). A real, minimal **patch to BSM's
+own source** (`third_party-patches/BSM.patch`, applied via `git am` like
+`Csu.patch`/`Libc.patch`/`ICU.patch`, verified to apply cleanly against a
+fresh `bsm-13` checkout): `xnu-7195`'s own `bsd/bsm/audit_record.h`
+already declares a full "deprecated userland BSM API" prototype block (9
+functions — `au_to_arg`/`data`/`groups`/`opaque`/`file`/`path`/`seq`/
+`exec_args`/`exec_env`) with slightly different signatures than what
+BSM-13's own `bsm_token.c` defines (mostly a dropped/added `const`
+qualifier, `int *` vs. `gid_t *` for `au_to_groups` — xnu's own header is
+arguably the buggy side there, since the very next declaration,
+`au_to_newgroups`, correctly uses `gid_t *` — plus one genuine behavioral
+difference: `au_to_file` gained an extra `struct timeval` parameter in
+the newer header that this implementation predates, accepted-and-ignored
+since the function already computes its own real timestamp via
+`gettimeofday()`). Fixed by aligning BSM-13's 9 definitions to match
+xnu-7195's real, currently-published contract — a real, confirmed
+cross-repo API-vintage skew between two real Apple sources, not
+something this project introduced, same "real, confirmed bug in a
+pristine Apple snapshot, patched with a documented `git am` patch"
+precedent as `dyld.patch`'s (now-retired) `ImagePair` fix / `ICU.patch`'s
+`aaplbfct.cpp` omission.
+
+Real new syscall wrappers (`tools/userland_staging/bsm_syscalls.c`):
+`audit(2)`/`auditon(2)`/`getaudit(2)` (#350/#351/#355, cross-checked
+against `xnu-7195`'s own `bsd/kern/syscalls.master`). Real, confirmed,
+not a project-specific gap: `syscalls.master` lists #355 as `{ int
+nosys(void); } { old getaudit }` — this exact `xnu-7195` kernel has
+genuinely retired legacy `getaudit(2)` in favor of `getaudit_addr(2)`
+(#357, not wrapped — no real BSM-13 lib source calls it), matching real,
+current Darwin's own actual behavior, not a simplification.
+
+Real smoketest (`bsm_smoketest.macho`, `nm -u`-verified zero undefined
+symbols, `LC_UNIXTHREAD` present, zero `LC_LOAD_DYLIB`): a real
+`au_open()`/`au_to_subject32()`/`au_to_return32()`/`au_to_text()`/
+`au_write()`/`au_close()` record cycle. Built as a static archive
+(`libbsm.a`), not a `.dylib` — real Apple's own `bsm/lib/Makefile`
+actually targets a dylib, but this project's own recent precedent for a
+curated support library linked into Csu-static consumers (`libm.a`,
+`libnotify_client.a`, `libresolv.a`, `libopenpam.a`, all built after the
+project's real per-library-dylib convention was announced) is `.a`; not
+wired into any consumer yet (no real auditd/notifyd/OpenSSH/launchd
+consumer exists on this target either), same "build it in advance, ready
+for when something needs it" framing as `Libm`.
+
 **Not yet done, scope for a follow-up pass, not this one:** the same
 check for the 5 repos vendored via `third_party-patches/` with local
 fixes on top (`dtc-AppleDeviceTree`, `u-boot`, `Csu`) — `Csu` matched

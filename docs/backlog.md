@@ -515,6 +515,49 @@ d7. **CoreFoundation + real ICU + real libxml2 ports DONE 2026-08-26/27
       GitHub code search across the whole `apple-oss-distributions`
       org — zero definitions anywhere, only real callers).
 
+d8. **Every curated support library built since the real per-library-dylib
+    convention was announced (`CLAUDE.md`'s "New project convention going
+    forward: prefer real, per-library `.dylib`s over new static
+    archives", Phase 6.5) has still shipped as a plain `.a` static
+    archive, not a `.dylib` — a real, growing gap between stated
+    convention and actual practice, not yet reconciled.** Confirmed via
+    `ls tools/userland_staging/build_*.sh` + `file libc_build/*.a`:
+    `build_libm.sh` (`libm.a`), `build_libnotify_client.sh`
+    (`libnotify_client.a`), `build_libresolv.sh` (`libresolv.a`),
+    `build_openpam.sh` (`libopenpam.a`), and `build_bsm.sh` (`libbsm.a`,
+    2026-08-27/28) were all written and built *after* the convention
+    landed, and all five chose `.a` anyway — each one's own header
+    comment documents the same real reasoning (a curated support library
+    linked into this project's still-dominant Csu-static `-nostdlib
+    -static` consumers has no real dyld-based consumer to justify the
+    extra dylib-linking complexity yet, unlike `libdyld.dylib`/
+    `libsystem_*.dylib`, which exist specifically because real dyld
+    structurally requires them). `libbsm.a` is the sharpest case: real
+    Apple's own `bsm/lib/Makefile` *already* targets a dylib
+    (`libbsm.dylib`, `-dynamiclib -install_name /usr/lib/libbsm.dylib`)
+    — this project deliberately chose `.a` anyway, for consistency with
+    the other four, not because the real upstream build system does.
+
+    Not a correctness bug (every one of these `.a`s builds clean, links
+    clean, and passes its own real smoketest) — filed because the
+    convention exists precisely to stop this exact pattern from
+    compounding (see `docs/daemon-roadmap.md`'s "Static-vs-dylib
+    architecture debt" section for the same concern at the
+    `libSystem.B.dylib`-flattening scale), and five real, independent
+    instances of "wrote a new `.a` anyway" since the convention was
+    announced is a real signal the convention isn't being followed by
+    default, not just an occasional deliberate exception. Real follow-up,
+    not attempted here: either (a) revisit each of these five as a real
+    `.dylib` once/if a real dyld-loaded consumer actually needs one
+    (lowest-risk — matches `build_libdyld.sh`'s own "link against real
+    sibling dylibs, not their static ancestors" pattern, see item d1
+    above for why that matters for correctness, not just style), or (b)
+    make an explicit, documented call that `.a` is in fact still correct
+    for small curated-support libraries with no standalone runtime role,
+    and narrow the convention's own wording in `CLAUDE.md` to say so —
+    but don't leave the stated convention and the actual practice
+    silently diverging the way they are today.
+
 0a. **No AES implementation exists anywhere in this kernel — HARD
     PREREQUISITE for Phase 7b (`sshd`).** Filed explicitly 2026-08-21 so it
     is a known gate rather than the fourth surprise NULL dereference.

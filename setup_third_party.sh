@@ -283,6 +283,31 @@ mkdir -p third_party
 #     service -- no bootstrap-namespace/launchd dependency at all, unlike
 #     `notifyd` (see `docs/daemon-roadmap.md`'s Phase 6.7 section).
 #
+#   - BSM (2026-08-27, tools/userland_staging/build_bsm.sh): pinned earlier
+#     (Phase 6.8, see the BSM entry above) but not built until this pass --
+#     same "proactively port a small, dependency-light Apple library
+#     before something else needs it" spirit as Libm below. Same "no
+#     manifest entry" honest ceiling as Libm/IOUSBFamily -- checked
+#     distribution-macOS's macos-112 manifest directly (full 232-entry
+#     tree, git ls-tree), no entry named BSM or audit exists at all.
+#     bsm-13 confirmed the newest real tag (git ls-remote --tags:
+#     bsm-13 > bsm-8 > bsm-2.11 > bsm-2.10). `BSM.patch` (new, applied via
+#     git am like Csu.patch/Libc.patch/ICU.patch) fixes a real, confirmed
+#     cross-repo API-vintage skew: xnu-7195's own bsd/bsm/audit_record.h
+#     declares a full "deprecated userland BSM API" prototype block (9
+#     functions: au_to_arg/data/groups/opaque/file/path/seq/exec_args/
+#     exec_env) with slightly different signatures than what BSM-13's own
+#     bsm_token.c defines (mostly const-qualifier drift, one real
+#     behavioral difference -- au_to_file gained an extra struct timeval
+#     parameter in the newer header) -- fixed by aligning BSM-13's
+#     definitions to match xnu-7195's real, currently-published contract.
+#     See build_bsm.sh's own header comment for the full real-gap writeup
+#     (MAX_GROUPS/HEADER_SIZE/AU_*_TOKEN naming-drift compat header,
+#     be16/32/64enc, real audit(2)/auditon(2)/getaudit(2) syscall
+#     wrappers) -- all 11 real bsm/lib/*.c files compile clean, zero
+#     exclusions, real libbsm.a + a real, fully-static, zero-undefined-
+#     symbol smoketest.
+#
 #   - Libm (2026-08-27): NOT manifest-verifiable the way every other pin
 #     above is -- checked `distribution-macOS`'s `release.json` at
 #     `macos-112` AND every other macOS tag back through `macos-1012`
@@ -357,7 +382,7 @@ awk|https://github.com/apple-oss-distributions/awk.git|awk-27.40.1|
 IOKitTools|https://github.com/apple-oss-distributions/IOKitTools.git|IOKitTools-114.40.1|
 OpenSSH|https://github.com/apple-oss-distributions/OpenSSH.git|OpenSSH-240.40.1|
 Libnotify|https://github.com/apple-oss-distributions/Libnotify.git|Libnotify-279.40.4|
-BSM|https://github.com/apple-oss-distributions/BSM.git|bsm-13|
+BSM|https://github.com/apple-oss-distributions/BSM.git|bsm-13|BSM.patch
 ICU|https://github.com/apple-oss-distributions/ICU.git|ICU-66109|ICU.patch
 libxml2|https://github.com/apple-oss-distributions/libxml2.git|libxml2-34.9|
 cctools|https://github.com/apple-oss-distributions/cctools.git|cctools-973.0.1|
