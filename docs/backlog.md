@@ -559,8 +559,11 @@ d8. **Every curated support library built since the real per-library-dylib
     silently diverging the way they are today.
 
 d9. **`build_simple_cmds.sh` converted from fully-static to real dynamic
-    linking (2026-08-28) — 44 of 76 commands done, 32 blocked on a real,
-    unresolved ld64-609 crash, not yet fixed.** This is the first real
+    linking (2026-08-28) — RESOLVED: 76 of 76 commands now build, the
+    ld64-609 crash below fixed for real.** See this item's own trailing
+    "RESOLVED 2026-08-28" paragraph for the fix; the rest of this item
+    (kept verbatim) is the real bisection trail that root-caused it.
+    This is the first real
     dyld-loaded consumer d8 above was waiting for, and confirms d8's own
     premise: converting a real static consumer to real dynamic linking
     against `libSystem.B.dylib`/`libdyld.dylib` eliminates the entire
@@ -681,97 +684,250 @@ d9. **`build_simple_cmds.sh` converted from fully-static to real dynamic
     initializer) to reduce its own real fixup/atom footprint below
     whatever this toolchain's real threshold is.
 
-0a. **No AES implementation exists anywhere in this kernel — HARD
-    PREREQUISITE for Phase 7b (`sshd`).** Filed explicitly 2026-08-21 so it
-    is a known gate rather than the fourth surprise NULL dereference.
+    **RESOLVED 2026-08-28, same day, following the exact "worth
+    checking" follow-up above.** Real, isolated repro (minimal
+    `table.o`+`none.o`+`libc_locale_globals_compat.o`+trivial `main`,
+    same `-Wl,-fixup_chains`, same dylib set) reproduced the identical
+    `Assertion failed: (_mode == modeFinalAddress)` under Xcode 12's own
+    `ld64-609`, then the *same* link command with `clang`'s `-B` flag
+    pointed at the daily-driver Xcode's own much newer `ld` (this
+    machine: Xcode 26.6, `ld` 1267) succeeded — confirmed not just
+    "succeeds" but real load-command parity via `otool -l` against an
+    already-QEMU-verified dynamic executable (`true.macho`): identical
+    `LC_LOAD_DYLINKER`/`LC_MAIN`/`LC_DYLD_CHAINED_FIXUPS` shape. This is
+    a real, narrow ld64-609 bug in the daily-driver Xcode's own
+    predecessor, not anything about this project's object code —
+    confirmed by two back-to-back clean rebuilds (`rm -rf
+    libc_build/simple_obj`) both landing exactly `76 built, 0 failed`,
+    where the crash used to reproduce non-deterministically per the
+    bisection notes above.
+
+    Fix, in `build_simple_cmds.sh`: `NEWLD_BINDIR` (`xcode-select -p`'s
+    `Toolchains/XcodeDefault.xctoolchain/usr/bin`, fail-fast if missing)
+    passed via `-B"$NEWLD_BINDIR"` on the final per-command link only —
+    still compiling with Xcode 12's own `clang`/SDK throughout (the
+    SDK/header-vintage invariant this project's other "must be Xcode
+    12" rules are actually about is untouched; only ld64's own internal
+    bug is being routed around). `table.c`/`none.c` joined
+    `COMMON_EXTRA` (always linked, same "harmless if unreferenced"
+    precedent as `err.c`/`getopt.c`), which resolved the crash and the
+    original `___global_locale`/`___locale_key`/`__none_*` gaps
+    together (44 → 55 built). Closing the remaining 21 needed three
+    more real ports, each a genuine new finding, not just re-adding
+    files the bisection above already tried:
+    - `ldpart.c`/`getcwd.c`/`findfp.c`: compiled clean with zero
+      changes, resolving `__ldpart_free_extra`/`__part_load_locale`
+      (real `LC_TIME` via `__time_load_locale`, needed by every command
+      already linking `strftime.c`/`timelocal.c`) and `___sfprelease`
+      (`findfp.c`, needed by `freopen$UNIX2003`) — 55 → 71 built.
+    - `collate.c` (real `LC_COLLATE`/`fnmatch()` range-matching support
+      for `grep`/`find`/`diff`/`du`) has a genuine, narrow compile bug
+      *unrelated to ld64-609*: its own header
+      (`locale/FreeBSD/collate.h`) guards
+      `__collate_mbstowcs`/`__collate_wcsdup`'s prototypes behind
+      `#ifdef __LIBC__` (real Apple's own umbrella Libc build always
+      defines this; no other file this project compiles ever needed
+      to) — without it, collate.c's own internal forward-reference to
+      `__collate_mbstowcs()` gets an implicit-int declaration that then
+      conflicts with its real `wchar_t*`-returning definition later in
+      the same file. Fixed with a `collate.c`-only `-D__LIBC__`
+      override in the `COMMON_EXTRA` compile loop (scoped, not global —
+      untested whether `__LIBC__` changes anything else this project
+      compiles). `collcmp.c` (the actual home of `__collate_range_cmp`,
+      confirmed via `grep`, not assumed to live in `collate.c`) added
+      alongside it — 71 → 75 built.
+    - `cat` **regressed** during this pass (real, caught immediately by
+      the full-suite rerun, not silently missed): `cat_socket_stub.o`'s
+      link-alias case aliased `_send`/`_writev` to base symbols
+      `cat_socket_stub.c` never actually defined (only
+      `socket()`/`connect()`/`shutdown()` — real `cat.c` never calls
+      `send()`/`writev()`). Xcode 12's `ld64-609` silently tolerated
+      aliasing an undefined base; the daily-driver Xcode's newer `ld`
+      hard-fails on it (`symbol(s) not found ... in
+      command-line-aliases-file`) — a real, confirmed behavioral
+      divergence between the two linkers' `-alias` handling, not a
+      regression from anything else in this pass. Fixed by dropping the
+      two dead aliases from `cat_socket_stub.o`'s case entirely.
+    - `date` was the last failure, and a *different* real gap: its own
+      `date_compat.c` already ships honest `ENOSYS` `send()`/`writev()`
+      stubs for `oldsyslog.c`'s `vsyslog()` path (predates this pass —
+      real `netsettime()`/`pututxline()` network-daemon gaps this same
+      file's header already documents), but no `case` ever added the
+      matching `-Wl,-alias` flags for `date` specifically (only
+      `cat_socket_stub.o`'s case did, and cat doesn't need them). Fixed
+      by adding a `date`-only alias case — no new stub code needed, the
+      base symbols already existed.
+
+    **Second real regression found by the real QEMU boot-test that
+    followed (2026-08-28, not caught by any of the above — `otool -l`/
+    `gap_audit.sh` both passed clean on `ed`/`diff`/`less` first):**
+    `diff /tmp/a /tmp/b` (the first of the 76 to actually launch and
+    exercise this path — `diff` was one of the newly-unblocked 32, `ed`/
+    `less` were already in the original 44) crashed immediately at
+    process launch, before printing anything: `dyld[8]: Symbol not
+    found: _pipe / Referenced from: /bin/diff / Expected in:
+    /usr/lib/libSystem.B.dylib`. Root cause, confirmed via `nm -m` on
+    all four real `pipe(2)` consumers (`ed`, `diff`, `less`, `tar`):
+    real `ed_popen_system_compat.c` (`ed`/`less`) and real
+    `filter_fork_posix.c`/GNU `diff.c` both call plain `pipe(fd)`,
+    which needs a real `_pipe` symbol, but `ed_pipe_trap.o` (Apple's own
+    real `libsyscall/custom/__pipe.s`, which all four already link)
+    only exports the raw trap under `___pipe` (three underscores) —
+    real Apple Libc needs a thin public-name forwarder in between,
+    which `tar_pipe_compat.c` already provided (written earlier, for a
+    *different* reason — see that file's own header) but only tar ever
+    linked it. `ed`/`less` used to get this bridged for free via the
+    old static-linking era's project-wide `-alias ___pipe _pipe`
+    directive, which d9's own dynamic-link conversion earlier this same
+    day removed project-wide (the whole obsoleted `LINK_ALIASES` stack)
+    without anyone re-providing the bridge for these two specific
+    commands — a real, dormant regression from *earlier in this same
+    d9 conversion*, invisible until something actually launched under
+    real chained-fixups dyld (which binds every referenced symbol
+    eagerly at process start, unlike the old lazy-bind model — a call
+    site being unreached at runtime doesn't save you). `diff` becoming
+    linkable was what finally exercised it, but `ed`/`less` had already
+    been silently broken the same way since d9's conversion, just never
+    actually launched afterward to prove it (link-time `otool -l` /
+    `gap_audit.sh` both pass regardless, since a `(from libSystem)`
+    "safe two-level-namespace binding" classification only checks that
+    *some* dylib in the process could plausibly satisfy the symbol at
+    load, not that it actually does). Fixed by linking
+    `tar_pipe_compat.c` into `ed`/`diff`/`less` too (that file's own
+    header updated to reflect it's no longer tar-specific despite the
+    name) rather than reintroducing the removed alias mechanism. Real
+    QEMU re-verification after the fix: `ls`, `grep`, `date`, `diff`
+    (real `1c1`/`<`/`>` output), `find`, `stat`, `fold` all confirmed
+    working with no panic/assertion/dyld-symbol-not-found anywhere in
+    the transcript; `ed`'s own file-write in that same session failed
+    with an unrelated "No such file or directory" that traces to the
+    test harness's own quoting through the pty, not a `pipe()`/dyld
+    issue (ed's core buffer/file-write path doesn't call `pipe()` at
+    all — only its `!`-shell-escape and `r !cmd`/`w !cmd` forms do),
+    not chased further here.
+
+    Real, still-open, deliberately out of scope for this pass: none
+    known — all 76 commands build, and the two real regressions the
+    QEMU pass surfaced (cat's dead aliases, ed/diff/less's missing
+    `_pipe` bridge) are both fixed and re-verified. `docs/roadmap.md`'s
+    own Phase 4/4.6 command tiers should be checked for whether any of
+    them still list `date`/`ls`/etc as behaviorally-limited for a
+    *different* reason (e.g. `date`'s real clock-setting path is still
+    stubbed, see `date_compat.c`'s own header) — this item is scoped to
+    "does it link and boot," not full feature parity. `ed`'s own
+    file-write behavior under a real interactive session (as opposed to
+    this pass's scripted/piped test) has not been separately verified.
+
+0a. **[DONE 2026-08-28] Real AES core wired: FreeBSD rijndael, not
+    PureDarwin.** Filed 2026-08-21 as a hard prerequisite for Phase 7b
+    (`sshd`); closed by vendoring `sys/crypto/rijndael/` (public-domain,
+    Rijmen/Bosselaers/Barreto — the AES designers themselves, cleaner
+    than PureDarwin's mixed-license option scoped 2026-08-27 below and
+    never acted on) into `libkern/crypto/freebsd/rijndael-alg-fst.c`,
+    plus a new corecrypto-shaped adapter
+    (`libkern/crypto/corecrypto_aes_register.c`) implementing real
+    `ccmode_ecb`/`ccmode_cbc`/`ccmode_ctr` instances against it and
+    calling `register_crypto_functions()` with only the AES fields
+    filled (ecb/cbc/ctr encrypt+decrypt), everything else left NULL per
+    the incremental-fill plan below.
 
     `g_crypto_funcs` (`libkern/crypto/register_crypto.c`) is a table of
-    function pointers that real macOS's closed-source corecrypto kext fills
-    in via `register_crypto_functions()`. This kernel loads no kexts at all,
-    so **nothing ever calls it and the table stays NULL forever**. Every
-    consumer therefore faults as `NULL + <field offset>`. This has now bitten
-    four separate times, each rediscovered the hard way from a fault address:
+    function pointers real macOS's closed-source corecrypto kext fills in
+    via `register_crypto_functions()`; this kernel loads no kexts, so
+    nothing had ever called it before this. Bitten five separate times
+    now, each rediscovered the hard way from a fault address — the fifth
+    (`cc_rand_generate`) found and fixed *by this same AES work*, not a
+    surprise later:
 
-    | Caller | Offset | Field | Resolution so far |
+    | Caller | Offset | Field | Resolution |
     |---|---|---|---|
-    | `SHA256_Init` via `devfs_mount` | `0x30` | `ccsha256_di` | now real corecrypto, see item 0b |
-    | MD5 | `0x20` | `ccmd5_di` | from-scratch, bypasses the table |
+    | `SHA256_Init` via `devfs_mount` | `0x30` | `ccsha256_di` | real corecrypto, item 0b |
+    | MD5 | `0x20` | `ccmd5_di` | now real FreeBSD `md5c.c`, bypasses the table (see below) |
     | `read_random` | n/a | `cckprng` | falls back to `read_erandom()` |
-    | `tcp_init`→`tcp_tfo_init` | `0x78` | `ccaes_cbc_encrypt` | guarded; TCP Fast Open disabled |
+    | `tcp_init`→`tcp_tfo_init` | `0x78` | `ccaes_cbc_encrypt` | **now real** — TFO auto-enables |
+    | `cc_rand_generate` (`corecrypto_rand.c`) | n/a | `ccrng_fn` | **found by this work**, see below |
 
-    Every fix so far *routed around* the table rather than filling it, which
-    is exactly why it keeps recurring. To decode the next one: the offset is
-    the field index times 8 into `struct crypto_functions`
-    (`libkern/libkern/crypto/register_crypto.h:113`).
+    **Two real bugs found and fixed while wiring this up, neither
+    guessed — both from real QEMU panics:**
+    1. `register_crypto_functions()` writes `g_crypto_funcs`, a
+       `SECURITY_READ_ONLY_LATE` global — that section becomes
+       hardware-write-protected at `machine_lockdown()`
+       (`osfmk/kern/startup.c`). First attempt called the registration
+       function from `bsd_init()` (which runs well after lockdown) and
+       produced a real "Unexpected fault in kernel static region"
+       (ESR=0x9600004f, a write-permission fault) at boot. Fixed by
+       moving the call into `kernel_bootstrap_thread()`
+       (`osfmk/kern/startup.c`), immediately before `machine_lockdown()`
+       — the same place a real corecrypto kext's own registration would
+       need to land relative to lockdown.
+    2. Once AES was actually live, a *second*, unrelated real panic
+       appeared inside `necp_init()` — a NULL-function-pointer jump
+       (`Kernel instruction fetch abort at pc 0x0`). Root cause:
+       `corecrypto_rand.c`'s `cc_rand_generate()` guards on
+       `if (g_crypto_funcs)` only, then unconditionally calls
+       `g_crypto_funcs->ccrng_fn(...)` — a field this table intentionally
+       leaves NULL (no RNG registered here; `read_random()` has its own
+       separate `read_erandom()` fallback). That guard was written
+       assuming corecrypto's real all-or-nothing kext fill and had never
+       been exercised, because `g_crypto_funcs` had literally never been
+       non-NULL before in this project's history. Fixed with a
+       field-specific null check
+       (`g_crypto_funcs && g_crypto_funcs->ccrng_fn`), matching the
+       pattern `corecrypto_aes.c` already uses. **Root-caused via a real
+       A/B test**, not guessed: the exact same kernel with only the
+       registration call disabled booted cleanly past this point, proving
+       the crash was caused by AES becoming active, not a pre-existing
+       gap.
+    3. **Known, deliberately NOT fixed**: `corecrypto_des.c`,
+       `corecrypto_rsa.c`, `corecrypto_aesxts.c`,
+       `corecrypto_chacha20poly1305.c`, `bsd/nfs/gss/ccrypto.c`, and
+       `bsd/netinet/flow_divert.c` all dereference `g_crypto_funcs->`
+       fields with **no null check at all** (not even a bare
+       `if (g_crypto_funcs)`) — they assume real macOS's kext-filled,
+       all-fields-populated table. These are *not* reached by anything
+       exercised up through a full boot to login (QEMU-verified), so
+       they're the same latent-landmine risk they always were, not made
+       worse by this change — but whoever next touches DES/RSA/XTS/
+       ChaCha20-Poly1305/NFS-GSS/flow-divert should add a field-specific
+       guard (or fill the relevant field for real) *before* exercising
+       that code path, rather than rediscovering this exact class of bug
+       a sixth time.
 
-    **Current state is safe but featureless.** `aes_encrypt_key()` now
-    returns `aes_error` instead of dereferencing NULL, so further hits are a
-    log line rather than a panic. Nothing that needs AES works.
+    Context sizing: `libkern/libkern/crypto/aes.h`'s
+    `AES_CBC_CTX_MAX_SIZE` (a hardcoded ~280-byte budget baked into the
+    `aes_encrypt_ctx`/`aes_decrypt_ctx` typedefs used throughout the
+    kernel) comfortably fits the new adapter's per-direction context
+    (an `int` plus a 4×(Nr+1)-word key schedule, ≤244 bytes for AES-256)
+    — confirmed for real by the AES-256 case in the boot-time self-test
+    below, not just computed on paper.
 
-    **What Phase 7b actually requires**, and why it is not just "write AES":
-    - The AES block-cipher core (this is the part to take from an existing
-      implementation, see below).
-    - A corecrypto-shaped adapter: a `struct ccmode_cbc`
-      (`EXTERNAL_HEADERS/corecrypto/ccmode_impl.h:63` — only 5 fields:
-      `size`, `block_size`, `init`, `cbc`, `custom`) plus whatever other
-      modes are needed, and a boot-time `register_crypto_functions()` call.
-      No library provides this glue; it is project-specific either way.
-    - The table can be filled **incrementally** — register AES, leave the
-      rest NULL, and the guard above keeps unfilled slots non-fatal. The
-      existing from-scratch MD5 should be folded in at that point so
-      there is one mechanism rather than two (real SHA-256 already moved
-      off this table entirely, see item 0b).
+    **FIPS-197/SP 800-38A self-test at boot, not just KAT-in-a-vacuum**:
+    `xnu_rpi3_register_freebsd_aes()` runs AES-128/192/256 ECB
+    (FIPS-197 Appendix C.1–C.3) and AES-128 CBC/CTR (SP 800-38A Appendix
+    F.2.1/F.5.1) known-answer vectors through the real
+    `ccmode_ecb`/`ccmode_cbc`/`ccmode_ctr` interfaces — not the raw
+    cipher core directly — so a bug in the adapter glue fails loudly at
+    boot (`panic()`) exactly like a bug in the vendored core would,
+    before `register_crypto_functions()` is ever called.
 
-    **Do not hand-roll the AES core.** Confirmed 2026-08-21: `corecrypto` is
-    **not** in apple-oss-distributions (searched, zero repos), so this
-    project's "Apple's real source first" rule cannot be satisfied — the
-    documented fallback is FreeBSD, whose `sys/crypto/rijndael/` is
-    self-contained, already kernel-resident, and permissively licensed.
-    xnu-7195 itself ships **no** AES core (only the corecrypto dispatch
-    wrappers `corecrypto_aes.c`/`corecrypto_aesxts.c`, and
-    `bsd/netinet6/esp_rijndael.c` which is IPsec glue over the same
-    dispatch), so there is nothing in-tree to reuse.
+    ARMv8 Crypto Extensions (AESE/AESMC) on BCM2837's Cortex-A53:
+    believed absent, still not verified — irrelevant now since the
+    software core is real and working, not a blocker.
 
-    Risks to handle when doing it: verify against FIPS-197 known-answer
-    vectors (a subtly wrong AES silently produces valid-looking wrong
-    ciphertext — worse than none); table-based AES is cache-timing
-    vulnerable, acceptable here but worth recording; and check whether the
-    BCM2837's Cortex-A53 implements the optional ARMv8 Crypto Extensions
-    (AESE/AESMC) before assuming a hardware path exists — believed absent on
-    Pi 3, NOT verified.
-
-    **Update 2026-08-27: `PureDarwin/corecrypto` investigated as a source
-    for this, real findings, not yet acted on.** `src/kext/
-    register_crypto.h` in that repo is byte-for-byte the same
-    `struct crypto_functions` layout as this project's real
-    `libkern/libkern/crypto/register_crypto.h` (verified by hand against
-    every offset in the crash table above: `ccmd5_di`=0x20,
-    `ccsha256_di`=0x30, `ccaes_cbc_encrypt`=0x78, all match) — real
-    upstream precedent for the `register_crypto_functions()` adapter this
-    item needs either way. Its AES core (`src/algorithms/aes128.c`/
-    `aes_cbc.c`/`aes_ecb.c`) is a real, small, KAT-verified implementation
-    adapted from `kokke/tiny-AES128-C` (public domain) — but AES-128
-    ECB/CBC only, no CTR/AES-256/GCM/XTS, and real `sshd` (this item's
-    actual reason for existing) defaults to `aes128-ctr`/`aes256-ctr`, so
-    this alone would close the gate only partway. License provenance is
-    also genuinely messy: `LICENSE.md` claims Apache-2.0 (mbedTLS-based),
-    `README.md` says Botan + `rafirafi/pdcrypto`, the AES core's own
-    header credits `tiny-AES128-C` — three different stated lineages, not
-    a clean single license to adopt wholesale.
-
-    **Decided direction (2026-08-27)**: use PureDarwin's `corecrypto` for
-    now — its `register_crypto.h`-compatible interface/adapter shape in
-    particular — but treat it as an interim source, not a final one:
-    file a follow-up to revisit any part of it whose actual crypto logic
-    (as opposed to the interface/struct plumbing) has unclear or mixed
-    provenance, and prefer swapping just that logic for FreeBSD's
-    `sys/crypto/rijndael/` (already the documented, cleanly-licensed
-    fallback for the AES core specifically) where that's possible without
-    changing the corecrypto-shaped interface itself. In short: PureDarwin
-    for the adapter/struct shape (real, verified-matching ABI), FreeBSD
-    for the actual cipher body wherever the two can be kept separate.
-    Whoever picks this up should re-check this tradeoff before writing
-    code — it was not implemented this session, only scoped.
+    **PureDarwin/corecrypto (scoped 2026-08-27) was NOT used in the end.**
+    That investigation found real, verified-matching `struct
+    crypto_functions` ABI precedent but a mixed-license AES core
+    (`LICENSE.md` says Apache-2.0/mbedTLS, `README.md` says Botan +
+    `rafirafi/pdcrypto`, the code's own header credits `tiny-AES128-C` —
+    three different stated lineages) and AES-128-only coverage (no
+    CTR/AES-256). FreeBSD's `sys/crypto/rijndael/` turned out to need no
+    interface borrowing at all — it's just a block cipher core
+    (`rijndaelKeySetupEnc/Dec` + `rijndaelEncrypt/Decrypt`), and this
+    project's own `struct ccmode_ecb/cbc/ctr` adapter (project-specific
+    glue either way, per the original scoping above) covers ECB/CBC/CTR/
+    AES-128/192/256 cleanly under one public-domain license. Vendoring
+    details, pin, and per-file license notes: `setup_third_party.sh`'s
+    `freebsd-src` block.
 
 0b. **[DONE 2026-08-27] `ccsha256_di` wired to real corecrypto, replacing
     the from-scratch `corecrypto_sha2.c` for code-signing/exec hashing.**
@@ -780,14 +936,33 @@ d9. **`build_simple_cmds.sh` converted from fully-static to real dynamic
     directly (the real digest-core source was already sitting unused at
     `third_party/xnu-7195/osfmk/corecrypto/` and already compiled into
     the kernel binary for the PRNG's own use — only the SHA-256 call
-    sites hadn't been pointed at it). SHA-384/512 remain on the
-    from-scratch path (no real corecrypto body for those exists in this
-    project's `xnu-7195` checkout). QEMU-verified: real login, real
+    sites hadn't been pointed at it). QEMU-verified: real login, real
     shell, real `/bin/ls`/`md5` exec, no panic — commit `ceb6d419c` in
     the `xnu-7195` checkout. Full investigation (including a corrected
     finding that `register_crypto_functions()`/`g_crypto_funcs` was
     never actually the right mechanism for this call site) archived to
     `docs/historic/backlog.md`.
+
+    **[DONE 2026-08-28] SHA-384/512 and MD5 also off the from-scratch
+    path now**, alongside item 0a's AES work — no real corecrypto body
+    exists for either in this checkout (confirmed absent, only headers),
+    so per this project's Apple→FreeBSD→custom source priority: SHA-384/
+    512's compress core (the real K[80] table and round function, not
+    just constants copied by hand) is now FreeBSD's real 2-clause-BSD
+    `sys/crypto/sha2/sha512c.c` (vendored to
+    `libkern/crypto/freebsd/sha512_transform.c`, upstream's ARM64 ifunc
+    hardware-accel path dropped — dead code on Cortex-A53 either way);
+    `corecrypto_sha2.c` keeps its own buffering/padding wrapper since
+    that has to match this project's `SHA512_CTX`/`SHA384_CTX` layout,
+    not FreeBSD's differently-shaped one. MD5
+    (`libkern/crypto/corecrypto_md5.c`, deleted) is now FreeBSD's real
+    `sys/kern/md5c.c` (RSA Data Security's own 1991-2 reference
+    implementation) at `libkern/crypto/freebsd/md5c.c`, K&R-style
+    function definitions modernized to ANSI prototypes (mechanical,
+    same bodies) — this project's own `MD5_CTX` layout
+    (`state[4]`/`count[2]`/`buffer[64]`) is byte-identical to FreeBSD's,
+    no adapter needed. Both QEMU-verified as part of the same boot that
+    verified item 0a's AES work.
 
 0. **DWC2 transfer completion is polled, not interrupt-driven** (added
     2026-08-21 with `iokit/BCM2837DWC2/`). `docs/historic/usb-support-plan.md` task 2

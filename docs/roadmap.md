@@ -69,10 +69,10 @@ and exact files touched per command):
   `simple_cmds_libm_compat.c` — verification per consumer: `ping`
   QEMU-boot-tested with real stddev output; CF's trial link confirmed via
   `nm` that those 3 symbols no longer appear in its undefined-symbol gap
-  list; `df`'s `simple_cmds_libm_compat.c` replacement is compile-level
-  verified only — link-level verification is blocked by a pre-existing,
-  unrelated duplicate-symbol bug affecting all 76 `build_simple_cmds.sh`
-  commands (tracked separately, being fixed on its own). None of the 3
+  list; `df`'s `simple_cmds_libm_compat.c` replacement was initially
+  compile-level verified only, link-level verification blocked by the
+  ld64-609 bug below — now resolved (`docs/backlog.md` item d9), `df`
+  links and QEMU-boots cleanly. None of the 3
   old shim `.c` files were deleted (confirmed nothing else references
   them, except `build_libxml2.sh`'s own separate, untouched copy).
 
@@ -163,13 +163,18 @@ need a real implementation later:
   `tools/workq_kthread_test/` for the real, minimal, verified exercises
   of each path, and the Phase 7.5 entry below for the fuller design
   writeup.
-- **SHA-384/512 from-scratch, SHA-256 now real corecrypto** (2026-08-27:
-  `SHA256_Init`/`_Update`/`_Final` call the real, audited
-  `ccdigest_init`/`ccsha256_di()` core already compiled into this kernel;
-  SHA-384/512 stay from-scratch, real corecrypto bodies for those don't
-  exist in this checkout -- see `docs/backlog.md` P2 item 0b). Hashing/
-  integrity only either way; no AES/HMAC/RSA/ECDSA/DH/ECDH. Blocks real
-  `sshd` (Phase 7b) and `pkg`'s `libecc` signature verification (Phase 8).
+- **Real AES (FreeBSD rijndael) + real SHA-256 (corecrypto) + real
+  SHA-384/512/MD5 (FreeBSD)** (2026-08-28, `docs/backlog.md` item 0a/0b):
+  `g_crypto_funcs` now gets a real `register_crypto_functions()` call
+  (AES ecb/cbc/ctr only, boot-time FIPS-197/SP 800-38A self-test gates
+  it) -- `tcp_tfo_init`'s TCP Fast Open path now works for real instead
+  of degrading. `SHA256_Init`/`_Update`/`_Final` still call real
+  `ccdigest_init`/`ccsha256_di()`; SHA-384/512 and MD5 are no longer
+  from-scratch either, now FreeBSD's real compress core/reference impl
+  (corecrypto has no real body for either in this checkout). Still no
+  HMAC/RSA/ECDSA/DH/ECDH via this table. Was the blocker for real
+  `sshd` (Phase 7b); `pkg`'s `libecc` signature verification (Phase 8)
+  is a separate, still-open gap.
 - **`cerror_stub.c`** -- minimal errno/`cerror` stand-in used where real
   Apple `errno.c`'s TSD dependency wasn't available yet.
 - **Residual no-op `os_once`/`pthread_mutex_*` copies** in
@@ -880,14 +885,15 @@ need a real implementation later:
   `docs/daemon-roadmap.md`. Immediate actionable next step that needs
   none of this infrastructure: Phase 5.5 items 3-4 (`cron`/`ntpd`) above.
 - **Phase 7 (usable OS)**: none of 7a-7d started. 7a (DNS via `libresolv`)
-  is small and clean once Phase 6 lands. 7b (`sshd` via OpenSSH) is
-  blocked on real crypto beyond SHA-2 (Phase 7.5) -- concretely, on
-  **AES, which does not exist anywhere in this kernel**: `g_crypto_funcs`
-  is never populated (no kext ever loads) and xnu-7195 ships no AES core
-  of its own. Scoped as an explicit gate in `docs/backlog.md` P2 item 0a,
-  including why the core should come from FreeBSD's `sys/crypto/rijndael/`
-  rather than be hand-rolled (corecrypto is confirmed absent from
-  apple-oss-distributions, so the "Apple first" rule cannot apply). 7c (self-hosting
+  is small and clean once Phase 6 lands. 7b (`sshd` via OpenSSH)'s kernel
+  AES gate is now closed (2026-08-28, `docs/backlog.md` item 0a):
+  `g_crypto_funcs` gets a real `register_crypto_functions()` call with a
+  FreeBSD `sys/crypto/rijndael/`-backed ecb/cbc/ctr AES, boot-time
+  KAT-self-tested (corecrypto's own AES core is confirmed absent from
+  apple-oss-distributions, so the "Apple first" rule couldn't apply here
+  either way). Whether OpenSSH's own userland crypto needs anything
+  further from this kernel-side table (vs. bundling its own) is still
+  open. 7c (self-hosting
   toolchain) recommends Apple's old `gcc_42` over `clang` for feasibility,
   plus `cctools`. 7d (`vim`) is small and can fold into whichever of 7a-7c
   lands first.
