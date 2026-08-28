@@ -592,7 +592,15 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
 # this project's other tiers already take with e.g. libclosure/libmalloc
 # stand-ins -- confirmed no duplicate-symbol conflicts, zero of these
 # tier-1 sources define their own err/getopt).
-COMMON_EXTRA="$LIBC/gen/FreeBSD/err.c $LIBC/stdlib/FreeBSD/getopt.c simple_cmds_read_compat.c simple_cmds_getenv_compat.c"
+COMMON_EXTRA="$LIBC/gen/FreeBSD/err.c $LIBC/stdlib/FreeBSD/getopt.c simple_cmds_read_compat.c simple_cmds_getenv_compat.c libc_locale_globals_compat.c simple_cmds_libsystem_c_gap_compat.c cp_mv_syscalls.c"
+# cp_mv_syscalls.c promoted from a cp/mv-only CMD_LIST extra source to a
+# common object (2026-08-28): its real lchown()/setattrlist()/waitpid()
+# turned out to be needed by many more commands once the dynamic-link
+# conversion's own real per-command undefined-symbol sweep ran (chown/
+# chflags/chmod/find/tar/etc, not just cp/mv) -- same real syscalls
+# (#364/#221/real fork+wait4), just needed broadly now. cp/mv's own
+# CMD_LIST entries below no longer list cp_mv_syscalls.c as a per-command
+# extra (would otherwise duplicate-symbol against this common copy).
 for f in $COMMON_EXTRA; do
     base=$(basename "$f" .c)
     out="$OUT/simple_obj/common_${base}.o"
@@ -751,9 +759,7 @@ if [ ! -f "$OUT/simple_obj/statfs64_compat.o" ]; then
     "$CLANG" $CFLAGS simple_cmds_statfs64_compat.c -o "$OUT/simple_obj/statfs64_compat.o"
 fi
 
-LINK_COMMON="$OUT/libc_printf.a $OUT/libc_gen.a $OUT/libc_stdio.a $OUT/libc_locale_for_stdio.a $OUT/libc_gen.a $OUT/libc_stdio.a \
-    $OUT/pthread_tsd_shim_libc_bootstrap.o $OUT/libpthread.a $OUT/simple_sched_yield_trap.o $OUT/simple_sched_yield.o \
-    $OUT/simple_obj/sys____getlogin.o $OUT/simple_obj/sys____mmap.o $OUT/simple_obj/sys____munmap.o \
+LINK_COMMON="$OUT/simple_obj/sys____getlogin.o \
     $OUT/simple_obj/sys__kevent.o $OUT/simple_obj/sys__kqueue.o $OUT/simple_obj/sys__ftruncate.o \
     $OUT/simple_obj/sys__mkdir.o $OUT/simple_obj/sys__utimes.o $OUT/simple_obj/sys____chmod.o $OUT/simple_obj/sys__sigprocmask.o \
     $OUT/simple_obj/sys__fchmodat.o $OUT/simple_obj/sys__fstatat64.o $OUT/simple_obj/sys__mkdirat.o $OUT/simple_obj/sys__umask.o \
@@ -766,137 +772,62 @@ LINK_COMMON="$OUT/libc_printf.a $OUT/libc_gen.a $OUT/libc_stdio.a $OUT/libc_loca
     $OUT/simple_obj/sys__pathconf.o $OUT/simple_obj/sys__faccessat.o $OUT/simple_obj/sys__getentropy.o \
     $OUT/simple_obj/sys__dup2.o $OUT/simple_obj/sys__getpriority.o \
     $OUT/simple_obj/sys__chroot.o $OUT/simple_obj/sys__setgroups.o $OUT/simple_obj/sys__setgid.o $OUT/simple_obj/sys__setuid.o \
-    $OUT/simple_obj/sys__chdir.o $OUT/simple_obj/statfs64_compat.o \
-    $OUT/libclosure.a $OUT/libmalloc.a $OUT/cerror_stub.o $OUT/libplatform.a"
-LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
-    -Wl,-alias,_close,_close\$UNIX2003 \
-    -Wl,-alias,_write,_write\$UNIX2003 \
-    -Wl,-alias,___kill,_kill\$UNIX2003 \
-    -Wl,-alias,___kill,_kill \
-    -Wl,-alias,__mal_semwait_sleep,_sleep\$UNIX2003 \
-    -Wl,-alias,___kdebug_trace,_kdebug_trace \
-    -Wl,-alias,_fcntl,_fcntl\$UNIX2003 \
-    -Wl,-alias,_fstat,_fstat\$INODE64 \
-    -Wl,-alias,_lstat,_lstat\$INODE64 \
-    -Wl,-alias,_stat,_stat\$INODE64 \
-    -Wl,-alias,_poll,_poll\$UNIX2003 \
-    -Wl,-alias,__err,_err \
-    -Wl,-alias,__warn,_warn \
-    -Wl,-alias,_fputs,_fputs\$UNIX2003 \
-    -Wl,-alias,_mprotect,_mprotect\$UNIX2003 \
-    -Wl,-alias,_pthread_rwlock_rdlock\$UNIX2003,_pthread_rwlock_rdlock \
-    -Wl,-alias,_pthread_rwlock_unlock\$UNIX2003,_pthread_rwlock_unlock \
-    -Wl,-alias,_getopt\$UNIX2003,_getopt \
-    -Wl,-alias,_strerror,_strerror\$UNIX2003 \
-    -Wl,-alias,_fwrite,_fwrite\$UNIX2003 \
-    -Wl,-alias,_strtod,_strtod\$UNIX2003 \
-    -Wl,-alias,_fdopen,_fdopen\$UNIX2003 \
-    -Wl,-alias,_read,_read\$UNIX2003 \
-    -Wl,-alias,_connect,_connect\$UNIX2003 \
-    -Wl,-alias,_fstatfs,_fstatfs\$INODE64 \
-    -Wl,-alias,_fopen,_fopen\$UNIX2003 \
-    -Wl,-alias,__flockfile,_flockfile \
-    -Wl,-alias,__funlockfile,_funlockfile \
-    -Wl,-alias,_mmap,_mmap\$UNIX2003 \
-    -Wl,-alias,_munmap,_munmap\$UNIX2003 \
-    -Wl,-alias,_pthread_rwlock_rdlock\$UNIX2003,__pthread_rwlock_rdlock \
-    -Wl,-alias,_pthread_rwlock_wrlock\$UNIX2003,__pthread_rwlock_wrlock \
-    -Wl,-alias,_pthread_rwlock_unlock\$UNIX2003,__pthread_rwlock_unlock \
-    -Wl,-alias,_strchr,_index \
-    -Wl,-alias,_fstatat64,_fstatat\$INODE64 \
-    -Wl,-alias,_closedir,_closedir\$UNIX2003 \
-    -Wl,-alias,_opendir,_opendir\$INODE64\$UNIX2003 \
-    -Wl,-alias,_readdir,_readdir\$INODE64 \
-    -Wl,-alias,_readdir_r,_readdir_r\$INODE64 \
-    -Wl,-alias,_fdopendir,_fdopendir\$INODE64\$UNIX2003 \
-    -Wl,-alias,_fsync,_fsync\$UNIX2003 \
-    -Wl,-alias,_reallocarray,_reallocarray\$DARWIN_EXTSN \
-    -Wl,-alias,_nanosleep,_nanosleep\$UNIX2003 \
-    -Wl,-alias,_fchmod,_fchmod\$UNIX2003 \
-    -Wl,-alias,_lchown,_lchown\$UNIX2003 \
-    -Wl,-alias,_getattrlist,_getattrlist\$UNIX2003 \
-    -Wl,-alias,_setattrlist,_setattrlist\$UNIX2003 \
-    -Wl,-alias,_pread,_pread\$UNIX2003 \
-    -Wl,-alias,_pwrite,_pwrite\$UNIX2003 \
-    -Wl,-alias,_statfs,_statfs\$INODE64 \
-    -Wl,-alias,_getfsstat,_getfsstat\$INODE64 \
-    -Wl,-alias,_waitpid,_waitpid\$UNIX2003 \
-    -Wl,-alias,_confstr,_confstr\$UNIX2003 \
-    -Wl,-alias,_pthread_testcancel,_pthread_testcancel\$UNIX2003 \
-    -Wl,-alias,_sigsuspend,_sigsuspend\$UNIX2003 \
-    -Wl,-alias,_regcomp,_regcomp\$UNIX2003 \
-    -Wl,-alias,_getrlimit,_getrlimit\$UNIX2003 \
-    -Wl,-alias,___pipe,_pipe \
-    -Wl,-alias,_send,_send\$UNIX2003 \
-    -Wl,-alias,_writev,_writev\$UNIX2003"
-
-# tar(1)-only variant, real ld64-609 crash workaround -- root-caused via
-# a real binary search over LINK_ALIASES against tar's actual ~140-object
-# link (its own real relink harness, not guessed): passing the FULL
-# shared LINK_ALIASES list (60 entries, several with a genuinely
-# undefined base symbol -- e.g. `-alias ___pipe _pipe`, where nothing in
-# this project ever generates a `___pipe` symbol; ed_pipe_trap.o defines
-# plain `_pipe` directly instead) triggers a real, reproducible ld64-609
-# (Xcode 12's linker) internal crash in generateLinkEditInfo ("Assertion
-# failed: (target != NULL)") once tar's object count is combined with
-# enough simultaneously-undefined alias bases. Every smaller command
-# tolerates the same undefined-base aliases fine (a plain warning,
-# ld64-609 only crashes past some real but unidentified combined
-# threshold this project has never hit before tar) -- confirmed via
-# bisection that no SINGLE alias entry is independently "the" bad one;
-# it's cumulative. The real fix is a tar-specific alias list containing
-# ONLY the aliases tar's own real object set actually references as
-# undefined (computed once, by a real link attempt with zero aliases and
-# reading its own undefined-symbol list -- not guessed) -- every alias
-# below has a real, confirmed consumer in tar.macho's own real link
-# inputs. `___pipe`'s alias is correctly absent (tar gets `pipe()` via
-# tar_pipe_compat.c's own direct forwarding to the real `___pipe` raw
-# syscall symbol instead, see that file's own header) and
-# `_pthread_testcancel`'s missing alias direction is resolved by a real
-# no-op definition (tar_pthread_testcancel_compat.c) rather than an
-# alias at all (same real gap/fix apply(1)/bash(1)/ps(1) each
-# independently already hit, see that file's own header).
-LINK_ALIASES_TAR="-Wl,-alias,_open,_open\$UNIX2003 \
-    -Wl,-alias,_close,_close\$UNIX2003 \
-    -Wl,-alias,_write,_write\$UNIX2003 \
-    -Wl,-alias,___kill,_kill\$UNIX2003 \
-    -Wl,-alias,___kill,_kill \
-    -Wl,-alias,__mal_semwait_sleep,_sleep\$UNIX2003 \
-    -Wl,-alias,___kdebug_trace,_kdebug_trace \
-    -Wl,-alias,_fcntl,_fcntl\$UNIX2003 \
-    -Wl,-alias,_fstat,_fstat\$INODE64 \
-    -Wl,-alias,_lstat,_lstat\$INODE64 \
-    -Wl,-alias,_stat,_stat\$INODE64 \
-    -Wl,-alias,_poll,_poll\$UNIX2003 \
-    -Wl,-alias,_fputs,_fputs\$UNIX2003 \
-    -Wl,-alias,_mprotect,_mprotect\$UNIX2003 \
-    -Wl,-alias,_pthread_rwlock_rdlock\$UNIX2003,_pthread_rwlock_rdlock \
-    -Wl,-alias,_pthread_rwlock_unlock\$UNIX2003,_pthread_rwlock_unlock \
-    -Wl,-alias,_strerror,_strerror\$UNIX2003 \
-    -Wl,-alias,_fwrite,_fwrite\$UNIX2003 \
-    -Wl,-alias,_read,_read\$UNIX2003 \
-    -Wl,-alias,_fstatfs,_fstatfs\$INODE64 \
-    -Wl,-alias,_fopen,_fopen\$UNIX2003 \
-    -Wl,-alias,_pthread_rwlock_rdlock\$UNIX2003,__pthread_rwlock_rdlock \
-    -Wl,-alias,_pthread_rwlock_wrlock\$UNIX2003,__pthread_rwlock_wrlock \
-    -Wl,-alias,_pthread_rwlock_unlock\$UNIX2003,__pthread_rwlock_unlock \
-    -Wl,-alias,_strchr,_index \
-    -Wl,-alias,_fstatat64,_fstatat\$INODE64 \
-    -Wl,-alias,_closedir,_closedir\$UNIX2003 \
-    -Wl,-alias,_opendir,_opendir\$INODE64\$UNIX2003 \
-    -Wl,-alias,_readdir,_readdir\$INODE64 \
-    -Wl,-alias,_readdir_r,_readdir_r\$INODE64 \
-    -Wl,-alias,_fdopendir,_fdopendir\$INODE64\$UNIX2003 \
-    -Wl,-alias,_reallocarray,_reallocarray\$DARWIN_EXTSN \
-    -Wl,-alias,_fchmod,_fchmod\$UNIX2003 \
-    -Wl,-alias,_lchown,_lchown\$UNIX2003 \
-    -Wl,-alias,_getattrlist,_getattrlist\$UNIX2003 \
-    -Wl,-alias,_setattrlist,_setattrlist\$UNIX2003 \
-    -Wl,-alias,_pread,_pread\$UNIX2003 \
-    -Wl,-alias,_pwrite,_pwrite\$UNIX2003 \
-    -Wl,-alias,_statfs,_statfs\$INODE64 \
-    -Wl,-alias,_waitpid,_waitpid\$UNIX2003 \
-    -Wl,-alias,_regcomp,_regcomp\$UNIX2003"
+    $OUT/simple_obj/sys__chdir.o $OUT/simple_obj/statfs64_compat.o"
+# REAL ARCHITECTURE CHANGE 2026-08-28: this file used to link every
+# command fully static against this project's own libc_printf.a/
+# libc_gen.a/libc_stdio.a/libc_locale_for_stdio.a/libpthread.a/
+# libclosure.a/libmalloc.a/libplatform.a/cerror_stub.o, plus a ~60-entry
+# -Wl,-alias workaround for ld64-609's real internal crash (Assertion
+# failed: (target != NULL) in generateLinkEditInfo -- see git history
+# around 2026-08-27 for the full saga this replaces: LINK_ALIASES/
+# LINK_ALIASES_TAR/LINK_ALIASES_ERRWARN/_STDIO_EXTRA/_REGEX/_CPMV/_ATTR/
+# _SIGSUSPEND/_SOCKET/_GETRLIMIT/_PIPE, one alias block per real
+# UNIX2003/INODE64/DARWIN_EXTSN symbol-versioning gap that static linking
+# forced this project to synthesize by hand). Now that real dyld-940
+# boots and libSystem.B.dylib is real (Phase 6.5/6.7), that entire
+# archive+alias stack is obsolete: libSystem.B.dylib already reexports
+# real libsystem_c.dylib/libsystem_pthread.dylib/libsystem_malloc.dylib/
+# libsystem_platform.dylib/libsystem_blocks.dylib (covering everything
+# libc_printf.a/libc_gen.a/libc_stdio.a/libc_locale_for_stdio.a/
+# libc_regex.a/libpthread.a/libclosure.a/libmalloc.a/libplatform.a used
+# to provide -- confirmed via nm -gU on each dylib, not guessed) and
+# already bakes in the exact same UNIX2003/INODE64/DARWIN_EXTSN alias set
+# directly into its own build (build_libsystem.sh's own tail) -- clients
+# linking against it need zero alias flags of their own, matching real
+# Apple's own architecture instead of working around this project's
+# former lack of one. Only the project's own real, hand-written BSD
+# syscall wrapper objects above survive unchanged: libsystem_kernel.dylib
+# turns out to be a narrow, Mach/VM-bootstrap-focused port (Phase 6.5
+# step 1), NOT a full syscalls.master surface -- confirmed via nm -gU
+# that every one of these real syscalls is genuinely absent from it, so
+# this project's own separate, already-complete raw-syscall port here is
+# still the only real provider of each. sys____mmap.o/sys____munmap.o
+# and the mmap-wrapping common_mmap_compat.o were dropped from this list
+# (unlike the syscalls above) because libSystem.B.dylib itself already
+# exports plain _mmap/_munmap via its own real alias over
+# libsystem_kernel.dylib's real mmap syscall -- keeping this project's
+# own copies alongside would just be a redundant, divergent
+# implementation of something now real upstream.
+LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libdyld.dylib $OUT/system/libSystem.B.dylib"
+# libsystem_malloc.dylib: real per-command need for the private
+# ___pthread_setspecific/___pthread_getspecific/___pthread_once variants
+# (one leading underscore in C source) real libmalloc's own per-thread
+# zone-cache TSD path exports -- confirmed via nm -gU as the only real
+# provider, same "must link every sub-dylib a real symbol is genuinely
+# local to, transitive reexport-only doesn't resolve" finding as
+# libsystem_pthread.dylib/libsystem_c.dylib above.
+# libsystem_pthread.dylib must be linked directly, not just transitively
+# via libSystem.B.dylib's own -reexport_library -- ld64 cannot resolve a
+# two-level-namespace reexport chain through a dylib whose
+# LC_REEXPORT_DYLIB install-name path (/usr/lib/system/
+# libsystem_pthread.dylib) doesn't exist at that exact path on this
+# build host (only a real target boot image has it there); giving ld64
+# the real local .dylib file directly on the command line sidesteps that
+# (confirmed via a real prototype trial link + real QEMU boot test,
+# 2026-08-28, not guessed -- every one of these 76 commands needs
+# generic_main_wrapper.c's real pthread_main_thread_bootstrap() call,
+# which is why this dylib is in the always-linked common set rather than
+# scoped like libm.a/libmach_ipc.a below).
 
 # Bash array, one element per command: "name:srcfile:extra1|extra2|..."
 # (srcfile is the FULL real source path -- not just relative to
@@ -949,8 +880,8 @@ CMD_LIST=(
     # and real Libc/gen/get_compat.c (both cp.c/utils.c/mv.c compile
     # __APPLE__'s real get_compat.h path, not the non-Apple COMPAT_MODE=1
     # macro fallback -- confirmed by reading the #ifdef, not assumed).
-    "cp:$FILE_CMDS/cp/cp.c:$FILE_CMDS/cp/utils.c|$LIBC/gen/get_compat.c|$LIBC/emulated/lchmod.c|$LIBC/emulated/lchflags.c|$LIBC/gen/FreeBSD/signal.c|cp_mv_syscalls.c|simple_cmds_rpmatch_compat.c|simple_cmds_lutimes_compat.c|$XNU/libsyscall/wrappers/clonefile.c|$XNU/libsyscall/wrappers/unix03/chmod.c"
-    "mv:$FILE_CMDS/mv/mv.c:$LIBC/gen/get_compat.c|cp_mv_syscalls.c|simple_cmds_rpmatch_compat.c|$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|mv_pwcache_compat.c|../libinfo_custom/libinfo_custom.c|$XNU/libsyscall/wrappers/unix03/chmod.c"
+    "cp:$FILE_CMDS/cp/cp.c:$FILE_CMDS/cp/utils.c|$LIBC/gen/get_compat.c|$LIBC/emulated/lchmod.c|$LIBC/emulated/lchflags.c|$LIBC/gen/FreeBSD/signal.c|simple_cmds_rpmatch_compat.c|simple_cmds_lutimes_compat.c|$XNU/libsyscall/wrappers/clonefile.c|$XNU/libsyscall/wrappers/unix03/chmod.c"
+    "mv:$FILE_CMDS/mv/mv.c:$LIBC/gen/get_compat.c|simple_cmds_rpmatch_compat.c|$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|mv_pwcache_compat.c|../libinfo_custom/libinfo_custom.c|$XNU/libsyscall/wrappers/unix03/chmod.c"
     # Block 2 (docs/roadmap.md Phase 4 step 3 "remaining commands" sweep):
     # nine pure-stdio text_cmds (zero new syscalls -- just real getopt/
     # err/warn, all already linked) plus four file_cmds reusing the raw
@@ -972,7 +903,7 @@ CMD_LIST=(
     "rmdir:$FILE_CMDS/rmdir/rmdir.c:"
     "mkfifo:$FILE_CMDS/mkfifo/mkfifo.c:$LIBC/gen/get_compat.c|$LIBC/gen/FreeBSD/setmode.c|simple_cmds_sigprocmask_compat.c"
     "mknod:$FILE_CMDS/mknod/mknod.c:$LIBC/stdlib/FreeBSD/bsearch.c|$LIBC/stdlib/FreeBSD/strtoul.c"
-    "chflags:$FILE_CMDS/chflags/chflags.c:$LIBC/gen/strtofflags.c|$LIBC/emulated/lchflags.c|cp_mv_syscalls.c"
+    "chflags:$FILE_CMDS/chflags/chflags.c:$LIBC/gen/strtofflags.c|$LIBC/emulated/lchflags.c"
     # Block 3: seven shell_cmds (seq/jot/test/kill/tee/mktemp/hexdump) plus
     # four file_cmds (stat/cksum/pathchk/du) -- all real-source-confirmed
     # regex/ACL/mmap/Mach-IPC-free (grepped first, not guessed). mktemp
@@ -987,7 +918,7 @@ CMD_LIST=(
     "jot:$SHELL_CMDS/jot/jot.c:$LIBC/stdlib/FreeBSD/random.c|$LIBC/gen/FreeBSD/arc4random.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/sys/gettimeofday.c|ps_commpage_gettimeofday_stub.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c"
     "test:$SHELL_CMDS/test/test.c:"
     "kill:$SHELL_CMDS/kill/kill.c:$LIBC/gen/FreeBSD/siglist.c"
-    "tee:$SHELL_CMDS/tee/tee.c:$LIBC/gen/FreeBSD/signal.c|cp_mv_syscalls.c"
+    "tee:$SHELL_CMDS/tee/tee.c:$LIBC/gen/FreeBSD/signal.c"
     "mktemp:$SHELL_CMDS/mktemp/mktemp.c:$LIBC/stdio/FreeBSD/mktemp.c|$LIBC/gen/FreeBSD/arc4random.c|block3_last_resort_compat.c"
     "hexdump:$SHELL_CMDS/hexdump/hexdump.c:$SHELL_CMDS/hexdump/hexsyntax.c|$SHELL_CMDS/hexdump/conv.c|$SHELL_CMDS/hexdump/display.c|$SHELL_CMDS/hexdump/parse.c|$SHELL_CMDS/hexdump/odsyntax.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/stdlib/FreeBSD/strtoul.c|$LIBC/stdio/FreeBSD/freopen.c|$LIBC/stdio/FreeBSD/_flock_stub.c|hexdump_bcmp_compat.c"
     "stat:$FILE_CMDS/stat/stat.c:$LIBC/gen/strtofflags.c|ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c|simple_cmds_time_compat.c|$LIBC/sys/gettimeofday.c|ps_commpage_gettimeofday_stub.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c"
@@ -1029,17 +960,17 @@ CMD_LIST=(
     # into libcopyfile.a back in the cp/mv pass (copyfile's own real
     # ACL-copy path needed it) and confirmed present via nm before
     # attempting this, not assumed.
-    "chmod:$FILE_CMDS/chmod/chmod.c:$FILE_CMDS/chmod/chmod_acl.c|$LIBC/gen/FreeBSD/setmode.c|$LIBC/gen/get_compat.c|$XNU/libsyscall/wrappers/unix03/chmod.c|$LIBC/emulated/lchmod.c|cp_mv_syscalls.c|simple_cmds_sigprocmask_compat.c|chmod_mbr_compat.c"
-    "chown:$FILE_CMDS/chown/chown.c:$LIBC/gen/get_compat.c|ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c|simple_cmds_getgrouplist_compat.c|cp_mv_syscalls.c|$LIBC/stdlib/FreeBSD/strtoul.c"
+    "chmod:$FILE_CMDS/chmod/chmod.c:$FILE_CMDS/chmod/chmod_acl.c|$LIBC/gen/FreeBSD/setmode.c|$LIBC/gen/get_compat.c|$XNU/libsyscall/wrappers/unix03/chmod.c|$LIBC/emulated/lchmod.c|simple_cmds_sigprocmask_compat.c|chmod_mbr_compat.c"
+    "chown:$FILE_CMDS/chown/chown.c:$LIBC/gen/get_compat.c|ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c|simple_cmds_getgrouplist_compat.c|$LIBC/stdlib/FreeBSD/strtoul.c"
     # Block 5: nice/renice/nohup. df (needs real sysctl(2), a variable-
     # length-MIB syscall this project has never built) and install (needs
     # posix_spawn -- a whole unbuilt subsystem, its own real strip(1)
     # subprocess helper) were surveyed and deliberately deferred, real
     # complexity confirmed by reading xinstall.c/df.c directly, not
     # guessed -- both more involved than fits this pass.
-    "nice:$SHELL_CMDS/nice/nice.c:$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|cp_mv_syscalls.c|$LIBC/stdlib/FreeBSD/atoi.c"
-    "renice:$SHELL_CMDS/renice/renice.c:ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c|cp_mv_syscalls.c"
-    "nohup:$SHELL_CMDS/nohup/nohup.c:$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|$LIBC/gen/FreeBSD/signal.c|cp_mv_syscalls.c|nohup_vproc_compat.c"
+    "nice:$SHELL_CMDS/nice/nice.c:$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|$LIBC/stdlib/FreeBSD/atoi.c"
+    "renice:$SHELL_CMDS/renice/renice.c:ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c"
+    "nohup:$SHELL_CMDS/nohup/nohup.c:$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|$LIBC/gen/FreeBSD/signal.c|nohup_vproc_compat.c"
     # Block 6: chroot/apply (shell_cmds) and vis/unvis (text_cmds -- real
     # commands wrapping the real Libc/gen/FreeBSD/vis.c+unvis.c encode/
     # decode logic). sort hits TWO of this sweep's documented ceilings
@@ -1050,7 +981,7 @@ CMD_LIST=(
     # from-scratch SHA-2 (a different, narrower, non-CommonCrypto-shaped
     # API) -- both surveyed and deliberately skipped, not overlooked.
     "chroot:$SHELL_CMDS/chroot/chroot.c:ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c|$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c"
-    "apply:$SHELL_CMDS/apply/apply.c:$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|$LIBC/gen/FreeBSD/signal.c|cp_mv_syscalls.c|$LIBC/compat-43/sigcompat.c|apply_sigsuspend_compat.c"
+    "apply:$SHELL_CMDS/apply/apply.c:$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|$LIBC/gen/FreeBSD/signal.c|$LIBC/compat-43/sigcompat.c|apply_sigsuspend_compat.c"
     "vis:$TEXT_CMDS/vis/vis.c:$TEXT_CMDS/vis/foldit.c|$LIBC/gen/FreeBSD/vis.c|$LIBC/stdlib/FreeBSD/atoi.c"
     "unvis:$TEXT_CMDS/unvis/unvis.c:$LIBC/gen/FreeBSD/unvis.c"
     # Block 7 (docs/roadmap.md Phase 4.6 "grep/sed/nl/xargs/ed" sweep,
@@ -1095,7 +1026,7 @@ CMD_LIST=(
     # is needed only for -p's real y/n confirmation prompt
     # (regcomp(nl_langinfo(YESEXPR))), not xargs' main argument-batching
     # logic, which has no regex in it at all.
-    "xargs:$SHELL_CMDS/xargs/xargs.c:$SHELL_CMDS/xargs/strnsubst.c|$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|$LIBC/stdlib/FreeBSD/strtoul.c|$LIBC/stdlib/FreeBSD/strtonum.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/gen/get_compat.c|cp_mv_syscalls.c|xargs_getrlimit_compat.c|$OUT/freebsd_extra/strstr.c"
+    "xargs:$SHELL_CMDS/xargs/xargs.c:$SHELL_CMDS/xargs/strnsubst.c|$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|$LIBC/stdlib/FreeBSD/strtoul.c|$LIBC/stdlib/FreeBSD/strtonum.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/gen/get_compat.c|xargs_getrlimit_compat.c|$OUT/freebsd_extra/strstr.c"
     # ed: real, unmodified main.c/buf.c/cbc.c/glbl.c/io.c/re.c/sub.c/
     # undo.c. Built WITHOUT -DDES (real, upstream-supported build
     # variant -- cbc.c's own #ifdef DES guards every actual DES/
@@ -1116,7 +1047,7 @@ CMD_LIST=(
     # generation step above, real Apple asm). mkstemp (buf.c's real
     # temp-file-backed edit buffer) reuses mktemp's real
     # Libc/stdio/FreeBSD/mktemp.c.
-    "ed:$TEXT_CMDS/ed/main.c:$TEXT_CMDS/ed/buf.c|$TEXT_CMDS/ed/cbc.c|$TEXT_CMDS/ed/glbl.c|$TEXT_CMDS/ed/io.c|$TEXT_CMDS/ed/re.c|$TEXT_CMDS/ed/sub.c|$TEXT_CMDS/ed/undo.c|ed_setjmp_compat.c|ed_popen_system_compat.c|$LIBC/stdio/FreeBSD/mktemp.c|$LIBC/gen/FreeBSD/arc4random.c|$LIBC/gen/get_compat.c|$LIBC/gen/FreeBSD/signal.c|cp_mv_syscalls.c"
+    "ed:$TEXT_CMDS/ed/main.c:$TEXT_CMDS/ed/buf.c|$TEXT_CMDS/ed/cbc.c|$TEXT_CMDS/ed/glbl.c|$TEXT_CMDS/ed/io.c|$TEXT_CMDS/ed/re.c|$TEXT_CMDS/ed/sub.c|$TEXT_CMDS/ed/undo.c|ed_setjmp_compat.c|ed_popen_system_compat.c|$LIBC/stdio/FreeBSD/mktemp.c|$LIBC/gen/FreeBSD/arc4random.c|$LIBC/gen/get_compat.c|$LIBC/gen/FreeBSD/signal.c"
     # find: docs/roadmap.md Tier A #2. Real, unmodified find.c/function.c/
     # main.c/misc.c/operator.c/option.c PLUS find's own ls.c (not
     # file_cmds/ls/ls.c -- a separate, much smaller real source file in
@@ -1137,7 +1068,7 @@ CMD_LIST=(
     # Real fork()/execvp()/waitpid() for -exec/-execdir (cp_mv_syscalls.c/
     # exec.c/simple_cmds_execve_compat.c, same real primitives xargs's
     # own -exec-like child-process path already proved).
-    "find:$SHELL_CMDS/find/main.c:$SHELL_CMDS/find/find.c|$SHELL_CMDS/find/function.c|$SHELL_CMDS/find/misc.c|$SHELL_CMDS/find/operator.c|$SHELL_CMDS/find/option.c|$SHELL_CMDS/find/ls.c|$OUT/find_gen/getdate.c|$LIBC/gen/get_compat.c|du_fnmatch_libc_wrapper.c|$LIBC/gen/strtofflags.c|mv_pwcache_compat.c|../libinfo_custom/libinfo_custom.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c|$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|cp_mv_syscalls.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/stdlib/FreeBSD/bsearch.c|$LIBC/stdlib/FreeBSD/strtoq.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/gen/FreeBSD/setmode.c|$LIBC/emulated/lchflags.c|simple_cmds_sigprocmask_compat.c"
+    "find:$SHELL_CMDS/find/main.c:$SHELL_CMDS/find/find.c|$SHELL_CMDS/find/function.c|$SHELL_CMDS/find/misc.c|$SHELL_CMDS/find/operator.c|$SHELL_CMDS/find/option.c|$SHELL_CMDS/find/ls.c|$OUT/find_gen/getdate.c|$LIBC/gen/get_compat.c|du_fnmatch_libc_wrapper.c|$LIBC/gen/strtofflags.c|mv_pwcache_compat.c|../libinfo_custom/libinfo_custom.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c|$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/stdlib/FreeBSD/bsearch.c|$LIBC/stdlib/FreeBSD/strtoq.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/gen/FreeBSD/setmode.c|$LIBC/emulated/lchflags.c|simple_cmds_sigprocmask_compat.c"
     # date: docs/roadmap.md Tier A #3. Real, unmodified date.c/vary.c.
     # netdate.c deliberately NOT compiled -- its one entry point
     # (netsettime(), the legacy `timed`-protocol UDP broadcast only
@@ -1177,7 +1108,7 @@ CMD_LIST=(
     # zuncompress.c/unpack.c are both real, self-contained, external-
     # dependency-free BSD source already sitting right next to gzip.c,
     # genuinely free real functionality, not scope creep.
-    "gzip:$FILE_CMDS/gzip/gzip.c:$LIBC/gen/get_compat.c|gz_deflate_impl.c|gz_crc32_compat.c|gz_futimens_compat.c|$XNU/libsyscall/wrappers/unix03/chmod.c|$LIBC/stdlib/FreeBSD/getopt_long.c|$LIBC/gen/FreeBSD/signal.c|cp_mv_syscalls.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c"
+    "gzip:$FILE_CMDS/gzip/gzip.c:$LIBC/gen/get_compat.c|gz_deflate_impl.c|gz_crc32_compat.c|gz_futimens_compat.c|$XNU/libsyscall/wrappers/unix03/chmod.c|$LIBC/stdlib/FreeBSD/getopt_long.c|$LIBC/gen/FreeBSD/signal.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c"
     # compress: docs/roadmap.md Tier A #4's other half. Real, unmodified
     # compress.c/zopen.c -- a real, self-contained classic LZW codec,
     # zero zlib/deflate dependency at all (genuinely separate from
@@ -1247,9 +1178,9 @@ CMD_LIST=(
     # actual LINK_COMMON was not verified, and ASCII-range -I/--ignore-
     # matching-lines matching, the feature this pass actually verifies,
     # doesn't need it).
-    "diff:$GNUDIFF/src/diff.c:$GNUDIFF/src/analyze.c|$GNUDIFF/src/context.c|$GNUDIFF/src/dir.c|$GNUDIFF/src/ed.c|$GNUDIFF/src/ifdef.c|$GNUDIFF/src/io.c|$GNUDIFF/src/normal.c|$GNUDIFF/src/side.c|$GNUDIFF/src/util.c|$GNUDIFF/src/version.c|$GNUDIFF/lib/basename.c|$GNUDIFF/lib/c-stack.c|$GNUDIFF/lib/cmpbuf.c|$GNUDIFF/lib/error.c|$GNUDIFF/lib/exclude.c|$GNUDIFF/lib/exitfail.c|$GNUDIFF/lib/freesoft.c|$GNUDIFF/lib/hard-locale.c|$GNUDIFF/lib/imaxtostr.c|$GNUDIFF/lib/offtostr.c|$GNUDIFF/lib/posixver.c|$GNUDIFF/lib/prepargs.c|$GNUDIFF/lib/quotesys.c|$GNUDIFF/lib/regex.c|$GNUDIFF/lib/setmode.c|$GNUDIFF/lib/strftime.c|$GNUDIFF/lib/umaxtostr.c|$GNUDIFF/lib/xmalloc.c|$GNUDIFF/lib/xstrtoumax.c|$LIBC/stdlib/FreeBSD/getopt_long.c|du_fnmatch_libc_wrapper.c|$LIBC/compat-43/sigaltstk.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/stdlib/FreeBSD/strtoull.c|$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|cp_mv_syscalls.c|ed_setjmp_compat.c|$LIBC/stdlib/FreeBSD/qsort.c|$LIBC/gen/FreeBSD/signal.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/timelocal.c|$OUT/freebsd_extra/flsl.c|$LIBC/stdlib/FreeBSD/heapsort.c|$LIBC/sys/gettimeofday.c|ps_commpage_gettimeofday_stub.c|$OUT/gnudiff_glue/libc_real_strftime.c"
-    "tar:$LIBARCHIVE_TAR/bsdtar.c:$LIBARCHIVE/archive_acl.c|$LIBARCHIVE/archive_check_magic.c|$LIBARCHIVE/archive_cmdline.c|$LIBARCHIVE/archive_disk_acl_darwin.c|$LIBARCHIVE/archive_entry_copy_stat.c|$LIBARCHIVE/archive_entry_link_resolver.c|$LIBARCHIVE/archive_entry_sparse.c|$LIBARCHIVE/archive_entry_stat.c|$LIBARCHIVE/archive_entry_strmode.c|$LIBARCHIVE/archive_entry_xattr.c|$LIBARCHIVE/archive_entry.c|$LIBARCHIVE/archive_getdate.c|$LIBARCHIVE/archive_match.c|$LIBARCHIVE/archive_options.c|$LIBARCHIVE/archive_pack_dev.c|$LIBARCHIVE/archive_pathmatch.c|$LIBARCHIVE/archive_ppmd7.c|$LIBARCHIVE/archive_random.c|$LIBARCHIVE/archive_rb.c|$LIBARCHIVE/archive_read_add_passphrase.c|$LIBARCHIVE/archive_read_append_filter.c|$LIBARCHIVE/archive_read_data_into_fd.c|$LIBARCHIVE/archive_read_disk_entry_from_file.c|$LIBARCHIVE/archive_read_disk_posix.c|$LIBARCHIVE/archive_read_disk_set_standard_lookup.c|$LIBARCHIVE/archive_read_extract.c|$LIBARCHIVE/archive_read_extract2.c|$LIBARCHIVE/archive_read_open_fd.c|$LIBARCHIVE/archive_read_open_file.c|$LIBARCHIVE/archive_read_open_filename.c|$LIBARCHIVE/archive_read_open_memory.c|$LIBARCHIVE/archive_read_set_format.c|$LIBARCHIVE/archive_read_set_options.c|$LIBARCHIVE/archive_read_support_filter_all.c|$LIBARCHIVE/archive_read_support_filter_bzip2.c|$LIBARCHIVE/archive_read_support_filter_compress.c|$LIBARCHIVE/archive_read_support_filter_grzip.c|$LIBARCHIVE/archive_read_support_filter_gzip.c|$LIBARCHIVE/archive_read_support_filter_lrzip.c|$LIBARCHIVE/archive_read_support_filter_lz4.c|$LIBARCHIVE/archive_read_support_filter_lzop.c|$LIBARCHIVE/archive_read_support_filter_none.c|$LIBARCHIVE/archive_read_support_filter_program.c|$LIBARCHIVE/archive_read_support_filter_rpm.c|$LIBARCHIVE/archive_read_support_filter_uu.c|$LIBARCHIVE/archive_read_support_filter_xz.c|$LIBARCHIVE/archive_read_support_format_all.c|$LIBARCHIVE/archive_read_support_format_ar.c|$LIBARCHIVE/archive_read_support_format_by_code.c|$LIBARCHIVE/archive_read_support_format_cpio.c|$LIBARCHIVE/archive_read_support_format_empty.c|$LIBARCHIVE/archive_read_support_format_iso9660.c|$LIBARCHIVE/archive_read_support_format_lha.c|$LIBARCHIVE/archive_read_support_format_mtree.c|$LIBARCHIVE/archive_read_support_format_rar.c|$LIBARCHIVE/archive_read_support_format_raw.c|$LIBARCHIVE/archive_read_support_format_tar.c|$LIBARCHIVE/archive_read_support_format_warc.c|$LIBARCHIVE/archive_read.c|$LIBARCHIVE/archive_string_sprintf.c|$LIBARCHIVE/archive_string.c|$LIBARCHIVE/archive_util.c|$LIBARCHIVE/archive_version_details.c|$LIBARCHIVE/archive_virtual.c|$LIBARCHIVE/archive_write_add_filter_b64encode.c|$LIBARCHIVE/archive_write_add_filter_by_name.c|$LIBARCHIVE/archive_write_add_filter_bzip2.c|$LIBARCHIVE/archive_write_add_filter_compress.c|$LIBARCHIVE/archive_write_add_filter_grzip.c|$LIBARCHIVE/archive_write_add_filter_gzip.c|$LIBARCHIVE/archive_write_add_filter_lrzip.c|$LIBARCHIVE/archive_write_add_filter_lz4.c|$LIBARCHIVE/archive_write_add_filter_lzop.c|$LIBARCHIVE/archive_write_add_filter_none.c|$LIBARCHIVE/archive_write_add_filter_program.c|$LIBARCHIVE/archive_write_add_filter_uuencode.c|$LIBARCHIVE/archive_write_add_filter_xz.c|$LIBARCHIVE/archive_write_add_filter.c|$LIBARCHIVE/archive_write_disk_posix.c|$LIBARCHIVE/archive_write_disk_set_standard_lookup.c|$LIBARCHIVE/archive_write_open_fd.c|$LIBARCHIVE/archive_write_open_file.c|$LIBARCHIVE/archive_write_open_filename.c|$LIBARCHIVE/archive_write_open_memory.c|$LIBARCHIVE/archive_write_set_format_7zip.c|$LIBARCHIVE/archive_write_set_format_ar.c|$LIBARCHIVE/archive_write_set_format_by_name.c|$LIBARCHIVE/archive_write_set_format_cpio_newc.c|$LIBARCHIVE/archive_write_set_format_cpio.c|$LIBARCHIVE/archive_write_set_format_filter_by_ext.c|$LIBARCHIVE/archive_write_set_format_gnutar.c|$LIBARCHIVE/archive_write_set_format_iso9660.c|$LIBARCHIVE/archive_write_set_format_pax.c|$LIBARCHIVE/archive_write_set_format_raw.c|$LIBARCHIVE/archive_write_set_format_shar.c|$LIBARCHIVE/archive_write_set_format_ustar.c|$LIBARCHIVE/archive_write_set_format_v7tar.c|$LIBARCHIVE/archive_write_set_format_warc.c|$LIBARCHIVE/archive_write_set_format.c|$LIBARCHIVE/archive_write_set_options.c|$LIBARCHIVE/archive_write_set_passphrase.c|$LIBARCHIVE/archive_write.c|$LIBARCHIVE/filter_fork_posix.c|$LIBARCHIVE/xxhash.c|tar_zlib_convenience_compat.c|tar_cab_format_compat.c|tar_pwgr_r_compat.c|gz_deflate_impl.c|gz_crc32_compat.c|$OUT/freebsd_extra/strstr.c|$LIBC/gen/FreeBSD/signal.c|$LIBC/emulated/lchmod.c|$LIBC/emulated/lchflags.c|simple_cmds_lutimes_compat.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/timelocal.c|$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|cp_mv_syscalls.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/stdlib/FreeBSD/strtoull.c|$LIBARCHIVE_TAR/cmdline.c|$LIBARCHIVE_TAR/creation_set.c|$LIBARCHIVE_TAR/read.c|$LIBARCHIVE_TAR/subst.c|$LIBARCHIVE_TAR/util.c|$LIBARCHIVE_TAR/write.c|$LIBARCHIVE_FE/err.c|$LIBARCHIVE_FE/line_reader.c|$LIBARCHIVE_FE/passphrase.c|$XNU/libsyscall/wrappers/unix03/chmod.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/stdlib/FreeBSD/bsearch.c|$LIBC/gen/FreeBSD/arc4random.c|$LIBC/stdtime/FreeBSD/strftime.c|tar_pipe_compat.c|tar_pthread_testcancel_compat.c"
-    "less:$LESS/main.c:$LESS/brac.c|$LESS/ch.c|$LESS/charset.c|$LESS/cmdbuf.c|$LESS/command.c|$LESS/cvt.c|$LESS/decode.c|$LESS/edit.c|$LESS/filename.c|$LESS/forwback.c|$LESS/help.c|$LESS/ifile.c|$LESS/input.c|$LESS/jump.c|$LESS/line.c|$LESS/linenum.c|$LESS/lsystem.c|$LESS/mark.c|$LESS/optfunc.c|$LESS/option.c|$LESS/opttbl.c|$LESS/os.c|$LESS/output.c|$LESS/pattern.c|$LESS/position.c|$LESS/prompt.c|$LESS/screen.c|$LESS/search.c|$LESS/signal.c|$LESS/tags.c|$LESS/ttyin.c|$LESS/version.c|$OUT/less_glue/libc_real_signal.c|ed_popen_system_compat.c|bash_readline_termcap_compat.c|$OUT/freebsd_extra/strstr.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|ed_setjmp_compat.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/stdlib/FreeBSD/abs.c|$LIBC/gen/get_compat.c|less_misc_compat.c|tar_pthread_testcancel_compat.c|cp_mv_syscalls.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/timelocal.c|$LIBC/stdtime/FreeBSD/strftime.c"
+    "diff:$GNUDIFF/src/diff.c:$GNUDIFF/src/analyze.c|$GNUDIFF/src/context.c|$GNUDIFF/src/dir.c|$GNUDIFF/src/ed.c|$GNUDIFF/src/ifdef.c|$GNUDIFF/src/io.c|$GNUDIFF/src/normal.c|$GNUDIFF/src/side.c|$GNUDIFF/src/util.c|$GNUDIFF/src/version.c|$GNUDIFF/lib/basename.c|$GNUDIFF/lib/c-stack.c|$GNUDIFF/lib/cmpbuf.c|$GNUDIFF/lib/error.c|$GNUDIFF/lib/exclude.c|$GNUDIFF/lib/exitfail.c|$GNUDIFF/lib/freesoft.c|$GNUDIFF/lib/hard-locale.c|$GNUDIFF/lib/imaxtostr.c|$GNUDIFF/lib/offtostr.c|$GNUDIFF/lib/posixver.c|$GNUDIFF/lib/prepargs.c|$GNUDIFF/lib/quotesys.c|$GNUDIFF/lib/regex.c|$GNUDIFF/lib/setmode.c|$GNUDIFF/lib/strftime.c|$GNUDIFF/lib/umaxtostr.c|$GNUDIFF/lib/xmalloc.c|$GNUDIFF/lib/xstrtoumax.c|$LIBC/stdlib/FreeBSD/getopt_long.c|du_fnmatch_libc_wrapper.c|$LIBC/compat-43/sigaltstk.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/stdlib/FreeBSD/strtoull.c|$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|ed_setjmp_compat.c|$LIBC/stdlib/FreeBSD/qsort.c|$LIBC/gen/FreeBSD/signal.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/timelocal.c|$OUT/freebsd_extra/flsl.c|$LIBC/stdlib/FreeBSD/heapsort.c|$LIBC/sys/gettimeofday.c|ps_commpage_gettimeofday_stub.c|$OUT/gnudiff_glue/libc_real_strftime.c"
+    "tar:$LIBARCHIVE_TAR/bsdtar.c:$LIBARCHIVE/archive_acl.c|$LIBARCHIVE/archive_check_magic.c|$LIBARCHIVE/archive_cmdline.c|$LIBARCHIVE/archive_disk_acl_darwin.c|$LIBARCHIVE/archive_entry_copy_stat.c|$LIBARCHIVE/archive_entry_link_resolver.c|$LIBARCHIVE/archive_entry_sparse.c|$LIBARCHIVE/archive_entry_stat.c|$LIBARCHIVE/archive_entry_strmode.c|$LIBARCHIVE/archive_entry_xattr.c|$LIBARCHIVE/archive_entry.c|$LIBARCHIVE/archive_getdate.c|$LIBARCHIVE/archive_match.c|$LIBARCHIVE/archive_options.c|$LIBARCHIVE/archive_pack_dev.c|$LIBARCHIVE/archive_pathmatch.c|$LIBARCHIVE/archive_ppmd7.c|$LIBARCHIVE/archive_random.c|$LIBARCHIVE/archive_rb.c|$LIBARCHIVE/archive_read_add_passphrase.c|$LIBARCHIVE/archive_read_append_filter.c|$LIBARCHIVE/archive_read_data_into_fd.c|$LIBARCHIVE/archive_read_disk_entry_from_file.c|$LIBARCHIVE/archive_read_disk_posix.c|$LIBARCHIVE/archive_read_disk_set_standard_lookup.c|$LIBARCHIVE/archive_read_extract.c|$LIBARCHIVE/archive_read_extract2.c|$LIBARCHIVE/archive_read_open_fd.c|$LIBARCHIVE/archive_read_open_file.c|$LIBARCHIVE/archive_read_open_filename.c|$LIBARCHIVE/archive_read_open_memory.c|$LIBARCHIVE/archive_read_set_format.c|$LIBARCHIVE/archive_read_set_options.c|$LIBARCHIVE/archive_read_support_filter_all.c|$LIBARCHIVE/archive_read_support_filter_bzip2.c|$LIBARCHIVE/archive_read_support_filter_compress.c|$LIBARCHIVE/archive_read_support_filter_grzip.c|$LIBARCHIVE/archive_read_support_filter_gzip.c|$LIBARCHIVE/archive_read_support_filter_lrzip.c|$LIBARCHIVE/archive_read_support_filter_lz4.c|$LIBARCHIVE/archive_read_support_filter_lzop.c|$LIBARCHIVE/archive_read_support_filter_none.c|$LIBARCHIVE/archive_read_support_filter_program.c|$LIBARCHIVE/archive_read_support_filter_rpm.c|$LIBARCHIVE/archive_read_support_filter_uu.c|$LIBARCHIVE/archive_read_support_filter_xz.c|$LIBARCHIVE/archive_read_support_format_all.c|$LIBARCHIVE/archive_read_support_format_ar.c|$LIBARCHIVE/archive_read_support_format_by_code.c|$LIBARCHIVE/archive_read_support_format_cpio.c|$LIBARCHIVE/archive_read_support_format_empty.c|$LIBARCHIVE/archive_read_support_format_iso9660.c|$LIBARCHIVE/archive_read_support_format_lha.c|$LIBARCHIVE/archive_read_support_format_mtree.c|$LIBARCHIVE/archive_read_support_format_rar.c|$LIBARCHIVE/archive_read_support_format_raw.c|$LIBARCHIVE/archive_read_support_format_tar.c|$LIBARCHIVE/archive_read_support_format_warc.c|$LIBARCHIVE/archive_read.c|$LIBARCHIVE/archive_string_sprintf.c|$LIBARCHIVE/archive_string.c|$LIBARCHIVE/archive_util.c|$LIBARCHIVE/archive_version_details.c|$LIBARCHIVE/archive_virtual.c|$LIBARCHIVE/archive_write_add_filter_b64encode.c|$LIBARCHIVE/archive_write_add_filter_by_name.c|$LIBARCHIVE/archive_write_add_filter_bzip2.c|$LIBARCHIVE/archive_write_add_filter_compress.c|$LIBARCHIVE/archive_write_add_filter_grzip.c|$LIBARCHIVE/archive_write_add_filter_gzip.c|$LIBARCHIVE/archive_write_add_filter_lrzip.c|$LIBARCHIVE/archive_write_add_filter_lz4.c|$LIBARCHIVE/archive_write_add_filter_lzop.c|$LIBARCHIVE/archive_write_add_filter_none.c|$LIBARCHIVE/archive_write_add_filter_program.c|$LIBARCHIVE/archive_write_add_filter_uuencode.c|$LIBARCHIVE/archive_write_add_filter_xz.c|$LIBARCHIVE/archive_write_add_filter.c|$LIBARCHIVE/archive_write_disk_posix.c|$LIBARCHIVE/archive_write_disk_set_standard_lookup.c|$LIBARCHIVE/archive_write_open_fd.c|$LIBARCHIVE/archive_write_open_file.c|$LIBARCHIVE/archive_write_open_filename.c|$LIBARCHIVE/archive_write_open_memory.c|$LIBARCHIVE/archive_write_set_format_7zip.c|$LIBARCHIVE/archive_write_set_format_ar.c|$LIBARCHIVE/archive_write_set_format_by_name.c|$LIBARCHIVE/archive_write_set_format_cpio_newc.c|$LIBARCHIVE/archive_write_set_format_cpio.c|$LIBARCHIVE/archive_write_set_format_filter_by_ext.c|$LIBARCHIVE/archive_write_set_format_gnutar.c|$LIBARCHIVE/archive_write_set_format_iso9660.c|$LIBARCHIVE/archive_write_set_format_pax.c|$LIBARCHIVE/archive_write_set_format_raw.c|$LIBARCHIVE/archive_write_set_format_shar.c|$LIBARCHIVE/archive_write_set_format_ustar.c|$LIBARCHIVE/archive_write_set_format_v7tar.c|$LIBARCHIVE/archive_write_set_format_warc.c|$LIBARCHIVE/archive_write_set_format.c|$LIBARCHIVE/archive_write_set_options.c|$LIBARCHIVE/archive_write_set_passphrase.c|$LIBARCHIVE/archive_write.c|$LIBARCHIVE/filter_fork_posix.c|$LIBARCHIVE/xxhash.c|tar_zlib_convenience_compat.c|tar_cab_format_compat.c|tar_pwgr_r_compat.c|gz_deflate_impl.c|gz_crc32_compat.c|$OUT/freebsd_extra/strstr.c|$LIBC/gen/FreeBSD/signal.c|$LIBC/emulated/lchmod.c|$LIBC/emulated/lchflags.c|simple_cmds_lutimes_compat.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/timelocal.c|$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/stdlib/FreeBSD/strtoull.c|$LIBARCHIVE_TAR/cmdline.c|$LIBARCHIVE_TAR/creation_set.c|$LIBARCHIVE_TAR/read.c|$LIBARCHIVE_TAR/subst.c|$LIBARCHIVE_TAR/util.c|$LIBARCHIVE_TAR/write.c|$LIBARCHIVE_FE/err.c|$LIBARCHIVE_FE/line_reader.c|$LIBARCHIVE_FE/passphrase.c|$XNU/libsyscall/wrappers/unix03/chmod.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/stdlib/FreeBSD/bsearch.c|$LIBC/gen/FreeBSD/arc4random.c|$LIBC/stdtime/FreeBSD/strftime.c|tar_pipe_compat.c|tar_pthread_testcancel_compat.c"
+    "less:$LESS/main.c:$LESS/brac.c|$LESS/ch.c|$LESS/charset.c|$LESS/cmdbuf.c|$LESS/command.c|$LESS/cvt.c|$LESS/decode.c|$LESS/edit.c|$LESS/filename.c|$LESS/forwback.c|$LESS/help.c|$LESS/ifile.c|$LESS/input.c|$LESS/jump.c|$LESS/line.c|$LESS/linenum.c|$LESS/lsystem.c|$LESS/mark.c|$LESS/optfunc.c|$LESS/option.c|$LESS/opttbl.c|$LESS/os.c|$LESS/output.c|$LESS/pattern.c|$LESS/position.c|$LESS/prompt.c|$LESS/screen.c|$LESS/search.c|$LESS/signal.c|$LESS/tags.c|$LESS/ttyin.c|$LESS/version.c|$OUT/less_glue/libc_real_signal.c|ed_popen_system_compat.c|bash_readline_termcap_compat.c|$OUT/freebsd_extra/strstr.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|ed_setjmp_compat.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/stdlib/FreeBSD/abs.c|$LIBC/gen/get_compat.c|less_misc_compat.c|tar_pthread_testcancel_compat.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/timelocal.c|$LIBC/stdtime/FreeBSD/strftime.c"
     # Phase 4.6 item 8 (docs/roadmap.md, re-scoped 2026-08-20): df/killall
     # against the real, already-general sysctl()/statfs() plumbing.
     # df: real, unmodified file_cmds/df/{df,vfslist}.c + real Libc/gen/
@@ -1576,10 +1507,12 @@ for spec in "${CMD_LIST[@]}"; do
             # TRE engine, already built and proven via bash -- not
             # linked into any Tier-1/simple_cmds binary before now) for
             # its own real regcomp/regexec/regerror calls.
+            # grep's own real regcomp/regexec/regerror no longer needs
+            # libc_regex.a here -- libsystem_c.dylib already reexports
+            # real TRE (build_libsystem_c.sh's own static-to-dylib
+            # migration step 4, confirmed via nm -gU), available via
+            # $LINK_DYLIBS for every command now, not just this one.
             extra_libs="$OUT/libremovefile.a"
-            case "$name" in
-                grep) extra_libs="$extra_libs $OUT/libc_regex.a" ;;
-            esac
             common_read_compat=""
             ;;
         sed|find)
@@ -1592,11 +1525,10 @@ for spec in "${CMD_LIST[@]}"; do
             # way) and libcopyfile.a's real fchmod()/fchown() (confirmed
             # via nm not to redefine read() itself, unlike
             # libremovefile.a -- no further conflict from adding it).
-            extra_libs="$OUT/libc_regex.a $OUT/libremovefile.a $OUT/libcopyfile.a"
+            # libc_regex.a no longer needed here -- see grep's own updated
+            # comment above (real TRE now via $LINK_DYLIBS).
+            extra_libs="$OUT/libremovefile.a $OUT/libcopyfile.a"
             common_read_compat=""
-            ;;
-        nl)
-            extra_libs="$OUT/libc_regex.a"
             ;;
         df)
             # Real fabs()/trunc()/ilogb() (see this command's own
@@ -1607,11 +1539,6 @@ for spec in "${CMD_LIST[@]}"; do
             # blast radius for every other command in this tier with no
             # current benefit).
             extra_libs="$OUT/libm.a"
-            ;;
-        xargs)
-            # regcomp/regexec/regfree for -p's real y/n confirmation
-            # prompt only (see xargs's own CMD_LIST comment).
-            extra_libs="$OUT/libc_regex.a"
             ;;
         ed)
             # libc_regex.a: re.c's real regcomp/regexec/regerror
@@ -1627,7 +1554,7 @@ for spec in "${CMD_LIST[@]}"; do
             # open_dprotected_np() (mktemp.c's real content-protection-
             # class-aware mkstemp() path, same real dependency the
             # `mktemp` command itself already established).
-            extra_libs="$OUT/libc_regex.a $OUT/ed_pipe_trap.o $OUT/ed_setjmp_raw.o $OUT/libremovefile.a $OUT/libcopyfile.a"
+            extra_libs="$OUT/ed_pipe_trap.o $OUT/ed_setjmp_raw.o $OUT/libremovefile.a $OUT/libcopyfile.a"
             common_read_compat=""
             ;;
         compress)
@@ -1640,7 +1567,7 @@ for spec in "${CMD_LIST[@]}"; do
             # after successful compression" step) -- same real duplicate
             # read()/read$UNIX2003 conflict as rm/ln/grep/gzip above,
             # common_read_compat cleared the same way.
-            extra_libs="$OUT/libc_regex.a $OUT/libremovefile.a"
+            extra_libs="$OUT/libremovefile.a"
             common_read_compat=""
             ;;
         gzip)
@@ -1703,7 +1630,7 @@ for spec in "${CMD_LIST[@]}"; do
             # pipe(2) raw syscall (filter_fork_posix.c's real forked-
             # external-decompressor fallback path, reused verbatim from
             # the ed tier).
-            extra_libs="$OUT/libc_regex.a $OUT/libremovefile.a $OUT/libcopyfile.a $OUT/ed_pipe_trap.o $OUT/simple_obj/sys__dup.o $OUT/simple_obj/sys__readlinkat.o $OUT/simple_obj/sys__poll.o"
+            extra_libs="$OUT/libremovefile.a $OUT/libcopyfile.a $OUT/ed_pipe_trap.o $OUT/simple_obj/sys__dup.o $OUT/simple_obj/sys__readlinkat.o $OUT/simple_obj/sys__poll.o"
             common_read_compat=""
             ;;
         less)
@@ -1726,15 +1653,10 @@ for spec in "${CMD_LIST[@]}"; do
             # support). $OUT/simple_obj/sys__dup.o: real dup(2) (also
             # lsystem.c's real stdin/stdout-fd-juggling around a forked
             # child).
-            extra_libs="$OUT/libc_regex.a $OUT/ed_setjmp_raw.o $OUT/simple_obj/sys__fsync.o $OUT/libremovefile.a $OUT/libcopyfile.a $OUT/ed_pipe_trap.o $OUT/simple_obj/sys__dup.o"
+            # sys__fsync.o dropped -- libSystem.B.dylib already exports
+            # real fsync(2) directly (confirmed via nm -gU).
+            extra_libs="$OUT/ed_setjmp_raw.o $OUT/libremovefile.a $OUT/libcopyfile.a $OUT/ed_pipe_trap.o $OUT/simple_obj/sys__dup.o"
             common_read_compat=""
-            ;;
-        killall)
-            # libc_regex.a: real regcomp/regexec/regfree (killall -m's
-            # real ERE-match mode against thiscmd) -- same archive tar/
-            # less/diff already proved, real _regcomp$UNIX2003 alias
-            # already in the shared LINK_ALIASES above.
-            extra_libs="$OUT/libc_regex.a"
             ;;
         sleep|tail)
             # Real Mach IPC (Phase 4.6 item 5, 2026-08-21): both real
@@ -1761,22 +1683,85 @@ for spec in "${CMD_LIST[@]}"; do
             ;;
     esac
 
-    # See LINK_ALIASES_TAR's own header comment (near LINK_ALIASES'
-    # definition) for why tar(1) specifically needs its own minimal
-    # alias list (a real ld64-609 crash workaround, not a behavior
-    # change).
-    link_aliases="$LINK_ALIASES"
+    # Small, scoped alias set for the handful of real UNIX2003/INODE64
+    # gaps that remain -- every base below is real and confirmed present
+    # (via nm) on the exact link line it's appended to, unlike the old
+    # 60-entry universal LINK_ALIASES saga this replaced, so this does
+    # not reproduce the real ld64-609 combined-complexity crash that
+    # forced that mechanism to exist in the first place.
+    link_aliases="-Wl,-alias,__err,_err -Wl,-alias,__warn,_warn \
+        -Wl,-alias,_lchown,_lchown\$UNIX2003 \
+        -Wl,-alias,_setattrlist,_setattrlist\$UNIX2003 \
+        -Wl,-alias,_waitpid,_waitpid\$UNIX2003 \
+        -Wl,-alias,_pread,_pread\$UNIX2003 \
+        -Wl,-alias,_pwrite,_pwrite\$UNIX2003 \
+        -Wl,-alias,_confstr,_confstr\$UNIX2003 \
+        -Wl,-alias,_getfsstat,_getfsstat\$INODE64 \
+        -Wl,-alias,_statfs,_statfs\$INODE64"
+    case "$extra_libs" in
+        *libcopyfile.a*)
+            link_aliases="$link_aliases -Wl,-alias,_fchmod,_fchmod\$UNIX2003 -Wl,-alias,_getattrlist,_getattrlist\$UNIX2003" ;;
+    esac
+    case "$extra_objs" in
+        *apply_sigsuspend_compat.o*) link_aliases="$link_aliases -Wl,-alias,_sigsuspend,_sigsuspend\$UNIX2003" ;;
+    esac
+    case "$extra_objs" in
+        *cat_socket_stub.o*) link_aliases="$link_aliases -Wl,-alias,_connect,_connect\$UNIX2003 -Wl,-alias,_send,_send\$UNIX2003 -Wl,-alias,_writev,_writev\$UNIX2003" ;;
+    esac
+    case "$extra_objs" in
+        *xargs_getrlimit_compat.o*) link_aliases="$link_aliases -Wl,-alias,_getrlimit,_getrlimit\$UNIX2003" ;;
+    esac
     case "$name" in
-        tar) link_aliases="$LINK_ALIASES_TAR" ;;
+        tar) link_aliases="$link_aliases -Wl,-alias,_poll,_poll\$UNIX2003" ;;
     esac
 
-    if ! "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
+    # locale_extra_objs: real, UNRESOLVED, open gap (2026-08-28) -- left
+    # empty deliberately. The ~32 commands whose own real source needs
+    # ctype.h's xlocale-based macros (__locale_key/__global_locale) or
+    # deeper real LC_TIME/LC_COLLATE support (timelocale/fnmatch range
+    # matching) do not build in this pass; see docs/backlog.md for the
+    # real, detailed writeup of why. Short version: linking real
+    # table.c's _DefaultRuneXLocale (needed for __global_locale) into
+    # ANY of these commands' already-substantial per-command object set
+    # triggers a real, narrow ld64-609 internal crash ("Assertion
+    # failed: (_mode == modeFinalAddress)" in finalAddress) under
+    # -Wl,-fixup_chains -- extensively bisected (see git history around
+    # this date for the full real trail: cross-object relocations,
+    # source-level merging, hand-copying real none.c/ldpart.c/collcmp.c
+    # function bodies directly into table.c, a minimal-pair-only
+    # policy) without finding a reliable fix; results were not even
+    # consistently reproducible across clean vs incremental rebuilds,
+    # which rules out continuing to chase it by further bisection. Real
+    # follow-up, not attempted here: either a real ld64-609 workaround,
+    # or restructuring table.c's own real _DefaultRuneXLocale to reduce
+    # its fixup/atom footprint below whatever this toolchain's real
+    # threshold is.
+    locale_extra_objs=""
+
+    # Real dynamic link (2026-08-28) -- no -static/-e start (see
+    # LINK_DYLIBS's own header comment near LINK_COMMON for what this
+    # replaces). $common_read_compat is deliberately NOT linked here any
+    # more -- its whole purpose was forwarding to the private __read raw
+    # syscall that used to live in libc_locale_for_stdio.a; libSystem.B.
+    # dylib now exports real public _read directly (confirmed via
+    # nm -gU), making that forwarder redundant. -e start is gone too:
+    # confirmed via a real prototype trial link that ld64 ignores it for
+    # this target's non-static link mode regardless ("Ignoring '-e
+    # start' because entry point 'start' is not used for the targeted OS
+    # version") and always emits LC_MAIN instead of LC_UNIXTHREAD --
+    # matching build_dyld_test_exec.sh's own already-QEMU-verified
+    # dyld_test_exec.macho exactly, not a new or untested code shape.
+    if ! "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
+        -Wl,-fixup_chains \
         -o "${name}.macho" \
         ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
         "$wrapper_obj" "$obj" $extra_objs \
-        "$OUT/simple_obj/common_err.o" "$OUT/simple_obj/common_getopt.o" "$OUT/simple_obj/common_simple_cmds_getenv_compat.o" $common_read_compat \
-        $extra_libs \
-        $LINK_COMMON $link_aliases 2>"$OUT/simple_obj/${name}_link.err"; then
+        "$OUT/simple_obj/common_err.o" "$OUT/simple_obj/common_getopt.o" "$OUT/simple_obj/common_simple_cmds_getenv_compat.o" \
+        "$OUT/simple_obj/common_simple_cmds_libsystem_c_gap_compat.o" \
+        "$OUT/simple_obj/common_cp_mv_syscalls.o" \
+        $extra_libs $locale_extra_objs \
+        $LINK_COMMON $LINK_DYLIBS \
+        $link_aliases 2>"$OUT/simple_obj/${name}_link.err"; then
         echo "  skip: $name (link)"
         cat "$OUT/simple_obj/${name}_link.err" >&2
         failed=$((failed + 1))
@@ -1784,17 +1769,16 @@ for spec in "${CMD_LIST[@]}"; do
     fi
 
     bad=0
-    if otool -l "${name}.macho" | grep -q LC_LOAD_DYLIB; then
-        echo "  FAIL: $name -- LC_LOAD_DYLIB present, not dyld-free" >&2
+    if ! otool -l "${name}.macho" | grep -A2 "cmd LC_LOAD_DYLINKER" | grep -q "/usr/lib/dyld"; then
+        echo "  FAIL: $name -- no LC_LOAD_DYLINKER /usr/lib/dyld, not a real dynamic executable" >&2
         bad=1
     fi
-    if ! otool -l "${name}.macho" | grep -q LC_UNIXTHREAD; then
-        echo "  FAIL: $name -- no LC_UNIXTHREAD" >&2
+    if ! otool -l "${name}.macho" | grep -q "cmd LC_LOAD_DYLIB"; then
+        echo "  FAIL: $name -- no LC_LOAD_DYLIB, not a real dynamic executable" >&2
         bad=1
     fi
-    if nm -u "${name}.macho" 2>/dev/null | grep -q .; then
-        echo "  FAIL: $name -- undefined symbols:" >&2
-        nm -u "${name}.macho" >&2
+    if ! otool -l "${name}.macho" | grep -q "cmd LC_MAIN"; then
+        echo "  FAIL: $name -- no LC_MAIN (real unixproc entry, see LINK_DYLIBS' own comment on the load_dylinker() kernel bug this guards against)" >&2
         bad=1
     fi
     if [ "$bad" -ne 0 ]; then

@@ -219,6 +219,19 @@ rm -f "$OUT/system/libsystem_c.dylib"
 # intentional dynamic lookup (same real -Wl,-U mechanism
 # _dyld_initializer already uses), resolved at runtime against whatever
 # process image actually defines it.
+# REAL BUG FOUND 2026-08-28 (build_simple_cmds.sh's real-dylib-consumer
+# conversion): -Wl,-alias only lands in a dylib's real LC_DYLD_EXPORTS_TRIE
+# (confirmed via `xcrun dyld_info -exports`, not nm -- nm's plain symbol
+# table listing is misleading here, it shows alias entries regardless of
+# whether they actually made it into the trie) when the alias's BASE
+# symbol is genuinely LOCAL to THIS SAME ld64 invocation. Adding an alias
+# for e.g. _fputs/_strerror to libSystem.B.dylib's own build (where they
+# are only reachable via -reexport_library, not local) silently produces
+# an alias no real consumer can ever resolve -- confirmed via a real
+# trial link that failed with "symbol not found" despite `nm -gU`
+# claiming the alias existed. Every base below IS local here ($EXTRACT/
+# *.o, from libc_stdio.a's real fputs.c etc), so this dylib -- not
+# libSystem.B.dylib -- is the correct place for all of them.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
     -install_name /usr/lib/system/libsystem_c.dylib \
     -Wl,-fixup_chains \
@@ -245,6 +258,20 @@ rm -f "$OUT/system/libsystem_c.dylib"
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
     -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
+    -Wl,-alias,_fputs,'_fputs$UNIX2003' \
+    -Wl,-alias,_strerror,'_strerror$UNIX2003' \
+    -Wl,-alias,_fwrite,'_fwrite$UNIX2003' \
+    -Wl,-alias,_fstatfs,'_fstatfs$INODE64' \
+    -Wl,-alias,_fopen,'_fopen$UNIX2003' \
+    -Wl,-alias,_fstatat,'_fstatat$INODE64' \
+    -Wl,-alias,_closedir,'_closedir$UNIX2003' \
+    -Wl,-alias,_opendir,'_opendir$INODE64$UNIX2003' \
+    -Wl,-alias,_readdir,'_readdir$INODE64' \
+    -Wl,-alias,_readdir_r,'_readdir_r$INODE64' \
+    -Wl,-alias,_fdopendir,'_fdopendir$INODE64$UNIX2003' \
+    -Wl,-alias,_regcomp,'_regcomp$UNIX2003' \
+    -Wl,-alias,_fdopen,'_fdopen$UNIX2003' \
+    -Wl,-alias,_strtod,'_strtod$UNIX2003' \
     -o "$OUT/system/libsystem_c.dylib" \
     "$EXTRACT"/*.o \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" \

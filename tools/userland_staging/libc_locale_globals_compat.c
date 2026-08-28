@@ -34,6 +34,32 @@
  * not redefined here. */
 #include "xlocale_private.h"
 
+/* REAL BUG FOUND 2026-08-28 (build_simple_cmds.sh's dynamic-link
+ * conversion): a real, obscure ld64-609 internal crash ("Assertion
+ * failed: (_mode == modeFinalAddress), function finalAddress") triggers
+ * whenever this file (libc_locale_globals_compat.o) + table.o + almost
+ * any real third object are all linked together into the same
+ * executable with -Wl,-fixup_chains -- root-caused via extensive real
+ * bisection to table.c's own _DefaultRuneXLocale (a very large real
+ * rune-classification table) combined with this file's own reference to
+ * it crossing some ld64-609 fixup-chains complexity threshold; NOT
+ * specific to none.c (confirmed: swapping none.o for an unrelated
+ * third object, e.g. findfp.o, reproduces the identical crash), NOT
+ * fixed by removing the cross-object static relocation below (confirmed
+ * by testing table.c with zero references to this file at all -- still
+ * crashes), and NOT even consistently reproducible between a clean
+ * rebuild and an incremental one with identical source (ruling out
+ * further bisection as a reliable path). Real, current state
+ * (2026-08-28): build_simple_cmds.sh's own `locale_extra_objs` is left
+ * deliberately EMPTY -- no scoping/mitigation currently in place, this
+ * is a real, visible, unresolved gap (see docs/backlog.md item d9 for
+ * the full real trail and the ~32 commands it blocks), not silently
+ * worked around. __lc_ctype starting NULL and getting its real
+ * &_DefaultRuneXLocale assignment via the constructor below (a runtime
+ * pointer store, not a link-time relocation) is kept regardless -- a
+ * real, independently-correct improvement (one fewer cross-object
+ * static relocation) even though it didn't resolve the crash above on
+ * its own. */
 #define C_LOCALE_INITIALIZER	{	\
 	0, XPERMANENT,			\
 	{}, {}, {}, {}, {},		\
@@ -42,7 +68,7 @@
 	XMAGIC,				\
 	1, 0, 0, 0, 0, 0, 1, 1, 0,	\
 	NULL,				\
-	&_DefaultRuneXLocale,		\
+	NULL,				\
 }
 
 struct _xlocale __global_locale = C_LOCALE_INITIALIZER;
@@ -99,6 +125,7 @@ __attribute__((constructor))
 static void
 __xlocale_init_compat(void)
 {
+	__global_locale.__lc_ctype = &_DefaultRuneXLocale;
 	if (__locale_key == (pthread_key_t)-1) {
 		__locale_key = __LIBC_PTHREAD_KEY_XLOCALE;
 		pthread_key_init_np(__locale_key, __xlocale_release);

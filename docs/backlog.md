@@ -558,6 +558,129 @@ d8. **Every curated support library built since the real per-library-dylib
     but don't leave the stated convention and the actual practice
     silently diverging the way they are today.
 
+d9. **`build_simple_cmds.sh` converted from fully-static to real dynamic
+    linking (2026-08-28) — 44 of 76 commands done, 32 blocked on a real,
+    unresolved ld64-609 crash, not yet fixed.** This is the first real
+    dyld-loaded consumer d8 above was waiting for, and confirms d8's own
+    premise: converting a real static consumer to real dynamic linking
+    against `libSystem.B.dylib`/`libdyld.dylib` eliminates the entire
+    `-Wl,-alias` workaround class this file used to need (the ~60-entry
+    `LINK_ALIASES`/`LINK_ALIASES_TAR` saga, and the real ld64-609
+    "Assertion failed: (target != NULL)" crash in `generateLinkEditInfo`
+    that saga existed to work around) — `libSystem.B.dylib` already
+    bakes the same real UNIX2003/INODE64/DARWIN_EXTSN aliases into its
+    own build (`build_libsystem.sh`'s own tail), so a real dynamic
+    consumer needs zero alias flags of its own for anything whose real
+    base is locally resolvable at THAT dylib's own link time.
+
+    Real, load-bearing finding from this conversion, not previously
+    documented anywhere: **`-Wl,-alias` inside a dylib only lands in
+    that dylib's real `LC_DYLD_EXPORTS_TRIE`** (confirmed via
+    `xcrun dyld_info -exports`, **not** `nm` — `nm`'s plain symbol-table
+    listing shows an alias-created indirect symbol regardless of whether
+    it actually made the trie, which is actively misleading) **when the
+    alias's BASE symbol is genuinely local to that same link.** Adding
+    an alias for e.g. `_fputs$UNIX2003`/`_strerror$UNIX2003` to
+    `libSystem.B.dylib`'s own build — where those bases are only
+    reachable via `-reexport_library`, not local — silently produces an
+    alias no real consumer can ever resolve (a real trial link fails
+    with "symbol not found" despite `nm -gU` claiming the alias exists).
+    The fix used throughout this conversion: add each alias at the
+    specific sub-dylib (`build_libsystem_c.sh`, `build_libsystem.sh`,
+    etc) where its base is genuinely local, never at the umbrella
+    `libSystem.B.dylib` level for a reexported base. A real runtime
+    regression from exactly this class of bug was caught live in QEMU
+    (2026-08-28): `cat.macho` linked clean but crashed at real dyld load
+    time (`dyld[3]: Symbol not found: _fdopen$UNIX2003`) because the
+    private test SD image's `/usr/lib/system/libsystem_c.dylib` was
+    stale — `tools/init_binary/inject_into_sd_image.sh` must be re-run
+    after every `build_libsystem_c.sh`/`build_libsystem.sh` rebuild, not
+    just after `build_simple_cmds.sh`, or booted binaries will resolve
+    dylib imports against old exports. A second, related finding: **any
+    sub-dylib whose real, non-aliased symbols a consumer's own compiled
+    code calls directly must also be linked directly on that consumer's
+    own command line** (`libsystem_pthread.dylib` for
+    `pthread_main_thread_bootstrap()`, `libsystem_c.dylib` for the bulk
+    of libc, `libsystem_malloc.dylib` for the private
+    `_pthread_setspecific`/`_pthread_getspecific`/`_pthread_once`
+    variants real libmalloc's own TSD-cache path needs) — ld64 does not
+    resolve a multi-level reexport chain through `libSystem.B.dylib`
+    alone for this toolchain, regardless of whether the symbol is
+    alias-derived or a real, directly-defined export.
+
+    **The 32 blocked commands** (`cp`, `mv`, `ls`, `grep`, `tar`, `diff`,
+    `gzip`, `less`, `find`, `date`, `du`, `stat`, `chmod`, `chown`,
+    `sed`, `xargs`, `nice`, `printf`, `echo`, `wc`, `cut`, `vis`, `rs`,
+    `mknod`, `expand`, `unexpand`, `fold`, `hexdump`, `jot`, `nl`,
+    `tail`, `touch`) all need real locale support this project's dropped
+    `libc_locale_for_stdio.a` used to provide — at minimum
+    `__locale_key`/`__global_locale` (real `ctype.h` xlocale macros;
+    `libc_locale_globals_compat.c` already provides a narrow real
+    reproduction of these two globals, same file used by
+    `build_libdispatch_dylib.sh`), and for about 20 of them, deeper real
+    `LC_TIME`/`LC_COLLATE` support (`ls`'s date formatting; `grep`/
+    `find`/`diff`'s `[a-z]`-range `fnmatch()` matching). The real
+    blocker: `libc_locale_globals_compat.c`'s `__global_locale` needs
+    `&_DefaultRuneXLocale` — real `third_party/Libc/locale/FreeBSD/
+    table.c`'s big built-in "C"-locale character-classification table —
+    and linking that table into ANY of these 32 commands' already-
+    substantial per-command object set reproduces a real, narrow
+    ld64-609 internal crash: `Assertion failed: (_mode ==
+    modeFinalAddress), function finalAddress` (a different assertion
+    from the `generateLinkEditInfo` one d8/the alias saga hit — this one
+    fires deep in `OutputFile::applyFixUps`, under `-Wl,-fixup_chains`
+    specifically). Extensively, but so far unsuccessfully, bisected
+    (2026-08-28) — real approaches tried, in order, each with a real,
+    specific reason it didn't work:
+    - Removing the one confirmed real cross-object static relocation
+      (`__global_locale`'s static initializer took `&_DefaultRuneXLocale`
+      directly; moved to a runtime constructor assignment instead) — no
+      change, still crashes.
+    - Source-level merging of `table.c`+`none.c`+`ldpart.c`+`collate.c`+
+      `collcmp.c`+`findfp.c`+`getcwd.c` into one translation unit via
+      `#include` (fewer separate link-time objects) — crashes MORE, not
+      less (even locale-light commands started crashing once every
+      command shared the same larger bundle).
+    - Hand-copying the same real function bodies directly into `table.c`
+      instead of `#include`-merging (avoids per-file `__FBSDID`/
+      `sccsid`/license-comment overhead) — no reliable improvement over
+      `#include`-merging at the same content size.
+    - A real `ld -r` partial-link merge of the separately-compiled
+      objects into one — still crashes, ruling out "too many separate
+      *objects*" as the mechanism (it's total complexity/fixup count
+      regardless of object boundaries).
+    - Swapping `none.o` for an unrelated third object (`findfp.o`) at
+      the same `{libc_locale_globals_compat, table}` pair — still
+      crashes, ruling out anything `none.c`-specific.
+    - Dropping the by-far-largest file (`collate.c`, 1046 real lines) in
+      favor of just `collcmp.c`'s own tiny real `__collate_range_cmp()`
+      (which only needs real `wcscoll_l()`, already a direct
+      `libsystem_c.dylib` export, confirmed via `nm -gU`) — reduced but
+      did not eliminate the crash.
+    - **Results were not even consistently reproducible between a clean
+      rebuild and an incremental one with identical source** — the same
+      `{libc_locale_globals_compat, table}` pair that built 0/32 clean
+      in one run reproduced 12/32 crashes in a supposedly-identical
+      clean rebuild immediately after. This is the real reason bisection
+      was abandoned rather than continued: a threshold that doesn't
+      reproduce deterministically can't be reliably bisected against.
+
+    Current state: `third_party/Libc/locale/FreeBSD/table.c` is back to
+    fully pristine (`git checkout --`, no patches survive) and
+    `build_simple_cmds.sh`'s `locale_extra_objs` is deliberately left
+    empty — the 32 commands above simply don't build in this pass, a
+    real, visible failure (`build_simple_cmds: 44 built, 32 failed`,
+    stable across repeated clean rebuilds), not a silently-degraded one.
+    Real follow-up, not attempted here: either find a real ld64-609
+    workaround for this specific fixup-chains threshold (possibly
+    version-specific to this project's pinned Xcode 12 toolchain — worth
+    checking whether a newer `ld64`/`ld-prime` bundled with a later
+    Xcode still on this machine, if any, reproduces it at all before
+    assuming it's permanent), or restructure `_DefaultRuneXLocale`
+    itself (e.g. lazily-populated instead of one giant static
+    initializer) to reduce its own real fixup/atom footprint below
+    whatever this toolchain's real threshold is.
+
 0a. **No AES implementation exists anywhere in this kernel — HARD
     PREREQUISITE for Phase 7b (`sshd`).** Filed explicitly 2026-08-21 so it
     is a known gate rather than the fourth surprise NULL dereference.
