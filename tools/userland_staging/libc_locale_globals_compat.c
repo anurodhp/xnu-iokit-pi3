@@ -47,3 +47,60 @@
 
 struct _xlocale __global_locale = C_LOCALE_INITIALIZER;
 pthread_key_t __locale_key = (pthread_key_t)-1;
+
+/* REAL BUG FOUND AND FIXED 2026-08-27, not part of the original narrow
+ * atoi.o closure above: leaving __locale_key permanently at -1 (its
+ * static initial value, matching real xlocale.c's own line 46 exactly)
+ * is only safe on TARGET_IPHONE_SIMULATOR, where xlocale_private.h's
+ * __current_locale() has a real `if (__locale_key == (pthread_key_t)-1)
+ * return &__global_locale;` fast-path guard. On a REAL device target
+ * (this project's own -target arm64-apple-ios14.4, not the simulator),
+ * that guard is compiled out and __current_locale() unconditionally
+ * calls _pthread_getspecific_direct(__locale_key) /
+ * pthread_getspecific(__locale_key) with key == (pthread_key_t)-1 --
+ * _pthread_getspecific_direct's own doc comment says "to be used with
+ * static constant keys only", and its real body (tsd_private.h) is
+ * __os_tsd_get_direct(slot), a raw, unchecked TSD-array index -- -1
+ * widens to a huge unsigned slot number, indexing wildly out of bounds.
+ * Found via a real QEMU crash (SIGSEGV, not SIGABRT) the first time any
+ * code in this whole project actually called plain snprintf()/
+ * vsnprintf() at runtime (real vsnprintf() calls __current_locale()
+ * directly) -- confirmed by bisecting with a static smoketest down to
+ * this exact call, then reading xlocale_private.h's real
+ * TARGET_IPHONE_SIMULATOR-gated fast path to find the real mismatch,
+ * not guessed.
+ *
+ * Real fix, verbatim matching xlocale.c's own __xlocale_init() (already
+ * declared in xlocale_private.h, just never called by anything in this
+ * project -- there is no real _libc_initializer() here to call it from
+ * the way real Apple's own libSystem startup does): a real, reserved,
+ * compile-time-constant TSD slot (__LIBC_PTHREAD_KEY_XLOCALE, defined
+ * sys/cdefs.h:119 as __LIBC_PTHREAD_KEY(0) == 10 for a non-simulator
+ * target), registered via the real pthread_key_init_np() (already a
+ * real, defined export of this project's own libpthread.a -- confirmed
+ * via nm before using it, not assumed) with a real destructor
+ * (__xlocale_release, copied verbatim from xlocale.c:480-485 -- a tiny,
+ * self-contained wrapper around xlocale_private.h's own XL_RELEASE
+ * macro, real atomic refcount release, not fabricated). Runs via a real
+ * ELF/Mach-O constructor so it's live before any userland main() runs,
+ * same as this project's own other __attribute__((constructor)) uses
+ * elsewhere. In practice this project never calls uselocale() to
+ * install a per-thread override, so the destructor is real but
+ * currently unreachable dead code -- included for correctness, not
+ * because anything here exercises it yet. */
+static void
+__xlocale_release(void *loc)
+{
+	locale_t l = loc;
+	XL_RELEASE(l);
+}
+
+__attribute__((constructor))
+static void
+__xlocale_init_compat(void)
+{
+	if (__locale_key == (pthread_key_t)-1) {
+		__locale_key = __LIBC_PTHREAD_KEY_XLOCALE;
+		pthread_key_init_np(__locale_key, __xlocale_release);
+	}
+}

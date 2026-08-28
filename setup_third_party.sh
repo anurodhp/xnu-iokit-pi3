@@ -20,6 +20,21 @@
 #     `__DATA,__mod_init_func` constructor support for real ifconfig --
 #     see tools/userland_staging/build_ifconfig.sh) rather than left
 #     unresolved further.
+#   - Libc: unmodified Apple source except `Libc.patch` (2026-08-27),
+#     same "real local fix, no personal fork" reasoning as Csu.patch --
+#     `locale/xlocale.c`'s own `__xlocale_init()` (registers the real
+#     TSD key `__global_locale`/`__locale_key` need) is only ever called
+#     from real Apple's own `_libc_initializer()`, which this project has
+#     never ported. Without it `__locale_key` stays at its static -1
+#     sentinel forever, and `xlocale_private.h`'s `__current_locale()`
+#     (called by real `vsnprintf()`, among others) does an unchecked,
+#     out-of-bounds TSD lookup with that -1 on any non-simulator target
+#     -- a real SIGSEGV, found via a real QEMU crash the first time
+#     anything in this project called plain snprintf()/vsnprintf() at
+#     runtime (syslogd's write_boot_log(), Phase 6.7). The patch adds a
+#     same-translation-unit constructor calling the existing real
+#     `__xlocale_init()`, so it's linked in for free by any of this
+#     project's 39+ build scripts that pull in this object file.
 #   - hfs, IOStorageFamily, IOUSBFamily, IONetworkingFamily, msdosfs: unmodified Apple
 #     open-source reference sources, pinned to an exact tag, no patching.
 #     CORRECTED 2026-08-24: a full `distribution-macOS` `macos-112` manifest
@@ -268,6 +283,29 @@ mkdir -p third_party
 #     service -- no bootstrap-namespace/launchd dependency at all, unlike
 #     `notifyd` (see `docs/daemon-roadmap.md`'s Phase 6.7 section).
 #
+#   - Libm (2026-08-27): NOT manifest-verifiable the way every other pin
+#     above is -- checked `distribution-macOS`'s `release.json` at
+#     `macos-112` AND every other macOS tag back through `macos-1012`
+#     (Sierra) and it never lists a `Libm` project at all (188 real
+#     entries at `macos-112`, confirmed by parsing the JSON, zero of them
+#     named `Libm`). Apple's `apple-oss-distributions/Libm` repo does
+#     exist and is real, but its real tag list (`git ls-remote --tags`)
+#     has only 15 tags total, and its own tag *objects'* real tagger
+#     dates (`git cat-file tag <sha>`, not GitHub's own commit-import
+#     dates, which are unreliable for these bulk-imported repos) run
+#     1(2003) through `Libm-2026` at 2011-07-20 -- Apple has not
+#     published Libm source at all since OS X Lion, a full decade before
+#     Darwin 20.3/macOS 11.2 and about 2 years before arm64 existed as an
+#     architecture. `Libm-2026` is pinned anyway as the real, newest
+#     available source (same "no era-accurate tag exists, pin the newest
+#     real one and document the gap honestly" precedent as `IOUSBFamily`
+#     above) -- but `tools/userland_staging/build_libm.sh` only actually
+#     builds from its portable, hardware-agnostic C files (its
+#     `Source/ARM` tree predates AArch64 and is a mix of real armv6/armv7
+#     assembly plus portable C; the assembly is skipped outright, not
+#     ported). See `docs/apple-oss-catalog.md` for the full real
+#     manifest-sweep/tag-date method.
+#
 # name | clone_url | ref (branch or tag) | patch file (optional, relative to third_party-patches/)
 REPOS='
 xnu-7195|git@github.com:anurodhp/xnu-pi3-macos11.git|bcm2837-bringup|
@@ -281,7 +319,7 @@ IOUSBFamily|https://github.com/apple-oss-distributions/IOUSBFamily.git|IOUSBFami
 IONetworkingFamily|https://github.com/apple-oss-distributions/IONetworkingFamily.git|IONetworkingFamily-151.40.1|
 msdosfs|https://github.com/apple-oss-distributions/msdosfs.git|msdosfs-435.60.1|
 dyld|https://github.com/apple-oss-distributions/dyld.git|dyld-940|
-Libc|https://github.com/apple-oss-distributions/Libc.git|Libc-1439.40.11|
+Libc|https://github.com/apple-oss-distributions/Libc.git|Libc-1439.40.11|Libc.patch
 libpthread|https://github.com/apple-oss-distributions/libpthread.git|libpthread-454.80.2|
 libplatform|https://github.com/apple-oss-distributions/libplatform.git|libplatform-254.80.2|
 libdispatch|https://github.com/apple-oss-distributions/libdispatch.git|libdispatch-1271.40.12|libdispatch.patch
@@ -323,6 +361,7 @@ BSM|https://github.com/apple-oss-distributions/BSM.git|bsm-13|
 ICU|https://github.com/apple-oss-distributions/ICU.git|ICU-66109|ICU.patch
 libxml2|https://github.com/apple-oss-distributions/libxml2.git|libxml2-34.9|
 cctools|https://github.com/apple-oss-distributions/cctools.git|cctools-973.0.1|
+Libm|https://github.com/apple-oss-distributions/Libm.git|Libm-2026|
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch; do

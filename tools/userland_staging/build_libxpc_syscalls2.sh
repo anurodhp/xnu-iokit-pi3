@@ -122,7 +122,34 @@ echo "compiled: real mach_portUser.c client stubs"
 CFLAGS_XNU=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk")
+# -D_FORTIFY_SOURCE=0 is REQUIRED here, not optional: this SDK's own
+# usr/include/_types.h defaults _FORTIFY_SOURCE to 2 whenever it isn't
+# already defined and the target isn't macOS
+# (`__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__` is unset for this
+# project's iOS target, so it always falls to the "on by default"
+# branch) -- meaning every one of these _chk source files, compiled
+# under the SAME default-fortified headers, has its OWN internal calls
+# to the function it's implementing rewritten right back into itself by
+# secure/_stdio.h's/_string.h's own macros (e.g. vsnprintf_chk.c's
+# internal `vsnprintf(...)` call becomes `__builtin___vsnprintf_chk(...)`
+# again) -- real, unbounded self-recursion, not a hang: it burns stack
+# until the guard page faults, a real SIGSEGV. Found 2026-08-27 via a
+# real QEMU crash the very first time any code path in this whole
+# project actually called plain snprintf()/vsnprintf() at runtime
+# (syslogd's write_boot_log(), Phase 6.7) -- confirmed by isolating a
+# trivial `snprintf(buf, sizeof(buf), "%u", x)` into its own static
+# smoketest and watching it crash on line 1 with a real SIGSEGV (not
+# SIGABRT, ruling out __chk_fail_overflow's own real abort() path),
+# then reading this SDK's real _types.h/secure/_common.h to confirm the
+# fortify-default mechanism rather than guessing. Real Apple's own
+# actual Libc build must pass the equivalent of this flag when compiling
+# these exact files for the identical reason -- otherwise Apple's own
+# shipping vsnprintf_chk would have the same bug. This is the ONLY
+# correct fix: disable fortify while compiling the _chk
+# implementations themselves, not their real callers (which should stay
+# fortified).
 CFLAGS_SECURE=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -D_FORTIFY_SOURCE=0 \
     -Wno-nullability-completeness -I "$LIBC/secure")
 CFLAGS_LOCAL=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1)

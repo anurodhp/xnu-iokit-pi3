@@ -412,8 +412,18 @@ XNU_FOR_TRAP="../../third_party/xnu-7195"
 # -- real source already established by build_libxpc_syscalls2.sh
 # (third_party/Libc/secure/*.c), just needs its own copy here since this
 # script doesn't depend on that one having run.
+#
+# -D_FORTIFY_SOURCE=0 REQUIRED: see build_libxpc_syscalls2.sh's own
+# CFLAGS_SECURE comment for the full real trail -- this SDK defaults
+# _FORTIFY_SOURCE to 2 for this iOS target, so without this flag each of
+# these _chk implementation files' own internal calls (e.g.
+# vsnprintf_chk.c's `vsnprintf(...)`) get macro-rewritten right back into
+# themselves, causing real unbounded self-recursion -> stack-guard-page
+# SIGSEGV. Found 2026-08-27 the first time this dylib's real dependents
+# (syslogd) actually exercised plain snprintf()/vsnprintf() at runtime.
 LIBC="../../third_party/Libc"
 CFLAGS_SECURE=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -D_FORTIFY_SOURCE=0 \
     -Wno-nullability-completeness -I "$LIBC/secure")
 for f in snprintf_chk strlcpy_chk vsnprintf_chk; do
     "$CLANG" "${CFLAGS_SECURE[@]}" "$LIBC/secure/$f.c" -o "$OUT/dispatch_dylib_extract/$f.o"

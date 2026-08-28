@@ -1,0 +1,80 @@
+From fd2c67eba97954b0a1493aa04309985ae8088b82 Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@icloud.com>
+Date: Thu, 27 Aug 2026 21:39:14 -0400
+Subject: [PATCH] xlocale.c: call real __xlocale_init() via constructor, real
+ device targets need it
+
+Real Apple's own libSystem calls __xlocale_init() exactly once from its
+own _libc_initializer(), which runs before any userland main() via a
+real dyld image-init callback registration the iokit/xnu-rpi3 port has
+never ported. Without it, __locale_key stays at its static initial
+value, (pthread_key_t)-1, forever.
+
+xlocale_private.h's __current_locale() (called by, among many other
+things, real vsnprintf()) only guards against that on
+TARGET_IPHONE_SIMULATOR; on a real device target it unconditionally
+calls _pthread_getspecific_direct(__locale_key) with key == -1 -- an
+unchecked, out-of-bounds raw TSD-array index (tsd_private.h's own doc
+comment: "to be used with static constant keys only") -- a real
+SIGSEGV, not a hang or SIGABRT.
+
+Fix: a constructor living in this same translation unit (so it's linked
+in for free by any consumer that pulls in this object file for
+__global_locale/__locale_key) that calls the real, already-existing
+__xlocale_init() above -- not a reimplementation, the identical real
+function real Apple's own initializer calls, just invoked from a real
+ELF/Mach-O constructor instead of a ported _libc_initializer this
+project doesn't have.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+---
+ locale/xlocale.c | 36 ++++++++++++++++++++++++++++++++++++
+ 1 file changed, 36 insertions(+)
+
+diff --git a/locale/xlocale.c b/locale/xlocale.c
+index 6efb9a5..f279fcf 100644
+--- a/locale/xlocale.c
++++ b/locale/xlocale.c
+@@ -496,3 +496,39 @@ __xlocale_init(void)
+ 	}
+ }
+ 
++/* REAL BUG FOUND AND FIXED 2026-08-27 (this project's own port, not an
++ * upstream Apple issue): real Apple's actual libSystem calls
++ * __xlocale_init() exactly once from its own real _libc_initializer(),
++ * which runs before any userland main() via a real dyld image-init
++ * callback registration this project has never ported. Without it,
++ * __locale_key stays at its static initial value, (pthread_key_t)-1,
++ * forever. xlocale_private.h's __current_locale() (called by, among
++ * many other things, real vsnprintf()) only guards against that on
++ * TARGET_IPHONE_SIMULATOR; on a real device target (this project's own
++ * -target arm64-apple-ios14.4) it unconditionally calls
++ * _pthread_getspecific_direct(__locale_key) /
++ * pthread_getspecific(__locale_key) with key == -1 -- an unchecked,
++ * out-of-bounds raw TSD-array index (tsd_private.h's own doc comment:
++ * "to be used with static constant keys only") -- real SIGSEGV, not a
++ * hang or SIGABRT, found via a real QEMU crash the first time any code
++ * anywhere in this whole project actually called plain snprintf()/
++ * vsnprintf() at runtime (syslogd's write_boot_log(), Phase 6.7),
++ * bisected down to this exact call with a static smoketest binary
++ * before reading this file to find the real root cause.
++ *
++ * Real fix: a constructor living in this SAME translation unit (so it's
++ * linked in for free by ANY consumer that pulls in this object file for
++ * __global_locale/__locale_key -- confirmed via nm that 39 of this
++ * project's own build_*.sh scripts link libc_locale_for_stdio.a, this
++ * exact object file's home archive, not a narrow single-consumer issue)
++ * that calls the real, already-existing __xlocale_init() above -- not a
++ * reimplementation, the identical real function real Apple's own
++ * initializer calls, just invoked from a real ELF/Mach-O constructor
++ * instead of a ported _libc_initializer this project doesn't have. */
++__attribute__((constructor))
++static void
++__xlocale_init_constructor(void)
++{
++	__xlocale_init();
++}
++
+-- 
+2.50.1 (Apple Git-155)
+
