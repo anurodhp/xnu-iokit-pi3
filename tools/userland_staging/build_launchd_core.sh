@@ -21,23 +21,14 @@
 # not link into it), and its own real main() hard-conflicts with
 # launchd.c's real main() otherwise (found via a real trial link).
 #
-# NOT DONE YET: an actual link into a real launchd executable. This
-# script's own trial link (below) is informational only, against this
-# project's existing static libc/libpthread/libplatform/libmach_ipc/
-# liblaunchd_mig/libxpc/libdispatch_real stack -- expect a real,
-# nontrivial undefined-symbol list (launchd's own core.c is ~12K lines
-# calling deep into real BSD/Mach/XPC APIs this project's curated stack
-# doesn't fully cover yet, plus the 5 real SERVER-side MIG files
-# build_launchd_mig.sh already generates but doesn't compile --
-# jobServer.c etc, which need core.c's own internal job_t type and
-# aren't compiled into this archive either, a distinct follow-up).
-# Real launchd is also dynamically linked against libSystem on real
-# Darwin; this project's own libdispatch is now a real .dylib
-# (build_libdispatch_dylib.sh) with its own separate real duplicate-
-# global-state debt (docs/backlog.md P2 d1) -- the eventual real
-# launchd executable's own link model (static vs. dynamic against that
-# dylib) is a decision for the actual "wire launchd up as PID-1" phase,
-# not this compile-and-archive step.
+# The real, complete link into launchd.macho (0 undefined symbols, 0
+# duplicate symbols as of 2026-08-28 -- see docs/daemon-roadmap.md's
+# "Milestone 2 CLOSED" writeup) lives in build_launchd.sh, its own real,
+# checked-in build product -- this script's job ends at producing the
+# archives that feed it. Real launchd is dynamically linked against
+# libSystem/libdispatch/etc, matching real Darwin -- build_launchd.sh's
+# own header has the full real link-model writeup. Boot-path integration
+# ("wire launchd up as PID-1") is a separate, not-yet-started phase.
 set -e
 cd "$(dirname "$0")"
 
@@ -375,87 +366,7 @@ rm -f "$OUT/launchd_libc_extras.a"
 ar rcs "$OUT/launchd_libc_extras.a" "$OUT"/launchd_libc_extras_obj/*.o
 echo "wrote $OUT/launchd_libc_extras.a ($(ls "$OUT"/launchd_libc_extras_obj/*.o | wc -l | tr -d ' ') objects: chdir/access/strstr/sleep/sigprocmask/sigaction/getifaddrs/freeifaddrs/arc4random_uniform/bind/getentropy/uuid_copy/uuid_is_null/fegetenv/fesetenv/fstatat/qsort)"
 
-# Real, informational trial link. First attempt linked plainly against
-# liblaunchd_core.a (launchd.c has its own real main(), so unlike every
-# other tier's own hand-written trial_main.c none was needed) and
-# reported "0 undefined symbols" -- but a real check afterwards (`nm`
-# for core.c's own well-known functions in the output binary) showed
-# core.o/ipc.o/log.o were never actually pulled into the link at all:
-# launchd.c's real main() reaches them only indirectly (dispatch source
-# handlers, XPC connection callbacks stored as function pointers), which
-# static linking's archive-member pull-in can't see as a "reference" --
-# the same "empty main proves nothing" lesson from the libxpc tier,
-# recurring in a subtler form. `-force_load` (real ld64 flag: include
-# every member of this one archive unconditionally, regardless of
-# whether anything visibly references it -- the correct tool for "prove
-# this archive's full, real content links clean standalone", not a
-# workaround) gives the real, honest picture instead.
-#
-# Real DYNAMIC link (not `-static`): now that CoreFoundation is wired in
-# and depends on the real `libdispatch.dylib`, the static link mode this
-# script used to use can't resolve dispatch/os_log symbols at all (real
-# `ld64` limitation, not a real gap -- see docs/backlog.md item d7's
-# "link-mode artifact" finding). Same recipe `build_dyld_test_exec.sh`/
-# `build_corefoundation.sh` already established: no `-static`, plain
-# dylib links on the command line, `-Wl,-fixup_chains`. `libdispatch_real.a`
-# (the old static archive) is dropped in favor of `libdispatch.dylib`,
-# per this project's 2026-08-25 dylib-first directive. Also links
-# `libsystem_pthread.dylib` directly (real localtime.c calls the
-# internal `_pthread_rwlock_*` variants -- double-underscore names,
-# distinct from the public POSIX ones -- which `libSystem.B.dylib`'s
-# own small hand-picked re-export list, item d7's "export-parity gap"
-# finding, doesn't include; the real sub-image that actually provides
-# them is already built, just needed adding to this link directly).
-    # __mh_dylib_header alias: real CFUniChar.c's __CFGetSectDataPtr()
-    # hunts _dyld_get_image_header() results for a match against
-    # &_mh_dylib_header to find ITS OWN image's __UNICODE section -- a
-    # real assumption that CoreFoundation is always its own separate
-    # dylib (true on real Apple systems, ld64 always synthesizes
-    # _mh_dylib_header for a -dynamiclib link). This project statically
-    # archives CoreFoundation into the executable instead (known dylib-
-    # migration debt, docs/daemon-roadmap.md), so CF's own __UNICODE
-    # section actually lives in the executable's image -- the real
-    # equivalent ld64-synthesized symbol for THAT image is
-    # _mh_execute_header. Aliasing makes the address comparison match
-    # for real, not a fabrication: for this specific static-linked
-    # build, the executable's own image IS the one CF's data lives in.
-    # Legacy short-form CFLocale/CFDateFormatter constant aliases
-    # (kCFLocaleLanguageCode etc): real CFLocaleKeys.c only defines these
-    # via `__attribute__((alias(...)))` under `#if TARGET_OS_LINUX ||
-    # TARGET_OS_BSD || TARGET_OS_WIN32` -- real macOS/iOS are excluded on
-    # the assumption Apple's own proprietary CoreFoundation.framework
-    # provides them some other way. Tried widening that guard to
-    # TARGET_OS_MAC directly (2026-08-28) and reverted: clang rejects
-    # `__attribute__((alias(...)))` outright on Darwin ("aliases are not
-    # supported on darwin") -- confirms exactly why the guard excluded
-    # Darwin in the first place. Real fix has to be a linker alias at
-    # final-link time instead, same mechanism as __mh_dylib_header above
-    # -- this project statically links this exact source as its entire
-    # CoreFoundation, so these real, already-defined ...Key-suffixed
-    # constants are the correct alias base.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
-    -B"$NEWLD_BINDIR" \
-    -Wl,-fixup_chains \
-    -Wl,-alias,__mh_execute_header,__mh_dylib_header \
-    -Wl,-alias,_kCFDateFormatterCalendarKey,_kCFDateFormatterCalendar \
-    -Wl,-alias,_kCFDateFormatterTimeZoneKey,_kCFDateFormatterTimeZone \
-    -Wl,-alias,_kCFCalendarIdentifierGregorian,_kCFGregorianCalendar \
-    -Wl,-alias,_kCFLocaleCalendarKey,_kCFLocaleCalendar \
-    -Wl,-alias,_kCFLocaleCountryCodeKey,_kCFLocaleCountryCode \
-    -Wl,-alias,_kCFLocaleLanguageCodeKey,_kCFLocaleLanguageCode \
-    -Wl,-alias,_kCFLocaleScriptCodeKey,_kCFLocaleScriptCode \
-    -o "$OUT/launchd_trial.macho" \
-    ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
-    -Wl,-force_load,"$OUT/liblaunchd_core.a" \
-    "$OUT/libCoreFoundation.a" "$OUT/cf_libc_extras.a" "$OUT/launchd_libc_extras.a" \
-    "$OUT/libxpc.a" "$OUT/liblaunchd_mig.a" \
-    "$OUT/libxpc_syscalls.a" "$OUT/libxpc_syscalls2.a" "$OUT/liblaunchd_syscalls.a" \
-    "$OUT/libmach_ipc.a" "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
-    "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
-    "$OUT/libc_locale_for_stdio.a" "$OUT/libbsm.a" \
-    "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
-    "$OUT/system/libsystem_pthread.dylib" \
-    "$ICU_LIB/libicuuc.dylib" "$ICU_LIB/libicui18n.dylib" "$ICU_LIB/libicudata.dylib" "$OUT/system/libc++.dylib" \
-    2>"$OUT/launchd_trial_link.err" \
-    && echo "real trial link: 0 undefined symbols -- fully closed" \
-    || { n=$(grep -c 'Undefined symbol' "$OUT/launchd_trial_link.err" || true); echo "expected-for-now: real trial link found $n undefined symbol group(s):"; grep '^  "' "$OUT/launchd_trial_link.err" | sed 's/,.*//' | sort -u; }
+# Real linked launchd.macho + its own real smoketest (0-undefined-symbol
+# link, -force_load correctness check, real core.c-content check) now
+# lives in build_launchd.sh, its own real, checked-in build product --
+# not duplicated here. Run that script next.

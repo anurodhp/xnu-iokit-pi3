@@ -3104,15 +3104,46 @@ checkout); `setup_third_party.sh` (wired the new PureDarwin patch's
 `cf_compat_headers/cf_socket_syscalls.c`/`cf_compat_headers/
 cf_class_stubs.c` (edited).
 
-**Not started yet**: producing a real `build_launchd.sh` (promoting this
-trial link into a real, reproducible, checked-in build script per this
+### Milestone 3 CLOSED, 2026-08-28 -- real build_launchd.sh, "standalone run" scoped out for real reasons
+
+New `tools/userland_staging/build_launchd.sh`: promotes the trial link
+above into a real, checked-in, reproducible build product per this
 project's own "every built artifact needs a reproducing script"
-convention -- the trial link today lives inline in
-`build_launchd_core.sh`, informational-only), standalone run of
-`launchd_trial.macho` (Milestone 3), boot-path integration (Milestone 4,
-needs explicit user sign-off between (a) launchd replaces `tools/
-init_binary/` outright vs (b) `init_binary` execs into it -- (b)
-recommended default), or QEMU verification (Milestone 5).
+convention -- prerequisite-checks every archive/dylib it needs, fails
+loudly (not "expected-for-now") on any real link error, and runs a real
+smoketest afterward: `otool -hv` confirms a real `MH_EXECUTE` with
+`NOUNDEFS` set, and `nm` confirms a real, distinctive core.c-only
+symbol (`_job_dispatch`, the job-state-machine's own entry point) is
+actually present -- guards against the exact "plain link trivially
+succeeds while silently missing core.o" failure mode
+`build_launchd_core.sh`'s own header comment already documents from this
+effort's first attempt. `-force_load` on `liblaunchd_core.a` is real and
+required here (not just informational), for that same reason. The old
+trial-link block was removed from `build_launchd_core.sh` (which now
+only builds the archives `build_launchd.sh` links) to avoid two copies
+of the same real link command drifting apart. Verified end-to-end:
+rebuilding from `build_launchd_core.sh` through `build_launchd.sh`
+reproduces the same real, complete `libc_build/launchd.macho`.
+
+**"Standalone run" deliberately not attempted -- a real, considered
+decision, not skipped**: `launchd.macho` dynamically links against
+`/usr/lib/system/libdispatch.dylib`, `/usr/lib/libSystem.B.dylib`, etc
+-- real absolute host-style install-name paths. Running it directly on
+the Mac host doing this work would attempt to load the **host's own
+real system dylibs** at those paths (a real ABI/codesigning mismatch,
+not this project's dylibs at all), and real launchd's own job is to
+manipulate the Mach bootstrap namespace -- not a safe or meaningful
+thing to let run unintentionally against a real host's own process/Mach
+namespace. A real, meaningful "standalone run" only makes sense inside
+QEMU, against this project's own built dylibs at those same paths --
+that's Milestone 4/5's territory, which already needs the boot-
+integration sign-off below before it can proceed.
+
+**Not started yet**: boot-path integration (Milestone 4, needs explicit
+user sign-off between (a) launchd replaces `tools/init_binary/` outright
+vs (b) `init_binary` execs into it -- (b) recommended default), or QEMU
+verification (Milestone 5, the real place a meaningful run of
+`launchd.macho` becomes possible).
 
 ## Phase 6.8 -- original 2026-08-22 scoping (partially superseded above,
 ## kept for the parts still accurate: license/vintage caution, the
