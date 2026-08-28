@@ -35,6 +35,21 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     echo "error: Xcode-12.app not found at $XCODE12 (see tools/build_kexts.sh for the same dependency)" >&2
     exit 1
 fi
+
+# Real, verified fix (2026-08-28, see docs/backlog.md item d9 for the
+# full trail and tools/userland_staging/build_simple_cmds.sh's own
+# NEWLD_BINDIR header comment for the isolated repro this is based on):
+# Xcode 12's own bundled ld64-609 has a real internal crash under
+# -Wl,-fixup_chains that a much newer ld does not. Compiling still uses
+# Xcode 12's clang/SDK above (untouched -- that vintage match is a
+# separate, still-load-bearing invariant); only the final link step's
+# linker binary changes, via clang's -B override.
+DAILY_XCODE="$(xcode-select -p 2>/dev/null)"
+NEWLD_BINDIR="$DAILY_XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+if [ ! -x "$NEWLD_BINDIR/ld" ]; then
+    echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE) -- run 'xcode-select -p' to check, see docs/backlog.md item d9" >&2
+    exit 1
+fi
 for a in libcopyfile libremovefile libresolv; do
     if [ ! -f "$OUT/$a.a" ]; then
         echo "error: $OUT/$a.a not found -- run its build_$a.sh first" >&2
@@ -147,8 +162,18 @@ rm -f "$OUT/system/libSystem.B.dylib"
 # it makes each sub-dylib's own real export set part of
 # libSystem.B.dylib's, exactly matching real Apple's own architecture,
 # not inventing a new one.
+    # -not_for_dyld_shared_cache: real, newly-surfaced requirement of
+    # the daily-driver Xcode's newer ld (NEWLD_BINDIR above) -- it
+    # refuses "-undefined dynamic_lookup"/-U on a dylib it classifies
+    # as shared-cache eligible (real /usr/lib install path) unless this
+    # is set, a real check Xcode 12's ld64-609 never enforced. This
+    # project builds no real dyld shared cache at all, so opting every
+    # real dylib out is correct, not a workaround (docs/backlog.md item
+    # d9's NEWLD_BINDIR sweep, 2026-08-28).
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
     -install_name /usr/lib/libSystem.B.dylib \
+    -Wl,-not_for_dyld_shared_cache \
+    -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -Wl,-U,__dyld_initializer \
     -o "$OUT/system/libSystem.B.dylib" \
@@ -184,8 +209,13 @@ rm -f "$OUT/system/libSystem.B.dylib"
     -Wl,-alias,_reallocarray,'_reallocarray$DARWIN_EXTSN' \
     -Wl,-alias,'_mmap$UNIX2003',_mmap \
     -Wl,-alias,'_munmap$UNIX2003',_munmap \
-    -Wl,-alias,__pthread_cond_wait,_pthread_cond_wait \
     -Wl,-alias,_pthread_testcancel,'_pthread_testcancel$UNIX2003'
+    # __pthread_cond_wait alias removed 2026-08-28 (see docs/backlog.md
+    # item d9's NEWLD_BINDIR sweep): not local to this link either, same
+    # "silently dead under ld64-609" class as build_libsystem_c.sh's own
+    # matching fix -- plain _pthread_cond_wait is already a real, direct
+    # export of the sibling libsystem_pthread.dylib this link already
+    # includes, no alias needed.
 
 echo "wrote $OUT/system/libSystem.B.dylib"
 otool -hv "$OUT/system/libSystem.B.dylib" | grep -q " DYLIB " || {

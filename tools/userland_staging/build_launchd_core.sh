@@ -41,6 +41,21 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     exit 1
 fi
 
+# Real, verified fix (2026-08-28, see docs/backlog.md item d9 for the
+# full trail and tools/userland_staging/build_simple_cmds.sh's own
+# NEWLD_BINDIR header comment for the isolated repro this is based on):
+# Xcode 12's own bundled ld64-609 has a real internal crash under
+# -Wl,-fixup_chains that a much newer ld does not. Compiling still uses
+# Xcode 12's clang/SDK above (untouched -- that vintage match is a
+# separate, still-load-bearing invariant); only the final link step's
+# linker binary changes, via clang's -B override.
+DAILY_XCODE="$(xcode-select -p 2>/dev/null)"
+NEWLD_BINDIR="$DAILY_XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+if [ ! -x "$NEWLD_BINDIR/ld" ]; then
+    echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE) -- run 'xcode-select -p' to check, see docs/backlog.md item d9" >&2
+    exit 1
+fi
+
 XNU="../../third_party/xnu-7195"
 PD="../../third_party/PureDarwin/src/Libraries/XPC"
 CR="../../third_party/PureDarwin/src/Libraries/CrashReporterClient"
@@ -316,6 +331,7 @@ echo "wrote $OUT/launchd_libc_extras.a ($(ls "$OUT"/launchd_libc_extras_obj/*.o 
 # finding, doesn't include; the real sub-image that actually provides
 # them is already built, just needed adding to this link directly).
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
+    -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -o "$OUT/launchd_trial.macho" \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
@@ -325,7 +341,7 @@ echo "wrote $OUT/launchd_libc_extras.a ($(ls "$OUT"/launchd_libc_extras_obj/*.o 
     "$OUT/libxpc_syscalls.a" "$OUT/libxpc_syscalls2.a" "$OUT/liblaunchd_syscalls.a" \
     "$OUT/libmach_ipc.a" "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
     "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
-    "$OUT/libc_locale_for_stdio.a" \
+    "$OUT/libc_locale_for_stdio.a" "$OUT/libm.a" "$OUT/libbsm.a" \
     "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
     "$ICU_LIB/libicuuc.dylib" "$ICU_LIB/libicui18n.dylib" "$ICU_LIB/libicudata.dylib" "$OUT/system/libc++.dylib" \

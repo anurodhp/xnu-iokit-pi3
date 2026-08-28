@@ -23,6 +23,21 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     exit 1
 fi
 
+# Real, verified fix (2026-08-28, see docs/backlog.md item d9 for the
+# full trail and tools/userland_staging/build_simple_cmds.sh's own
+# NEWLD_BINDIR header comment for the isolated repro this is based on):
+# Xcode 12's own bundled ld64-609 has a real internal crash under
+# -Wl,-fixup_chains that a much newer ld does not. Compiling still uses
+# Xcode 12's clang/SDK above (untouched -- that vintage match is a
+# separate, still-load-bearing invariant); only the final link step's
+# linker binary changes, via clang's -B override.
+DAILY_XCODE="$(xcode-select -p 2>/dev/null)"
+NEWLD_BINDIR="$DAILY_XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+if [ ! -x "$NEWLD_BINDIR/ld" ]; then
+    echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE) -- run 'xcode-select -p' to check, see docs/backlog.md item d9" >&2
+    exit 1
+fi
+
 # -Wl,-fixup_chains: real dyld-940 (this project's currently pinned
 # tag) expects the modern chained-fixups format -- see
 # build_dyld_test_exec.sh's own header comment for the full real
@@ -43,8 +58,16 @@ fi
 # stopping at "Library not loaded: /usr/lib/libSystem.B.dylib".
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
     -install_name /usr/lib/libtest.dylib \
+    -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
-    -o "$OUT/libtest.dylib" libtest_dylib.c
+    -o "$OUT/libtest.dylib" libtest_dylib.c "$OUT/system/libSystem.B.dylib"
+# "$OUT/system/libSystem.B.dylib" added 2026-08-28 (docs/backlog.md item
+# d9's NEWLD_BINDIR sweep): real, newly-enforced requirement of the
+# daily-driver Xcode's newer ld ("dynamic executables or dylibs must
+# link with libSystem.dylib") that Xcode 12's ld64-609 never checked --
+# this project's own real libSystem.B.dylib satisfies it; libtest_dylib.c
+# itself still references nothing from it, so this is a harmless, real
+# LC_LOAD_DYLIB dependency, not a functional change to the smoketest.
 echo "wrote $OUT/libtest.dylib"
 
 otool -hv "$OUT/libtest.dylib" | grep -q " DYLIB " || {

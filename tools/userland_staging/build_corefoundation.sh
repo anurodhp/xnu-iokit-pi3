@@ -108,6 +108,21 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     exit 1
 fi
 
+# Real, verified fix (2026-08-28, see docs/backlog.md item d9 for the
+# full trail and tools/userland_staging/build_simple_cmds.sh's own
+# NEWLD_BINDIR header comment for the isolated repro this is based on):
+# Xcode 12's own bundled ld64-609 has a real internal crash under
+# -Wl,-fixup_chains that a much newer ld does not. Compiling still uses
+# Xcode 12's clang/SDK above (untouched -- that vintage match is a
+# separate, still-load-bearing invariant); only the final link step's
+# linker binary changes, via clang's -B override.
+DAILY_XCODE="$(xcode-select -p 2>/dev/null)"
+NEWLD_BINDIR="$DAILY_XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+if [ ! -x "$NEWLD_BINDIR/ld" ]; then
+    echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE) -- run 'xcode-select -p' to check, see docs/backlog.md item d9" >&2
+    exit 1
+fi
+
 CF="../../third_party/swift-corelibs-foundation/CoreFoundation"
 XNU="../../third_party/xnu-7195"
 DISPATCH="../../third_party/libdispatch"
@@ -494,6 +509,7 @@ rm -f "$OUT/cf_libc_extras.a"
 ar rcs "$OUT/cf_libc_extras.a" "$OUT"/cf_libc_extras_obj/*.o
 echo "wrote $OUT/cf_libc_extras.a ($(ls "$OUT"/cf_libc_extras_obj/*.o | wc -l | tr -d ' ') objects: getpwnam/getpwuid/getuid/geteuid/gethostname/writev)"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
+    -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -o "$OUT/cf_trial_dyn.macho" \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \

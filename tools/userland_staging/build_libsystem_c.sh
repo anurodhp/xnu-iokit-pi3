@@ -105,6 +105,21 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     echo "error: Xcode-12.app not found at $XCODE12 (see tools/build_kexts.sh for the same dependency)" >&2
     exit 1
 fi
+
+# Real, verified fix (2026-08-28, see docs/backlog.md item d9 for the
+# full trail and tools/userland_staging/build_simple_cmds.sh's own
+# NEWLD_BINDIR header comment for the isolated repro this is based on):
+# Xcode 12's own bundled ld64-609 has a real internal crash under
+# -Wl,-fixup_chains that a much newer ld does not. Compiling still uses
+# Xcode 12's clang/SDK above (untouched -- that vintage match is a
+# separate, still-load-bearing invariant); only the final link step's
+# linker binary changes, via clang's -B override.
+DAILY_XCODE="$(xcode-select -p 2>/dev/null)"
+NEWLD_BINDIR="$DAILY_XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+if [ ! -x "$NEWLD_BINDIR/ld" ]; then
+    echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE) -- run 'xcode-select -p' to check, see docs/backlog.md item d9" >&2
+    exit 1
+fi
 for a in libc_string libc_gen libc_stdio libc_printf libc_locale_for_stdio libc_regex; do
     if [ ! -f "$OUT/$a.a" ]; then
         echo "error: $OUT/$a.a not found -- run build_$a.sh first (this script reuses their already-built member objects)" >&2
@@ -232,8 +247,37 @@ rm -f "$OUT/system/libsystem_c.dylib"
 # claiming the alias existed. Every base below IS local here ($EXTRACT/
 # *.o, from libc_stdio.a's real fputs.c etc), so this dylib -- not
 # libSystem.B.dylib -- is the correct place for all of them.
+#
+# _fsync/_reallocarray REMOVED from this list 2026-08-28: this dylib's
+# own $EXTRACT/*.o never actually defined either base (confirmed via a
+# real `nm` sweep) -- the exact same "silently dead, only tolerated by
+# ld64-609" class of bug as above, just missed in the original cleanup.
+# The daily-driver Xcode's newer ld (NEWLD_BINDIR below) correctly hard-
+# fails on it instead of staying silent. Not a functional loss: real,
+# working `_fsync$UNIX2003`/`_reallocarray$DARWIN_EXTSN` aliases already
+# exist in `build_libdyld.sh` and `build_libsystem.sh` (confirmed via
+# `xcrun dyld_info -exports`, both real), and `less.macho` (this
+# project's one real fsync(2) consumer) already binds to `libdyld.dylib`
+# for it at real chained-fixups load time (confirmed via
+# `xcrun dyld_info -fixups`), not this dylib -- removing the dead copy
+# here changes nothing observable. `__pthread_cond_wait` (aliased to
+# plain `_pthread_cond_wait`) removed the same way: not local here
+# either, and plain `_pthread_cond_wait` is already a real, direct
+# export of the sibling `libsystem_pthread.dylib` this link already
+# includes -- any real caller resolves it via normal two-level-
+# namespace lookup with no alias needed at all.
+    # -not_for_dyld_shared_cache: real, newly-surfaced requirement of
+    # the daily-driver Xcode's newer ld (NEWLD_BINDIR above) -- it
+    # refuses "-undefined dynamic_lookup"/-U on a dylib it classifies
+    # as shared-cache eligible (real /usr/lib install path) unless this
+    # is set, a real check Xcode 12's ld64-609 never enforced. This
+    # project builds no real dyld shared cache at all, so opting every
+    # real dylib out is correct, not a workaround (docs/backlog.md item
+    # d9's NEWLD_BINDIR sweep, 2026-08-28).
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
     -install_name /usr/lib/system/libsystem_c.dylib \
+    -Wl,-not_for_dyld_shared_cache \
+    -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -Wl,-U,___progname \
     -Wl,-alias,___kill,_kill \
@@ -248,12 +292,9 @@ rm -f "$OUT/system/libsystem_c.dylib"
     -Wl,-alias,_fstat,'_fstat$INODE64' \
     -Wl,-alias,_lstat,'_lstat$INODE64' \
     -Wl,-alias,_stat,'_stat$INODE64' \
-    -Wl,-alias,_fsync,'_fsync$UNIX2003' \
     -Wl,-alias,_read,'_read$UNIX2003' \
-    -Wl,-alias,_reallocarray,'_reallocarray$DARWIN_EXTSN' \
     -Wl,-alias,'_mmap$UNIX2003',_mmap \
     -Wl,-alias,'_munmap$UNIX2003',_munmap \
-    -Wl,-alias,__pthread_cond_wait,_pthread_cond_wait \
     -Wl,-alias,_pthread_testcancel,'_pthread_testcancel$UNIX2003' \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \

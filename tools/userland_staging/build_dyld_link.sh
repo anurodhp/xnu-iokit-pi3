@@ -102,6 +102,21 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     echo "error: Xcode-12.app not found at $XCODE12 (see tools/build_kexts.sh for the same dependency)" >&2
     exit 1
 fi
+
+# Real, verified fix (2026-08-28, see docs/backlog.md item d9 for the
+# full trail and tools/userland_staging/build_simple_cmds.sh's own
+# NEWLD_BINDIR header comment for the isolated repro this is based on):
+# Xcode 12's own bundled ld64-609 has a real internal crash under
+# -Wl,-fixup_chains that a much newer ld does not. Compiling still uses
+# Xcode 12's clang/SDK above (untouched -- that vintage match is a
+# separate, still-load-bearing invariant); only the final link step's
+# linker binary changes, via clang's -B override.
+DAILY_XCODE="$(xcode-select -p 2>/dev/null)"
+NEWLD_BINDIR="$DAILY_XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+if [ ! -x "$NEWLD_BINDIR/ld" ]; then
+    echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE) -- run 'xcode-select -p' to check, see docs/backlog.md item d9" >&2
+    exit 1
+fi
 if [ ! -f "$OUT/dyld_core.a" ]; then
     echo "error: $OUT/dyld_core.a not found -- run build_dyld_core.sh first" >&2
     exit 1
@@ -306,6 +321,7 @@ rm -f dyld.macho
 # kernel's existing, unmodified rebase-processing in parse_machfile()
 # actually has real fixup chains to walk for this binary too.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -e __dyld_start_tsd_bootstrap \
+    -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -Wl,-dylinker -Wl,-dylinker_install_name,/usr/lib/dyld \
     -o dyld.macho \
@@ -328,19 +344,32 @@ rm -f dyld.macho
     -Wl,-alias,_write,'_write$UNIX2003' \
     -Wl,-alias,__mal_semwait_sleep,'_sleep$UNIX2003' \
     -Wl,-alias,___kdebug_trace,_kdebug_trace \
-    -Wl,-alias,_open,'_open$UNIX2003' \
     -Wl,-alias,_close,'_close$UNIX2003' \
     -Wl,-alias,_fcntl,'_fcntl$UNIX2003' \
     -Wl,-alias,_fstat,'_fstat$INODE64' \
     -Wl,-alias,_lstat,'_lstat$INODE64' \
     -Wl,-alias,_stat,'_stat$INODE64' \
     -Wl,-alias,_fsync,'_fsync$UNIX2003' \
-    -Wl,-alias,_read,'_read$UNIX2003' \
     -Wl,-alias,_reallocarray,'_reallocarray$DARWIN_EXTSN' \
     -Wl,-alias,'_mmap$UNIX2003',_mmap \
     -Wl,-alias,'_munmap$UNIX2003',_munmap \
     -Wl,-alias,__pthread_cond_wait,_pthread_cond_wait \
     -Wl,-alias,_pthread_testcancel,'_pthread_testcancel$UNIX2003'
+    # _open/_read aliases removed 2026-08-28 (docs/backlog.md item d9's
+    # NEWLD_BINDIR sweep): this link's own libresolv.a already defines
+    # real _open$UNIX2003/_read$UNIX2003 directly (libresolv_arc4random_
+    # deps_compat.o) -- the alias directive tried to create the exact
+    # same symbol names from a different base, a real duplicate-symbol
+    # conflict Xcode 12's ld64-609 silently tolerated (picking one
+    # definition without complaint) but the daily-driver Xcode's newer
+    # ld correctly rejects. __pthread_cond_wait KEPT here (unlike the
+    # matching removal in build_libsystem_c.sh/build_libdyld.sh/
+    # build_libsystem.sh) -- this script links libpthread.a directly
+    # (fully static dyld.macho, no libsystem_pthread.dylib sibling at
+    # all), so the raw __pthread_cond_wait base genuinely is local here;
+    # removing it broke a real libcxxabi.a reference
+    # (std::__1::__libcpp_condvar_wait) that only this script's own
+    # object set can satisfy.
 
 echo "wrote dyld.macho"
 otool -hv dyld.macho | grep -q " DYLINKER " || \

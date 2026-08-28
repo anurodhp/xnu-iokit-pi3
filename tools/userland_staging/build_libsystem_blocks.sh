@@ -34,6 +34,21 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     echo "error: Xcode-12.app not found at $XCODE12 (see tools/build_kexts.sh for the same dependency)" >&2
     exit 1
 fi
+
+# Real, verified fix (2026-08-28, see docs/backlog.md item d9 for the
+# full trail and tools/userland_staging/build_simple_cmds.sh's own
+# NEWLD_BINDIR header comment for the isolated repro this is based on):
+# Xcode 12's own bundled ld64-609 has a real internal crash under
+# -Wl,-fixup_chains that a much newer ld does not. Compiling still uses
+# Xcode 12's clang/SDK above (untouched -- that vintage match is a
+# separate, still-load-bearing invariant); only the final link step's
+# linker binary changes, via clang's -B override.
+DAILY_XCODE="$(xcode-select -p 2>/dev/null)"
+NEWLD_BINDIR="$DAILY_XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+if [ ! -x "$NEWLD_BINDIR/ld" ]; then
+    echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE) -- run 'xcode-select -p' to check, see docs/backlog.md item d9" >&2
+    exit 1
+fi
 if [ ! -f "$OUT/system/libsystem_platform.dylib" ]; then
     echo "error: $OUT/system/libsystem_platform.dylib not found -- run build_libsystem_platform.sh first (real _platform_memmove dependency)" >&2
     exit 1
@@ -59,8 +74,18 @@ CFLAGS_COMMON="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno
 # libsystem_malloc.dylib is real.
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libsystem_blocks.dylib"
+    # -not_for_dyld_shared_cache: real, newly-surfaced requirement of
+    # the daily-driver Xcode's newer ld (NEWLD_BINDIR above) -- it
+    # refuses "-undefined dynamic_lookup"/-U on a dylib it classifies
+    # as shared-cache eligible (real /usr/lib install path) unless this
+    # is set, a real check Xcode 12's ld64-609 never enforced. This
+    # project builds no real dyld shared cache at all, so opting every
+    # real dylib out is correct, not a workaround (docs/backlog.md item
+    # d9's NEWLD_BINDIR sweep, 2026-08-28).
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
     -install_name /usr/lib/system/libsystem_blocks.dylib \
+    -Wl,-not_for_dyld_shared_cache \
+    -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -o "$OUT/system/libsystem_blocks.dylib" \
     "$OUT/libsystem_blocks/data.o" "$OUT/libsystem_blocks/runtime.o" \

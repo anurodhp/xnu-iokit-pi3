@@ -27,6 +27,21 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     exit 1
 fi
 
+# Real, verified fix (2026-08-28, see docs/backlog.md item d9 for the
+# full trail and tools/userland_staging/build_simple_cmds.sh's own
+# NEWLD_BINDIR header comment for the isolated repro this is based on):
+# Xcode 12's own bundled ld64-609 has a real internal crash under
+# -Wl,-fixup_chains that a much newer ld does not. Compiling still uses
+# Xcode 12's clang/SDK above (untouched -- that vintage match is a
+# separate, still-load-bearing invariant); only the final link step's
+# linker binary changes, via clang's -B override.
+DAILY_XCODE="$(xcode-select -p 2>/dev/null)"
+NEWLD_BINDIR="$DAILY_XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+if [ ! -x "$NEWLD_BINDIR/ld" ]; then
+    echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE) -- run 'xcode-select -p' to check, see docs/backlog.md item d9" >&2
+    exit 1
+fi
+
 XML2="../../third_party/libxml2"
 SRC="$XML2/libxml2"
 PREGEN="$XML2/Pregenerated Files/include"
@@ -189,8 +204,18 @@ echo "wrote $OUT/libxml2.a ($(ls "$OUT"/xml2_obj/*.o "$OUT"/xml2_extras_obj/*.o 
 # object in the archive in regardless of reference.
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libxml2.dylib"
+    # -not_for_dyld_shared_cache: real, newly-surfaced requirement of
+    # the daily-driver Xcode's newer ld (NEWLD_BINDIR above) -- it
+    # refuses "-undefined dynamic_lookup"/-U on a dylib it classifies
+    # as shared-cache eligible (real /usr/lib install path) unless this
+    # is set, a real check Xcode 12's ld64-609 never enforced. This
+    # project builds no real dyld shared cache at all, so opting every
+    # real dylib out is correct, not a workaround (docs/backlog.md item
+    # d9's NEWLD_BINDIR sweep, 2026-08-28).
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
     -install_name /usr/lib/libxml2.2.dylib \
+    -Wl,-not_for_dyld_shared_cache \
+    -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -Wl,-alias,'_pthread_cond_init$UNIX2003',_pthread_cond_init \
     -Wl,-alias,__pthread_cond_wait,_pthread_cond_wait \

@@ -244,6 +244,21 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     exit 1
 fi
 
+# Real, verified fix (2026-08-28, see docs/backlog.md item d9 for the
+# full trail and tools/userland_staging/build_simple_cmds.sh's own
+# NEWLD_BINDIR header comment for the isolated repro this is based on):
+# Xcode 12's own bundled ld64-609 has a real internal crash under
+# -Wl,-fixup_chains that a much newer ld does not. Compiling still uses
+# Xcode 12's clang/SDK above (untouched -- that vintage match is a
+# separate, still-load-bearing invariant); only the final link step's
+# linker binary changes, via clang's -B override.
+DAILY_XCODE="$(xcode-select -p 2>/dev/null)"
+NEWLD_BINDIR="$DAILY_XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+if [ ! -x "$NEWLD_BINDIR/ld" ]; then
+    echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE) -- run 'xcode-select -p' to check, see docs/backlog.md item d9" >&2
+    exit 1
+fi
+
 # libmach_ipc.a's own mach_ipc_dead_stubs.o is real, confirmed-dead
 # weight now: all 4 of its symbols (_mach_port_extract_right/
 # _insert_right/_unguard, _voucher_mach_msg_set) are already provided
@@ -618,14 +633,33 @@ CFLAGS_PTHREAD_GAP=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestandi
 
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libdispatch.dylib"
+    # -not_for_dyld_shared_cache: real, newly-surfaced requirement of
+    # the daily-driver Xcode's newer ld (NEWLD_BINDIR above) -- it
+    # refuses "-undefined dynamic_lookup"/-U on a dylib it classifies
+    # as shared-cache eligible (real /usr/lib install path) unless this
+    # is set, a real check Xcode 12's ld64-609 never enforced. This
+    # project builds no real dyld shared cache at all, so opting every
+    # real dylib out is correct, not a workaround (docs/backlog.md item
+    # d9's NEWLD_BINDIR sweep, 2026-08-28).
+    #
+    # __dispatch_queue_attr_concurrent alias: real init.c only compiles a
+    # distinct definition of this global under `#if DISPATCH_VARIANT_STATIC`
+    # -- the real dylib build instead aliases it to __dispatch_queue_attrs[0]
+    # via the real, pinned xcodeconfig/libdispatch.aliases + -alias_list on
+    # Darwin (init.c's own comment says so explicitly). Same real pairing
+    # as that file's one non-UNIX2003 entry, just spelled as a single
+    # `-alias` pair instead of wiring up `-alias_list` for one line.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
     -install_name /usr/lib/system/libdispatch.dylib \
+    -Wl,-not_for_dyld_shared_cache \
+    -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     "${UNDEF_FLAGS[@]}" \
     -Wl,-alias,___kill,'_kill$UNIX2003' \
     -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
     -Wl,-alias,__mal_semwait_sleep,'_sleep$UNIX2003' \
     -Wl,-alias,_write,'_write$UNIX2003' \
+    -Wl,-alias,__dispatch_queue_attrs,__dispatch_queue_attr_concurrent \
     -o "$OUT/system/libdispatch.dylib" \
     "$OUT"/dispatch_obj/*.o "$OUT"/dispatch_obj/event/*.o \
     "$OUT"/dispatch_dylib_extract/*.o \
