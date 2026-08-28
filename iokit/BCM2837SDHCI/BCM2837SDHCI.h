@@ -131,6 +131,28 @@ private:
 	IOSimpleLock *fStatusLock;      // protects fPendingIntStatus between interruptOccurred() and waiters
 	volatile uint32_t fPendingIntStatus; // INT_STATUS bits acked but not yet consumed by a waitFor call
 
+	// Serializes doAsyncReadWrite() end-to-end (command issue through
+	// completion) against itself. Backlog P0#1: two concurrent I/O
+	// requests (now plausible with two mounted partitions, disk0s1 +
+	// disk0s2) previously had nothing stopping their register writes
+	// from interleaving and both consuming from the same
+	// fPendingIntStatus, so one request could eat another's completion
+	// bits - silent corruption or a hang. A real IOCommandGate/workloop
+	// would be the fuller architectural answer (the backlog's original
+	// ask), but this driver's doAsyncReadWrite() is already synchronous
+	// under the hood (it blocks the calling thread on
+	// waitForIntStatus32() rather than completing from interrupt
+	// context - see that function's own comment), so a plain mutex held
+	// for the whole command-issue-through-completion span is a real,
+	// sufficient critical section for this specific driver shape: it
+	// guarantees only one thread is ever touching the command/transfer
+	// registers or fPendingIntStatus's *producer* side (waitForIntStatus32's
+	// poll-fallback path also touches it) at a time. IOLockLock may block,
+	// which is fine - doAsyncReadWrite() is called from an ordinary
+	// (non-interrupt) IOKit context, same as it already blocks inside
+	// waitForIntStatus32() today.
+	IOLock       *fTransferLock;
+
 	// Diagnostic-turned-permanent counters (see waitForIntStatus32() and
 	// interruptOccurred()). fRealInterruptHits is incremented ONLY inside
 	// interruptOccurred() itself, fPollFallbackHits ONLY inside this
@@ -284,6 +306,26 @@ private:
 	bool     pinmuxSDSlot(void);
 
 	bool     resetHost(void);
+
+	// SDHCI-spec error recovery (backlog P0#2): previously every error
+	// path here was just IOLog()+return false, leaving CMD_INHIBIT/
+	// DAT_INHIBIT asserted forever after the first real CRC error,
+	// timeout, or card removal - the classic real-hardware bring-up
+	// cliff QEMU's SD model never reproduces (it doesn't model these
+	// errors, so a reset was never needed for a QEMU boot to keep
+	// working). resetCmdLine() issues SOFTWARE_RESET_CMD (SDHCI spec
+	// 3.7.1, kRegSoftwareReset bit1) and polls for it to self-clear;
+	// resetDatLine() does the same for SOFTWARE_RESET_DAT (bit2) and
+	// additionally issues CMD12 (STOP_TRANSMISSION) to formally abort
+	// an in-flight data transfer, matching Linux's sdhci_end_tx() /
+	// sdhci_error_recovery() split between a plain command-line reset
+	// and a full data-abort. Called from sendCommand()'s own timeout/
+	// error paths and from readBlocksPIO()/writeBlocksPIO()'s data-phase
+	// error paths so a subsequent command always starts from a clean
+	// controller state instead of dying on a stuck INHIBIT bit.
+	void     resetCmdLine(void);
+	void     resetDatLine(void);
+
 	bool     setClock(uint32_t targetHz);
 	bool     cardIdentify(void); // CMD0/8/ACMD41/CMD2/CMD3/CMD7/CMD9-derived geometry, CMD16 block length
 	bool     readBlocksPIO(uint64_t startBlock, uint32_t nblks, void *buf);

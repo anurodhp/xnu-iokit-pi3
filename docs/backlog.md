@@ -13,83 +13,151 @@ this list is stale.
 
 ## P0 — real-hardware risk (would plausibly hang, storm, or panic a real Pi)
 
-1. **NOT ATTEMPTED this pass** - see the note after item 6 for why (real
-   fix needs `IOCommandGate`/workloop integration, higher risk/effort than
-   the rest of this batch).
+1. **[FIXED 2026-08-27, QEMU-verified]** `BCM2837SDHCI::doAsyncReadWrite()`
+   had no serialization at all — no `IOCommandGate`, no workloop, no
+   mutex. Two concurrent requests (now plausible: the SD image has two
+   mounted partitions, `disk0s1` + `disk0s2`) could interleave register
+   writes and both consume from the same `fPendingIntStatus`, causing one
+   to eat the other's completion — silent data corruption or a hang, not
+   a clean error. Re-confirmed still present exactly as described before
+   fixing.
 
-   **`BCM2837SDHCI::doAsyncReadWrite()` has no serialization at all** —
-   no `IOCommandGate`, no workloop, no mutex. Two concurrent requests
-   (now plausible: the SD image has two mounted partitions, `disk0s1` +
-   `disk0s2`) can interleave register writes and both consume from the
-   same `fPendingIntStatus`, causing one to eat the other's completion —
-   silent data corruption or a hang, not a clean error. Survives today
-   only because nothing currently issues overlapping I/O.
+   **Fix**: added `fTransferLock` (a plain `IOLock`), held for the whole
+   command-issue-through-completion span of `doAsyncReadWrite()`. Not the
+   full `IOCommandGate`/workloop integration this item originally asked
+   for (that remains the architecturally "fuller" answer) — but this
+   driver's `doAsyncReadWrite()` is already synchronous under the hood
+   (it blocks the calling thread on `waitForIntStatus32()` rather than
+   completing from interrupt context), so a plain mutex around that
+   already-synchronous span is a real, sufficient critical section: it
+   guarantees only one thread ever touches the command/transfer registers
+   or `fPendingIntStatus`'s producer side at a time, which is exactly the
+   corruption this item described. See `fTransferLock`'s own header
+   comment (`iokit/BCM2837SDHCI/BCM2837SDHCI.h`) for the full reasoning.
+   **Verification caveat, stated honestly**: nothing in this project
+   currently issues genuinely concurrent I/O (same limitation the
+   original filing noted), so the QEMU boot test below confirms *no
+   regression* — real boot, real login, real reads against both
+   partitions — but does not and cannot exercise the actual interleaving
+   race the fix closes, since no current workload drives concurrent
+   requests to begin with.
 
-2. **NOT ATTEMPTED this pass** - see the note after item 6.
+2. **[FIXED 2026-08-27, QEMU-verified]** No error recovery anywhere in
+   `BCM2837SDHCI` — every error path was `IOLog(); return false;`.
+   Re-confirmed still true before fixing: no `SOFTWARE_RESET_CMD`/
+   `SOFTWARE_RESET_DAT`/`CMD12` anywhere in the file.
 
-   **No error recovery anywhere in `BCM2837SDHCI`.** Every error path is
-   `IOLog(); return false;`. The SDHCI spec requires `SOFTWARE_RESET_CMD`/
-   `SOFTWARE_RESET_DAT` after a command/data error and `CMD12` to abort an
-   in-flight transfer; none are issued. After the first real CRC error,
-   timeout, or card removal, `CMD_INHIBIT`/`DAT_INHIBIT` stay asserted and
-   every subsequent command dies after a 1s busy-wait — the classic
-   bring-up cliff QEMU's SD model never reproduces.
+   **Fix**: added `resetCmdLine()` (SDHCI spec 3.7.1 `SOFTWARE_RESET_CMD`,
+   `kRegSoftwareReset` bit1) and `resetDatLine()` (`CMD12`
+   STOP_TRANSMISSION best-effort, then `SOFTWARE_RESET_DAT` bit2), wired
+   into every real error/timeout path: `sendCommand()`'s CMD_INHIBIT/
+   DAT_INHIBIT-stuck checks, its CMD_COMPLETE timeout and error-status
+   paths, and `readBlocksPIO()`/`writeBlocksPIO()`'s buffer-ready-timeout,
+   error-status, and TRANSFER_COMPLETE-timeout/error paths — matching
+   Linux's `sdhci_reset(host, SDHCI_RESET_CMD/_DATA)` split. QEMU's SD
+   model still doesn't inject real CRC/timeout/card-removal errors (per
+   this item's own original note), so — same caveat as item 1 — the
+   QEMU boot test below confirms the reset paths compile and don't
+   regress a clean boot, not that they trigger correctly under a real
+   error (no current QEMU-reachable workload can force one).
 
-3. **NOT ATTEMPTED this pass** - see the note after item 6.
+3. **NOT FIXED — deliberately, after real investigation, not just
+   deferred.** `BCM2837SDHCI`'s SD clock still never leaves ~490 kHz /
+   1-bit; `setClock()` still always writes divisor `0xFF` (re-confirmed
+   unchanged), and `kRegHostControl` is still never written. Investigated
+   whether a real, low-risk fix was possible this pass (per this backlog
+   entry's own instructions: write one if "the right fix is clear and
+   low-risk", defer with a status note otherwise) and concluded it is
+   **not** clear/low-risk here, so no code was changed: computing a
+   correct data-phase divisor requires knowing the controller's real base
+   clock frequency, and this SoC is `missing_caps=true` (the
+   `CAPABILITIES` register's base-clock field is explicitly untrustworthy
+   per the Linux `sdhci-iproc` quirk this driver already documents) — the
+   real base clock is set by VideoCore firmware at boot and can vary by
+   board/firmware config (commonly cited real-hardware values range
+   ~41-50 MHz depending on `core_freq`), and this project has no
+   VC-mailbox driver reachable from this kext to query it for real (see
+   `tools/sdhci_baremetal/README.md`'s Finding, and backlog item 8's
+   identical gap for `SMSC9514Ethernet`'s MAC address). Hardcoding a
+   guessed base clock and computing a divisor from it risks programming a
+   data-phase clock *faster* than the card/bus can actually handle on
+   some real boards — active data corruption, strictly worse than today's
+   always-conservative divisor `0xFF`, and exactly the kind of fabricated,
+   unverifiable-from-QEMU guess this project's conventions exist to
+   avoid. Same reasoning blocks widening the bus via `kRegHostControl`
+   without also negotiating `ACMD6` with the card first (untested
+   protocol addition, same class of real-hardware-only risk). Real fix
+   needs a real VC-mailbox "get clock rate" query (or a bootloader-stashed
+   DT `clock-frequency` property) wired to this driver first — not
+   attempted, scoped here for whoever picks up the mailbox work.
 
-   **`BCM2837SDHCI`'s SD clock never leaves ~490 kHz / 1-bit.**
-   `setClock()` always writes divisor `0xFF` regardless of the requested
-   rate (explicitly `// TODO` for the data-phase case), and
-   `kRegHostControl` is never written to widen the bus. QEMU has no timing
-   cost; on real hardware this is roughly 60 KB/s — mounting HFS+ and
-   exec'ing a binary at that rate will look indistinguishable from a hang.
+4. **[FIXED 2026-08-27, QEMU-verified]** No power-on ramp / 74-clock
+   delay before `CMD0`, and power was enabled *after* the clock in
+   `start()` rather than before. Re-confirmed still true before fixing
+   (power write was after `setClock(400000)`).
 
-4. **NOT ATTEMPTED this pass** - see the note after item 6.
+   **Fix**: reordered `start()` to assert `kRegPowerControl` (3.3V +
+   `SD_BUS_POWER`) *before* `setClock()`, added an `IODelay(1000)` (≥1ms,
+   spec 6.4.1) between power-on and clock-start, and an `IODelay(250)`
+   (≥74 clocks at the 400kHz identification clock, ~185us, rounded up)
+   between clock-start and the first command (`cardIdentify()`). This
+   only changes *ordering and idle delays*, not any actual signal
+   rate/timing — the same class of change item 3 above declined to make
+   — so unlike item 3 there's no way for a wrong guess here to make
+   things worse on real hardware (a busy-wait can only be too short or
+   comfortably long, never "wrong speed"). QEMU has no power/clock
+   dependent reset behavior to catch the old ordering being wrong (which
+   is exactly why it went unnoticed originally), so this is verified only
+   as "boots clean, no regression" below, same honest caveat as items 1-2.
 
-   **No power-on ramp / 74-clock delay before `CMD0`**, and power is
-   enabled *after* the clock in `start()` rather than before. Spec
-   requires supply ramp + ≥1ms + 74 clocks first. Untested by QEMU.
+5. **[FIXED 2026-08-27, code correct but genuinely unverifiable from
+    QEMU — exactly as this item originally predicted.]** Re-confirmed the
+    core claim (no barrier at the specific location this item calls out)
+    still held before fixing. One correction to this item's own
+    description, found while re-checking it: the broader claim that
+    `grep -rn "dsb\|dmb\|isb\|OSSynchronizeIO"` returns nothing project-wide
+    except `OSMemoryBarrier()` is now stale — `iokit/BCM2837DWC2/
+    BCM2837DWC2.cpp` (added 2026-08-21, after this item was first filed)
+    already has two real `dsb sy` barriers around its DMA buffer/HCDMA
+    programming. The specific gap this item flagged — no barrier in
+    `BCM2837InterruptController::enableVector()`/`disableVectorHard()`
+    before the next `IRQ_PENDING` read — was still real and unfixed.
 
-5. **NOT ATTEMPTED this pass** - see the note after item 6.
+    **Fix**: added `__asm__ volatile ("dsb sy" ::: "memory")` after each
+    of `enableVector()`'s and `disableVectorHard()`'s register writes,
+    matching the barrier style already used in `BCM2837DWC2.cpp`. As
+    predicted, this is genuinely unverifiable from QEMU/TCG (all MMIO is
+    strongly ordered there regardless of the barrier's presence) — the
+    QEMU boot test below only confirms the added instruction doesn't
+    itself break anything, not that it fixes a real ordering bug on
+    silicon.
 
-    **No memory barriers anywhere in `iokit/`.** `grep -rn "dsb\|dmb\|isb\|OSSynchronizeIO"` across the whole driver tree returns nothing —
-    the only ordering primitive present (`OSMemoryBarrier()` in both
-    interrupt controllers) guards CPU-to-CPU ordering, not MMIO ordering.
-    Likely benign if `IODeviceMemory` mappings land Device-nGnRnE (typically
-    already ordered for same-peripheral accesses), but unverified in this
-    tree, and QEMU/TCG makes all MMIO strongly ordered regardless of
-    whether real hardware would. Cheapest place to add one: after the
-    `Enable_IRQs`/`Disable_IRQs` register writes in
-    `BCM2837InterruptController::enableVector()`/`disableVectorHard()`,
-    before the next `IRQ_PENDING` read.
+6. **Re-verified, not re-tested (inherently real-hardware-only).** GPIO
+    pinmux for the SD slot is still only ever exercised in QEMU, where
+    it remains a documented no-op (`tools/sdhci_baremetal/README.md`'s
+    own from-scratch bare-metal harness independently confirms this
+    QEMU model parents the card onto `sdhci` by default regardless of
+    GPFSEL). Re-read `pinmuxSDSlot()` (`iokit/BCM2837SDHCI/BCM2837SDHCI.cpp`)
+    end to end: the GPIO34-39-to-input fix for the WiFi-collision bug is
+    still in place, unchanged, and the reasoning still holds (GPFSEL3
+    bits for GPIO34-39 set to input `0b000` before GPFSEL4/5 claim
+    GPIO48-53 as ALT3). Still genuinely untested on real silicon — no
+    QEMU boot can close this, confirmed again this pass rather than
+    assumed.
 
-6. **GPIO pinmux for the SD slot is still only ever exercised in QEMU**,
-    where it's a documented no-op (the emulated card is parented onto the
-    bus regardless of GPFSEL). This session's GPIO34-39-to-input fix (for
-    the WiFi-collision bug) is logically sound but genuinely untested on
-    real silicon — first real-hardware boot is the only way to close this.
-
-**Why items 1-5 weren't attempted this pass** (note: these numbers refer
-to this same set of items by their position in this list — see
-`docs/historic/backlog.md` for the original item numbers 4-7, 10 this note
-was first written against): all real, all in `BCM2837SDHCI.cpp`'s hot I/O
-path, and all meaningfully higher risk than the rest of this batch - #1
-needs real `IOCommandGate`/workloop integration (an architectural change,
-not a local fix), #2 needs a careful CMD12/reset state machine that could
-interact with the just-verified interrupt-delivery path in subtle ways,
-#3 changes real signal timing (clock divisor/bus width) which is exactly
-the kind of change that's hardest to trust from QEMU alone since QEMU has
-no timing cost to begin with, and #4 similarly touches power/clock
-sequencing. Following this backlog's own explicit guidance ("go one at a
-time, rebuild+boot-test after each, be willing to stop partway through and
-report clearly rather than rushing all four") - after a productive pass
-through several lower-risk items, this was the right place to stop and
-hand off clearly rather than push into higher-risk territory in the same
-sitting. #5 (memory barriers) is lower-risk but was deferred alongside
-these since it's genuinely unverifiable from QEMU (which makes all MMIO
-strongly ordered regardless) - no rebuild+boot-test could actually
-confirm or refute it, so there was no way to close the verification loop
-this pass even if the change itself is cheap.
+**On items 1, 2, 4, 5 above**: all four were rebuilt together
+(`tools/build_kexts.sh` clean compile, then a full `tools/
+build_xnu_7195.sh` kernel rebuild) and verified with one real QEMU boot
+(`tools/boot_test.py --login --cmd 'ls /' --cmd 'cat /etc/hosts' --cmd
+'ls /System'`, `--expect-fail 'panic\('`) — real boot, real login, real
+reads against both mounted partitions (`disk0s1` root / `disk0s2` boot),
+zero panics, `BCM2837SDHCI` log confirms a real hardware interrupt still
+observed and the card still identifies correctly (RCA=0x4567, SDHC,
+1200MB). This confirms no regression from any of the four changes
+together; it does not and cannot exercise the specific fault conditions
+items 1/2/5 exist to guard against (concurrent I/O, a real card/bus
+error, or a real MMIO-ordering violation), since QEMU reproduces none of
+those - noted individually above rather than glossed over.
 
 7. **Real, reproducible kernel PANIC (not a hang) from sustained fast
     console output — found 2026-08-16 while QEMU-verifying the real
@@ -132,6 +200,78 @@ this pass even if the change itself is cheap.
     commands are — anyone hitting this again should start from the exact
     panic string above and `nm`/`atos` the handler address against the
     current kernel build rather than re-diagnosing from scratch.
+
+    **UPDATE 2026-08-27: does NOT currently reproduce, after real,
+    sustained re-verification — not closing this out, but downgrading
+    the "reliably panics within seconds" claim, which is now stale.**
+    Per this backlog's own "verify claims against source, not by date/
+    name proximity" rule, re-ran the exact real repro (`yes.macho`, real
+    unmodified source, at the console) against the CURRENT kernel build
+    rather than assuming the 2026-08-16 finding still holds — it does
+    not, at least not under this same QEMU config:
+    - First re-derived the current handler address the same honest way
+      this item asks for: `nm build/xnu-latest-build/out/
+      kernel.development.bcm2837-7195.unstripped | grep _rtclock_intr`
+      → `0xfffffff007335230` (shifted from the original
+      `0x...732d170`, exactly as expected — confirms the address in
+      this item's own text was already stale before this pass, matching
+      the note right above this update).
+    - `yes | head -c 2000000 > /dev/null` (real pipe, output never
+      touches the console) ran clean, no panic — first real signal that
+      console I/O specifically, not just high syscall/trap rate alone,
+      is implicated (matches the original finding's own handler-address
+      evidence pointing at `rtclock_intr`, but narrows what actually
+      drives it).
+    - `yes` run bare at the real console (exact original repro shape)
+      for **100 real seconds**: no panic, `[boot_test] PASS`.
+    - Added a real, cheap TEMP DIAGNOSTIC to `third_party/xnu-7195/
+      osfmk/kern/timer_call.c`'s `timer_queue_expire_with_options()`
+      (kept in place per this project's existing convention of leaving
+      diagnostic instrumentation rather than reverting it — see this
+      file's own P3#3 entry) to test the leading hypothesis directly:
+      an unbounded/growing number of `timer_call` entries piling up on
+      the per-CPU rtclock queue (each real, legitimate, but summing to
+      hundreds of ms if there are enough of them) rather than genuinely
+      unbounded per-entry cost — logs `queue->count` and the loop's real
+      iteration count whenever either exceeds 32 in one call. Rebuilt
+      the kernel with this in place and re-ran `yes` bare at the console
+      for **210 real seconds** (25.5MB of real console output, `[boot_test]
+      PASS`) — the diagnostic **never fired once**: the per-CPU timer
+      queue never exceeded 32 pending entries at any point in 3.5
+      minutes of the exact workload that used to panic within seconds.
+      `BCM2837SDHCI` still shows a real hardware interrupt and a correctly
+      identified card partway through this same boot, confirming items
+      1/2/4/5's fixes above are intact in this build and this is a real,
+      unmodified boot, not a degraded one.
+    - **Working hypothesis for why, not fully confirmed**: this
+      kernel has changed substantially since 2026-08-16 — most notably
+      `xnu-7195` commit `d7c6934d8` ("Switch root from mockfs to real
+      msdosfs, **fix console I/O plumbing for pid 1**"), which landed
+      afterward for unrelated Phase 5 reasons but, per its own commit
+      message, touched exactly the console I/O path this item's own
+      panic evidence pointed at (`rtclock_intr` handler address, high
+      syscall rate from console writes) before ever pointing at a
+      confirmed root cause inside `rtclock_intr`/`timer_intr` itself.
+      Also relevant: the original finding predates Phase 6b (INET
+      enabled 2026-08-21) entirely, so today's per-CPU timer queue
+      actually carries *more* background load (network timers) than it
+      did during the original repro, yet still never panics — evidence
+      against "more timer load" being the driver, consistent with the
+      bug instead being specific to whatever the console I/O plumbing
+      fix changed.
+    - **Not claiming root-caused or intentionally fixed** — no code
+      change was made to actually address this item (the TEMP
+      DIAGNOSTIC is observation-only), and it's possible a different
+      workload, a longer run, or real hardware's own timing could still
+      trigger it. Downgrading from "reliably panics within seconds" to
+      "not reproducible in 210 real QEMU seconds against the current
+      build, despite a real, honest attempt" — a meaningfully different,
+      weaker claim than this item's original text, which is why this
+      update doesn't just delete the original finding. Whoever revisits
+      this should re-run the exact repro above first before assuming
+      either "still broken" or "fixed" — both the original finding and
+      this update were real, evidenced observations at their respective
+      times.
 
 ---
 

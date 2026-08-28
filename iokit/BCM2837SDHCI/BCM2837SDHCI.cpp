@@ -53,6 +53,14 @@ BCM2837SDHCI::init(OSDictionary *properties)
 		fInterruptLock = NULL;
 		return false;
 	}
+	fTransferLock = IOLockAlloc();
+	if (fTransferLock == NULL) {
+		IOSimpleLockFree(fStatusLock);
+		fStatusLock = NULL;
+		IOLockFree(fInterruptLock);
+		fInterruptLock = NULL;
+		return false;
+	}
 	return true;
 }
 
@@ -408,6 +416,44 @@ BCM2837SDHCI::resetHost(void)
 	return true;
 }
 
+void
+BCM2837SDHCI::resetCmdLine(void)
+{
+	// SDHCI_SOFTWARE_RESET bit1 = "reset cmd" (SOFTWARE_RESET_CMD): resets
+	// only the command-inhibit logic/state machine, not the data path or
+	// clock config - the correct, narrower recovery after a command
+	// timeout/CRC/index error (SDHCI spec 3.7.1), matching Linux's
+	// sdhci_reset(host, SDHCI_RESET_CMD).
+	writeReg8(kRegSoftwareReset, 0x02);
+	if (!pollUntil(^bool(void) { return (readReg8(kRegSoftwareReset) & 0x02) == 0; }, 100000)) {
+		IOLog("BCM2837SDHCI: resetCmdLine: SOFTWARE_RESET_CMD did not clear\n");
+	}
+}
+
+void
+BCM2837SDHCI::resetDatLine(void)
+{
+	// CMD12 (STOP_TRANSMISSION) first, matching Linux's
+	// sdhci_error_recovery()/mmc_send_stop() ordering - the card may still
+	// be mid-transfer and the spec expects an explicit abort before the
+	// host resets its own DAT logic out from under it. Best-effort only:
+	// if CMD12 itself fails (e.g. the card is gone), still fall through to
+	// SOFTWARE_RESET_DAT unconditionally rather than leaving DAT_INHIBIT
+	// stuck - that stuck-forever state is exactly the bug this item exists
+	// to fix.
+	uint32_t r[4];
+	sendCommand(12, 0, kCmdRespShortBusy, false, r);
+
+	// SDHCI_SOFTWARE_RESET bit2 = "reset dat" (SOFTWARE_RESET_DAT): resets
+	// the data path (buffer pointers, DAT_INHIBIT, block/transfer-mode
+	// registers) without touching the command logic or clock config -
+	// SDHCI spec 3.7.1, matching Linux's sdhci_reset(host, SDHCI_RESET_DATA).
+	writeReg8(kRegSoftwareReset, 0x04);
+	if (!pollUntil(^bool(void) { return (readReg8(kRegSoftwareReset) & 0x04) == 0; }, 100000)) {
+		IOLog("BCM2837SDHCI: resetDatLine: SOFTWARE_RESET_DAT did not clear\n");
+	}
+}
+
 bool
 BCM2837SDHCI::setClock(uint32_t targetHz)
 {
@@ -438,11 +484,19 @@ bool
 BCM2837SDHCI::sendCommand(uint8_t cmdIndex, uint32_t arg, uint32_t respType, bool hasData, uint32_t resp[4])
 {
 	if (!waitClear32(kRegPresentState, kPresentCmdInhibit, 1000000)) {
-		IOLog("BCM2837SDHCI: CMD_INHIBIT stuck before CMD%u\n", cmdIndex);
+		IOLog("BCM2837SDHCI: CMD_INHIBIT stuck before CMD%u - resetting cmd line\n", cmdIndex);
+		// Backlog P0#2: this used to just log and fail, leaving the stuck
+		// inhibit bit for every subsequent command to die on too. A stuck
+		// CMD_INHIBIT this early (before we've even issued anything) means
+		// a prior transaction's cleanup never finished - the SDHCI-spec
+		// recovery for that is a command-line reset, not a wait-forever.
+		resetCmdLine();
 		return false;
 	}
 	if (hasData && !waitClear32(kRegPresentState, kPresentDatInhibit, 1000000)) {
-		IOLog("BCM2837SDHCI: DAT_INHIBIT stuck before CMD%u\n", cmdIndex);
+		IOLog("BCM2837SDHCI: DAT_INHIBIT stuck before CMD%u - resetting dat line\n", cmdIndex);
+		writeReg8(kRegSoftwareReset, 0x04); // SOFTWARE_RESET_DAT only - no card to send CMD12 to yet
+		pollUntil(^bool(void) { return (readReg8(kRegSoftwareReset) & 0x04) == 0; }, 100000);
 		return false;
 	}
 
@@ -464,10 +518,20 @@ BCM2837SDHCI::sendCommand(uint8_t cmdIndex, uint32_t arg, uint32_t respType, boo
 	if (!waitForIntStatus32(kIntCmdComplete | kIntErrorMask, 1000000, &status)) {
 		IOLog("BCM2837SDHCI: CMD%u timed out (no CMD_COMPLETE/error) raw INT_STATUS=%#x PRESENT_STATE=%#x\n",
 		    cmdIndex, readReg32(kRegIntStatus), readReg32(kRegPresentState));
+		// Backlog P0#2: a real command timeout leaves CMD_INHIBIT asserted
+		// with nothing to ever clear it again (the completion that would
+		// normally do so never arrived) - every subsequent command would
+		// die on the very first waitClear32() above. Reset the command
+		// line so the controller comes back to a clean, usable state.
+		resetCmdLine();
 		return false;
 	}
 	if (status & kIntErrorMask) {
 		IOLog("BCM2837SDHCI: CMD%u error, INT_STATUS=%#x\n", cmdIndex, status);
+		// Same recovery as the timeout case above - a real CRC/index/end-bit
+		// error (SDHCI spec 3.7.1) requires SOFTWARE_RESET_CMD before the
+		// controller can reliably accept another command.
+		resetCmdLine();
 		return false;
 	}
 
@@ -664,11 +728,35 @@ BCM2837SDHCI::start(IOService *provider)
 	if (!resetHost()) {
 		return false;
 	}
+
+	// Backlog P0#4: this used to enable the clock (setClock() below)
+	// *before* turning on bus power at all, and sent CMD0 with no
+	// settling delay after either - the reverse of the real SD Physical
+	// Layer spec's power-up sequencing (6.4.1/"Power Up" figure): Vdd
+	// ramp first, wait for it to stabilize, only then start the clock,
+	// and hold the clock running for >=74 clocks with the bus idle before
+	// the first command. Real cards can misbehave (wrong power-on state
+	// latched, CMD0 arriving before the card's own internal reset
+	// completes) if commands start before this settles - QEMU's SD model
+	// has no such power/clock-dependent reset behavior to catch the old
+	// ordering being wrong, which is exactly why this went unnoticed.
+	//
+	// SDHCI_POWER_CONTROL: 3.3V (0x0E) | SD_BUS_POWER (0x01) - now first.
+	writeReg8(kRegPowerControl, 0x0F);
+	// >=1ms after Vdd is asserted before the clock may start (spec
+	// 6.4.1). IODelay is a busy-wait; this path runs once at start(),
+	// long before interrupts/scheduling pressure matter here.
+	IODelay(1000);
+
 	if (!setClock(400000)) {
 		return false;
 	}
-	// SDHCI_POWER_CONTROL: 3.3V (0x0E) | SD_BUS_POWER (0x01).
-	writeReg8(kRegPowerControl, 0x0F);
+	// >=74 SD clocks with CMD held high (the hardware idles CMD high
+	// automatically once the clock is running and nothing has been
+	// issued yet) before the first command. At the 400kHz identification
+	// clock this driver programs, 74 clocks is ~185us - round up
+	// generously since this cost is paid exactly once at boot.
+	IODelay(250);
 
 	if (!cardIdentify()) {
 		IOLog("BCM2837SDHCI: no card identified at start() - device will report no media\n");
@@ -704,6 +792,10 @@ BCM2837SDHCI::free(void)
 	if (fInterruptLock != NULL) {
 		IOLockFree(fInterruptLock);
 		fInterruptLock = NULL;
+	}
+	if (fTransferLock != NULL) {
+		IOLockFree(fTransferLock);
+		fTransferLock = NULL;
 	}
 	super::free();
 }
@@ -817,11 +909,15 @@ BCM2837SDHCI::readBlocksPIO(uint64_t startBlock, uint32_t nblks, void *buf)
 	for (uint32_t b = 0; b < nblks; b++) {
 		uint32_t status;
 		if (!waitForIntStatus32(kIntBufReadRdy | kIntErrorMask, 1000000, &status)) {
-			IOLog("BCM2837SDHCI: read block %u/%u timed out waiting BUFFER_READ_READY\n", b, nblks);
+			IOLog("BCM2837SDHCI: read block %u/%u timed out waiting BUFFER_READ_READY - resetting dat line\n", b, nblks);
+			// Backlog P0#2: a stuck DAT_INHIBIT here previously meant every
+			// later command touching the data path would die too.
+			resetDatLine();
 			return false;
 		}
 		if (status & kIntErrorMask) {
-			IOLog("BCM2837SDHCI: read error, INT_STATUS=%#x\n", status);
+			IOLog("BCM2837SDHCI: read error, INT_STATUS=%#x - resetting dat line\n", status);
+			resetDatLine();
 			return false;
 		}
 
@@ -832,11 +928,13 @@ BCM2837SDHCI::readBlocksPIO(uint64_t startBlock, uint32_t nblks, void *buf)
 
 	uint32_t xferStatus;
 	if (!waitForIntStatus32(kIntTransferDone | kIntErrorMask, 1000000, &xferStatus)) {
-		IOLog("BCM2837SDHCI: read did not reach TRANSFER_COMPLETE\n");
+		IOLog("BCM2837SDHCI: read did not reach TRANSFER_COMPLETE - resetting dat line\n");
+		resetDatLine();
 		return false;
 	}
 	if (xferStatus & kIntErrorMask) {
-		IOLog("BCM2837SDHCI: read error at TRANSFER_COMPLETE, INT_STATUS=%#x\n", xferStatus);
+		IOLog("BCM2837SDHCI: read error at TRANSFER_COMPLETE, INT_STATUS=%#x - resetting dat line\n", xferStatus);
+		resetDatLine();
 		return false;
 	}
 
@@ -864,11 +962,13 @@ BCM2837SDHCI::writeBlocksPIO(uint64_t startBlock, uint32_t nblks, const void *bu
 	for (uint32_t b = 0; b < nblks; b++) {
 		uint32_t status;
 		if (!waitForIntStatus32(kIntBufWriteRdy | kIntErrorMask, 1000000, &status)) {
-			IOLog("BCM2837SDHCI: write block %u/%u timed out waiting BUFFER_WRITE_READY\n", b, nblks);
+			IOLog("BCM2837SDHCI: write block %u/%u timed out waiting BUFFER_WRITE_READY - resetting dat line\n", b, nblks);
+			resetDatLine();
 			return false;
 		}
 		if (status & kIntErrorMask) {
-			IOLog("BCM2837SDHCI: write error, INT_STATUS=%#x\n", status);
+			IOLog("BCM2837SDHCI: write error, INT_STATUS=%#x - resetting dat line\n", status);
+			resetDatLine();
 			return false;
 		}
 
@@ -879,11 +979,13 @@ BCM2837SDHCI::writeBlocksPIO(uint64_t startBlock, uint32_t nblks, const void *bu
 
 	uint32_t xferStatus;
 	if (!waitForIntStatus32(kIntTransferDone | kIntErrorMask, 1000000, &xferStatus)) {
-		IOLog("BCM2837SDHCI: write did not reach TRANSFER_COMPLETE\n");
+		IOLog("BCM2837SDHCI: write did not reach TRANSFER_COMPLETE - resetting dat line\n");
+		resetDatLine();
 		return false;
 	}
 	if (xferStatus & kIntErrorMask) {
-		IOLog("BCM2837SDHCI: write error at TRANSFER_COMPLETE, INT_STATUS=%#x\n", xferStatus);
+		IOLog("BCM2837SDHCI: write error at TRANSFER_COMPLETE, INT_STATUS=%#x - resetting dat line\n", xferStatus);
+		resetDatLine();
 		return false;
 	}
 
@@ -924,11 +1026,23 @@ BCM2837SDHCI::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 block, UInt64 
 
 	// PIO only (see header) - stage through a bounce buffer rather than
 	// assuming `buffer` is a single contiguous, CPU-addressable range.
+	// Allocated before taking fTransferLock: IOMalloc can block/sleep and
+	// there's no need to hold the hardware lock across it.
 	void *bounce = IOMalloc((size_t)transferSize);
 	if (bounce == NULL) {
 		IOStorage::complete(completion, kIOReturnNoMemory, 0);
 		return kIOReturnSuccess;
 	}
+
+	// Backlog P0#1: serialize the whole command-issue-through-completion
+	// span against any other concurrent doAsyncReadWrite() call (see
+	// fTransferLock's own header comment for why a plain mutex is a
+	// sufficient critical section for this specific, already-synchronous
+	// driver). Without this, two overlapping requests (now plausible with
+	// two mounted partitions) could interleave register writes and both
+	// consume from the same fPendingIntStatus, corrupting or hanging one
+	// of them.
+	IOLockLock(fTransferLock);
 
 	bool ok;
 	if (isWrite) {
@@ -940,6 +1054,8 @@ BCM2837SDHCI::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 block, UInt64 
 			buffer->writeBytes(0, bounce, transferSize);
 		}
 	}
+
+	IOLockUnlock(fTransferLock);
 
 	IOFree(bounce, (size_t)transferSize);
 

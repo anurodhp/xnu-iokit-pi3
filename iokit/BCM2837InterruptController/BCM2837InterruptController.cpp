@@ -311,6 +311,18 @@ BCM2837InterruptController::disableVectorHard(IOInterruptVectorNumber vectorNumb
 	} else {
 		fRegBase[kRegDisableBasicIRQs] = (1U << (vectorNumber - kVectorBasicBase));
 	}
+	// Backlog P0#5: no ordering primitive guaranteed this mask write is
+	// actually visible to the BCM2837's interrupt-pending logic before a
+	// caller goes on to read IRQ_PENDING (handleInterrupt(), or another
+	// thread calling enableVector()/disableVectorHard() concurrently on a
+	// different vector). `dsb sy` (matching the real ordering barrier
+	// BCM2837DWC2.cpp already uses for its own MMIO-ordering-sensitive
+	// sequencing, see that file's HCDMA/HCCHAR comment) forces this
+	// store to complete before anything after it executes. Genuinely
+	// unverifiable from QEMU/TCG, which makes all MMIO strongly ordered
+	// regardless of whether this barrier is present - see this item's own
+	// docs/backlog.md entry.
+	__asm__ volatile ("dsb sy" ::: "memory");
 }
 
 void
@@ -327,4 +339,6 @@ BCM2837InterruptController::enableVector(IOInterruptVectorNumber vectorNumber, I
 	} else {
 		fRegBase[kRegEnableBasicIRQs] = (1U << (vectorNumber - kVectorBasicBase));
 	}
+	// See disableVectorHard()'s matching comment above.
+	__asm__ volatile ("dsb sy" ::: "memory");
 }
