@@ -55,6 +55,7 @@ OUT="libc_build"
 COMPAT="launchd_compat_headers"
 DCOMPAT="dispatch_compat_headers"
 MIGOUT="$OUT/launchd_mig"
+ICU_LIB="icu_build/target/lib"
 
 if [ ! -d "$PD/launchd" ]; then
     echo "error: $PD/launchd not found -- run setup_third_party.sh first" >&2
@@ -327,6 +328,7 @@ echo "wrote $OUT/launchd_libc_extras.a ($(ls "$OUT"/launchd_libc_extras_obj/*.o 
     "$OUT/libc_locale_for_stdio.a" \
     "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
+    "$ICU_LIB/libicuuc.dylib" "$ICU_LIB/libicui18n.dylib" "$ICU_LIB/libicudata.dylib" "$OUT/system/libc++.dylib" \
     2>"$OUT/launchd_trial_link.err" \
     && echo "real trial link: 0 undefined symbols -- fully closed" \
     || { n=$(grep -c 'Undefined symbol' "$OUT/launchd_trial_link.err" || true); echo "expected-for-now: real trial link found $n undefined symbol group(s):"; grep '^  "' "$OUT/launchd_trial_link.err" | sed 's/,.*//' | sort -u; }

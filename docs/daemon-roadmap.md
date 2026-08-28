@@ -2767,6 +2767,97 @@ gap on this project's side. See `docs/backlog.md`'s P2 "d6" item for
 the full, current list and `build_launchd_recon.sh`'s own header
 comment for the complete real-fix writeup.
 
+### Real launchd trial-link gap re-derivation + ICU-dylib link-line fix,
+### 2026-08-28 -- RESUME POINT for whoever picks this up next
+
+Session goal: get real launchd actually running (see the session's own
+plan, staged as 5 milestones -- gap count, close gaps, produce+standalone-run
+a real binary, boot-path integration, full QEMU verification). This entry
+covers Milestone 1 only; Milestone 2 (closing the gaps below) was
+deliberately not started this pass.
+
+**Real finding**: `docs/backlog.md` item d6's "109 undefined symbols"
+figure was a several-sessions-old summary; the actual last-captured trial
+link (`tools/userland_staging/libc_build/launchd_trial_link.err`) was dated
+2026-08-26, predating real fixes the script itself had already picked up
+(`runtime.c`/`ktrace.c` compilation, `ld2xpc_compat.c`, `xpc_copy_compat.c`,
+real BSM `lib_wrappers.c`, host/mach_port MIG regen) that had never been
+re-verified with an actual fresh link. Separately, `build_launchd_core.sh`'s
+own trial-link command never linked the real ICU dylibs that
+`build_corefoundation.sh`'s own trial link does (confirmed by reading both
+scripts).
+
+**Fix made** (small, mechanical, already applied): added
+`ICU_LIB="icu_build/target/lib"` plus `"$ICU_LIB/libicuuc.dylib"
+"$ICU_LIB/libicui18n.dylib" "$ICU_LIB/libicudata.dylib"
+"$OUT/system/libc++.dylib"` to the trial-link command in
+`tools/userland_staging/build_launchd_core.sh`, matching
+`build_corefoundation.sh`'s own recipe exactly. Re-ran the script for real.
+
+**Result: 51 distinct undefined-symbol groups**, down in real terms (the
+whole `CFUniChar*`/`CFCharacterSet*`/`CFBundle*`/`CFStream*` bucket, ~25
+symbols, is gone -- closed by the ICU fix), even though the raw count looks
+similar to the stale log. Categorized breakdown (see the session's plan file
+for the full symbol-by-symbol list if resuming outside that session):
+
+- **CFPreferences family (20 symbols)** -- `docs/backlog.md` item d7's
+  already-documented real structural exclusion (`CFPreferences.c`/
+  `CFXMLPreferencesDomain.c`: `gethostuuid` `TARGET_OS_MAC` bug, missing
+  `CFUUID` decl, undeclared `prefDir`), now surfacing in launchd's own
+  trial link since ICU lets CF's string/locale code reach further into it.
+  Now the single largest remaining real chunk.
+- **ASL client (6)**: `asl_open`/`_close`/`_new`/`_free`/`_send`/`_set`,
+  from CF's `__CFLogCStringLegacy`. Real client library already pinned
+  (`syslog-385`), not yet built/wired. Per item 17's own standing rule, do
+  NOT wire onto the real `bootstrap_look_up2()` path yet (chicken-and-egg
+  -- nothing answers that lookup until launchd itself runs); a minimal
+  shim over the existing stderr fallback is the right first step.
+- **BSM audit-record writing (8)**: `au_close`/`_free_token`/`_open`/
+  `_to_me`/`_to_return32`/`_to_subject32`/`_to_text`/`_write` --
+  **another agent is building real BSM as a library concurrently as of
+  2026-08-28, in a separate session** -- check its status before
+  attempting these 8 symbols; do not duplicate that work.
+  `audit_session_join`/`_port`/`_self` (part of the original ~10-symbol
+  estimate) are already closed, not open.
+- **os_log engine (6)**: `os_log_create`, `os_log_type_enabled`,
+  `__os_log_debug_impl`, `__os_log_default`, `__os_log_error_impl`,
+  `__os_log_impl` -- confirmed never open-sourced anywhere, no log daemon
+  to talk to regardless; needs a minimal honest shim (same shape as
+  `pd_sandbox_check.c`'s no-profile no-ops).
+- **`job_mig_look_up2_forward`/`job_mig_parent_forward` (2)** -- confirmed
+  genuinely unimplemented even in PureDarwin's own upstream; this project
+  only ever runs one launchd instance (no per-session/per-user XPC
+  domains), so these are architecturally unreachable -- needs an honest
+  MIG-error stub, not silence.
+- **Mechanical/likely-real-source (7)**: `initgroups`, `setlogmask`,
+  `__dispatch_queue_attr_concurrent` (real `libdispatch.dylib` global,
+  confirmed missing from its exports via `nm -gU` -- likely an export-list
+  gap in `build_libdispatch_dylib.sh`, not missing source), 
+  `__pthread_clear_qos_tsd` (real `libpthread` source, natural follow-on
+  to the 2026-08-27 pthread-QoS pass), `_scalbn` (real `libm.a`, pinned
+  2026-08-27, isn't even on this trial link's link line yet -- add it,
+  likely free), `_getpwuid_r`, `_getsectbynamefromheader_64`+
+  `_getsegbyname` (check the newly-pinned `cctools-973.0.1`'s `libmacho`
+  first, same family as the already-ported `NXFindBestFatArch`).
+  `setiopolicy_np` and `__os_alloc_once`/`__os_alloc_once_table`/
+  `__platform_bzero` from earlier scoping passes are already closed.
+- **Confirmed never open-sourced (2)**: `sysdir_start_search_path_enumeration`/
+  `_get_next_search_path_enumeration` -- needs an honest stub.
+- **New/uninvestigated (1)**: `__mh_dylib_header` -- likely an artifact of
+  this trial link's informational `-force_load` executable shape (that
+  symbol is normally `ld64`-synthesized for a real `MH_DYLIB` image, not a
+  plain executable) -- check after a real (non-`-force_load`) link exists
+  before chasing it standalone.
+- `asctime`/`asctime_r` (previously flagged as needing the deep
+  `xlocale.c` chain) no longer appear in the trial-link output at all --
+  apparently already resolved; re-confirm before assuming closed.
+
+**Not started this pass**: closing any of the above, producing a real
+`build_launchd.sh` binary, standalone run, or boot-path integration -- see
+the session's own plan for the full staged approach if resuming with that
+context available, otherwise the breakdown above is self-contained enough
+to continue from directly.
+
 ## Phase 6.8 -- original 2026-08-22 scoping (partially superseded above,
 ## kept for the parts still accurate: license/vintage caution, the
 ## "expect real work left in the XPC skeleton" expectation, and the
