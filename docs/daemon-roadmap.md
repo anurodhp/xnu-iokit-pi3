@@ -2858,6 +2858,94 @@ the session's own plan for the full staged approach if resuming with that
 context available, otherwise the breakdown above is self-contained enough
 to continue from directly.
 
+### Milestone 2 progress, 2026-08-28 -- mechanical group + BSM closed, 51 -> 38
+
+Real, QEMU-independent progress (link-only, verified via a real re-run of
+`build_launchd_core.sh`'s own trial link, not assumed): **38 undefined-
+symbol groups remaining**, down from the 51 above.
+
+**BSM (8 symbols, `au_*`)**: the concurrent session flagged above landed
+real `libbsm.a` (commit `09c0a93`, confirmed via `nm -gU` -- all 8 real
+exports present) -- this pass just added `"$OUT/libbsm.a"` to
+`build_launchd_core.sh`'s own trial-link line (it was built but never
+actually linked in). Closed for real, not just compiled.
+
+**Mechanical group (6 of 7 closed)**:
+- `_getpwuid_r`/`_initgroups`: no real Apple source for either anywhere
+  in this project's pinned checkouts (confirmed via grep, not assumed) --
+  real, last-resort custom implementations in new
+  `launchd_passwd_compat.c`, against the same flat-file resolver
+  (`tools/libinfo_custom/`) `ps_passwd_compat.c` already uses.
+  `getpwuid_r()` uses the byte-exact `struct li_passwd`/`struct passwd`
+  ABI equivalence that file's own header already documents.
+  `initgroups()` uses the plain BSD algorithm (scan `/etc/group`, then
+  real `setgroups(2)`) matching real `core.c`'s own `#if 1` branch by
+  name -- deliberately NOT the private `syscall(SYS_initgroups, ...,
+  gmuid)` trap its own `#else` branch shows, since that trap's dynamic-
+  group-resolution semantics need DirectoryServices/mbr_* infrastructure
+  this project doesn't have and structurally doesn't need (flat-file-only
+  account model). New real `setgroups` raw-trap stub added to
+  `build_launchd_syscalls.sh`'s existing `create-syscalls.pl` loop
+  (plain, non-`NO_SYSCALL_STUB` trap, same shape as the `setgid`/`setuid`
+  already there).
+- `__dispatch_queue_attr_concurrent`: real Apple `init.c` only compiles a
+  distinct definition of this global under `#if DISPATCH_VARIANT_STATIC`
+  -- the real dylib build aliases it instead, via the real, pinned
+  `xcodeconfig/libdispatch.aliases` (`__dispatch_queue_attrs
+  __dispatch_queue_attr_concurrent`) + `-alias_list` on Darwin (`init.c`'s
+  own comment says so explicitly). `build_libdispatch_dylib.sh`'s final
+  link now carries the equivalent single `-Wl,-alias,__dispatch_queue_attrs,
+  __dispatch_queue_attr_concurrent` pair -- confirmed via `nm -gU` the
+  dylib now exports it for real.
+- `__pthread_clear_qos_tsd`: real Apple source
+  (`third_party/libpthread/src/pthread.c:1900-1923`), but `pthread.c`
+  itself is deliberately not compiled wholesale by `build_libpthread.sh`
+  (see that script's own header comment). Extracted as a real, verbatim
+  curated file (new `pthread_clear_qos_tsd_compat.c`), same pattern as
+  `pthread_main_thread_bootstrap.c`'s own extractions -- all its real
+  dependencies (`__pthread_head`/`_pthread_list_lock`,
+  `_pthread_tsd_slot`/`_pthread_unspecified_priority`/etc via
+  `"internal.h"`) were already real and reachable, nothing new needed.
+- `_getsectbynamefromheader_64`/`_getsegbyname`: real, pinned
+  cctools-973.0.1 `libmacho` (same repo `build_corefoundation.sh`'s own
+  `cctools_arch.o` already trial-compiles against).
+  `getsegbyname.c` compiled as-is (self-contained on this arm64/
+  `__LP64__` target). `getsectbynamefromheader_64` is instead a real,
+  curated extraction (new `cctools_getsectbynamefromheader64_compat.c`)
+  rather than compiling the whole `getsecbyname.c` -- that file also
+  defines the `withswap()` variants, which pulled in a real but entirely
+  unneeded `swap_section()`/`swap_segment_command()` dependency chain
+  (4 new undefined symbols appeared on the first attempt, confirmed via
+  a real trial link, then closed by switching to the curated extraction
+  instead of chasing that chain).
+- `_scalbn`: real `libm.a` already existed (pinned 2026-08-27) but was
+  simply missing from `build_launchd_core.sh`'s own trial-link line --
+  added, real fix, no new code.
+
+**Not closed**: `_setlogmask` -- this script's own pre-existing header
+comment already documents a real attempt-and-revert (`oldsyslog.o` pulls
+a deep, not-locally-satisfied dependency chain, a net loss same as
+`localtime.o`/`libproc.o`/`strtoul.o` before it) -- left as-is, not
+re-attempted.
+
+**Concurrency note (re-confirmed this pass)**: while re-deriving this
+result, a second, separate Claude Code session was observed actively
+rebuilding this project's per-library dylib chain in this same
+`tools/userland_staging/` directory in real time (`libdyld.dylib`/
+`libSystem.B.dylib` briefly absent mid-rebuild, `libunwind.dylib`
+newly appeared) -- confirmed via `ps aux` (a second `claude daemon run`
+process with this directory as its cwd), not just inferred from file
+timestamps. Waited for the shared `libc_build/system/` output to
+stabilize (polled, not raced) before re-running the trial link. Also
+found ~19 other `build_*.sh` scripts with uncommitted, unrelated changes
+from that session (a `NEWLD_BINDIR`/daily-driver-`ld` fix, `docs/
+backlog.md` item d9's own sweep) already present in the working tree
+before this pass started -- left untouched, not this effort's scope.
+Whoever commits this pass's own changes should stage narrowly (the
+launchd/pthread/dispatch/cctools files this entry lists), not
+`git add -A`, to avoid bundling the other session's still-in-flight work
+into this commit.
+
 ## Phase 6.8 -- original 2026-08-22 scoping (partially superseded above,
 ## kept for the parts still accurate: license/vintage caution, the
 ## "expect real work left in the XPC skeleton" expectation, and the

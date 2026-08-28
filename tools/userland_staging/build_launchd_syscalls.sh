@@ -88,9 +88,7 @@
 # forward for `pthread/tsd_private.h`) plus `-D__LIBC__=1` (real
 # Apple-internal build macro gating declarations in `collate.h` --
 # `__collate_range_cmp`'s own prototype is invisible without it) plus
-# its own real dependency `locale/FreeBSD/collcmp.c`. `initgroups`
-# remains a real, NO_SYSCALL_STUB gap -- no dedicated wrapper source
-# located anywhere in this project's pinned repos; not fixed this pass.
+# its own real dependency `locale/FreeBSD/collcmp.c`.
 # login_tty/setlogin/raise/siglist/getpeereid already compiled clean and
 # are now wired in (getpeereid replaces a broken create-syscalls.pl
 # attempt in the ASMFLAGS loop below -- real Apple `getpeereid` is
@@ -135,7 +133,7 @@ ASMFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -arch arm64 \
     -I"$OUT/launchd_sys_asm_compat" -I"$XNU/libsyscall/custom" -I"$XNU/libsyscall/mach" -I"$XNU/osfmk")
 for s in _chown _chroot _sync _revoke _setuid _setgid _setsid _setpgid \
     _getrusage _execve _mount _kevent _dup _dup2 _getppid _umask _getgid _mkdirat _getsockopt \
-    _getaudit_addr _setaudit_addr _memorystatus_control \
+    _getaudit_addr _setaudit_addr _memorystatus_control _setgroups \
     ___accept_nocancel ___listen ___socketpair ___munmap ___wait4_nocancel ___fork \
     ___reboot ___setpriority ___getrlimit ___setrlimit ___posix_spawn ___setlogin ___getlogin; do
     "$CLANG" "${ASMFLAGS[@]}" "$TMP/${s}.s" -o "$OUT/launchd_syscall_obj/sys_${s}.o" 2>/dev/null || true
@@ -192,6 +190,43 @@ CFLAGS_LIBC=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno
 "$CLANG" "${CFLAGS_LIBC[@]}" "$LIBC/gen/setlogin.c" -o "$OUT/launchd_syscall_obj/setlogin.o"
 "$CLANG" "${CFLAGS_LIBC[@]}" "$LIBC/gen/raise.c" -o "$OUT/launchd_syscall_obj/raise.o"
 echo "compiled: real dedicated wrapper files + real uuid_clear/compare/unpack + real posix_spawnp/getopt/login_tty/setlogin/raise (zero errors)"
+
+# --- real getpwuid_r()/initgroups() (docs/daemon-roadmap.md's
+# 2026-08-28 "mechanical" gap group) -- Phase 5's flat-file resolver
+# (tools/libinfo_custom/), same real dependency-free module
+# ps_passwd_compat.c already builds against, plus a real setgroups(2)
+# raw trap (AUE_SETGROUPS, plain create-syscalls.pl stub, added to the
+# ASMFLAGS loop above) -- see launchd_passwd_compat.c's own header for
+# the full real-fix writeup. ---------------------------------------
+"$CLANG" "${CFLAGS[@]}" -I ../libinfo_custom ../libinfo_custom/libinfo_custom.c -o "$OUT/launchd_syscall_obj/libinfo_custom.o"
+"$CLANG" "${CFLAGS[@]}" -I ../libinfo_custom launchd_passwd_compat.c -o "$OUT/launchd_syscall_obj/launchd_passwd_compat.o"
+echo "compiled: real getpwuid_r/initgroups (flat-file resolver + real setgroups(2))"
+
+# --- real getsectbynamefromheader_64()/getsegbyname() (same real,
+# pinned cctools-973.0.1 libmacho build_corefoundation.sh's own
+# cctools_arch.o already trial-compiles against). getsegbyname.c is
+# self-contained on this arm64/__LP64__ target (its __OPENSTEP__/
+# _dyld_lookup_and_bind branch is never compiled here), needing only
+# real _NSGetMachExecuteHeader() from <crt_externs.h>, already a real
+# libdyld/libSystem export -- compiled as-is. getsectbynamefromheader_64
+# is instead a real, curated extraction (see
+# cctools_getsectbynamefromheader64_compat.c's own header) -- its real
+# source file also defines the withswap() variants, which pull in a
+# real but entirely unneeded swap_section()/swap_segment_command()
+# dependency chain nothing in this project's launchd link actually
+# needs. ---------------------------------------------------------
+CCTOOLS="../../third_party/cctools"
+if [ ! -f "$CCTOOLS/libmacho/getsegbyname.c" ]; then
+    echo "error: $CCTOOLS/libmacho/getsegbyname.c not found -- run setup_third_party.sh first" >&2
+    exit 1
+fi
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -O0 \
+    -I "$CCTOOLS/include" -I "$CCTOOLS" \
+    "$CCTOOLS/libmacho/getsegbyname.c" -o "$OUT/launchd_syscall_obj/cctools_getsegbyname.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -O0 \
+    -I "$CCTOOLS/include" -I "$CCTOOLS" \
+    cctools_getsectbynamefromheader64_compat.c -o "$OUT/launchd_syscall_obj/cctools_getsectbynamefromheader64_compat.o"
+echo "compiled: real getsectbynamefromheader_64/getsegbyname (cctools libmacho)"
 
 # --- real, curated fork()/wait4() -----------------------------------
 cat > "$OUT/launchd_syscall_obj/fork_compat.c" <<'EOF'

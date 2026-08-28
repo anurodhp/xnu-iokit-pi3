@@ -304,7 +304,8 @@ for f in pthread_main_thread_bootstrap pthread_bsdthread_create_syscall \
          pthread_bsdthread_register_syscall pthread_bsdthread_terminate_syscall \
          pthread_tsd_platform_bootstrap pthread_psynch_syscalls \
          pthread_compat_extras pthread_abort_with_reason_compat \
-         pthread_guard_compat pthread_thread_ops_compat; do
+         pthread_guard_compat pthread_thread_ops_compat \
+         pthread_clear_qos_tsd_compat; do
     $CLANG $CFLAGS "${f}.c" -o "$OUT/${f}.o"
 done
 
@@ -388,7 +389,8 @@ ar rcs "$OUT/libpthread.a" \
     "$OUT/pthread_simple_getenv.o" "$OUT/pthread_platform_memcmp.o" \
     "$OUT/pthread_gettimeofday.o" "$OUT/pthread___pthread_chdir.o" "$OUT/pthread___pthread_fchdir.o" \
     "$OUT/pthread_mmap_compat.o" "$OUT/pthread___mmap.o" "$OUT/pthread___munmap.o" \
-    "$OUT/pthread___ulock_wait2.o" "$OUT/pthread___thread_selfid.o" "$OUT/pthread_getegid.o"
+    "$OUT/pthread___ulock_wait2.o" "$OUT/pthread___thread_selfid.o" "$OUT/pthread_getegid.o" \
+    "$OUT/pthread_clear_qos_tsd_compat.o"
 echo "wrote $OUT/libpthread.a"
 
 # Real archive-member removal, not a hack: retires build_libmalloc.sh's
