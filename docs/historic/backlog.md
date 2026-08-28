@@ -325,6 +325,106 @@ class of race, see items 13/14 below).
     symptom is gone, since QEMU cannot exercise `SMSC9514Ethernet` at all
     (see item 10).
 
+## P0, items 1/2/4/5 — [FIXED 2026-08-27, QEMU-verified, commit `d472f37`] full fix writeup archived
+
+All four rebuilt together (`tools/build_kexts.sh` clean compile, then a
+full `tools/build_xnu_7195.sh` kernel rebuild) and verified with one real
+QEMU boot (`tools/boot_test.py --login --cmd 'ls /' --cmd 'cat /etc/hosts'
+--cmd 'ls /System'`, `--expect-fail 'panic\('`) — real boot, real login,
+real reads against both mounted partitions (`disk0s1` root / `disk0s2`
+boot), zero panics, `BCM2837SDHCI` log confirms a real hardware interrupt
+still observed and the card still identifies correctly (RCA=0x4567, SDHC,
+1200MB). This confirms no regression from any of the four changes
+together; it does not and cannot exercise the specific fault conditions
+items 1/2/5 exist to guard against (concurrent I/O, a real card/bus
+error, or a real MMIO-ordering violation), since QEMU reproduces none of
+those.
+
+**Item 1** — `BCM2837SDHCI::doAsyncReadWrite()` had no serialization at
+all — no `IOCommandGate`, no workloop, no mutex. Two concurrent requests
+(now plausible: the SD image has two mounted partitions, `disk0s1` +
+`disk0s2`) could interleave register writes and both consume from the
+same `fPendingIntStatus`, causing one to eat the other's completion —
+silent data corruption or a hang, not a clean error. Re-confirmed still
+present exactly as described before fixing.
+
+Fix: added `fTransferLock` (a plain `IOLock`), held for the whole
+command-issue-through-completion span of `doAsyncReadWrite()`. Not the
+full `IOCommandGate`/workloop integration this item originally asked for
+(that remains the architecturally "fuller" answer) — but this driver's
+`doAsyncReadWrite()` is already synchronous under the hood (it blocks the
+calling thread on `waitForIntStatus32()` rather than completing from
+interrupt context), so a plain mutex around that already-synchronous span
+is a real, sufficient critical section: it guarantees only one thread
+ever touches the command/transfer registers or `fPendingIntStatus`'s
+producer side at a time, which is exactly the corruption this item
+described. See `fTransferLock`'s own header comment
+(`iokit/BCM2837SDHCI/BCM2837SDHCI.h`) for the full reasoning.
+Verification caveat: nothing in this project currently issues genuinely
+concurrent I/O (same limitation the original filing noted), so the QEMU
+boot test confirms no regression — real boot, real login, real reads
+against both partitions — but does not and cannot exercise the actual
+interleaving race the fix closes, since no current workload drives
+concurrent requests to begin with.
+
+**Item 2** — no error recovery anywhere in `BCM2837SDHCI` — every error
+path was `IOLog(); return false;`. Re-confirmed still true before fixing:
+no `SOFTWARE_RESET_CMD`/`SOFTWARE_RESET_DAT`/`CMD12` anywhere in the
+file.
+
+Fix: added `resetCmdLine()` (SDHCI spec 3.7.1 `SOFTWARE_RESET_CMD`,
+`kRegSoftwareReset` bit1) and `resetDatLine()` (`CMD12`
+STOP_TRANSMISSION best-effort, then `SOFTWARE_RESET_DAT` bit2), wired
+into every real error/timeout path: `sendCommand()`'s CMD_INHIBIT/
+DAT_INHIBIT-stuck checks, its CMD_COMPLETE timeout and error-status
+paths, and `readBlocksPIO()`/`writeBlocksPIO()`'s buffer-ready-timeout,
+error-status, and TRANSFER_COMPLETE-timeout/error paths — matching
+Linux's `sdhci_reset(host, SDHCI_RESET_CMD/_DATA)` split. QEMU's SD model
+still doesn't inject real CRC/timeout/card-removal errors (per this
+item's own original note), so the QEMU boot test confirms the reset
+paths compile and don't regress a clean boot, not that they trigger
+correctly under a real error (no current QEMU-reachable workload can
+force one).
+
+**Item 4** — no power-on ramp / 74-clock delay before `CMD0`, and power
+was enabled *after* the clock in `start()` rather than before.
+Re-confirmed still true before fixing (power write was after
+`setClock(400000)`).
+
+Fix: reordered `start()` to assert `kRegPowerControl` (3.3V +
+`SD_BUS_POWER`) *before* `setClock()`, added an `IODelay(1000)` (≥1ms,
+spec 6.4.1) between power-on and clock-start, and an `IODelay(250)`
+(≥74 clocks at the 400kHz identification clock, ~185us, rounded up)
+between clock-start and the first command (`cardIdentify()`). This only
+changes *ordering and idle delays*, not any actual signal rate/timing —
+the same class of change item 3 declined to make — so unlike item 3
+there's no way for a wrong guess here to make things worse on real
+hardware (a busy-wait can only be too short or comfortably long, never
+"wrong speed"). QEMU has no power/clock-dependent reset behavior to
+catch the old ordering being wrong (which is exactly why it went
+unnoticed originally), so this is verified only as "boots clean, no
+regression."
+
+**Item 5** — code correct but genuinely unverifiable from QEMU, exactly
+as this item originally predicted. Re-confirmed the core claim (no
+barrier at the specific location this item calls out) still held before
+fixing. One correction found while re-checking it: the broader claim
+that `grep -rn "dsb\|dmb\|isb\|OSSynchronizeIO"` returns nothing
+project-wide except `OSMemoryBarrier()` was stale — `iokit/BCM2837DWC2/
+BCM2837DWC2.cpp` (added 2026-08-21, after this item was first filed)
+already has two real `dsb sy` barriers around its DMA buffer/HCDMA
+programming. The specific gap this item flagged — no barrier in
+`BCM2837InterruptController::enableVector()`/`disableVectorHard()`
+before the next `IRQ_PENDING` read — was still real and unfixed.
+
+Fix: added `__asm__ volatile ("dsb sy" ::: "memory")` after each of
+`enableVector()`'s and `disableVectorHard()`'s register writes, matching
+the barrier style already used in `BCM2837DWC2.cpp`. As predicted, this
+is genuinely unverifiable from QEMU/TCG (all MMIO is strongly ordered
+there regardless of the barrier's presence) — the QEMU boot test only
+confirms the added instruction doesn't itself break anything, not that
+it fixes a real ordering bug on silicon.
+
 ---
 
 ## P1

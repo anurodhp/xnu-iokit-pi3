@@ -45,6 +45,36 @@ and exact files touched per command):
   order** (reorganized 2026-08-20, see "Remaining future work" below):
   rarely-used utilities are deliberately deferred until Phase 8's package
   manager exists rather than pre-baked into the base image.
+- **Real Apple `Libm` pinned 2026-08-27, retiring this project's 3
+  hand-rolled math shims.** `apple-oss-distributions/Libm` at tag
+  `Libm-2026` — the newest Apple has published, since Apple stopped
+  releasing `Libm` source after OS X Lion (2011), a decade before this
+  project's Darwin 20.3/macOS 11.2 target and ~2 years before arm64
+  existed, so unlike every other pin here this one is **not**
+  manifest-verifiable; documented honestly as such in
+  `setup_third_party.sh`/`docs/apple-oss-catalog.md` rather than silently
+  treated as equivalent to the rest. `tools/userland_staging/build_libm.sh`
+  builds `libc_build/libm.a`: 62 real object files from Apple's real
+  `Source/ARM/*.c` portable subset (all ~40 `.s` files are real
+  armv6/armv7 assembly with no AArch64 variant in any tag, skipped
+  outright), exporting 111 real functions — `sqrt`/`fmod` compiled with
+  `-D__SOFTFP__` to reach Apple's real portable branch (AArch64 has no
+  hardware `fmod` either), plus the fuller real fdlibm/FreeBSD-derived
+  trig/hyperbolic/Bessel/gamma/log/exp families. A handful of functions
+  with no usable portable Apple source (`fabs`/`trunc`/`modf`/`pow`/
+  `scalbn` — asm-only or an Apple-acknowledged "IncrediblySkanky" hack)
+  come from real, attributed FreeBSD `lib/msun/src` source in a new
+  `libm_freebsd_fallback.c` instead. Replaces `ping_libm_compat.c`
+  (`sqrt`), `cf_compat_headers/libm_compat.c` (`fmod`/`modf`/`pow`), and
+  `simple_cmds_libm_compat.c` — verification per consumer: `ping`
+  QEMU-boot-tested with real stddev output; CF's trial link confirmed via
+  `nm` that those 3 symbols no longer appear in its undefined-symbol gap
+  list; `df`'s `simple_cmds_libm_compat.c` replacement is compile-level
+  verified only — link-level verification is blocked by a pre-existing,
+  unrelated duplicate-symbol bug affecting all 76 `build_simple_cmds.sh`
+  commands (tracked separately, being fixed on its own). None of the 3
+  old shim `.c` files were deleted (confirmed nothing else references
+  them, except `build_libxml2.sh`'s own separate, untouched copy).
 
 See `docs/historic/roadmap.md` for the full narrative (real bugs found,
 exact syscalls/structs involved, per-command QEMU transcripts) behind
@@ -230,8 +260,15 @@ need a real implementation later:
   and the rest of the curated libc stack are still static-archive copies
   -- see `docs/daemon-roadmap.md`'s "Static-to-dylib migration, step 1"
   section for the full writeup and next-step candidates.
-- **`libdispatch`/GCD** -- zero API surface, not attempted at all (Phase
-  6.6).
+- **`libdispatch`/GCD** -- STALE, superseded 2026-08-26/27: a real
+  `libdispatch.dylib` now exists and is linkable (Phase 6.6/6.7, see
+  `docs/daemon-roadmap.md`'s Phase 6.6/6.7 sections and `docs/backlog.md`
+  item 17) -- `syslogd.macho` links it dynamically and, as of 2026-08-27,
+  runs to completion against it with zero undefined symbols and no
+  crash. Real concurrent `dispatch_async` still can't exist until real
+  threading does (Phase 7.5's pthread ceiling), so this remains
+  single-thread-honest in practice, but "zero API surface, not attempted"
+  is no longer an accurate description.
 - **`ed_setjmp_raw.s`/`ed_setjmp_compat.c`** (Phase 4.6 grep/sed/nl/
   xargs/ed sweep) -- real AAPCS64 register-save/restore core for
   `setjmp`/`longjmp`/`sigsetjmp`/`siglongjmp`, standing in for Apple's
@@ -690,11 +727,16 @@ need a real implementation later:
   (none do yet). See `docs/daemon-roadmap.md`'s "Static-to-dylib
   migration" sections for what moved, what's left (libunwind + smaller
   archives next), and next-step candidates.
-- **Phase 6.6 (libdispatch/GCD)**: planning-only placeholder, blocked
-  behind 6.5. Even once unblocked, real concurrent `dispatch_async` can't
-  exist until real threading does (Phase 7.5's pthread ceiling) -- scope
-  would be limited to single-thread-honest `dispatch_once`/`dispatch_sync`/
-  kqueue-backed dispatch sources.
+- **Phase 6.6 (libdispatch/GCD)**: no longer a placeholder -- real
+  `libdispatch.dylib` ported, compiled, and converted to a dylib
+  2026-08-26, then had its full remaining undefined-symbol gap closed
+  2026-08-27 (`3fab93c`/`7629e79`, see `docs/backlog.md` item 17 and
+  `docs/daemon-roadmap.md`'s Phase 6.6/6.7 sections) driven by real
+  `syslogd`'s own dispatch-queue usage as the first consumer. Real
+  concurrent `dispatch_async` still can't exist until real threading does
+  (Phase 7.5's pthread ceiling), so this remains single-thread-honest in
+  practice, matching the scope this entry originally predicted --
+  correctly predicted, just no longer "not started."
 - **Phase 9 (CoreFoundation): DONE 2026-08-26** -- real Apple CF (via
   swift-corelibs-foundation, since apple-oss-distributions/CF is dead/
   stale) ported and wired into launchd's trial link; ICU confirmed not

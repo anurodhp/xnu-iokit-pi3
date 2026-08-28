@@ -6,8 +6,10 @@ Open items found but not yet fixed, mostly surfaced by two adversarial
 code reviews on 2026-08-13 (one on `BCM2837SDHCI`/the boot chain, one on
 the rest of the custom IOKit kexts) plus a few longer-standing known gaps.
 Organized by how much it matters, not by discovery order. File:line
-references are as of commit `86b1653`; re-check before trusting them if
-this list is stale.
+references are as of commit `d472f37`; re-check before trusting them if
+this list is stale (this pointer itself is only updated when someone
+actually re-verifies line numbers, not on every commit — treat it as "not
+older than" rather than "current as of").
 
 ---
 
@@ -15,51 +17,28 @@ this list is stale.
 
 1. **[FIXED 2026-08-27, QEMU-verified]** `BCM2837SDHCI::doAsyncReadWrite()`
    had no serialization at all — no `IOCommandGate`, no workloop, no
-   mutex. Two concurrent requests (now plausible: the SD image has two
-   mounted partitions, `disk0s1` + `disk0s2`) could interleave register
-   writes and both consume from the same `fPendingIntStatus`, causing one
-   to eat the other's completion — silent data corruption or a hang, not
-   a clean error. Re-confirmed still present exactly as described before
-   fixing.
-
-   **Fix**: added `fTransferLock` (a plain `IOLock`), held for the whole
-   command-issue-through-completion span of `doAsyncReadWrite()`. Not the
-   full `IOCommandGate`/workloop integration this item originally asked
-   for (that remains the architecturally "fuller" answer) — but this
-   driver's `doAsyncReadWrite()` is already synchronous under the hood
-   (it blocks the calling thread on `waitForIntStatus32()` rather than
-   completing from interrupt context), so a plain mutex around that
-   already-synchronous span is a real, sufficient critical section: it
-   guarantees only one thread ever touches the command/transfer registers
-   or `fPendingIntStatus`'s producer side at a time, which is exactly the
-   corruption this item described. See `fTransferLock`'s own header
-   comment (`iokit/BCM2837SDHCI/BCM2837SDHCI.h`) for the full reasoning.
-   **Verification caveat, stated honestly**: nothing in this project
-   currently issues genuinely concurrent I/O (same limitation the
-   original filing noted), so the QEMU boot test below confirms *no
-   regression* — real boot, real login, real reads against both
-   partitions — but does not and cannot exercise the actual interleaving
-   race the fix closes, since no current workload drives concurrent
-   requests to begin with.
+   mutex. Two concurrent requests (plausible now that the SD image has
+   two mounted partitions) could interleave register writes and corrupt
+   `fPendingIntStatus`. Fixed with `fTransferLock` (a plain `IOLock`) held
+   for the whole command-issue-through-completion span — sufficient
+   because `doAsyncReadWrite()` is already synchronous under the hood
+   (blocks on `waitForIntStatus32()` rather than completing from
+   interrupt context). **Verification caveat**: nothing in this project
+   currently issues genuinely concurrent I/O, so the QEMU boot test
+   confirms no regression, not that the actual interleaving race is
+   exercised. Full writeup (exact reasoning, `fTransferLock` placement)
+   archived to `docs/historic/backlog.md`.
 
 2. **[FIXED 2026-08-27, QEMU-verified]** No error recovery anywhere in
-   `BCM2837SDHCI` — every error path was `IOLog(); return false;`.
-   Re-confirmed still true before fixing: no `SOFTWARE_RESET_CMD`/
-   `SOFTWARE_RESET_DAT`/`CMD12` anywhere in the file.
-
-   **Fix**: added `resetCmdLine()` (SDHCI spec 3.7.1 `SOFTWARE_RESET_CMD`,
-   `kRegSoftwareReset` bit1) and `resetDatLine()` (`CMD12`
-   STOP_TRANSMISSION best-effort, then `SOFTWARE_RESET_DAT` bit2), wired
-   into every real error/timeout path: `sendCommand()`'s CMD_INHIBIT/
-   DAT_INHIBIT-stuck checks, its CMD_COMPLETE timeout and error-status
-   paths, and `readBlocksPIO()`/`writeBlocksPIO()`'s buffer-ready-timeout,
-   error-status, and TRANSFER_COMPLETE-timeout/error paths — matching
-   Linux's `sdhci_reset(host, SDHCI_RESET_CMD/_DATA)` split. QEMU's SD
-   model still doesn't inject real CRC/timeout/card-removal errors (per
-   this item's own original note), so — same caveat as item 1 — the
-   QEMU boot test below confirms the reset paths compile and don't
-   regress a clean boot, not that they trigger correctly under a real
-   error (no current QEMU-reachable workload can force one).
+   `BCM2837SDHCI` — every error path was `IOLog(); return false;`. Fixed
+   with `resetCmdLine()`/`resetDatLine()` (SDHCI spec 3.7.1
+   `SOFTWARE_RESET_CMD`/`_DATA`, matching Linux's `sdhci_reset()` split),
+   wired into every real error/timeout path in `sendCommand()`/
+   `readBlocksPIO()`/`writeBlocksPIO()`. **Verification caveat**: QEMU's
+   SD model still doesn't inject real CRC/timeout/card-removal errors, so
+   the boot test confirms the reset paths compile and don't regress a
+   clean boot, not that they trigger correctly under a real error. Full
+   writeup archived to `docs/historic/backlog.md`.
 
 3. **NOT FIXED — deliberately, after real investigation, not just
    deferred.** `BCM2837SDHCI`'s SD clock still never leaves ~490 kHz /
@@ -91,46 +70,29 @@ this list is stale.
    DT `clock-frequency` property) wired to this driver first — not
    attempted, scoped here for whoever picks up the mailbox work.
 
-4. **[FIXED 2026-08-27, QEMU-verified]** No power-on ramp / 74-clock
-   delay before `CMD0`, and power was enabled *after* the clock in
-   `start()` rather than before. Re-confirmed still true before fixing
-   (power write was after `setClock(400000)`).
-
-   **Fix**: reordered `start()` to assert `kRegPowerControl` (3.3V +
-   `SD_BUS_POWER`) *before* `setClock()`, added an `IODelay(1000)` (≥1ms,
-   spec 6.4.1) between power-on and clock-start, and an `IODelay(250)`
-   (≥74 clocks at the 400kHz identification clock, ~185us, rounded up)
-   between clock-start and the first command (`cardIdentify()`). This
-   only changes *ordering and idle delays*, not any actual signal
-   rate/timing — the same class of change item 3 above declined to make
-   — so unlike item 3 there's no way for a wrong guess here to make
-   things worse on real hardware (a busy-wait can only be too short or
-   comfortably long, never "wrong speed"). QEMU has no power/clock
-   dependent reset behavior to catch the old ordering being wrong (which
-   is exactly why it went unnoticed originally), so this is verified only
-   as "boots clean, no regression" below, same honest caveat as items 1-2.
+4. **[FIXED 2026-08-27, QEMU-verified]** No power-on ramp / 74-clock delay
+   before `CMD0`, and power was enabled *after* the clock in `start()`
+   rather than before. Fixed by reordering `start()` to assert
+   `kRegPowerControl` before `setClock()`, plus real `IODelay()`s for the
+   ≥1ms power-on ramp (spec 6.4.1) and ≥74-clock identification delay.
+   Only changes ordering/idle delays, not signal rate/timing, so unlike
+   item 3 there's no way a wrong guess here makes things worse on real
+   hardware. QEMU has no power/clock-dependent reset behavior to catch
+   the old ordering being wrong, so this is verified only as "boots
+   clean, no regression." Full writeup archived to
+   `docs/historic/backlog.md`.
 
 5. **[FIXED 2026-08-27, code correct but genuinely unverifiable from
-    QEMU — exactly as this item originally predicted.]** Re-confirmed the
-    core claim (no barrier at the specific location this item calls out)
-    still held before fixing. One correction to this item's own
-    description, found while re-checking it: the broader claim that
-    `grep -rn "dsb\|dmb\|isb\|OSSynchronizeIO"` returns nothing project-wide
-    except `OSMemoryBarrier()` is now stale — `iokit/BCM2837DWC2/
-    BCM2837DWC2.cpp` (added 2026-08-21, after this item was first filed)
-    already has two real `dsb sy` barriers around its DMA buffer/HCDMA
-    programming. The specific gap this item flagged — no barrier in
-    `BCM2837InterruptController::enableVector()`/`disableVectorHard()`
-    before the next `IRQ_PENDING` read — was still real and unfixed.
-
-    **Fix**: added `__asm__ volatile ("dsb sy" ::: "memory")` after each
-    of `enableVector()`'s and `disableVectorHard()`'s register writes,
-    matching the barrier style already used in `BCM2837DWC2.cpp`. As
-    predicted, this is genuinely unverifiable from QEMU/TCG (all MMIO is
-    strongly ordered there regardless of the barrier's presence) — the
-    QEMU boot test below only confirms the added instruction doesn't
-    itself break anything, not that it fixes a real ordering bug on
-    silicon.
+   QEMU — exactly as this item originally predicted.]** No memory barrier
+   in `BCM2837InterruptController::enableVector()`/`disableVectorHard()`
+   before the next `IRQ_PENDING` read. Fixed with
+   `__asm__ volatile ("dsb sy" ::: "memory")` after each register write,
+   matching the barrier style `BCM2837DWC2.cpp` already uses. Genuinely
+   unverifiable from QEMU/TCG (all MMIO is strongly ordered there
+   regardless of the barrier's presence) — the boot test only confirms
+   the added instruction doesn't itself break anything. Full writeup
+   (including a correction to this item's own original "no barriers
+   anywhere" claim) archived to `docs/historic/backlog.md`.
 
 6. **Re-verified, not re-tested (inherently real-hardware-only).** GPIO
     pinmux for the SD slot is still only ever exercised in QEMU, where
@@ -945,23 +907,92 @@ d7. **CoreFoundation + real ICU + real libxml2 ports DONE 2026-08-26/27
     syscall #116 body) and `geteuid` (real single-object extraction from
     `syslogd_libc_extras.a`).
 
-    **Real blocker remaining**: 32 real undefined symbols (`kevent_qos`,
-    `mach_eventlink_*` (7 symbols), `kpersona_get`,
-    `mach_continuous_time`/`get_times`, `malloc_engaged_nano`/
-    `memory_event_handler`, `mach_port_construct`/`destruct`/etc (7
-    symbols, the already-documented `dyld_core.a`-vs-`libmalloc.a`
-    de-duplication task), `semaphore_create`/`destroy`/`timedwait`,
-    `sigsuspend`, `sleep`, `thread_destruct`/`get_special_reply_port`,
-    `pread`/`pwrite`, `pthread_get_stackaddr_np`, `atoi`, `environ`,
-    `mach_errors`) — confirmed genuinely absent from every archive in
-    this project (unlike the 22 just closed), so real new work, not just
-    wiring, for most of what's left; the `mach_eventlink_*` family in
-    particular is real XNU IPC machinery with no existing userland
-    wrapper anywhere in this tree yet. `tools/init_binary/init.c`'s
-    `spawn_syslogd()` call is written but stays disabled, with a full
-    real postmortem in its own comment, until this gap closes and a real
-    QEMU boot reaches a shell with `syslogd` actually running. Once
-    that's closed, this item (switching real callers onto the legacy
+    **UPDATE 2026-08-27, later same day: all `libdispatch.dylib` symbol
+    gaps closed — `syslogd.macho` reaches real execution.** Two more
+    passes closed the remaining 32-symbol gap in full:
+    - `3fab93c` closed 20 of the 32: real `kevent_qos`, `kpersona_get`,
+      `pread`/`pwrite`, `sigsuspend`, `sleep`, `semaphore_timedwait`,
+      `malloc_engaged_nano`/`memory_event_handler`,
+      `mach_continuous_time`/`mach_get_times`,
+      `mach_make_memory_entry_64`, all 7 `mach_port_*` traps/MIG-fallback
+      wrappers, and `thread_destruct_special_reply_port`. Found and fixed
+      a real bug along the way: `mach_ipc_dead_stubs.o`'s narrowly-scoped
+      `KERN_FAILURE` `mach_port_insert_right`/`extract_right`/`unguard`
+      stand-ins (meant only for one unreachable reply-validation path)
+      would otherwise have been the only definition satisfying
+      `syslogd`'s real dispatch/eventlink calls to those same names —
+      replaced with real trap-first/MIG-fallback bodies. Added
+      `tools/userland_staging/gap_audit.sh` (triages a built dylib/macho's
+      undefined-symbol table against already-built archives and real
+      Apple source without a QEMU boot per symbol; now a standing
+      pre-boot step per `CLAUDE.md`).
+    - `7629e79` closed the remaining 8: the `mach_eventlink_*` family (real
+      `libsyscall/mach/mach_eventlink.c` BSD-syscall bodies for
+      `signal`/`wait_until`/`signal_wait_until`, plus a fresh `mig` regen
+      against `osfmk/mach/mach_eventlink.defs` for
+      `create`/`destroy`/`associate`/`disassociate`) and
+      `pthread_get_stackaddr_np` (a narrow extraction of `pthread.c`'s own
+      function, skipping the internal cross-thread liveness check since
+      child threads aren't inserted into `__pthread_head` on this
+      project's from-scratch thread bootstrap — safe here specifically
+      because `pthread_s` structs are never freed/reused).
+
+    Verified via real QEMU boot: `syslogd.macho` now passes dyld's eager
+    symbol binding completely (zero "symbol not found in flat namespace"
+    aborts) and reaches real execution — where it then hit a **real
+    runtime SIGSEGV (11)**, a different, later-stage failure than the old
+    load-time SIGABRT (6).
+
+    **UPDATE 2026-08-27, later still: that SIGSEGV fixed, `syslogd.macho`
+    now runs to completion (`e819550`).** Two independent real bugs, both
+    root-caused via the real crash (the first time anything in this
+    project called plain `snprintf()`/`vsnprintf()` at runtime,
+    `syslogd`'s `write_boot_log()`) and bisected with isolated static
+    smoketests:
+    1. This SDK defaults `_FORTIFY_SOURCE` to 2 for this iOS target.
+       `third_party/Libc/secure/vsnprintf_chk.c`'s own internal
+       `vsnprintf(...)` call was getting macro-rewritten back into
+       `__vsnprintf_chk(...)` — infinite self-recursion, stack-guard-page
+       SIGSEGV. Fixed with `-D_FORTIFY_SOURCE=0` on the two build scripts
+       that compile `Libc/secure/*.c`
+       (`build_libxpc_syscalls2.sh`/`build_libdispatch_dylib.sh`).
+    2. Real `vsnprintf()` calls `__current_locale()`, which does a raw,
+       unchecked TSD-array lookup using `__locale_key` — left at its
+       static `-1` sentinel because nothing in this project ever called
+       the real `__xlocale_init()` real Apple calls from
+       `_libc_initializer()` (never ported here). Fixed with a real patch
+       (`third_party-patches/Libc.patch`) adding a same-translation-unit
+       constructor to `xlocale.c` itself, so every build script pulling in
+       that object file links it for free;
+       `libc_locale_globals_compat.c` (this project's own narrow private
+       copy of the same two globals, used by `libdispatch.dylib`'s
+       separate static link) got the identical fix.
+
+    Verified end-to-end: `syslogd.macho` no longer crashes at all — it
+    runs its full real startup (dispatch queue creation, boot-log writing
+    with real `snprintf`, notify registration) and exits cleanly with the
+    expected, already-documented "no real launchd" limitation (its
+    `asl_open()`/`notify_register_*` calls need `bootstrap_look_up2()`
+    against a real bootstrap namespace registrar this project doesn't
+    have yet, see the notifyd scoping note above), not a memory-safety
+    bug.
+
+    **What's still actually open, confirmed by re-reading
+    `tools/init_binary/init.c` directly rather than trusting the above as
+    "done"**: `spawn_syslogd()` is defined (`init.c:1665`) but its call
+    site is still commented out — grepping the file for
+    `spawn_syslogd()` finds exactly one hit, inside that disabling
+    comment block, no active call anywhere in `init_main()`'s loop.
+    `syslogd` is **not** auto-spawned at boot despite every gap above
+    being closed; nothing currently prevents re-enabling it (the
+    documented "no real launchd" exit is a clean, non-fatal outcome, not
+    a crash), it just hasn't been done yet. Note also: `init.c`'s own
+    disabling comment block still enumerates the old "32 remaining
+    symbols" list from before `3fab93c`/`7629e79` — that comment is now
+    stale on gap count (not rewritten as part of this docs pass, since
+    editing `init.c` itself is out of scope here); whoever re-enables the
+    call site should refresh that comment too. Once re-enabled and QEMU-
+    boot-confirmed, this item (switching real callers onto the legacy
     Unix-socket path) becomes actionable.
 
 ---
