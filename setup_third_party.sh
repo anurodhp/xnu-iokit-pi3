@@ -505,4 +505,56 @@ if [ -n "$SCF_DEST" ]; then
     git -C "$SCF_DEST" am "../../third_party-patches/swift-corelibs-foundation.patch"
 fi
 
+# freebsd-src: real AES core + real MD5/SHA-384/512 bodies to close the
+# corecrypto AES gap (docs/backlog.md item 0a) and replace this project's
+# from-scratch MD5/SHA-384/512 (docs/backlog.md item 0b's sibling gaps).
+# corecrypto itself is confirmed NOT in apple-oss-distributions (searched,
+# zero repos, see backlog) -- FreeBSD is this project's documented fallback
+# source, ahead of hand-rolling. Non-cone sparse-checkout (rather than this
+# project's usual --cone) because the two files this needs out of
+# sys/kern/ and sys/sys/ each sit in directories with ~1500 unrelated
+# kernel source files -- cone mode only prunes at directory granularity,
+# so a literal file-pattern sparse-checkout is the only way to avoid
+# pulling all of sys/kern/ and sys/sys/ onto disk for one file each.
+#   - sys/crypto/rijndael/{rijndael.h,rijndael-alg-fst.c,rijndael-api.c,
+#     rijndael_local.h}: the actual Rijndael reference implementation
+#     (Rijmen/Bosselaers/Barreto -- the AES designers themselves),
+#     explicitly placed in the public domain by its authors -- the
+#     cleanest license of any option investigated, cleaner than the
+#     PureDarwin/corecrypto AES core scoped-but-not-used 2026-08-27 (that
+#     one had three conflicting license attributions in its own repo).
+#     rijndael-api-fst.c/.h and test00.c are a padding-oriented API this
+#     project doesn't use -- not pulled.
+#   - sys/crypto/sha2/sha512c.c (+ sha512.h/sha384.h/sha512t.h/
+#     sha512c_impl.h): Colin Percival / Allan Jude, 2-clause BSD, to
+#     replace the from-scratch SHA-384/512 compress loop in
+#     corecrypto_sha2.c. sha256c.c/sha256.h/sha224.h/sha256c_impl.h are
+#     pulled incidentally by the directory-level rijndael pattern's sibling
+#     but NOT used -- SHA-256 is already real corecrypto (backlog item 0b).
+#   - sys/kern/md5c.c + sys/sys/md5.h: the RSA Data Security reference MD5
+#     (RSA's original 1991-2 license, permissive/attribution-only, the
+#     same lineage every other BSD/Apple MD5 traces to), to replace the
+#     from-scratch MD5 in corecrypto_md5.c.
+# Pinned to release/13.2.0 (2023-04), a real tagged FreeBSD release.
+FREEBSD_REF="release/13.2.0"
+FREEBSD_DEST="third_party/freebsd-src"
+if [ -d "$FREEBSD_DEST" ]; then
+    if [ "$FORCE" = "1" ]; then
+        echo "+ removing existing $FREEBSD_DEST (--force)"
+        rm -rf "$FREEBSD_DEST"
+    else
+        echo "= $FREEBSD_DEST already exists, skipping (use --force to re-clone)"
+        FREEBSD_DEST=""
+    fi
+fi
+if [ -n "$FREEBSD_DEST" ]; then
+    echo "+ sparse-cloning freebsd-src @ $FREEBSD_REF (rijndael, sha2, md5c.c/md5.h only)"
+    git clone --filter=blob:none --no-checkout --depth 1 --branch "$FREEBSD_REF" \
+        https://github.com/freebsd/freebsd-src.git "$FREEBSD_DEST"
+    git -C "$FREEBSD_DEST" sparse-checkout init --no-cone
+    printf '/sys/crypto/rijndael/*\n/sys/crypto/sha2/*\n/sys/kern/md5c.c\n/sys/sys/md5.h\n' \
+        > "$FREEBSD_DEST/.git/info/sparse-checkout"
+    git -C "$FREEBSD_DEST" checkout "$FREEBSD_REF"
+fi
+
 echo "done -- third_party/ populated. See docs/roadmap.md and README.md for what to build next."

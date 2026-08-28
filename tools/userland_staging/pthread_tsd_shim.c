@@ -180,7 +180,21 @@ static unsigned long g_key_destructors[TSD_DYNAMIC_END];
  * remain this file's sole, still-necessary provider regardless of what
  * else is linked; since they simply call through to the (now correctly
  * overridable) public names above, they automatically forward to whichever
- * implementation actually won at link time. */
+ * implementation actually won at link time.
+ *
+ * REAL BUG FOUND 2026-08-27 (build_simple_cmds.sh's 76-command tier,
+ * `duplicate symbol '_pthread_key_init_np'` between
+ * libc_locale_for_stdio.a(pthread_tsd_shim.o) and
+ * libpthread.a(pthread_tsd.o)): this file actually exports FIVE names that
+ * collide with libpthread.a's real pthread_tsd.c, not four --
+ * pthread_key_init_np (below) was missed when __attribute__((weak)) was
+ * added to the other four during the bash SIGSEGV fix above, because at
+ * the time nothing linked both archives AND called it directly. Confirmed
+ * via `nm -m` on the actual archive members: pthread_key_create/
+ * setspecific/getspecific/once all show "weak external" while
+ * pthread_key_init_np showed plain "external" (strong) -- a real, provable
+ * asymmetry, not a guess. Same fix, same rationale, extended to the 5th
+ * function. */
 __attribute__((weak))
 int pthread_key_create(unsigned long *key, void (*destructor)(void *)) {
     pthread_tsd_shim_bootstrap();
@@ -201,6 +215,7 @@ int pthread_key_create(unsigned long *key, void (*destructor)(void *)) {
  * genuinely is a plain `int` in the real declaration (a compile-time
  * constant reserved slot number, not a pthread_key_t* out-param like
  * pthread_key_create takes) - this one was already correct. */
+__attribute__((weak))
 int pthread_key_init_np(int key, void (*destructor)(void *)) {
     pthread_tsd_shim_bootstrap();
     if (key < TSD_FIRST || key >= TSD_DYNAMIC_START) {

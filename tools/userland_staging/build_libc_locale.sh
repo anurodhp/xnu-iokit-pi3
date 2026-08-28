@@ -183,9 +183,32 @@ for f in pthread_tsd_shim pthread_tsd_shim_libc_bootstrap compat_stubs \
     "$CLANG" $CFLAGS "${f}.c" -o "$OUT/${f}.o"
 done
 
+# REAL BUG FOUND+FIXED 2026-08-27: this used to archive
+# "$OUT"/freebsd_string/*.o (a wildcard) -- but freebsd_string/ is a
+# SHARED scratch dir build_libc_string.sh also writes into (both scripts
+# fetch fresh FreeBSD source there), and that script leaves its own
+# synthetic index.o (a plain `char *index(...) { return strchr(...); }`
+# wrapper, real strong _index symbol) sitting in the same directory. This
+# script's own loop above never asked for "index" -- but the wildcard
+# swept it up anyway whenever build_libc_string.sh had already run once,
+# alongside this script's own real strchr.o (which carries its own real
+# weak `_index` alias, `__weak_reference(strchr, index)`) -- two real
+# definitions of `_index` in the same archive, causing a real
+# `duplicate symbol '_index'` at any final link that pulls both members
+# in (found while build_simple_cmds.sh's 76-command tier finally
+# exercised this exact archive combination for the first time). Fixed by
+# listing exactly the files this loop compiled, matching the `for f in`
+# list above verbatim, instead of a wildcard over a directory this
+# script doesn't fully own.
 rm -f "$OUT/libc_locale.a"
 ar rcs "$OUT/libc_locale.a" \
-    "$OUT"/apple_locale/*.o "$OUT"/freebsd_string/*.o \
+    "$OUT"/apple_locale/*.o \
+    "$OUT/freebsd_string/bcopy.o" "$OUT/freebsd_string/memcpy.o" "$OUT/freebsd_string/memmove.o" \
+    "$OUT/freebsd_string/memset.o" "$OUT/freebsd_string/bzero.o" "$OUT/freebsd_string/memcmp.o" \
+    "$OUT/freebsd_string/strlen.o" "$OUT/freebsd_string/strcmp.o" "$OUT/freebsd_string/strncmp.o" \
+    "$OUT/freebsd_string/memchr.o" "$OUT/freebsd_string/strchr.o" "$OUT/freebsd_string/strchrnul.o" \
+    "$OUT/freebsd_string/strcpy.o" "$OUT/freebsd_string/strncpy.o" "$OUT/freebsd_string/strlcpy.o" \
+    "$OUT/freebsd_string/strlcat.o" "$OUT/freebsd_string/strnlen.o" "$OUT/freebsd_string/ffs.o" \
     "$OUT/pthread_tsd_shim.o" "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
     "$OUT/compat_stubs.o" "$OUT/libc_locale_syscalls.o" \
     "$OUT/libc_locale_env_stubs.o" "$OUT/libc_locale_stdio.o" "$OUT/cerror_stub.o"
