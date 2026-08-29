@@ -195,7 +195,7 @@ LOCALTIME_FLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -fno-stack-chec
     -idirafter "$LIBC/fbsdcompat" -idirafter "$LIBC/darwin" -idirafter "$XNU/bsd" -idirafter "$XNU/osfmk")
 "$CLANG" "${LOCALTIME_FLAGS[@]}" "$LIBC/stdtime/FreeBSD/localtime.c" -o "$OUT/launchd_core_obj/localtime.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -DPRIVATE=1 \
-    "$LIBC/secure/strcat_chk.c" -o "$OUT/launchd_core_obj/strcat_chk.o"
+    -D_FORTIFY_SOURCE=0 "$LIBC/secure/strcat_chk.c" -o "$OUT/launchd_core_obj/strcat_chk.o"
 
 # Real __st_set_timezone/__st_get_timezone (localtime.c's own real
 # tzset() path) -- real, zero-dependency source
@@ -219,8 +219,38 @@ LOCALTIME_FLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -fno-stack-chec
 # directly) + real __mach_errors data table (backing libxpc_syscalls.a's
 # own mach_error_string.o, which this project already links but never
 # had this table for).
-"$CLANG" "${CFLAGS[@]}" "$LIBC/secure/sprintf_chk.c" -o "$OUT/launchd_core_obj/sprintf_chk.o"
-"$CLANG" "${CFLAGS[@]}" "$LIBC/secure/vsprintf_chk.c" -o "$OUT/launchd_core_obj/vsprintf_chk.o"
+#
+# -D_FORTIFY_SOURCE=0 IS LOAD-BEARING HERE -- it is the fix for launchd
+# bug #6 (2026-08-29), the real root cause of the PID-1 SIGSEGV that
+# five sessions of kernel-side context-switch investigation chased.
+# Apple's own Libc builds the whole secure/ directory with fortify OFF,
+# and for a hard reason: every secure/X_chk.c implements __X_chk() by
+# falling through to the plain X() on the "size is unknown/unbounded"
+# path, but <stdio.h>/<string.h>'s fortify inlines rewrite that very
+# call BACK into __builtin___X_chk() -- so the function calls itself.
+# It is not even a conditional recursion: the rewritten call passes
+# __darwin_obsz(dest), which is (size_t)-1 for any pointer whose size
+# isn't statically known (always true for a _chk function's own
+# parameter), and every secure/ file's guard is "unbounded => call the
+# plain function", so the recursion branch is taken unconditionally,
+# forever. Confirmed by disassembly, not inferred: ___vsprintf_chk was
+# emitting `mov x2, #-0x1; bl ___vsprintf_chk`, which blew launchd's
+# main-thread stack into its guard page on the very first real
+# launchd_syslog() call ("*** launchd[1] has started up. ***"), giving
+# a write fault whose fp/fault_addr looked like a foreign thread's
+# stack and sent the whole investigation kernel-side. Note the fault is
+# reported by vm_fault() as KERN_PROTECTION_FAILURE (guard page), NOT
+# KERN_INVALID_ADDRESS -- that distinction is what finally identified
+# it as stack exhaustion rather than a corrupt SP.
+# build_libdispatch_dylib.sh/build_libxpc_syscalls2.sh already did this
+# (their own CFLAGS_SECURE arrays); this file and the other secure/
+# consumers did not, which is exactly why their _chk functions were
+# broken and libdispatch's/libxpc's were fine. Verify after any change
+# to these lines with:
+#   llvm-objdump -d --disassemble-symbols=___vsprintf_chk launchd.macho
+# and confirm there is NO `bl ___vsprintf_chk` inside itself.
+"$CLANG" "${CFLAGS[@]}" -D_FORTIFY_SOURCE=0 "$LIBC/secure/sprintf_chk.c" -o "$OUT/launchd_core_obj/sprintf_chk.o"
+"$CLANG" "${CFLAGS[@]}" -D_FORTIFY_SOURCE=0 "$LIBC/secure/vsprintf_chk.c" -o "$OUT/launchd_core_obj/vsprintf_chk.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -DPRIVATE=1 \
     -idirafter "$XNU/osfmk" -idirafter "$XNU/bsd" -idirafter "$XNU/libkern" -idirafter "$XNU/iokit" \
     "$XNU/libsyscall/mach/error_codes.c" -o "$OUT/launchd_core_obj/error_codes.o"

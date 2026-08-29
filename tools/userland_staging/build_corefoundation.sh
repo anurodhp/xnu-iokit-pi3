@@ -267,10 +267,19 @@ done
 # secure/*.c fortified-libc sources, udivti3_compat.c a real standard
 # 128-bit division algorithm already checked into this directory), just
 # compiled here too rather than sharing launchd_core's own object dir.
-"$CLANG" "${CFLAGS[@]}" "$LIBC/secure/memmove_chk.c" -o "$OUT/cf_obj/memmove_chk.o"
-"$CLANG" "${CFLAGS[@]}" "$LIBC/secure/sprintf_chk.c" -o "$OUT/cf_obj/sprintf_chk.o"
-"$CLANG" "${CFLAGS[@]}" "$LIBC/secure/strlcat_chk.c" -o "$OUT/cf_obj/strlcat_chk.o"
-"$CLANG" "${CFLAGS[@]}" "$LIBC/secure/strncpy_chk.c" -o "$OUT/cf_obj/strncpy_chk.o"
+# -D_FORTIFY_SOURCE=0 on these secure/ compiles is load-bearing, not
+# hygiene: without it the fortify inlines in <stdio.h>/<string.h> rewrite
+# each __X_chk()'s own internal fall-through call to plain X() back into
+# __builtin___X_chk(), i.e. into itself, unconditionally (the rewritten
+# call passes __darwin_obsz(dest) == (size_t)-1 for a pointer parameter,
+# and every secure/ file's guard treats "unbounded" as "call the plain
+# function"). That is infinite recursion -> stack exhaustion -> SIGSEGV.
+# This was the real root cause of launchd bug #6; see
+# build_launchd_core.sh's fuller write-up above its own secure/ compiles.
+"$CLANG" "${CFLAGS[@]}" -D_FORTIFY_SOURCE=0 "$LIBC/secure/memmove_chk.c" -o "$OUT/cf_obj/memmove_chk.o"
+"$CLANG" "${CFLAGS[@]}" -D_FORTIFY_SOURCE=0 "$LIBC/secure/sprintf_chk.c" -o "$OUT/cf_obj/sprintf_chk.o"
+"$CLANG" "${CFLAGS[@]}" -D_FORTIFY_SOURCE=0 "$LIBC/secure/strlcat_chk.c" -o "$OUT/cf_obj/strlcat_chk.o"
+"$CLANG" "${CFLAGS[@]}" -D_FORTIFY_SOURCE=0 "$LIBC/secure/strncpy_chk.c" -o "$OUT/cf_obj/strncpy_chk.o"
 "$CLANG" "${CFLAGS[@]}" udivti3_compat.c -o "$OUT/cf_obj/udivti3_compat.o"
 # Real, minimal CFRuntimeClass stub descriptors for CF subsystems not
 # ported yet (RunLoop/Stream/Socket/MachPort/URL/DateComponents/

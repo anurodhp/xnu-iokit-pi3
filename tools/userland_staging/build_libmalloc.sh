@@ -363,17 +363,26 @@ PLATCFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-bu
 # "_FORTIFY_SOURCE=0" there) -- this project simply hadn't hit it yet
 # for memset/memcpy specifically until real magazine code's own memset()
 # call became the first real exerciser.
+# -D_FORTIFY_SOURCE=0 on these secure/ compiles is load-bearing, not
+# hygiene: without it the fortify inlines in <stdio.h>/<string.h> rewrite
+# each __X_chk()'s own internal fall-through call to plain X() back into
+# __builtin___X_chk(), i.e. into itself, unconditionally (the rewritten
+# call passes __darwin_obsz(dest) == (size_t)-1 for a pointer parameter,
+# and every secure/ file's guard treats "unbounded" as "call the plain
+# function"). That is infinite recursion -> stack exhaustion -> SIGSEGV.
+# This was the real root cause of launchd bug #6; see
+# build_launchd_core.sh's fuller write-up above its own secure/ compiles.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 -D_FORTIFY_SOURCE=0 -I libc_build/compat_include -I $LIBC/include -I $LIBC/darwin \
-    "$LIBC/secure/memcpy_chk.c" -o "$OUT/memcpy_chk.o"
+    -D_FORTIFY_SOURCE=0 "$LIBC/secure/memcpy_chk.c" -o "$OUT/memcpy_chk.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 -D_FORTIFY_SOURCE=0 -I libc_build/compat_include -I $LIBC/include -I $LIBC/darwin \
-    "$LIBC/secure/memset_chk.c" -o "$OUT/memset_chk.o"
+    -D_FORTIFY_SOURCE=0 "$LIBC/secure/memset_chk.c" -o "$OUT/memset_chk.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 -D_FORTIFY_SOURCE=0 \
     -include libc_build/compat_include/os_assumes_malloc_shim.h \
     -I libc_build/compat_include -I $LIBC/include -I $LIBC/darwin \
-    "$LIBC/secure/chk_fail.c" -o "$OUT/chk_fail.o"
+    -D_FORTIFY_SOURCE=0 "$LIBC/secure/chk_fail.c" -o "$OUT/chk_fail.o"
 mkdir -p "$OUT/freebsd_string"
 for f in memcpy memset; do
     dst="$OUT/freebsd_string/${f}.c"

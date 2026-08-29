@@ -152,10 +152,19 @@ fi
 # _sched_yield below are deliberately deferred instead).
 LIBC="../../third_party/Libc"
 mkdir -p "$OUT/xml2_extras_obj"
-"$CLANG" "${CFLAGS[@]}" "$LIBC/secure/memmove_chk.c" -o "$OUT/xml2_extras_obj/memmove_chk.o"
-"$CLANG" "${CFLAGS[@]}" "$LIBC/secure/strncat_chk.c" -o "$OUT/xml2_extras_obj/strncat_chk.o"
-"$CLANG" "${CFLAGS[@]}" "$LIBC/secure/strncpy_chk.c" -o "$OUT/xml2_extras_obj/strncpy_chk.o"
-"$CLANG" "${CFLAGS[@]}" "$LIBC/secure/stpncpy_chk.c" -o "$OUT/xml2_extras_obj/stpncpy_chk.o"
+# -D_FORTIFY_SOURCE=0 on these secure/ compiles is load-bearing, not
+# hygiene: without it the fortify inlines in <stdio.h>/<string.h> rewrite
+# each __X_chk()'s own internal fall-through call to plain X() back into
+# __builtin___X_chk(), i.e. into itself, unconditionally (the rewritten
+# call passes __darwin_obsz(dest) == (size_t)-1 for a pointer parameter,
+# and every secure/ file's guard treats "unbounded" as "call the plain
+# function"). That is infinite recursion -> stack exhaustion -> SIGSEGV.
+# This was the real root cause of launchd bug #6; see
+# build_launchd_core.sh's fuller write-up above its own secure/ compiles.
+"$CLANG" "${CFLAGS[@]}" -D_FORTIFY_SOURCE=0 "$LIBC/secure/memmove_chk.c" -o "$OUT/xml2_extras_obj/memmove_chk.o"
+"$CLANG" "${CFLAGS[@]}" -D_FORTIFY_SOURCE=0 "$LIBC/secure/strncat_chk.c" -o "$OUT/xml2_extras_obj/strncat_chk.o"
+"$CLANG" "${CFLAGS[@]}" -D_FORTIFY_SOURCE=0 "$LIBC/secure/strncpy_chk.c" -o "$OUT/xml2_extras_obj/strncpy_chk.o"
+"$CLANG" "${CFLAGS[@]}" -D_FORTIFY_SOURCE=0 "$LIBC/secure/stpncpy_chk.c" -o "$OUT/xml2_extras_obj/stpncpy_chk.o"
 "$CLANG" "${CFLAGS[@]}" "$COMPAT/libxml2_libc_extras.c" -o "$OUT/xml2_extras_obj/libxml2_libc_extras.o"
 # Real fmod/pow (cf_compat_headers/libm_compat.c, already used by
 # build_corefoundation.sh for the same real "no Libm anywhere" gap) --

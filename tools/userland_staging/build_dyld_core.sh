@@ -311,12 +311,21 @@ SYSFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -I $XNU/BUILD.hdrs/dst/u
 # Real __strlcat_chk()/__strlcpy_chk() (Libc/secure/*.c) -- real,
 # self-contained FORTIFY_SOURCE bounds-checked variants
 # Libc/darwin/subsystem.c's construct_subsystem_path() calls.
+# -D_FORTIFY_SOURCE=0 on these secure/ compiles is load-bearing, not
+# hygiene: without it the fortify inlines in <stdio.h>/<string.h> rewrite
+# each __X_chk()'s own internal fall-through call to plain X() back into
+# __builtin___X_chk(), i.e. into itself, unconditionally (the rewritten
+# call passes __darwin_obsz(dest) == (size_t)-1 for a pointer parameter,
+# and every secure/ file's guard treats "unbounded" as "call the plain
+# function"). That is infinite recursion -> stack exhaustion -> SIGSEGV.
+# This was the real root cause of launchd bug #6; see
+# build_launchd_core.sh's fuller write-up above its own secure/ compiles.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
     -I "$LIBC/secure" \
-    "$LIBC/secure/strlcat_chk.c" -o "$OUT/dyld_core/strlcat_chk.o"
+    -D_FORTIFY_SOURCE=0 "$LIBC/secure/strlcat_chk.c" -o "$OUT/dyld_core/strlcat_chk.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
     -I "$LIBC/secure" \
-    "$LIBC/secure/strlcpy_chk.c" -o "$OUT/dyld_core/strlcpy_chk.o"
+    -D_FORTIFY_SOURCE=0 "$LIBC/secure/strlcpy_chk.c" -o "$OUT/dyld_core/strlcpy_chk.o"
 
 # os_fault_with_payload(): real userland declaration lives in
 # libkern/os/reason_private.h, but the real IMPLEMENTATION is
