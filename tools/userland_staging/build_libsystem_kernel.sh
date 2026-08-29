@@ -146,6 +146,38 @@ fi
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     "$XNU/libsyscall/os/alloc_once.c" -o "$OUT/libsystem_kernel/os_alloc_once_table.o"
 
+# Real gap found+fixed 2026-08-28 booting launchd as PID 1 with real
+# libdispatch.dylib loaded alongside it: real mach_msg()/mach_msg_trap()
+# (mach_msg_real.c/mach_ipc_traps.s, this project's own first real
+# userland Mach-IPC exerciser, Phase 4.6 item 5) were only ever compiled
+# as loose objects bundled into libmach_ipc.a -- both launchd.macho's own
+# static portion AND libdispatch.dylib's own separate static bundling of
+# that same archive (build_libdispatch_dylib.sh's `ar x ../libmach_ipc.a`
+# step) each got their OWN private copy, and launchd's real
+# _kernelrpc_mach_port_move_member() call (generated MIG client code,
+# also statically linked into launchd.macho) resolved its own mach_msg()
+# reference to libdispatch.dylib's copy instead of its own local one --
+# confirmed via a real instrumentation pass (temporary prints added to a
+# scratch copy of mach_msg(), verified they never fired) -- exact same
+# "two private copies of one process-global[-ish]" bug class as
+# mach_task_self_'s Phase D bugs and this session's own mach_init.o
+# fix above, just for a FUNCTION instead of a data symbol. Real Apple
+# architecture ships mach_msg/mach_msg_trap/mach_reply_port/etc as part
+# of libsystem_kernel.dylib -- this project's own libsystem_kernel.dylib
+# already hosts mach_reply_port/task_self_trap (libmalloc_vm_traps.o
+# above) but never mach_msg itself. Real, correct fix: build it here too,
+# so every real consumer (launchd.macho, libdispatch.dylib, anything
+# else) shares this ONE real, canonical copy instead of each bundling
+# their own -- matching how mach_task_self_ was fixed, at the actual
+# architectural root rather than patching each consumer separately.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+    -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" \
+    -include mach_msg_trap_decl.h \
+    mach_msg_real.c -o "$OUT/libsystem_kernel/mach_msg_real.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    mach_ipc_traps.s -o "$OUT/libsystem_kernel/mach_ipc_traps.o"
+
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libsystem_kernel.dylib"
     # -not_for_dyld_shared_cache: real, newly-surfaced requirement of
@@ -161,11 +193,20 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     -Wl,-not_for_dyld_shared_cache \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
+    -Wl,-U,_mach_port_insert_right -Wl,-U,_mach_port_extract_right -Wl,-U,_mach_port_unguard \
+    `# mach_msg_real.o's mach_msg_destroy_port() references these on its` \
+    `# own provably-unreachable MAKE_SEND/MAKE_SEND_ONCE reply cases (see` \
+    `# mach_msg_real.c's own header) -- deliberately left undefined here` \
+    `# rather than adding another local definition, to avoid re-creating` \
+    `# the exact duplicate-symbol risk this whole fix exists to close;` \
+    `# real implementations already live in launchd.macho's own` \
+    `# mach_port_gap_closures2.o and libdispatch.dylib's own equivalent.` \
     -o "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/libsystem_kernel/mach_vm.o" "$OUT/libsystem_kernel/mach_init.o" "$OUT/libsystem_kernel/mig_reply_port.o" \
     "$OUT/libsystem_kernel/init_cpu_capabilities.o" "$OUT/libsystem_kernel/libmalloc_vm_traps.o" \
     "$OUT/libsystem_kernel/libmalloc_vm_mig_stubs.o" "$OUT/libsystem_kernel/compat.o" \
-    "$OUT/libsystem_kernel/cerror_stub.o" "$OUT/libsystem_kernel/os_alloc_once_table.o"
+    "$OUT/libsystem_kernel/cerror_stub.o" "$OUT/libsystem_kernel/os_alloc_once_table.o" \
+    "$OUT/libsystem_kernel/mach_msg_real.o" "$OUT/libsystem_kernel/mach_ipc_traps.o"
 
 echo "wrote $OUT/system/libsystem_kernel.dylib"
 otool -hv "$OUT/system/libsystem_kernel.dylib" | grep -q " DYLIB " || {

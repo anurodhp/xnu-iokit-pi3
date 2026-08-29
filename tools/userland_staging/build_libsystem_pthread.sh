@@ -124,6 +124,14 @@ mkdir -p "$OUT/libsystem_pthread/extracted"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     libsystem_pthread_atfork_compat.c -o "$OUT/libsystem_pthread/atfork_compat.o"
 
+# Real gap: see libsystem_pthread_dylib_bootstrap_compat.c's own comment --
+# nothing ever called pthread_main_thread_bootstrap() for a real, dynamic-
+# executable (dyld-linked) consumer of this dylib; every static consumer's
+# own hand-rolled entry point calls it explicitly, but dyld jumps straight
+# to main() with no such wrapper. Real dylib constructor closes the gap.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    libsystem_pthread_dylib_bootstrap_compat.c -o "$OUT/libsystem_pthread/dylib_bootstrap_compat.o"
+
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libsystem_pthread.dylib"
 # Real UNIX2003/raw-syscall-naming aliases real pthread source calls by
@@ -157,6 +165,7 @@ rm -f "$OUT/system/libsystem_pthread.dylib"
     $(for m in $MEMBERS; do echo "$OUT/libsystem_pthread/extracted/$m"; done) \
     "$OUT/libsystem_pthread/sched_yield_trap.o" "$OUT/libsystem_pthread/sched_yield.o" \
     "$OUT/libsystem_pthread/atfork_compat.o" \
+    "$OUT/libsystem_pthread/dylib_bootstrap_compat.o" \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_malloc.dylib"
 
 echo "wrote $OUT/system/libsystem_pthread.dylib"
