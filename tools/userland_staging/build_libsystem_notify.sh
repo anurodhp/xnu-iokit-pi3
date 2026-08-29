@@ -81,7 +81,7 @@ if [ ! -f "$OUT/libnotify.a" ] || [ ! -f "$OUT/libnotify_client.a" ]; then
     echo "error: libnotify.a / libnotify_client.a not found -- run build_libnotify.sh and build_libnotify_client.sh first" >&2
     exit 1
 fi
-for d in libsystem_c libsystem_malloc libsystem_platform libsystem_kernel libsystem_pthread libdispatch libsystem_blocks; do
+for d in libsystem_c libsystem_malloc libsystem_platform libsystem_kernel libsystem_pthread libdispatch libsystem_blocks libncurses; do
     if [ ! -f "$OUT/system/$d.dylib" ]; then
         echo "error: $OUT/system/$d.dylib not found -- run build_${d}.sh first" >&2
         exit 1
@@ -102,6 +102,17 @@ fi
 
 (cd "$EXTRACT" && ar x "../../libnotify.a" && ar x "../../libnotify_client.a")
 
+# REAL BUG FOUND+FIXED 2026-08-29: creat/shm_open/usleep/
+# os_fault_with_payload/os_variant_has_internal_diagnostics were
+# deferred via `-Wl,-U` on the assumption an unreached symbol is
+# harmless; it is not (real dyld eager chained-fixups binding fails at
+# real process load time regardless of whether the call path executes,
+# confirmed via a real QEMU boot of launchd: "symbol not found in flat
+# namespace '_creat'"). Real fixes -- see
+# libsystem_notify_misc_compat.c's own header.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    libsystem_notify_misc_compat.c -o "$EXTRACT/libsystem_notify_misc_compat.o"
+
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libsystem_notify.dylib"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
@@ -112,14 +123,13 @@ rm -f "$OUT/system/libsystem_notify.dylib"
     -Wl,-U,_xpc_dictionary_create -Wl,-U,_xpc_dictionary_set_string \
     -Wl,-U,_xpc_dictionary_set_uint64 -Wl,-U,_xpc_release -Wl,-U,__xpc_bool_true \
     -Wl,-U,_bootstrap_look_up2 \
-    -Wl,-U,_creat -Wl,-U,_pipe -Wl,-U,_shm_open -Wl,-U,_usleep \
-    -Wl,-U,_os_fault_with_payload -Wl,-U,_os_variant_has_internal_diagnostics \
+    -Wl,-U,_pipe \
     -o "$OUT/system/libsystem_notify.dylib" \
     "$EXTRACT"/*.o \
     "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_malloc.dylib" \
     "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/system/libsystem_pthread.dylib" "$OUT/system/libdispatch.dylib" \
-    "$OUT/system/libsystem_blocks.dylib" \
+    "$OUT/system/libsystem_blocks.dylib" "$OUT/system/libncurses.dylib" \
     2>"$OUT/libsystem_notify_link.err" \
     && echo "wrote $OUT/system/libsystem_notify.dylib" \
     || { echo "libsystem_notify.dylib link found real undefined symbols:" >&2; grep '^  "' "$OUT/libsystem_notify_link.err" | sed 's/,.*//' | sort -u >&2; cat "$OUT/libsystem_notify_link.err" >&2; exit 1; }
@@ -136,7 +146,7 @@ otool -hv "$OUT/system/libsystem_notify.dylib" | grep -q " DYLIB " || {
 # else bound to a real, named sibling dylib.
 echo "declared -Wl,-U deferrals (expect: <flat-namespace> bind target, resolved at real load time):"
 xcrun dyld_info -fixups "$OUT/system/libsystem_notify.dylib" 2>/dev/null | grep '<flat-namespace>' | awk '{print "  " $NF}'
-UNEXPECTED=$(xcrun dyld_info -fixups "$OUT/system/libsystem_notify.dylib" 2>/dev/null | grep -v -E '<flat-namespace>|<weak-def-coalesce>' | grep 'bind' | grep -v -E 'libsystem_c/|libsystem_malloc/|libsystem_platform/|libsystem_kernel/|libsystem_pthread/|libdispatch/|libsystem_blocks/' || true)
+UNEXPECTED=$(xcrun dyld_info -fixups "$OUT/system/libsystem_notify.dylib" 2>/dev/null | grep -v -E '<flat-namespace>|<weak-def-coalesce>' | grep 'bind' | grep -v -E 'libsystem_c/|libsystem_malloc/|libsystem_platform/|libsystem_kernel/|libsystem_pthread/|libdispatch/|libsystem_blocks/|libncurses' || true)
 if [ -n "$UNEXPECTED" ]; then
     echo "error: real, unexpected non-sibling bind targets found (not flat-namespace, not one of the 7 linked sibling dylibs):" >&2
     echo "$UNEXPECTED" >&2
