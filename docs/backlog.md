@@ -1593,7 +1593,9 @@ d10. **Real, project-wide finding, 2026-08-29 — `-Wl,-U` does not safely
     a clean `ld` link or a passing `gap_audit.sh` means it will actually
     run.
 
-d11. **RESOLVED 2026-08-29 (session 5, main-repo commit `76ff8cd`).**
+d11. **RESOLVED 2026-08-29 (session 5, main-repo commit `76ff8cd`;
+    diagnostics removed in `a1678ab`). Full write-up:
+    `docs/launchd-bug6-postmortem.md`.**
     **Root cause: `_FORTIFY_SOURCE` self-recursion in
     `third_party/Libc/secure/*_chk.c`, a USERLAND BUILD-FLAG bug — not a
     kernel context-switch bug, not QEMU.** Apple builds that whole
