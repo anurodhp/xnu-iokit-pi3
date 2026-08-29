@@ -377,6 +377,7 @@ rm -f "$OUT/system/libsystem_c.dylib"
     -Wl,-alias,_regcomp,'_regcomp$UNIX2003' \
     -Wl,-alias,_fdopen,'_fdopen$UNIX2003' \
     -Wl,-alias,_strtod,'_strtod$UNIX2003' \
+    -Wl,-alias,___strtok_r,_strtok_r \
     -o "$OUT/system/libsystem_c.dylib" \
     "$EXTRACT"/*.o \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" \
