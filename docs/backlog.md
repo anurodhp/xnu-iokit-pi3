@@ -2104,6 +2104,76 @@ d11. **launchd PID-1 bug #6 (real SIGSEGV in `launchd_runtime_init()`'s
     bookkeeping) -- not yet located precisely, real fix work, not just
     more diagnosis, once step (1) confirms the theory.
 
+    **UPDATE 2026-08-29, session 5: step (1) done, theory REFINED not
+    confirmed as originally stated -- one real userland bug found+fixed
+    along the way (kept), but bug #6 itself is still open.**
+
+    Ran the already-written `stack_base`/`stack_top` vs `fp`/`fault_addr`
+    comparison. It never printed at all (`IOKITDIAG19` absent from
+    `launchd_boot_test64.log`/`65.log`) -- root-caused to a *second*,
+    independent real bug: `libpthread.a` (a plain static archive, linked
+    *before* `system/libsystem_pthread.dylib` in `build_launchd.sh`) was
+    shadowing the dylib's real, shared `pthread_create` -- ld64 pulled
+    `pthread_main_thread_bootstrap.o` out of the archive to satisfy
+    `core.o`'s undefined `_pthread_create` reference before the dylib was
+    ever considered, baking a second, independently-`__bsdthread_register`'d
+    copy of the whole pthread bootstrap path into `launchd.macho`
+    (confirmed via `nm`: both `launchd.macho` and the dylib defined a
+    strong `T _pthread_create`). Exact same bug class as this same
+    script's own prior `mig_reply_port.o`/`mach_msg_real.o` fixes -- see
+    memory `feedback_suspect_duplicate_static_copy_early` for the
+    standing rule this earned. **Fixed** (iokit main repo commit
+    `a07bc1c`): narrowed a launchd-only copy of `libpthread.a`
+    (`ld -r -unexported_symbol ... -keep_private_externs`, demoting the
+    duplicated functions to private-extern while preserving the shared
+    DATA symbols `pthread_tsd.o`/`pthread_clear_qos_tsd_compat.o` still
+    need) so `pthread_create` now genuinely resolves to the dylib's one
+    real copy at runtime (verified: the launchd-only diagnostic that can
+    only fire from the old local copy no longer does).
+
+    **This did NOT fix bug #6** -- `launchd_boot_test66.log` shows the
+    identical crash (same thread pointer, same fault pc/fp/fault_addr
+    pattern) even with only one canonical `pthread_create`/
+    `__bsdthread_register` call site in the whole process. This falsifies
+    the specific "two racing `__bsdthread_register` calls" mechanism, but
+    the underlying observation (main thread's `SP_EL0` ending up pointing
+    at what looks exactly like the second thread's own private stack) is
+    unchanged and still real.
+
+    Went one level deeper at the kernel C level (xnu-7195 submodule
+    commits `6e4983dec`, `6bad23b75`, both real diagnostic-only changes,
+    both boot-tested): added `thread->machine.contextData` (the real,
+    per-thread `zalloc(user_ss_zone)`-allocated PCB, `osfmk/arm64/pcb.c`)
+    and `thread->kernel_stack` (the real, per-thread
+    `kernel_memory_allocate`-backed kernel stack with guard pages,
+    `osfmk/kern/stack.c`) to both `IOKITDIAG17` (second thread, right
+    before its own `thread_block()`) and `IOKITDIAG18` (main thread, at
+    the fault), for a direct same-boot comparison. **Both ruled out**:
+    `contextData` differs (`0xfffffff214184470` vs `0xfffffff214184b10`,
+    `test67.log`) and `kernel_stack` differs (`0xfffffff851c20000` vs
+    `0xfffffff851c30000`, 64KB apart, `test68.log`) -- the two threads'
+    per-thread state is genuinely, separately allocated, not aliased.
+    Also traced (read-only) `save_general_registers`/
+    `load_general_registers` (`osfmk/arm64/cswitch.s`) and confirmed they
+    correctly include `x21` (the exception-return machine-context
+    pointer) in the real AAPCS-64 x19-x28 callee-saved set, and
+    `arm64_thread_exception_return` (`osfmk/arm64/locore.s`) explicitly
+    recomputes `x21 = current_thread()->machine.contextData` fresh on
+    every continuation-resume, not a stale carried-over value. Every
+    generic mechanism traced so far looks like real, correct,
+    unmodified-looking Apple code -- no bug found in it yet.
+
+    **Real, still-open next step**: the corruption is proven to be a
+    *value* written into the main thread's own, correctly-separate PCB's
+    `SS64_SP` field -- not a pointer-aliasing bug of any kind checked so
+    far. The next diagnostic needs to bracket the actual
+    `Switch_context`/`machine_switch_context` call itself (`osfmk/arm/
+    pcb.c`'s C wrapper, immediately before/after the real asm call) to
+    catch the exact switch where the wrong value first appears, since
+    every *structural* candidate (PCB alloc, kernel-stack alloc, register
+    save-set, exception-return path) has now been individually
+    eliminated by direct evidence.
+
 d12. **Missing/incomplete library work, explicitly tracked so it isn't
     lost (cross-referenced from item d8, not duplicated in full here)**:
     - `libCoreFoundation.a` → `.dylib`: deliberately deferred, own future
