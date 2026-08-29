@@ -85,13 +85,24 @@ if [ ! -d "$SYSLOG/syslogd.tproj" ]; then
     echo "error: $SYSLOG/syslogd.tproj not found -- run setup_third_party.sh first" >&2
     exit 1
 fi
-for a in libnotify_client libnotify libxpc liblaunchd_mig libxpc_syscalls libxpc_syscalls2 liblaunchd_syscalls libmach_ipc libmalloc libplatform libpthread libc_gen libc_string libc_stdio libc_printf libc_locale_for_stdio; do
+for a in liblaunchd_mig liblaunchd_syscalls libmach_ipc libmalloc libplatform libpthread libc_gen libc_string libc_stdio libc_printf libc_locale_for_stdio; do
     if [ ! -f "$OUT/$a.a" ]; then
         echo "error: $OUT/$a.a not found -- run build_${a}.sh first" >&2
         exit 1
     fi
 done
-for d in libdispatch libdyld libSystem.B libsystem_pthread; do
+# libnotify.a/libnotify_client.a/libxpc.a/libxpc_syscalls.a/libxpc_syscalls2.a/
+# libopenpam.a/libncurses.a's real per-consumer curated objects are gone
+# from this build -- static-linking cleanup pass (2026-08-29): real,
+# separately-built dylibs replace all of these now (libsystem_notify.dylib
+# replaces libnotify.a+libnotify_client.a, real Apple ships them as one
+# product; libxpc.dylib replaces libxpc.a+libxpc_syscalls.a+
+# libxpc_syscalls2.a). libresolv/libcopyfile/libremovefile's curated
+# extractions below are also gone -- all three are already real
+# `-Wl,-reexport_library` members of libSystem.B.dylib (build_libsystem.sh),
+# already linked below, so syslogd reaches them through the umbrella with
+# no direct link needed.
+for d in libdispatch libdyld libSystem.B libsystem_pthread libsystem_notify libxpc libopenpam libncurses; do
     if [ ! -f "$OUT/system/$d.dylib" ]; then
         echo "error: $OUT/system/$d.dylib not found -- run its build_*.sh first" >&2
         exit 1
@@ -225,32 +236,33 @@ echo "wrote $OUT/libsyslogd.a ($(ls "$OUT"/syslogd_obj/*.o | wc -l | tr -d ' ') 
 # functions this trial link needs -- same selective `ar x` pattern
 # build_launchd_core.sh already established (not whole-archive linking,
 # same C++/xattr pollution risk documented in docs/backlog.md item d7).
-# Real gaps found during this pass's own QEMU boot test (a dynamically-
-# linked executable's real dyld load-time symbol binding surfaced basic
-# libc functions this project's static stack had real implementations of
-# all along, just never linked into any earlier consumer): fegetenv/
-# fesetenv (libopenpam.a's ls_fenv_compat.o), getpwnam (cf_libc_extras.a's
-# copyfile_syscalls.o), chown/dup/geteuid/getuid/kevent/mkdir/umask/
-# uuid_clear/signal (liblaunchd_syscalls.a -- NOT linked as a whole
-# archive because its own private_names_compat.o real __write alias
-# collides with libc_locale_for_stdio.a's own real __write, a genuine
-# duplicate-symbol conflict found by this pass's own trial link; every
-# other real member is independent and safe), gmtime_r/mktime/timegm/
-# ctime_r/pututxline (libopenpam.a's date_compat.o), fchown/symlink/
-# uuid_parse/realpath (libcopyfile.a), atoi/gethostname/inet_ntop/
-# inet_pton (libresolv.a), mach_port_destruct/mach_port_move_member
-# (dyld_core.a's real MIG client stub, mach_portUser.o).
+# Static-linking cleanup pass (2026-08-29): the ls_fenv_compat.o/mkdir.o/
+# fchown.o/symlink.o/parse.o/realpath.o/pack.o/statfs64.o/atoi.o/
+# gethostname.o/inet_ntop.o/inet_pton.o/if_nametoindex.o/getifaddrs.o/
+# Libc_sys_sigaction.o/libplatform_sigaction.o/
+# simple_cmds_nanosleep_pub_compat_c.o members formerly extracted here
+# from libopenpam.a/libremovefile.a/libcopyfile.a/libresolv.a/libncurses.a
+# are gone -- those five libraries are all real dylibs now, linked
+# directly (libopenpam.dylib/libncurses.dylib below) or reached through
+# libSystem.B.dylib's own real reexport (libresolv/libcopyfile/
+# libremovefile, already linked). Real gaps found during this pass's own
+# QEMU boot test that are NOT part of this migration's scope (this
+# project's own internal glue archives, not independent libraries, stay
+# static by design -- docs/backlog.md item d8): getpwnam
+# (cf_libc_extras.a's copyfile_syscalls.o), chown/dup/geteuid/getuid/
+# kevent/mkdir/umask/uuid_clear/signal (liblaunchd_syscalls.a -- NOT
+# linked as a whole archive because its own private_names_compat.o real
+# __write alias collides with libc_locale_for_stdio.a's own real
+# __write, a genuine duplicate-symbol conflict found by this pass's own
+# trial link; every other real member is independent and safe),
+# mach_port_destruct/mach_port_move_member (dyld_core.a's real MIG
+# client stub, mach_portUser.o).
 rm -rf "$OUT/syslogd_libc_extras_obj"
 mkdir -p "$OUT/syslogd_libc_extras_obj"
 ( cd "$OUT/syslogd_libc_extras_obj" && \
-  ar x "../libopenpam.a" ls_fenv_compat.o && \
   ar x "../cf_libc_extras.a" copyfile_syscalls.o geteuid.o getuid.o && \
   ar x "../liblaunchd_syscalls.a" sys__chown.o sys__dup.o sys__kevent.o sys__umask.o uuid_clear.o signal.o && \
-  ar x "../libremovefile.a" mkdir.o && \
-  ar x "../libcopyfile.a" fchown.o symlink.o parse.o realpath.o pack.o statfs64.o && \
-  ar x "../libresolv.a" atoi.o gethostname.o inet_ntop.o inet_pton.o if_nametoindex.o getifaddrs.o && \
-  ar x "../launchd_libc_extras.a" qsort.o heapsort.o && \
-  ar x "../libncurses.a" Libc_sys_sigaction.o libplatform_sigaction.o simple_cmds_nanosleep_pub_compat_c.o )
+  ar x "../launchd_libc_extras.a" qsort.o heapsort.o )
 rm -f "$OUT/syslogd_libc_extras.a"
 ar rcs "$OUT/syslogd_libc_extras.a" "$OUT"/syslogd_libc_extras_obj/*.o
 echo "wrote $OUT/syslogd_libc_extras.a"
@@ -287,22 +299,19 @@ rm -f syslogd.macho
     "$OUT/syslogd_obj/syslogd_alloc_once_compat.o" "$OUT/syslogd_obj/syslogd_misc_libc_compat.o" \
     "$OUT/syslogd_obj/syslogd_mach_port_compat.o" "$OUT/syslogd_obj/syslogd_mach_port_extra_trap.o" \
     "$OUT/syslogd_obj/error_codes.o" \
-    -Wl,-force_load,"$OUT/libnotify_client.a" \
-    "$OUT/libnotify.a" \
     "$OUT/syslogd_libc_extras.a" \
     "$OUT/libc_regex.a" \
-    "$OUT/libxpc.a" "$OUT/liblaunchd_mig.a" \
-    "$OUT/libxpc_syscalls.a" "$OUT/libxpc_syscalls2.a" \
+    "$OUT/liblaunchd_mig.a" \
     "$OUT/libmach_ipc.a" "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
     "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
     "$OUT/libc_locale_for_stdio.a" \
     "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
+    "$OUT/system/libsystem_notify.dylib" "$OUT/system/libxpc.dylib" \
+    "$OUT/system/libopenpam.dylib" "$OUT/system/libncurses.dylib" \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
     -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
-    -Wl,-alias,'_realpath$DARWIN_EXTSN',_realpath \
     -Wl,-alias,_getattrlist,'_getattrlist$UNIX2003' \
-    -Wl,-alias,_statfs,'_statfs$INODE64' \
     2>"$OUT/syslogd_link.err" \
     && echo "real link: 0 undefined symbols -- syslogd.macho fully closed" \
     || { n=$(grep -c 'Undefined symbol' "$OUT/syslogd_link.err" || true); echo "real link found $n undefined symbol group(s):"; grep '^  "' "$OUT/syslogd_link.err" | sed 's/,.*//' | sort -u; tail -80 "$OUT/syslogd_link.err" >&2; exit 1; }
