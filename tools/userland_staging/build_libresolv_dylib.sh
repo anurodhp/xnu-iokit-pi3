@@ -41,24 +41,47 @@
 # guessed, and NOT the same as build_libresolv.sh's own archive-level
 # smoketest gaps, which never linked res_send.c's real send_dg()/
 # send_vc() network path at all):
-#   - Already an explicit, documented scope decision in
-#     build_libresolv.sh's own header (carried forward unchanged, not a
-#     new gap): DNSServiceQueryRecord/_ProcessResult/_RefDeallocate/
-#     _RefSockFD (mDNSResponder client, res_query.c), kevent/kqueue/pipe
-#     (res_send.c's real kqueue-based I/O multiplexing).
-#   - Real, confirmed-absent-from-this-checkout Libinfo netdb sources
-#     (`find third_party/Libinfo -iname '*getproto*.c' -iname
-#     '*getserv*.c'` -- zero hits, same "confirmed absent, not guessed"
-#     standard as docs/backlog.md item d7's sysdir_* gap): getprotobynumber/
-#     getprotoent/setprotoent/endprotoent, getservbyport/getservent/
-#     setservent/endservent. getnameinfo (real source,
-#     Libinfo/lookup.subproj/getnameinfo_link.c, exists but not pulled in
-#     this pass -- same si_module wall build_libresolv.sh's own header
-#     already documents for dns_async.c, not attempted here either).
+#   - DNSServiceQueryRecord/_ProcessResult/_RefDeallocate/_RefSockFD:
+#     CLOSED 2026-08-29, no longer deferred -- real, honest "no
+#     mDNSResponder daemon" stand-ins instead (libresolv_dnssd_compat.c),
+#     found blocking a real QEMU boot of launchd (flat-namespace
+#     eager-bind failure). The underlying scope decision (this project's
+#     own build_libresolv.sh header: no mDNSResponder daemon exists
+#     here) is unchanged -- only the deferral mechanism was wrong.
+#   - kevent/kqueue/pipe (res_send.c's real kqueue-based I/O
+#     multiplexing): still an explicit, documented scope decision in
+#     build_libresolv.sh's own header, still deferred -- res_send.c's
+#     own real network I/O path is not exercised by launchd's classic
+#     resolver usage, unlike the DNS-SD path above which turned out to
+#     be referenced (not necessarily called) regardless.
+#   - getprotobynumber/getprotoent/setprotoent/endprotoent/getservbyport/
+#     getservent/setservent/endservent/getnameinfo: CLOSED 2026-08-29,
+#     no longer deferred -- real, honest "no protocol/service database"
+#     stand-ins instead (libresolv_netdb_compat.c), found blocking a
+#     real QEMU boot of launchd. Real Libinfo netdb .c sources are still
+#     confirmed genuinely absent from this checkout (`find
+#     third_party/Libinfo -iname '*getproto*.c' -iname '*getserv*.c'` --
+#     zero hits) and getnameinfo's real source still needs the same
+#     si_module wall build_libresolv.sh's header documents for
+#     dns_async.c -- only the deferral mechanism was wrong, not the
+#     underlying scope reasoning.
+#   - notify_cancel/notify_get_state/notify_register_plain: CLOSED
+#     2026-08-29 -- libsystem_notify.dylib now exists (this same
+#     migration pass) and is linked below as a real sibling, not
+#     deferred.
+#   - chmod$UNIX2003/getpeername$UNIX2003/getsockname$UNIX2003/
+#     recvmsg$UNIX2003/writev$UNIX2003/pselect$1050: CLOSED 2026-08-29 --
+#     real raw syscall wrappers (libresolv_more_socket_syscalls.c) +
+#     real `-Wl,-alias` entries below, not deferred. Was the same
+#     project-wide "BSD socket syscall wrappers missing" gap
+#     docs/backlog.md item d7 already flagged.
 #   - Real dns.c-internal helpers (_check_cache/_pdns_search/
-#     _sdns_search/dns_search_list_count) -- same dns.c exclusion
-#     build_libresolv.sh's own header already made; some already-compiled
-#     file has a residual forward reference into it.
+#     _sdns_search/dns_search_list_count): CLOSED 2026-08-29, no longer
+#     deferred -- real, honest dns.c-internal stand-ins instead
+#     (libresolv_dns_internal_compat.c), found blocking a real QEMU boot
+#     of launchd. Same dns.c exclusion build_libresolv.sh's own header
+#     already made (some already-compiled file has a residual forward
+#     reference into it) -- only the deferral mechanism was wrong.
 #   - CORRECTED 2026-08-29: bind$UNIX2003/connect$UNIX2003/sendto$UNIX2003
 #     are NOT actually part of this gap -- their real bases (bind/
 #     connect/sendto) are genuinely LOCAL to this exact archive (real
@@ -170,6 +193,39 @@ echo "compiling 3 real additional files (if_indextoname.c, herror.c, nsap_addr.c
 "$CLANG" $CFLAGS "$LIBINFO/dns.subproj/herror.c" -o "$EXTRACT/herror.o"
 "$CLANG" $CFLAGS "$LIBC/net/FreeBSD/nsap_addr.c" -o "$EXTRACT/nsap_addr.o"
 
+# REAL BUG FOUND+FIXED 2026-08-29: DNSServiceQueryRecord/_ProcessResult/
+# _RefDeallocate/_RefSockFD were deferred via `-Wl,-U` on the assumption
+# an unreached symbol is harmless; it is not (real dyld flat-namespace
+# lookup fails at real process load time regardless of whether the call
+# path executes, confirmed via a real QEMU boot failure). Real, honest
+# "no mDNSResponder daemon" stand-in instead -- see
+# libresolv_dnssd_compat.c's own header. Uses the real Apple dns_sd.h
+# already on this SDK's include path (no -I needed beyond $CFLAGS's
+# existing -isysroot), not hand-declared types.
+"$CLANG" $CFLAGS libresolv_dnssd_compat.c -o "$EXTRACT/libresolv_dnssd_compat.o"
+
+# REAL BUG FOUND+FIXED 2026-08-29, same real class as the DNS-SD fix
+# above: __check_cache/__pdns_search/__sdns_search/_dns_search_list_count
+# were ALSO wrongly deferred. Real, honest dns.c-internal stand-ins
+# instead -- see libresolv_dns_internal_compat.c's own header.
+"$CLANG" $CFLAGS libresolv_dns_internal_compat.c -o "$EXTRACT/libresolv_dns_internal_compat.o"
+
+# REAL BUG FOUND+FIXED 2026-08-29, same real class as above:
+# chmod$UNIX2003/getpeername$UNIX2003/getsockname$UNIX2003/
+# recvmsg$UNIX2003/writev$UNIX2003/pselect$1050 were also wrongly
+# deferred -- real, project-wide missing raw syscalls, not resolv-
+# specific (see libresolv_more_socket_syscalls.c's own header). Real
+# raw wrappers compiled in, real $UNIX2003/$1050 aliases added to this
+# dylib's own link below (base symbols now genuinely local here).
+"$CLANG" $CFLAGS libresolv_more_socket_syscalls.c -o "$EXTRACT/libresolv_more_socket_syscalls.o"
+
+# REAL BUG FOUND+FIXED 2026-08-29, same real class as above:
+# getprotobynumber/getprotoent/setprotoent/endprotoent/getservbyport/
+# getservent/setservent/endservent/getnameinfo were also wrongly
+# deferred. Real, honest "no protocol/service database" stand-ins
+# instead -- see libresolv_netdb_compat.c's own header.
+"$CLANG" $CFLAGS libresolv_netdb_compat.c -o "$EXTRACT/libresolv_netdb_compat.o"
+
 # REAL FIX, found while first attempting to defer ___global_locale/
 # ___locale_key via plain -Wl,-U (see this script's header -- that
 # attempt is what this comment replaces): ld64's real chained-fixups
@@ -209,23 +265,18 @@ rm -f "$OUT/system/libresolv.dylib"
     -Wl,-fixup_chains \
     -Wl,-alias,_bind,'_bind$UNIX2003' -Wl,-alias,_connect,'_connect$UNIX2003' \
     -Wl,-alias,_sendto,'_sendto$UNIX2003' \
-    -Wl,-U,'_chmod$UNIX2003' \
-    -Wl,-U,'_getpeername$UNIX2003' -Wl,-U,'_getsockname$UNIX2003' -Wl,-U,'_recvmsg$UNIX2003' \
-    -Wl,-U,'_writev$UNIX2003' -Wl,-U,'_pselect$1050' \
-    -Wl,-U,_DNSServiceProcessResult -Wl,-U,_DNSServiceQueryRecord \
-    -Wl,-U,_DNSServiceRefDeallocate -Wl,-U,_DNSServiceRefSockFD \
+    -Wl,-alias,_chmod,'_chmod$UNIX2003' \
+    -Wl,-alias,_getpeername,'_getpeername$UNIX2003' -Wl,-alias,_getsockname,'_getsockname$UNIX2003' \
+    -Wl,-alias,_recvmsg,'_recvmsg$UNIX2003' -Wl,-alias,_writev,'_writev$UNIX2003' \
+    -Wl,-alias,_pselect,'_pselect$1050' \
     -Wl,-U,_kevent -Wl,-U,_kqueue -Wl,-U,_pipe \
-    -Wl,-U,_getprotobynumber -Wl,-U,_getprotoent -Wl,-U,_setprotoent -Wl,-U,_endprotoent \
-    -Wl,-U,_getservbyport -Wl,-U,_getservent -Wl,-U,_setservent -Wl,-U,_endservent \
-    -Wl,-U,_getnameinfo \
-    -Wl,-U,__check_cache -Wl,-U,__pdns_search -Wl,-U,__sdns_search -Wl,-U,_dns_search_list_count \
     -Wl,-U,___darwin_check_fd_set_overflow \
-    -Wl,-U,_notify_cancel -Wl,-U,_notify_get_state -Wl,-U,_notify_register_plain \
     -o "$OUT/system/libresolv.dylib" \
     "$EXTRACT"/*.o \
     "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_malloc.dylib" \
     "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
+    "$OUT/system/libsystem_notify.dylib" \
     2>"$OUT/libresolv_dylib_link.err" \
     && echo "wrote $OUT/system/libresolv.dylib" \
     || { echo "libresolv.dylib link found real undefined symbols:" >&2; grep '^  "' "$OUT/libresolv_dylib_link.err" | sed 's/,.*//' | sort -u >&2; exit 1; }
@@ -255,7 +306,7 @@ otool -hv "$OUT/system/libresolv.dylib" | grep -q " DYLIB " || {
 # bound to a real, named sibling dylib.
 echo "declared -Wl,-U deferrals (expect: <flat-namespace> bind target, resolved at real load time):"
 xcrun dyld_info -fixups "$OUT/system/libresolv.dylib" 2>/dev/null | grep '<flat-namespace>' | awk '{print "  " $NF}'
-UNEXPECTED=$(xcrun dyld_info -fixups "$OUT/system/libresolv.dylib" 2>/dev/null | grep -v -E '<flat-namespace>|<weak-def-coalesce>' | grep 'bind' | grep -v -E 'libsystem_c/|libsystem_malloc/|libsystem_platform/|libsystem_kernel/|libsystem_pthread/' || true)
+UNEXPECTED=$(xcrun dyld_info -fixups "$OUT/system/libresolv.dylib" 2>/dev/null | grep -v -E '<flat-namespace>|<weak-def-coalesce>' | grep 'bind' | grep -v -E 'libsystem_c/|libsystem_malloc/|libsystem_platform/|libsystem_kernel/|libsystem_pthread/|libsystem_notify/' || true)
 if [ -n "$UNEXPECTED" ]; then
     echo "error: real, unexpected non-sibling bind targets found (not flat-namespace, not one of the 5 linked sibling dylibs):" >&2
     echo "$UNEXPECTED" >&2
