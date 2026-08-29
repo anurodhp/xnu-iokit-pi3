@@ -104,8 +104,30 @@ done
 # same duplicate-global-state bug class already fixed once for
 # mach_task_self_/g_zone, see build_libsystem_malloc.sh's own header).
 # Real sibling dylibs now exist for all three (build_libresolv_dylib.sh/
-# build_copyfile_dylib.sh/build_removefile_dylib.sh) -- linked as real
-# dependencies below instead.
+# build_copyfile_dylib.sh/build_removefile_dylib.sh) -- REEXPORTED below
+# (`-Wl,-reexport_library`, not a plain link), not bundled.
+#
+# REAL REGRESSION FOUND+FIXED while making this exact change (2026-08-28):
+# a plain link (tried first) broke a real, already-documented, deliberate
+# reliance elsewhere in this project -- build_libsystem_c.sh's own
+# comment (2026-08-28, right above its own `-Wl,-reexport_library,
+# "$OUT/system/libdyld.dylib"` line) states outright that `less.macho`
+# (this project's one real fsync(2) consumer) "already binds to
+# libdyld.dylib" for `_fsync` at real chained-fixups load time --
+# because libdyld.dylib used to statically bundle the whole of
+# libremovefile.a (which happens to export a real fsync.o), that symbol
+# transitively leaked out through libsystem_c.dylib's own reexport of
+# libdyld.dylib. A real QEMU boot test after switching to a plain link
+# reproduced exactly this break for real (`Symbol not found: _fsync` /
+# `_flsl`, `Expected in: /usr/lib/system/libdyld.dylib`, launchd.macho
+# and libsystem_c.dylib respectively) -- confirming the reliance was
+# real, not hypothetical. `-Wl,-reexport_library` instead of a plain
+# link restores this transitively for any existing consumer, while still
+# achieving the real goal (one shared copy of resolv/copyfile/removefile
+# state instead of three private ones) -- see this same real regression
+# class already documented for `_fdopen$UNIX2003` in docs/backlog.md
+# item d9 ("any real consumer resolves dylib imports against old
+# exports" if not rebuilt after a sibling's exports change).
 for d in libcopyfile libremovefile libresolv; do
     if [ ! -f "$OUT/system/$d.dylib" ]; then
         echo "error: $OUT/system/$d.dylib not found -- run build_${d}_dylib.sh first" >&2
@@ -254,6 +276,16 @@ rm -f "$OUT/system/libdyld.dylib"
     # project builds no real dyld shared cache at all, so opting every
     # real dylib out is correct, not a workaround (docs/backlog.md item
     # d9's NEWLD_BINDIR sweep, 2026-08-28).
+    #
+    # fsync$UNIX2003/reallocarray$DARWIN_EXTSN aliases REMOVED 2026-08-29:
+    # real bug -- their base (_fsync/_reallocarray) stopped being local
+    # to THIS link once libcopyfile/libremovefile/libresolv switched from
+    # a plain archive link to -Wl,-reexport_library above (Stage B of the
+    # static-linking cleanup pass), which broke the alias (real launchd
+    # boot failure: "re-export ordinal 0 ... out of range"). Real, working
+    # replacements now live in build_removefile_dylib.sh itself, where
+    # the base genuinely is local -- resolved transitively through this
+    # dylib's own reexport of libremovefile.dylib, no alias needed here.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
     -install_name /usr/lib/system/libdyld.dylib \
     -Wl,-not_for_dyld_shared_cache \
@@ -266,7 +298,9 @@ rm -f "$OUT/system/libdyld.dylib"
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_blocks.dylib" \
     "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" "$OUT/system/libsystem_c.dylib" \
     "$OUT/system/libc++.dylib" \
-    "$OUT/system/libcopyfile.dylib" "$OUT/system/libremovefile.dylib" "$OUT/system/libresolv.dylib" \
+    -Wl,-reexport_library,"$OUT/system/libcopyfile.dylib" \
+    -Wl,-reexport_library,"$OUT/system/libremovefile.dylib" \
+    -Wl,-reexport_library,"$OUT/system/libresolv.dylib" \
     "$RTLIB" \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
@@ -283,9 +317,7 @@ rm -f "$OUT/system/libdyld.dylib"
     -Wl,-alias,_fstat,'_fstat$INODE64' \
     -Wl,-alias,_lstat,'_lstat$INODE64' \
     -Wl,-alias,_stat,'_stat$INODE64' \
-    -Wl,-alias,_fsync,'_fsync$UNIX2003' \
     -Wl,-alias,_read,'_read$UNIX2003' \
-    -Wl,-alias,_reallocarray,'_reallocarray$DARWIN_EXTSN' \
     -Wl,-alias,'_mmap$UNIX2003',_mmap \
     -Wl,-alias,'_munmap$UNIX2003',_munmap \
     -Wl,-alias,_pthread_testcancel,'_pthread_testcancel$UNIX2003'

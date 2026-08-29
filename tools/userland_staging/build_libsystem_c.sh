@@ -381,7 +381,29 @@ rm -f "$OUT/system/libsystem_c.dylib"
     "$EXTRACT"/*.o \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" \
     "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" "$OUT/system/libsystem_blocks.dylib" \
+    "$OUT/system/libremovefile.dylib" \
     -Wl,-reexport_library,"$OUT/system/libdyld.dylib"
+    # ^ REAL BUG FOUND+FIXED 2026-08-28 (static-linking cleanup pass,
+    # Stage B): this dylib's own qsort.o (extracted from libremovefile.a
+    # above, real BSD qsort) directly calls real `flsl()` -- also from
+    # libremovefile.a's own real source, now libremovefile.dylib
+    # (docs/backlog.md item d8). Per this project's own already-
+    # documented rule (d9: "any sub-dylib whose real, non-aliased
+    # symbols a consumer's own compiled code calls directly must also be
+    # linked directly on that consumer's own command line"), relying on
+    # the transitive `libsystem_c.dylib -> libdyld.dylib (reexport) ->
+    # libremovefile.dylib (reexport)` chain alone is NOT enough here: a
+    # real, separate bug surfaced trying that -- `-isysroot`-relative
+    # transitive dependency resolution for libdyld.dylib's own real
+    # `/usr/lib/libresolv.9.dylib` LC_LOAD_DYLIB path silently picked up
+    # the daily-driver Xcode SDK's own REAL stub `libresolv.9.dylib`
+    # (confirmed via ld's own "text-based stub file ... and library file
+    # ... unexpectedly found" warning) instead of this project's actual
+    # `libc_build/system/libresolv.dylib` -- a real install_name/SDK-path
+    # collision, not a fabricated concern (this project's own dylib
+    # legitimately reuses real Apple's own absolute install_name paths).
+    # Linking libremovefile.dylib directly here sidesteps that ambiguity
+    # entirely for the one symbol this dylib's own code actually calls.
     # ^ real gap found booting launchd as PID 1 (docs/backlog.md item
     # d10): ICU's own libicuuc.66.dylib expects _dlclose specifically
     # from libSystem (its own two-level-namespace bind, baked in at
