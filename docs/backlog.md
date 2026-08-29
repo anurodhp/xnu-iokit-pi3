@@ -1593,10 +1593,69 @@ d10. **Real, project-wide finding, 2026-08-29 — `-Wl,-U` does not safely
     a clean `ld` link or a passing `gap_audit.sh` means it will actually
     run.
 
-d11. **launchd PID-1 bug #6 (real SIGSEGV in `launchd_runtime_init()`'s
-    second thread) is STILL OPEN as of 2026-08-29 — real progress was
-    made getting back to it, but the crash itself is unchanged from
-    session 2's own diagnosis.** Full context, diagnostic infrastructure,
+d11. **RESOLVED 2026-08-29 (session 5, main-repo commit `76ff8cd`).**
+    **Root cause: `_FORTIFY_SOURCE` self-recursion in
+    `third_party/Libc/secure/*_chk.c`, a USERLAND BUILD-FLAG bug — not a
+    kernel context-switch bug, not QEMU.** Apple builds that whole
+    directory with fortify OFF because each `__X_chk()` falls through to
+    plain `X()` on the "unbounded size" path, and `<stdio.h>`/
+    `<string.h>`'s fortify inlines rewrite that call back into
+    `__builtin___X_chk()` — itself. Unconditionally: the rewritten call
+    passes `__darwin_obsz(dest)` == `(size_t)-1` for any pointer whose
+    size isn't statically known (always true of a `_chk` function's own
+    parameter), and "unbounded" is exactly the branch that calls the
+    plain function. `___vsprintf_chk` was emitting
+    `mov x2, #-0x1; bl ___vsprintf_chk`, blowing launchd's main-thread
+    stack into its guard page on the first real `launchd_syslog()` call.
+    Fix: `-D_FORTIFY_SOURCE=0` on every `Libc/secure/*_chk.c` compile in
+    `build_launchd_core.sh`/`build_corefoundation.sh`/`build_libxml2.sh`/
+    `build_libmalloc.sh`/`build_dyld_core.sh`, matching what
+    `build_libdispatch_dylib.sh`/`build_libxpc_syscalls2.sh` already did
+    (their `CFLAGS_SECURE` arrays) — which is precisely why *their* `_chk`
+    functions were fine and these five scripts' were not. Swept every
+    built artifact for the same class: `___memmove_chk` (launchd.macho +
+    libxml2.dylib) and `___stpncpy_chk` (libxml2.dylib) were identical
+    latent landmines; post-fix sweep finds zero self-recursing `_chk`
+    functions anywhere.
+
+    **Two decisive clues were sitting in already-captured logs, needing
+    no new boots — worth internalizing for next time:**
+    (1) `handle_user_abort`'s `codes[0]` was `0x2` =
+    `KERN_PROTECTION_FAILURE`, i.e. `vm_fault()` FOUND a VM entry and
+    refused the write => **guard page => stack exhaustion**. It was
+    read as "page never mapped" (that would be `0x1`,
+    `KERN_INVALID_ADDRESS`), and the whole kernel-side `SP_EL0` theory
+    was built on that misreading. (2) `lr - pc` was exactly `0x50` in
+    all five captured boots across five different kernel builds — the
+    return address sits inside the same function faulting in its own
+    prologue, the signature of direct self-recursion. **Decode fault
+    result codes exactly, and check `lr` vs `pc` for self-recursion,
+    before theorising about the scheduler.**
+
+    Verified statically (`llvm-objdump`: `___vsprintf_chk` now calls
+    `_vsprintf`/`_vsnprintf`) and by real boot
+    (`qemu/launchd_boot_test74.log`): the `IOKITDIAG18` fault is gone (0
+    occurrences; present in every prior boot), launchd mounts devfs,
+    finishes its mutex work, and successfully spawns its **third** thread
+    (task reports 3 threads, was 2 — the `update_thread` `pthread_create`
+    that used to trigger the crash).
+
+    **NEW, SEPARATE follow-on (this is the current PID-1 blocker):**
+    launchd now fails later and differently — a clean `exit(1)`
+    (`signal 0`, not SIGSEGV): `pid 1 exited ... (signal 0, exit 1)`,
+    immediately after `IOKITDIAG14: ... about to call start_routine` for
+    the third thread and a `jnl: b(14, 2): flushing fs disk buffer
+    returned 0x2d`. That's launchd's own logic deciding to give up, a
+    much more tractable failure than a memory fault; next step is to find
+    which real `exit(1)` path in launchd/PureDarwin runtime is taken.
+    NOTE: the kernel-side TEMP DIAGNOSTIC instrumentation
+    (`IOKITDIAG15`/`17`/`18` in `osfmk/ipc/ipc_mqueue.c`,
+    `osfmk/arm64/sleh.c`) is still live and should be stripped once this
+    follow-on is closed.
+
+    Historical context below is retained for the record; note its
+    "second thread"/`TPIDRRO_EL0`/`SP_EL0` framings are all now known
+    wrong. Full context, diagnostic infrastructure,
     and the TPIDRRO_EL0 cross-image-confusion hypothesis:
     project memory `project_xnu_rpi3_launchd_pid1_2026-08-28_session2.md`
     and `project_xnu_rpi3_static_to_dylib_sweep_2026-08-29.md`. Short
