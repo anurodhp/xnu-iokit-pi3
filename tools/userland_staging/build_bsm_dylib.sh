@@ -33,27 +33,31 @@
 #   - getgrgid/getpwuid: real Libinfo passwd/group-database lookups,
 #     genuinely heavier (NSS-style module dispatch on real Darwin) --
 #     not attempted this pass.
-#   - notify_cancel/notify_check/notify_register_check: real functions,
-#     confirmed already defined in libc_build/libnotify.a (`nm -g`) --
-#     genuinely resolvable, just not yet as a sibling .dylib
-#     (libnotify.dylib is a separate, not-yet-done unit in this same
-#     migration pass -- see docs/backlog.md item d8). Deferred via
-#     `-Wl,-U` now, to be verified resolving for real once
-#     libnotify.dylib exists and both are linked by the same real
-#     consumer (same iterative pattern build_libresolv_dylib.sh already
-#     used for these exact three symbols).
+#   - notify_cancel/notify_check/notify_register_check: CLOSED 2026-08-29
+#     -- libsystem_notify.dylib (the real dylib libnotify.a +
+#     libnotify_client.a converted to earlier this same pass) now exists
+#     and is linked below as a real sibling dependency, not deferred.
+#     Found blocking a real QEMU boot of launchd (flat-namespace
+#     eager-bind failure on the old `-Wl,-U`) -- exactly the iterative
+#     "verify resolving for real once the sibling dylib exists" step
+#     this comment used to only promise.
 #   - syslog: real function, no ASL/syslog client wired into this
 #     project's dylib graph yet (docs/backlog.md item d6's `asl_*`
 #     entry -- pinned as syslog-385, not yet built as a sibling dylib).
-#   - strtok_r: real, but this project's libsystem_c.dylib only exports
-#     the internal double-underscore `__strtok_r` (confirmed via
-#     `nm -gU`), not the plain public alias -- and per this project's
-#     own documented `-Wl,-alias` gotcha (alias BASE must be locally
-#     compiled in the SAME link, or ld64 silently emits a malformed
-#     reexport -- see memory/feedback on this), this dylib can't safely
-#     alias to a symbol that's only reachable cross-dylib. Deferred, not
-#     a new gap (same underlying libsystem_c.dylib export-parity class
-#     docs/backlog.md item d7 already tracks).
+#   - strtok_r: CORRECTED 2026-08-29, no longer deferred here -- real
+#     fix landed at the actual architectural root instead (per this
+#     project's own "-Wl,-alias base must be locally compiled in the
+#     SAME link" rule): `-Wl,-alias,___strtok_r,_strtok_r` added to
+#     build_libsystem_c.sh's own link, where `__strtok_r` genuinely is
+#     local (real linker symbol `___strtok_r` -- two leading underscores
+#     from the real C name plus the compiler's own mangling underscore,
+#     confirmed via nm, not the `__strtok_r` two-underscore form this
+#     comment originally had -- a real, reproducible-in-isolation
+#     off-by-one that looked like a linker bug until counted correctly).
+#     libbsm.dylib gets the real public name for free via its existing
+#     libsystem_c.dylib sibling link, same as any other real export.
+#     Found blocking a real QEMU boot of launchd (flat-namespace
+#     eager-bind failure), not deferred further.
 #
 # Real, cheap gap CLOSED via a sibling dylib link, not deferred:
 # inet_ntoa/inet_ntop -- real functions, now a real, direct export of
@@ -115,11 +119,11 @@ rm -f "$OUT/system/libbsm.dylib"
     -Wl,-fixup_chains \
     -Wl,-U,_getegid -Wl,-U,_getgid \
     -Wl,-U,_getgrgid -Wl,-U,_getpwuid \
-    -Wl,-U,_notify_cancel -Wl,-U,_notify_check -Wl,-U,_notify_register_check \
-    -Wl,-U,_syslog -Wl,-U,_strtok_r \
+    -Wl,-U,_syslog \
     -o "$OUT/system/libbsm.dylib" \
     "$EXTRACT"/*.o \
     "$OUT/system/libresolv.dylib" \
+    "$OUT/system/libsystem_notify.dylib" \
     "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_malloc.dylib" \
     "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
@@ -139,7 +143,7 @@ otool -hv "$OUT/system/libbsm.dylib" | grep -q " DYLIB " || {
 # sibling dylib.
 echo "declared -Wl,-U deferrals (expect: <flat-namespace> bind target):"
 xcrun dyld_info -fixups "$OUT/system/libbsm.dylib" 2>/dev/null | grep '<flat-namespace>' | awk '{print "  " $NF}'
-UNEXPECTED=$(xcrun dyld_info -fixups "$OUT/system/libbsm.dylib" 2>/dev/null | grep -v -E '<flat-namespace>|<weak-def-coalesce>' | grep 'bind' | grep -v -E 'libsystem_c/|libsystem_malloc/|libsystem_platform/|libsystem_kernel/|libsystem_pthread/|libresolv/' || true)
+UNEXPECTED=$(xcrun dyld_info -fixups "$OUT/system/libbsm.dylib" 2>/dev/null | grep -v -E '<flat-namespace>|<weak-def-coalesce>' | grep 'bind' | grep -v -E 'libsystem_c/|libsystem_malloc/|libsystem_platform/|libsystem_kernel/|libsystem_pthread/|libresolv/|libsystem_notify/' || true)
 if [ -n "$UNEXPECTED" ]; then
     echo "error: real, unexpected non-sibling bind targets found:" >&2
     echo "$UNEXPECTED" >&2
