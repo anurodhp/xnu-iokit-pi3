@@ -92,5 +92,5 @@ exec ./third_party/qemu-zhuowei/aarch64-softmmu/qemu-system-aarch64 -M raspi3 -m
   -dtb devicetrees/rpi3.dtb \
   -drive "file=$SD_IMAGE,if=sd,format=raw" \
   $USB_DEVICES \
-  -append "debug=0x8 kextlog=0xfff -noprogress -v rd=$ROOT_DEV serial=3 cpu-factor=10" \
+  -append "debug=0x8 kextlog=0xfff -noprogress -v -enable_kprintf_spam rd=$ROOT_DEV serial=3 cpu-factor=10" \
   -monitor unix:qemu/mon.sock,server,nowait

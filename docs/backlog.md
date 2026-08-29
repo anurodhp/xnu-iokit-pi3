@@ -1781,6 +1781,142 @@ d11. **launchd PID-1 bug #6 (real SIGSEGV in `launchd_runtime_init()`'s
     investigation) — see `mig_reply_port.c`'s `iokit_diag13_hex`/
     `iokit_diag13_tsd_base` and `mach_msg_real.c`'s `iokit_diag12_dump`.
 
+    **UPDATE 2026-08-29, later same day: crash bisected all the way into
+    the kernel's own context-switch machinery — a genuinely different,
+    much deeper class of investigation than everything above (which was
+    100% userland/build-system). Four real kernel rebuild-and-boot
+    cycles this pass, each narrowing the fault site further.**
+
+    Real prerequisite fix, needed before ANY kernel-side kprintf showed
+    up at all: `kprintf()` on this arm64 port is gated off by default
+    for a DEVELOPMENT kernel build
+    (`pexpert/arm/pe_kprintf.c`'s `disable_kprintf_output`, static-init
+    `TRUE`, only flipped `FALSE` if boot-arg `-enable_kprintf_spam`
+    parses — real, unmodified Apple gating, not a project bug). The
+    project's own earlier `TEMP DIAGNOSTIC: timer_queue_expire` kprintfs
+    (`osfmk/kern/timer_call.c`, backlog P0#7) only ever appeared during
+    the KERNEL-only pre-userland boot phase in every log checked — never
+    once during/after `load_init_program`, which is consistent with this
+    gating rather than contradicting it (not yet understood exactly why
+    those specific early ones got through un-gated; not investigated
+    further since it wasn't blocking). Fixed for real kernel-side
+    debugging going forward: added `-enable_kprintf_spam` to
+    `runvm.sh`'s own `-append` boot-args string. This is a real,
+    permanent, low-risk addition (worth keeping even after bug #6
+    closes, not a bug-#6-specific temporary hack) — it only affects
+    whether `kprintf()` calls anywhere in the kernel are visible on the
+    serial console at all; it changes zero runtime behavior otherwise.
+
+    Added real, unmodified-Apple-source-adjacent `kprintf()` diagnostics
+    (all still live, `IOKITDIAG15`/`16`/`17` tags, each printing
+    `current_thread()` as a per-thread tag matching the userland
+    `iokit_diag*` convention) at every real sub-step of the kernel-side
+    call chain a blocking `mach_msg()` receive goes through:
+    `osfmk/ipc/mach_msg.c`'s `mach_msg_overwrite_trap()` (SEND phase:
+    `ipc_kmsg_get`/`ipc_kmsg_copyin`/`ipc_kmsg_send`; RCV phase:
+    `ipc_mqueue_copyin`/`ipc_mqueue_receive`/`mach_msg_receive_results`)
+    and `mach_msg_receive_continue()`; `osfmk/ipc/ipc_mqueue.c`'s
+    `ipc_mqueue_receive_continue()` and, most granularly,
+    `ipc_mqueue_receive_on_thread()`'s real turnstile/waitq setup
+    (`turnstile_prepare`/`ipc_port_recv_update_inheritor`/
+    `waitq_assert_wait64_locked`) and `ipc_mqueue_receive()`'s own
+    `thread_block(ipc_mqueue_receive_continue)` call site.
+
+    **Real, evidenced findings, in bisection order:**
+    1. The main thread's own `mach_msg()` call (the earlier
+       `mach_port_move_member` one) never blocks at all -- its reply is
+       already ready synchronously (`THREAD_NOT_WAITING`), so it never
+       exercises any of the blocking/continuation machinery below. Only
+       the second (`kqueue_demand_loop`) thread's `handle_kqueue()` call
+       does, since its reply comes from launchd's own userspace dispatch,
+       not an immediate kernel reply.
+    2. **Confirmed real, run-to-run NONDETERMINISM with the exact same
+       kernel binary** (`qemu/launchd_boot_test57.log` vs `test58.log`,
+       back-to-back boot_test runs, zero source changes between them):
+       one run's second thread never even reaches
+       `mach_msg_overwrite_trap` entry before the panic; the very next
+       run reaches all the way to "about to call `ipc_mqueue_receive`"
+       and beyond. This is a real, load-bearing finding on its own -- the
+       exact crash SITE observed in any single boot is not fully
+       deterministic, consistent with a genuine race (not a single fixed
+       faulting instruction), and explains why earlier passes'
+       "isolated" crash sites (`mig_get_reply_port`, then raw
+       `MACH_MSG_TRAP`) kept moving as more diagnostics were added --
+       each new diagnostic's own console-write latency measurably
+       perturbs the race's timing, not just adding visibility.
+    3. **With the most granular instrumentation (`qemu/
+       launchd_boot_test59.log`), the fault is bisected to inside
+       `thread_block(ipc_mqueue_receive_continue)` itself** -- every
+       real setup step immediately before it succeeds cleanly and is
+       fully confirmed via real, non-garbage values: `imq_is_turnstile_proxy=1`
+       (the reply port IS a real turnstile proxy, as expected for a MIG
+       reply port), `turnstile_prepare()` returns a real, valid
+       `rcv_turnstile` pointer, `ipc_port_recv_update_inheritor()`
+       completes, `waitq_assert_wait64_locked()` returns `THREAD_WAITING`
+       (wresult=-1) as expected, `self`/`current_thread()` agree and are
+       non-garbage, `ith_continuation` is a real, valid, non-null kernel
+       code pointer. The very next kprintf (`IOKITDIAG17: ... about to
+       call thread_block`) is the LAST diagnostic output in the entire
+       boot log before the panic -- zero occurrences of `IOKITDIAG16`
+       (placed at the top of both `ipc_mqueue_receive_continue()` and
+       `mach_msg_receive_continue()`, i.e. the real wakeup/continuation
+       resume path) ever fire.
+    4. **Real complication, not yet resolved**: `bsd/kern/kern_exit.c`'s
+       `launchd_crashed_panic()` (the real, unmodified-Apple source that
+       prints the "pid 1 exited -- exit reason ..." line and then
+       panics) only ever fires from a genuine process exit/signal
+       delivery path -- meaning "namespace 2 subcode 0xb" really is a
+       true `OS_REASON_SIGNAL`/SIGSEGV(11) delivered to a thread running
+       in EL0 (user mode), not a raw EL1 kernel-mode data abort (which
+       would panic directly, with a full kernel register dump, never
+       reaching this signal-shaped path at all). This is in real tension
+       with finding 3 above: if the fault is genuinely EL0, it should
+       occur only AFTER `thread_syscall_return()` hands control back to
+       user mode -- which happens only via `ith_continuation`'s call
+       chain (`ipc_mqueue_receive_continue` → `mach_msg_receive_continue`
+       → `thread_syscall_return`), all of which are still real kernel
+       (EL1) C code that the still-live `IOKITDIAG16` prints should have
+       caught before any EL0 transition could occur, and never did.
+       Two live, unresolved possibilities, neither confirmed: (a) the
+       fault is right at/inside the actual `eret`-style EL1→EL0 return
+       transition itself (past the last point pure C instrumentation can
+       safely observe without risking further perturbing the race), or
+       (b) — given finding 2's confirmed nondeterminism — the thread that
+       actually faults at the moment of the panic in a given boot isn't
+       always the second thread at all; it could be the MAIN thread
+       (racing concurrently, e.g. while first entering its own MIG
+       server dispatch loop to receive+reply to `handle_kqueue`'s
+       request, a code path that has NOT yet been instrumented or
+       confirmed to even execute in any log gathered so far -- no log
+       shows a second `mach_msg_overwrite_trap` call tagged with the
+       main thread's own `current_thread()` pointer after its first,
+       successful one).
+
+    **Real next step, not yet attempted**: this is now genuinely
+    arm64 exception/context-switch-level work, a different tier from
+    everything in this investigation so far (C-level kprintf bisection
+    is reaching its practical limit -- the next boundary, the real
+    `eret`/exception-return assembly and `machine_switch_context()`,
+    needs either raw register-state capture directly from the fault
+    handler (find wherever this simplified kernel's EL0 data-abort path
+    converts a fault into `OS_REASON_SIGNAL` and log the real
+    `ESR_EL1`/`FAR_EL1`/`ELR_EL1` there, before it gets abstracted away
+    into a generic "signal 11" description) or a lower-level, lock-free
+    print primitive safe to call from inside the actual context-switch
+    path itself (kprintf's own lock may not be safe to take from
+    `thread_invoke`/`machine_switch_context` -- not yet verified either
+    way). Confirming/ruling out possibility (b) above (instrumenting the
+    main thread's own MIG server dispatch loop, not yet touched at all)
+    is a real, comparatively cheaper next step to try FIRST, before
+    committing to assembly-level fault-handler instrumentation.
+
+    Repo state: real, permanent fixes from this update (`runvm.sh`'s
+    `-enable_kprintf_spam` addition) are committable now; the
+    `IOKITDIAG15`/`16`/`17` kprintf additions in
+    `third_party/xnu-7195/osfmk/ipc/mach_msg.c` and `ipc_mqueue.c` are
+    live TEMP DIAGNOSTIC, same standing convention as everything else in
+    this investigation.
+
 d12. **Missing/incomplete library work, explicitly tracked so it isn't
     lost (cross-referenced from item d8, not duplicated in full here)**:
     - `libCoreFoundation.a` → `.dylib`: deliberately deferred, own future
