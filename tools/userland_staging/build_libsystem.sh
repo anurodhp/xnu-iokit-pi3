@@ -50,9 +50,21 @@ if [ ! -x "$NEWLD_BINDIR/ld" ]; then
     echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE) -- run 'xcode-select -p' to check, see docs/backlog.md item d9" >&2
     exit 1
 fi
-for a in libcopyfile libremovefile libresolv; do
-    if [ ! -f "$OUT/$a.a" ]; then
-        echo "error: $OUT/$a.a not found -- run its build_$a.sh first" >&2
+# Real static-vs-dylib architecture fix (docs/backlog.md item d8, Stage
+# B of the 2026-08-28 static-linking cleanup pass): libSystem.B.dylib
+# used to statically bundle the WHOLE of libcopyfile.a/libremovefile.a/
+# libresolv.a, each with its own private copy of any process-global
+# state (real, mutable `_res`/`_res_9` resolver state in particular --
+# same duplicate-global-state bug class already fixed once for
+# mach_task_self_/g_zone). Real sibling dylibs now exist for all three
+# -- reexported below (same `-Wl,-reexport_library` treatment every
+# other sub-dylib here already gets) instead of bundled, so this
+# umbrella's export surface stays identical for existing consumers while
+# the underlying symbols now come from one real, shared image instead of
+# a private static copy.
+for d in libcopyfile libremovefile libresolv; do
+    if [ ! -f "$OUT/system/$d.dylib" ]; then
+        echo "error: $OUT/system/$d.dylib not found -- run build_${d}_dylib.sh first" >&2
         exit 1
     fi
 done
@@ -187,7 +199,9 @@ rm -f "$OUT/system/libSystem.B.dylib"
     -Wl,-reexport_library,"$OUT/system/libsystem_pthread.dylib" \
     -Wl,-reexport_library,"$OUT/system/libsystem_c.dylib" \
     -Wl,-reexport_library,"$OUT/system/libc++.dylib" \
-    "$OUT/libcopyfile.a" "$OUT/libremovefile.a" "$OUT/libresolv.a" \
+    -Wl,-reexport_library,"$OUT/system/libcopyfile.dylib" \
+    -Wl,-reexport_library,"$OUT/system/libremovefile.dylib" \
+    -Wl,-reexport_library,"$OUT/system/libresolv.dylib" \
     "$RTLIB"
     # ALL -Wl,-alias entries REMOVED 2026-08-28 (docs/backlog.md item
     # d10): real, systemic gap, first found via _mmap specifically --

@@ -96,9 +96,19 @@ for f in "$OUT/dyld_mig/mach/task.h" "$OUT/dyld_compat_derived/dyld_priv.h" \
         exit 1
     fi
 done
-for a in libcopyfile libremovefile libresolv; do
-    if [ ! -f "$OUT/$a.a" ]; then
-        echo "error: $OUT/$a.a not found -- run its build_$a.sh first" >&2
+# Real static-vs-dylib architecture fix (docs/backlog.md item d8, Stage
+# B of the 2026-08-28 static-linking cleanup pass): this dylib used to
+# statically bundle the WHOLE of libcopyfile.a/libremovefile.a/
+# libresolv.a, each with its own private copy of any process-global
+# state (real, mutable `_res`/`_res_9` resolver state in particular --
+# same duplicate-global-state bug class already fixed once for
+# mach_task_self_/g_zone, see build_libsystem_malloc.sh's own header).
+# Real sibling dylibs now exist for all three (build_libresolv_dylib.sh/
+# build_copyfile_dylib.sh/build_removefile_dylib.sh) -- linked as real
+# dependencies below instead.
+for d in libcopyfile libremovefile libresolv; do
+    if [ ! -f "$OUT/system/$d.dylib" ]; then
+        echo "error: $OUT/system/$d.dylib not found -- run build_${d}_dylib.sh first" >&2
         exit 1
     fi
 done
@@ -256,7 +266,7 @@ rm -f "$OUT/system/libdyld.dylib"
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_blocks.dylib" \
     "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" "$OUT/system/libsystem_c.dylib" \
     "$OUT/system/libc++.dylib" \
-    "$OUT/libcopyfile.a" "$OUT/libremovefile.a" "$OUT/libresolv.a" \
+    "$OUT/system/libcopyfile.dylib" "$OUT/system/libremovefile.dylib" "$OUT/system/libresolv.dylib" \
     "$RTLIB" \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
