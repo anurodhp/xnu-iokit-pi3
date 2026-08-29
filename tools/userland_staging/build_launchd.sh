@@ -226,6 +226,75 @@ fi
 # before relying on it, not assumed).
 ar d "$OUT/libmach_ipc_no_dead_stubs.a" mach_msg_real.o
 
+# Real gap found+fixed 2026-08-29, launchd bug #6's actual root cause:
+# pthread_main_thread_bootstrap.o (pthread_create/_real_pthread_start_abi/
+# the `_pthread_create.registered` bsdthread_register-once gate) was ALSO
+# bundled as a private static copy here -- libpthread.a is a plain
+# archive linked BEFORE system/libsystem_pthread.dylib below, so ld64
+# pulls this .o out of the archive to satisfy liblaunchd_core.a's
+# undefined `_pthread_create` reference before the dylib is ever
+# considered, permanently baking a SEPARATE copy of the entire pthread
+# bootstrap/registration implementation into launchd.macho (confirmed via
+# `nm`: both launchd.macho and libsystem_pthread.dylib defined a strong
+# `T _pthread_create` before this fix). Same bug class as the
+# mach_msg_real.o fix directly above: two independently-registered
+# `__bsdthread_register()` call sites (own `_real_pthread_start_abi`
+# code address each, own `registered` static gate each) racing to be the
+# one the kernel actually trusts for this process is a real, sufficient
+# explanation for launchd bug #6's observed symptom (main thread resuming
+# execution pointed at the SECOND thread's private stack) -- confirmed
+# every symbol this .o provides (___pthread_head, __main_thread_ptr,
+# _pthread_create, _pthread_equal, _pthread_main_np,
+# _pthread_main_thread_bootstrap, _pthread_main_thread_np, _pthread_once,
+# the weak-no-op _iokit_diag14 already superseded by
+# launchd_mach_port_compat.o's own strong definition above) is already a
+# real, exported symbol of libsystem_pthread.dylib before stripping it.
+# Can't just `ar d` the whole .o out (first attempt, real link failure):
+# pthread_tsd.o/pthread_clear_qos_tsd_compat.o (other, still-needed
+# members of this same archive) hold real undefined references to this
+# .o's own shared DATA symbols (___pthread_head, __main_thread_ptr,
+# __main_thread, __pthread_list_lock, __pthread_ptr_munge_token) --
+# those aren't duplicated anywhere else (the dylib's own copies are
+# local/non-exported, invisible for this static archive's own internal
+# cross-.o linking). Real fix: narrow via `ld -r -exported_symbol` (same
+# precedent as this script's own mach_port_gap_closures2.o above) down
+# to just those 5 real data symbols, dropping every function this .o
+# also defined (_pthread_create, _pthread_equal, _pthread_main_np,
+# _pthread_main_thread_bootstrap, _pthread_main_thread_np,
+# _pthread_once, the weak-no-op _iokit_diag14) so those resolve to
+# system/libsystem_pthread.dylib's own real, shared copies below instead.
+# -unexported_symbol (not -exported_symbol): ___pthread_head/
+# __main_thread_ptr/__main_thread/__pthread_list_lock/
+# __pthread_ptr_munge_token are already `private extern` (hidden but
+# link-unit-visible) in the real source -- ld64 refuses to even list an
+# already-hidden symbol under -exported_symbol ("cannot export hidden
+# symbol"). -unexported_symbol instead demotes exactly the named
+# (currently fully-external) function symbols to hidden and leaves
+# every other symbol, hidden or not, untouched -- but `ld -r` only
+# preserves already-private-extern symbols AS private-extern (still
+# externally linkable within this static archive) when
+# -keep_private_externs is also passed; without it, a real (found by
+# trying it) second failure mode appeared, `ld -r` silently demoting
+# ___pthread_head/__main_thread_ptr/__pthread_list_lock all the way to
+# fully local/non-external, breaking pthread_tsd.o's own real undefined
+# references to them.
+rm -f "$OUT/pthread_main_thread_bootstrap_raw.o"
+ar p "$OUT/libpthread.a" pthread_main_thread_bootstrap.o > "$OUT/pthread_main_thread_bootstrap_raw.o"
+"$LD" -r -arch arm64 -keep_private_externs \
+    -unexported_symbol _pthread_create \
+    -unexported_symbol _pthread_equal \
+    -unexported_symbol _pthread_main_np \
+    -unexported_symbol _pthread_main_thread_bootstrap \
+    -unexported_symbol _pthread_main_thread_np \
+    -unexported_symbol _pthread_once \
+    -unexported_symbol _iokit_diag14 \
+    "$OUT/pthread_main_thread_bootstrap_raw.o" -o "$OUT/pthread_main_thread_bootstrap_data_only.o"
+rm -f "$OUT/pthread_main_thread_bootstrap_raw.o"
+rm -f "$OUT/libpthread_no_dup_pthread_create.a"
+cp "$OUT/libpthread.a" "$OUT/libpthread_no_dup_pthread_create.a"
+ar d "$OUT/libpthread_no_dup_pthread_create.a" pthread_main_thread_bootstrap.o
+ar r "$OUT/libpthread_no_dup_pthread_create.a" "$OUT/pthread_main_thread_bootstrap_data_only.o"
+
 rm -f "$OUT/launchd.macho"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
     -B"$NEWLD_BINDIR" \
@@ -246,7 +315,7 @@ rm -f "$OUT/launchd.macho"
     "$OUT/libmach_ipc_no_dead_stubs.a" "$OUT/mach_port_gap_closures2.o" "$OUT/mach_port_gap_closures2_traps.o" \
     "$OUT/mach_ipc_dead_stubs_voucher_only.o" \
     "$OUT/libclosure.a" "$OUT/libmalloc_no_mach_init.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
-    "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
+    "$OUT/libpthread_no_dup_pthread_create.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
     "$OUT/libc_locale_for_stdio.a" \
     "$OUT/system/libxpc.dylib" "$OUT/system/libbsm.dylib" \
     "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
