@@ -119,20 +119,46 @@ rm -rf "$EXTRACT"
 mkdir -p "$EXTRACT"
 (cd "$EXTRACT" && ar x "../../libcxx.a")
 (cd "$EXTRACT" && ar x "../../libcxxabi.a")
-# Real gap: real libc++'s <locale> (locale.cpp) needs __global_locale/
-# __locale_key (real Apple xlocale.c's "current locale" TSD state) --
-# libsystem_c.dylib already has its OWN copy (via libc_locale_for_stdio.a,
-# migration step 4) but compiles it with hidden visibility (not
-# exported from that dylib's own symbol table, confirmed via nm -g),
-# so it isn't reachable across the dylib boundary. Bundling libc_locale.a's
-# own copy here instead of trying to export libsystem_c.dylib's is a
-# real, honestly-scoped compromise: this project's own code never calls
-# setlocale() away from the default "C" locale anywhere today, so the
-# two independent copies staying in sync is a narrow, currently-inert
-# risk, not an active one like g_zone/the pthread registry were -- flagged
-# for whoever eventually wires up real locale switching, not treated as
-# blocking here.
-(cd "$EXTRACT" && ar x "../../libc_locale.a")
+# libc_locale.a is no longer bundled wholesale here (static-linking
+# cleanup, Phase 1a, 2026-08-29). It was contributing ~244 duplicate
+# exports against libsystem_c.dylib -- the entire rune/ctype/collate
+# surface plus a full second copy of the string primitives -- for the
+# sake of two symbols. See the xlocale.o note further down for the one
+# part that genuinely has to stay.
+#
+# xlocale.o and ldpart.o DO have to stay, and for a real reason rather
+# than convenience: real Apple's xlocale.c declares `___global_locale`
+# and `___locale_key` -- the current-locale state itself -- as
+# `.private external` (confirmed with `nm -m` against
+# libsystem_c.dylib, which has its own copy marked "non-external (was a
+# private external)"). Private externs are image-local by construction,
+# so libsystem_c.dylib physically cannot export them and this dylib's
+# own locale.o/strftime.o cannot bind to them across the boundary. The
+# pre-existing consequence is unchanged and still honestly scoped: two
+# images hold two copies of the current locale, which is inert only
+# because nothing in this project ever calls setlocale() away from "C".
+# Making libsystem_c.dylib the single owner means giving these two
+# symbols default visibility -- a deliberate, documented divergence from
+# Apple's source -- and is the real follow-up for whoever wires up
+# locale switching. ldpart.o comes along as xlocale's own real table
+# loader (___part_load_locale/___ldpart_free_extra).
+# xlocale.o cascades into the rest of Apple's locale-loading subsystem,
+# and every entry point it reaches (___setrunelocale,
+# ___collate_load_tables, ___get_locale_env, ___detect_path_locale,
+# ___open_path_locale, ___monetary_load_locale, ___numeric_load_locale,
+# ___messages_load_locale, __DefaultRuneXLocale) is ALSO private extern
+# in real Apple's source -- verified one by one with `nm -m` against
+# libsystem_c.dylib, all reported "non-external (was a private
+# external)". Apple's locale internals are image-private by
+# construction, so any image that instantiates locale state has to carry
+# the machinery; there is no version of this that resolves across the
+# dylib boundary without changing their visibility. That is the same
+# single follow-up described above, not a separate one.
+(cd "$EXTRACT" && ar x "../../libc_locale.a" \
+    xlocale.o ldpart.o setlocale.o setrunelocale.o collate.o \
+    lmessages.o lmonetary.o lnumeric.o table.o \
+    ascii.o big5.o euc.o gb18030.o gb2312.o gbk.o mskanji.o none.o \
+    utf2.o utf8.o mbsnrtowcs.o wcsnrtombs.o)
 rm -f "$EXTRACT/__.SYMDEF"* \
     "$EXTRACT/thread.o" "$EXTRACT/mutex.o" "$EXTRACT/condition_variable.o" \
     "$EXTRACT/future.o" "$EXTRACT/shared_mutex.o" \
@@ -235,14 +261,15 @@ LIBCXXABI="../../third_party/llvm-project/libcxxabi"
     -I "$XNU/osfmk" -I ../../generated \
     simple_cmds_nanosleep_pub_compat.c -o "$EXTRACT/nanosleep_compat.o"
 
-# Real, self-contained Mach-IPC clock-service plumbing nanosleep_compat.o
-# needs (host_get_clock_service/semaphore_create/clock_get_time/real Mach
-# traps -- same real archive build_libmach_ipc.sh already established
-# and QEMU-verified, see project memory on Phase 4.6 item 5). Extracted
-# wholesale rather than hand-picking members -- confirmed self-contained
-# beyond libsystem_kernel.dylib's own real mach_init/mach_task_self_/
-# mach_port_deallocate/mach_port_mod_refs via nm -u, not guessed.
-(cd "$EXTRACT" && ar x "../../libmach_ipc.a")
+# libmach_ipc.a is no longer bundled here (static-linking cleanup, Phase
+# 1a, 2026-08-29). nanosleep_compat.o still needs the same real Mach-IPC
+# clock plumbing (host_get_clock_service/semaphore_create/clock_get_time
+# and their traps), but all of it is now a real export of
+# libsystem_kernel.dylib -- already a sibling on this link line -- rather
+# than a private copy in each of libc++.dylib, libdispatch.dylib,
+# libxpc.dylib and libncurses.dylib. Two of the symbols involved
+# (_g_mach_ipc_clock_port/_sem) are real cached Mach port rights, so
+# those copies were duplicate state, not just duplicate code.
 
 # Real timezone/strftime family (real Apple/FreeBSD source, same real
 # files+order build_simple_cmds.sh's own many entries already establish
@@ -303,7 +330,7 @@ rm -f "$OUT/system/libc++.dylib"
     -Wl,-alias,'_strftime_l$UNIX2003',_strftime_l \
     -o "$OUT/system/libc++.dylib" \
     "$EXTRACT"/*.o \
-    "$SCRATCH/libunwind_scratch.a" \
+    "$OUT/system/libunwind.dylib" \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" \
     "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" \
     "$OUT/system/libsystem_blocks.dylib" "$OUT/system/libsystem_c.dylib"

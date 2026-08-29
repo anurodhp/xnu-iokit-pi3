@@ -280,61 +280,40 @@ rm -f "$OUT"/dispatch_dylib_extract/*.o
 # global-state risk this file's own HONEST SCOPE STATEMENT above already
 # flagged, now closed for this specific symbol pair the same way
 # mach_task_self_ already was.
-(cd "$OUT/dispatch_dylib_extract" && ar x ../libmach_ipc.a && rm -f mach_ipc_dead_stubs.o mach_msg_real.o)
+# libmach_ipc.a is NO LONGER extracted here (static-linking cleanup,
+# Phase 1a, 2026-08-29). Its whole real content -- the generated MIG
+# client stubs for clock.defs/mach_host.defs/task.defs, mig_strncpy,
+# mach_host_self and the g_mach_ipc_clock_port/_sem cache -- now lives in
+# libsystem_kernel.dylib, already a sibling on this link line (see
+# build_libsystem_kernel.sh's own comment for the full rationale,
+# including the two real duplicate-GLOBALS this closes). The
+# mach_ipc_dead_stubs.o / mach_msg_real.o exclusions that used to be
+# needed here are handled at that end now, once, instead of separately in
+# every image that bundled the archive.
 
-# real, narrow single-object extraction: geteuid.o's only dependency
-# (_cerror_nocancel) is already resolved for real via the
-# libsystem_c.dylib sibling link below (confirmed via nm before
-# extracting).
-(cd "$OUT/dispatch_dylib_extract" && ar x ../syslogd_libc_extras.a geteuid.o)
+# --- Objects removed 2026-08-29 (static-linking cleanup, Phase 1a) ---
+# Each of these was a private copy of something a sibling dylib already
+# on this link line now owns outright, so each was a real duplicate
+# definition in any process that loaded both:
+#   geteuid.o                     -> libsystem_kernel.dylib (_geteuid)
+#   pread_trap.o / pwrite_trap.o  -> libsystem_kernel.dylib
+#   stack_chk_compat.o            -> libsystem_c.dylib (___stack_chk_fail,
+#                                    ___stack_chk_guard, ___chkstk_darwin)
+#   atoi.o                        -> libsystem_c.dylib (_atoi, _atoi_l)
+#   table.o / none.o /            -> libsystem_c.dylib. These carried
+#   libc_locale_globals_compat.o     __CurrentRuneLocale,
+#                                    __DefaultRuneLocale, ___mb_cur_max,
+#                                    ___mb_sb_limit, ___global_locale and
+#                                    ___locale_key -- real, mutable
+#                                    process-global locale state, so this
+#                                    one was duplicate STATE, not just
+#                                    duplicate code.
+# The long comments that used to explain why each was extracted here are
+# removed with them; build_libsystem_c.sh / build_libsystem_kernel.sh are
+# the place to look now.
 
-# atoi: real body is atoi.o, same archive as geteuid.o above. Its only
-# real deps (___global_locale/___locale_key) are NOT provided by pulling
-# in the whole xlocale.o (real-cascades into
-# __collate_load_tables/__monetary_load_locale/etc, same bloat class
-# already rejected for strcasecmp/getprogname elsewhere in this file) --
-# instead: a real, narrow libc_locale_globals_compat.c (this script's own
-# sibling file, see its header for the full trace) defines just those
-# two real globals, verbatim from xlocale.c, plus real table.o/none.o
-# (locale/FreeBSD/table.c's own _DefaultRuneXLocale + its own
-# self-contained __none_* charset-conversion dependency) extracted from
-# libc_build/libc_locale.a -- confirmed via nm that table.o/none.o's only
-# real deps (___error/_memchr) are already resolved elsewhere in this
-# exact link, so this whole chain adds zero new gaps.
-if [ ! -f "$OUT/libc_locale.a" ]; then
-    echo "error: $OUT/libc_locale.a not found -- run build_libc_locale.sh first" >&2
-    exit 1
-fi
-# atoi.o used to be extractable from syslogd_libc_extras.a too, but the
-# static-to-dylib cleanup pass (2026-08-29, see build_syslogd.sh's own
-# header comment on this exact archive) dropped that member when
-# openpam/copyfile/etc became real dylibs -- atoi.o was only ever pulled
-# through THAT archive incidentally, never actually produced by
-# build_syslogd.sh's own extraction list. Real, unmodified Apple source
-# is still right here (third_party/Libc/stdlib/FreeBSD/atoi.c) -- compile
-# it fresh instead of chasing a member that no longer exists anywhere.
-# Found+fixed 2026-08-29 resuming launchd bug #6 (needed a real
-# libdispatch.dylib rebuild to pick up this file's own separate
-# mig_reply_port.o duplicate fix, see this file's own header on that).
-(cd "$OUT/dispatch_dylib_extract" && ar x ../libc_locale.a table.o none.o)
-LIBC="../../third_party/Libc"
-PTHREAD_FOR_LOCALE="../../third_party/libpthread"
-XNU_FOR_LOCALE="../../third_party/xnu-7195"
-LOCALE_CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    -Wno-nullability-completeness \
-    -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
-    -DVARIANT_STATIC -DVARIANT_CANCELABLE -DVARIANT_DARWINEXTSN -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \
-    -D__ct_rune_t=__darwin_ct_rune_t -D__va_list=__builtin_va_list \
-    -I "$OUT/compat_include" \
-    -I "$LIBC/include" -I "$LIBC/darwin" -I "$LIBC/fbsdcompat" -I "$LIBC/locale" -I "$LIBC/locale/FreeBSD" \
-    -I "$LIBC/stdtime/FreeBSD" \
-    -I "$PTHREAD_FOR_LOCALE/include" -I "$PTHREAD_FOR_LOCALE/private" \
-    -I "$XNU_FOR_LOCALE/osfmk" -I "$XNU_FOR_LOCALE/libsyscall" \
-    -I ../../generated)
-"$CLANG" "${LOCALE_CFLAGS[@]}" \
-    libc_locale_globals_compat.c -o "$OUT/dispatch_dylib_extract/libc_locale_globals_compat.o"
-"$CLANG" "${LOCALE_CFLAGS[@]}" \
-    "$LIBC/stdlib/FreeBSD/atoi.c" -o "$OUT/dispatch_dylib_extract/atoi.o"
+
+
 
 # libc_build/dyld_core.a's own mach_portUser.o/vm_mapUser.o were tried
 # here (they have real mach_port_construct/destruct/get_context/etc and
@@ -349,7 +328,9 @@ LOCALE_CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -f
 # real semaphore_signal()/semaphore_wait() curated bodies already built
 # for the libxpc syscalls tier (build_libxpc_syscalls.sh's own
 # mach_semaphore_wrap_compat.o) -- reused, not regenerated.
-cp "$OUT/xpc_syscall_obj/semaphore_wrap.o" "$OUT/dispatch_dylib_extract/semaphore_wrap.o"
+# semaphore_wrap.o no longer copied here (static-linking cleanup, Phase
+# 1a, 2026-08-29): _semaphore_signal/_semaphore_wait are now real exports
+# of libsystem_kernel.dylib, a sibling on this link line.
 
 # real third_party/Libc/gen/FreeBSD locale/string primitives
 # (strcasecmp, sys_errlist/sys_nerr) this dylib's own code needs --
@@ -380,33 +361,25 @@ cp "$OUT/xpc_syscall_obj/semaphore_wrap.o" "$OUT/dispatch_dylib_extract/semaphor
 
 # real mach_error_string()/semaphore_{signal,wait}_trap()/os_assumes
 # bodies -- already built for the libxpc tier, reused not regenerated.
-cp "$OUT/xpc_syscall_obj/mach_error_string.o" "$OUT/dispatch_dylib_extract/mach_error_string.o"
-cp "$OUT/xpc_syscall_obj/mach_semaphore_traps.o" "$OUT/dispatch_dylib_extract/mach_semaphore_traps.o"
-cp "$OUT/xpc_obj/os_assumes_compat.o" "$OUT/dispatch_dylib_extract/os_assumes_compat.o"
-cp "$OUT/xpc_syscall_obj/getenv_compat.o" "$OUT/dispatch_dylib_extract/getenv_compat.o"
+# mach_error_string.o / mach_semaphore_traps.o no longer copied here
+# (static-linking cleanup, Phase 1a, 2026-08-29) -- _mach_error_string/
+# _mach_error_type and the raw semaphore traps are now real exports of
+# libsystem_kernel.dylib. os_assumes_compat.o stays for now: nothing
+# below this dylib owns the __os_assumes_log/__os_crash family yet
+# (real Apple puts it in libsystem_c) -- still duplicated with
+# libxpc.dylib, tracked as remaining work.
+# os_assumes_compat.o no longer copied here (static-linking cleanup,
+# Phase 1a, 2026-08-29): the __os_assumes_log/__os_assert_log/__os_crash
+# family is now owned by libsystem_c.dylib, a sibling on this link line,
+# matching real Apple. libxpc.dylib had a second copy of the same object.
+# getenv_compat.o no longer copied here (static-linking cleanup, Phase
+# 1a, 2026-08-29): the whole environment-variable subsystem (getenv,
+# setenv/unsetenv/putenv and their $UNIX2003 aliases, _NSGetEnviron,
+# ___environ_lock) is now owned by libsystem_c.dylib, a sibling on this
+# link line. It used to exist only in this dylib and libxpc.dylib, each
+# with its own lock over the one real `environ` array.
 
-# real, minimal stack-protector runtime support -- needed only because
-# dyld_mach_portUser.o/dyld_vm_mapUser.o (below, reused from the dyld
-# port) were originally compiled WITH stack-protector enabled; this
-# dylib's own dispatch_obj/*.o are all `-fno-stack-protector` (matching
-# every other tier in this project) and never call these. Real,
-# standard canary-check runtime (matches every libc's actual
-# __stack_chk_fail semantics: abort on mismatch), not a functional
-# stand-in.
-cat > "$OUT/dispatch_dylib_extract/stack_chk_compat.c" <<'EOF'
-#include <stdint.h>
-#include <stdlib.h>
-long __stack_chk_guard = 0x0BADC0DEDEADBEEFL;
-void __stack_chk_fail(void) { abort(); }
-/* real arm64 stack-probe helper (touches each page of a large stack
- * allocation so the kernel's guard page reliably faults on overflow
- * instead of possibly skipping past it) -- reused objects here only
- * make small, fixed-size MIG reply-buffer allocations, so a no-op body
- * is safe for this target's real call pattern, not a functional gap. */
-void __chkstk_darwin(void) {}
-EOF
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    "$OUT/dispatch_dylib_extract/stack_chk_compat.c" -o "$OUT/dispatch_dylib_extract/stack_chk_compat.o"
+
 
 # real raw trap for ___kdebug_trace64 (BSD syscall #179, NO_SYSCALL_STUB
 # -- confirmed real trap number in bsd/kern/syscalls.master), closing a
@@ -446,6 +419,39 @@ XNU_FOR_TRAP="../../third_party/xnu-7195"
     -I "$XNU_FOR_TRAP/BUILD.hdrs/dst/usr/include" -I "$OUT/pthread_syscall_gen" \
     "$OUT/pthread_syscall_gen/_kevent_qos.s" -o "$OUT/dispatch_dylib_extract/kevent_qos_trap.o"
 
+# ___gettimeofday_with_mach: needed here because dispatch_gap_closures4.o's
+# real mach_get_times() calls it (see that file's own header comment).
+# Compiled locally rather than resolved from libsystem_pthread.dylib --
+# which DOES link the same generated stub -- because real Apple's own
+# generator emits it `.private_extern` (confirmed via
+# `nm -m`: "private external"), so it is deliberately image-local and can
+# never be exported across a dylib boundary. On real Darwin every image
+# that needs it has its own copy for exactly this reason.
+#
+# This is NOT the duplicate-symbol bug class the rest of this pass
+# removes: the stub is a stateless raw syscall trap with no globals, and
+# being private-extern it is invisible outside this image, so there is no
+# symbol for another image to bind to the wrong copy of. Added 2026-08-29
+# when dropping this dylib's static libpthread.a bundle (Phase 1a)
+# removed the previous, accidental source of it.
+# The generated stub defines BOTH ___gettimeofday (public, and a real
+# export of libsystem_c.dylib already) and ___gettimeofday_with_mach.
+# Only the second is wanted here, so the first is hidden with
+# `ld -r -unexported_symbol` rather than shipping a second public
+# definition -- `-exported_symbol` cannot be used for the inverse
+# selection because the symbol being kept is private-extern to begin
+# with and so is not exportable at all. `-keep_private_externs` is
+# required alongside `-r`: without it ld resolves private externs down to
+# plain local symbols, which makes ___gettimeofday_with_mach invisible to
+# the final link (verified -- the link fails on exactly that symbol).
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    -I "$XNU_FOR_TRAP/BUILD.hdrs/dst/usr/include" -I "$OUT/pthread_syscall_gen" \
+    "$OUT/pthread_syscall_gen/___gettimeofday.s" -o "$OUT/dispatch_dylib_extract/gettimeofday_trap_raw.o"
+"$LD" -r -arch arm64 -keep_private_externs -unexported_symbol ___gettimeofday \
+    "$OUT/dispatch_dylib_extract/gettimeofday_trap_raw.o" \
+    -o "$OUT/dispatch_dylib_extract/gettimeofday_trap.o"
+rm -f "$OUT/dispatch_dylib_extract/gettimeofday_trap_raw.o"
+
 # same real _chk/-undefined-dynamic_lookup quirk as kdebug_trace64 above
 # -- real source already established by build_libxpc_syscalls2.sh
 # (third_party/Libc/secure/*.c), just needs its own copy here since this
@@ -463,10 +469,14 @@ LIBC="../../third_party/Libc"
 CFLAGS_SECURE=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -D_FORTIFY_SOURCE=0 \
     -Wno-nullability-completeness -I "$LIBC/secure")
-for f in snprintf_chk strlcpy_chk vsnprintf_chk; do
-    "$CLANG" "${CFLAGS_SECURE[@]}" "$LIBC/secure/$f.c" -o "$OUT/dispatch_dylib_extract/$f.o"
-done
-"$CLANG" "${CFLAGS_SECURE[@]}" chk_fail_compat.c -o "$OUT/dispatch_dylib_extract/chk_fail_compat.o"
+# The _chk tier is no longer compiled here (static-linking cleanup,
+# Phase 1a, 2026-08-29) -- ___snprintf_chk/___vsnprintf_chk/
+# ___strlcpy_chk/___snprintf_object_size_chk and the ___chk_fail_*
+# handlers are now real exports of libsystem_c.dylib, a sibling on this
+# link line, which is where real Apple puts them. The -D_FORTIFY_SOURCE=0
+# requirement described above did not go away, it moved with them: see
+# build_libsystem_c.sh, which compiles the same real sources with the
+# same flag for the same reason (launchd bug #6).
 
 # 2026-08-27 gap-closure pass: real remaining-gap symbols closed at once
 # (see tools/init_binary/init.c's spawn_syslogd() comment for the full
@@ -488,14 +498,7 @@ XNU_FOR_GAPS="../../third_party/xnu-7195"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -I "$XNU_FOR_GAPS/BUILD.hdrs/dst/usr/include" -I "$OUT/pthread_syscall_gen" \
     "$OUT/pthread_syscall_gen/___persona.s" -o "$OUT/dispatch_dylib_extract/persona_trap.o"
 
-# pread/pwrite: plain Apple-generated syscall stubs (#153/#154, NOT
-# NO_SYSCALL_STUB), already produced by build_libpthread.sh's own
-# create-syscalls.pl run -- reused verbatim, not regenerated. Only real
-# dep is _cerror (already linked into this dylib below via cerror_stub.o).
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -I "$XNU_FOR_GAPS/BUILD.hdrs/dst/usr/include" -I "$OUT/pthread_syscall_gen" \
-    "$OUT/pthread_syscall_gen/_pread.s" -o "$OUT/dispatch_dylib_extract/pread_trap.o"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -I "$XNU_FOR_GAPS/BUILD.hdrs/dst/usr/include" -I "$OUT/pthread_syscall_gen" \
-    "$OUT/pthread_syscall_gen/_pwrite.s" -o "$OUT/dispatch_dylib_extract/pwrite_trap.o"
+
 
 # mach_port_construct: real, already-built CoreFoundation objects
 # (cf_obj/cf_mach_port_syscalls.o + cf_obj/mach_port_traps.o, built by
@@ -509,8 +512,9 @@ XNU_FOR_GAPS="../../third_party/xnu-7195"
 # it resolves at the whole-process level once syslogd.macho, which does
 # link that archive, loads this dylib -- same real flat-namespace
 # mechanism this dylib's own -Wl,-U symbols already rely on).
-cp "$OUT/cf_obj/cf_mach_port_syscalls.o" "$OUT/dispatch_dylib_extract/cf_mach_port_syscalls.o"
-cp "$OUT/cf_obj/mach_port_traps.o" "$OUT/dispatch_dylib_extract/mach_port_traps.o"
+# cf_mach_port_syscalls.o / mach_port_traps.o no longer copied here
+# (static-linking cleanup, Phase 1a, 2026-08-29): the mach_port_allocate
+# family and its raw traps are now real exports of libsystem_kernel.dylib.
 
 # mach_port_extract_right/insert_right/unguard/request_notification/
 # kernel_object + thread_destruct_special_reply_port: real trap-first
@@ -522,13 +526,11 @@ cp "$OUT/cf_obj/mach_port_traps.o" "$OUT/dispatch_dylib_extract/mach_port_traps.
 # step (below) excludes libmach_ipc.a's mach_ipc_dead_stubs.o, whose 3
 # narrowly-scoped KERN_FAILURE stand-ins for these exact symbol names
 # would otherwise have been the ONLY definition available process-wide.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
-    -I "$XNU_FOR_GAPS/libsyscall/mach" -I "$XNU_FOR_GAPS/libsyscall/os" -idirafter "$XNU_FOR_GAPS/osfmk" \
-    -I "$LIBC/include" -I "$LIBC/darwin" \
-    mach_port_gap_closures2.c -o "$OUT/dispatch_dylib_extract/mach_port_gap_closures2.o"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
-    mach_port_gap_closures2.s -o "$OUT/dispatch_dylib_extract/mach_port_gap_closures2_traps.o"
+# mach_port_gap_closures2.o/.s no longer compiled here (static-linking
+# cleanup, Phase 1a, 2026-08-29): _mach_port_extract_right/_insert_right/
+# _unguard/_kernel_object and _thread_destruct_special_reply_port are now
+# real exports of libsystem_kernel.dylib, which is where they belonged --
+# libxpc.dylib was compiling its own second copy of this same file.
 
 # mach_make_memory_entry_64: real, already-built MIG output
 # (libc_build/dyld_core.a's own vm_mapUser.o, generated from real
@@ -726,20 +728,14 @@ rm -f "$OUT/system/libdispatch.dylib"
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     "${UNDEF_FLAGS[@]}" \
-    -Wl,-alias,___kill,'_kill$UNIX2003' \
-    -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
-    -Wl,-alias,__mal_semwait_sleep,'_sleep$UNIX2003' \
-    -Wl,-alias,_write,'_write$UNIX2003' \
     -Wl,-alias,__dispatch_queue_attrs,__dispatch_queue_attr_concurrent \
     -o "$OUT/system/libdispatch.dylib" \
     "$OUT"/dispatch_obj/*.o "$OUT"/dispatch_obj/event/*.o \
     "$OUT"/dispatch_dylib_extract/*.o \
-    -Wl,-force_load,"$OUT/libpthread_qos.a" \
-    "$OUT/libclosure.a" "$OUT/libmalloc_no_mach_init.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
-    "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" \
     "$OUT/simple_obj/sys__kqueue.o" \
     "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" \
-    "$OUT/system/libsystem_kernel.dylib" \
+    "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" \
+    "$OUT/system/libsystem_blocks.dylib" \
     2>"$OUT/system/libdispatch_dylib_link.err" \
     || { echo "note: dylib link reported diagnostics (expected -- undefined symbols are normal in a dylib), see $OUT/system/libdispatch_dylib_link.err" >&2; }
 

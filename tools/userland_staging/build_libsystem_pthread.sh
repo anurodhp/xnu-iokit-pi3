@@ -92,16 +92,78 @@ fi
 # syscall traps, only depending on `errno`, already resolved via the
 # libsystem_kernel.dylib sibling link below -- confirmed via nm before
 # adding, not assumed).
+#
+# pthread_thread_ops_compat.o/pthread___thread_selfid.o/
+# pthread_clear_qos_tsd_compat.o added 2026-08-29 (static-linking
+# cleanup, Phase 1a -- see dup_symbol_audit.sh's own header for why):
+# they define real, standard pthread API (_pthread_detach, _pthread_kill,
+# _pthread_setschedparam, _pthread_threadid_np, _pthread_is_threaded_np,
+# _pthread_getugid_np, ___thread_selfid, __pthread_clear_qos_tsd) that
+# was reaching processes ONLY through libdispatch.dylib's own private
+# static copy of libpthread.a. Real Apple exports every one of these
+# from libsystem_pthread.dylib -- this is where they belong, and moving
+# them here is what lets libdispatch stop bundling the archive at all.
 MEMBERS="pthread_atfork.o pthread_cond.o pthread_cwd.o pthread_mutex.o pthread_rwlock.o pthread_tsd.o \
     pthread_main_thread_bootstrap.o pthread_bsdthread_create_syscall.o pthread_tsd_platform_bootstrap.o \
     pthread_bsdthread_register_syscall.o pthread_bsdthread_terminate_syscall.o \
     pthread_psynch_syscalls.o pthread_compat_extras.o pthread_abort_with_reason_compat.o \
     pthread_guard_compat.o pthread_simple_getenv.o pthread_platform_memcmp.o pthread_gettimeofday.o \
     pthread___pthread_chdir.o pthread___pthread_fchdir.o pthread_mmap_compat.o pthread___mmap.o \
-    pthread___munmap.o pthread___ulock_wait2.o"
+    pthread___munmap.o pthread___ulock_wait2.o \
+    pthread_thread_ops_compat.o pthread___thread_selfid.o pthread_clear_qos_tsd_compat.o"
 rm -rf "$OUT/libsystem_pthread/extracted"
 mkdir -p "$OUT/libsystem_pthread/extracted"
 (cd "$OUT/libsystem_pthread/extracted" && ar x "../../libpthread.a" $MEMBERS)
+
+# Real pthread QoS/attr tier, moved here 2026-08-29 (static-linking
+# cleanup, Phase 1a). build_libpthread_qos.sh's libpthread_qos.a carries
+# the real POSIX pthread_attr_* API, the real QoS API (qos_class_self,
+# pthread_set_qos_class_self_np, _pthread_qos_class_encode/_decode,
+# the _pthread_workqueue_override_* family) and pthread_exit --
+# i.e. straightforwardly the exported surface of real Apple's own
+# libsystem_pthread.dylib. This project had it in exactly one place
+# instead: force_load'ed into libdispatch.dylib, which is why
+# _pthread_attr_init/_pthread_exit/_qos_class_self showed up as
+# libdispatch exports rather than pthread ones, and why libdispatch had
+# to statically bundle libpthread.a alongside them (the QoS code calls
+# straight into pthread internals like __pthread_ptr_munge_token that
+# only resolve inside the same image).
+#
+# host_privUser.o/mach_voucherUser.o come along because
+# libpthread_qos_compat.o's real voucher path calls their MIG stubs
+# (__kernelrpc_host_create_mach_voucher /
+# __kernelrpc_mach_voucher_extract_attr_recipe) -- confirmed via nm per
+# member, not assumed. Their own two remaining externs (_mig_strncpy,
+# _voucher_mach_msg_set) are deliberately left undefined here rather
+# than adding another private copy: _voucher_mach_msg_set really is
+# libdispatch's symbol on real Apple too, and duplicating the MIG
+# runtime is the exact bug this pass exists to remove.
+if [ ! -f "$OUT/libpthread_qos.a" ]; then
+    echo "error: $OUT/libpthread_qos.a not found -- run build_libpthread_qos.sh first" >&2
+    exit 1
+fi
+QOS_MEMBERS="qos.o libpthread_attr_compat.o libpthread_qos_compat.o host_privUser.o mach_voucherUser.o"
+(cd "$OUT/libsystem_pthread/extracted" && ar x "../../libpthread_qos.a" $QOS_MEMBERS)
+MEMBERS="$MEMBERS $QOS_MEMBERS"
+
+# __kernelrpc_host_create_mach_voucher: real MIG output, but it lives in
+# libmach_ipc.a's mach_hostUser.o alongside ~20 OTHER host_*() routines
+# this dylib has no business exporting (and which would collide with the
+# copies libdispatch/libxpc already carry). Narrowed to the one routine
+# with `ld -r -exported_symbol` -- same real precedent
+# build_libdispatch_dylib.sh already established for pulling
+# _mach_make_memory_entry_64 out of a multi-routine vm_mapUser.o.
+if [ ! -f "$OUT/libmach_ipc.a" ]; then
+    echo "error: $OUT/libmach_ipc.a not found -- run build_libmach_ipc.sh first" >&2
+    exit 1
+fi
+LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+ar p "$OUT/libmach_ipc.a" mach_hostUser.o > "$OUT/libsystem_pthread/mach_hostUser_raw.o"
+"$LD" -r -arch arm64 -exported_symbol __kernelrpc_host_create_mach_voucher \
+    "$OUT/libsystem_pthread/mach_hostUser_raw.o" \
+    -o "$OUT/libsystem_pthread/extracted/kernelrpc_host_create_mach_voucher.o"
+rm -f "$OUT/libsystem_pthread/mach_hostUser_raw.o"
+MEMBERS="$MEMBERS kernelrpc_host_create_mach_voucher.o"
 
 # Real gap: real pthread_rwlock.c/pthread_cond.c call sched_yield() in
 # their real contended-lock backoff paths; this project's libpthread
@@ -161,6 +223,7 @@ rm -f "$OUT/system/libsystem_pthread.dylib"
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',__pthread_rwlock_rdlock \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',__pthread_rwlock_wrlock \
     -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',__pthread_rwlock_unlock \
+    -Wl,-U,_mig_strncpy -Wl,-U,_voucher_mach_msg_set \
     -o "$OUT/system/libsystem_pthread.dylib" \
     $(for m in $MEMBERS; do echo "$OUT/libsystem_pthread/extracted/$m"; done) \
     "$OUT/libsystem_pthread/sched_yield_trap.o" "$OUT/libsystem_pthread/sched_yield.o" \

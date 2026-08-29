@@ -120,36 +120,59 @@ fi
 (cd "$EXTRACT" && ar x "../../libxpc.a")
 (cd "$EXTRACT" && ar x "../../libxpc_syscalls.a")
 (cd "$EXTRACT" && ar x "../../libxpc_syscalls2.a")
-(cd "$EXTRACT" && ar x "../../syslogd_libc_extras.a" geteuid.o getuid.o sys__dup.o)
+(cd "$EXTRACT" && ar x "../../syslogd_libc_extras.a" sys__dup.o)
 
-# Real construction, reproduced independently from build_launchd.sh's
-# own (see this script's header) -- not a copied build artifact. Exact
-# same real CFLAGS build_launchd.sh's own compile step uses.
-XNU="../../third_party/xnu-7195"
-LIBC="../../third_party/Libc"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
-    -I "$XNU/libsyscall/mach" -I "$XNU/libsyscall/os" -idirafter "$XNU/osfmk" \
-    -I "$LIBC/include" -I "$LIBC/darwin" \
-    mach_port_gap_closures2.c -o "$OUT/xpc_dylib_mach_port_gap_closures2_raw.o"
-"$LD" -r -arch arm64 \
-    -exported_symbol _mach_port_insert_right \
-    -exported_symbol _mach_port_extract_right \
-    -exported_symbol _mach_port_unguard \
-    -exported_symbol _mach_port_kernel_object \
-    -exported_symbol _thread_destruct_special_reply_port \
-    "$OUT/xpc_dylib_mach_port_gap_closures2_raw.o" -o "$EXTRACT/mach_port_gap_closures2.o"
-rm -f "$OUT/xpc_dylib_mach_port_gap_closures2_raw.o"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
-    mach_port_gap_closures2.s -o "$EXTRACT/mach_port_gap_closures2_traps.o"
+# Members dropped 2026-08-29 (static-linking cleanup, Phase 1a). Every
+# one of these was a second copy of something a sibling dylib already on
+# this link line now owns, so every process loading libxpc.dylib next to
+# libdispatch.dylib or libSystem.B.dylib had two definitions of each:
+#
+#   -> libsystem_kernel.dylib: the Mach semaphore traps and their
+#      wrappers, mach_error_string, and the mach_port_allocate family.
+#      geteuid.o/getuid.o go the same way (raw BSD syscall stubs).
+#   -> libsystem_c.dylib: the environment-variable subsystem
+#      (setenv/environ_lock/findenv/getenv) -- this one mattered most,
+#      because two setenv() implementations were mutating one real
+#      `environ` array under two separate locks -- the _FORTIFY_SOURCE
+#      _chk family, and os_assumes.
+#
+# chk_fail_compat.o is deliberately NOT dropped either, for a different
+# and better reason: every symbol it defines (___chk_fail_overflow,
+# ___chk_overlap, ___chk_assert_no_overlap, ___chk_fail_overlap) is
+# `.private external` in real Apple's own source -- confirmed via
+# `nm -m`, not assumed -- so it is image-local by design and invisible
+# across a dylib boundary. There is no symbol here for another image to
+# bind to the wrong copy of, and the remaining _chk members this dylib
+# still carries (memmove_chk.o, stpcpy_chk.o, strcpy_chk.o, ...) each
+# need one in their own image. Same situation as
+# ___gettimeofday_with_mach in build_libdispatch_dylib.sh.
+#
+# mach_portUser.o is deliberately NOT dropped: it is the MIG-generated
+# __kernelrpc_mach_port_* fallback set that libsystem_kernel.dylib itself
+# defers via -Wl,-U (see that script's comment on why it cannot generate
+# them at its own level yet), so libxpc.dylib remains their real provider
+# for now.
+(cd "$EXTRACT" && rm -f \
+    semaphore_wrap.o mach_semaphore_traps.o mach_error_string.o \
+    mach_port_allocate_compat.o mach_port_allocate_trap.o \
+    setenv.o environ_lock_compat.o findenv_locked_compat.o getenv_compat.o \
+    snprintf_chk.o vsnprintf_chk.o strlcpy_chk.o \
+    os_assumes_compat.o)
 
-rm -f "$OUT/libmach_ipc_no_dead_stubs_for_xpc.a"
-cp "$OUT/libmach_ipc.a" "$OUT/libmach_ipc_no_dead_stubs_for_xpc.a"
-ar d "$OUT/libmach_ipc_no_dead_stubs_for_xpc.a" mach_ipc_dead_stubs.o mach_msg_real.o
-(cd "$EXTRACT" && ar x "../../libmach_ipc_no_dead_stubs_for_xpc.a")
-"$LD" -r -arch arm64 \
-    -exported_symbol _voucher_mach_msg_set \
-    "$OUT/mach_ipc_dead_stubs.o" -o "$EXTRACT/mach_ipc_dead_stubs_voucher_only.o"
+# mach_port_gap_closures2.o/.s no longer built here (static-linking
+# cleanup, Phase 1a, 2026-08-29): _mach_port_insert_right/_extract_right/
+# _unguard/_kernel_object and _thread_destruct_special_reply_port are now
+# real exports of libsystem_kernel.dylib, a sibling on this link line.
+# libdispatch.dylib was compiling its own third copy of the same file.
+
+# libmach_ipc.a is no longer bundled here (static-linking cleanup, Phase
+# 1a, 2026-08-29): its whole content -- the MIG client stubs for
+# clock.defs/mach_host.defs/task.defs, mig_strncpy, mach_host_self and
+# the g_mach_ipc_clock_port/_sem cache -- now lives in
+# libsystem_kernel.dylib. The libmach_ipc_no_dead_stubs_for_xpc.a copy
+# and the _voucher_mach_msg_set narrowing that used to be needed here go
+# with it; _voucher_mach_msg_set is deferred at the libsystem_kernel end
+# now (real body: libdispatch.dylib, same as real Apple).
 
 # REAL BUG FOUND+FIXED 2026-08-29: csops was deferred via `-Wl,-U` below
 # on the (wrong) assumption that leaving it undefined was harmless if
@@ -181,8 +204,8 @@ if [ ! -f "$OUT/simple_obj/sys__kevent.o" ]; then
     echo "error: $OUT/simple_obj/sys__kevent.o not found -- run build_simple_cmds.sh first" >&2
     exit 1
 fi
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    mach_error_string_minimal_compat.c -o "$EXTRACT/mach_error_string_minimal_compat.o"
+# mach_error_string_minimal_compat.o moved to libsystem_kernel.dylib
+# alongside mach_error_string.o itself (static-linking cleanup, Phase 1a).
 cp "$OUT/simple_obj/sys__kevent.o" "$EXTRACT/sys__kevent.o"
 
 mkdir -p "$OUT/system"

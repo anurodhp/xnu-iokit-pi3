@@ -164,6 +164,58 @@ SIGLIST_CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fn
     -I $PTHREAD/include -I $PTHREAD/private \
     -I $XNU/bsd -I $XNU/osfmk -I $XNU/libsyscall \
     -I ../../generated"
+# _FORTIFY_SOURCE _chk tier + the environment-variable subsystem, moved
+# here 2026-08-29 (static-linking cleanup, Phase 1a).
+#
+# Both belong in libsystem_c on real Apple, and this project already had
+# part of the _chk family here (chk_fail_compat.o/strcpy_chk.o/
+# strncpy_chk.o, extracted from libxpc_syscalls2.a below). The rest was
+# being compiled separately into libdispatch.dylib AND libxpc.dylib, and
+# the environment subsystem existed ONLY in those two -- so a process
+# loading both had two setenv()/unsetenv() implementations racing over
+# one real `environ` array, each with its own ___environ_lock. That is
+# duplicate mutable state, not just duplicate code.
+#
+# SIGLIST_CFLAGS already carries -D_FORTIFY_SOURCE=0, which is
+# load-bearing for the _chk files specifically and NOT cosmetic: this
+# SDK defaults it to 2, which macro-rewrites each _chk implementation's
+# own internal call (vsnprintf_chk.c's `vsnprintf(...)`) straight back
+# into itself -- unbounded self-recursion into a stack-guard-page
+# SIGSEGV. That is the exact root cause of launchd bug #6 (see
+# docs/backlog.md item d11 and this tree's own postmortem); do not
+# compile these without it.
+for f in snprintf_chk vsnprintf_chk strlcpy_chk; do
+    "$CLANG" $SIGLIST_CFLAGS -I "$LIBC/secure" "$LIBC/secure/$f.c" -o "$EXTRACT/$f.o"
+done
+"$CLANG" $SIGLIST_CFLAGS "$LIBC/stdlib/FreeBSD/setenv.c" -o "$EXTRACT/setenv.o"
+"$CLANG" $SIGLIST_CFLAGS "$LIBC/stdlib/FreeBSD/putenv.c" -o "$EXTRACT/putenv.o"
+# os_assumes: the 7 real extern functions third_party/Libc/os/assumes.h's
+# macros call (see os_assumes_compat.c's own header for why the real
+# assumes.c body is curated rather than compiled). Moved here 2026-08-29
+# (static-linking cleanup, Phase 1a): real Apple ships this in
+# libsystem_c, and every one of its own dependencies (___snprintf_chk,
+# ___stderrp, _abort, _fprintf, _strdup) is already local to this dylib --
+# confirmed via nm, not assumed. It was previously compiled separately
+# into both libdispatch.dylib and libxpc.dylib.
+"$CLANG" $SIGLIST_CFLAGS -I "$LIBC" os_assumes_compat.c -o "$EXTRACT/os_assumes_compat.o"
+"$CLANG" $SIGLIST_CFLAGS environ_lock_compat.c -o "$EXTRACT/environ_lock_compat.o"
+"$CLANG" $SIGLIST_CFLAGS findenv_locked_compat.c -o "$EXTRACT/findenv_locked_compat.o"
+# _NSGetEnviron: real Apple's setenv.c reaches `environ` through this
+# indirection (crt_externs.h #defines environ to (*_NSGetEnviron())), and
+# real dyld-940 in this checkout does not define it -- confirmed by
+# grepping third_party/dyld, not assumed; only `_environ` itself comes
+# from dyld's real libdyldGlue.o. simple_cmds_getenv_compat.c already has
+# a real one, narrowed here to that single symbol via `ld -r
+# -exported_symbol` because the rest of that file is this project's
+# pre-dyld single-threaded getenv/setenv simplification, superseded by
+# the real Apple setenv.c linked just above (same narrowing precedent as
+# build_libdispatch_dylib.sh's _mach_make_memory_entry_64 extraction).
+LD_FOR_NARROW="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+"$CLANG" $SIGLIST_CFLAGS simple_cmds_getenv_compat.c -o "$EXTRACT/nsgetenviron_raw.o"
+"$LD_FOR_NARROW" -r -arch arm64 -exported_symbol __NSGetEnviron \
+    "$EXTRACT/nsgetenviron_raw.o" -o "$EXTRACT/nsgetenviron.o"
+rm -f "$EXTRACT/nsgetenviron_raw.o"
+
 "$CLANG" $SIGLIST_CFLAGS "$LIBC/gen/FreeBSD/siglist.c" -o "$EXTRACT/siglist.o"
 "$CLANG" $SIGLIST_CFLAGS "$LIBC/gen/FreeBSD/vis.c" -o "$EXTRACT/vis.o"
 
@@ -378,6 +430,17 @@ rm -f "$OUT/system/libsystem_c.dylib"
     -Wl,-alias,_fdopen,'_fdopen$UNIX2003' \
     -Wl,-alias,_strtod,'_strtod$UNIX2003' \
     -Wl,-alias,___strtok_r,_strtok_r \
+    `# Plain, non-$UNIX2003 spellings of the environment setters. This` \
+    `# dylib compiles real Apple setenv.c with -D__DARWIN_UNIX03=1, which` \
+    `# emits ONLY the asm-labeled $UNIX2003 names, but real callers` \
+    `# (libxpc.dylib's own xpc objects among them) reference the plain` \
+    `# ones. Each alias base below is genuinely local to this link` \
+    `# ($EXTRACT/setenv.o) -- required, see docs/backlog.md item d10 for` \
+    `# the ld64 bug where a non-local alias base silently produces a` \
+    `# malformed ordinal-0 re-export instead of an error.` \
+    -Wl,-alias,'_setenv$UNIX2003',_setenv \
+    -Wl,-alias,'_unsetenv$UNIX2003',_unsetenv \
+    -Wl,-alias,'_putenv$UNIX2003',_putenv \
     -o "$OUT/system/libsystem_c.dylib" \
     "$EXTRACT"/*.o \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" \
