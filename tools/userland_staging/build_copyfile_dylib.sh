@@ -32,12 +32,17 @@
 #     `fixup error (kind=arm64_adrp_lo12)` for this exact symbol pair
 #     (direct data-address computation, not a lazily-bound call).
 #     Provided below, not deferred.
-#   - chmod$UNIX2003, fchmod$UNIX2003, pread$UNIX2003, pwrite$UNIX2003,
-#     getattrlist$UNIX2003, statfs$INODE64: real, project-wide missing
-#     raw syscall wrappers (confirmed via `nm -gU` against every sibling
-#     dylib below plus libremovefile.dylib -- none export these in any
-#     form). Not copyfile-specific, same class as libremovefile.dylib's
-#     own fsync$UNIX2003/reallocarray$DARWIN_EXTSN deferrals.
+#   - chmod$UNIX2003/fchmod$UNIX2003/pread$UNIX2003/pwrite$UNIX2003/
+#     getattrlist$UNIX2003/statfs$INODE64: CORRECTED 2026-08-29 -- NOT a
+#     project-wide gap, not deferred here anymore. All six real base
+#     symbols (chmod/fchmod/pread/pwrite/getattrlist/statfs) are
+#     genuinely LOCAL to this exact archive/dylib (confirmed via
+#     `nm -gU`) -- real, working `-Wl,-alias` entries below instead
+#     (same real bug class already found+fixed for libremovefile.dylib's
+#     fsync$UNIX2003/reallocarray$DARWIN_EXTSN, see that script's own
+#     header for the full trail: a real launchd boot-time failure,
+#     "symbol not found in flat namespace", surfaced this original
+#     `-Wl,-U` as wrong).
 set -e
 cd "$(dirname "$0")"
 
@@ -114,8 +119,9 @@ rm -f "$OUT/system/libcopyfile.dylib"
     -Wl,-not_for_dyld_shared_cache \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
-    -Wl,-U,'_chmod$UNIX2003' -Wl,-U,'_fchmod$UNIX2003' -Wl,-U,'_pread$UNIX2003' \
-    -Wl,-U,'_pwrite$UNIX2003' -Wl,-U,'_getattrlist$UNIX2003' -Wl,-U,'_statfs$INODE64' \
+    -Wl,-alias,_chmod,'_chmod$UNIX2003' -Wl,-alias,_fchmod,'_fchmod$UNIX2003' \
+    -Wl,-alias,_pread,'_pread$UNIX2003' -Wl,-alias,_pwrite,'_pwrite$UNIX2003' \
+    -Wl,-alias,_getattrlist,'_getattrlist$UNIX2003' -Wl,-alias,_statfs,'_statfs$INODE64' \
     -o "$OUT/system/libcopyfile.dylib" \
     "$EXTRACT"/*.o \
     "$OUT/system/libremovefile.dylib" \

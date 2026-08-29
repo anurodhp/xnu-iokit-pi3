@@ -59,14 +59,24 @@
 #     _sdns_search/dns_search_list_count) -- same dns.c exclusion
 #     build_libresolv.sh's own header already made; some already-compiled
 #     file has a residual forward reference into it.
-#   - Real, project-wide BSD socket syscall gap, not resolv-specific
+#   - CORRECTED 2026-08-29: bind$UNIX2003/connect$UNIX2003/sendto$UNIX2003
+#     are NOT actually part of this gap -- their real bases (bind/
+#     connect/sendto) are genuinely LOCAL to this exact archive (real
+#     libresolv_socket_syscalls.c raw wrappers, confirmed via `nm -g`),
+#     so these are real, working `-Wl,-alias` entries below instead of
+#     deferrals (same bug class already found+fixed for
+#     libremovefile.dylib's fsync$UNIX2003/reallocarray$DARWIN_EXTSN and
+#     libcopyfile.dylib's chmod$UNIX2003-family -- a real launchd boot
+#     failure surfaced the original mistake here too). What remains a
+#     real, project-wide BSD socket syscall gap, not resolv-specific
 #     (confirmed via `nm -gU` against every sibling dylib below: none
-#     export connect/bind/sendto/recvmsg/getpeername/getsockname/writev/
-#     pselect in ANY form, $UNIX2003-suffixed or plain) -- same missing-
-#     prerequisite docs/backlog.md item d7 already flagged for
-#     CFSocket.c/CFURLSessionInterface.c ("BSD socket syscall wrappers in
-#     userland libc" as a shared, not-yet-attempted need). Deferred here
-#     rather than inventing a resolv-specific one-off.
+#     export these in any form, and this archive's own objects don't
+#     define them either): chmod$UNIX2003, getpeername$UNIX2003,
+#     getsockname$UNIX2003, recvmsg$UNIX2003, writev$UNIX2003,
+#     pselect$1050 -- same missing-prerequisite docs/backlog.md item d7
+#     already flagged for CFSocket.c/CFURLSessionInterface.c ("BSD
+#     socket syscall wrappers in userland libc" as a shared, not-yet-
+#     attempted need).
 #   - __darwin_check_fd_set_overflow: real `_FORTIFY_SOURCE`-family
 #     compiler-inserted check, same already-documented `_chk`-family gap
 #     class as docs/backlog.md item d7's `___chk_assert_no_overlap` entry
@@ -197,9 +207,11 @@ rm -f "$OUT/system/libresolv.dylib"
     -Wl,-not_for_dyld_shared_cache \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
-    -Wl,-U,'_bind$UNIX2003' -Wl,-U,'_chmod$UNIX2003' -Wl,-U,'_connect$UNIX2003' \
+    -Wl,-alias,_bind,'_bind$UNIX2003' -Wl,-alias,_connect,'_connect$UNIX2003' \
+    -Wl,-alias,_sendto,'_sendto$UNIX2003' \
+    -Wl,-U,'_chmod$UNIX2003' \
     -Wl,-U,'_getpeername$UNIX2003' -Wl,-U,'_getsockname$UNIX2003' -Wl,-U,'_recvmsg$UNIX2003' \
-    -Wl,-U,'_sendto$UNIX2003' -Wl,-U,'_writev$UNIX2003' -Wl,-U,'_pselect$1050' \
+    -Wl,-U,'_writev$UNIX2003' -Wl,-U,'_pselect$1050' \
     -Wl,-U,_DNSServiceProcessResult -Wl,-U,_DNSServiceQueryRecord \
     -Wl,-U,_DNSServiceRefDeallocate -Wl,-U,_DNSServiceRefSockFD \
     -Wl,-U,_kevent -Wl,-U,_kqueue -Wl,-U,_pipe \

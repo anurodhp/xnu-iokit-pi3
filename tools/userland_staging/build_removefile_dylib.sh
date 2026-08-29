@@ -24,12 +24,14 @@
 # object, union their defined symbols, subtract from the union of their
 # undefined refs to get the TRUE cross-archive-boundary gap, then
 # subtract every symbol the sibling dylibs below actually export):
-#   - fsync$UNIX2003, reallocarray$DARWIN_EXTSN: real, project-wide
-#     missing raw syscall/libc wrappers (confirmed via `nm -gU` against
-#     every sibling dylib below -- neither exports these in any form).
-#     Not removefile-specific; same class of gap as the BSD-socket-
-#     syscall wall build_libresolv_dylib.sh's own header already
-#     documents for a different symbol set.
+#   - fsync$UNIX2003/reallocarray$DARWIN_EXTSN: CORRECTED 2026-08-29 --
+#     these are NOT a project-wide gap, and not deferred here anymore.
+#     The real base symbols (fsync/reallocarray) are genuinely LOCAL to
+#     this exact archive/dylib (confirmed via `nm -g`) -- real, working
+#     `-Wl,-alias` entries below instead (found while wiring
+#     build_libdyld.sh to reexport this dylib -- a real launchd boot
+#     failure surfaced the original `-Wl,-U` here as wrong, see this
+#     script's own header for the full trail).
 set -e
 cd "$(dirname "$0")"
 
@@ -75,7 +77,7 @@ rm -f "$OUT/system/libremovefile.dylib"
     -Wl,-not_for_dyld_shared_cache \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
-    -Wl,-U,'_fsync$UNIX2003' -Wl,-U,'_reallocarray$DARWIN_EXTSN' \
+    -Wl,-alias,_fsync,'_fsync$UNIX2003' -Wl,-alias,_reallocarray,'_reallocarray$DARWIN_EXTSN' \
     -o "$OUT/system/libremovefile.dylib" \
     "$EXTRACT"/*.o \
     "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_malloc.dylib" \
