@@ -2166,13 +2166,47 @@ d11. **launchd PID-1 bug #6 (real SIGSEGV in `launchd_runtime_init()`'s
     **Real, still-open next step**: the corruption is proven to be a
     *value* written into the main thread's own, correctly-separate PCB's
     `SS64_SP` field -- not a pointer-aliasing bug of any kind checked so
-    far. The next diagnostic needs to bracket the actual
-    `Switch_context`/`machine_switch_context` call itself (`osfmk/arm/
-    pcb.c`'s C wrapper, immediately before/after the real asm call) to
-    catch the exact switch where the wrong value first appears, since
-    every *structural* candidate (PCB alloc, kernel-stack alloc, register
-    save-set, exception-return path) has now been individually
-    eliminated by direct evidence.
+    far.
+
+    **UPDATE 2026-08-29, session 5 continued: the `Switch_context`
+    bracketing attempt itself caused a real, SEPARATE, 100%-reproducible
+    crash -- reverted, not a lead on bug #6 itself.** Added
+    `kprintf()`-based before/after prints of `thread->machine.upcb`'s
+    `SS64_SP` around the real `Switch_context()` call in
+    `machine_switch_context()` (`osfmk/arm64/pcb.c` -- confirmed via
+    `osfmk/conf/files.arm64` this is the real, compiled-for-this-target
+    file; `osfmk/arm/pcb.c`'s near-identical twin is dead armv7-only
+    code here), gated to `task != kernel_task` on both sides to avoid
+    firing during early boot. Caught by direct user question ("is one
+    specific print line crashing launchd -- does removing it fix it?"):
+    `launchd_boot_test70.log`/`71.log` showed a NEW crash, byte-identical
+    modulo ASLR across two separate boots (i.e. newly, fully
+    deterministic), in `load_init_program_at_path` -- PID 1's own very
+    first thread, resumed with `resumed_sp=0x0` (real, but premature --
+    before `exec`'s own machinery finishes setting the real initial user
+    SP) -- immediately after the added `IOKITDIAG21` print. Reverted the
+    print (xnu-7195 submodule commit `0483290d5`); `launchd_boot_test72.log`
+    confirms both (a) the new crash is gone and (b) bug #6 itself
+    reproduces again, unchanged (`panic(` match, same fault pc/fp/
+    fault_addr pattern, `contextData`/`kernel_stack` still separately
+    allocated) -- **confirming bug #6 is real and independent of any of
+    this session's instrumentation**, not an artifact, since it
+    predates all of it (session 2/3/4) and reproduces with or without
+    the reverted print.
+
+    **Lesson for next attempt**: `kprintf()` itself is evidently not
+    safe to call from inside `machine_switch_context()` this early in a
+    brand-new thread's life, independent of whether the specific data
+    being read is valid -- a `task != kernel_task` guard is not
+    sufficient by itself; also needs to exclude a thread's own first-
+    ever resume (e.g. check the thread has a real, non-zero
+    `SS64_SP` -- or better, avoid instrumenting inside
+    `machine_switch_context()`/`Switch_context()` directly at all and
+    find another way to compare a thread's own saved SP immediately
+    before it yields vs. immediately after it resumes, e.g. from
+    `ipc_mqueue.c`'s own already-safe call sites bracketing specific,
+    already-identified thread activity rather than every switch
+    process-wide.
 
 d12. **Missing/incomplete library work, explicitly tracked so it isn't
     lost (cross-referenced from item d8, not duplicated in full here)**:
