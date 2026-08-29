@@ -1563,7 +1563,7 @@ for spec in "${CMD_LIST[@]}"; do
             # real TRE (build_libsystem_c.sh's own static-to-dylib
             # migration step 4, confirmed via nm -gU), available via
             # $LINK_DYLIBS for every command now, not just this one.
-            extra_libs="$OUT/libremovefile.a"
+            extra_libs="$OUT/system/libremovefile.dylib"
             common_read_compat=""
             ;;
         sed|find)
@@ -1578,7 +1578,7 @@ for spec in "${CMD_LIST[@]}"; do
             # libremovefile.a -- no further conflict from adding it).
             # libc_regex.a no longer needed here -- see grep's own updated
             # comment above (real TRE now via $LINK_DYLIBS).
-            extra_libs="$OUT/libremovefile.a $OUT/libcopyfile.a"
+            extra_libs="$OUT/system/libremovefile.dylib $OUT/system/libcopyfile.dylib"
             common_read_compat=""
             ;;
         df)
@@ -1589,7 +1589,7 @@ for spec in "${CMD_LIST[@]}"; do
             # adding this project-wide to LINK_COMMON, which would widen
             # blast radius for every other command in this tier with no
             # current benefit).
-            extra_libs="$OUT/libm.a"
+            extra_libs="$OUT/system/libsystem_m.dylib"
             ;;
         ed)
             # libc_regex.a: re.c's real regcomp/regexec/regerror
@@ -1605,7 +1605,7 @@ for spec in "${CMD_LIST[@]}"; do
             # open_dprotected_np() (mktemp.c's real content-protection-
             # class-aware mkstemp() path, same real dependency the
             # `mktemp` command itself already established).
-            extra_libs="$OUT/ed_pipe_trap.o $OUT/ed_setjmp_raw.o $OUT/libremovefile.a $OUT/libcopyfile.a"
+            extra_libs="$OUT/ed_pipe_trap.o $OUT/ed_setjmp_raw.o $OUT/system/libremovefile.dylib $OUT/system/libcopyfile.dylib"
             common_read_compat=""
             ;;
         compress)
@@ -1618,7 +1618,7 @@ for spec in "${CMD_LIST[@]}"; do
             # after successful compression" step) -- same real duplicate
             # read()/read$UNIX2003 conflict as rm/ln/grep/gzip above,
             # common_read_compat cleared the same way.
-            extra_libs="$OUT/libremovefile.a"
+            extra_libs="$OUT/system/libremovefile.dylib"
             common_read_compat=""
             ;;
         gzip)
@@ -1632,7 +1632,7 @@ for spec in "${CMD_LIST[@]}"; do
             # generated into the standard SYS_STUBS_NEEDED batch above,
             # referenced directly here since they're niche enough not to
             # warrant a global LINK_COMMON addition).
-            extra_libs="$OUT/libremovefile.a $OUT/libcopyfile.a $OUT/simple_obj/sys__fgetattrlist.o $OUT/simple_obj/sys__fsetattrlist.o $OUT/simple_obj/sys__dup.o"
+            extra_libs="$OUT/system/libremovefile.dylib $OUT/system/libcopyfile.dylib $OUT/simple_obj/sys__fgetattrlist.o $OUT/simple_obj/sys__fsetattrlist.o $OUT/simple_obj/sys__dup.o"
             common_read_compat=""
             ;;
         cp|mv|mktemp|du|chmod|ls)
@@ -1649,7 +1649,7 @@ for spec in "${CMD_LIST[@]}"; do
             # freshly generated sys__readlink.o/sys__chown.o/etc (first
             # definition on the link line wins, archive members for an
             # already-resolved symbol are simply never pulled).
-            extra_libs="$OUT/libremovefile.a $OUT/libcopyfile.a"
+            extra_libs="$OUT/system/libremovefile.dylib $OUT/system/libcopyfile.dylib"
             common_read_compat=""
             ;;
         diff)
@@ -1681,7 +1681,7 @@ for spec in "${CMD_LIST[@]}"; do
             # pipe(2) raw syscall (filter_fork_posix.c's real forked-
             # external-decompressor fallback path, reused verbatim from
             # the ed tier).
-            extra_libs="$OUT/libremovefile.a $OUT/libcopyfile.a $OUT/ed_pipe_trap.o $OUT/simple_obj/sys__dup.o $OUT/simple_obj/sys__readlinkat.o $OUT/simple_obj/sys__poll.o"
+            extra_libs="$OUT/system/libremovefile.dylib $OUT/system/libcopyfile.dylib $OUT/ed_pipe_trap.o $OUT/simple_obj/sys__dup.o $OUT/simple_obj/sys__readlinkat.o $OUT/simple_obj/sys__poll.o"
             common_read_compat=""
             ;;
         less)
@@ -1706,7 +1706,7 @@ for spec in "${CMD_LIST[@]}"; do
             # child).
             # sys__fsync.o dropped -- libSystem.B.dylib already exports
             # real fsync(2) directly (confirmed via nm -gU).
-            extra_libs="$OUT/ed_setjmp_raw.o $OUT/libremovefile.a $OUT/libcopyfile.a $OUT/ed_pipe_trap.o $OUT/simple_obj/sys__dup.o"
+            extra_libs="$OUT/ed_setjmp_raw.o $OUT/system/libremovefile.dylib $OUT/system/libcopyfile.dylib $OUT/ed_pipe_trap.o $OUT/simple_obj/sys__dup.o"
             common_read_compat=""
             ;;
         sleep|tail)
@@ -1750,7 +1750,7 @@ for spec in "${CMD_LIST[@]}"; do
         -Wl,-alias,_getfsstat,_getfsstat\$INODE64 \
         -Wl,-alias,_statfs,_statfs\$INODE64"
     case "$extra_libs" in
-        *libcopyfile.a*)
+        *libcopyfile.dylib*)
             link_aliases="$link_aliases -Wl,-alias,_fchmod,_fchmod\$UNIX2003 -Wl,-alias,_getattrlist,_getattrlist\$UNIX2003" ;;
     esac
     case "$extra_objs" in
