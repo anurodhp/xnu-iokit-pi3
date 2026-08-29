@@ -288,28 +288,49 @@ if [ -f tools/userland_staging/dyld.macho ] && [ -f tools/userland_staging/dyld_
     # load at all. Looped (not hand-listed one at a time) so a new
     # migration batch's dylib is picked up automatically the next time
     # this script runs, without needing its own edit here.
+    # REAL BUG FOUND+FIXED 2026-08-28 (static-linking cleanup pass, Stage
+    # B): this loop used to hardcode every dylib's destination to
+    # /usr/lib/system/<name>, which only matches real Apple's own actual
+    # install path for the libsystem_*/libdispatch/libunwind-class
+    # dylibs -- confirmed via a real `otool -D` sweep of every dylib
+    # under libc_build/system/ that several of this pass's own new
+    # standalone dylibs (libresolv.dylib, libbsm.dylib, libncurses.dylib,
+    # libiconv.dylib, libopenpam.dylib, libiokituser.dylib) carry a real
+    # LC_ID_DYLIB install_name OUTSIDE /usr/lib/system/ (matching real
+    # macOS's own actual paths, e.g. /usr/lib/libresolv.9.dylib) --
+    # installing them at the old hardcoded path would leave dyld unable
+    # to find them at their real referenced location, a real, silent
+    # boot-time failure this generic loop's own "just works for whatever
+    # gets added later" comment explicitly promised and didn't actually
+    # deliver. Same real bug already existed for libxml2.dylib (real
+    # install_name /usr/lib/libxml2.2.dylib) even before this pass,
+    # latent only because nothing yet loads it at runtime -- confirmed
+    # via the same otool sweep, not assumed. Real fix: read each dylib's
+    # own actual LC_ID_DYLIB via `otool -D` and install it there,
+    # instead of guessing a path from the filename. The old libc++.dylib
+    # special case is subsumed by this (no longer needed) -- kept only
+    # the libdyld.dylib/libSystem.B.dylib skip, since those two already
+    # have their own dedicated, working install blocks directly above.
     mkdir -p "$MNT/usr/lib/system"
     for d in tools/userland_staging/libc_build/system/*.dylib; do
         [ -f "$d" ] || continue
         name="$(basename "$d")"
         case "$name" in
             libdyld.dylib|libSystem.B.dylib) continue ;;
-            # libc++.dylib is a second real special case: its real
-            # LC_ID_DYLIB install_name is /usr/lib/libc++.1.dylib
-            # (matching real Apple's own path, NOT under
-            # /usr/lib/system/ like every other migration-step dylib --
-            # confirmed via otool -l, not assumed), so it needs its own
-            # real destination path/filename here too.
-            "libc++.dylib")
-                cp "$d" "$MNT/usr/lib/libc++.1.dylib"
-                chmod 755 "$MNT/usr/lib/libc++.1.dylib"
-                echo "+ wrote $(wc -c < "$d") bytes to $MNT/usr/lib/libc++.1.dylib"
-                continue
+        esac
+        install_name="$(otool -D "$d" 2>/dev/null | tail -1)"
+        case "$install_name" in
+            /usr/lib/*) : ;;
+            *)
+                echo "error: $d has no real LC_ID_DYLIB install_name (otool -D returned '$install_name') -- refusing to guess a destination path" >&2
+                exit 1
                 ;;
         esac
-        cp "$d" "$MNT/usr/lib/system/$name"
-        chmod 755 "$MNT/usr/lib/system/$name"
-        echo "+ wrote $(wc -c < "$d") bytes to $MNT/usr/lib/system/$name"
+        dest="$MNT/usr/lib${install_name#/usr/lib}"
+        mkdir -p "$(dirname "$dest")"
+        cp "$d" "$dest"
+        chmod 755 "$dest"
+        echo "+ wrote $(wc -c < "$d") bytes to $dest (real install_name $install_name)"
     done
     cp tools/userland_staging/dyld_test_exec.macho "$MNT/bin/dyld_test_exec"
     chmod 755 "$MNT/bin/dyld_test_exec"
