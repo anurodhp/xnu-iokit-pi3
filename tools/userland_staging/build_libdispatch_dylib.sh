@@ -305,12 +305,22 @@ if [ ! -f "$OUT/libc_locale.a" ]; then
     echo "error: $OUT/libc_locale.a not found -- run build_libc_locale.sh first" >&2
     exit 1
 fi
-(cd "$OUT/dispatch_dylib_extract" && ar x ../syslogd_libc_extras.a atoi.o && \
- ar x ../libc_locale.a table.o none.o)
+# atoi.o used to be extractable from syslogd_libc_extras.a too, but the
+# static-to-dylib cleanup pass (2026-08-29, see build_syslogd.sh's own
+# header comment on this exact archive) dropped that member when
+# openpam/copyfile/etc became real dylibs -- atoi.o was only ever pulled
+# through THAT archive incidentally, never actually produced by
+# build_syslogd.sh's own extraction list. Real, unmodified Apple source
+# is still right here (third_party/Libc/stdlib/FreeBSD/atoi.c) -- compile
+# it fresh instead of chasing a member that no longer exists anywhere.
+# Found+fixed 2026-08-29 resuming launchd bug #6 (needed a real
+# libdispatch.dylib rebuild to pick up this file's own separate
+# mig_reply_port.o duplicate fix, see this file's own header on that).
+(cd "$OUT/dispatch_dylib_extract" && ar x ../libc_locale.a table.o none.o)
 LIBC="../../third_party/Libc"
 PTHREAD_FOR_LOCALE="../../third_party/libpthread"
 XNU_FOR_LOCALE="../../third_party/xnu-7195"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+LOCALE_CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness \
     -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
     -DVARIANT_STATIC -DVARIANT_CANCELABLE -DVARIANT_DARWINEXTSN -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \
@@ -320,8 +330,11 @@ XNU_FOR_LOCALE="../../third_party/xnu-7195"
     -I "$LIBC/stdtime/FreeBSD" \
     -I "$PTHREAD_FOR_LOCALE/include" -I "$PTHREAD_FOR_LOCALE/private" \
     -I "$XNU_FOR_LOCALE/osfmk" -I "$XNU_FOR_LOCALE/libsyscall" \
-    -I ../../generated \
+    -I ../../generated)
+"$CLANG" "${LOCALE_CFLAGS[@]}" \
     libc_locale_globals_compat.c -o "$OUT/dispatch_dylib_extract/libc_locale_globals_compat.o"
+"$CLANG" "${LOCALE_CFLAGS[@]}" \
+    "$LIBC/stdlib/FreeBSD/atoi.c" -o "$OUT/dispatch_dylib_extract/atoi.o"
 
 # libc_build/dyld_core.a's own mach_portUser.o/vm_mapUser.o were tried
 # here (they have real mach_port_construct/destruct/get_context/etc and
@@ -668,9 +681,26 @@ CFLAGS_PTHREAD_GAP=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestandi
 # HONEST SCOPE STATEMENT (g_zone/errno etc are real, separate, still-open
 # instances of the same class) -- narrowly fixes the one instance that
 # actually crashed launchd, not a claim the whole debt item is resolved.
+#
+# A SECOND real instance found+fixed 2026-08-29 resuming bug #6: this
+# same local libmalloc_no_mach_init.a copy also bundles its own private
+# mig_reply_port.o (only mach_init.o was ever stripped from it) -- and
+# because libdispatch.dylib appears BEFORE libSystem.B.dylib on
+# build_launchd.sh's own link line, launchd.macho's two-level-namespace
+# binding for _mig_get_reply_port/_mig_dealloc_reply_port/
+# _mig_put_reply_port picked THIS dylib's copy over libsystem_kernel.dylib's
+# real, canonical one (confirmed: after fixing build_launchd.sh's OWN
+# separate mig_reply_port.o duplicate inside launchd.macho's local static
+# link, diagnostic prints added to libsystem_kernel.dylib's copy still
+# never fired -- only went silent once this dylib's copy was also
+# checked and found to still carry a plain, uninstrumented one). Same
+# established fix, same verification (every symbol mig_reply_port.o
+# defines is already a real export of libsystem_kernel.dylib, already a
+# real transitive dependency here).
 rm -f "$OUT/libmalloc_no_mach_init.a"
 cp "$OUT/libmalloc.a" "$OUT/libmalloc_no_mach_init.a"
 ar d "$OUT/libmalloc_no_mach_init.a" mach_init.o
+ar d "$OUT/libmalloc_no_mach_init.a" mig_reply_port.o
 
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libdispatch.dylib"

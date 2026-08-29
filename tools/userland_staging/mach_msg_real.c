@@ -91,6 +91,57 @@ static void iokit_diag12(const char *msg) {
 	iokit_diag12_syscall3(6, fd, 0, 0);
 }
 
+/* TEMP DIAGNOSTIC 2026-08-29, resuming bug #6 (crash isolated to
+ * "somewhere inside/around MACH_MSG_TRAP" once the mig_get_reply_port
+ * duplicate-copy confusion was closed -- see mig_reply_port.c's own new
+ * diagnostics and docs/backlog.md item d11): dump the raw msg header
+ * (bits/size/remote/local/id), the trap args, and a per-thread tag
+ * (masked TPIDRRO_EL0, same value _os_tsd_get_base() computes -- unique
+ * per real thread, lets a garbled/interleaved console log be attributed
+ * to the right thread) in ONE atomic write, not iokit_diag12()'s
+ * multi-syscall-per-line approach -- two real threads (main +
+ * kqueue_demand_loop) both call mach_msg() around the same real time and
+ * the separate open/write/close-per-line prints were visibly
+ * interleaving/corrupting each other in qemu/launchd_boot_test52.log. */
+static void iokit_diag12_dump(const char *label, mach_msg_header_t *msg,
+    mach_msg_size_t send_size, mach_msg_size_t rcv_size, mach_port_t rcv_name) {
+	uint64_t tag;
+	__asm__("mrs %0, TPIDRRO_EL0\n\t" "bic %0, %0, #0x7\n" : "=r" (tag));
+
+	char buf[256];
+	long n = 0;
+	for (long i = 0; label[i] != '\0' && n < (long)sizeof(buf) - 1; i++) { buf[n++] = label[i]; }
+
+	unsigned long vals[8];
+	const char *names[8];
+	int nv = 0;
+	names[nv] = " tag="; vals[nv++] = tag;
+	names[nv] = " msg="; vals[nv++] = (unsigned long)(uintptr_t)msg;
+	names[nv] = " bits="; vals[nv++] = msg ? (unsigned long)msg->msgh_bits : 0xdeadUL;
+	names[nv] = " size="; vals[nv++] = msg ? (unsigned long)msg->msgh_size : 0xdeadUL;
+	names[nv] = " remote="; vals[nv++] = msg ? (unsigned long)msg->msgh_remote_port : 0xdeadUL;
+	names[nv] = " local="; vals[nv++] = msg ? (unsigned long)msg->msgh_local_port : 0xdeadUL;
+	names[nv] = " id="; vals[nv++] = msg ? (unsigned long)msg->msgh_id : 0xdeadUL;
+	names[nv] = " rcv_name="; vals[nv++] = (unsigned long)rcv_name;
+
+	for (int i = 0; i < nv && n < (long)sizeof(buf) - 40; i++) {
+		const char *nm = names[i];
+		for (long j = 0; nm[j] != '\0'; j++) { buf[n++] = nm[j]; }
+		buf[n++] = '0'; buf[n++] = 'x';
+		for (int k = 0; k < 16; k++) {
+			int nibble = (vals[i] >> ((15 - k) * 4)) & 0xf;
+			buf[n++] = nibble < 10 ? ('0' + nibble) : ('a' + nibble - 10);
+		}
+	}
+	(void)send_size; (void)rcv_size;
+	buf[n++] = '\n';
+
+	long fd = iokit_diag12_syscall3(5, (long)"/dev/console", 0x0001 | 0x20000, 0);
+	if (fd < 0) { return; }
+	iokit_diag12_syscall3(4, fd, (long)buf, n);
+	iokit_diag12_syscall3(6, fd, 0, 0);
+}
+
 mach_msg_return_t
 mach_msg(msg, option, send_size, rcv_size, rcv_name, timeout, notify)
 mach_msg_header_t *msg;
@@ -117,11 +168,11 @@ mach_port_t notify;
 	 * the kernel's fast paths (when it checks the option value).
 	 */
 
-	iokit_diag12("IOKITDIAG12: about to call MACH_MSG_TRAP\n");
+	iokit_diag12_dump("IOKITDIAG12: about to call MACH_MSG_TRAP", msg, send_size, rcv_size, rcv_name);
 	mr = MACH_MSG_TRAP(msg, option & ~LIBMACH_OPTIONS,
 	    send_size, rcv_size, rcv_name,
 	    timeout, notify);
-	iokit_diag12("IOKITDIAG12: MACH_MSG_TRAP returned\n");
+	iokit_diag12_dump("IOKITDIAG12: MACH_MSG_TRAP returned", msg, send_size, rcv_size, rcv_name);
 	if (mr == MACH_MSG_SUCCESS) {
 		iokit_diag12("IOKITDIAG12: MACH_MSG_SUCCESS, returning\n");
 		return MACH_MSG_SUCCESS;

@@ -1640,6 +1640,147 @@ d11. **launchd PID-1 bug #6 (real SIGSEGV in `launchd_runtime_init()`'s
     hypothesis from scratch — it's already written up in the session 2
     memory file, just not yet confirmed or ruled out.
 
+    **UPDATE 2026-08-29, same-day resume: TWO more real duplicate-copy
+    bugs found+fixed (same bug class as d10), crash site re-isolated with
+    much higher fidelity, TPIDRRO_EL0-cross-image hypothesis effectively
+    RULED OUT, new leading hypothesis is kernel-side.**
+
+    Added finer-grained diagnostics inside `mig_get_reply_port()` (raw
+    TPIDRRO_EL0-derived TSD base + return value at each step) to
+    directly test the TPIDRRO_EL0 hypothesis — and discovered the new
+    prints never fired at all. Root cause: a **third and fourth real
+    instance** of item d10's exact duplicate-copy bug class, both newly
+    found this session, neither previously known:
+    - `launchd.macho` itself statically linked its own private copy of
+      `mig_reply_port.o` (bundled inside `libmalloc.a`, only
+      `mach_init.o` had ever been stripped from that local copy, not
+      `mig_reply_port.o`) — confirmed via `nm launchd.macho` showing
+      `T _mig_get_reply_port` as a LOCAL strong symbol, not `U`. Since
+      ld64 always prefers an executable's own local strong definition
+      over any linked dylib's export of the same name, EVERY call to
+      `mig_get_reply_port`/`mig_dealloc_reply_port`/`mig_put_reply_port`
+      from anywhere in launchd's statically-linked code silently
+      resolved to this stale local copy, not `libsystem_kernel.dylib`'s
+      real one — so the new diagnostics, added only to
+      `libsystem_kernel.dylib`'s copy, never ran. Fixed in
+      `build_launchd.sh` the same way `mach_init.o` was already stripped
+      once before: `ar d "$OUT/libmalloc_no_mach_init.a" mig_reply_port.o`
+      (verified via `nm` first that every symbol it defines is already a
+      real export of `libsystem_kernel.dylib`, same precedent as the
+      `mach_init.o` fix).
+    - `libdispatch.dylib` (via `build_libdispatch_dylib.sh`) bundles the
+      exact same `libmalloc_no_mach_init.a` local copy with the exact
+      same gap — confirmed via `nm -gU libdispatch.dylib` showing a
+      real, STRONG `T _mig_get_reply_port` (not weak, not `U`). Because
+      `libdispatch.dylib` appears before `libSystem.B.dylib` on
+      `build_launchd.sh`'s own dylib link line, two-level-namespace
+      binding picked libdispatch's copy once launchd's own local copy
+      (above) was removed — so fixing launchd's own copy alone wasn't
+      enough; had to fix both. Same fix applied
+      (`ar d ... mig_reply_port.o` on that script's own
+      `libmalloc_no_mach_init.a` copy). **Real follow-on consequence,
+      also fixed**: removing these 3 exported symbols from
+      `libdispatch.dylib` broke `libxpc.dylib` and `libc++.dylib`, which
+      had each baked a two-level-namespace bind record at their OWN
+      earlier build time expecting `_mig_dealloc_reply_port` etc "in
+      /usr/lib/system/libdispatch.dylib" — dyld enforces the specific
+      recorded provider at load time (real, observed failure: `pid 1
+      exited -- exit reason ... Symbol not found: _mig_dealloc_reply_port
+      Referenced from: /usr/lib/system/libxpc.dylib Expected in:
+      /usr/lib/system/libdispatch.dylib`). Both rebuilt
+      (`build_libxpc_dylib.sh`, `build_libcxx_dylib.sh`) to re-resolve
+      against `libsystem_kernel.dylib` instead — same "must rebuild any
+      dylib with a baked two-level-namespace expectation, not just the
+      dylib whose exports changed" gotcha item d4/session 2 already
+      documented for `libSystem.B.dylib`'s own reexports, now confirmed
+      to apply to ordinary cross-dylib binds too, not just
+      `-reexport_library`.
+    - **Unrelated real regression found+fixed along the way**:
+      `build_libdispatch_dylib.sh` could no longer build at all —
+      `ar: atoi.o: not found in archive`. Root cause: the 2026-08-29
+      static-to-dylib cleanup pass (item d8) dropped `atoi.o` from
+      `syslogd_libc_extras.a` (openpam/copyfile/etc became real dylibs,
+      so `build_syslogd.sh`'s own extraction list no longer produces
+      that member), but `build_libdispatch_dylib.sh` still tried to
+      `ar x` it from there. Fixed by compiling
+      `third_party/Libc/stdlib/FreeBSD/atoi.c` fresh, right where it's
+      needed, using the same CFLAGS already established for that
+      script's neighboring `libc_locale_globals_compat.c` compile,
+      instead of chasing a member that no longer exists anywhere.
+
+    **With all of the above fixed and real diagnostics finally executing
+    the intended code**, the crash site is NOT `mig_get_reply_port`
+    after all — `mig_get_reply_port()` now genuinely succeeds every
+    time, on both threads, confirmed via the new per-call hex dumps
+    (`qemu/launchd_boot_test53.log`). The TPIDRRO_EL0-cross-image-
+    confusion hypothesis from session 2 is therefore effectively RULED
+    OUT for this specific symptom (the second thread's own TSD/TPIDRRO_EL0
+    is demonstrably valid enough to make a real MIG reply-port
+    allocation succeed) — though the broader hypothesis (some OTHER
+    TSD-backed state being cross-image-confused) isn't fully closed,
+    just no longer the leading explanation.
+
+    Added a second, matching per-thread-tagged/atomic diagnostic dump
+    inside `mach_msg()` itself (`mach_msg_real.c`, replacing the old
+    multi-syscall-per-line `iokit_diag12` prints, which were visibly
+    interleaving/corrupting each other across the two real concurrent
+    threads) — prints a thread tag (masked TPIDRRO_EL0) plus the real
+    msg header (`msgh_bits`/`msgh_size`/`msgh_remote_port`/
+    `msgh_local_port`/`msgh_id`) and `rcv_name` immediately before/after
+    the raw trap. Result (`qemu/launchd_boot_test53.log` lines 851-853):
+    the crash is a real SIGSEGV **inside/immediately after the raw
+    `MACH_MSG_TRAP` syscall itself**, on the `kqueue_demand_loop` thread
+    (confirmed by its own distinct thread tag, `0x100ad40e0`, differing
+    from the main thread's `0x100a52470` earlier in the same boot) —
+    "about to call" prints, "returned" never does. The message being
+    sent is a completely legitimate, well-formed real Mach message, NOT
+    corrupted/garbage as first suspected from the large `msgh_id`
+    (0x21728 = 137256): cross-checked against
+    `third_party/PureDarwin/src/Libraries/XPC/launchd/internal.defs`'s
+    own `subsystem internal 137000;` declaration — 137000 decimal ==
+    0x21728 hex EXACTLY, confirming this is `handle_kqueue`'s real,
+    correct, compile-time-fixed MIG message ID (the very first routine
+    in that subsystem, so its ID == the subsystem base). `remote=0x603`/
+    `local=0x903`/`rcv_name=0x903` are real, live, valid port names in
+    the process's one shared task IPC space (0x903 was the reply port
+    `mig_get_reply_port()` had JUST successfully allocated on this same
+    thread moments earlier; 0x603 is `launchd_internal_port`, a real
+    receive right the main thread set up earlier in the very same boot).
+    So: real message, real ports, real MIG id — ruled out as a message-
+    header-corruption bug. The exact same kind of call (a MIG-client
+    send+receive round trip via `mach_msg()`) succeeded cleanly on the
+    MAIN thread earlier in the identical boot
+    (`qemu/launchd_boot_test53.log` lines 816-819, id=0xc8c for
+    `mach_port_move_member`) — so whatever's wrong is specific to this
+    being the SECOND, `bsdthread_create()`-spawned thread making the
+    call, not the message content or the reply-port machinery.
+
+    **Real next step, not yet attempted**: this now points at the
+    KERNEL side, not userland — specifically whatever
+    `bsd_pthread_workq.c`'s `real_bsdthread_create()` (verbatim port of
+    `kern_support.c`'s real `_bsdthread_create`, added 2026-08-25, see
+    that function's own header) sets up (or doesn't) for a new thread's
+    Mach-IPC-relevant kernel state that real `thread_create()` plus
+    `convert_thread_to_port()`/`ipc_port_copyout_send()` may not fully
+    cover on this simplified path, vs. whatever the kernel-created
+    original/main thread has that a `bsdthread_create()`-spawned one
+    doesn't. Mach ports themselves are task-scoped, not thread-scoped
+    (rules out "the port itself is only valid for the main thread"), so
+    the likely shape of the bug is something the kernel's real
+    `mach_msg_trap`/`ipc_kmsg_*` path reads or writes per-CALLING-THREAD
+    (not per-port) that's only correctly initialized for a thread that
+    went through the FULL real thread-creation path. Needs kernel-side
+    instrumentation (e.g. a diagnostic print at kernel entry to
+    `mach_msg_overwrite_trap`/wherever it dereferences per-thread state)
+    to find the exact faulting access — not yet attempted this session;
+    a genuinely different, kernel-side investigation from everything
+    above, which was all userland/build-system work.
+
+    All new diagnostics from this update are still live, not reverted
+    (same standing convention as every other `iokit_diag*` in this
+    investigation) — see `mig_reply_port.c`'s `iokit_diag13_hex`/
+    `iokit_diag13_tsd_base` and `mach_msg_real.c`'s `iokit_diag12_dump`.
+
 d12. **Missing/incomplete library work, explicitly tracked so it isn't
     lost (cross-referenced from item d8, not duplicated in full here)**:
     - `libCoreFoundation.a` → `.dylib`: deliberately deferred, own future

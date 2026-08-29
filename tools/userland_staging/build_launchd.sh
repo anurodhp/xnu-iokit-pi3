@@ -111,9 +111,32 @@ done
 # a real export of libsystem_kernel.dylib, already a real input to this
 # link) from a LOCAL copy only, never the shared committed libmalloc.a
 # (other static-only consumers still need their own private copy).
+#
+# A FOURTH occurrence of the exact same bug class, found+fixed 2026-08-29
+# resuming bug #6: libmalloc.a (via build_libmalloc.sh, which compiles
+# mach_vm.c/mach_init.c/mig_reply_port.c/init_cpu_capabilities.c as one
+# real-Apple-source group) ALSO bundles its own private copy of
+# mig_reply_port.o -- confirmed via `nm launchd.macho` showing
+# `T _mig_get_reply_port` as a LOCAL strong definition, not `U`. Because
+# ld64 resolves an executable's own local strong definitions before ever
+# consulting a linked dylib's export (even when the dylib, here
+# libsystem_kernel.dylib, exports the exact same symbol), every call to
+# mig_get_reply_port()/mig_dealloc_reply_port()/mig_put_reply_port() from
+# ANYWHERE in launchd.macho's own statically-linked code -- including
+# generated MIG client stubs -- silently resolved to this stale local
+# copy instead of libsystem_kernel.dylib's real, shared, canonical one.
+# Found while adding finer-grained diagnostics inside mig_reply_port.c
+# for bug #6 (SIGSEGV in the kqueue_demand_loop second thread) and
+# discovering none of the new prints ever fired -- the code being
+# instrumented in libsystem_kernel.dylib was never the code actually
+# executing. Confirmed via nm that every symbol mig_reply_port.o defines
+# (_mig_get_reply_port/_mig_dealloc_reply_port/_mig_put_reply_port) is
+# already a real export of libsystem_kernel.dylib, same as mach_init.o
+# above -- safe to strip the local copy the same way.
 rm -f "$OUT/libmalloc_no_mach_init.a"
 cp "$OUT/libmalloc.a" "$OUT/libmalloc_no_mach_init.a"
 ar d "$OUT/libmalloc_no_mach_init.a" mach_init.o
+ar d "$OUT/libmalloc_no_mach_init.a" mig_reply_port.o
 
 # Real gap found+fixed 2026-08-28, next crash after the mach_task_self_
 # fix above: runtime.c's launchd_runtime_init() calls
