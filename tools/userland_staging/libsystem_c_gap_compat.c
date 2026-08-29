@@ -32,32 +32,6 @@ long __stack_chk_guard = 0x0BADC0DEDEADBEEFL;
 void __stack_chk_fail(void) { extern void abort(void); abort(); }
 void __chkstk_darwin(void) {}
 
-/* TEMP DIAGNOSTIC: bisecting a silent early exit(1) with zero console
- * output when launchd.macho boots as PID 1 -- see launchd.c's own
- * iokit_diag_ctor for the full writeup. This is the same raw-syscall
- * probe, placed here (libsystem_c.dylib, a foundational transitive
- * dependency initialized before ICU/libdispatch/libc++/the main
- * executable in dyld's real bottom-up init order) to test whether ANY
- * image's constructors run at all before the silent exit. Remove once
- * root-caused. */
-static long iokit_diag2_syscall3(long num, long a0, long a1, long a2) {
-    register long x0 asm("x0") = a0;
-    register long x1 asm("x1") = a1;
-    register long x2 asm("x2") = a2;
-    register long x16 asm("x16") = num;
-    asm volatile("svc #0x80" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x16) : "memory", "cc");
-    return x0;
-}
-__attribute__((constructor))
-static void iokit_diag2_ctor(void) {
-    long fd = iokit_diag2_syscall3(5 /* SYS_open */, (long)"/dev/console", 0x0001 | 0x20000, 0);
-    if (fd >= 0) {
-        const char m[] = "DIAG2: libsystem_c.dylib constructor reached\n";
-        iokit_diag2_syscall3(4 /* SYS_write */, fd, (long)m, sizeof(m) - 1);
-        iokit_diag2_syscall3(6 /* SYS_close */, fd, 0, 0);
-    }
-}
-
 char *strstr(const char *haystack, const char *needle) {
     if (*needle == '\0') {
         return (char *)haystack;

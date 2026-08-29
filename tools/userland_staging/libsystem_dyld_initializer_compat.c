@@ -97,23 +97,6 @@ extern int pthread_main_thread_bootstrap(void);
  * runs), so mach_init()/_dyld_initializer() work in that configuration --
  * these probes bisect whether they still complete cleanly once the full
  * dep graph is present. Remove once root-caused. */
-static long iokit_diag3_syscall3(long num, long a0, long a1, long a2) {
-    register long x0 asm("x0") = a0;
-    register long x1 asm("x1") = a1;
-    register long x2 asm("x2") = a2;
-    register long x16 asm("x16") = num;
-    asm volatile("svc #0x80" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x16) : "memory", "cc");
-    return x0;
-}
-static void iokit_diag3(const char *msg) {
-    long len = 0;
-    while (msg[len] != '\0') { len++; }
-    long fd = iokit_diag3_syscall3(5, (long)"/dev/console", 0x0001 | 0x20000, 0);
-    if (fd < 0) { return; }
-    iokit_diag3_syscall3(4, fd, (long)msg, len);
-    iokit_diag3_syscall3(6, fd, 0, 0);
-}
-
 __attribute__((constructor))
 static void libsystem_call_dyld_initializer(void) {
     /* Order matters: mach_init() must run before _dyld_initializer(),
@@ -121,11 +104,7 @@ static void libsystem_call_dyld_initializer(void) {
      * source) does real VM/allocator work while registering the
      * LibSystemHelpers vtable, which can reach os_alloc_once/
      * mach_vm_map before a call placed after it ever gets a turn. */
-    iokit_diag3("DIAG3: libsystem_call_dyld_initializer entry\n");
     mach_init();
-    iokit_diag3("DIAG3: mach_init() returned\n");
     pthread_main_thread_bootstrap();
-    iokit_diag3("DIAG3: pthread_main_thread_bootstrap() returned\n");
     _dyld_initializer();
-    iokit_diag3("DIAG3: _dyld_initializer() returned\n");
 }

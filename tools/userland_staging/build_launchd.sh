@@ -245,10 +245,9 @@ ar d "$OUT/libmach_ipc_no_dead_stubs.a" mach_msg_real.o
 # execution pointed at the SECOND thread's private stack) -- confirmed
 # every symbol this .o provides (___pthread_head, __main_thread_ptr,
 # _pthread_create, _pthread_equal, _pthread_main_np,
-# _pthread_main_thread_bootstrap, _pthread_main_thread_np, _pthread_once,
-# the weak-no-op _iokit_diag14 already superseded by
-# launchd_mach_port_compat.o's own strong definition above) is already a
-# real, exported symbol of libsystem_pthread.dylib before stripping it.
+# _pthread_main_thread_bootstrap, _pthread_main_thread_np, _pthread_once)
+# is already a real, exported symbol of libsystem_pthread.dylib before
+# stripping it.
 # Can't just `ar d` the whole .o out (first attempt, real link failure):
 # pthread_tsd.o/pthread_clear_qos_tsd_compat.o (other, still-needed
 # members of this same archive) hold real undefined references to this
@@ -261,7 +260,7 @@ ar d "$OUT/libmach_ipc_no_dead_stubs.a" mach_msg_real.o
 # to just those 5 real data symbols, dropping every function this .o
 # also defined (_pthread_create, _pthread_equal, _pthread_main_np,
 # _pthread_main_thread_bootstrap, _pthread_main_thread_np,
-# _pthread_once, the weak-no-op _iokit_diag14) so those resolve to
+# _pthread_once) so those resolve to
 # system/libsystem_pthread.dylib's own real, shared copies below instead.
 # -unexported_symbol (not -exported_symbol): ___pthread_head/
 # __main_thread_ptr/__main_thread/__pthread_list_lock/
@@ -287,7 +286,6 @@ ar p "$OUT/libpthread.a" pthread_main_thread_bootstrap.o > "$OUT/pthread_main_th
     -unexported_symbol _pthread_main_thread_bootstrap \
     -unexported_symbol _pthread_main_thread_np \
     -unexported_symbol _pthread_once \
-    -unexported_symbol _iokit_diag14 \
     "$OUT/pthread_main_thread_bootstrap_raw.o" -o "$OUT/pthread_main_thread_bootstrap_data_only.o"
 rm -f "$OUT/pthread_main_thread_bootstrap_raw.o"
 rm -f "$OUT/libpthread_no_dup_pthread_create.a"

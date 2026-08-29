@@ -428,59 +428,9 @@ _real_pthread_start_abi(void *self, void *kport, void *(*fun)(void *),
 	fun(arg);
 }
 
-/* weak_import, not a plain extern: this project's shared libpthread.a is
- * statically linked into many consumers beyond launchd (syslogd,
- * launchctl, CoreFoundation's trial link, every build_simple_cmds.sh
- * command, ...), but iokit_diag14() is only ever DEFINED in
- * launchd_mach_port_compat.c, which only launchd's own build links.
- * Without weak_import, every other consumer hard-fails to link with
- * "undefined symbol _iokit_diag14" the moment this file is rebuilt --
- * a real, confirmed regression (build_syslogd.sh, build_launchctl.sh),
- * not hypothetical. weak_import + a null check preserves the exact same
- * diagnostic behavior for launchd (which does link the real definition)
- * while making it a harmless no-op everywhere else -- the diagnostic's
- * own content/meaning is unchanged, only its link requirement. */
-/* REVISED: weak_import alone doesn't work for this project's static
- * (-nostdlib -static, no dyld) consumers -- weak_import only defers
- * resolution to dyld at real process load time, and a plain static link
- * still hard-required a real definition (confirmed via a real rebuild
- * failure, not assumed). Real fix: a local, weak DEFINITION instead,
- * which uses ordinary linker weak-symbol coalescing -- works for both
- * static archive links and real dylibs. When launchd_mach_port_compat.o's
- * own strong, non-weak iokit_diag14() is also present in the same link
- * (launchd only), it overrides this one; everywhere else, this harmless
- * no-op runs. Diagnostic content/meaning for launchd is unchanged, only
- * the link requirement. */
-__attribute__((weak))
-void
-iokit_diag14(const char *msg)
-{
-	(void)msg;
-}
-
-/* TEMP DIAGNOSTIC 2026-08-29, launchd bug #6: real kernel-side fault
- * capture (osfmk/arm64/sleh.c's handle_user_abort, IOKITDIAG18) shows
- * the actual SIGSEGV happening on the MAIN thread (confirmed via
- * current_thread() tag matching), at a stack address/fp far outside any
- * physically possible primary-process-stack range (over 18MB below
- * USRSTACK64, impossible under this embedded config's real 1MB MAXSSIZ)
- * -- strongly suggesting the main thread is somehow resuming with (or
- * corrupted by) THIS thread's own pthread_create()-allocated 256KB
- * mmap'd stack. This prints the real stack_base/stack_top for direct
- * comparison against IOKITDIAG18's fp/fault_addr in the same boot log.
- * weak like iokit_diag14 above, same reason (syslogd/launchctl/etc also
- * link this file without launchd_mach_port_compat.c's strong defs). */
-__attribute__((weak))
-void
-iokit_diag14_hex(const char *label, unsigned long val)
-{
-	(void)label; (void)val;
-}
-
 static void *
 _pthread_create_trampoline(void *raw_ctx)
 {
-	iokit_diag14("IOKITDIAG14: _pthread_create_trampoline entry\n");
 	struct pthread_create_trampoline_ctx *ctx = raw_ctx;
 	struct pthread_s *th = ctx->child_thread;
 
@@ -489,12 +439,9 @@ _pthread_create_trampoline(void *raw_ctx)
 	 * any real libpthread code (pthread_mutex_lock, etc) will accept
 	 * it as pthread_self(). */
 	th->sig = (uintptr_t)th ^ _pthread_ptr_munge_token;
-	iokit_diag14("IOKITDIAG14: past sig assignment\n");
 
 	pthread_tsd_shim_bootstrap_with_base(&th->tsd[0]);
-	iokit_diag14("IOKITDIAG14: past pthread_tsd_shim_bootstrap_with_base\n");
 	th->tsd[_PTHREAD_TSD_SLOT_ERRNO] = &th->err_no;
-	iokit_diag14("IOKITDIAG14: past errno tsd slot, about to call start_routine\n");
 
 	void *(*start_routine)(void *) = ctx->start_routine;
 	void *arg = ctx->arg;
@@ -541,8 +488,6 @@ pthread_create(pthread_t _Nullable *_Nonnull restrict thread,
 		return errno;
 	}
 	uintptr_t stack_top = ((uintptr_t)stack_base + PTHREAD_CREATE_STACK_SIZE) & ~(uintptr_t)15;
-	iokit_diag14_hex("IOKITDIAG19: pthread_create stack_base=", (unsigned long)stack_base);
-	iokit_diag14_hex("IOKITDIAG19: pthread_create stack_top=", (unsigned long)stack_top);
 
 	/* Real per-child struct pthread_s + trampoline context, own real
 	 * page-backed mapping (kept separate from the stack mapping so a
