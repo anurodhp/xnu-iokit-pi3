@@ -1917,6 +1917,85 @@ d11. **launchd PID-1 bug #6 (real SIGSEGV in `launchd_runtime_init()`'s
     live TEMP DIAGNOSTIC, same standing convention as everything else in
     this investigation.
 
+    **UPDATE 2026-08-29, later still: possibility (b) tested and
+    RULED OUT — cheap (launchd.macho-only, no kernel rebuild) real
+    PureDarwin-side instrumentation, two more real findings.**
+
+    Traced the real dispatch chain for who's supposed to service
+    `launchd_internal_port`/`ipc_port_set`: `launchd.c`'s `main()` calls
+    `launchd_runtime()` → `launchd_runtime2()` (`runtime.c`), a real
+    `for (;;)` loop calling `xpc_pipe_try_receive(ipc_port_set, ...,
+    launchd_mig_demux, ...)` — this is the main thread's own receive
+    loop, and it's real, unmodified-shape Apple/PureDarwin source, not
+    fabricated. Added `iokit_diag8()` prints at its entry and around the
+    `xpc_pipe_try_receive` call (real, existing helper already used
+    throughout this file, no new infrastructure needed).
+
+    **Finding 1**: across every log gathered with this instrumentation
+    (`qemu/launchd_boot_test60.log`), the main thread's own
+    `launchd_runtime2` entry print NEVER fires before the panic — the
+    main thread is still doing earlier sequential `main()` setup
+    (`pid1_magic_init`, then a `pthread_create()` for a previously-
+    unnoticed THIRD real thread, `update_thread` -- see finding 2 --
+    then `pd_launchd_boot()`/`pd_launchd_load_daemons_dir()`) and hasn't
+    reached its receive loop at all by the time the second thread dies.
+    **This rules out possibility (b) as originally framed** (main thread
+    racing inside its OWN MIG dispatch/receive) — it hasn't started that
+    loop yet.
+
+    **Finding 2, a real, previously-missed detail**: `launchd.c`'s
+    `main()` spawns a THIRD real thread via the same `pthread_create()`
+    mechanism as the second (`kqueue_demand_loop`) — `update_thread`
+    (`pthread_create(&t, NULL, update_thread, NULL)`, right after the
+    "`*** launchd[1] has started up ***`" log line, i.e. very close in
+    wall-clock time to where the second thread's blocking receive
+    happens). Reopened possibility (b) in a broader form: not "main
+    thread racing in its dispatch loop" but "main thread racing while
+    CREATING a third thread, concurrently with the second thread's
+    context-switch/block — genuine SMP concurrency in real kernel data
+    structures (`threads` global list, run queues, turnstile subsystem)
+    this project's port may not have been exercised against before,
+    since nothing prior to this investigation ever had 2+ real threads
+    actually contending for kernel-side thread-management state at the
+    same wall-clock moment on this 4-core target." Added
+    `iokit_diag()` prints immediately around the `update_thread`
+    `pthread_create()`/`pthread_detach()` calls to test this directly.
+
+    **Result (`qemu/launchd_boot_test61.log`): also ruled out.** The
+    "about to call pthread_create for update_thread" print never fires
+    either — the main thread doesn't even reach LINE 316 (barely 30
+    lines of straight-line code, mostly `if` checks and log calls, past
+    the "started up" print) before the second thread's crash happens.
+    Combined with finding 1, this is strong evidence the crash's timing
+    is dictated entirely by the second thread's own blocking-receive
+    transition, not by anything concurrent the main thread is doing —
+    the main thread simply never gets far enough, regardless of how
+    little or much code sits between the last print it does reach and
+    whatever comes next, across every one of this session's tests.
+    **Both forms of possibility (b) are now ruled out with real evidence
+    (not just re-run and hope) — the fault is not a race with the main
+    thread doing anything in particular.**
+
+    This pushes essentially all remaining weight onto possibility (a)
+    from the prior update: the fault is at or inside the actual
+    `eret`-style EL1→EL0 return transition for THIS
+    `bsdthread_create()`-spawned thread's very first continuation-based
+    block, past what plain C-level `kprintf` bisection can safely reach
+    without either (i) raw `ESR_EL1`/`FAR_EL1`/`ELR_EL1` capture directly
+    in whatever this simplified kernel's fault handler does to convert
+    an EL0 data abort into `OS_REASON_SIGNAL`, before that detail is
+    lost, or (ii) a lock-free print primitive proven safe to call from
+    inside `thread_invoke`/`machine_switch_context` itself. Neither
+    attempted yet — genuinely different, higher-risk tier of kernel work
+    (exception-vector/context-switch assembly) than anything in this
+    investigation so far, flagged here for an explicit decision before
+    continuing rather than attempted unprompted.
+
+    Repo state: `launchd.c`/`runtime.c` (submodule `third_party/
+    PureDarwin`) diagnostic additions from this update are real,
+    live TEMP DIAGNOSTIC, not yet committed as of this writing (see
+    project memory for exact commit status at any given resume point).
+
 d12. **Missing/incomplete library work, explicitly tracked so it isn't
     lost (cross-referenced from item d8, not duplicated in full here)**:
     - `libCoreFoundation.a` → `.dylib`: deliberately deferred, own future
