@@ -658,7 +658,72 @@ d8. **Every curated support library built since the real per-library-dylib
     - **Possibly dead, not yet confirmed**: `libdispatch_min.a`/
       `libdispatch_real.a` — likely superseded now that
       `libdispatch.dylib` is real (Phase 6.6); check for remaining real
-      consumers before deleting, don't assume.
+      consumers before deleting, don't assume. **Still open as of
+      2026-08-29** — not investigated this pass either, carried forward.
+
+    **RESOLVED 2026-08-29 — all 11 "genuine conversion candidate"
+    archives above converted to real dylibs, and every real consumer
+    relinked (not just left as unused parallel output).** User paused
+    the launchd SIGSEGV investigation (bug #6, session 2) specifically
+    to run this pass. `libCoreFoundation.a` deliberately still deferred
+    (explicit user decision, own future session — unchanged from this
+    item's own original reasoning). `libiokituser.a` converted to
+    `libiokituser.dylib` (a plain dylib, not a `.framework` bundle — this
+    project has no bundle/Info.plist packaging pipeline for kexts either,
+    same established precedent).
+    - Real per-library dylibs: `libresolv.dylib`, `libsystem_notify.dylib`
+      (replaces libnotify.a + libnotify_client.a — real Apple ships these
+      as one product), `libbsm.dylib`, `libncurses.dylib`,
+      `libcopyfile.dylib`, `libremovefile.dylib`, `libiconv.dylib`,
+      `libsystem_m.dylib` (real Apple name for what was libm.a),
+      `libopenpam.dylib` (base library only — real per-module PAM dylibs
+      need `dlopen`, which this project doesn't have; same documented gap
+      class as OpenPAM's own module loader elsewhere in this project, not
+      attempted), `libxpc.dylib` (replaces libxpc.a + libxpc_syscalls.a +
+      libxpc_syscalls2.a as one real dylib), `libiokituser.dylib`.
+    - Consumers relinked away from the static archives: `build_launchd.sh`
+      (libbsm/libxpc — the launchd SIGSEGV diagnostics from the paused
+      session were left completely untouched/uncommitted throughout),
+      `build_syslogd.sh`, `build_launchctl.sh`, `build_simple_cmds.sh`
+      (all 76 commands, re-verified 76/0 no regression), `build_corefoundation.sh`
+      (non-CF library refs only — CF itself stays static per the scope
+      decision above). `build_dyld_link.sh` deliberately left alone — a
+      real, legitimate exception (dyld itself can't depend on the real
+      dylibs it's the thing that loads), same class as `tools/init_binary`/
+      `pwtool`.
+    - Real duplicate-global-state bugs closed at the architectural root
+      (same bug class as `mach_task_self_`/`g_zone`, not hypothetical):
+      `build_libdyld.sh`/`build_libsystem.sh` now `-Wl,-reexport_library`
+      (not statically bundle) `libresolv.dylib`/`libcopyfile.dylib`/
+      `libremovefile.dylib`, closing three independently-uninitialized
+      private copies of `_res` down to one shared copy.
+    - Two new real gaps found+closed the same class of investigation this
+      whole migration already established: `mach_msg()`/`mach_msg_trap()`
+      now live for real in `libsystem_kernel.dylib` (previously bundled
+      separately into launchd.macho's static portion AND
+      libdispatch.dylib), and a real `libsystem_pthread_dylib_bootstrap_compat.c`
+      constructor closes the same "nothing calls
+      `pthread_main_thread_bootstrap()` for a real dyld-linked consumer"
+      gap at the `libsystem_pthread.dylib` level that
+      `libsystem_dyld_initializer_compat.c` already closed once for
+      `libSystem.B.dylib`.
+    - **Real, deliberately deferred residual, not silently dropped**:
+      `build_libsystem_c.sh` still does narrow, curated `ar x` object
+      extraction (not full-archive bundling) from `libm.a`/
+      `libremovefile.a`/`libopenpam.a` for a handful of specific symbols
+      ICU's own dylibs expect from "libSystem" (`acos`/`asin`/`sqrt`/
+      `fmod`/`qsort`/`heapsort`/`time`/`gettimeofday`/etc). Lower risk
+      than the `_res`-class bug above (mostly stateless math/qsort/time
+      functions, not mutable process-global state) — and genuinely
+      structurally different: `libsystem_m.dylib`/`libremovefile.dylib`/
+      `libopenpam.dylib` all link AGAINST `libsystem_c.dylib`, so
+      `libsystem_c.dylib` linking them back would be a real circular
+      build-order dependency, not just a style choice. Real follow-up,
+      not attempted here: reexport `libsystem_m.dylib`/`libopenpam.dylib`
+      through `libSystem.B.dylib` (matching the umbrella-reexport pattern
+      that already made ICU's `libresolv`/`libcopyfile`/`libremovefile`
+      needs resolve without embedding), then drop the curated extraction
+      entirely.
 
 d9. **`build_simple_cmds.sh` converted from fully-static to real dynamic
     linking (2026-08-28) — RESOLVED: 76 of 76 commands now build, the
