@@ -56,8 +56,14 @@
 # Real, honestly-classified `-Wl,-U` deferrals (found via the same real
 # nm-based intra-archive resolution pass build_libresolv_dylib.sh's
 # header documents):
-#   - csops, mach_errors, environ: real, confirmed genuinely absent from
-#     every archive in this checkout (`nm -g` swept across every .a in
+#   - csops: CORRECTED 2026-08-29 -- was wrongly deferred via `-Wl,-U`
+#     on the assumption an unreached symbol is harmless; it is not (real
+#     dyld flat-namespace lookup fails at real process load time
+#     regardless of whether the call path executes, confirmed via a real
+#     QEMU boot failure). Real, narrow raw-syscall wrapper provided
+#     instead (libxpc_csops_syscall.c), not deferred anymore.
+#   - mach_errors, environ: real, confirmed genuinely absent from every
+#     archive in this checkout (`nm -g` swept across every .a in
 #     libc_build/) -- project-wide gaps, not xpc-specific. (dup/geteuid/
 #     getuid ARE closable via already-built sys__dup.o/geteuid.o/getuid.o,
 #     syslogd_libc_extras.a -- same precedent build_bsm_dylib.sh already
@@ -145,6 +151,40 @@ ar d "$OUT/libmach_ipc_no_dead_stubs_for_xpc.a" mach_ipc_dead_stubs.o mach_msg_r
     -exported_symbol _voucher_mach_msg_set \
     "$OUT/mach_ipc_dead_stubs.o" -o "$EXTRACT/mach_ipc_dead_stubs_voucher_only.o"
 
+# REAL BUG FOUND+FIXED 2026-08-29: csops was deferred via `-Wl,-U` below
+# on the (wrong) assumption that leaving it undefined was harmless if
+# unreached. It is not -- real dyld's flat-namespace lookup at real
+# process load time hard-fails the instant ANY code in the process tries
+# to bind it, regardless of whether that specific call path ever
+# executes, and this project has nothing anywhere exporting csops
+# (confirmed via nm -g across every .a). Found via a real QEMU boot of
+# launchd (the first real consumer to load libxpc.dylib): "symbol not
+# found in flat namespace '_csops'", pid 1 exited before main() ran at
+# all. Real, narrow syscall wrapper instead (see libxpc_csops_syscall.c
+# for the full citation) -- same real fix class as
+# build_copyfile_dylib.sh's chmod$UNIX2003 family from earlier this pass
+# (a symbol wrongly deferred instead of actually provided).
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    libxpc_csops_syscall.c -o "$EXTRACT/libxpc_csops_syscall.o"
+
+# REAL BUG FOUND+FIXED 2026-08-29, same real class as csops above:
+# __mach_errors (a data table mach_error_string.o -- already extracted
+# from libxpc_syscalls.a above -- references) and kevent were ALSO
+# wrongly deferred via `-Wl,-U`. Real fixes, see each source's own
+# header: mach_error_string_minimal_compat.c (a real, honestly-empty
+# `_mach_errors` table -- the real generated per-subsystem data doesn't
+# exist in this checkout, but the struct layout and fallback behavior
+# are real, not fabricated) and libc_build/simple_obj/sys__kevent.o (a
+# real, already-generated create-syscalls.pl raw syscall stub, same one
+# kqueue_smoketest.c already uses -- reused, not recompiled).
+if [ ! -f "$OUT/simple_obj/sys__kevent.o" ]; then
+    echo "error: $OUT/simple_obj/sys__kevent.o not found -- run build_simple_cmds.sh first" >&2
+    exit 1
+fi
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    mach_error_string_minimal_compat.c -o "$EXTRACT/mach_error_string_minimal_compat.o"
+cp "$OUT/simple_obj/sys__kevent.o" "$EXTRACT/sys__kevent.o"
+
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libxpc.dylib"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
@@ -152,8 +192,7 @@ rm -f "$OUT/system/libxpc.dylib"
     -Wl,-not_for_dyld_shared_cache \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
-    -Wl,-U,_csops -Wl,-U,__mach_errors -Wl,-U,_environ \
-    -Wl,-U,_kevent -Wl,-U,_kqueue \
+    -Wl,-U,_environ -Wl,-U,_kqueue \
     -o "$OUT/system/libxpc.dylib" \
     "$EXTRACT"/*.o \
     -Wl,-force_load,"$OUT/liblaunchd_mig.a" \
