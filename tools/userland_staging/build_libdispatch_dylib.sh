@@ -226,8 +226,8 @@ if [ ! -d "$OUT/dispatch_obj" ]; then
     exit 1
 fi
 if [ ! -f "$OUT/system/libsystem_c.dylib" ] || [ ! -f "$OUT/system/libsystem_malloc.dylib" ] || \
-   [ ! -f "$OUT/system/libsystem_pthread.dylib" ]; then
-    echo "error: libsystem_c/malloc/pthread.dylib not found -- run those build scripts first" >&2
+   [ ! -f "$OUT/system/libsystem_pthread.dylib" ] || [ ! -f "$OUT/system/libsystem_kernel.dylib" ]; then
+    echo "error: libsystem_c/malloc/pthread/kernel.dylib not found -- run those build scripts first" >&2
     exit 1
 fi
 if [ ! -f "$OUT/syslogd_libc_extras.a" ]; then
@@ -270,7 +270,17 @@ fi
 # build_libsystem_malloc.sh already established for a different archive.
 mkdir -p "$OUT/dispatch_dylib_extract"
 rm -f "$OUT"/dispatch_dylib_extract/*.o
-(cd "$OUT/dispatch_dylib_extract" && ar x ../libmach_ipc.a && rm -f mach_ipc_dead_stubs.o)
+# mach_msg_real.o excluded too (real gap found+fixed 2026-08-28 booting
+# launchd as PID 1 alongside this dylib): mach_msg()/mach_msg_trap() are
+# now real, canonical exports of libsystem_kernel.dylib (see
+# build_libsystem_kernel.sh's own header) -- this dylib's own private
+# static copy of the same functions was winning symbol resolution for
+# launchd.macho's own real _kernelrpc_mach_port_move_member() call
+# (confirmed via a real instrumentation pass), the exact same duplicate-
+# global-state risk this file's own HONEST SCOPE STATEMENT above already
+# flagged, now closed for this specific symbol pair the same way
+# mach_task_self_ already was.
+(cd "$OUT/dispatch_dylib_extract" && ar x ../libmach_ipc.a && rm -f mach_ipc_dead_stubs.o mach_msg_real.o)
 
 # real, narrow single-object extraction: geteuid.o's only dependency
 # (_cerror_nocancel) is already resolved for real via the
@@ -631,6 +641,37 @@ CFLAGS_PTHREAD_GAP=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestandi
     -idirafter "$XNU_FOR_GAPS/osfmk" -idirafter "$XNU_FOR_GAPS/libkern")
 "$CLANG" "${CFLAGS_PTHREAD_GAP[@]}" pthread_get_stackaddr_np_compat.c -o "$OUT/dispatch_dylib_extract/pthread_get_stackaddr_np_compat.o"
 
+# Real gap found+fixed 2026-08-28 booting launchd as PID 1 with
+# libdispatch.dylib loaded alongside it: libmalloc.a bundles its own
+# private, pre-dylib-era copy of real Apple mach_init.c
+# (magazine_malloc.o/vm.o/mach_vm.o reference _mach_task_self_ as
+# undefined, so the linker pulls the whole member in to satisfy it) --
+# this is exactly the real "two private copies of one process-global"
+# risk this file's own HONEST SCOPE STATEMENT above already flagged and
+# deferred, now confirmed live: launchd.macho's own two-level-namespace
+# binding for _mach_task_self_ picked THIS dylib's local copy (first
+# dylib on launchd's own link line to export a real definition) over the
+# real, correctly-populated one in libsystem_kernel.dylib -- so anything
+# reading mach_task_self() anywhere in the process got a permanently-0,
+# never-initialized task port, causing a real mach_port_allocate()
+# failure inside launchd_runtime_init() (SIGABRT via os_assert_zero()).
+# Same established `ar d`-on-a-local-copy fix build_launchd.sh's own
+# header comment already applied for this exact same reason -- strips
+# mach_init.o (confirmed via nm: every symbol it defines --
+# _mach_task_self_, _mach_init, _bootstrap_port, _host_page_size,
+# _NDR_record, __mach_fork_child, _vm_kernel_page_*/_vm_page_* -- is
+# also a real export of libsystem_kernel.dylib, already a real
+# transitive dependency via libsystem_c.dylib/libsystem_malloc.dylib/
+# libsystem_pthread.dylib below) from a LOCAL copy only, never the
+# shared committed libmalloc.a (other static-only consumers still need
+# their own private copy). Does NOT fully close this file's own broader
+# HONEST SCOPE STATEMENT (g_zone/errno etc are real, separate, still-open
+# instances of the same class) -- narrowly fixes the one instance that
+# actually crashed launchd, not a claim the whole debt item is resolved.
+rm -f "$OUT/libmalloc_no_mach_init.a"
+cp "$OUT/libmalloc.a" "$OUT/libmalloc_no_mach_init.a"
+ar d "$OUT/libmalloc_no_mach_init.a" mach_init.o
+
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libdispatch.dylib"
     # -not_for_dyld_shared_cache: real, newly-surfaced requirement of
@@ -664,10 +705,11 @@ rm -f "$OUT/system/libdispatch.dylib"
     "$OUT"/dispatch_obj/*.o "$OUT"/dispatch_obj/event/*.o \
     "$OUT"/dispatch_dylib_extract/*.o \
     -Wl,-force_load,"$OUT/libpthread_qos.a" \
-    "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    "$OUT/libclosure.a" "$OUT/libmalloc_no_mach_init.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
     "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" \
     "$OUT/simple_obj/sys__kqueue.o" \
     "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" \
+    "$OUT/system/libsystem_kernel.dylib" \
     2>"$OUT/system/libdispatch_dylib_link.err" \
     || { echo "note: dylib link reported diagnostics (expected -- undefined symbols are normal in a dylib), see $OUT/system/libdispatch_dylib_link.err" >&2; }
 

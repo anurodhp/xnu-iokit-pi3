@@ -1500,6 +1500,182 @@ d9. **`build_simple_cmds.sh` converted from fully-static to real dynamic
     boot-confirmed, this item (switching real callers onto the legacy
     Unix-socket path) becomes actionable.
 
+d10. **Real, project-wide finding, 2026-08-29 — `-Wl,-U` does not safely
+    defer an unreached symbol under this project's `-Wl,-fixup_chains`
+    (chained fixups) convention, and this has NOT been re-verified for
+    every consumer yet.** Found resuming launchd's own real QEMU boot
+    after item d8's static-to-dylib pass: with chained fixups, real dyld
+    resolves every bound `__got` entry at real image-load time, before
+    any code runs — not lazily on first call. A flat-namespace `-Wl,-U`
+    symbol that's genuinely unresolvable ANYWHERE in the loaded process
+    aborts the whole process load (`symbol not found in flat namespace
+    '_X'`, exit reason namespace 6 subcode 0x9) the instant that dylib is
+    loaded, regardless of whether the referencing code path ever
+    executes. This never mattered for this project's static
+    (`-nostdlib -static`, no dyld) consumers, and never mattered for a
+    dylib nobody had actually booted into a real process yet — **launchd
+    is the first real, fully-dynamic process complex enough to load
+    `libresolv`/`libxpc`/`libbsm`/`libsystem_notify`/`libdispatch` all at
+    once and actually hit this.** `gap_audit.sh`'s static analysis does
+    **not** catch this class of bug (it only checks whether a symbol is
+    defined *somewhere* in the process's linked images, not whether real
+    chained-fixups binding order would actually succeed) — only a real
+    boot finds it, one `symbol not found` at a time.
+
+    **~20 real symbols across `libxpc`/`libresolv`/`libbsm`/
+    `libsystem_notify` were found+closed this way for launchd
+    specifically** (real syscalls where a wrapper was genuinely missing,
+    real honest "service not available" stand-ins where a whole
+    subsystem doesn't exist here — mDNSResponder, protocol/service
+    databases; real sibling-dylib links where a symbol already existed
+    elsewhere) — see `tools/userland_staging/libxpc_csops_syscall.c`,
+    `mach_error_string_minimal_compat.c`, `libresolv_dnssd_compat.c`,
+    `libresolv_dns_internal_compat.c`, `libresolv_more_socket_syscalls.c`,
+    `libresolv_netdb_compat.c`, `libsystem_notify_misc_compat.c`, and
+    each one's own build script (`build_libxpc_dylib.sh`,
+    `build_libresolv_dylib.sh`, `build_bsm_dylib.sh`,
+    `build_libsystem_notify.sh`) for the full real, individually-cited
+    trail — not re-summarized here.
+
+    **What's NOT yet done, real remaining work, not to be lost**: those
+    fixes closed exactly the symbols launchd's own particular dylib load
+    set needed. A real re-derivation (`xcrun dyld_info -fixups
+    <dylib>.dylib | grep '<flat-namespace>'`) on 2026-08-29 shows these
+    dylibs still carry real, unverified flat-namespace deferrals that
+    **only currently "work" because launchd.macho happens to provide the
+    matching symbol locally** (via its own static portion or another
+    linked dylib) — a **different** real consumer of the same dylib
+    (`syslogd.macho`, `launchctl.macho`, `build_corefoundation.sh`'s
+    trial link, any of `build_simple_cmds.sh`'s 76 commands) has **not**
+    been re-verified and may hit the identical class of boot failure the
+    moment it's actually run, not just linked:
+    - `libresolv.dylib`: `___darwin_check_fd_set_overflow` (real,
+      genuinely safe — see its own citation, real Apple header already
+      marks it `weak_import`), `_kevent`/`_kqueue`/`_pipe` (real, resolve
+      via `libxpc.dylib`/`libdispatch.dylib` being loaded alongside —
+      true for any consumer that also loads one of those two, not
+      guaranteed for one that doesn't).
+    - `libbsm.dylib`: `_getegid`/`_getgid`/`_getgrgid`/`_getpwuid`/
+      `_syslog` — all resolve today only via launchd's own local BSM/
+      passwd-compat wrappers (`liblaunchd_core.a`).
+    - `libsystem_notify.dylib`: `__xpc_bool_true`/`_bootstrap_look_up2`/
+      `_xpc_dictionary_create`/`_xpc_dictionary_set_string`/
+      `_xpc_dictionary_set_uint64`/`_xpc_release`/`_pipe` — all resolve
+      today only via `libxpc.dylib` being loaded in the same process.
+    - `libdispatch.dylib`: the full 11-symbol `_kernelrpc_mach_port_*`
+      family, `__mach_errors`, `_nanosleep`, `_thread_get_special_reply_port`
+      — all resolve today only via launchd's own local
+      `liblaunchd_core.a`/`mach_port_gap_closures2.o` (a narrower, only-
+      3-of-11-symbol local copy that happens to be enough because
+      `libxpc_syscalls2.a`'s `mach_portUser.o` is *also* force-loaded
+      into `liblaunchd_core.a` for other reasons, covering the rest).
+      `build_libdispatch_dylib.sh` itself already documents this exact
+      reliance in its own `UNDEF_SYMS_ELSEWHERE_IN_PROCESS` comment
+      (written 2026-08-27, before this was ever actually exercised by a
+      real launchd boot) — confirmed still accurate, not yet closed at
+      the architectural root the way `libxpc`/`libresolv`/`libbsm`/
+      `libsystem_notify` were.
+    - `libncurses.dylib`: `_clock_get_time`/`_host_get_clock_service`/
+      `_mach_host_self`/`_semaphore_create` — not yet investigated
+      against any real consumer at all.
+    - `libopenpam.dylib`: `___ldpart_free_extra`/`___part_load_locale`/
+      `_alarm`/`_connect$UNIX2003`/`_getgroups`/`_initgroups`/
+      `_send$UNIX2003`/`_setegid`/`_seteuid`/`_sigaction`/
+      `_writev$UNIX2003` — not yet investigated against any real
+      consumer at all.
+
+    **Real next step for whoever picks this up**: before trusting
+    `syslogd.macho`/`launchctl.macho`/any `build_simple_cmds.sh` command
+    that loads one of the dylibs above, run a real QEMU boot/exec of it
+    specifically (not just a clean link) — the exact same
+    `tools/boot_test.py --expect-fail 'panic\('` + read-the-panic-string
+    method that closed all ~20 launchd-specific gaps above. Don't assume
+    a clean `ld` link or a passing `gap_audit.sh` means it will actually
+    run.
+
+d11. **launchd PID-1 bug #6 (real SIGSEGV in `launchd_runtime_init()`'s
+    second thread) is STILL OPEN as of 2026-08-29 — real progress was
+    made getting back to it, but the crash itself is unchanged from
+    session 2's own diagnosis.** Full context, diagnostic infrastructure,
+    and the TPIDRRO_EL0 cross-image-confusion hypothesis:
+    project memory `project_xnu_rpi3_launchd_pid1_2026-08-28_session2.md`
+    and `project_xnu_rpi3_static_to_dylib_sweep_2026-08-29.md`. Short
+    version for anyone without memory access: after item d10's real
+    dyld-gap-closing pass, `launchd.macho` boots all the way through real
+    dyld initializers, `main()`, and `launchd_runtime_init()` — reaching
+    exactly the same failure as before: the `kqueue_demand_loop` second
+    thread starts, calls `select()`, `select()` returns, then crashes
+    with a real SIGSEGV (`namespace 2 subcode 0xb`) inside
+    `mig_get_reply_port` shortly after
+    (`qemu/launchd_boot_test48.log`).
+
+    One real fix already applied and tested, confirmed **not** to
+    resolve this on its own: `third_party/PureDarwin/src/Libraries/XPC/
+    launchd/launchd.c`'s `main()` now calls
+    `pthread_main_thread_bootstrap()` explicitly before
+    `launchd_runtime_init()` (session 2's own resume-hypothesis) —
+    confirmed via `nm launchd.macho` this was genuinely the *first* call
+    against launchd's own local `_main_thread`/`__pthread_head` (not a
+    double-bootstrap; the existing `libsystem_dyld_initializer_compat.c`
+    constructor only ever touched `libsystem_pthread.dylib`'s separate
+    copy). Real, correct, keeps launchd's local pthread state
+    consistent — but the SIGSEGV in the second thread persists
+    regardless, so it's a real, separate fix, not the root cause. **This
+    change is UNCOMMITTED** (submodule `third_party/PureDarwin`),
+    consistent with how the rest of this investigation's state has been
+    left throughout (the `iokit_diag8`/`9`/`12`/`13`/`14` instrumentation
+    across `tools/userland_staging/launchd_mach_port_compat.c`,
+    `mach_msg_real.c`, `libsystem_c_gap_compat.c`,
+    `libsystem_dyld_initializer_compat.c`, plus
+    `third_party/xnu-7195`/`third_party/llvm-project` diagnostic edits) —
+    not yet proven correct/complete, don't commit as a real fix until
+    bug #6 itself is resolved.
+
+    **Real next step**: the crash site is identical to before
+    (`mig_get_reply_port` in the second thread, right after `select()`
+    returns) — add a diagnostic print inside `mig_get_reply_port` itself
+    (or wherever it dereferences whatever crashes) to see the actual
+    faulting address/register state, same method that closed every other
+    bug in this whole investigation. Don't re-derive the TPIDRRO_EL0
+    hypothesis from scratch — it's already written up in the session 2
+    memory file, just not yet confirmed or ruled out.
+
+d12. **Missing/incomplete library work, explicitly tracked so it isn't
+    lost (cross-referenced from item d8, not duplicated in full here)**:
+    - `libCoreFoundation.a` → `.dylib`: deliberately deferred, own future
+      session (real load-time global state/constructors, largest/
+      riskiest remaining conversion) — see item d8's own "RESOLVED
+      2026-08-29" note.
+    - Real per-module PAM `.dylib`s: out of scope, this project has no
+      `dlopen` — `libopenpam.dylib` (base library only) is as far as
+      this converts; documented, not attempted further.
+    - `build_libsystem_c.sh`'s own narrow curated `ar x` extraction from
+      `libm.a`/`libremovefile.a`/`libopenpam.a` (acos/asin/sqrt/fmod/
+      qsort/heapsort/time/gettimeofday/etc, needed by ICU): real,
+      deliberately deferred residual — lower risk than a full-archive
+      duplicate-global-state bug (mostly stateless math/qsort/time
+      functions), but still real static-linking debt. Real follow-up
+      path already scoped in item d8's own note: reexport
+      `libsystem_m.dylib`/`libopenpam.dylib` through `libSystem.B.dylib`
+      (matching the pattern that already closed the equivalent
+      `libresolv`/`libcopyfile`/`libremovefile` need for ICU), then drop
+      the curated extraction entirely.
+    - `libdispatch_min.a`/`libdispatch_real.a`: still not investigated —
+      likely dead now that `libdispatch.dylib` is real (Phase 6.6), but
+      nobody has actually checked for remaining real consumers before
+      proposing deletion. Still open.
+    - `tools/userland_staging/build_libpthread.sh`'s own
+      `pthread_smoketest.macho` link is currently broken (real,
+      pre-existing, found 2026-08-29 while rebuilding this library for
+      unrelated reasons — not caused by that session's own changes):
+      fails with undefined `_kdebug_trace`/`_kill`/`_kill$UNIX2003`/
+      `_mprotect$UNIX2003`/`_sleep$UNIX2003`/`_write$UNIX2003` (real
+      `-Wl,-alias`/raw-syscall gaps in that one smoketest's own link
+      line, same class of gap as this file's other items, just not yet
+      triaged). The real `libpthread.a` archive itself still builds and
+      is correct; only its own standalone smoketest executable fails to
+      link. Not investigated further this pass.
+
 ---
 
 ### d10: launchd PID-1 boot-path integration, in progress 2026-08-28

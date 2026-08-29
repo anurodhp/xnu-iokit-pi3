@@ -68,6 +68,29 @@
  *		of that fact, then restart the appropriate parts of the
  *              operation.
  */
+/* TEMP DIAGNOSTIC: bisecting a silent exit(1) that persists even after
+ * closing the real mach_msg()/mach_msg_trap() duplicate-copy bug (this
+ * is now the ONE real copy, in libsystem_kernel.dylib) -- self-contained
+ * raw-syscall helper (no cross-dylib dependency) to confirm whether this
+ * exact copy is even reached, and whether the raw trap itself returns.
+ * Remove once root-caused. */
+static long iokit_diag12_syscall3(long num, long a0, long a1, long a2) {
+	register long x0 asm("x0") = a0;
+	register long x1 asm("x1") = a1;
+	register long x2 asm("x2") = a2;
+	register long x16 asm("x16") = num;
+	asm volatile("svc #0x80" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x16) : "memory", "cc");
+	return x0;
+}
+static void iokit_diag12(const char *msg) {
+	long len = 0;
+	while (msg[len] != '\0') { len++; }
+	long fd = iokit_diag12_syscall3(5, (long)"/dev/console", 0x0001 | 0x20000, 0);
+	if (fd < 0) { return; }
+	iokit_diag12_syscall3(4, fd, (long)msg, len);
+	iokit_diag12_syscall3(6, fd, 0, 0);
+}
+
 mach_msg_return_t
 mach_msg(msg, option, send_size, rcv_size, rcv_name, timeout, notify)
 mach_msg_header_t *msg;
@@ -79,6 +102,8 @@ mach_msg_timeout_t timeout;
 mach_port_t notify;
 {
 	mach_msg_return_t mr;
+
+	iokit_diag12("IOKITDIAG12: mach_msg (libsystem_kernel.dylib copy) entry\n");
 
 	/*
 	 * Consider the following cases:
@@ -92,10 +117,13 @@ mach_port_t notify;
 	 * the kernel's fast paths (when it checks the option value).
 	 */
 
+	iokit_diag12("IOKITDIAG12: about to call MACH_MSG_TRAP\n");
 	mr = MACH_MSG_TRAP(msg, option & ~LIBMACH_OPTIONS,
 	    send_size, rcv_size, rcv_name,
 	    timeout, notify);
+	iokit_diag12("IOKITDIAG12: MACH_MSG_TRAP returned\n");
 	if (mr == MACH_MSG_SUCCESS) {
+		iokit_diag12("IOKITDIAG12: MACH_MSG_SUCCESS, returning\n");
 		return MACH_MSG_SUCCESS;
 	}
 
