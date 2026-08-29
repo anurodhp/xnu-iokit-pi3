@@ -75,6 +75,27 @@ void iokit_diag14(const char *msg) {
 	iokit_diag9(msg);
 }
 
+/* TEMP DIAGNOSTIC 2026-08-29, launchd bug #6: strong definition for
+ * pthread_main_thread_bootstrap.c's weak iokit_diag14_hex (same
+ * weak/strong pairing as iokit_diag14 above) -- prints a label plus a
+ * hex value in one atomic write, real raw-syscall mechanism shared with
+ * iokit_diag9 above. */
+void iokit_diag14_hex(const char *label, unsigned long val) {
+	char buf[48];
+	long n = 0;
+	for (long i = 0; label[i] != '\0' && n < (long)sizeof(buf) - 20; i++) { buf[n++] = label[i]; }
+	buf[n++] = '0'; buf[n++] = 'x';
+	for (int k = 0; k < 16; k++) {
+		int nibble = (val >> ((15 - k) * 4)) & 0xf;
+		buf[n++] = nibble < 10 ? ('0' + nibble) : ('a' + nibble - 10);
+	}
+	buf[n++] = '\n';
+	long fd = iokit_diag9_syscall3(5, (long)"/dev/console", 0x0001 | 0x20000, 0);
+	if (fd < 0) { return; }
+	iokit_diag9_syscall3(4, fd, (long)buf, n);
+	iokit_diag9_syscall3(6, fd, 0, 0);
+}
+
 kern_return_t mach_port_request_notification(ipc_space_t task, mach_port_name_t name, mach_msg_id_t msgid, mach_port_mscount_t sync, mach_port_t notify, mach_msg_type_name_t notifyPoly, mach_port_t *previous) {
 	return _kernelrpc_mach_port_request_notification(task, name, msgid, sync, notify, notifyPoly, previous);
 }

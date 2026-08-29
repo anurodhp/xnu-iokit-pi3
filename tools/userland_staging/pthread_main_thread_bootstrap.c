@@ -458,6 +458,25 @@ iokit_diag14(const char *msg)
 	(void)msg;
 }
 
+/* TEMP DIAGNOSTIC 2026-08-29, launchd bug #6: real kernel-side fault
+ * capture (osfmk/arm64/sleh.c's handle_user_abort, IOKITDIAG18) shows
+ * the actual SIGSEGV happening on the MAIN thread (confirmed via
+ * current_thread() tag matching), at a stack address/fp far outside any
+ * physically possible primary-process-stack range (over 18MB below
+ * USRSTACK64, impossible under this embedded config's real 1MB MAXSSIZ)
+ * -- strongly suggesting the main thread is somehow resuming with (or
+ * corrupted by) THIS thread's own pthread_create()-allocated 256KB
+ * mmap'd stack. This prints the real stack_base/stack_top for direct
+ * comparison against IOKITDIAG18's fp/fault_addr in the same boot log.
+ * weak like iokit_diag14 above, same reason (syslogd/launchctl/etc also
+ * link this file without launchd_mach_port_compat.c's strong defs). */
+__attribute__((weak))
+void
+iokit_diag14_hex(const char *label, unsigned long val)
+{
+	(void)label; (void)val;
+}
+
 static void *
 _pthread_create_trampoline(void *raw_ctx)
 {
@@ -522,6 +541,8 @@ pthread_create(pthread_t _Nullable *_Nonnull restrict thread,
 		return errno;
 	}
 	uintptr_t stack_top = ((uintptr_t)stack_base + PTHREAD_CREATE_STACK_SIZE) & ~(uintptr_t)15;
+	iokit_diag14_hex("IOKITDIAG19: pthread_create stack_base=", (unsigned long)stack_base);
+	iokit_diag14_hex("IOKITDIAG19: pthread_create stack_top=", (unsigned long)stack_top);
 
 	/* Real per-child struct pthread_s + trampoline context, own real
 	 * page-backed mapping (kept separate from the stack mapping so a

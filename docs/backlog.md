@@ -1996,6 +1996,114 @@ d11. **launchd PID-1 bug #6 (real SIGSEGV in `launchd_runtime_init()`'s
     live TEMP DIAGNOSTIC, not yet committed as of this writing (see
     project memory for exact commit status at any given resume point).
 
+    **UPDATE 2026-08-29, final update this session: raw fault-register
+    capture at the real EL0 abort handler — ROOT CAUSE FOUND (not yet
+    fixed). The second thread's block was a red herring the whole time;
+    the actual crash is the MAIN thread, and the evidence points at a
+    real kernel context-switch bug (thread-stack cross-contamination),
+    not a race, not a threading-setup gap.**
+
+    Added a real diagnostic directly in `osfmk/arm64/sleh.c`'s
+    `handle_user_abort()` — the real, unmodified-Apple EL0 data/
+    instruction-abort handler, right before `exception_triage()` (the
+    call that turns an unresolved fault into the real Mach exception ->
+    `OS_REASON_SIGNAL` -> the exact "pid 1 exited... signal 11" path
+    confirmed real back in the prior update). Prints `current_thread()`,
+    the real fault PC/SP/FP/LR (`get_saved_state_pc/sp/fp/lr()`), `esr`,
+    `fault_addr` (FAR), and the `vm_fault()` result code — the actual
+    raw register state at the moment of the real fault, one tier below
+    anything C-level bisection could see before.
+
+    **Result (`qemu/launchd_boot_test62.log`/`test63.log`): decisive.**
+    `esr=0x92000047` decodes to `ESR_EC_DABORT_EL0` (confirmed real EL0
+    data abort, matching the signal-shaped exit reason) with DFSC =
+    "Translation fault, level 3" (the page is genuinely never mapped,
+    not a permission fault) and the WnR bit set (a real WRITE, not a
+    read). `pc` resolves (via `nm -n` against `launchd.macho`, cross-
+    referencing dyld's own real init-order base-address prints in the
+    same boot log to compute the real ASLR slide) to exactly
+    `___vsprintf_chk+0xc` — i.e. real, very-early function-prologue
+    stack-frame setup, not application logic.
+
+    **The critical cross-reference**: `current_thread()` at the fault
+    (`test63.log` line 901) is `0xfffffff2122f3540` — the EXACT SAME
+    thread pointer as the MAIN thread's own earlier, successful
+    `mach_port_move_member` call (line 848), NOT the second
+    (`kqueue_demand_loop`) thread's pointer (`0xfffffff2122f1aa0`,
+    confirmed still separately visible completing its own
+    `about to call thread_block` sequence normally in the very same
+    log). **The main thread is the one that actually crashes** — every
+    previous session-4 finding about the second thread's blocking
+    receive completing cleanly through real turnstile/waitq setup
+    remains true and real, it was just never the direct cause; it was
+    coincidentally the last diagnostic output before a SEPARATE,
+    main-thread-only fault, which is exactly why the "main-thread races
+    ruled out" update earlier this same session drew the wrong
+    conclusion (it only checked reachability of print points AFTER the
+    "started up" `launchd_syslog()` call, never diagnostics INSIDE that
+    call itself, where the real fault turned out to live).
+
+    **Why this points at a real kernel bug, not application logic**: the
+    faulting `fp`/`fault_addr` (`0x16ebf4000`/`0x16ebf3ff8` in
+    `test63.log`) sit **~18MB below `USRSTACK64`**
+    (`bsd/arm/vmparam.h`'s real `0x16FE00000`) — physically impossible
+    for the main thread's own process stack to reach under this
+    embedded-config target's real `MAXSSIZ` (1MB, same file). `fp` is
+    also exactly page-aligned (both 4K and 16K), matching the shape of
+    `pthread_create()`'s own `stack_top` computation
+    (`tools/userland_staging/pthread_main_thread_bootstrap.c`:
+    `stack_base + PTHREAD_CREATE_STACK_SIZE(256KB)`, 16-byte-aligned) —
+    i.e. the address pattern of the SECOND thread's own dedicated
+    mmap'd stack, not anything belonging to the main thread. Added one
+    more (cheap, userland-only) diagnostic to
+    `pthread_create()`/`iokit_diag14_hex` in
+    `pthread_main_thread_bootstrap.c` + `launchd_mach_port_compat.c` to
+    print the real `stack_base`/`stack_top` for direct same-boot
+    comparison against `handle_user_abort`'s `fp`/`fault_addr` and
+    confirm the exact-match hypothesis definitively — written but NOT
+    YET boot-tested as of this writing (session ended here on an
+    unrelated tooling interruption, not a technical blocker; the test
+    itself is cheap, launchd.macho-only, no kernel rebuild needed).
+
+    **Working theory, not yet proven**: when `thread_block()` switches
+    the CPU away from the second thread (which legitimately, correctly
+    blocks) to the main thread (the next runnable thread, since this
+    kernel is confirmed single-core — only `cpu0` ever starts, per this
+    boot log's own `"BCM2837CPU: started \"cpu0\""` line, ruling out a
+    genuine SMP/multi-core cache-visibility race as a competing
+    explanation), the kernel's arm64 context-switch/register-save-
+    restore path does not correctly keep the two threads' saved user-
+    mode `SP_EL0` values separate — the main thread appears to resume
+    executing with (or has its own saved state corrupted by) the second
+    thread's `SP_EL0`, pointing into the second thread's own private
+    256KB stack instead of the main thread's real one. The very next
+    real stack-frame-setup instruction on the main thread's resumed
+    execution (`___vsprintf_chk`'s prologue) then either legitimately
+    stack-overflows past the second thread's small 256KB region
+    (if it actually IS writing into that region but past its bounds) or
+    hits a boundary specific to how that region was mapped — either way,
+    a real, previously-undiscovered bug in this project's `thread_invoke`/
+    context-switch machinery (`osfmk/arm64/machine_routines_asm.s` or
+    wherever `machine_switch_context`/`Thread_continue`-equivalent
+    saves/restores `SP_EL0` per-thread), not anything in
+    launchd/PureDarwin application code and not the second thread's own
+    setup (already independently confirmed correct through exhaustive
+    C-level bisection earlier this session).
+
+    **Real next step**: (1) boot-test the already-written
+    stack_base/stack_top vs fp/fault_addr comparison (cheap, no kernel
+    rebuild) to convert "working theory" into "confirmed" -- this is
+    the very next action, blocked only by an unrelated tooling
+    interruption this session, not by any remaining technical unknown;
+    (2) if confirmed, find and fix the real `SP_EL0` save/restore bug in
+    the arm64 context-switch path -- likely either `thread_invoke()`'s
+    own machine-state handoff (`osfmk/kern/sched_prim.c`) or the
+    architecture-specific `machine_switch_context`/PCB save-restore
+    (`osfmk/arm64/machine_routines_asm.s`,
+    `osfmk/arm64/status.c`/`cpu_data.h`'s `cpu_active_thread`
+    bookkeeping) -- not yet located precisely, real fix work, not just
+    more diagnosis, once step (1) confirms the theory.
+
 d12. **Missing/incomplete library work, explicitly tracked so it isn't
     lost (cross-referenced from item d8, not duplicated in full here)**:
     - `libCoreFoundation.a` → `.dylib`: deliberately deferred, own future
