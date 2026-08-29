@@ -76,8 +76,8 @@ if [ ! -d "$PD/launchd" ]; then
     echo "error: $PD/launchd not found -- run setup_third_party.sh first" >&2
     exit 1
 fi
-if [ ! -f "$OUT/libxpc.a" ] || [ ! -f "$OUT/liblaunchd_mig.a" ] || [ ! -f "$OUT/liblaunchd_syscalls.a" ]; then
-    echo "error: $OUT/libxpc.a, $OUT/liblaunchd_mig.a, and $OUT/liblaunchd_syscalls.a required -- run build_libxpc.sh / build_launchd_mig.sh / build_launchd_syscalls.sh first" >&2
+if [ ! -f "$OUT/system/libxpc.dylib" ] || [ ! -f "$OUT/liblaunchd_mig.a" ] || [ ! -f "$OUT/liblaunchd_syscalls.a" ]; then
+    echo "error: $OUT/system/libxpc.dylib, $OUT/liblaunchd_mig.a, and $OUT/liblaunchd_syscalls.a required -- run build_libxpc_dylib.sh / build_launchd_mig.sh / build_launchd_syscalls.sh first" >&2
     exit 1
 fi
 if [ ! -f "$OUT/libCoreFoundation.a" ] || [ ! -f "$OUT/cf_libc_extras.a" ]; then

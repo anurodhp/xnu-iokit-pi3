@@ -25,6 +25,7 @@ cd "$(dirname "$0")"
 
 XCODE12="/Applications/Xcode-12.app/Contents/Developer"
 CLANG="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
 SDK="$XCODE12/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
 if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     echo "error: Xcode-12.app not found at $XCODE12" >&2
@@ -47,11 +48,25 @@ OUT="libc_build"
 ICU_LIB="icu_build/target/lib"
 
 for a in liblaunchd_core.a libCoreFoundation.a cf_libc_extras.a launchd_libc_extras.a \
-         libxpc.a liblaunchd_mig.a libxpc_syscalls.a libxpc_syscalls2.a liblaunchd_syscalls.a \
+         liblaunchd_mig.a liblaunchd_syscalls.a \
          libmach_ipc.a libclosure.a libmalloc.a libplatform.a libpthread.a \
-         libc_gen.a libc_string.a libc_stdio.a libc_printf.a libc_locale_for_stdio.a libbsm.a; do
+         libc_gen.a libc_string.a libc_stdio.a libc_printf.a libc_locale_for_stdio.a; do
     if [ ! -f "$OUT/$a" ]; then
         echo "error: $OUT/$a not found -- run build_launchd_core.sh first" >&2
+        exit 1
+    fi
+done
+# libxpc.a/libxpc_syscalls.a/libxpc_syscalls2.a -> libxpc.dylib and
+# libbsm.a -> libbsm.dylib (static-linking cleanup pass, 2026-08-29):
+# real per-library dylibs now exist for both (build_libxpc_dylib.sh,
+# build_bsm_dylib.sh) -- confirmed via `nm -gU` before switching that
+# libxpc.dylib genuinely, locally exports every MIG symbol this file's
+# own mach_port_gap_closures2.c comment above relies on
+# (_kernelrpc_mach_port_insert_right/_extract_right/_unguard, all real
+# `T`, not deferred), not just guessed compatible.
+for d in libxpc.dylib libbsm.dylib; do
+    if [ ! -f "$OUT/system/$d" ]; then
+        echo "error: $OUT/system/$d not found -- run the matching build_*_dylib.sh first" >&2
         exit 1
     fi
 done
@@ -72,6 +87,122 @@ for d in libicuuc.dylib libicui18n.dylib libicudata.dylib; do
     fi
 done
 
+# Real gap found+fixed 2026-08-28 booting launchd as PID 1: libmalloc.a
+# bundles its own private, pre-dylib-era copy of real Apple mach_init.c
+# (magazine_malloc.o/vm.o/mach_vm.o reference _mach_task_self_ as
+# undefined, so the linker pulls the whole member in to satisfy it) --
+# same real "two private copies of one process-global" bug class already
+# documented in build_libsystem_kernel.sh's own header (mach_task_self_'s
+# Phase D bugs), a THIRD occurrence of it: this one splits launchd's own
+# statically-linked code (liblaunchd_core.a's runtime.c calls
+# mach_task_self() and gets libmalloc.a's copy, permanently 0/never
+# initialized) from the real, correctly-populated copy in
+# libsystem_kernel.dylib (which this project's own real mach_init(),
+# called once via libsystem_dyld_initializer_compat.c's constructor,
+# actually writes to). Confirmed via a real multi-layer instrumentation
+# pass: mach_task_self()==0x0 read back inside launchd_runtime_init(),
+# causing a real mach_port_allocate() failure -> os_assert_zero() ->
+# real SIGABRT (namespace 2/OS_REASON_SIGNAL subcode 6). Same established
+# `ar d`-on-a-local-copy fix already used once before for libmalloc.a
+# (see libcxx_tsd_shim_bootstrap_compat.c's own header) -- strips
+# mach_init.o (confirmed via nm: every symbol it defines --
+# _mach_task_self_, _mach_init, _bootstrap_port, _host_page_size,
+# _NDR_record, __mach_fork_child, _vm_kernel_page_*/_vm_page_* -- is also
+# a real export of libsystem_kernel.dylib, already a real input to this
+# link) from a LOCAL copy only, never the shared committed libmalloc.a
+# (other static-only consumers still need their own private copy).
+rm -f "$OUT/libmalloc_no_mach_init.a"
+cp "$OUT/libmalloc.a" "$OUT/libmalloc_no_mach_init.a"
+ar d "$OUT/libmalloc_no_mach_init.a" mach_init.o
+
+# Real gap found+fixed 2026-08-28, next crash after the mach_task_self_
+# fix above: runtime.c's launchd_runtime_init() calls
+# launchd_mport_make_send() -> mach_port_insert_right(), which SIGABRTed
+# via os_assert_zero() because it always returned KERN_FAILURE. Root
+# cause: libmach_ipc.a's mach_ipc_dead_stubs.o bundles a narrowly-scoped
+# KERN_FAILURE stand-in for mach_port_insert_right/extract_right/unguard
+# (only ever meant to satisfy 3 provably-unreachable mach_msg_destroy_port()
+# reply-validation-failure paths, see that file's own header), and the
+# linker pulled it into launchd.macho's own static portion to satisfy
+# runtime.c's real, live, direct call -- the EXACT same bug this project
+# already found and fixed once for syslogd/libdispatch.dylib (see
+# mach_port_gap_closures2.c's own header, "REAL BUG FIXED, not just a new
+# gap closure") -- just never applied to launchd's own separate,
+# statically-linked build. Same fix: strip mach_ipc_dead_stubs.o from a
+# local copy of libmach_ipc.a, compile mach_port_gap_closures2.c/.s fresh
+# (real trap-first + real MIG-fallback implementations, verbatim from
+# libsyscall/mach/mach_port.c) so the real versions win instead. The MIG
+# fallback symbols (_kernelrpc_mach_port_insert_right/_unguard) these
+# reference are already real, defined exports of libxpc_syscalls2.a's
+# mach_portUser.o, already a real input to this link.
+XNU="../../third_party/xnu-7195"
+LIBC="../../third_party/Libc"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+    -I "$XNU/libsyscall/mach" -I "$XNU/libsyscall/os" -idirafter "$XNU/osfmk" \
+    -I "$LIBC/include" -I "$LIBC/darwin" \
+    mach_port_gap_closures2.c -o "$OUT/mach_port_gap_closures2_raw.o"
+# Narrowed via `ld -r -exported_symbol` (same precedent
+# build_libdispatch_dylib.sh's own vm_mapUser.o narrowing already
+# established): mach_port_request_notification is excluded on purpose --
+# liblaunchd_core.a's own launchd_mach_port_compat.o already provides a
+# real (MIG-only, no trap-first fast path, but functionally correct)
+# definition of that one symbol; keeping this file's other 5 real
+# implementations (which launchd_mach_port_compat.o does NOT provide)
+# without hard-duplicate-symbol-conflicting on the one it does.
+"$LD" -r -arch arm64 \
+    -exported_symbol _mach_port_insert_right \
+    -exported_symbol _mach_port_extract_right \
+    -exported_symbol _mach_port_unguard \
+    -exported_symbol _mach_port_kernel_object \
+    -exported_symbol _thread_destruct_special_reply_port \
+    "$OUT/mach_port_gap_closures2_raw.o" -o "$OUT/mach_port_gap_closures2.o"
+rm -f "$OUT/mach_port_gap_closures2_raw.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    mach_port_gap_closures2.s -o "$OUT/mach_port_gap_closures2_traps.o"
+rm -f "$OUT/libmach_ipc_no_dead_stubs.a"
+cp "$OUT/libmach_ipc.a" "$OUT/libmach_ipc_no_dead_stubs.a"
+ar d "$OUT/libmach_ipc_no_dead_stubs.a" mach_ipc_dead_stubs.o
+# Real gap found+fixed 2026-08-28, real crash introduced by the above
+# `ar d` itself: mach_ipc_dead_stubs.o bundles 4 functions, not just the
+# 3 mach_port_* ones replaced above -- voucher_mach_msg_set() (an honest
+# `return FALSE` stand-in; real, weak_import-declared per every real MIG
+# client stub's own generated code, see that function's own header on
+# why "no voucher subsystem" is the correct, deliberate answer here, same
+# scope decision as INET/INET6 networking) got removed as a side effect
+# too. Without it, _kernelrpc_mach_port_move_member's own real generated
+# `if (voucher_mach_msg_set != NULL) voucher_mach_msg_set(&InP->Head);`
+# check resolved the symbol externally instead -- to libdispatch.dylib's
+# OWN real, considerably more complex voucher implementation, which this
+# project's boot-time process state isn't ready for (confirmed via a real
+# instrumentation pass: this is exactly where the next silent exit(1)
+# appeared after the mach_msg duplicate fix above). Real fix: narrow
+# mach_ipc_dead_stubs.o via `ld -r -exported_symbol` (same precedent
+# mach_port_gap_closures2.o's own narrowing already established) down to
+# just voucher_mach_msg_set, so the honest stub wins again without
+# reintroducing the mach_port_insert_right/extract_right/unguard
+# duplicate-symbol conflict the real versions above already fixed.
+if [ ! -f "$OUT/mach_ipc_dead_stubs.o" ]; then
+    echo "error: $OUT/mach_ipc_dead_stubs.o not found -- run build_libmach_ipc.sh first" >&2
+    exit 1
+fi
+"$LD" -r -arch arm64 \
+    -exported_symbol _voucher_mach_msg_set \
+    "$OUT/mach_ipc_dead_stubs.o" -o "$OUT/mach_ipc_dead_stubs_voucher_only.o"
+# Real gap found+fixed 2026-08-28, next crash after the above: real
+# mach_msg()/mach_msg_trap() (mach_msg_real.o) were ALSO bundled as a
+# private static copy here, competing with libsystem_kernel.dylib's own
+# now-real copy (see build_libsystem_kernel.sh's own header on this same
+# fix) -- launchd's own _kernelrpc_mach_port_move_member() call resolved
+# mach_msg() to libdispatch.dylib's OWN separate private copy instead of
+# either of these (confirmed via a real instrumentation pass: temporary
+# prints in this project's own mach_msg_real.o never fired). Stripped
+# here so this static portion's real call resolves against the one
+# shared, canonical copy in libsystem_kernel.dylib (already transitively
+# linked via libSystem.B.dylib's own reexport chain, confirmed via nm
+# before relying on it, not assumed).
+ar d "$OUT/libmach_ipc_no_dead_stubs.a" mach_msg_real.o
+
 rm -f "$OUT/launchd.macho"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
     -B"$NEWLD_BINDIR" \
@@ -88,11 +219,13 @@ rm -f "$OUT/launchd.macho"
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     -Wl,-force_load,"$OUT/liblaunchd_core.a" \
     "$OUT/libCoreFoundation.a" "$OUT/cf_libc_extras.a" "$OUT/launchd_libc_extras.a" \
-    "$OUT/libxpc.a" "$OUT/liblaunchd_mig.a" \
-    "$OUT/libxpc_syscalls.a" "$OUT/libxpc_syscalls2.a" "$OUT/liblaunchd_syscalls.a" \
-    "$OUT/libmach_ipc.a" "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    "$OUT/liblaunchd_mig.a" "$OUT/liblaunchd_syscalls.a" \
+    "$OUT/libmach_ipc_no_dead_stubs.a" "$OUT/mach_port_gap_closures2.o" "$OUT/mach_port_gap_closures2_traps.o" \
+    "$OUT/mach_ipc_dead_stubs_voucher_only.o" \
+    "$OUT/libclosure.a" "$OUT/libmalloc_no_mach_init.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
     "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
-    "$OUT/libc_locale_for_stdio.a" "$OUT/libbsm.a" \
+    "$OUT/libc_locale_for_stdio.a" \
+    "$OUT/system/libxpc.dylib" "$OUT/system/libbsm.dylib" \
     "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
     "$ICU_LIB/libicuuc.dylib" "$ICU_LIB/libicui18n.dylib" "$ICU_LIB/libicudata.dylib" "$OUT/system/libc++.dylib" \
