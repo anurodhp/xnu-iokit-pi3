@@ -3296,6 +3296,222 @@ a significant, carefully-staged migration, not a drop-in. Keep the custom
 PID-1 as a fallback boot path during the transition (matches this
 project's general caution around destructive/hard-to-reverse changes).
 
+## Phase 6.8 continued -- real PID-1 boot + real `login(1)` plan (2026-08-29)
+
+**Status check, 2026-08-29**: the "outright replace" from Milestone 4
+above is further along than it sounds -- `tools/init_binary/
+inject_into_sd_image.sh`'s own header confirms `/sbin/launchd` on the SD
+image is *already* real, dynamically-linked `launchd.macho`, not
+`init.macho`. `load_init_program()` (`bsd/kern/kern_exec.c:6467`,
+unmodified stock XNU) only ever tries `/sbin/launchd` -- there's no
+`/sbin/init` fallback path in the kernel, so this was never a dual-path
+boot; `init.macho` is simply unused as PID 1 already and only still
+matters as the thing `host_test.c`/`_pty_test_phase5.py` (CLAUDE.md's
+documented host-side tests) exercise.
+
+What's actually still blocking a real launchd-as-PID-1 boot, and what a
+real console login needs, per a fresh read of the current sources
+(`launchd.c`, `pd_launchd_boot.c`, `pd_console_login.c`,
+`system_cmds/getty.tproj`, `system_cmds/login.tproj`) plus
+`qemu/launchd_boot_test76.log` and `docs/backlog.md` item d11:
+
+1. **Real-PID-1 boot panic, still open -- item 1's original hypothesis
+   REFUTED, real progress made instead (2026-08-29 session).** The
+   original theory here (an HFS journal EROFS from an ineffective
+   root-rw remount) does not survive a real source read:
+   `hfs_journal.c`'s `write_journal_header()` prints the `jnl: ...
+   flushing fs disk buffer returned 0x2d` line (0x2d = `ENOTSUP`, not
+   `EROFS`) but **always returns 0 regardless of that ioctl's result**
+   (confirmed by reading the function to its end) -- it is genuinely
+   non-fatal, exactly the kind of "suspect the diagnostic itself" trap
+   this project's own conventions warn about. `pd_launchd_boot_remount_
+   root_rw()`'s `mount("hfs", "/", 0, &args)` is fine: `__mac_mount()`
+   (`bsd/vfs/vfs_syscalls.c:552`) forces `MNT_UPDATE` for the root vnode
+   and sets `MNTK_WANTRDWR`, which correctly drives `hfs_mount()`'s
+   `vfs_iswriteupgrade()` branch (confirmed by reading both).
+
+   The real chain, found by bisecting with `launchd_syslog(LOG_NOTICE |
+   LOG_CONSOLE, ...)` markers around `pd_launchd_boot()`/`pd_launchd_
+   load_daemons_dir()`/`launchd_runtime_init2()` in `launchd.c`'s
+   `main()`, then symbolicating the panic backtrace against `nm -n` on
+   the unstripped kernel (`_exit` -> `_exit_with_reason` ->
+   `_proc_prepareexit` -> `_launchd_crashed_panic`, confirming this is a
+   real BSD `exit()` syscall from launchd's own userland code, not a
+   kernel-side fault): rebuilding `launchd.macho` at all first hit a
+   **pre-existing, unrelated link failure** (`___chkstk_darwin`
+   undefined, referenced from `liblaunchd_core.a`'s MIG stubs and
+   `libCoreFoundation.a`'s large-stack-frame functions) -- real, defined
+   in `libsystem_c.dylib` (confirmed via `nm -m`), reachable only
+   through `libSystem.B.dylib`'s real reexport of it, which `ld64`
+   cannot resolve from a bare install-name path since `/usr/lib/system/
+   libsystem_c.dylib` doesn't exist in this project's on-disk SDK --
+   fixed by adding `$OUT/system/libsystem_c.dylib` directly to `build_
+   launchd.sh`'s link line. With the link fixed and a real QEMU boot run
+   for the first time in this session, three more real, distinct dyld
+   symbol-binding gaps were found and fixed one boot at a time (each
+   confirmed via dyld's own real "exit reason namespace 6" abort
+   message, e.g. `Symbol not found: __Unwind_Resume, Referenced from:
+   /libicuuc.66.dylib, Expected in: /usr/lib/libSystem.B.dylib`):
+   `libSystem.B.dylib` now also reexports `libunwind.dylib` (`build_
+   libsystem.sh`), and `libdispatch.dylib` now reexports `libsystem_
+   blocks.dylib` and `libsystem_c.dylib` instead of plain-loading them
+   (`build_libdispatch_dylib.sh` -- the plain-load-vs-reexport distinction
+   matters because this project's pinned Xcode-12-era `ld64`, under
+   `-Wl,-fixup_chains`, was observed folding some non-dispatch symbols
+   into libdispatch's own two-level ordinal for this specific consumer;
+   confirmed not a real duplicate-symbol regression via `tools/
+   userland_staging/dup_symbol_audit.sh`, which stayed clean against its
+   baseline through all three fixes). All three are real, QEMU-boot-
+   verified fixes (`qemu/launchd_boot_test77.log` through `test80.log`).
+
+   **RESOLVED 2026-08-30.** Real launchd now boots as PID 1, prints
+   `*** launchd[1] has started up. ***`, runs `pd_launchd_boot()` (devfs
+   mounts), `pd_launchd_load_daemons_dir()` and `launchd_runtime_init2()`,
+   and reaches `launchd_runtime()` -- its real main event loop -- with no
+   panic (`qemu/launchd_boot_test93.log`, and again with every diagnostic
+   stripped in `test94.log`).
+
+   The previous session's leading theory ("real main() is never entered,
+   the failure is in dyld's own pre-main() bootstrap") was WRONG, and the
+   reason it looked right is worth recording: every marker used to test it
+   -- `launchd.c`'s `pd_diag_console()`, plus later ones added inside
+   `abort_with_reason()` and `abort()` -- wrote to `/dev/console`. That
+   makes "never called" and "called, but the console write silently
+   failed" indistinguishable, so a CORRECT hypothesis
+   (`_pthread_validate_signature()` -> `abort_with_reason()`) was
+   discarded as refuted when it was in fact the answer. A diagnostic whose
+   output channel can share a failure mode with the bug produces
+   confident, wrong negatives.
+
+   What actually worked: a KERNEL-side diagnostic in `bsd/kern/kern_exit.c`'s
+   `exit()` syscall printing `backtrace_user()`, the TSD base
+   (`thread_get_cthread_self()`) and the pthread `sig` word, plus
+   symbolication anchors (`load_result.mach_header` /
+   `dynlinker_mach_header`) printed from `kern_exec.c`. No userspace
+   fd/devfs/TSD state can defeat it, and `WTERMSIG == 0` in the panic had
+   already proved exit(2) was the real path. That symbolicated -- exactly,
+   not by guesswork -- to:
+   `__CFTSDInitialize -> __CFTSDGetTable -> __CFGetTSDCreateIfNeeded ->
+   __CFGetTSD -> dispatch_once -> dispatch_once_f -> pthread_self ->
+   _pthread_validate_signature -> abort_with_reason -> exit(1)`.
+
+   TWO real, independent bugs, both instances of this project's recurring
+   duplicate-static-copy class (4th and 5th occurrences -- see
+   `docs/backlog.md` and the bug #6 postmortem):
+
+   a. **TSD base clobber.** `tools/userland_staging/pthread_tsd_shim.c`'s
+      `pthread_tsd_shim_bootstrap()` guarded only on its own PER-COPY
+      `g_tsd_bootstrapped` flag and then UNCONDITIONALLY set TPIDRRO_EL0 to
+      its own private `g_tsd_block`. That file is genuinely compiled into
+      more than one image (`nm`: `_g_tsd_block` defined in BOTH
+      `libsystem_malloc.dylib` and, at the time, `launchd.macho`), so the
+      guard could not see that the authoritative bootstrap had already run.
+      Sequence: `libSystem.B.dylib`'s constructor correctly ran
+      `pthread_main_thread_bootstrap()`, then `_dyld_initializer()`'s first
+      malloc reached `libmalloc_dispatch.c`'s `get_zone()` -> this function
+      -> overwrote the good, signed base with a zero-filled block. Fixed by
+      adopting an already-installed base instead of clobbering it;
+      `pthread_tsd_shim_bootstrap_with_base()` stays unconditional on
+      purpose, since it is the authoritative installer. The file's own
+      header comment had predicted this exact hazard in writing
+      ("whichever bootstraps SECOND wins TPIDRRO_EL0").
+
+   b. **Two munge tokens, one shared `_main_thread`.** `launchd.macho`
+      statically linked `libpthread_no_dup_pthread_create.a`, carrying a
+      full second copy of the pthread implementation alongside the real
+      `libsystem_pthread.dylib` it already links. `__main_thread` is an
+      EXTERNAL COMMON symbol, so the two copies coalesced at runtime into
+      launchd's single struct; `__pthread_ptr_munge_token` is NON-external
+      in both and did NOT coalesce. Both copies of
+      `pthread_main_thread_bootstrap()` therefore signed the SAME struct
+      with DIFFERENT private tokens, and whichever ran second won -- after
+      which every `pthread_self()` served by `libsystem_pthread.dylib`
+      (the copy real CoreFoundation, libdispatch and libc++ actually bind
+      to) failed signature validation. Proven arithmetically by reading
+      both tokens out of the two images from the kernel at exit(2) time:
+      `(sig ^ launchd_token) == pthread_t` exactly, while
+      `(sig ^ libsystem_pthread_token)` did not. Fixed by removing that
+      archive from `build_launchd.sh`'s link -- it relinks with ZERO
+      undefined symbols, and `nm -m` now shows
+      `_pthread_self`/`_pthread_mutex_lock` resolving
+      "(from libsystem_pthread)" -- plus deleting `launchd.c`'s redundant
+      explicit `pthread_main_thread_bootstrap()` call. This is the same
+      "one owner per symbol" invariant as commit 9ee721b, applied to
+      pthread state.
+
+   Real, still-open items observed in the now-good boot (new, separate,
+   NOT regressions of the above): `abort()` fires twice from a dylib
+   (non-fatal here, but this port's `abort()` is
+   `kill(getpid(), SIGABRT)` and SIGABRT is not delivered, so it falls
+   into its own infinite spin -- a real hang risk), and
+   `mkdir("/var/tmp/"): Read-only file system`, i.e. the root filesystem
+   is not remounted read-write.
+2. **No real `login(1)` exists yet, in either boot path.** Current
+   `org.puredarwin.console-login` (`pd_console_login.c`, wired via
+   `org.puredarwin.console-login.plist`) does real tty/session setup
+   (`setsid`, `TIOCSCTTY`, `CLOCAL`) but execs `/bin/bash -l` as root
+   directly -- **no username/password prompt at all**. Real `login(1)`
+   source (`third_party/system_cmds/login.tproj`: `login.c`,
+   `login_audit.c`, `klogin.c`) is already cloned via `setup_third_party.sh`
+   (`system_cmds-880.60.2`), never built -- no `build_login.sh` exists.
+   `build_getty.sh`'s own header already anticipated this exact gap:
+   real `getty.tproj` (already built, installed at `/bin/getty`, not
+   wired into boot) hands off via `execle(LO, "login", ..., name, ...)`
+   to a separate real `login(1)` this project doesn't have yet.
+3. **Real dependencies `login.tproj` needs, not yet checked in detail**:
+   PAM (`login.c` calls `pam_start`/`pam_authenticate`; OpenPAM is
+   already ported per the library-sweep work -- needs `/etc/pam.d/login`
+   plus a real auth module backed by the same master.passwd/crypt path
+   `pwtool`/`init.c`'s `attempt_login()` already use), `login_audit.c`
+   (real BSM audit -- `libbsm.dylib` is already real and built, see
+   Phase 6.7), and utmp/wtmp/lastlog writes (check whether these degrade
+   gracefully on a missing file/dir the way `getty`'s `/etc/gettytab`
+   read does, or need stub files provisioned by
+   `inject_into_sd_image.sh` the same way it already creates `/etc`).
+
+**Plan, in order:**
+
+- **Phase A**: ~~root-cause and fix item 1 (real-PID-1 boot panic)~~
+  **DONE 2026-08-30** -- see item 1's "RESOLVED" write-up above. Note the
+  HFS-journal framing this bullet originally proposed was a dead end
+  twice over: the journal ENOTSUP message is genuinely non-fatal
+  (`write_journal_header()` always returns 0), and the real bug was in
+  userland pthread state, not the filesystem. Diagnostics were stripped
+  and re-verified by a clean QEMU boot
+  (`qemu/launchd_boot_test94.log`). Still TODO from this bullet: update
+  `docs/backlog.md` item d11 and add a postmortem doc, matching the bug
+  #6 precedent (`docs/launchd-bug6-postmortem.md`).
+- **Phase B**: write `build_login.sh` (same template as
+  `build_getty.sh`: `-Dmain=...` + TSD-bootstrap wrapper, real per-file
+  compile loop, real `nm -u` gap check, real QEMU-exec smoketest, not
+  just a clean link), closing whatever real PAM/audit/utmp gaps item 3
+  surfaces one at a time.
+- **Phase C**: wire the real chain through launchd -- replace (or
+  point) the console-login job at real `getty` on `/dev/console`, which
+  execs real `login`, which PAM-authenticates against `master.passwd`
+  and execs the shell. Retire `pd_console_login.c`'s auto-root-exec only
+  once this real chain is QEMU-verified end to end (bad password
+  rejected, good password reaches an authenticated shell) -- keep it
+  as a fallback plist during the transition, same caution as the
+  PID-1 swap itself.
+- **Phase D**: confirm launchd's real steady state as PID 1 -- full
+  clean boot, `launchctl list`/`start`/`stop` round-trip, `cron`/
+  `syslogd` LaunchDaemon spawn-on-demand (both currently blocked by
+  their own separate, already-documented bugs -- Phase 5.5 item 3's
+  `cron` `snprintf()` SIGSEGV, `syslogd`'s dyld-gap chase in
+  `tools/init_binary/init.c`'s `spawn_syslogd()` comment -- may still
+  gate this independently of the PID-1 work itself).
+- **Phase E**: `tools/init_binary/init.c` disposition -- no boot-path
+  code to remove (it was never re-added as `/sbin/launchd`). Keep it
+  until launchd's console-login path has equivalent real QEMU-verified
+  regression coverage to what `host_test.c`/`_pty_test_phase5.py`
+  exercise today, then either repoint those two test entry points at
+  real launchd or retire `init.c` and its tests together -- don't delete
+  working test infra with no replacement.
+- **Phase F**: docs -- update CLAUDE.md's "no launchd" framing,
+  close out this section, update `docs/roadmap.md`'s current-status
+  once real login-to-shell is QEMU-verified.
+
 ## Phase 9 (CoreFoundation) -- DONE 2026-08-26
 
 Real repo used: [swift-corelibs-foundation](

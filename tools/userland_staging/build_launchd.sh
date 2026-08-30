@@ -293,6 +293,22 @@ cp "$OUT/libpthread.a" "$OUT/libpthread_no_dup_pthread_create.a"
 ar d "$OUT/libpthread_no_dup_pthread_create.a" pthread_main_thread_bootstrap.o
 ar r "$OUT/libpthread_no_dup_pthread_create.a" "$OUT/pthread_main_thread_bootstrap_data_only.o"
 
+# libSystem.B.dylib real-reexports libsystem_c.dylib (confirmed via
+# otool -L: "reexport"), which is where the real, defined
+# ___chkstk_darwin (Apple's large-stack-frame probe helper -- confirmed
+# via `nm -m libsystem_c.dylib` showing it "external"/defined, not just
+# referenced) actually lives. ld64 can't resolve a reexport by
+# install-name alone here since /usr/lib/system/libsystem_c.dylib
+# doesn't exist in this project's on-disk SDK/sysroot -- only this
+# project's own build at $OUT/system/libsystem_c.dylib does -- so any
+# consumer that needs a reexported-only symbol must list the real dylib
+# explicitly on the link line too, same as libSystem.B.dylib itself is.
+# CF's CFAttributedString.c/CFBinaryPList.c and the host_priv.defs MIG
+# stubs below both have large enough stack frames to reference it;
+# -fno-stack-check (this project's usual workaround, see
+# build_launchd_core.sh's localtime.c comment) would also work but a
+# real chkstk_darwin probe already exists as real Apple code, so linking
+# to it directly is the more correct fix.
 rm -f "$OUT/launchd.macho"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
     -B"$NEWLD_BINDIR" \
@@ -313,11 +329,38 @@ rm -f "$OUT/launchd.macho"
     "$OUT/libmach_ipc_no_dead_stubs.a" "$OUT/mach_port_gap_closures2.o" "$OUT/mach_port_gap_closures2_traps.o" \
     "$OUT/mach_ipc_dead_stubs_voucher_only.o" \
     "$OUT/libclosure.a" "$OUT/libmalloc_no_mach_init.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
-    "$OUT/libpthread_no_dup_pthread_create.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
+    `# libpthread_no_dup_pthread_create.a REMOVED 2026-08-30 (docs/` \
+    `# daemon-roadmap.md Phase 6.8 continued item 1): launchd.macho must` \
+    `# NOT carry its own static copy of the pthread implementation` \
+    `# alongside the real libsystem_pthread.dylib it already links. It` \
+    `# did, and that was the root cause of a real, QEMU-diagnosed boot` \
+    `# failure -- "one owner per symbol", the same invariant commit` \
+    `# 9ee721b established, applied to pthread state specifically.` \
+    `#` \
+    `# The duplication was not benign: _main_thread is an EXTERNAL COMMON` \
+    `# symbol, so the two copies coalesced at runtime into launchd's one` \
+    `# struct, while _pthread_ptr_munge_token is NON-external in both and` \
+    `# did NOT coalesce. Both copies of pthread_main_thread_bootstrap()` \
+    `# therefore signed the SAME shared _main_thread with DIFFERENT` \
+    `# private tokens, and whichever ran second won -- after which every` \
+    `# pthread_self() served by libsystem_pthread.dylib (the copy real` \
+    `# CoreFoundation, libdispatch and libc++ actually bind to) failed` \
+    `# _pthread_validate_signature() and called abort_with_reason(), a` \
+    `# silent exit(1) with zero console output. Proven by reading the` \
+    `# munge tokens out of both images from the kernel at exit(2) time:` \
+    `# (sig ^ launchd_token) == pthread_t exactly, (sig ^` \
+    `# libsystem_pthread_token) did not.` \
+    `#` \
+    `# Dropping the archive relinks cleanly with ZERO undefined symbols` \
+    `# (verified via nm -m: _pthread_self/_pthread_mutex_lock now resolve` \
+    `# "(from libsystem_pthread)") because libsystem_pthread.dylib really` \
+    `# does export the whole surface this binary needs. Do NOT re-add it.` \
+    "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
     "$OUT/libc_locale_for_stdio.a" \
     "$OUT/system/libxpc.dylib" "$OUT/system/libbsm.dylib" \
     "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
+    "$OUT/system/libsystem_c.dylib" \
     "$ICU_LIB/libicuuc.dylib" "$ICU_LIB/libicui18n.dylib" "$ICU_LIB/libicudata.dylib" "$OUT/system/libc++.dylib" \
     2>"$OUT/launchd_link.err" \
     || { echo "error: real link failed -- see $OUT/launchd_link.err" >&2; tail -60 "$OUT/launchd_link.err" >&2; exit 1; }

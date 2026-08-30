@@ -77,6 +77,25 @@ if [ ! -f "$OUT/system/libsystem_c.dylib" ] || [ ! -f "$OUT/system/libc++.dylib"
     echo "error: $OUT/system/libsystem_c.dylib / libc++.dylib not found -- run build_libsystem_c.sh and build_libcxx_dylib.sh first" >&2
     exit 1
 fi
+# libunwind.dylib reexport added 2026-08-29 (docs/daemon-roadmap.md Phase
+# 6.8 continued, item 1 real root-cause): a real launchd-as-PID-1 boot
+# panicked with dyld's own real exit reason "Symbol not found:
+# __Unwind_Resume, Referenced from: /libicuuc.66.dylib, Expected in:
+# /usr/lib/libSystem.B.dylib". ICU's own upstream build links against a
+# real Apple SDK and its bind info expects __Unwind_Resume to come
+# directly from libSystem.B.dylib (confirmed real on macOS: libSystem.B
+# reexports libunwind directly, not only transitively through libc++),
+# not from libc++.dylib the way this project's own C++ code reaches it.
+# libc++.dylib itself already depends on libunwind.dylib as a peer
+# import (confirmed via `nm -m libc++.dylib`: "__Unwind_Resume
+# (from libunwind)"), not a reexport, so reexporting libc++.dylib alone
+# never surfaced __Unwind_Resume through libSystem.B for a third-party
+# consumer like ICU. Real fix: reexport libunwind.dylib directly here too,
+# same pattern as every other sub-dylib on this link line.
+if [ ! -f "$OUT/system/libunwind.dylib" ]; then
+    echo "error: $OUT/system/libunwind.dylib not found -- run build_libunwind_dylib.sh first" >&2
+    exit 1
+fi
 # libplatform.a/libclosure.a/cerror_stub.o no longer required here
 # (static-to-dylib migration batch 1, docs/daemon-roadmap.md) -- real
 # libsystem_kernel.dylib/libsystem_platform.dylib/libsystem_blocks.dylib
@@ -199,6 +218,7 @@ rm -f "$OUT/system/libSystem.B.dylib"
     -Wl,-reexport_library,"$OUT/system/libsystem_pthread.dylib" \
     -Wl,-reexport_library,"$OUT/system/libsystem_c.dylib" \
     -Wl,-reexport_library,"$OUT/system/libc++.dylib" \
+    -Wl,-reexport_library,"$OUT/system/libunwind.dylib" \
     -Wl,-reexport_library,"$OUT/system/libcopyfile.dylib" \
     -Wl,-reexport_library,"$OUT/system/libremovefile.dylib" \
     -Wl,-reexport_library,"$OUT/system/libresolv.dylib" \

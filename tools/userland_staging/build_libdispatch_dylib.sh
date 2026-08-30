@@ -722,6 +722,36 @@ rm -f "$OUT/system/libdispatch.dylib"
     # Darwin (init.c's own comment says so explicitly). Same real pairing
     # as that file's one non-UNIX2003 entry, just spelled as a single
     # `-alias` pair instead of wiring up `-alias_list` for one line.
+    #
+    # libsystem_blocks.dylib reexport (not a plain load) added 2026-08-29
+    # (docs/daemon-roadmap.md Phase 6.8 continued, item 1 real
+    # root-cause): a real launchd-as-PID-1 boot panicked with dyld's own
+    # real exit reason "Symbol not found: __Block_copy, Referenced from:
+    # /usr/lib/system/libsystem_notify.dylib, Expected in:
+    # /usr/lib/system/libdispatch.dylib" -- real Apple's libdispatch.dylib
+    # has historically absorbed the Blocks runtime's public identity (it
+    # reexports it), so any consumer written against real Apple headers
+    # expects Block_copy/Block_release to resolve through libdispatch, not
+    # just be usable *by* libdispatch internally. A plain load only
+    # satisfies the latter.
+    #
+    # libsystem_c.dylib reexport added the same pass: after the above fix,
+    # the SAME boot hit an identical-shaped abort for ___snprintf_chk,
+    # also "Expected in: libdispatch.dylib" -- despite libsystem_c.dylib
+    # (which really defines it, confirmed via `nm -m`/`dyld_info -exports`)
+    # being linked earlier on libsystem_notify.dylib's own link line. A
+    # real `dyld_info -fixups` dump of libsystem_notify.dylib showed dozens
+    # of genuinely libdispatch-owned symbols (real dispatch_* API) grouped
+    # in the same ordinal as these two non-dispatch symbols -- this
+    # project's pinned Xcode-12-era ld64 (NEWLD_BINDIR override, see
+    # docs/backlog.md item d9) appears to fold a plain (non-reexport) load
+    # dependency into the SAME two-level ordinal as its own real exports
+    # under `-Wl,-fixup_chains`, rather than keeping them distinct the way
+    # real Apple's newer toolchain does -- a real, narrow toolchain quirk,
+    # not a duplicate-symbol or architecture problem (confirmed:
+    # tools/userland_staging/dup_symbol_audit.sh does not flag either
+    # symbol). Reexporting libsystem_c.dylib here closes the whole class
+    # at once instead of chasing it symbol-by-symbol.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
     -install_name /usr/lib/system/libdispatch.dylib \
     -Wl,-not_for_dyld_shared_cache \
@@ -733,9 +763,10 @@ rm -f "$OUT/system/libdispatch.dylib"
     "$OUT"/dispatch_obj/*.o "$OUT"/dispatch_obj/event/*.o \
     "$OUT"/dispatch_dylib_extract/*.o \
     "$OUT/simple_obj/sys__kqueue.o" \
-    "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" \
+    "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" \
-    "$OUT/system/libsystem_blocks.dylib" \
+    -Wl,-reexport_library,"$OUT/system/libsystem_blocks.dylib" \
+    -Wl,-reexport_library,"$OUT/system/libsystem_c.dylib" \
     2>"$OUT/system/libdispatch_dylib_link.err" \
     || { echo "note: dylib link reported diagnostics (expected -- undefined symbols are normal in a dylib), see $OUT/system/libdispatch_dylib_link.err" >&2; }
 

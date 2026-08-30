@@ -81,6 +81,54 @@ int pthread_tsd_shim_bootstrap(void) {
     if (g_tsd_bootstrapped) {
         return 1;
     }
+    /* REAL BUG FOUND AND FIXED HERE (2026-08-30, docs/daemon-roadmap.md
+     * Phase 6.8 continued item 1): this used to unconditionally clobber
+     * TPIDRRO_EL0 with THIS translation unit's own private g_tsd_block.
+     * The g_tsd_bootstrapped guard above is per-COPY, and this file is
+     * genuinely compiled into more than one image at once (confirmed via
+     * `nm`: _g_tsd_block is defined in BOTH libsystem_malloc.dylib and
+     * launchd.macho) -- so the guard cannot see that another copy, or
+     * the authoritative pthread_main_thread_bootstrap(), already
+     * installed a real TSD base. This file's own header comment above
+     * predicted exactly this failure ("whichever bootstraps SECOND wins
+     * TPIDRRO_EL0 and the other's TSD block silently goes stale"); it
+     * stopped being hypothetical once launchd.macho linked the full
+     * libdispatch/ICU/libc++ graph.
+     *
+     * Real, QEMU-diagnosed symptom this fixes: libSystem.B.dylib's
+     * constructor (libsystem_dyld_initializer_compat.c) correctly ran
+     * pthread_main_thread_bootstrap(), installing the real signed
+     * _main_thread as the TSD base -- and then _dyld_initializer()'s
+     * first malloc reached libmalloc_dispatch.c's get_zone(), which
+     * calls this function, which overwrote that base with
+     * libsystem_malloc.dylib's private zero-filled g_tsd_block. libc++'s
+     * iostream static initializer then called pthread_self(), which
+     * computed (TPIDRRO_EL0 - 0xe0), read sig == 0, failed
+     * _pthread_validate_signature() and called abort_with_reason() --
+     * a silent exit(1) with no console output at all. Root-caused with a
+     * temporary kernel-side exit(2) user-backtrace diagnostic (in
+     * bsd/kern/kern_exit.c, since reverted), because every userland-side
+     * marker was invisible -- they all wrote to /dev/console, which
+     * cannot distinguish "never called" from "called, write failed". See
+     * docs/daemon-roadmap.md's Phase 6.8 item 1 write-up for the full
+     * trail and for why that diagnostic channel choice mattered.
+     *
+     * Fix: adopt an already-installed base instead of clobbering it.
+     * This function is the OPPORTUNISTIC bootstrap ("give me some valid
+     * TSD block so os_unfair_lock/_os_tsd_get_direct work"); any base
+     * already installed satisfies that contract exactly as well as our
+     * own block does, and the TSD slots are then genuinely shared
+     * process-wide rather than split across private per-image blocks.
+     * pthread_tsd_shim_bootstrap_with_base()
+     * (pthread_tsd_platform_bootstrap.c) stays unconditional on purpose
+     * -- it is the AUTHORITATIVE installer used by
+     * pthread_main_thread_bootstrap() to publish the real, correctly
+     * signed _main_thread, and must always win regardless of call order. */
+    void *existing = platform_syscall_get_cthread_self();
+    if (existing != (void *)0) {
+        g_tsd_bootstrapped = 1;
+        return 1;
+    }
     void *base = (void *)&g_tsd_block.tsd[0];
     platform_syscall_set_cthread_self(base);
     void *readback = platform_syscall_get_cthread_self();
