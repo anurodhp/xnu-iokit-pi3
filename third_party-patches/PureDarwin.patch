@@ -1,7 +1,7 @@
 From d6c5fabb51d37c2c42ecf30bcbf2fefadef8bbb8 Mon Sep 17 00:00:00 2001
 From: Anurodh Pokharel <anurodhp@icloud.com>
 Date: Fri, 28 Aug 2026 13:45:12 -0400
-Subject: [PATCH 1/2] launchd/shim.h: remove redundant posix_spawnattr
+Subject: [PATCH 1/6] launchd/shim.h: remove redundant posix_spawnattr
  NP-setter no-op shims
 
 posix_spawnattr_setprocesstype_np()/posix_spawnattr_set_
@@ -68,7 +68,7 @@ index e772d61..7d6c208 100644
 From 73084672ea616e76e4a131a3f56805af997caaa1 Mon Sep 17 00:00:00 2001
 From: Anurodh Pokharel <anurodhp@icloud.com>
 Date: Fri, 28 Aug 2026 14:06:58 -0400
-Subject: [PATCH 2/2] launchd/pd_launchd_boot/pd_console_login: iokit project
+Subject: [PATCH 2/6] launchd/pd_launchd_boot/pd_console_login: iokit project
  boot-integration fixes
 
 - launchd.c: call pd_launchd_load_daemons_dir("/Library/LaunchDaemons")
@@ -193,6 +193,817 @@ index 62a9cb0..f06c702 100644
  	pd_launchd_boot_mkdir_p("/dev", 0755);
  	pd_launchd_boot_try_mount("devfs", "/dev", 0, NULL);
  }
+-- 
+2.50.1 (Apple Git-155)
+
+
+From cb628b5da964096c16157f57ac56586af5b1d766 Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@icloud.com>
+Date: Sat, 29 Aug 2026 07:10:06 -0400
+Subject: [PATCH 3/6] launchd: TEMP DIAGNOSTIC instrumentation for bug #6
+ (second-thread SIGSEGV), plus real pthread_main_thread_bootstrap() fix
+
+Mid-investigation checkpoint, not a resolved fix -- committed for a
+clean handoff to whoever continues this (see iokit repo's
+docs/backlog.md item d11 and project memory
+project_xnu_rpi3_launchd_pid1_2026-08-28_session2.md /
+project_xnu_rpi3_static_to_dylib_sweep_2026-08-29.md for full context).
+
+launchd.c: real iokit_diag()/iokit_diag_syscall3() raw-console
+diagnostic helper + prints through main()'s early sequence (still live,
+not yet reverted -- part of the same TEMP DIAGNOSTIC convention this
+project already uses elsewhere, see iokit's own docs/backlog.md P3 item
+3). Also a real, tested fix: main() now explicitly calls
+pthread_main_thread_bootstrap() before launchd_runtime_init(),
+bootstrapping launchd's own local main-thread pthread_t for the first
+time (confirmed via nm this was never touched before -- the existing
+dyld-constructor fix only ever bootstrapped libsystem_pthread.dylib's
+separate copy). Real and correct, but confirmed NOT to fix bug #6 on
+its own -- the SIGSEGV in the second thread persists.
+
+runtime.c: iokit_diag8() helper + prints through
+launchd_runtime_init()/runtime_add_mport()/kqueue_demand_loop() -- the
+second thread's own entry point, where bug #6's real crash happens
+(mig_get_reply_port, right after select() returns).
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01DF4f2tcNW24JcVKMUujSFt
+---
+ src/Libraries/XPC/launchd/launchd.c | 80 +++++++++++++++++++++++++++++
+ src/Libraries/XPC/launchd/runtime.c | 67 +++++++++++++++++++++++-
+ 2 files changed, 145 insertions(+), 2 deletions(-)
+
+diff --git a/src/Libraries/XPC/launchd/launchd.c b/src/Libraries/XPC/launchd/launchd.c
+index 7dc6e06..ec15c99 100644
+--- a/src/Libraries/XPC/launchd/launchd.c
++++ b/src/Libraries/XPC/launchd/launchd.c
+@@ -127,12 +127,62 @@ FILE *launchd_console = NULL;
+ int32_t launchd_sync_frequency = 30;
+ 
+ 
++/* Real, locally-defined (this project's own static build, see
++ * tools/userland_staging/pthread_main_thread_bootstrap.c) -- no header
++ * exposes this prototype to launchd's own real PureDarwin source, so
++ * declared here directly. Used below in main(), bug #6 investigation. */
++extern int pthread_main_thread_bootstrap(void);
++
++/* TEMP DIAGNOSTIC: bisecting a silent exit(1) with zero console output
++ * anywhere before it -- first round (this project's normal open()/
++ * write()/strlen()) produced NO output at all, not even "main() entry"
++ * at the very top of main(), which means either main() itself is never
++ * reached (something before it, e.g. a real dyld/libc++/ICU static
++ * initializer, calls exit(1) first) or this project's own open()/write()
++ * wrappers have a bug. This second round uses RAW syscalls (matching
++ * crt0_smoketest.c's own proven-working pattern), bypassing libc's
++ * open()/write() entirely, to isolate which. Remove once root-caused. */
++static long
++iokit_diag_syscall3(long num, long a0, long a1, long a2)
++{
++	register long x0 asm("x0") = a0;
++	register long x1 asm("x1") = a1;
++	register long x2 asm("x2") = a2;
++	register long x16 asm("x16") = num;
++	asm volatile("svc #0x80" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x16) : "memory", "cc");
++	return x0;
++}
++
++static void
++iokit_diag(const char *msg)
++{
++	long len = 0;
++	while (msg[len] != '\0') {
++		len++;
++	}
++	long fd = iokit_diag_syscall3(5 /* SYS_open */, (long)_PATH_CONSOLE, O_WRONLY | O_NOCTTY, 0);
++	if (fd < 0) {
++		return;
++	}
++	iokit_diag_syscall3(4 /* SYS_write */, fd, (long)msg, len);
++	iokit_diag_syscall3(6 /* SYS_close */, fd, 0, 0);
++}
++
++__attribute__((constructor))
++static void
++iokit_diag_ctor(void)
++{
++	iokit_diag("DIAG: __mod_init_func constructor reached (before main())\n");
++}
++
+ int
+ main(int argc, char *const *argv)
+ {
+ 	bool sflag = false;
+ 	int ch;
+ 
++	iokit_diag("DIAG: main() entry\n");
++
+ 	/* This needs to be cleaned up. Currently, we risk tripping assumes() macros
+ 	 * before we've properly set things like launchd's log database paths, the
+ 	 * global launchd label for syslog messages and the like. Luckily, these are
+@@ -143,6 +193,7 @@ main(int argc, char *const *argv)
+ 	testfd_or_openfd(STDIN_FILENO, _PATH_DEVNULL, O_RDONLY);
+ 	testfd_or_openfd(STDOUT_FILENO, _PATH_DEVNULL, O_WRONLY);
+ 	testfd_or_openfd(STDERR_FILENO, _PATH_DEVNULL, O_WRONLY);
++	iokit_diag("DIAG: past testfd_or_openfd\n");
+ 
+ 	if (launchd_use_gmalloc) {
+ 		if (!getenv("DYLD_INSERT_LIBRARIES")) {
+@@ -173,18 +224,47 @@ main(int argc, char *const *argv)
+ 	}
+ 
+ 	if (getpid() != 1 && getppid() != 1) {
++		iokit_diag("DIAG: failing getpid/getppid check, exiting\n");
+ 		fprintf(stderr, "%s: This program is not meant to be run directly.\n", getprogname());
+ 		exit(EXIT_FAILURE);
+ 	}
++	iokit_diag("DIAG: passed getpid/getppid check\n");
++
++	/* REAL BUG under investigation (bug #6, session 2): launchd.macho's
++	 * own statically-linked pthread machinery (runtime.c's real
++	 * pthread_create() call inside launchd_runtime_init(), below) has
++	 * its OWN separate, local copy of _main_thread/__pthread_head/
++	 * pthread_main_thread_bootstrap (confirmed via `nm launchd.macho` --
++	 * all real, locally-defined `T`/`S`/`d` symbols, not `U`) -- a
++	 * SEPARATE image's worth of pthread state from libsystem_pthread.dylib's
++	 * own copy, which libsystem_dyld_initializer_compat.c's constructor
++	 * already bootstraps via a cross-dylib call. TPIDRRO_EL0 is a single,
++	 * real, process-global CPU register though -- so after that
++	 * constructor runs, it points at libsystem_pthread.dylib's own
++	 * &_main_thread.tsd[0], not launchd's own local copy's. Any code in
++	 * launchd's own local pthread copy that computes pthread_self()/
++	 * errno from that same register would get a valid-looking pointer
++	 * into the WRONG image's struct -- a real cross-image confusion,
++	 * exactly the shape of the new second-thread SIGSEGV this fix is
++	 * testing. This is genuinely the FIRST call against THIS copy's
++	 * _main_thread/__pthread_head (confirmed via nm -- nothing has
++	 * touched them yet), not a double-bootstrap of anything already
++	 * initialized once. */
++	pthread_main_thread_bootstrap();
++	iokit_diag("DIAG: past launchd-local pthread_main_thread_bootstrap\n");
+ 
+ 	launchd_runtime_init();
++	iokit_diag("DIAG: returned from launchd_runtime_init\n");
+ 
+ 	if (NULL == getenv("PATH")) {
+ 		setenv("PATH", _PATH_STDPATH, 1);
+ 	}
++	iokit_diag("DIAG: past PATH setenv\n");
+ 
+ 	if (pid1_magic) {
++		iokit_diag("DIAG: about to call pid1_magic_init\n");
+ 		pid1_magic_init();
++		iokit_diag("DIAG: returned from pid1_magic_init\n");
+ 
+ 		int cfd = -1;
+ 		if ((cfd = open(_PATH_CONSOLE, O_WRONLY | O_NOCTTY)) != -1) {
+diff --git a/src/Libraries/XPC/launchd/runtime.c b/src/Libraries/XPC/launchd/runtime.c
+index e72f350..8e2e847 100644
+--- a/src/Libraries/XPC/launchd/runtime.c
++++ b/src/Libraries/XPC/launchd/runtime.c
+@@ -191,18 +191,69 @@ union do_notify_max_sz {
+ 	union __ReplyUnion__do_notify_subsystem rep;
+ };
+ 
++/* TEMP DIAGNOSTIC: bisecting a real SIGABRT (namespace 2/OS_REASON_SIGNAL
++ * subcode 0x6) somewhere inside this function -- see docs/backlog.md item
++ * d10 for the full trail (this is the NEW bug that surfaced once the
++ * pthread-main-thread-bootstrap fix let real main() run for the first
++ * time). Raw syscalls, not stdio, same pattern used throughout this
++ * project's own recent dyld/libc++/libpthread bisection. Remove once
++ * root-caused. */
++static long iokit_diag8_syscall3(long num, long a0, long a1, long a2) {
++	register long x0 asm("x0") = a0;
++	register long x1 asm("x1") = a1;
++	register long x2 asm("x2") = a2;
++	register long x16 asm("x16") = num;
++	asm volatile("svc #0x80" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x16) : "memory", "cc");
++	return x0;
++}
++static void iokit_diag8(const char *msg) {
++	long len = 0;
++	while (msg[len] != '\0') { len++; }
++	long fd = iokit_diag8_syscall3(5, (long)"/dev/console", 0x0001 | 0x20000, 0);
++	if (fd < 0) { return; }
++	iokit_diag8_syscall3(4, fd, (long)msg, len);
++	iokit_diag8_syscall3(6, fd, 0, 0);
++}
++
+ void
+ launchd_runtime_init(void)
+ {
+ 	pid_t p = getpid();
++	iokit_diag8("IOKITDIAG8: launchd_runtime_init entry\n");
+ 	(void)posix_assert_zero((mainkq = kqueue()));
+-
+-	os_assert_zero(mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_PORT_SET, &demand_port_set));
++	iokit_diag8("IOKITDIAG8: past kqueue()\n");
++
++	{
++		mach_port_t self_task = mach_task_self();
++		char tmsg[80] = "IOKITDIAG8: mach_task_self()=0x00000000\n";
++		for (int i = 0; i < 8; i++) {
++			int nib = (self_task >> ((7 - i) * 4)) & 0xf;
++			tmsg[31 + i] = (char)(nib < 10 ? '0' + nib : 'a' + nib - 10);
++		}
++		iokit_diag8(tmsg);
++
++		kern_return_t kr_demand = mach_port_allocate(self_task, MACH_PORT_RIGHT_PORT_SET, &demand_port_set);
++		char kmsg[80] = "IOKITDIAG8: mach_port_allocate kr=-0000000000\n";
++		int neg = kr_demand < 0;
++		unsigned int mag = (unsigned int)(neg ? -kr_demand : kr_demand);
++		kmsg[34] = neg ? '-' : ' ';
++		for (int i = 9; i >= 0; i--) {
++			kmsg[35 + i] = (char)('0' + (mag % 10));
++			mag /= 10;
++		}
++		iokit_diag8(kmsg);
++		os_assert_zero(kr_demand);
++	}
++	iokit_diag8("IOKITDIAG8: past demand_port_set mach_port_allocate\n");
+ 	os_assert_zero(mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_PORT_SET, &ipc_port_set));
++	iokit_diag8("IOKITDIAG8: past ipc_port_set mach_port_allocate\n");
+ 	posix_assert_zero(kevent_mod(demand_port_set, EVFILT_MACHPORT, EV_ADD, 0, 0, &kqmportset_callback));
++	iokit_diag8("IOKITDIAG8: past kevent_mod\n");
+ 
+ 	os_assert_zero(launchd_mport_create_recv(&launchd_internal_port));
++	iokit_diag8("IOKITDIAG8: past launchd_mport_create_recv\n");
+ 	os_assert_zero(launchd_mport_make_send(launchd_internal_port));
++	iokit_diag8("IOKITDIAG8: past launchd_mport_make_send\n");
+ 
+     // _sjc_ investigate this here
+ 	max_msg_size = sizeof(union vproc_mig_max_sz);
+@@ -211,10 +262,14 @@ launchd_runtime_init(void)
+ 	}
+ 
+ 	os_assert_zero(runtime_add_mport(launchd_internal_port, launchd_internal_demux));
++	iokit_diag8("IOKITDIAG8: past runtime_add_mport\n");
+ 	os_assert_zero(pthread_create(&kqueue_demand_thread, NULL, kqueue_demand_loop, NULL));
++	iokit_diag8("IOKITDIAG8: past pthread_create\n");
+ 	os_assert_zero(pthread_detach(kqueue_demand_thread));
++	iokit_diag8("IOKITDIAG8: past pthread_detach\n");
+ 
+ 	(void)posix_assumes_zero(sysctlbyname("vfs.generic.noremotehang", NULL, NULL, &p, sizeof(p)));
++	iokit_diag8("IOKITDIAG8: launchd_runtime_init exit\n");
+ }
+ 
+ void
+@@ -539,10 +594,13 @@ kqueue_demand_loop(void *arg __attribute__((unused)))
+ 	 * that manipulates the kqueue.
+ 	 */
+ 
++	iokit_diag8("IOKITDIAG8: kqueue_demand_loop (new thread) entry\n");
+ 	for (;;) {
+ 		FD_ZERO(&rfds);
+ 		FD_SET(mainkq, &rfds);
++		iokit_diag8("IOKITDIAG8: kqueue_demand_loop about to call select()\n");
+ 		int r = select(mainkq + 1, &rfds, NULL, NULL, NULL);
++		iokit_diag8("IOKITDIAG8: kqueue_demand_loop select() returned\n");
+ 		if (r == 1) {
+ 			(void)os_assumes_zero(handle_kqueue(launchd_internal_port, mainkq));
+ 		} else if (posix_assumes_zero(r) != -1) {
+@@ -713,9 +771,11 @@ runtime_add_mport(mach_port_t name, mig_callback demux)
+ 	mach_port_t target_set = demux ? ipc_port_set : demand_port_set;
+ 	kern_return_t kr;
+ 
++	iokit_diag8("IOKITDIAG8: runtime_add_mport entry\n");
+ 	if (unlikely(needed_table_sz > mig_cb_table_sz)) {
+ 		needed_table_sz *= 2; /* Let's try and avoid realloc'ing for a while */
+ 		mig_callback *new_table = malloc(needed_table_sz);
++		iokit_diag8("IOKITDIAG8: runtime_add_mport past malloc\n");
+ 
+ 		if (!new_table) {
+ 			return KERN_RESOURCE_SHORTAGE;
+@@ -731,10 +791,13 @@ runtime_add_mport(mach_port_t name, mig_callback demux)
+ 	}
+ 
+ 	mig_cb_table[MACH_PORT_INDEX(name)] = demux;
++	iokit_diag8("IOKITDIAG8: runtime_add_mport about to call mach_port_move_member\n");
+ 
+ 	kr = mach_port_move_member(mach_task_self(), name, target_set);
++	iokit_diag8("IOKITDIAG8: runtime_add_mport past mach_port_move_member\n");
+ 	pd_runtime_phase("runtime_add_mport port=0x%x idx=%u demux=%p set=0x%x kr=0x%x",
+ 			name, MACH_PORT_INDEX(name), demux, target_set, kr);
++	iokit_diag8("IOKITDIAG8: runtime_add_mport exit\n");
+ 	return errno = kr;
+ }
+ 
+-- 
+2.50.1 (Apple Git-155)
+
+
+From 246d441298e63664fd9b7c44a4b43d9e02ca14ab Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@icloud.com>
+Date: Sat, 29 Aug 2026 08:20:49 -0400
+Subject: [PATCH 4/6] launchd/runtime: TEMP DIAGNOSTIC tracing for bug #6,
+ rules out main-thread races
+
+Adds iokit_diag()/iokit_diag8() prints around launchd_runtime2()'s real
+receive loop (xpc_pipe_try_receive on ipc_port_set) and around the
+update_thread pthread_create()/pthread_detach() calls in main(), to
+test whether the main thread's own concurrent activity (its MIG
+dispatch loop, or spawning a third real thread) races with the second
+(kqueue_demand_loop) thread's blocking mach_msg() receive.
+
+Real result: neither ever fires before the panic in any test run --
+the main thread never reaches launchd_runtime2() or even the
+update_thread pthread_create() call by the time the second thread
+dies, across every log gathered. Rules out a main-thread race as the
+cause; the crash's timing is dictated entirely by the second thread's
+own block transition. Full trail in iokit/docs/backlog.md item d11's
+final 2026-08-29 update.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01DF4f2tcNW24JcVKMUujSFt
+---
+ src/Libraries/XPC/launchd/launchd.c |  5 +++++
+ src/Libraries/XPC/launchd/runtime.c | 14 ++++++++++++++
+ 2 files changed, 19 insertions(+)
+
+diff --git a/src/Libraries/XPC/launchd/launchd.c b/src/Libraries/XPC/launchd/launchd.c
+index ec15c99..6a98b68 100644
+--- a/src/Libraries/XPC/launchd/launchd.c
++++ b/src/Libraries/XPC/launchd/launchd.c
+@@ -306,15 +306,20 @@ main(int argc, char *const *argv)
+ 			launchd_syslog(LOG_NOTICE | LOG_CONSOLE, "*** Debug logging is enabled. ***");
+ 		}
+ 
++		iokit_diag("DIAG: about to call handle_pid1_crashes_separately\n");
+ 		handle_pid1_crashes_separately();
++		iokit_diag("DIAG: past handle_pid1_crashes_separately\n");
+ 
+ 		/* Start the update thread.
+ 		 *
+ 		 * <rdar://problem/5039559&6153301>
+ 		 */
+ 		pthread_t t = NULL;
++		iokit_diag("DIAG: about to call pthread_create for update_thread (THIRD real thread)\n");
+ 		(void)os_assumes_zero(pthread_create(&t, NULL, update_thread, NULL));
++		iokit_diag("DIAG: past pthread_create for update_thread\n");
+ 		(void)os_assumes_zero(pthread_detach(t));
++		iokit_diag("DIAG: past pthread_detach for update_thread\n");
+ 
+ 		/* PID 1 doesn't have a flat namespace. */
+ 		launchd_flat_mach_namespace = false;
+diff --git a/src/Libraries/XPC/launchd/runtime.c b/src/Libraries/XPC/launchd/runtime.c
+index 8e2e847..0369d4d 100644
+--- a/src/Libraries/XPC/launchd/runtime.c
++++ b/src/Libraries/XPC/launchd/runtime.c
+@@ -662,6 +662,17 @@ x_handle_kqueue(mach_port_t junk __attribute__((unused)), integer_t fd)
+ void
+ launchd_runtime(void)
+ {
++	/* TEMP DIAGNOSTIC 2026-08-29, launchd bug #6: real kernel-side
++	 * kprintf bisection (osfmk/ipc/mach_msg.c/ipc_mqueue.c, see
++	 * iokit/docs/backlog.md item d11) narrowed the crash to the second
++	 * (kqueue_demand_loop) thread's blocking mach_msg() receive, but
++	 * left open whether the MAIN thread ever reaches its own receive
++	 * loop (launchd_runtime2 below, real xpc_pipe_try_receive on
++	 * ipc_port_set/launchd_internal_port) before the crash -- no log so
++	 * far shows a second mach_msg_overwrite_trap call tagged with the
++	 * main thread. This print settles that cheaply (launchd.macho-only
++	 * rebuild, no kernel rebuild needed). */
++	iokit_diag8("IOKITDIAG8: launchd_runtime about to call launchd_runtime2\n");
+ 	launchd_runtime2(max_msg_size);
+ 	dispatch_main();
+ }
+@@ -1143,12 +1154,15 @@ pd_runtime_phase(const char *fmt, ...)
+ void
+ launchd_runtime2(mach_msg_size_t msg_size)
+ {
++	iokit_diag8("IOKITDIAG8: launchd_runtime2 entry\n");
+ 	for (;;) {
+ 		launchd_log_push();
+ 
+ 		mach_port_t recvp = MACH_PORT_NULL;
+ 		xpc_object_t request = NULL;
++		iokit_diag8("IOKITDIAG8: launchd_runtime2 about to call xpc_pipe_try_receive\n");
+ 		int result = xpc_pipe_try_receive(ipc_port_set, &request, &recvp, launchd_mig_demux, msg_size, 0);
++		iokit_diag8("IOKITDIAG8: launchd_runtime2 past xpc_pipe_try_receive\n");
+ 		if (result == 0 && request) {
+ 			boolean_t handled = false;
+ 			time_of_mach_msg_return = runtime_get_opaque_time();
+-- 
+2.50.1 (Apple Git-155)
+
+
+From 42ea3aa851bd624635159e48866eb5b6c1fe8d5f Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@icloud.com>
+Date: Sat, 29 Aug 2026 11:42:21 -0400
+Subject: [PATCH 5/6] launchd: remove bug #6 TEMP DIAGNOSTIC instrumentation,
+ keep the real fix
+
+Bug #6 is resolved -- root cause was _FORTIFY_SOURCE self-recursion in
+Libc/secure/*_chk.c on the iokit project's userland side, not in launchd.
+
+runtime.c: removes the iokit_diag8 helpers and all 24 probe call sites,
+including the instrumented mach_port_allocate(demand_port_set) block, which
+is restored to its original single os_assert_zero(...) line. This file now
+matches origin/next exactly -- every local change to it was diagnostic.
+
+launchd.c: removes the iokit_diag helpers, the __mod_init_func constructor
+probe and all 14 DIAG call sites, while KEEPING the real, load-bearing
+change -- the extern declaration and call to pthread_main_thread_bootstrap()
+before launchd_runtime_init().
+
+NOTE: this branch is intentionally not pushed. origin here is the real
+upstream PureDarwin/PureDarwin.git, not a personal fork.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01DF4f2tcNW24JcVKMUujSFt
+---
+ src/Libraries/XPC/launchd/launchd.c | 56 --------------------
+ src/Libraries/XPC/launchd/runtime.c | 81 +----------------------------
+ 2 files changed, 2 insertions(+), 135 deletions(-)
+
+diff --git a/src/Libraries/XPC/launchd/launchd.c b/src/Libraries/XPC/launchd/launchd.c
+index 6a98b68..adb5c21 100644
+--- a/src/Libraries/XPC/launchd/launchd.c
++++ b/src/Libraries/XPC/launchd/launchd.c
+@@ -133,55 +133,12 @@ int32_t launchd_sync_frequency = 30;
+  * declared here directly. Used below in main(), bug #6 investigation. */
+ extern int pthread_main_thread_bootstrap(void);
+ 
+-/* TEMP DIAGNOSTIC: bisecting a silent exit(1) with zero console output
+- * anywhere before it -- first round (this project's normal open()/
+- * write()/strlen()) produced NO output at all, not even "main() entry"
+- * at the very top of main(), which means either main() itself is never
+- * reached (something before it, e.g. a real dyld/libc++/ICU static
+- * initializer, calls exit(1) first) or this project's own open()/write()
+- * wrappers have a bug. This second round uses RAW syscalls (matching
+- * crt0_smoketest.c's own proven-working pattern), bypassing libc's
+- * open()/write() entirely, to isolate which. Remove once root-caused. */
+-static long
+-iokit_diag_syscall3(long num, long a0, long a1, long a2)
+-{
+-	register long x0 asm("x0") = a0;
+-	register long x1 asm("x1") = a1;
+-	register long x2 asm("x2") = a2;
+-	register long x16 asm("x16") = num;
+-	asm volatile("svc #0x80" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x16) : "memory", "cc");
+-	return x0;
+-}
+-
+-static void
+-iokit_diag(const char *msg)
+-{
+-	long len = 0;
+-	while (msg[len] != '\0') {
+-		len++;
+-	}
+-	long fd = iokit_diag_syscall3(5 /* SYS_open */, (long)_PATH_CONSOLE, O_WRONLY | O_NOCTTY, 0);
+-	if (fd < 0) {
+-		return;
+-	}
+-	iokit_diag_syscall3(4 /* SYS_write */, fd, (long)msg, len);
+-	iokit_diag_syscall3(6 /* SYS_close */, fd, 0, 0);
+-}
+-
+-__attribute__((constructor))
+-static void
+-iokit_diag_ctor(void)
+-{
+-	iokit_diag("DIAG: __mod_init_func constructor reached (before main())\n");
+-}
+-
+ int
+ main(int argc, char *const *argv)
+ {
+ 	bool sflag = false;
+ 	int ch;
+ 
+-	iokit_diag("DIAG: main() entry\n");
+ 
+ 	/* This needs to be cleaned up. Currently, we risk tripping assumes() macros
+ 	 * before we've properly set things like launchd's log database paths, the
+@@ -193,7 +150,6 @@ main(int argc, char *const *argv)
+ 	testfd_or_openfd(STDIN_FILENO, _PATH_DEVNULL, O_RDONLY);
+ 	testfd_or_openfd(STDOUT_FILENO, _PATH_DEVNULL, O_WRONLY);
+ 	testfd_or_openfd(STDERR_FILENO, _PATH_DEVNULL, O_WRONLY);
+-	iokit_diag("DIAG: past testfd_or_openfd\n");
+ 
+ 	if (launchd_use_gmalloc) {
+ 		if (!getenv("DYLD_INSERT_LIBRARIES")) {
+@@ -224,11 +180,9 @@ main(int argc, char *const *argv)
+ 	}
+ 
+ 	if (getpid() != 1 && getppid() != 1) {
+-		iokit_diag("DIAG: failing getpid/getppid check, exiting\n");
+ 		fprintf(stderr, "%s: This program is not meant to be run directly.\n", getprogname());
+ 		exit(EXIT_FAILURE);
+ 	}
+-	iokit_diag("DIAG: passed getpid/getppid check\n");
+ 
+ 	/* REAL BUG under investigation (bug #6, session 2): launchd.macho's
+ 	 * own statically-linked pthread machinery (runtime.c's real
+@@ -251,20 +205,15 @@ main(int argc, char *const *argv)
+ 	 * touched them yet), not a double-bootstrap of anything already
+ 	 * initialized once. */
+ 	pthread_main_thread_bootstrap();
+-	iokit_diag("DIAG: past launchd-local pthread_main_thread_bootstrap\n");
+ 
+ 	launchd_runtime_init();
+-	iokit_diag("DIAG: returned from launchd_runtime_init\n");
+ 
+ 	if (NULL == getenv("PATH")) {
+ 		setenv("PATH", _PATH_STDPATH, 1);
+ 	}
+-	iokit_diag("DIAG: past PATH setenv\n");
+ 
+ 	if (pid1_magic) {
+-		iokit_diag("DIAG: about to call pid1_magic_init\n");
+ 		pid1_magic_init();
+-		iokit_diag("DIAG: returned from pid1_magic_init\n");
+ 
+ 		int cfd = -1;
+ 		if ((cfd = open(_PATH_CONSOLE, O_WRONLY | O_NOCTTY)) != -1) {
+@@ -306,20 +255,15 @@ main(int argc, char *const *argv)
+ 			launchd_syslog(LOG_NOTICE | LOG_CONSOLE, "*** Debug logging is enabled. ***");
+ 		}
+ 
+-		iokit_diag("DIAG: about to call handle_pid1_crashes_separately\n");
+ 		handle_pid1_crashes_separately();
+-		iokit_diag("DIAG: past handle_pid1_crashes_separately\n");
+ 
+ 		/* Start the update thread.
+ 		 *
+ 		 * <rdar://problem/5039559&6153301>
+ 		 */
+ 		pthread_t t = NULL;
+-		iokit_diag("DIAG: about to call pthread_create for update_thread (THIRD real thread)\n");
+ 		(void)os_assumes_zero(pthread_create(&t, NULL, update_thread, NULL));
+-		iokit_diag("DIAG: past pthread_create for update_thread\n");
+ 		(void)os_assumes_zero(pthread_detach(t));
+-		iokit_diag("DIAG: past pthread_detach for update_thread\n");
+ 
+ 		/* PID 1 doesn't have a flat namespace. */
+ 		launchd_flat_mach_namespace = false;
+diff --git a/src/Libraries/XPC/launchd/runtime.c b/src/Libraries/XPC/launchd/runtime.c
+index 0369d4d..e72f350 100644
+--- a/src/Libraries/XPC/launchd/runtime.c
++++ b/src/Libraries/XPC/launchd/runtime.c
+@@ -191,69 +191,18 @@ union do_notify_max_sz {
+ 	union __ReplyUnion__do_notify_subsystem rep;
+ };
+ 
+-/* TEMP DIAGNOSTIC: bisecting a real SIGABRT (namespace 2/OS_REASON_SIGNAL
+- * subcode 0x6) somewhere inside this function -- see docs/backlog.md item
+- * d10 for the full trail (this is the NEW bug that surfaced once the
+- * pthread-main-thread-bootstrap fix let real main() run for the first
+- * time). Raw syscalls, not stdio, same pattern used throughout this
+- * project's own recent dyld/libc++/libpthread bisection. Remove once
+- * root-caused. */
+-static long iokit_diag8_syscall3(long num, long a0, long a1, long a2) {
+-	register long x0 asm("x0") = a0;
+-	register long x1 asm("x1") = a1;
+-	register long x2 asm("x2") = a2;
+-	register long x16 asm("x16") = num;
+-	asm volatile("svc #0x80" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x16) : "memory", "cc");
+-	return x0;
+-}
+-static void iokit_diag8(const char *msg) {
+-	long len = 0;
+-	while (msg[len] != '\0') { len++; }
+-	long fd = iokit_diag8_syscall3(5, (long)"/dev/console", 0x0001 | 0x20000, 0);
+-	if (fd < 0) { return; }
+-	iokit_diag8_syscall3(4, fd, (long)msg, len);
+-	iokit_diag8_syscall3(6, fd, 0, 0);
+-}
+-
+ void
+ launchd_runtime_init(void)
+ {
+ 	pid_t p = getpid();
+-	iokit_diag8("IOKITDIAG8: launchd_runtime_init entry\n");
+ 	(void)posix_assert_zero((mainkq = kqueue()));
+-	iokit_diag8("IOKITDIAG8: past kqueue()\n");
+-
+-	{
+-		mach_port_t self_task = mach_task_self();
+-		char tmsg[80] = "IOKITDIAG8: mach_task_self()=0x00000000\n";
+-		for (int i = 0; i < 8; i++) {
+-			int nib = (self_task >> ((7 - i) * 4)) & 0xf;
+-			tmsg[31 + i] = (char)(nib < 10 ? '0' + nib : 'a' + nib - 10);
+-		}
+-		iokit_diag8(tmsg);
+-
+-		kern_return_t kr_demand = mach_port_allocate(self_task, MACH_PORT_RIGHT_PORT_SET, &demand_port_set);
+-		char kmsg[80] = "IOKITDIAG8: mach_port_allocate kr=-0000000000\n";
+-		int neg = kr_demand < 0;
+-		unsigned int mag = (unsigned int)(neg ? -kr_demand : kr_demand);
+-		kmsg[34] = neg ? '-' : ' ';
+-		for (int i = 9; i >= 0; i--) {
+-			kmsg[35 + i] = (char)('0' + (mag % 10));
+-			mag /= 10;
+-		}
+-		iokit_diag8(kmsg);
+-		os_assert_zero(kr_demand);
+-	}
+-	iokit_diag8("IOKITDIAG8: past demand_port_set mach_port_allocate\n");
++
++	os_assert_zero(mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_PORT_SET, &demand_port_set));
+ 	os_assert_zero(mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_PORT_SET, &ipc_port_set));
+-	iokit_diag8("IOKITDIAG8: past ipc_port_set mach_port_allocate\n");
+ 	posix_assert_zero(kevent_mod(demand_port_set, EVFILT_MACHPORT, EV_ADD, 0, 0, &kqmportset_callback));
+-	iokit_diag8("IOKITDIAG8: past kevent_mod\n");
+ 
+ 	os_assert_zero(launchd_mport_create_recv(&launchd_internal_port));
+-	iokit_diag8("IOKITDIAG8: past launchd_mport_create_recv\n");
+ 	os_assert_zero(launchd_mport_make_send(launchd_internal_port));
+-	iokit_diag8("IOKITDIAG8: past launchd_mport_make_send\n");
+ 
+     // _sjc_ investigate this here
+ 	max_msg_size = sizeof(union vproc_mig_max_sz);
+@@ -262,14 +211,10 @@ launchd_runtime_init(void)
+ 	}
+ 
+ 	os_assert_zero(runtime_add_mport(launchd_internal_port, launchd_internal_demux));
+-	iokit_diag8("IOKITDIAG8: past runtime_add_mport\n");
+ 	os_assert_zero(pthread_create(&kqueue_demand_thread, NULL, kqueue_demand_loop, NULL));
+-	iokit_diag8("IOKITDIAG8: past pthread_create\n");
+ 	os_assert_zero(pthread_detach(kqueue_demand_thread));
+-	iokit_diag8("IOKITDIAG8: past pthread_detach\n");
+ 
+ 	(void)posix_assumes_zero(sysctlbyname("vfs.generic.noremotehang", NULL, NULL, &p, sizeof(p)));
+-	iokit_diag8("IOKITDIAG8: launchd_runtime_init exit\n");
+ }
+ 
+ void
+@@ -594,13 +539,10 @@ kqueue_demand_loop(void *arg __attribute__((unused)))
+ 	 * that manipulates the kqueue.
+ 	 */
+ 
+-	iokit_diag8("IOKITDIAG8: kqueue_demand_loop (new thread) entry\n");
+ 	for (;;) {
+ 		FD_ZERO(&rfds);
+ 		FD_SET(mainkq, &rfds);
+-		iokit_diag8("IOKITDIAG8: kqueue_demand_loop about to call select()\n");
+ 		int r = select(mainkq + 1, &rfds, NULL, NULL, NULL);
+-		iokit_diag8("IOKITDIAG8: kqueue_demand_loop select() returned\n");
+ 		if (r == 1) {
+ 			(void)os_assumes_zero(handle_kqueue(launchd_internal_port, mainkq));
+ 		} else if (posix_assumes_zero(r) != -1) {
+@@ -662,17 +604,6 @@ x_handle_kqueue(mach_port_t junk __attribute__((unused)), integer_t fd)
+ void
+ launchd_runtime(void)
+ {
+-	/* TEMP DIAGNOSTIC 2026-08-29, launchd bug #6: real kernel-side
+-	 * kprintf bisection (osfmk/ipc/mach_msg.c/ipc_mqueue.c, see
+-	 * iokit/docs/backlog.md item d11) narrowed the crash to the second
+-	 * (kqueue_demand_loop) thread's blocking mach_msg() receive, but
+-	 * left open whether the MAIN thread ever reaches its own receive
+-	 * loop (launchd_runtime2 below, real xpc_pipe_try_receive on
+-	 * ipc_port_set/launchd_internal_port) before the crash -- no log so
+-	 * far shows a second mach_msg_overwrite_trap call tagged with the
+-	 * main thread. This print settles that cheaply (launchd.macho-only
+-	 * rebuild, no kernel rebuild needed). */
+-	iokit_diag8("IOKITDIAG8: launchd_runtime about to call launchd_runtime2\n");
+ 	launchd_runtime2(max_msg_size);
+ 	dispatch_main();
+ }
+@@ -782,11 +713,9 @@ runtime_add_mport(mach_port_t name, mig_callback demux)
+ 	mach_port_t target_set = demux ? ipc_port_set : demand_port_set;
+ 	kern_return_t kr;
+ 
+-	iokit_diag8("IOKITDIAG8: runtime_add_mport entry\n");
+ 	if (unlikely(needed_table_sz > mig_cb_table_sz)) {
+ 		needed_table_sz *= 2; /* Let's try and avoid realloc'ing for a while */
+ 		mig_callback *new_table = malloc(needed_table_sz);
+-		iokit_diag8("IOKITDIAG8: runtime_add_mport past malloc\n");
+ 
+ 		if (!new_table) {
+ 			return KERN_RESOURCE_SHORTAGE;
+@@ -802,13 +731,10 @@ runtime_add_mport(mach_port_t name, mig_callback demux)
+ 	}
+ 
+ 	mig_cb_table[MACH_PORT_INDEX(name)] = demux;
+-	iokit_diag8("IOKITDIAG8: runtime_add_mport about to call mach_port_move_member\n");
+ 
+ 	kr = mach_port_move_member(mach_task_self(), name, target_set);
+-	iokit_diag8("IOKITDIAG8: runtime_add_mport past mach_port_move_member\n");
+ 	pd_runtime_phase("runtime_add_mport port=0x%x idx=%u demux=%p set=0x%x kr=0x%x",
+ 			name, MACH_PORT_INDEX(name), demux, target_set, kr);
+-	iokit_diag8("IOKITDIAG8: runtime_add_mport exit\n");
+ 	return errno = kr;
+ }
+ 
+@@ -1154,15 +1080,12 @@ pd_runtime_phase(const char *fmt, ...)
+ void
+ launchd_runtime2(mach_msg_size_t msg_size)
+ {
+-	iokit_diag8("IOKITDIAG8: launchd_runtime2 entry\n");
+ 	for (;;) {
+ 		launchd_log_push();
+ 
+ 		mach_port_t recvp = MACH_PORT_NULL;
+ 		xpc_object_t request = NULL;
+-		iokit_diag8("IOKITDIAG8: launchd_runtime2 about to call xpc_pipe_try_receive\n");
+ 		int result = xpc_pipe_try_receive(ipc_port_set, &request, &recvp, launchd_mig_demux, msg_size, 0);
+-		iokit_diag8("IOKITDIAG8: launchd_runtime2 past xpc_pipe_try_receive\n");
+ 		if (result == 0 && request) {
+ 			boolean_t handled = false;
+ 			time_of_mach_msg_return = runtime_get_opaque_time();
+-- 
+2.50.1 (Apple Git-155)
+
+
+From 2f0ef341abb46a2f541a39797bd9a52bc55c75ad Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@icloud.com>
+Date: Sun, 30 Aug 2026 14:05:58 -0400
+Subject: [PATCH 6/6] launchd: drop redundant pthread main-thread bootstrap +
+ strip diagnostics
+
+launchd's main() explicitly called pthread_main_thread_bootstrap(). That
+was actively harmful, not merely redundant.
+
+__main_thread is an EXTERNAL COMMON symbol defined in both launchd.macho
+and libsystem_pthread.dylib, so the two coalesce at runtime into a single
+struct. __pthread_ptr_munge_token is NON-external in both and does NOT
+coalesce. By the time main() runs, libSystem.B.dylib's constructor has
+already bootstrapped that shared struct via libsystem_pthread.dylib's
+copy, signing it with that image's private token. Calling launchd's own
+copy here re-signed it with a SECOND token, after which every
+pthread_self() served by libsystem_pthread.dylib -- the copy real
+CoreFoundation, libdispatch and libc++ actually bind to -- failed
+_pthread_validate_signature() and called abort_with_reason(): a silent
+exit(1), signal 0, with zero console output.
+
+The authoritative bootstrap already runs before any initializer or
+main(), so the correct number of additional bootstraps here is zero.
+launchd.macho no longer links a static pthread copy at all (see
+tools/userland_staging/build_launchd.sh in the parent repo).
+
+Also strips the pd_diag_console() helper and all TEMP DIAGNOSTIC markers
+from the prior bisection. Those markers wrote to /dev/console, which
+cannot distinguish "never called" from "called, write failed" -- they
+produced a confident false negative that sent the investigation after
+dyld's pre-main() bootstrap instead of this bug.
+
+Real launchd now boots as PID 1 and reaches launchd_runtime().
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01Nkfdgj4zUvAa7XcRLcWBgt
+---
+ src/Libraries/XPC/launchd/launchd.c | 40 ++++++++++-------------------
+ 1 file changed, 14 insertions(+), 26 deletions(-)
+
+diff --git a/src/Libraries/XPC/launchd/launchd.c b/src/Libraries/XPC/launchd/launchd.c
+index adb5c21..4aa92db 100644
+--- a/src/Libraries/XPC/launchd/launchd.c
++++ b/src/Libraries/XPC/launchd/launchd.c
+@@ -127,11 +127,7 @@ FILE *launchd_console = NULL;
+ int32_t launchd_sync_frequency = 30;
+ 
+ 
+-/* Real, locally-defined (this project's own static build, see
+- * tools/userland_staging/pthread_main_thread_bootstrap.c) -- no header
+- * exposes this prototype to launchd's own real PureDarwin source, so
+- * declared here directly. Used below in main(), bug #6 investigation. */
+-extern int pthread_main_thread_bootstrap(void);
++
+ 
+ int
+ main(int argc, char *const *argv)
+@@ -184,27 +180,19 @@ main(int argc, char *const *argv)
+ 		exit(EXIT_FAILURE);
+ 	}
+ 
+-	/* REAL BUG under investigation (bug #6, session 2): launchd.macho's
+-	 * own statically-linked pthread machinery (runtime.c's real
+-	 * pthread_create() call inside launchd_runtime_init(), below) has
+-	 * its OWN separate, local copy of _main_thread/__pthread_head/
+-	 * pthread_main_thread_bootstrap (confirmed via `nm launchd.macho` --
+-	 * all real, locally-defined `T`/`S`/`d` symbols, not `U`) -- a
+-	 * SEPARATE image's worth of pthread state from libsystem_pthread.dylib's
+-	 * own copy, which libsystem_dyld_initializer_compat.c's constructor
+-	 * already bootstraps via a cross-dylib call. TPIDRRO_EL0 is a single,
+-	 * real, process-global CPU register though -- so after that
+-	 * constructor runs, it points at libsystem_pthread.dylib's own
+-	 * &_main_thread.tsd[0], not launchd's own local copy's. Any code in
+-	 * launchd's own local pthread copy that computes pthread_self()/
+-	 * errno from that same register would get a valid-looking pointer
+-	 * into the WRONG image's struct -- a real cross-image confusion,
+-	 * exactly the shape of the new second-thread SIGSEGV this fix is
+-	 * testing. This is genuinely the FIRST call against THIS copy's
+-	 * _main_thread/__pthread_head (confirmed via nm -- nothing has
+-	 * touched them yet), not a double-bootstrap of anything already
+-	 * initialized once. */
+-	pthread_main_thread_bootstrap();
++	/* NOTE (2026-08-30, docs/daemon-roadmap.md Phase 6.8 continued):
++	 * launchd deliberately does NOT bootstrap the pthread main thread
++	 * here. libSystem.B.dylib's own constructor
++	 * (libsystem_dyld_initializer_compat.c) already does it, via
++	 * libsystem_pthread.dylib, before ANY initializer or main() runs --
++	 * so the correct number of additional bootstraps in launchd is zero.
++	 * An earlier explicit call here re-signed the shared _main_thread
++	 * with a SECOND, private munge token, after which every
++	 * pthread_self() served by libsystem_pthread.dylib (the copy real
++	 * CoreFoundation/libdispatch/libc++ bind to) failed
++	 * _pthread_validate_signature() and aborted into a silent exit(1).
++	 * launchd.macho no longer links a static pthread copy at all -- see
++	 * tools/userland_staging/build_launchd.sh. */
+ 
+ 	launchd_runtime_init();
+ 
 -- 
 2.50.1 (Apple Git-155)
 
