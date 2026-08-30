@@ -3517,9 +3517,28 @@ real console login needs, per a fresh read of the current sources
   (`write_journal_header()` always returns 0), and the real bug was in
   userland pthread state, not the filesystem. Diagnostics were stripped
   and re-verified by a clean QEMU boot
-  (`qemu/launchd_boot_test94.log`). Still TODO from this bullet: update
-  `docs/backlog.md` item d11 and add a postmortem doc, matching the bug
-  #6 precedent (`docs/launchd-bug6-postmortem.md`).
+  (`qemu/launchd_boot_test94.log`). **Documentation TODO from this
+  bullet is now DONE (2026-08-30)**: `docs/backlog.md` item d11 is
+  updated, and `docs/launchd-pid1-postmortem.md` is the postmortem,
+  matching the bug #6 precedent (`docs/launchd-bug6-postmortem.md`).
+- **Phase A-follow-on (2026-08-30, partially closed)**: launchd as PID 1
+  now boots, remounts `/` read-write, brings up its IPC socket, loads
+  `/Library/LaunchDaemons`, reaches `launchd_runtime()`, and forks
+  daemon children that survive the whole atfork sequence -- the
+  `EXC_CORPSE_NOTIFY` crashes those children used to hit are gone
+  (`qemu/launchd_boot_test109_clean.log`). Three more real bugs were
+  fixed getting there: `fork()` now implements the real
+  `libSystem_atfork_prepare/parent/child` triple (real
+  Libsystem-1292.50.1 order), `_malloc_fork_prepare/parent/child` were
+  written for this port's malloc dispatcher, and `atexit()` -- which had
+  never worked in any binary here, hanging silently on an uninitialized
+  `__atexit` -- was fixed. **The children still do not reach `exec`.**
+  Remaining walls are filed individually as `docs/backlog.md` items
+  d13 (dyld atfork hangs the child -- the immediate next thing to chase),
+  d14 (`_libc_initializer()`'s other seven initializers), d15 (remaining
+  absent atfork handlers, notably `xpc_atfork_child`) and d16
+  (launchd.macho's two heaps). Full write-up:
+  `docs/launchd-pid1-postmortem.md`.
 - **Phase B**: write `build_login.sh` (same template as
   `build_getty.sh`: `-Dmain=...` + TSD-bootstrap wrapper, real per-file
   compile loop, real `nm -u` gap check, real QEMU-exec smoketest, not

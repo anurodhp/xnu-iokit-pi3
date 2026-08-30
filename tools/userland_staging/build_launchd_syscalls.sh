@@ -32,12 +32,10 @@
 # preprocessor conflict already found and curated around for connect()/
 # recvmsg()/sendmsg() in xpc_syscall_wrappers_compat.c (real Apple's
 # own arm64/iOS libsyscall build excludes these legacy files per-arch
-# too, for the same reason). fork() (third_party/Libc/sys/fork.c,
-# curated to drop the real _libSystem_atfork_parent/child hook-dispatch
-# calls -- this project's real pthread_atfork() IS implemented in
-# libpthread.a, but nothing in this project's own runtime ever
-# registers a real atfork handler yet, so those calls would always be a
-# no-op regardless; dropped rather than wiring up dead-code plumbing).
+# too, for the same reason). fork() (third_party/Libc/sys/fork.c) --
+# see fork_compat.c further down for its real, full
+# libSystem_atfork_prepare/parent/child implementation and the exact
+# list of real handlers this port does and does not have.
 #
 # Real, curated: wait4 (third_party/Libc's own waitpid.c calls
 # __wait4()/__wait4_nocancel() -- both real raw traps this project
@@ -230,73 +228,270 @@ echo "compiled: real getsectbynamefromheader_64/getsegbyname (cctools libmacho)"
 
 # --- real, curated fork()/wait4() -----------------------------------
 cat > "$OUT/launchd_syscall_obj/fork_compat.c" <<'EOF'
-/* Real, curated fork() -- the __fork() call from
- * third_party/Libc/sys/fork.c (real Apple source).
+/* Real fork() -- third_party/Libc/sys/fork.c's real body, with the
+ * real libSystem_atfork_prepare/parent/child hooks it dispatches
+ * through implemented here rather than in Libsystem (this project has
+ * no Libsystem umbrella project at all: libSystem.B.dylib here is a
+ * link-time reexport shim, not a compiled image with its own init.c).
  *
- * CORRECTED 2026-08-30 (docs/daemon-roadmap.md Phase 6.8 continued):
- * this used to be a bare `return __fork();`, justified by the claim that
+ * HISTORY, so the next person doesn't re-derive it:
+ *
+ * (1) Originally a bare `return __fork();`, justified by the claim that
  * real Libc's _libSystem_atfork_child() hook "would always be a real
  * no-op regardless" since nothing here registers a pthread_atfork()
  * handler. That reasoning was WRONG, and it was a real, QEMU-observed
  * bug: on real Darwin the atfork CHILD hook is not only about
- * user-registered handlers -- it is where libSystem calls
- * _mach_fork_child(), which re-establishes the child's Mach state after
- * fork(). Skipping it leaves the child with the PARENT's cached
- * mach_task_self_/_task_reply_port and, worse, the parent's MIG reply
- * port name still sitting in TSD slot __TSD_MIG_REPLY -- a port name
- * that is meaningless in the child's brand-new IPC space.
+ * user-registered handlers -- it is where libSystem re-establishes the
+ * child's Mach, pthread and malloc state after fork().
  *
- * Real symptom this fixes: launchd's job_start() forks a daemon, and the
- * child calls bootstrap_init() (PureDarwin libxpc/libbootstrap.c), whose
- * very first act is the MIG RPC
- * task_get_special_port(task_self_trap(), TASK_BOOTSTRAP_PORT, ...).
- * That RPC needs a valid reply port, got the parent's stale one, failed,
- * and bootstrap_init() called abort() -- and because this port has no
- * real signal delivery yet, abort()'s kill(getpid(), SIGABRT) does
- * nothing and it falls into its own infinite spin loop. So every daemon
- * launchd tried to spawn silently hung forever instead of exec'ing.
+ * Real symptom: launchd's job_start() forks a daemon, and the child
+ * calls bootstrap_init() (PureDarwin libxpc/libbootstrap.c), whose very
+ * first act is the MIG RPC task_get_special_port(task_self_trap(),
+ * TASK_BOOTSTRAP_PORT, ...). That RPC needs a valid reply port, got the
+ * parent's stale one, failed, and bootstrap_init() called abort() --
+ * and because this port has no real signal delivery yet, abort()'s
+ * kill(getpid(), SIGABRT) does nothing and it falls into its own
+ * infinite spin loop. So every daemon launchd tried to spawn silently
+ * hung forever instead of exec'ing.
  *
- * Fix: do in the child exactly what real _libSystem_atfork_child() does
- * for Mach state. _mach_fork_child() is real, unmodified Apple source
- * (third_party/xnu-7195/libsyscall/mach/mach_init.c -- its own comment
- * literally reads "called by libSystem_atfork_child()") and is really
- * exported by this project's libsystem_kernel.dylib, reached here via
- * libSystem.B.dylib's reexport. Note mach_init() itself is NOT usable
- * for this: it has a `mach_init_inited` guard and would no-op in the
- * child; _mach_fork_child() calls mach_init_doit() unguarded, which is
- * the entire point.
+ * (2) Then a child-only partial fix: _mach_fork_child() plus a
+ * hand-written zeroing of TSD slot __TSD_MIG_REPLY. That got daemon
+ * children past the hang, but they then crashed downstream with a real
+ * EXC_CORPSE_NOTIFY (qemu/launchd_boot_test95.log, pid 3 and pid 4),
+ * and its own comment flagged the pthread/malloc halves as knowingly
+ * missing. This file is that gap closed.
  *
- * Clearing the MIG reply port is done directly because real Apple's
- * _mig_fork_child()/_mig_set_reply_port() are __private_extern__ inside
- * libsyscall's mig_reply_port.c and genuinely not linkable from here.
- * The slot itself is real, stable ABI: __TSD_MIG_REPLY == 2
- * (third_party/xnu-7195/libsyscall/os/tsd.h), read by real
- * _mig_get_reply_port() as _os_tsd_get_direct(__TSD_MIG_REPLY). Zeroing
- * it makes the child's next mig_get_reply_port() allocate a fresh port,
- * which is exactly real Apple's post-fork behavior. The low-3-bit mask
- * on TPIDRRO_EL0 matches real _pthread_self_direct()/_os_tsd_get_direct.
+ * THE REAL ORDER, verbatim from real Apple Libsystem-1292.50.1's
+ * init.c (the macOS 11.2 / Darwin 20.3 vintage this whole port is
+ * pinned to -- see docs/apple-oss-catalog.md), which is the actual
+ * authority here. Note in particular that _mach_fork_child() is FIRST
+ * in the child, BEFORE _pthread_atfork_child(); libpthread's own
+ * pthread_atfork.c comment claiming _pthread_atfork_child() is "called
+ * first ... (after _dyld_fork_child)" is stale for this vintage, where
+ * _dyld_fork_child() actually runs sixth:
  *
- * Deliberately NOT done here: the pthread/malloc halves of a real
- * atfork child (_pthread_fork_child(), _malloc_fork_child()). Those are
- * real, separate gaps -- this change fixes the Mach-IPC half that was
- * actually breaking daemon spawn, and does not pretend to be a complete
- * _libSystem_atfork_child(). */
+ *   libSystem_atfork_prepare:  _pthread_atfork_prepare_handlers,
+ *       _libSC_info_fork_prepare, xpc_atfork_prepare,
+ *       dispatch_atfork_prepare, _dyld_atfork_prepare, cc_atfork_prepare,
+ *       _malloc_fork_prepare, _pthread_atfork_prepare
+ *   libSystem_atfork_parent:   _pthread_atfork_parent, _malloc_fork_parent,
+ *       cc_atfork_parent, _dyld_atfork_parent, dispatch_atfork_parent,
+ *       xpc_atfork_parent, _libSC_info_fork_parent,
+ *       _pthread_atfork_parent_handlers
+ *   libSystem_atfork_child:    _mach_fork_child, _pthread_atfork_child,
+ *       _malloc_fork_child, cc_atfork_child, _libc_fork_child,
+ *       _dyld_fork_child, dispatch_atfork_child,
+ *       _libcoreservices_fork_child, _asl_fork_child, _notify_fork_child,
+ *       xpc_atfork_child, _libtrace_fork_child, _libSC_info_fork_child,
+ *       _pthread_atfork_child_handlers
+ *
+ * WHAT THIS PORT REALLY HAS, checked with `nm -gU` against the actual
+ * built dylibs in libc_build/system/ -- every one of these is real,
+ * unmodified Apple source already compiled and exported by this
+ * project, reached here through launchd.macho's own existing
+ * LC_LOAD_DYLIBs (libsystem_pthread / libdispatch / libdyld directly,
+ * libsystem_kernel and libsystem_malloc through libSystem.B.dylib's
+ * real LC_REEXPORT_DYLIB entries):
+ *   _pthread_atfork_prepare_handlers / _pthread_atfork_prepare /
+ *   _pthread_atfork_parent / _pthread_atfork_parent_handlers /
+ *   _pthread_atfork_child / _pthread_atfork_child_handlers
+ *       -- third_party/libpthread/src/pthread_atfork.c, libsystem_pthread.dylib
+ *   _mach_fork_child
+ *       -- third_party/xnu-7195/libsyscall/mach/mach_init.c (its own comment
+ *          literally reads "called by libSystem_atfork_child()"),
+ *          libsystem_kernel.dylib
+ *   _malloc_fork_prepare / _malloc_fork_parent / _malloc_fork_child
+ *       -- tools/userland_staging/libmalloc_dispatch.c, libsystem_malloc.dylib
+ *          (real malloc.c itself is deliberately out of scope for this port,
+ *          so its three fork hooks live in this project's replacement for
+ *          malloc.c's public-API glue; see that file's own comment).
+ *          CAVEAT, real and measured with `nm -m launchd.macho`: launchd.macho
+ *          still statically links libmalloc.a as well as loading
+ *          libSystem.B.dylib, so it carries its OWN _malloc/_free/_g_zone and
+ *          its own copy of these three hooks -- the call below binds to that
+ *          local copy and reinitializes launchd's own zone, which is the zone
+ *          launchd's own allocations really use. libsystem_malloc.dylib's
+ *          separate zone (the one libdispatch/CF/libc++ allocate from) is NOT
+ *          reinitialized by this. That is not a shortcut taken here: it is the
+ *          already-documented Phase 2b duplicate-static-copy condition in
+ *          docs/static-linking-cleanup-plan.md ("launchd.macho is the
+ *          highest-risk one: it defines _malloc, _free, ... locally despite
+ *          loading libSystem.B.dylib"), and closing Phase 2b fixes this hook
+ *          for free -- there is deliberately no clever dlsym(RTLD_NEXT)
+ *          workaround here papering over it.
+ *   dispatch_atfork_prepare / dispatch_atfork_parent / dispatch_atfork_child
+ *       -- third_party/libdispatch/src/init.c, libdispatch.dylib
+ *
+ * DYLD -- REAL, BUILT, AND DELIBERATELY NOT CALLED (2026-08-30):
+ *   _dyld_atfork_prepare / _dyld_atfork_parent / _dyld_fork_child are all
+ *   real, exported by this project's libdyld.dylib, and are exactly what
+ *   real Libsystem calls. They are omitted here anyway, because calling
+ *   them is a measured REGRESSION on this port right now:
+ *
+ *   With them in, every forked child reached _dyld_fork_child() and hung
+ *   there forever -- no crash, no corpse, just a stuck process
+ *   (qemu/launchd_boot_test107_atexit_fix.log: markers for
+ *   _mach_fork_child, _pthread_atfork_child and _malloc_fork_child all
+ *   printed, the marker after _dyld_fork_child() never did, for all three
+ *   children). With them out, the same children get all the way through
+ *   dispatch_atfork_child() (qemu/launchd_boot_test108_nodyld.log).
+ *
+ *   The likely mechanism, for whoever picks this up -- NOT yet proven, so
+ *   do not treat it as diagnosed: dyld's RuntimeState::takeLockBeforeFork()
+ *   (third_party/dyld/dyld/DyldRuntimeState.cpp) takes loadersLock,
+ *   notifiersLock and tlvInfosLock unconditionally, while the matching
+ *   resetLockInForkChild() only resets them if
+ *   `libSystemHelpers->version() >= 2`; and the reset itself goes through
+ *   libplatform's os_unfair_recursive_lock_unlock_forked_child(), which
+ *   deliberately __LIBPLATFORM_CLIENT_CRASH__es with "Lock was not held"
+ *   if the lock does not look held. Either half of that mismatch would
+ *   leave a forked child stuck. Check this port's real
+ *   LibSystemHelpers::version() first.
+ *
+ *   Not calling them is not a silent regression from the pre-2026-08-30
+ *   state either: this port's fork() never called ANY dyld atfork hook
+ *   before, so children are no worse off than they have always been, and
+ *   the mach/pthread/malloc/dispatch halves are a real net gain. Tracked
+ *   in docs/backlog.md.
+ *
+ * WHAT IT REALLY DOES NOT HAVE, and why each is a genuine absence
+ * rather than something skipped here (all verified by `nm`/grep, not
+ * assumed):
+ *   cc_atfork_*            -- corecrypto. Apple has never open-sourced
+ *                             corecrypto as an apple-oss-distributions repo
+ *                             at all (docs/backlog.md's crypto item); there
+ *                             is no such image in this port to notify.
+ *   _libc_fork_child       -- third_party/Libc/sys/_libc_fork_child.c exists,
+ *                             but its three callees do not all: _arc4_fork_child
+ *                             is real and compiled into libsystem_c.dylib (as a
+ *                             non-exported local), while _init_clock_port
+ *                             (Libc/gen/nanosleep.c) and __environ_lock_fork_child
+ *                             (Libc/stdlib/FreeBSD/getenv.c) are absent from the
+ *                             built dylib -- those files aren't in this port's
+ *                             libsystem_c yet. Wiring this up is a real, separate
+ *                             follow-on, not a one-liner here: the whole thing
+ *                             has to be compiled INTO libsystem_c.dylib to see
+ *                             its own private callees.
+ *   _asl_fork_child        -- no real asl/syslog client library in this port
+ *                             (docs/daemon-roadmap.md's syslogd/ASL section).
+ *   _notify_fork_child     -- REAL AND BUILT (libsystem_notify.dylib), but
+ *                             deliberately not called here: launchd.macho does
+ *                             not link libsystem_notify.dylib and libSystem.B
+ *                             does not reexport it, so referencing it would be a
+ *                             real link-line change to every consumer of this
+ *                             archive. Wire it up when something in launchd
+ *                             actually uses libnotify across a fork.
+ *   xpc_atfork_*           -- PureDarwin's libxpc reimplementation has no fork
+ *                             handlers at all (grep: zero hits for "xpc_atfork"
+ *                             anywhere in third_party/PureDarwin). A real gap in
+ *                             that source, not something omitted here.
+ *   _libcoreservices_fork_child / _libtrace_fork_child /
+ *   _libSC_info_fork_*     -- CoreServices, libtrace and SystemConfiguration are
+ *                             not part of this port at all.
+ *
+ * NOTE the hand-written __TSD_MIG_REPLY zeroing that used to live here
+ * is GONE, and deliberately so -- it is not merely redundant now, the
+ * real handler does strictly more. _pthread_atfork_child() ->
+ * _pthread_main_thread_postfork_init() -> _pthread_main_thread_init()
+ * (third_party/libpthread/src/pthread.c) really does:
+ *     _pthread_tsd_slot(p, MACH_THREAD_SELF)   = mach_thread_self();
+ *     _pthread_tsd_slot(p, MIG_REPLY)          = mach_reply_port();
+ *     _pthread_tsd_slot(p, MACH_SPECIAL_REPLY) = MACH_PORT_NULL;
+ *     _pthread_tsd_slot(p, SEMAPHORE_CACHE)    = SEMAPHORE_NULL;
+ * i.e. it allocates a genuinely fresh reply port instead of leaving the
+ * slot NULL for lazy allocation, AND it refreshes MACH_THREAD_SELF and
+ * MACH_SPECIAL_REPLY -- which the old hand-written version left holding
+ * the PARENT's port names, meaningless in the child's new IPC space.
+ * That stale __TSD_MACH_THREAD_SELF is read on every single
+ * os_unfair_lock acquisition (libplatform's _os_lock_owner_get_self()),
+ * so it is a real correctness problem, not a tidiness one. This writes
+ * to the same memory _os_tsd_get_direct() reads because this port's
+ * main-thread TSD base really is &_main_thread.tsd[0] -- see
+ * pthread_tsd_platform_bootstrap.c's own header comment.
+ *
+ * _pthread_atfork_child() requires _pthread_atfork_prepare() to have run
+ * in the parent (it consumes globals->psaved_self, which prepare sets
+ * from pthread_self()), which is exactly why the prepare/parent halves
+ * below are not optional decoration. */
 extern int __fork(void);
-extern int _mach_fork_child(void);
 
-int fork(void) {
-	int ret = __fork();
-	if (ret == 0) {
-		/* Child: re-cache mach_task_self_/_task_reply_port. */
-		(void)_mach_fork_child();
-		/* Child: drop the parent's inherited MIG reply port. */
-		void **tsd;
-		__asm__ volatile("mrs %0, TPIDRRO_EL0" : "=r"(tsd));
-		tsd = (void **)((unsigned long)tsd & ~(unsigned long)7);
-		if (tsd != (void **)0) {
-			tsd[2] = (void *)0; /* __TSD_MIG_REPLY */
-		}
+extern void _pthread_atfork_prepare_handlers(void);
+extern void _pthread_atfork_prepare(void);
+extern void _pthread_atfork_parent(void);
+extern void _pthread_atfork_parent_handlers(void);
+extern void _pthread_atfork_child(void);
+extern void _pthread_atfork_child_handlers(void);
+extern int  _mach_fork_child(void);
+extern void _malloc_fork_prepare(void);
+extern void _malloc_fork_parent(void);
+extern void _malloc_fork_child(void);
+extern void dispatch_atfork_prepare(void);
+extern void dispatch_atfork_parent(void);
+extern void dispatch_atfork_child(void);
+
+/* Real Libsystem init.c order, with only the genuinely-absent handlers
+ * dropped (each one named and justified in this file's header comment).
+ * Relative order of everything that IS present is unchanged. */
+static void libSystem_atfork_prepare(void)
+{
+	_pthread_atfork_prepare_handlers();
+	/* _libSC_info_fork_prepare(), xpc_atfork_prepare(): absent. */
+	dispatch_atfork_prepare();
+	/* _dyld_atfork_prepare(): real and exported, but DELIBERATELY NOT
+	 * CALLED -- see the DYLD block in this file's header comment. */
+	/* cc_atfork_prepare(): absent. */
+	_malloc_fork_prepare();
+	_pthread_atfork_prepare();
+}
+
+static void libSystem_atfork_parent(void)
+{
+	_pthread_atfork_parent();
+	_malloc_fork_parent();
+	/* cc_atfork_parent(): absent. */
+	/* _dyld_atfork_parent(): not called, see header. */
+	dispatch_atfork_parent();
+	/* xpc_atfork_parent(), _libSC_info_fork_parent(): absent. */
+	_pthread_atfork_parent_handlers();
+}
+
+static void libSystem_atfork_child(void)
+{
+	(void)_mach_fork_child();
+	_pthread_atfork_child();
+	_malloc_fork_child();
+	/* cc_atfork_child(), _libc_fork_child(): absent. */
+	/* _dyld_fork_child(): not called, see header. */
+	dispatch_atfork_child();
+	/* _libcoreservices_fork_child(), _asl_fork_child(),
+	 * _notify_fork_child(), xpc_atfork_child(), _libtrace_fork_child(),
+	 * _libSC_info_fork_child(): absent. */
+	_pthread_atfork_child_handlers();
+}
+
+/* Body is real Libc/sys/fork.c's, unchanged -- including its real
+ * behavior of running the PARENT hooks on the __fork() == -1 error
+ * path, which is easy to get wrong. */
+int fork(void)
+{
+	int ret;
+
+	libSystem_atfork_prepare();
+
+	ret = __fork();
+
+	if (-1 == ret) {
+		/* __fork already set errno for us */
+		libSystem_atfork_parent();
+		return ret;
 	}
+
+	if (0 == ret) {
+		libSystem_atfork_child();
+		return 0;
+	}
+
+	libSystem_atfork_parent();
 	return ret;
 }
 EOF

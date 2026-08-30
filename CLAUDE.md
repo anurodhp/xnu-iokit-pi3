@@ -164,6 +164,11 @@ worked examples). Other `docs/` files worth knowing about beyond
 `roadmap.md`/`backlog.md`: `daemon-roadmap.md` (background-daemon
 porting plan/tiering), `apple-oss-catalog.md` (full apple-oss-
 distributions inventory + pin-correctness audit),
+`launchd-bug6-postmortem.md` + `launchd-pid1-postmortem.md` (the two
+real launchd PID-1 investigations, in that order — read both before
+touching the PID-1 boot path; between them they cover five separate
+duplicate-static-copy bugs, `fork()`/atfork, and a silent
+uninitialized-`__atexit` hang), `static-linking-cleanup-plan.md`,
 `multiuser-userland-plan.md`, `hfs-integration-notes.md`;
 `docs/historic/` archives full phase-by-phase detail once
 `roadmap.md`/`backlog.md` are condensed, plus one-shot planning docs

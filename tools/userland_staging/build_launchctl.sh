@@ -344,6 +344,18 @@ echo "wrote $OUT/liblaunchctl_extras.a"
 # all -- the whole narrowing dance existed only because flat static
 # archives shared one symbol table.
 
+# Real link-line fix (2026-08-30): libsystem_c.dylib must be listed
+# EXPLICITLY, not left to libSystem.B.dylib's real LC_REEXPORT_DYLIB of
+# it. Without it this link fails on an undefined ___chkstk_darwin
+# (Apple's real large-stack-frame probe helper) referenced by CF's
+# CFAttributedString.o/CFBinaryPList.o -- exactly the gap
+# build_launchd.sh already hit and documents at length above its own
+# link line; the reason is that ld64 cannot follow a reexport by
+# install-name when /usr/lib/system/libsystem_c.dylib does not exist in
+# the on-disk SDK/sysroot, which it does not here. build_launchctl.sh
+# had never had the same fix applied, so this script was failing to
+# link at all (found when a rebuild of it deleted the stale
+# launchctl.macho left over from before CF grew those call sites).
 rm -f "$OUT/launchctl.macho"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
     -B"$NEWLD_BINDIR" \
@@ -371,6 +383,7 @@ rm -f "$OUT/launchctl.macho"
     "$OUT/libc_locale_for_stdio.a" \
     "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
+    "$OUT/system/libsystem_c.dylib" \
     "$OUT/system/libxpc.dylib" "$OUT/system/libbsm.dylib" "$OUT/system/libopenpam.dylib" "$OUT/system/libiokituser.dylib" \
     "$ICU_LIB/libicuuc.dylib" "$ICU_LIB/libicui18n.dylib" "$ICU_LIB/libicudata.dylib" "$OUT/system/libc++.dylib" \
     2>"$OUT/launchctl_link.err" \

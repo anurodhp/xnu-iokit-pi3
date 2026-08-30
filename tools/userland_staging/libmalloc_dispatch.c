@@ -199,6 +199,122 @@ void *reallocf(void *ptr, size_t size) {
     return p;
 }
 
+/* ---- Real _malloc_fork_prepare/_malloc_fork_parent/_malloc_fork_child
+ * (real Apple malloc.c, out of scope for this file wholesale -- see this
+ * file's header comment -- so its three fork hooks are reimplemented here,
+ * same as its public-API glue already is).
+ *
+ * Real libSystem calls these from libSystem_atfork_prepare/parent/child
+ * (Libsystem's init.c). Without them, a fork() taken while another thread
+ * holds a magazine lock leaves that lock held-by-a-thread-that-no-longer-
+ * exists in the child, and the child's first malloc() deadlocks forever.
+ * That is a real hazard here, not a theoretical one: launchd's job_start()
+ * forks from a process whose libdispatch worker threads are running.
+ *
+ * Real malloc.c bodies, for reference:
+ *   _malloc_fork_prepare(void) { return _malloc_lock_all(msl.fork_prepare); }
+ *   _malloc_fork_parent(void)  { return _malloc_unlock_all(msl.fork_parent); }
+ *   _malloc_fork_child(void)   { ...nano...; return _malloc_reinit_lock_all(msl.fork_child); }
+ * ...where the _malloc_{lock,unlock,reinit_lock}_all() helpers walk the
+ * malloc_zones[] array under MALLOC_LOCK() and call each zone's
+ * introspect->force_lock / force_unlock / reinit_lock.
+ *
+ * Two real, deliberate differences from malloc.c here, both structural
+ * consequences of what this dispatcher is, NOT simplifications:
+ *  - There is no malloc_zones[] array and no MALLOC_LOCK() in this
+ *    dispatcher: it owns exactly one zone (g_zone, created lazily by
+ *    get_zone()). So "walk every zone under the global lock" reduces
+ *    exactly to "act on g_zone", and the global-lock half has nothing to
+ *    protect. Nothing is skipped.
+ *  - The CONFIG_NANOZONE block in real _malloc_fork_child() (nano_forked_zone/
+ *    nanov2_forked_zone) is genuinely N/A: build_libmalloc.sh deliberately
+ *    does not build nano_malloc.c/nanov2_malloc.c at all (see its header
+ *    comment), so _malloc_engaged_nano is never set and there is no nano
+ *    zone to fork.
+ * g_zone == NULL (nothing has allocated yet) is a real, expected state and
+ * is correctly a no-op -- real malloc.c's loops are equally no-ops when
+ * malloc_num_zones == 0. Deliberately NOT get_zone() here: creating a zone
+ * as a side effect of fork() would be new behavior malloc.c never has.
+ * (There is a theoretical race if g_zone were NULL at _malloc_fork_prepare()
+ * time and non-NULL by _malloc_fork_parent() -- the parent would then
+ * force_unlock a lock it never took. Real malloc.c is immune because
+ * MALLOC_LOCK() covers the whole malloc_zones[] walk; here the window is
+ * closed in practice instead, because get_zone() creates the one zone during
+ * early process init, long before anything can call fork(). Noted rather
+ * than papered over -- if this dispatcher ever gains a second zone or lazier
+ * creation, this needs a real lock.)
+ *
+ * The msl.fork_* callouts are Malloc Stack Logging's hooks; msl_lite_support.c
+ * is out of scope for the same real reason malloc.c is (it needs the dlopen'd
+ * logging dylib), so there is no callout to make. */
+
+/* Partial view of the real malloc_introspection_t (third_party/libmalloc/
+ * include/malloc/malloc.h), declared in exactly the same style, and for
+ * exactly the same reason, as the partial _malloc_zone_t view above: only
+ * the two members this file actually calls are typed, the rest are
+ * placeholders present purely to hold the real field offsets. Field order
+ * and count match the real header exactly (16 pointer-sized members;
+ * force_unlock is #6, reinit_lock is #13). */
+struct _malloc_introspection_t {
+    void *enumerator;
+    void *good_size;
+    void *check;
+    void *print;
+    void *log;
+    void (*force_lock)(malloc_zone_t *zone);
+    void (*force_unlock)(malloc_zone_t *zone);
+    void *statistics;
+    void *zone_locked;
+    void *enable_discharge_checking;   /* version >= 7 */
+    void *disable_discharge_checking;  /* version >= 7 */
+    void *discharge;                   /* version >= 7 */
+    void *enumerate_discharged_pointers;
+    void (*reinit_lock)(malloc_zone_t *zone); /* version >= 9 */
+    void *print_task;                  /* version >= 11 */
+    void *task_statistics;             /* version >= 12 */
+};
+
+void _malloc_fork_prepare(void);
+void _malloc_fork_parent(void);
+void _malloc_fork_child(void);
+
+void _malloc_fork_prepare(void) {
+    malloc_zone_t *z = g_zone;
+    if (!z) {
+        return;
+    }
+    ((struct _malloc_introspection_t *)z->introspect)->force_lock(z);
+}
+
+void _malloc_fork_parent(void) {
+    malloc_zone_t *z = g_zone;
+    if (!z) {
+        return;
+    }
+    ((struct _malloc_introspection_t *)z->introspect)->force_unlock(z);
+}
+
+void _malloc_fork_child(void) {
+    malloc_zone_t *z = g_zone;
+    if (!z) {
+        return;
+    }
+    struct _malloc_introspection_t *in =
+        (struct _malloc_introspection_t *)z->introspect;
+    /* Exactly real _malloc_reinit_lock_all()'s per-zone branch: reinit_lock
+     * only exists from introspection version 9 on; older zones fall back to
+     * force_unlock. create_scalable_zone()'s szone publishes a real
+     * szone_reinit_lock (magazine_malloc.c's szone_introspect table), so
+     * this normally takes the reinit path -- the fallback is kept because
+     * it is what real malloc.c does, not because a version < 9 zone is
+     * expected here. */
+    if (z->version < 9) {
+        in->force_unlock(z);
+    } else {
+        in->reinit_lock(z);
+    }
+}
+
 /* ---- Real globals malloc.c normally defines, needed by the magazine/vm
  * tier this dispatcher links but not provided by it (malloc.c itself is
  * out of scope -- see this file's header comment). Each is the exact

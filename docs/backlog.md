@@ -1642,18 +1642,37 @@ d11. **RESOLVED 2026-08-29 (session 5, main-repo commit `76ff8cd`;
     (task reports 3 threads, was 2 — the `update_thread` `pthread_create`
     that used to trigger the crash).
 
-    **NEW, SEPARATE follow-on (this is the current PID-1 blocker):**
-    launchd now fails later and differently — a clean `exit(1)`
-    (`signal 0`, not SIGSEGV): `pid 1 exited ... (signal 0, exit 1)`,
-    immediately after `IOKITDIAG14: ... about to call start_routine` for
-    the third thread and a `jnl: b(14, 2): flushing fs disk buffer
-    returned 0x2d`. That's launchd's own logic deciding to give up, a
-    much more tractable failure than a memory fault; next step is to find
-    which real `exit(1)` path in launchd/PureDarwin runtime is taken.
-    NOTE: the kernel-side TEMP DIAGNOSTIC instrumentation
-    (`IOKITDIAG15`/`17`/`18` in `osfmk/ipc/ipc_mqueue.c`,
-    `osfmk/arm64/sleh.c`) is still live and should be stripped once this
-    follow-on is closed.
+    **Follow-on #1 — the silent `exit(1)` — ALSO RESOLVED 2026-08-30**
+    (commits `b01de02`, `ebfd181`, PureDarwin `2f0ef34`). The `pid 1
+    exited ... (signal 0, exit 1)` with zero console output was TWO more
+    duplicate-static-copy bugs (the 4th and 5th of that class): a TSD
+    base clobber in `pthread_tsd_shim.c` and two private
+    `__pthread_ptr_munge_token`s signing one shared `_main_thread`
+    (launchd statically linked a second full copy of libpthread next to
+    the real `libsystem_pthread.dylib`). Full write-up:
+    **`docs/launchd-pid1-postmortem.md`**, which also covers the
+    2026-08-30 `fork()`/atfork work below. The kernel-side
+    `IOKITDIAG15`/`17`/`18` instrumentation referenced by the older text
+    here has since been stripped (`a1678ab`, xnu `54de1e85c`); the
+    `TEMP DIAGNOSTIC: devfs_mount ...` prints still in
+    `bsd/miscfs/devfs/devfs_vfsops.c` on `bcm2837-bringup` are a
+    separate leftover, tracked as its own P3 item below.
+
+    **Follow-on #2 — forked children — PARTIALLY CLOSED 2026-08-30.**
+    launchd as PID 1 now reaches `launchd_runtime()` and really forks
+    daemon children. Those children used to die with a real
+    `EXC_CORPSE_NOTIFY` (`qemu/launchd_boot_test95.log`, pids 3 and 4)
+    because this port's `fork()` did almost none of what real
+    `libSystem_atfork_child()` does. `fork()` now implements the real
+    `libSystem_atfork_prepare/parent/child` triple (see
+    `tools/userland_staging/build_launchd_syscalls.sh`'s `fork_compat.c`
+    and `docs/launchd-pid1-postmortem.md`); the corpses are gone
+    (`qemu/launchd_boot_test109_clean.log`) and children now get through
+    `_mach_fork_child` → `_pthread_atfork_child` → `_malloc_fork_child`
+    → `dispatch_atfork_child`. They still do not reach `exec`. The
+    remaining known walls are filed individually as **d13** (dyld atfork),
+    **d14** (`_libc_initializer` tier) and **d15** (residual atfork
+    handlers) below — do not treat this item as the tracker for them.
 
     Historical context below is retained for the record; note its
     "second thread"/`TPIDRRO_EL0`/`SP_EL0` framings are all now known
@@ -2305,6 +2324,204 @@ d12. **Missing/incomplete library work, explicitly tracked so it isn't
       is correct; only its own standalone smoketest executable fails to
       link. Not investigated further this pass.
 
+d13. **Real dyld atfork hooks exist and are built, but hang every forked
+    child — currently NOT called (filed 2026-08-30).** Real Apple
+    `libSystem_atfork_child()` calls `_dyld_fork_child()` (and
+    `_dyld_atfork_prepare()`/`_dyld_atfork_parent()` on the other two
+    sides). All three are real, present in `third_party/dyld`, and really
+    exported by this project's `libdyld.dylib` (`nm -gU`). This project's
+    `fork()` (`tools/userland_staging/build_launchd_syscalls.sh`'s
+    `fork_compat.c`) deliberately does **not** call them, because doing so
+    is a measured regression: with them in, every forked launchd child
+    reached `_dyld_fork_child()` and hung there forever — no crash, no
+    corpse, just a stuck process (`qemu/launchd_boot_test107_atexit_fix.log`:
+    the console markers for `_mach_fork_child`, `_pthread_atfork_child`
+    and `_malloc_fork_child` all printed for all three children, the
+    marker immediately after `_dyld_fork_child()` never did). With them
+    removed the same children get all the way through
+    `dispatch_atfork_child()` (`qemu/launchd_boot_test108_nodyld.log`).
+
+    **Not diagnosed — this is the lead, not the answer.** Do not write it
+    up as root-caused until it is actually confirmed:
+    `RuntimeState::takeLockBeforeFork()`
+    (`third_party/dyld/dyld/DyldRuntimeState.cpp`) takes `loadersLock`,
+    `notifiersLock` and `tlvInfosLock` unconditionally, while the matching
+    `resetLockInForkChild()` only resets them when
+    `libSystemHelpers->version() >= 2`; and the reset itself calls
+    libplatform's `os_unfair_recursive_lock_unlock_forked_child()`
+    (`third_party/libplatform/src/os/lock.c`), which by design
+    `__LIBPLATFORM_CLIENT_CRASH__`es with "Lock was not held" when the
+    lock does not look held. Either half of that mismatch strands a
+    forked child. **First thing to check is this port's real
+    `LibSystemHelpers::version()`** (`third_party/dyld/libdyld/
+    LibSystemHelpers.cpp`), then whether `gDyld.apis` and `gProcessInfo`
+    are what dyld expects in a forked child here. Note `build_dyld_core.sh`
+    builds with `-DBUILDING_DYLD=1` (so those bodies are live) while
+    `build_libdyld.sh` uses `-DBUILDING_DYLD=0` (glue only).
+
+    Leaving them out is not a regression against the pre-2026-08-30 state:
+    this port's `fork()` never called any dyld atfork hook at all before.
+
+d14. **`Libc/sys/_libc_init.c` — real Apple's `_libc_initializer()` — is
+    never built, and nothing calls the eight real initializers it runs
+    (filed 2026-08-30, one of them narrowly worked around).** Real Apple
+    runs, once per image, at libSystem init time:
+    `_program_vars_init`, `_libc_fork_init`, `__confstr_init`,
+    `__atexit_init`, `_init_clock_port`, `__chk_init`, `__xlocale_init`,
+    `__guard_setup`, `_subsystem_init`. This project has never built that
+    file — several of the supporting Libc sources it needs
+    (`gen/nanosleep.c` for `_init_clock_port`, `stdlib/FreeBSD/getenv.c`'s
+    lock half, `_subsystem_init`'s `apple[]` plumbing) are not in this
+    port's libc tier at all — so every one of those steps silently does
+    not happen.
+
+    **This is not theoretical; it already produced one real, totally
+    silent boot hang.** `atexit()` hung forever in every binary linking
+    `liblaunchd_syscalls.a`'s `atexit.o`. Real `atexit_register()`
+    (`Libc/stdlib/FreeBSD/atexit.c`) opens with `struct atexit *p =
+    __atexit; assert(p);`, and `__atexit` is a file-static that only
+    `__atexit_init()` ever sets — from `_libc_initializer()` and nowhere
+    else. So `__atexit` stayed `NULL`, the assert fired, and on this port
+    `assert()`'s `abort()` is `kill(getpid(), SIGABRT)` with no real
+    signal delivery yet, so instead of dying the process spins forever —
+    silently, with launchd's `stderr` on `/dev/null`. It went unnoticed
+    for months only because launchd's one boot-path `atexit()` call site
+    (`ipc_server_init()`'s `atexit(ipc_clean_up)`) was unreachable: that
+    function bailed out several statements earlier at
+    `mkdir(LAUNCHD_SOCK_PREFIX)` returning `EROFS` while the root
+    filesystem was still read-only. Fixing that ordering made the call
+    reachable and turned the boot into a silent hang.
+
+    **What was done**: `__atexit_init()` alone is now called from a real
+    image constructor in `tools/userland_staging/
+    launchd_syscall_compat_headers/isthreaded_compat.c` (that file,
+    because `__atexit_init` is `__private_extern__` so only a same-image
+    object can reach it, and because `__isthreaded` is referenced by
+    `atexit.c` itself so the linker pulls that object out of the archive
+    exactly when `atexit.o` is pulled and never otherwise). It is
+    idempotent — `__atexit_init()` is one `os_alloc_once()` call.
+    Verified by real boot (`qemu/launchd_boot_test107_atexit_fix.log`,
+    `..._109_clean.log`).
+
+    **What is still open**: the other seven initializers, for every image
+    in this project, not just launchd. `third_party-patches/Libc.patch`
+    already carries a second one-off of the same shape — a ctor calling
+    `__xlocale_init()` for `__locale_key` — which is the same bug class
+    solved the same ad-hoc way (see the `### d11` locale section below).
+    Two one-offs is the point at which this should stop being handled
+    per-symbol: either build `_libc_init.c` for real (closing
+    `_init_clock_port`/`__environ_lock_fork_child`/`_subsystem_init`'s own
+    gaps on the way, which also unblocks `_libc_fork_child()` in d15) or
+    write one deliberate, documented per-image init constructor that runs
+    exactly the steps this port really has. **Whoever touches this should
+    also sweep for other Libc globals with the same "only
+    `_libc_initializer()` ever sets it" shape** — there is no reason to
+    believe `__atexit` and `__locale_key` are the only two.
+
+d15. **Real atfork handlers still missing from this port's
+    `libSystem_atfork_child()` (filed 2026-08-30).** `fork()` now runs the
+    real Libsystem-1292.50.1 sequence, but four real handlers in it are
+    genuinely absent here and two more are present-but-unreachable. Full
+    per-symbol writeup lives in `fork_compat.c`'s own header comment in
+    `build_launchd_syscalls.sh`; summarized so it is findable:
+    - `_libc_fork_child` — the source exists
+      (`third_party/Libc/sys/_libc_fork_child.c`) but two of its three
+      callees do not: `_init_clock_port` (`Libc/gen/nanosleep.c`) and
+      `__environ_lock_fork_child` (`Libc/stdlib/FreeBSD/getenv.c`) are
+      absent from the built `libsystem_c.dylib` (`_arc4_fork_child` is
+      there, as a non-exported local). Blocked on the same missing libc
+      tier as **d14**, and must be compiled *into* `libsystem_c.dylib` to
+      see its own private callees.
+    - `xpc_atfork_prepare`/`_parent`/`_child` — PureDarwin's libxpc
+      reimplementation has no fork handlers at all (zero hits for
+      `xpc_atfork` anywhere in `third_party/PureDarwin`). A real gap in
+      that source, not an omission here. Relevant: `bootstrap_init()`,
+      which is exactly where the forked children used to die, is libxpc
+      code.
+    - `_notify_fork_child` — real and built
+      (`libsystem_notify.dylib` exports it), but `launchd.macho` does not
+      link `libsystem_notify.dylib` and `libSystem.B.dylib` does not
+      reexport it, so calling it means a real link-line change to every
+      consumer of `liblaunchd_syscalls.a`. Wire it up when something in
+      launchd actually uses libnotify across a fork.
+    - `cc_atfork_*` (corecrypto), `_asl_fork_child`,
+      `_libcoreservices_fork_child`, `_libtrace_fork_child`,
+      `_libSC_info_fork_*` — those subsystems do not exist in this port at
+      all.
+
+    **Concrete lead for the current child wall.** With dyld's trio omitted
+    (**d13**), forked children get through `dispatch_atfork_child()` and
+    then stop at the last step, `_pthread_atfork_child_handlers()`
+    (`qemu/launchd_boot_test108_nodyld.log`). That step is not a no-op
+    here: `nm -m launchd.macho` shows real `___cf_atfork_prepare` and
+    `___cf_atfork_child` in the image, i.e. **CoreFoundation really does
+    register `pthread_atfork()` handlers in this process**, and
+    `_pthread_atfork_child_handlers()` is what invokes them in the child.
+    So the next thing to instrument is CF's own atfork child handler, not
+    libpthread's iteration loop. Note also that `pthread_atfork()` handler
+    *registration* is what `globals->pthread_atfork_lock` protects, and
+    `_pthread_atfork_prepare_handlers()`/`_pthread_atfork_parent_handlers()`
+    take/release it around the fork — verify that pairing holds in this
+    port before assuming the handler body itself is at fault.
+
+d16. **`_malloc_fork_child()` only reinitializes launchd's own private
+    heap, because `launchd.macho` has two heaps (filed 2026-08-30).**
+    `nm -m launchd.macho` shows `_malloc`, `_free`, `_calloc`, `_g_zone`
+    and `_create_scalable_zone` all defined **locally** in the executable,
+    while it also loads `libSystem.B.dylib` (which reexports
+    `libsystem_malloc.dylib` with its own separate `g_zone`). So
+    `libdispatch`/CF/libc++ allocate from one zone and launchd's own code
+    from another, and the new `_malloc_fork_child()` call in `fork()`
+    binds to launchd's local copy and reinitializes only that zone. This
+    is exactly the already-documented Phase 2b condition in
+    `docs/static-linking-cleanup-plan.md` ("`launchd.macho` is the
+    highest-risk one: it defines `_malloc`, `_free`, ... locally despite
+    loading `libSystem.B.dylib`") — closing Phase 2b fixes this hook for
+    free. Deliberately no `dlsym(RTLD_NEXT)` workaround was added to paper
+    over it.
+
+d17. **`tools/userland_staging/build_launchctl.sh` does not link — real,
+    pre-existing, found 2026-08-30.** Confirmed pre-existing by rebuilding
+    it with every one of that session's changes stashed: same failure.
+    The `launchctl.macho` that had been sitting in `libc_build/` was a
+    stale artifact from before `libCoreFoundation.a` grew the call sites
+    that break the link, i.e. it was **not reproducible from source** —
+    a direct violation of this repo's "every built artifact needs a
+    reproducing script" rule, and the reason the breakage went unnoticed.
+    (The script `rm -f`s its output before linking, so the stale copy is
+    gone now.)
+    - **Fixed**: undefined `___chkstk_darwin` (referenced by CF's
+      `CFAttributedString.o`/`CFBinaryPList.o`). `libsystem_c.dylib` must
+      be listed *explicitly* on the link line, not left to
+      `libSystem.B.dylib`'s `LC_REEXPORT_DYLIB` of it — ld64 cannot follow
+      a reexport by install-name when `/usr/lib/system/libsystem_c.dylib`
+      does not exist in the on-disk SDK/sysroot, which it does not here.
+      `build_launchd.sh` already documents this at length above its own
+      link line; `build_launchctl.sh` had simply never had the same fix.
+    - **Still open**: undefined `_lchflags` (`launchctl.c`'s
+      `empty_dir()`) and `_sysctlnametomib`
+      (`limitloadtohardware_iterator()`). Real Apple source for both is
+      already pinned — `third_party/Libc/emulated/lchflags.c` and
+      `third_party/Libc/gen/FreeBSD/sysctlnametomib.c` — but each pulls
+      its own further real dependencies (`lchflags` needs `chflags` +
+      `setattrlist`; `sysctlnametomib` needs the raw `__sysctl` trap,
+      which this stack does not currently generate — only the public
+      `sysctl` exists). Expect a short cascade, same shape as every other
+      gap-closure pass here.
+
+d18. **Possible duplicate `_getenv` inside `libsystem_c.dylib` (filed
+    2026-08-30, unverified).** `nm -a libc_build/system/libsystem_c.dylib`
+    reports **two** `_getenv` symbols — one external (`T`, `0x21984`) and
+    one local (`t`, `0x2fc48`). Two implementations of `getenv` in one
+    image is the same duplicate-static-copy shape that produced bug #6 and
+    the duplicate-`pthread_create` bug, and `getenv`/`setenv` share
+    process-global `environ` state, so it is exactly the risky kind. Not
+    investigated at all — noticed in passing while checking that image for
+    `__environ_lock_fork_child` (see **d15**). Confirm with
+    `tools/userland_staging/dup_symbol_audit.sh` and find which two
+    objects define it before assuming it is benign.
+
+
 ---
 
 ### d10: launchd PID-1 boot-path integration, in progress 2026-08-28
@@ -2439,3 +2656,17 @@ kind of dedicated pass CF's own locale work got.
 4. **`BCM2837CPU::quiesceCPU()`/`haltCPU()` are silent no-ops** — correctly
     hedged as fine for now (single core, no sleep/shutdown ever attempted),
     but will need real implementations before any power-management work.
+
+5. **`bsd/miscfs/devfs/devfs_vfsops.c`'s `TEMP DIAGNOSTIC: devfs_mount ...`
+    prints are still live, and are committed on `bcm2837-bringup`** — not
+    a dirty working tree, so `git status` in `third_party/xnu-7195` looks
+    clean and hides them. They fire on every `devfs` mount and are all
+    over every recent boot log (e.g.
+    `qemu/launchd_boot_test109_clean.log`), which is exactly the noise P3
+    item 3 above describes. They are a leftover from the launchd PID-1
+    devfs bring-up, whose real work is long since done. Same treatment as
+    item 3's msdosfs/sdhci prints: gate behind a default-off flag or drop.
+    Noticed 2026-08-30 while reading launchd boot logs; the surrounding
+    launchd bug #6 kernel instrumentation (`IOKITDIAG15`/`17`/`18`) was
+    already correctly stripped in `a1678ab`/xnu `54de1e85c`, this one was
+    simply missed.
