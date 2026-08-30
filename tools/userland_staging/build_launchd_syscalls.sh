@@ -230,15 +230,75 @@ echo "compiled: real getsectbynamefromheader_64/getsegbyname (cctools libmacho)"
 
 # --- real, curated fork()/wait4() -----------------------------------
 cat > "$OUT/launchd_syscall_obj/fork_compat.c" <<'EOF'
-/* Real, curated fork() -- verbatim __fork() call from
- * third_party/Libc/sys/fork.c (real Apple source), minus its real
- * _libSystem_atfork_parent()/_child() hook-dispatch calls: this
- * project's real pthread_atfork() IS implemented (libpthread.a), but
- * nothing in this project's own runtime has ever registered a real
- * atfork handler, so those calls would always be a real no-op
- * regardless -- dropped rather than wiring up unreachable plumbing. */
+/* Real, curated fork() -- the __fork() call from
+ * third_party/Libc/sys/fork.c (real Apple source).
+ *
+ * CORRECTED 2026-08-30 (docs/daemon-roadmap.md Phase 6.8 continued):
+ * this used to be a bare `return __fork();`, justified by the claim that
+ * real Libc's _libSystem_atfork_child() hook "would always be a real
+ * no-op regardless" since nothing here registers a pthread_atfork()
+ * handler. That reasoning was WRONG, and it was a real, QEMU-observed
+ * bug: on real Darwin the atfork CHILD hook is not only about
+ * user-registered handlers -- it is where libSystem calls
+ * _mach_fork_child(), which re-establishes the child's Mach state after
+ * fork(). Skipping it leaves the child with the PARENT's cached
+ * mach_task_self_/_task_reply_port and, worse, the parent's MIG reply
+ * port name still sitting in TSD slot __TSD_MIG_REPLY -- a port name
+ * that is meaningless in the child's brand-new IPC space.
+ *
+ * Real symptom this fixes: launchd's job_start() forks a daemon, and the
+ * child calls bootstrap_init() (PureDarwin libxpc/libbootstrap.c), whose
+ * very first act is the MIG RPC
+ * task_get_special_port(task_self_trap(), TASK_BOOTSTRAP_PORT, ...).
+ * That RPC needs a valid reply port, got the parent's stale one, failed,
+ * and bootstrap_init() called abort() -- and because this port has no
+ * real signal delivery yet, abort()'s kill(getpid(), SIGABRT) does
+ * nothing and it falls into its own infinite spin loop. So every daemon
+ * launchd tried to spawn silently hung forever instead of exec'ing.
+ *
+ * Fix: do in the child exactly what real _libSystem_atfork_child() does
+ * for Mach state. _mach_fork_child() is real, unmodified Apple source
+ * (third_party/xnu-7195/libsyscall/mach/mach_init.c -- its own comment
+ * literally reads "called by libSystem_atfork_child()") and is really
+ * exported by this project's libsystem_kernel.dylib, reached here via
+ * libSystem.B.dylib's reexport. Note mach_init() itself is NOT usable
+ * for this: it has a `mach_init_inited` guard and would no-op in the
+ * child; _mach_fork_child() calls mach_init_doit() unguarded, which is
+ * the entire point.
+ *
+ * Clearing the MIG reply port is done directly because real Apple's
+ * _mig_fork_child()/_mig_set_reply_port() are __private_extern__ inside
+ * libsyscall's mig_reply_port.c and genuinely not linkable from here.
+ * The slot itself is real, stable ABI: __TSD_MIG_REPLY == 2
+ * (third_party/xnu-7195/libsyscall/os/tsd.h), read by real
+ * _mig_get_reply_port() as _os_tsd_get_direct(__TSD_MIG_REPLY). Zeroing
+ * it makes the child's next mig_get_reply_port() allocate a fresh port,
+ * which is exactly real Apple's post-fork behavior. The low-3-bit mask
+ * on TPIDRRO_EL0 matches real _pthread_self_direct()/_os_tsd_get_direct.
+ *
+ * Deliberately NOT done here: the pthread/malloc halves of a real
+ * atfork child (_pthread_fork_child(), _malloc_fork_child()). Those are
+ * real, separate gaps -- this change fixes the Mach-IPC half that was
+ * actually breaking daemon spawn, and does not pretend to be a complete
+ * _libSystem_atfork_child(). */
 extern int __fork(void);
-int fork(void) { return __fork(); }
+extern int _mach_fork_child(void);
+
+int fork(void) {
+	int ret = __fork();
+	if (ret == 0) {
+		/* Child: re-cache mach_task_self_/_task_reply_port. */
+		(void)_mach_fork_child();
+		/* Child: drop the parent's inherited MIG reply port. */
+		void **tsd;
+		__asm__ volatile("mrs %0, TPIDRRO_EL0" : "=r"(tsd));
+		tsd = (void **)((unsigned long)tsd & ~(unsigned long)7);
+		if (tsd != (void **)0) {
+			tsd[2] = (void *)0; /* __TSD_MIG_REPLY */
+		}
+	}
+	return ret;
+}
 EOF
 cat > "$OUT/launchd_syscall_obj/wait4_compat.c" <<'EOF'
 /* Real, curated wait4() -- third_party/Libc's own waitpid.c calls

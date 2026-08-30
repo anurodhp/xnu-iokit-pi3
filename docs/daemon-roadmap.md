@@ -3439,13 +3439,52 @@ real console login needs, per a fresh read of the current sources
       "one owner per symbol" invariant as commit 9ee721b, applied to
       pthread state.
 
-   Real, still-open items observed in the now-good boot (new, separate,
-   NOT regressions of the above): `abort()` fires twice from a dylib
-   (non-fatal here, but this port's `abort()` is
-   `kill(getpid(), SIGABRT)` and SIGABRT is not delivered, so it falls
-   into its own infinite spin -- a real hang risk), and
-   `mkdir("/var/tmp/"): Read-only file system`, i.e. the root filesystem
-   is not remounted read-write.
+   **Follow-on, also fixed 2026-08-30: post-fork Mach state.** The good
+   boot showed `abort()` firing twice from a dylib. Symbolicated the same
+   way (call site page offset + page-aligned base) to
+   `libxpc.dylib`'s `bootstrap_init()` -- whose only statement is
+   `task_get_special_port(task_self_trap(), TASK_BOOTSTRAP_PORT,
+   &bootstrap_port)` followed by `abort()` on failure. Crucially that
+   runs in the FORKED CHILD of `core.c`'s `job_start()` (case 0), which
+   is why launchd itself sailed past it.
+
+   Root cause: `build_launchd_syscalls.sh` generates a curated `fork()`
+   that was a bare `return __fork();`. Its own comment justified dropping
+   real Libc's `_libSystem_atfork_child()` hook on the grounds that
+   nothing here registers a `pthread_atfork()` handler "so those calls
+   would always be a real no-op regardless". That was wrong: on real
+   Darwin the atfork CHILD hook is also where libSystem calls
+   `_mach_fork_child()`, which re-caches `mach_task_self_`/
+   `_task_reply_port` and drops the parent's MIG reply port. Without it
+   the child inherited a reply-port name that is meaningless in its new
+   IPC space, so the first MIG RPC in the child failed -- and because
+   this port has no signal delivery, `abort()`'s
+   `kill(getpid(), SIGABRT)` did nothing and it fell into its own
+   infinite spin. Every daemon launchd forked hung forever instead of
+   exec'ing. Exactly the "when a dependency goes stub->real, sweep for
+   stale-assumption code" trap this project already has a standing rule
+   about.
+
+   Fixed by doing the Mach half of a real `_libSystem_atfork_child()` in
+   the child: call real `_mach_fork_child()` (real Apple source,
+   `libsyscall/mach/mach_init.c`, whose own comment reads "called by
+   libSystem_atfork_child()", really exported by this project's
+   `libsystem_kernel.dylib`) and zero TSD slot `__TSD_MIG_REPLY` (== 2,
+   real stable ABI from `libsyscall/os/tsd.h`). Note `mach_init()` is
+   NOT usable here -- its `mach_init_inited` guard makes it a no-op in
+   the child; `_mach_fork_child()` calls `mach_init_doit()` unguarded.
+   Verified by real QEMU boot (`qemu/launchd_boot_test95.log`): the two
+   children no longer hang, they now run on and exit (pid 3/pid 4 produce
+   real `EXC_CORPSE_NOTIFY`), which is only reachable if the abort spin
+   is gone. Deliberately NOT done: the pthread/malloc halves of a real
+   atfork child -- real, separate gaps, not papered over.
+
+   Real, still-open items (new, separate, NOT regressions): the forked
+   daemon children now crash somewhere DOWNSTREAM of `bootstrap_init()`
+   (next suspects on that path: `_vproc_post_fork_ping()`, then the
+   `read()`/uncork handshake and `exec`), and
+   `mkdir("/var/tmp/"): Read-only file system` -- the root filesystem is
+   not remounted read-write.
 2. **No real `login(1)` exists yet, in either boot path.** Current
    `org.puredarwin.console-login` (`pd_console_login.c`, wired via
    `org.puredarwin.console-login.plist`) does real tty/session setup
