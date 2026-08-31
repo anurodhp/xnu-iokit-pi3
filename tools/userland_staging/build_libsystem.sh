@@ -147,10 +147,31 @@ if [ ! -f "$OUT/system/libsystem_kernel.dylib" ] || [ ! -f "$OUT/system/libsyste
     exit 1
 fi
 
-# Real global storage only this dylib needs (see that file's own
-# comment) -- libdyld.dylib already provides it itself.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    libsystem_progname_compat.c -o "$OUT/libsystem/progname_compat.o"
+# ___progname REMOVED 2026-08-31 (static-linking cleanup, real
+# duplicate-STATE investigation): libsystem_progname_compat.c used to
+# compile a second, independent `const char* __progname = 0;` into this
+# dylib. Investigated with dup_symbol_audit.sh --explain plus real
+# third_party/dyld/dyld/dyldMain.cpp source (unmodified Apple code): real
+# modern dyld's canonical mechanism is libdyld.dylib's own `defaultVars`
+# (LibdyldDyld4Section, populated from libdyldGlue.cpp's real, genuine
+# `const char* __progname = NULL;` + its `state.vars->__prognamePtr`
+# wiring) -- dyldMain.cpp unconditionally does
+# `*state.vars->__prognamePtr = state.config.process.progname;` for
+# every real launch, and separately `halt("libdyld.dylib not found")`
+# if libdyld.dylib isn't loaded, i.e. libdyld.dylib's copy is BOTH the
+# real-Apple-canonical one AND structurally guaranteed to always be
+# co-loaded with this dylib (build_simple_cmds.sh's own LINK_DYLIBS
+# already links both together, always). Confirmed via a real grep sweep
+# that neither of this dylib's own compiled objects
+# (dyld_initializer_compat.o/compat_misc.o) ever read or wrote
+# ___progname -- the local copy here was pure dead storage, never
+# written by anything, shadowing nothing observable only because
+# libsystem_c.dylib's own getprogname()/setprogname() (see that file's
+# own header comment) resolve ___progname via a flat/dynamic `-Wl,-U`
+# lookup that happens to find the main executable's own crt.c copy
+# first, not this dylib's. Real single-owner fix: delete the compat
+# shim and this compile step entirely; nothing in this dylib references
+# ___progname any more, so no replacement flag is needed.
 
 # Real gap: see libsystem_dyld_initializer_compat.c's own comment. Real
 # libSystem.dylib's Libc/init.c calls _dyld_initializer() as part of its
@@ -200,7 +221,6 @@ rm -f "$OUT/system/libSystem.B.dylib"
     -Wl,-fixup_chains \
     -Wl,-U,__dyld_initializer \
     -o "$OUT/system/libSystem.B.dylib" \
-    "$OUT/libsystem/progname_compat.o" \
     "$OUT/libsystem/dyld_initializer_compat.o" \
     "$OUT/libdyld/compat_misc.o" \
     -Wl,-reexport_library,"$OUT/system/libsystem_kernel.dylib" \

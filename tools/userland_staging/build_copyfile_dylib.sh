@@ -118,6 +118,17 @@ fi
 # nothing outside this dylib can bind to the plain names here anymore.
 rm -f "$EXTRACT/getuid.o"
 
+# copy.o/parse.o/unparse.o/pack.o REMOVED 2026-08-31 (static-linking
+# cleanup, libcopyfile-vs-libxpc ownership investigation): real Apple
+# source (third_party/Libc/uuid/uuidsrc/*.c), same class of "genuinely
+# part of Libc" duplicate as getuid.o above -- these 4 uuid_* objects
+# are now the real, single-owner responsibility of libsystem_c.dylib
+# (build_libsystem_c.sh extracts the SAME objects out of this dylib's
+# own libcopyfile.a, see that file's own comment), which this dylib
+# already links as a sibling below. Not from libcopyfile.a itself --
+# that archive stays intact for dyld.macho's real static link.
+rm -f "$EXTRACT/copy.o" "$EXTRACT/parse.o" "$EXTRACT/unparse.o" "$EXTRACT/pack.o"
+
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness \
     -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \

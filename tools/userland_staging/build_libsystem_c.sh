@@ -339,6 +339,30 @@ fi
 (cd "$EXTRACT" && ar x "../../liblaunchd_core.a" localtime.o timezone_unix03.o strcat_chk.o)
 (cd "$EXTRACT" && ar x "../../libxpc_syscalls2.a" chk_fail_compat.o strcpy_chk.o strncpy_chk.o)
 
+# uuid_unparse/uuid_unparse_lower/uuid_unparse_upper/uuid_copy/uuid_parse/
+# uuid_pack: real duplicate-ownership investigation 2026-08-31
+# (static-linking cleanup) -- dup_symbol_audit.sh flagged these as
+# ambiguous between libcopyfile.dylib and libxpc.dylib, "neither side
+# obviously real Apple's home." Checked the real source both dylibs
+# actually compile: third_party/Libc/uuid/uuidsrc/{copy,parse,unparse,
+# pack}.c -- genuinely part of apple-oss-distributions Libc (this
+# project's own real Csu/Libc pin), i.e. real Apple's actual canonical
+# home for this whole family is libsystem_c.dylib, same as every other
+# Libc-sourced tier already consolidated here (env vars, _chk, os_assumes,
+# etc.) -- NOT libcopyfile or libxpc, which are both usurpers. Extracted
+# (not recompiled) from libcopyfile.a's own already-built copy.o/parse.o/
+# unparse.o/pack.o -- same already-established "reuse a sibling archive's
+# verified object" pattern as localtime.o/chk_fail_compat.o just above.
+# libcopyfile.a itself is untouched (dyld.macho's real static link still
+# needs it); only this dylib's own extract dir gains these 4 objects, and
+# build_copyfile_dylib.sh/build_libxpc_syscalls2.sh drop their own
+# extracted/compiled copies (see those files' own comments).
+if [ ! -f "$OUT/libcopyfile.a" ]; then
+    echo "error: $OUT/libcopyfile.a not found -- run build_copyfile.sh first" >&2
+    exit 1
+fi
+(cd "$EXTRACT" && ar x "../../libcopyfile.a" copy.o parse.o unparse.o pack.o)
+
 # Real gap: ICU also references time, expected from libSystem. Real
 # Apple source (gen/FreeBSD/time.c) already compiled once for
 # libopenpam.a (build_openpam.sh), pulled here the same real-extraction

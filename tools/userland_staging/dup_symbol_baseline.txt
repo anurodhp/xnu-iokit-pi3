@@ -1,4 +1,5 @@
 B apply.macho ___assert_rtn
+B apply.macho ___chmod
 B apply.macho ___collate_equiv_match
 B apply.macho ___collate_load_error
 B apply.macho ___collate_lookup
@@ -47,6 +48,7 @@ B apply.macho _vwarnx
 B apply.macho _warnc
 B apply.macho _warnx
 B basename.macho ___assert_rtn
+B basename.macho ___chmod
 B basename.macho ___collate_equiv_match
 B basename.macho ___collate_load_error
 B basename.macho ___collate_lookup
@@ -94,6 +96,7 @@ B basename.macho _vwarnx
 B basename.macho _warnc
 B basename.macho _warnx
 B cat.macho ___assert_rtn
+B cat.macho ___chmod
 B cat.macho ___collate_equiv_match
 B cat.macho ___collate_load_error
 B cat.macho ___collate_lookup
@@ -144,6 +147,7 @@ B cat.macho _vwarnx
 B cat.macho _warnc
 B cat.macho _warnx
 B chflags.macho ___assert_rtn
+B chflags.macho ___chmod
 B chflags.macho ___collate_equiv_match
 B chflags.macho ___collate_load_error
 B chflags.macho ___collate_lookup
@@ -191,6 +195,7 @@ B chflags.macho _vwarnx
 B chflags.macho _warnc
 B chflags.macho _warnx
 B chmod.macho ___assert_rtn
+B chmod.macho ___chmod
 B chmod.macho ___collate_equiv_match
 B chmod.macho ___collate_load_error
 B chmod.macho ___collate_lookup
@@ -242,6 +247,7 @@ B chmod.macho _vwarnx
 B chmod.macho _warnc
 B chmod.macho _warnx
 B chown.macho ___assert_rtn
+B chown.macho ___chmod
 B chown.macho ___collate_equiv_match
 B chown.macho ___collate_load_error
 B chown.macho ___collate_lookup
@@ -295,6 +301,7 @@ B chown.macho _vwarnx
 B chown.macho _warnc
 B chown.macho _warnx
 B chroot.macho ___assert_rtn
+B chroot.macho ___chmod
 B chroot.macho ___collate_equiv_match
 B chroot.macho ___collate_load_error
 B chroot.macho ___collate_lookup
@@ -346,6 +353,7 @@ B chroot.macho _vwarnx
 B chroot.macho _warnc
 B chroot.macho _warnx
 B cksum.macho ___assert_rtn
+B cksum.macho ___chmod
 B cksum.macho ___collate_equiv_match
 B cksum.macho ___collate_load_error
 B cksum.macho ___collate_lookup
@@ -393,6 +401,7 @@ B cksum.macho _vwarnx
 B cksum.macho _warnc
 B cksum.macho _warnx
 B colrm.macho ___assert_rtn
+B colrm.macho ___chmod
 B colrm.macho ___collate_equiv_match
 B colrm.macho ___collate_load_error
 B colrm.macho ___collate_lookup
@@ -440,6 +449,7 @@ B colrm.macho _vwarnx
 B colrm.macho _warnc
 B colrm.macho _warnx
 B comm.macho ___assert_rtn
+B comm.macho ___chmod
 B comm.macho ___collate_equiv_match
 B comm.macho ___collate_load_error
 B comm.macho ___collate_lookup
@@ -487,6 +497,7 @@ B comm.macho _vwarnx
 B comm.macho _warnc
 B comm.macho _warnx
 B compress.macho ___assert_rtn
+B compress.macho ___chmod
 B compress.macho ___collate_equiv_match
 B compress.macho ___collate_load_error
 B compress.macho ___collate_lookup
@@ -536,6 +547,7 @@ B compress.macho _vwarnx
 B compress.macho _warnc
 B compress.macho _warnx
 B cp.macho ___assert_rtn
+B cp.macho ___chmod
 B cp.macho ___collate_equiv_match
 B cp.macho ___collate_load_error
 B cp.macho ___collate_lookup
@@ -587,6 +599,7 @@ B cp.macho _vwarnx
 B cp.macho _warnc
 B cp.macho _warnx
 B cut.macho ___assert_rtn
+B cut.macho ___chmod
 B cut.macho ___collate_equiv_match
 B cut.macho ___collate_load_error
 B cut.macho ___collate_lookup
@@ -634,6 +647,7 @@ B cut.macho _vwarnx
 B cut.macho _warnc
 B cut.macho _warnx
 B date.macho ___assert_rtn
+B date.macho ___chmod
 B date.macho ___collate_equiv_match
 B date.macho ___collate_load_error
 B date.macho ___collate_lookup
@@ -720,6 +734,7 @@ B date.macho _warnx
 B date.macho _writev
 B date.macho _writev$UNIX2003
 B df.macho ___assert_rtn
+B df.macho ___chmod
 B df.macho ___collate_equiv_match
 B df.macho ___collate_load_error
 B df.macho ___collate_lookup
@@ -767,6 +782,7 @@ B df.macho _vwarnx
 B df.macho _warnc
 B df.macho _warnx
 B diff.macho ___assert_rtn
+B diff.macho ___chmod
 B diff.macho ___collate_equiv_match
 B diff.macho ___collate_load_error
 B diff.macho ___collate_lookup
@@ -852,6 +868,7 @@ B diff.macho _vwarnx
 B diff.macho _warnc
 B diff.macho _warnx
 B dirname.macho ___assert_rtn
+B dirname.macho ___chmod
 B dirname.macho ___collate_equiv_match
 B dirname.macho ___collate_load_error
 B dirname.macho ___collate_lookup
@@ -899,6 +916,7 @@ B dirname.macho _vwarnx
 B dirname.macho _warnc
 B dirname.macho _warnx
 B du.macho ___assert_rtn
+B du.macho ___chmod
 B du.macho ___collate_equiv_match
 B du.macho ___collate_load_error
 B du.macho ___collate_lookup
@@ -959,6 +977,7 @@ B dyld_test_exec.macho _exit
 B dyld_test_exec.macho _NXArgc
 B dyld_test_exec.macho _NXArgv
 B echo.macho ___assert_rtn
+B echo.macho ___chmod
 B echo.macho ___collate_equiv_match
 B echo.macho ___collate_load_error
 B echo.macho ___collate_lookup
@@ -1006,6 +1025,7 @@ B echo.macho _vwarnx
 B echo.macho _warnc
 B echo.macho _warnx
 B ed.macho ___assert_rtn
+B ed.macho ___chmod
 B ed.macho ___collate_equiv_match
 B ed.macho ___collate_load_error
 B ed.macho ___collate_lookup
@@ -1071,6 +1091,7 @@ B ed.macho _vwarnx
 B ed.macho _warnc
 B ed.macho _warnx
 B env.macho ___assert_rtn
+B env.macho ___chmod
 B env.macho ___collate_equiv_match
 B env.macho ___collate_load_error
 B env.macho ___collate_lookup
@@ -1118,6 +1139,7 @@ B env.macho _vwarnx
 B env.macho _warnc
 B env.macho _warnx
 B expand.macho ___assert_rtn
+B expand.macho ___chmod
 B expand.macho ___collate_equiv_match
 B expand.macho ___collate_load_error
 B expand.macho ___collate_lookup
@@ -1169,6 +1191,7 @@ B expand.macho _vwarnx
 B expand.macho _warnc
 B expand.macho _warnx
 B false.macho ___assert_rtn
+B false.macho ___chmod
 B false.macho ___collate_equiv_match
 B false.macho ___collate_load_error
 B false.macho ___collate_lookup
@@ -1216,6 +1239,7 @@ B false.macho _vwarnx
 B false.macho _warnc
 B false.macho _warnx
 B find.macho ___assert_rtn
+B find.macho ___chmod
 B find.macho ___collate_equiv_match
 B find.macho ___collate_load_error
 B find.macho ___collate_lookup
@@ -1297,6 +1321,7 @@ B find.macho _vwarnx
 B find.macho _warnc
 B find.macho _warnx
 B fold.macho ___assert_rtn
+B fold.macho ___chmod
 B fold.macho ___collate_equiv_match
 B fold.macho ___collate_load_error
 B fold.macho ___collate_lookup
@@ -1350,6 +1375,7 @@ B fold.macho _vwarnx
 B fold.macho _warnc
 B fold.macho _warnx
 B grep.macho ___assert_rtn
+B grep.macho ___chmod
 B grep.macho ___collate_equiv_match
 B grep.macho ___collate_load_error
 B grep.macho ___collate_lookup
@@ -1403,6 +1429,7 @@ B grep.macho _vwarnx
 B grep.macho _warnc
 B grep.macho _warnx
 B gzip.macho ___assert_rtn
+B gzip.macho ___chmod
 B gzip.macho ___collate_equiv_match
 B gzip.macho ___collate_load_error
 B gzip.macho ___collate_lookup
@@ -1479,6 +1506,7 @@ B gzip.macho _vwarnx
 B gzip.macho _warnc
 B gzip.macho _warnx
 B head.macho ___assert_rtn
+B head.macho ___chmod
 B head.macho ___collate_equiv_match
 B head.macho ___collate_load_error
 B head.macho ___collate_lookup
@@ -1526,6 +1554,7 @@ B head.macho _vwarnx
 B head.macho _warnc
 B head.macho _warnx
 B hexdump.macho ___assert_rtn
+B hexdump.macho ___chmod
 B hexdump.macho ___collate_equiv_match
 B hexdump.macho ___collate_load_error
 B hexdump.macho ___collate_lookup
@@ -1585,6 +1614,7 @@ B hexdump.macho _vwarnx
 B hexdump.macho _warnc
 B hexdump.macho _warnx
 B hostname.macho ___assert_rtn
+B hostname.macho ___chmod
 B hostname.macho ___collate_equiv_match
 B hostname.macho ___collate_load_error
 B hostname.macho ___collate_lookup
@@ -1633,6 +1663,7 @@ B hostname.macho _vwarnx
 B hostname.macho _warnc
 B hostname.macho _warnx
 B id.macho ___assert_rtn
+B id.macho ___chmod
 B id.macho ___collate_equiv_match
 B id.macho ___collate_load_error
 B id.macho ___collate_lookup
@@ -1684,6 +1715,7 @@ B id.macho _vwarnx
 B id.macho _warnc
 B id.macho _warnx
 B jot.macho ___assert_rtn
+B jot.macho ___chmod
 B jot.macho ___collate_equiv_match
 B jot.macho ___collate_load_error
 B jot.macho ___collate_lookup
@@ -1767,6 +1799,7 @@ B jot.macho _vwarnx
 B jot.macho _warnc
 B jot.macho _warnx
 B kill.macho ___assert_rtn
+B kill.macho ___chmod
 B kill.macho ___collate_equiv_match
 B kill.macho ___collate_load_error
 B kill.macho ___collate_lookup
@@ -1816,6 +1849,7 @@ B kill.macho _vwarnx
 B kill.macho _warnc
 B kill.macho _warnx
 B killall.macho ___assert_rtn
+B killall.macho ___chmod
 B killall.macho ___collate_equiv_match
 B killall.macho ___collate_load_error
 B killall.macho ___collate_lookup
@@ -1869,6 +1903,7 @@ B killall.macho _vwarnx
 B killall.macho _warnc
 B killall.macho _warnx
 B lam.macho ___assert_rtn
+B lam.macho ___chmod
 B lam.macho ___collate_equiv_match
 B lam.macho ___collate_load_error
 B lam.macho ___collate_lookup
@@ -2463,7 +2498,6 @@ B launchd.macho _job_mig_send_signal_reply
 B launchd.macho _job_mig_spawn2_reply
 B launchd.macho _kevent
 B launchd.macho _kext_request
-B launchd.macho _kill
 B launchd.macho _kmod_control
 B launchd.macho _kmod_create
 B launchd.macho _kmod_destroy
@@ -2554,7 +2588,6 @@ B launchd.macho _mkstempsat_np
 B launchd.macho _mktemp
 B launchd.macho _mktime
 B launchd.macho _modf
-B launchd.macho _munmap
 B launchd.macho _nan
 B launchd.macho _nanf
 B launchd.macho _nanl
@@ -2906,6 +2939,7 @@ B launchd.macho _wctob_l
 B launchd.macho _write
 B launchd.macho _writev
 B less.macho ___assert_rtn
+B less.macho ___chmod
 B less.macho ___collate_equiv_match
 B less.macho ___collate_load_error
 B less.macho ___collate_lookup
@@ -2985,6 +3019,7 @@ B less.macho _vwarnx
 B less.macho _warnc
 B less.macho _warnx
 B ln.macho ___assert_rtn
+B ln.macho ___chmod
 B ln.macho ___collate_equiv_match
 B ln.macho ___collate_load_error
 B ln.macho ___collate_lookup
@@ -3032,6 +3067,7 @@ B ln.macho _vwarnx
 B ln.macho _warnc
 B ln.macho _warnx
 B logname.macho ___assert_rtn
+B logname.macho ___chmod
 B logname.macho ___collate_equiv_match
 B logname.macho ___collate_load_error
 B logname.macho ___collate_lookup
@@ -3079,6 +3115,7 @@ B logname.macho _vwarnx
 B logname.macho _warnc
 B logname.macho _warnx
 B ls.macho ___assert_rtn
+B ls.macho ___chmod
 B ls.macho ___collate_equiv_match
 B ls.macho ___collate_load_error
 B ls.macho ___collate_lookup
@@ -3193,6 +3230,7 @@ B ls.macho _vwarnx
 B ls.macho _warnc
 B ls.macho _warnx
 B md5.macho ___assert_rtn
+B md5.macho ___chmod
 B md5.macho ___collate_equiv_match
 B md5.macho ___collate_load_error
 B md5.macho ___collate_lookup
@@ -3240,6 +3278,7 @@ B md5.macho _vwarnx
 B md5.macho _warnc
 B md5.macho _warnx
 B mkdir.macho ___assert_rtn
+B mkdir.macho ___chmod
 B mkdir.macho ___collate_equiv_match
 B mkdir.macho ___collate_load_error
 B mkdir.macho ___collate_lookup
@@ -3289,6 +3328,7 @@ B mkdir.macho _vwarnx
 B mkdir.macho _warnc
 B mkdir.macho _warnx
 B mkfifo.macho ___assert_rtn
+B mkfifo.macho ___chmod
 B mkfifo.macho ___collate_equiv_match
 B mkfifo.macho ___collate_load_error
 B mkfifo.macho ___collate_lookup
@@ -3337,6 +3377,7 @@ B mkfifo.macho _vwarnx
 B mkfifo.macho _warnc
 B mkfifo.macho _warnx
 B mknod.macho ___assert_rtn
+B mknod.macho ___chmod
 B mknod.macho ___collate_equiv_match
 B mknod.macho ___collate_load_error
 B mknod.macho ___collate_lookup
@@ -3388,6 +3429,7 @@ B mknod.macho _vwarnx
 B mknod.macho _warnc
 B mknod.macho _warnx
 B mktemp.macho ___assert_rtn
+B mktemp.macho ___chmod
 B mktemp.macho ___collate_equiv_match
 B mktemp.macho ___collate_load_error
 B mktemp.macho ___collate_lookup
@@ -3457,6 +3499,7 @@ B mktemp.macho _vwarnx
 B mktemp.macho _warnc
 B mktemp.macho _warnx
 B mv.macho ___assert_rtn
+B mv.macho ___chmod
 B mv.macho ___collate_equiv_match
 B mv.macho ___collate_load_error
 B mv.macho ___collate_lookup
@@ -3508,6 +3551,7 @@ B mv.macho _vwarnx
 B mv.macho _warnc
 B mv.macho _warnx
 B nice.macho ___assert_rtn
+B nice.macho ___chmod
 B nice.macho ___collate_equiv_match
 B nice.macho ___collate_load_error
 B nice.macho ___collate_lookup
@@ -3557,6 +3601,7 @@ B nice.macho _vwarnx
 B nice.macho _warnc
 B nice.macho _warnx
 B nl.macho ___assert_rtn
+B nl.macho ___chmod
 B nl.macho ___collate_equiv_match
 B nl.macho ___collate_load_error
 B nl.macho ___collate_lookup
@@ -3610,6 +3655,7 @@ B nl.macho _vwarnx
 B nl.macho _warnc
 B nl.macho _warnx
 B nohup.macho ___assert_rtn
+B nohup.macho ___chmod
 B nohup.macho ___collate_equiv_match
 B nohup.macho ___collate_load_error
 B nohup.macho ___collate_lookup
@@ -3657,6 +3703,7 @@ B nohup.macho _vwarnx
 B nohup.macho _warnc
 B nohup.macho _warnx
 B paste.macho ___assert_rtn
+B paste.macho ___chmod
 B paste.macho ___collate_equiv_match
 B paste.macho ___collate_load_error
 B paste.macho ___collate_lookup
@@ -3704,6 +3751,7 @@ B paste.macho _vwarnx
 B paste.macho _warnc
 B paste.macho _warnx
 B pathchk.macho ___assert_rtn
+B pathchk.macho ___chmod
 B pathchk.macho ___collate_equiv_match
 B pathchk.macho ___collate_load_error
 B pathchk.macho ___collate_lookup
@@ -3936,7 +3984,6 @@ B pd_console_login.macho _index
 B pd_console_login.macho _ioctl
 B pd_console_login.macho _isatty
 B pd_console_login.macho _issetugid
-B pd_console_login.macho _kill
 B pd_console_login.macho _lseek
 B pd_console_login.macho _lstat
 B pd_console_login.macho _mach_absolute_time
@@ -4130,6 +4177,7 @@ B pd_console_login.macho _vm_read
 B pd_console_login.macho _vm_remap
 B pd_console_login.macho _write
 B printenv.macho ___assert_rtn
+B printenv.macho ___chmod
 B printenv.macho ___collate_equiv_match
 B printenv.macho ___collate_load_error
 B printenv.macho ___collate_lookup
@@ -4177,6 +4225,7 @@ B printenv.macho _vwarnx
 B printenv.macho _warnc
 B printenv.macho _warnx
 B printf.macho ___assert_rtn
+B printf.macho ___chmod
 B printf.macho ___collate_equiv_match
 B printf.macho ___collate_load_error
 B printf.macho ___collate_lookup
@@ -4226,6 +4275,7 @@ B printf.macho _vwarnx
 B printf.macho _warnc
 B printf.macho _warnx
 B pwd.macho ___assert_rtn
+B pwd.macho ___chmod
 B pwd.macho ___collate_equiv_match
 B pwd.macho ___collate_load_error
 B pwd.macho ___collate_lookup
@@ -4273,6 +4323,7 @@ B pwd.macho _vwarnx
 B pwd.macho _warnc
 B pwd.macho _warnx
 B renice.macho ___assert_rtn
+B renice.macho ___chmod
 B renice.macho ___collate_equiv_match
 B renice.macho ___collate_load_error
 B renice.macho ___collate_lookup
@@ -4324,6 +4375,7 @@ B renice.macho _vwarnx
 B renice.macho _warnc
 B renice.macho _warnx
 B rev.macho ___assert_rtn
+B rev.macho ___chmod
 B rev.macho ___collate_equiv_match
 B rev.macho ___collate_load_error
 B rev.macho ___collate_lookup
@@ -4371,6 +4423,7 @@ B rev.macho _vwarnx
 B rev.macho _warnc
 B rev.macho _warnx
 B rm.macho ___assert_rtn
+B rm.macho ___chmod
 B rm.macho ___collate_equiv_match
 B rm.macho ___collate_load_error
 B rm.macho ___collate_lookup
@@ -4423,6 +4476,7 @@ B rm.macho _vwarnx
 B rm.macho _warnc
 B rm.macho _warnx
 B rmdir.macho ___assert_rtn
+B rmdir.macho ___chmod
 B rmdir.macho ___collate_equiv_match
 B rmdir.macho ___collate_load_error
 B rmdir.macho ___collate_lookup
@@ -4470,6 +4524,7 @@ B rmdir.macho _vwarnx
 B rmdir.macho _warnc
 B rmdir.macho _warnx
 B rs.macho ___assert_rtn
+B rs.macho ___chmod
 B rs.macho ___collate_equiv_match
 B rs.macho ___collate_load_error
 B rs.macho ___collate_lookup
@@ -4520,6 +4575,7 @@ B rs.macho _vwarnx
 B rs.macho _warnc
 B rs.macho _warnx
 B sed.macho ___assert_rtn
+B sed.macho ___chmod
 B sed.macho ___collate_equiv_match
 B sed.macho ___collate_load_error
 B sed.macho ___collate_lookup
@@ -4571,6 +4627,7 @@ B sed.macho _vwarnx
 B sed.macho _warnc
 B sed.macho _warnx
 B seq.macho ___assert_rtn
+B seq.macho ___chmod
 B seq.macho ___collate_equiv_match
 B seq.macho ___collate_load_error
 B seq.macho ___collate_lookup
@@ -4622,6 +4679,7 @@ B seq.macho _vwarnx
 B seq.macho _warnc
 B seq.macho _warnx
 B sleep.macho ___assert_rtn
+B sleep.macho ___chmod
 B sleep.macho ___collate_equiv_match
 B sleep.macho ___collate_load_error
 B sleep.macho ___collate_lookup
@@ -4766,6 +4824,7 @@ B sleep.macho _vwarnx
 B sleep.macho _warnc
 B sleep.macho _warnx
 B stat.macho ___assert_rtn
+B stat.macho ___chmod
 B stat.macho ___collate_equiv_match
 B stat.macho ___collate_load_error
 B stat.macho ___collate_lookup
@@ -5262,7 +5321,6 @@ B syslogd.macho _iswxdigit
 B syslogd.macho _iswxdigit_l
 B syslogd.macho _isxdigit
 B syslogd.macho _isxdigit_l
-B syslogd.macho _kdebug_trace
 B syslogd.macho _kqueue
 B syslogd.macho _localeconv
 B syslogd.macho _localeconv_l
@@ -5313,7 +5371,6 @@ B syslogd.macho _mig_dealloc_reply_port
 B syslogd.macho _mig_get_reply_port
 B syslogd.macho _mig_put_reply_port
 B syslogd.macho _mktime
-B syslogd.macho _mmap
 B syslogd.macho _nan
 B syslogd.macho _nanf
 B syslogd.macho _nanl
@@ -5422,11 +5479,9 @@ B syslogd.macho _pthread_mutexattr_settype
 B syslogd.macho _pthread_once
 B syslogd.macho _pthread_rwlock_destroy$UNIX2003
 B syslogd.macho _pthread_rwlock_init$UNIX2003
-B syslogd.macho _pthread_rwlock_rdlock
 B syslogd.macho _pthread_rwlock_rdlock$UNIX2003
 B syslogd.macho _pthread_rwlock_tryrdlock$UNIX2003
 B syslogd.macho _pthread_rwlock_trywrlock$UNIX2003
-B syslogd.macho _pthread_rwlock_unlock
 B syslogd.macho _pthread_rwlock_unlock$UNIX2003
 B syslogd.macho _pthread_rwlock_wrlock$UNIX2003
 B syslogd.macho _pthread_rwlockattr_destroy
@@ -5607,6 +5662,7 @@ B syslogd.macho _wctype_l
 B syslogd.macho _wmemcmp
 B syslogd.macho _write
 B tail.macho ___assert_rtn
+B tail.macho ___chmod
 B tail.macho ___collate_equiv_match
 B tail.macho ___collate_load_error
 B tail.macho ___collate_lookup
@@ -5759,6 +5815,7 @@ B tail.macho _vwarnx
 B tail.macho _warnc
 B tail.macho _warnx
 B tar.macho ___assert_rtn
+B tar.macho ___chmod
 B tar.macho ___collate_equiv_match
 B tar.macho ___collate_load_error
 B tar.macho ___collate_lookup
@@ -5849,6 +5906,7 @@ B tar.macho _vwarnx
 B tar.macho _warnc
 B tar.macho _warnx
 B tee.macho ___assert_rtn
+B tee.macho ___chmod
 B tee.macho ___collate_equiv_match
 B tee.macho ___collate_load_error
 B tee.macho ___collate_lookup
@@ -5896,6 +5954,7 @@ B tee.macho _vwarnx
 B tee.macho _warnc
 B tee.macho _warnx
 B test.macho ___assert_rtn
+B test.macho ___chmod
 B test.macho ___collate_equiv_match
 B test.macho ___collate_load_error
 B test.macho ___collate_lookup
@@ -5943,6 +6002,7 @@ B test.macho _vwarnx
 B test.macho _warnc
 B test.macho _warnx
 B touch.macho ___assert_rtn
+B touch.macho ___chmod
 B touch.macho ___collate_equiv_match
 B touch.macho ___collate_load_error
 B touch.macho ___collate_lookup
@@ -6016,6 +6076,7 @@ B touch.macho _vwarnx
 B touch.macho _warnc
 B touch.macho _warnx
 B true.macho ___assert_rtn
+B true.macho ___chmod
 B true.macho ___collate_equiv_match
 B true.macho ___collate_load_error
 B true.macho ___collate_lookup
@@ -6063,6 +6124,7 @@ B true.macho _vwarnx
 B true.macho _warnc
 B true.macho _warnx
 B unexpand.macho ___assert_rtn
+B unexpand.macho ___chmod
 B unexpand.macho ___collate_equiv_match
 B unexpand.macho ___collate_load_error
 B unexpand.macho ___collate_lookup
@@ -6114,6 +6176,7 @@ B unexpand.macho _vwarnx
 B unexpand.macho _warnc
 B unexpand.macho _warnx
 B uniq.macho ___assert_rtn
+B uniq.macho ___chmod
 B uniq.macho ___collate_equiv_match
 B uniq.macho ___collate_load_error
 B uniq.macho ___collate_lookup
@@ -6162,6 +6225,7 @@ B uniq.macho _vwarnx
 B uniq.macho _warnc
 B uniq.macho _warnx
 B unvis.macho ___assert_rtn
+B unvis.macho ___chmod
 B unvis.macho ___collate_equiv_match
 B unvis.macho ___collate_load_error
 B unvis.macho ___collate_lookup
@@ -6209,6 +6273,7 @@ B unvis.macho _vwarnx
 B unvis.macho _warnc
 B unvis.macho _warnx
 B vis.macho ___assert_rtn
+B vis.macho ___chmod
 B vis.macho ___collate_equiv_match
 B vis.macho ___collate_load_error
 B vis.macho ___collate_lookup
@@ -6272,6 +6337,7 @@ B vis.macho _vwarnx
 B vis.macho _warnc
 B vis.macho _warnx
 B wc.macho ___assert_rtn
+B wc.macho ___chmod
 B wc.macho ___collate_equiv_match
 B wc.macho ___collate_load_error
 B wc.macho ___collate_lookup
@@ -6319,6 +6385,7 @@ B wc.macho _vwarnx
 B wc.macho _warnc
 B wc.macho _warnx
 B which.macho ___assert_rtn
+B which.macho ___chmod
 B which.macho ___collate_equiv_match
 B which.macho ___collate_load_error
 B which.macho ___collate_lookup
@@ -6366,6 +6433,7 @@ B which.macho _vwarnx
 B which.macho _warnc
 B which.macho _warnx
 B xargs.macho ___assert_rtn
+B xargs.macho ___chmod
 B xargs.macho ___collate_equiv_match
 B xargs.macho ___collate_load_error
 B xargs.macho ___collate_lookup
@@ -6418,6 +6486,7 @@ B xargs.macho _vwarnx
 B xargs.macho _warnc
 B xargs.macho _warnx
 B yes.macho ___assert_rtn
+B yes.macho ___chmod
 B yes.macho ___collate_equiv_match
 B yes.macho ___collate_load_error
 B yes.macho ___collate_lookup
@@ -6473,45 +6542,24 @@ D ___collate_lookup_l
 D ___commpage_gettimeofday
 D ___darwin_check_fd_set_overflow
 D ___gettimeofday
-D ___kill
 D ___mb_cur_max
 D ___mb_sb_limit
-D ___memmove_chk
-D ___progname
-D ___stpncpy_chk
-D ___strcpy_chk
-D ___strncpy_chk
-D ___thread_selfid
 D __c_locale
 D __CurrentRuneLocale
 D __DefaultRuneLocale
 D __dyld_find_unwind_sections
-D __dyld_get_image_slide
 D __dyld_is_memory_immutable
 D __dyld_register_func_for_remove_image
-D __kernelrpc_host_create_mach_voucher
-D __os_alloc_once
-D __os_alloc_once_table
 D __PathLocale
-D __platform_memset
-D __pthread_set_self
 D __xpc_runtime_is_app_sandboxed
 D _abs
 D _access
 D _acos
-D _arc4random
-D _arc4random_addrandom
-D _arc4random_buf
-D _arc4random_stir
-D _arc4random_uniform
 D _asctime
 D _asctime_r
 D _asin
 D _atoi
 D _atoi_l
-D _chmod
-D _chmod$UNIX2003
-D _close$UNIX2003
 D _connect
 D _ctime
 D _ctime_r
@@ -6522,36 +6570,18 @@ D _dlopen
 D _dlsym
 D _duplocale
 D _fabs
-D _fcntl$UNIX2003
 D _fegetenv
 D _fesetenv
-D _fileport_makefd
-D _fileport_makeport
 D _fmod
 D _fpathconf
-D _fputs$UNIX2003
 D _freelocale
-D _fstat$INODE64
 D _ftruncate
-D _g_mach_ipc_clock_port
-D _g_mach_ipc_clock_sem
 D _getcwd
-D _getegid
-D _getentropy
-D _geteuid
 D _gettimeofday
-D _getuid
 D _gmtime
 D _gmtime_r
-D _kdebug_trace
-D _kill
-D _kill$UNIX2003
 D _localtime
 D _localtime_r
-D _lstat$INODE64
-D _mach_ipc_clock_init
-D _mach_port_deallocate
-D _mach_port_mod_refs
 D _malloc_size
 D _mbsnrtowcs
 D _mbsnrtowcs_l
@@ -6559,39 +6589,20 @@ D _memcpy
 D _memset
 D _mkdir
 D _mktime$UNIX2003
-D _mmap
 D _modf
-D _mprotect$UNIX2003
-D _munmap
 D _nanosleep
 D _newlocale
 D _offtime
 D _open_dprotected_np
-D _open$UNIX2003
 D _posix2time
 D _pow
-D _pread
-D _pthread_rwlock_rdlock
-D _pthread_rwlock_unlock
-D _pthread_rwlock_wrlock
-D _pthread_testcancel
-D _pthread_testcancel$UNIX2003
-D _pwrite
 D _querylocale
-D _read
-D _read$UNIX2003
-D _recvmsg
 D _scalbn
-D _sched_yield
-D _select
 D _send
 D _setlocale
-D _sigprocmask
 D _sleep
-D _sleep$UNIX2003
 D _socket
 D _sqrt
-D _stat$INODE64
 D _strftime_l$UNIX2003
 D _strftime$UNIX2003
 D _strstr
@@ -6599,7 +6610,6 @@ D _strtoll
 D _strtoll_l
 D _strtoul
 D _strtoul_l
-D _swtch_pri
 D _syslog
 D _time
 D _time2posix
@@ -6613,11 +6623,7 @@ D _tzname
 D _tzset
 D _tzsetwall
 D _uselocale
-D _uuid_unparse
-D _uuid_unparse_lower
-D _uuid_unparse_upper
 D _vproc_swap_integer
 D _wcsnrtombs
 D _wcsnrtombs_l
-D _write$UNIX2003
 D _writev

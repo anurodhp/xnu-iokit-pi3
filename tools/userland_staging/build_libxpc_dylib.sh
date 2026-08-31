@@ -162,6 +162,22 @@ rm -f "$EXTRACT/memmove_chk.o" "$EXTRACT/stpncpy_chk.o" \
 # `_time` locally.
 rm -f "$EXTRACT/time.o"
 
+# uuid_unparse.o REMOVED 2026-08-31 (static-linking cleanup,
+# libcopyfile-vs-libxpc ownership investigation): this dylib's own
+# freshly-compiled copy of third_party/Libc/uuid/uuidsrc/unparse.c
+# (uuid_unparse/uuid_unparse_lower/uuid_unparse_upper) duplicated
+# libcopyfile.dylib's own extracted copy of the SAME real Apple source --
+# genuinely ambiguous ownership (neither dylib is uuid's real Apple
+# home), resolved by making libsystem_c.dylib the single canonical
+# owner (see build_libsystem_c.sh's own comment: real Apple ships this
+# as part of Libc). Confirmed via nm -u that this extract dir's real
+# consumers (nvlist.o, xpc_misc.o) only ever reference `_uuid_unparse*`
+# as undefined -- they now resolve externally to the libsystem_c.dylib
+# sibling this dylib already links. Not from libxpc_syscalls2.a itself
+# (that archive stays intact for its own static consumers, e.g.
+# build_libnotify_client.sh's smoketest).
+rm -f "$EXTRACT/uuid_unparse.o"
+
 # sys__fileport_makefd.o/sys__fileport_makeport.o REMOVED 2026-08-31:
 # `_fileport_makefd`/`_fileport_makeport` are real BSD syscalls
 # (#430/#431) whose real home is libsystem_kernel.dylib, which now
