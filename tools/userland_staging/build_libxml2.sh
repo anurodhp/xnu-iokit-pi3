@@ -141,42 +141,28 @@ if [ "$fail" -ne 0 ]; then
     exit 1
 fi
 
-# Real, small compat gaps found via a real trial link (checked via nm
-# against every existing curated archive first, not assumed):
-# memmove_chk/strncat_chk/strncpy_chk (Libc's own real secure/*.c
-# fortified functions, already used the same way by
-# build_corefoundation.sh -- reused here, not reinvented), plus labs/
-# rand_r (real, tiny, zero-risk standard C functions -- see
-# cf_compat_headers/libxml2_libc_extras.c's own header for why these
-# two specifically get a real implementation here while _time/
-# _sched_yield below are deliberately deferred instead).
-LIBC="../../third_party/Libc"
-mkdir -p "$OUT/xml2_extras_obj"
-# -D_FORTIFY_SOURCE=0 on these secure/ compiles is load-bearing, not
-# hygiene: without it the fortify inlines in <stdio.h>/<string.h> rewrite
-# each __X_chk()'s own internal fall-through call to plain X() back into
-# __builtin___X_chk(), i.e. into itself, unconditionally (the rewritten
-# call passes __darwin_obsz(dest) == (size_t)-1 for a pointer parameter,
-# and every secure/ file's guard treats "unbounded" as "call the plain
-# function"). That is infinite recursion -> stack exhaustion -> SIGSEGV.
-# This was the real root cause of launchd bug #6; see
-# build_launchd_core.sh's fuller write-up above its own secure/ compiles.
-"$CLANG" "${CFLAGS[@]}" -D_FORTIFY_SOURCE=0 "$LIBC/secure/memmove_chk.c" -o "$OUT/xml2_extras_obj/memmove_chk.o"
-"$CLANG" "${CFLAGS[@]}" -D_FORTIFY_SOURCE=0 "$LIBC/secure/strncat_chk.c" -o "$OUT/xml2_extras_obj/strncat_chk.o"
-"$CLANG" "${CFLAGS[@]}" -D_FORTIFY_SOURCE=0 "$LIBC/secure/strncpy_chk.c" -o "$OUT/xml2_extras_obj/strncpy_chk.o"
-"$CLANG" "${CFLAGS[@]}" -D_FORTIFY_SOURCE=0 "$LIBC/secure/stpncpy_chk.c" -o "$OUT/xml2_extras_obj/stpncpy_chk.o"
-"$CLANG" "${CFLAGS[@]}" "$COMPAT/libxml2_libc_extras.c" -o "$OUT/xml2_extras_obj/libxml2_libc_extras.o"
-# Real fmod/pow (cf_compat_headers/libm_compat.c, already used by
-# build_corefoundation.sh for the same real "no Libm anywhere" gap) --
-# reused unmodified: xpath.c's own real call sites (general-double
-# fmod() for XPath's `mod` operator, pow(10.0, integer-exponent) for
-# scientific-notation parsing, both confirmed via source inspection)
-# match the exact cases that file's fmod/pow already handle correctly.
-"$CLANG" "${CFLAGS[@]}" "$COMPAT/libm_compat.c" -o "$OUT/xml2_extras_obj/libm_compat.o"
-
+# No compat/extras objects here any more (static-linking cleanup, Phase
+# 1d, 2026-08-30). This archive used to carry private copies of:
+#
+#   - Libc/secure/{memmove,strncat,strncpy,stpncpy}_chk.c -- the real
+#     _FORTIFY_SOURCE tier. All four are now owned by
+#     libsystem_c.dylib (build_libsystem_c.sh's own secure/ loop; the
+#     three it didn't already have were added there for exactly this).
+#   - cf_compat_headers/libxml2_libc_extras.c -- hand-written labs/
+#     rand_r/log10. labs and the real Apple rand family (rand.c's
+#     rand_r, with its real mutable `_next` seed) now come from
+#     libsystem_c.dylib; log10 from the real libsystem_m.dylib.
+#   - cf_compat_headers/libm_compat.c -- hand-written fmod/pow. Real
+#     libsystem_m.dylib has both, and this follows the same migration
+#     build_corefoundation.sh/build_ping.sh/build_simple_cmds.sh already
+#     made off their own libm_compat shims once build_libm.sh existed.
+#
+# Both compat .c files are deliberately left in the tree rather than
+# deleted, matching the precedent those three scripts set.
+rm -rf "$OUT/xml2_extras_obj"
 rm -f "$OUT/libxml2.a"
-ar rcs "$OUT/libxml2.a" "$OUT"/xml2_obj/*.o "$OUT"/xml2_extras_obj/*.o
-echo "wrote $OUT/libxml2.a ($(ls "$OUT"/xml2_obj/*.o "$OUT"/xml2_extras_obj/*.o | wc -l | tr -d ' ') objects)"
+ar rcs "$OUT/libxml2.a" "$OUT"/xml2_obj/*.o
+echo "wrote $OUT/libxml2.a ($(ls "$OUT"/xml2_obj/*.o | wc -l | tr -d ' ') objects)"
 
 # Real per-library dylib per this project's 2026-08-25 dylib-first
 # directive. Real install_name matches the Xcode 12 iPhoneOS SDK's own
@@ -184,22 +170,39 @@ echo "wrote $OUT/libxml2.a ($(ls "$OUT"/xml2_obj/*.o "$OUT"/xml2_extras_obj/*.o 
 # project doesn't have -- this is our own real replacement, not a
 # reference to Apple's).
 #
-# Real remaining gaps, deliberately deferred rather than implemented
-# (checked via nm first, confirmed genuinely absent everywhere in this
-# project, not a quick link-order fix): _time and _sched_yield are real
-# syscall-backed functions with no wrapper anywhere in this project's
-# userland yet (same category as CFRunLoop/CFSocket's own already-
-# documented real-syscall gaps, docs/backlog.md item d7) -- deferred via
-# the established per-symbol `-Wl,-U,<name>` mechanism (confirmed
-# reliable in this environment by build_libdispatch_dylib.sh's own real
-# finding: a blanket `-Wl,-undefined,dynamic_lookup` does NOT work here,
-# real ld64 tries resolving against the HOST macOS's own dyld shared
-# cache and hard-fails for common names instead of deferring -- `-U` per
-# symbol avoids that). Real pthread condition-variable functions this
-# project's libpthread.a only exports under Darwin's real $UNIX2003/
-# double-underscore-internal aliasing (`_pthread_cond_init$UNIX2003`,
-# `__pthread_cond_wait`) get real `-Wl,-alias` entries, same established
-# idiom every other dylib in this project already uses.
+# SIBLING DYLIBS ONLY -- no static archives (static-linking cleanup,
+# Phase 1d, 2026-08-30). This link line used to end with libclosure.a,
+# libmalloc.a, libplatform.a, libpthread.a, libc_gen.a, libc_string.a,
+# libc_stdio.a, libc_printf.a and libc_locale_for_stdio.a, which made
+# libxml2.dylib a second owner of ~42 symbols its siblings already
+# provide -- most visibly the entire pthread mutex/condvar tier, which
+# it re-exported wholesale. Everything it actually needs now resolves
+# through real sibling dylibs:
+#
+#   libSystem.B.dylib   -- umbrella, re-exports libsystem_c/malloc/
+#                          pthread/kernel/platform/blocks (so plain
+#                          libc, the _chk tier, the rand family, labs,
+#                          environ, stdio and the pthread API all bind
+#                          cross-image the way real Darwin does)
+#   libsystem_m.dylib   -- fmod/pow/modf/log10 (real Apple/FreeBSD Libm)
+#   libdispatch.dylib   -- threads.c's real dispatch_once use
+#   libdyld.dylib       -- dl* / image APIs
+#   libicuuc.dylib      -- encoding.c's real ICU converter path
+#
+# Two former `-Wl,-alias` entries went away with the archives, and had
+# to: `-Wl,-alias` only lands in the real exports trie when the alias's
+# BASE symbol is local to the same ld64 invocation (docs/backlog.md item
+# d10), so once libpthread.a is gone, aliasing `_pthread_cond_init` here
+# would silently emit a malformed ordinal-0 re-export instead of failing.
+# The plain `_pthread_cond_init` spelling the iOS SDK headers emit is now
+# a real, direct export of libsystem_pthread.dylib itself -- the alias
+# moved there, where its base genuinely is local.
+#
+# The former `-Wl,-U,_time -Wl,-U,_sched_yield` deferrals are gone too:
+# both are real, defined exports now (libsystem_c.dylib's extracted
+# time.o, libsystem_pthread.dylib's sched_yield trap), so they resolve
+# for real at link time rather than being punted to flat-namespace
+# lookup.
 #
 # Real bug found+fixed while writing this: without `-force_load`, ld64's
 # normal archive semantics only pull `.a` members needed to satisfy an
@@ -226,17 +229,13 @@ rm -f "$OUT/system/libxml2.dylib"
     -Wl,-not_for_dyld_shared_cache \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
-    -Wl,-alias,'_pthread_cond_init$UNIX2003',_pthread_cond_init \
-    -Wl,-alias,__pthread_cond_wait,_pthread_cond_wait \
-    -Wl,-U,_time -Wl,-U,_sched_yield \
     -o "$OUT/system/libxml2.dylib" \
     -Wl,-force_load,"$OUT/libxml2.a" \
     "icu_build/target/lib/libicuuc.dylib" \
     "$OUT/system/libdispatch.dylib" \
+    "$OUT/system/libsystem_m.dylib" \
+    "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_malloc.dylib" \
     "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
-    "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/libplatform.a" \
-    "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
-    "$OUT/libc_locale_for_stdio.a" \
     2>"$OUT/libxml2_dylib_link.err" \
-    && echo "wrote $OUT/system/libxml2.dylib (0 undefined symbols beyond the deliberate -U deferrals)" \
+    && echo "wrote $OUT/system/libxml2.dylib (0 undefined symbols)" \
     || { echo "libxml2 dylib link found real undefined symbols:" >&2; grep '^  "' "$OUT/libxml2_dylib_link.err" | sed 's/,.*//' | sort -u >&2; exit 1; }

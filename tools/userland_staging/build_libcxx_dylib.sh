@@ -241,9 +241,18 @@ LIBCXXABI="../../third_party/llvm-project/libcxxabi"
     -Wno-macro-redefined \
     mutex_trimmed.cpp -o "$EXTRACT/mutex.o"
 
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    libcxx_dylib_compat.c -o "$EXTRACT/compat.o"
-
+# libcxx_dylib_compat.o is NOT compiled here any more (static-linking
+# cleanup, Phase 1d, 2026-08-30): every one of its 7 functions
+# (catopen/catgets/catclose, clock_gettime, _dyld_find_unwind_sections/
+# _dyld_register_func_for_remove_image/dladdr) is ALSO compiled, from
+# the exact same source file, into libunwind.dylib's own extract dir --
+# and this dylib genuinely links libunwind.dylib as a real sibling below
+# (see this script's own header: "the last piece libc++.dylib was still
+# linking as a static archive", now fixed). There was never a real need
+# for a second copy; it just hadn't been removed when the sibling link
+# was wired up. Real Apple's own architecture has libunwind provide all
+# of these anyway.
+#
 # Real, working nanosleep(2) -- real Apple algorithm (host_get_clock_service
 # + semaphore_create + clock_get_time + __semwait_signal, real Mach IPC,
 # already QEMU-verified, see that file's own header comment for the full
@@ -293,16 +302,6 @@ for f in localtime timezone_unix03 asctime strftime timelocal; do
     [ -f "$src" ] || src="$LIBC/stdtime/${f}.c"
     "$CLANG" $LOCALE_CFLAGS "$src" -o "$EXTRACT/${f}.o"
 done
-
-# Same real exclusion build_dyld_link.sh/build_libdyld.sh already
-# established: libunwind_dyld_shim.o needs __mh_execute_header, never
-# synthesized for MH_DYLIB output. Scratch copy, shared committed
-# libunwind.a untouched.
-SCRATCH="$OUT/libcxx_dylib_scratch"
-rm -rf "$SCRATCH"
-mkdir -p "$SCRATCH"
-cp "$OUT/libunwind.a" "$SCRATCH/libunwind_scratch.a"
-ar d "$SCRATCH/libunwind_scratch.a" libunwind_dyld_shim.o
 
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libc++.dylib"

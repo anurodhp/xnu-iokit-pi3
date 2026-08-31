@@ -246,6 +246,69 @@ CFLAGS_MACH_PORT=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c mach_port_traps.s \
     -o "$OUT/libsystem_kernel/mach_port_traps.o"
 
+# Real mig regen of osfmk/mach/mach_port.defs (client side), moved here
+# 2026-08-30 (static-linking cleanup, Phase 1d). This is the follow-up
+# the -Wl,-U block below used to describe as "the real fix": the 12
+# __kernelrpc_mach_port_* MIG fallbacks cf_mach_port_syscalls.o's real
+# trap-first/MIG-fallback pairs call were deferred to flat-namespace
+# lookup here, and their real bodies existed only in libxpc.dylib and
+# libiokituser.dylib -- two owners of the same 40+ generated stubs, in
+# two images, with libsystem_kernel (their real Apple home) owning
+# neither.
+#
+# There was never a real dependency problem, only a sourcing one: the
+# other two scripts got mach_portUser.o by running `mig` themselves, and
+# `mig` needs nothing but xnu-7195's own .defs file, which is already
+# this dylib's own source tree. Generating it directly here inverts
+# nothing. Same invocation and same CFLAGS as
+# build_libxpc_syscalls2.sh's (default `_kernelrpc_` UserPrefix applies
+# since LIBSYSCALL_INTERFACE is not defined) -- not re-derived.
+MIG="$(which mig)"
+if [ -z "$MIG" ]; then
+    echo "error: 'mig' not found on PATH -- needed to generate mach_port.defs client stubs" >&2
+    exit 1
+fi
+mkdir -p "$OUT/libsystem_kernel/mach_port_mig"
+"$MIG" -arch arm64 -I"$XNU/osfmk" \
+    -header "$OUT/libsystem_kernel/mach_port_mig/mach_port.h" \
+    -user "$OUT/libsystem_kernel/mach_port_mig/mach_portUser.c" \
+    -server /dev/null -sheader /dev/null \
+    "$XNU/osfmk/mach/mach_port.defs"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+    -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$OUT/libsystem_kernel/mach_port_mig" \
+    "$OUT/libsystem_kernel/mach_port_mig/mach_portUser.c" \
+    -o "$OUT/libsystem_kernel/mach_portUser.o"
+
+# mach_port_set_attributes: the one mach_port_*() public wrapper this
+# dylib still didn't own after the MIG regen above. Its only definition
+# in this tree lived in libiokituser.dylib's own mach_port_wrappers_real.o
+# (and, separately, in launchd.macho's launchd_mach_port_compat.o) --
+# real Apple ships it in libsystem_kernel like every sibling wrapper, so
+# it comes here and libiokituser drops the whole object.
+#
+# Narrowed with `ld -r -exported_symbol` rather than linked whole,
+# because mach_port_wrappers_real.c ALSO defines mach_port_allocate and
+# mach_port_get_attributes, which cf_mach_port_syscalls.o (linked below)
+# already provides from real mach_port.c -- linking it entire is a
+# genuine duplicate-symbol error, confirmed by trying it. Same narrowing
+# precedent as this script's own kernelrpc_host_create_mach_voucher
+# extraction in build_libsystem_pthread.sh and libdispatch's vm_mapUser.o.
+#
+# Deliberately NOT done by appending the wrapper to
+# cf_mach_port_syscalls.c: that file is shared with
+# build_corefoundation.sh, whose libCoreFoundation.a is linked into
+# launchd.macho alongside liblaunchd_core.a's launchd_mach_port_compat.o
+# -- which defines mach_port_set_attributes too. Adding it there would
+# turn a dylib duplicate into a hard link error one layer up.
+"$CLANG" "${CFLAGS_MACH_PORT[@]}" -I "$OUT/libsystem_kernel/mach_port_mig" \
+    mach_port_wrappers_real.c -o "$OUT/libsystem_kernel/mach_port_wrappers_raw.o"
+"$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld" -r -arch arm64 \
+    -exported_symbol _mach_port_set_attributes \
+    "$OUT/libsystem_kernel/mach_port_wrappers_raw.o" \
+    -o "$OUT/libsystem_kernel/mach_port_set_attributes.o"
+rm -f "$OUT/libsystem_kernel/mach_port_wrappers_raw.o"
+
 MACH_IPC_EXTRACT="$OUT/libsystem_kernel/mach_ipc_extracted"
 rm -rf "$MACH_IPC_EXTRACT"
 mkdir -p "$MACH_IPC_EXTRACT"
@@ -325,22 +388,12 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     `# loads libsystem_kernel.dylib without libSystem.B.dylib (which` \
     `# re-exports both) also in the process.` \
     -Wl,-U,_abort -Wl,-U,_memcpy -Wl,-U,_pthread_tsd_shim_bootstrap \
-    `# The 12 __kernelrpc_mach_port_* MIG fallbacks below are the` \
-    `# slow-path half of cf_mach_port_syscalls.o's real trap-first/` \
-    `# MIG-fallback pairs (moved here this same pass). Their real bodies` \
-    `# are MIG-generated mach_portUser.o, which this project currently` \
-    `# produces only in build_dyld_core.sh / build_libxpc_syscalls2.sh --` \
-    `# both far above this dylib in the dependency order, so pulling` \
-    `# either here would invert it. Deferred with exactly the same` \
-    `# mechanism and for exactly the same reason libdispatch.dylib` \
-    `# already documents in its own UNDEF_SYMS_ELSEWHERE_IN_PROCESS list;` \
-    `# generating mach_port.defs here directly is the real follow-up.` \
-    -Wl,-U,__kernelrpc_mach_port_allocate -Wl,-U,__kernelrpc_mach_port_construct \
-    -Wl,-U,__kernelrpc_mach_port_destruct -Wl,-U,__kernelrpc_mach_port_extract_member \
-    -Wl,-U,__kernelrpc_mach_port_extract_right -Wl,-U,__kernelrpc_mach_port_get_attributes \
-    -Wl,-U,__kernelrpc_mach_port_insert_member -Wl,-U,__kernelrpc_mach_port_insert_right \
-    -Wl,-U,__kernelrpc_mach_port_kernel_object -Wl,-U,__kernelrpc_mach_port_request_notification \
-    -Wl,-U,__kernelrpc_mach_port_type -Wl,-U,__kernelrpc_mach_port_unguard \
+    `# The 12 __kernelrpc_mach_port_* -Wl,-U deferrals that used to sit` \
+    `# here are GONE (2026-08-30, static-linking cleanup Phase 1d): their` \
+    `# real bodies -- MIG-generated mach_portUser.o -- are now generated` \
+    `# and linked directly above, so this dylib owns them outright the way` \
+    `# real Apple's libsystem_kernel does, instead of punting to whichever` \
+    `# of libxpc.dylib/libiokituser.dylib happened to be loaded.` \
     `# mach_msg_real.o's mach_msg_destroy_port() references these on its` \
     `# own provably-unreachable MAKE_SEND/MAKE_SEND_ONCE reply cases (see` \
     `# mach_msg_real.c's own header) -- deliberately left undefined here` \
@@ -361,6 +414,7 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/mach_error_string.o" "$OUT/libsystem_kernel/mach_error_string_minimal_compat.o" \
     "$OUT/libsystem_kernel/mach_port_gap_closures2.o" "$OUT/libsystem_kernel/mach_port_gap_closures2_traps.o" \
     "$OUT/libsystem_kernel/cf_mach_port_syscalls.o" "$OUT/libsystem_kernel/mach_port_traps.o" \
+    "$OUT/libsystem_kernel/mach_portUser.o" "$OUT/libsystem_kernel/mach_port_set_attributes.o" \
     "$MACH_IPC_EXTRACT"/*.o
 
 echo "wrote $OUT/system/libsystem_kernel.dylib"

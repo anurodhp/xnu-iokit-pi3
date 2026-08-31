@@ -75,6 +75,20 @@ mkdir -p "$EXTRACT"
 (cd "$EXTRACT" && ar x "../../libunwind.a")
 rm -f "$EXTRACT/__.SYMDEF"* "$EXTRACT/libunwind_dyld_shim.o"
 
+# Removed 2026-08-30 (static-linking cleanup, Phase 1d): three
+# `-Wl,-alias` entries used to re-export
+# `__pthread_rwlock_{rdlock,wrlock,unlock}` here, aliased to the real
+# `$UNIX2003` bodies. No object in this extract dir ever defined the
+# plain double-underscore name -- `dyld_info -exports` confirmed each
+# alias landed as a real `[re-export]` of `libsystem_pthread`'s own copy,
+# and `nm -gUj libsystem_pthread.dylib` confirms `libsystem_pthread`
+# ALREADY exports the exact same plain name directly. So this dylib was
+# a second, redundant owner of a name its own sibling on the link line
+# below already provides -- any real caller resolves it via ordinary
+# two-level-namespace lookup with no alias needed at all, same
+# conclusion build_libsystem_c.sh's own header reached when it dropped
+# an equivalent dead `__pthread_cond_wait` alias for the same reason.
+
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     libcxx_dylib_compat.c -o "$EXTRACT/compat.o"
 
@@ -93,9 +107,6 @@ rm -f "$OUT/system/libunwind.dylib"
     -Wl,-not_for_dyld_shared_cache \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
-    -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',__pthread_rwlock_rdlock \
-    -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',__pthread_rwlock_wrlock \
-    -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',__pthread_rwlock_unlock \
     -o "$OUT/system/libunwind.dylib" \
     "$EXTRACT"/*.o \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" \

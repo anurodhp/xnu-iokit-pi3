@@ -202,6 +202,16 @@ rm -f "$OUT/system/libsystem_pthread.dylib"
 # flatten across image boundaries the way static-archive linking did,
 # so each dylib needs its own copy of whichever aliases its own real
 # source actually calls).
+#
+# _pthread_cond_init added 2026-08-30 (static-linking cleanup, Phase
+# 1d): real libpthread.a only ever defines the `$UNIX2003` spelling, but
+# the iOS SDK's own <pthread.h> emits plain `_pthread_cond_init` call
+# sites, so every consumer that wanted it was forced to statically bundle
+# libpthread.a for that one symbol -- which is exactly why libxml2.dylib
+# carried a private copy of the entire pthread mutex/cond tier. The alias
+# base IS local to this link (it comes from the extracted libpthread.a
+# members below), which is the precondition for -Wl,-alias actually
+# landing in the real exports trie -- see docs/backlog.md item d10.
     # -not_for_dyld_shared_cache: real, newly-surfaced requirement of
     # the daily-driver Xcode's newer ld (NEWLD_BINDIR above) -- it
     # refuses "-undefined dynamic_lookup"/-U on a dylib it classifies
@@ -218,6 +228,7 @@ rm -f "$OUT/system/libsystem_pthread.dylib"
     -Wl,-alias,___mmap,_mmap \
     -Wl,-alias,___munmap,_munmap \
     -Wl,-alias,__pthread_cond_wait,_pthread_cond_wait \
+    -Wl,-alias,'_pthread_cond_init$UNIX2003',_pthread_cond_init \
     -Wl,-alias,_pthread_testcancel,'_pthread_testcancel$UNIX2003' \
     -Wl,-alias,'_pthread_mutexattr_destroy$UNIX2003',_pthread_mutexattr_destroy \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',__pthread_rwlock_rdlock \

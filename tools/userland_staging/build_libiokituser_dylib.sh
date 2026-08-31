@@ -66,6 +66,35 @@ fi
 
 (cd "$EXTRACT" && ar x "../../libiokituser.a")
 
+# Three members dropped 2026-08-30 (static-linking cleanup, Phase 1d).
+# Between them they were 44 of the audit's duplicate symbols -- the
+# single largest group left after Phase 1a:
+#
+#   mach_portUser.o           -- the MIG-generated __kernelrpc_mach_port_*
+#                                client stub set (40 symbols). This was
+#                                ALSO in libxpc.dylib; neither was their
+#                                real home. build_libsystem_kernel.sh now
+#                                runs `mig` on xnu-7195's own
+#                                osfmk/mach/mach_port.defs and owns all
+#                                51 outright, matching real Apple.
+#   mach_port_wrappers_real.o -- mach_port_allocate/get_attributes/
+#                                set_attributes. All three are real
+#                                exports of libsystem_kernel.dylib now
+#                                (the first two from cf_mach_port_syscalls.o,
+#                                set_attributes newly narrowed out of this
+#                                very file over there).
+#   mach_port_extra_traps.o   -- the _allocate_trap/_get_attributes_trap
+#                                Mach trap stubs those wrappers call;
+#                                libsystem_kernel.dylib has its own
+#                                (mach_port_traps.s).
+#
+# libc_build/libiokituser.a itself is deliberately NOT changed: it is
+# still linked statically by tools that legitimately need a private copy
+# (the iokituser smoketest), and build_iokituser.sh remains its single
+# producer. This is a dylib-link-line change only.
+(cd "$EXTRACT" && rm -f \
+    mach_portUser.o mach_port_wrappers_real.o mach_port_extra_traps.o)
+
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libiokituser.dylib"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \

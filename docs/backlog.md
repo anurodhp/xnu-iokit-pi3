@@ -1,4 +1,6 @@
-Resolved items moved to `docs/historic/backlog.md` — see there for fix history.
+Resolved items moved to `docs/historic/backlog.md` — see there for fix history
+(most recently the third archive pass, 2026-08-30: P0 items 1/2/4/5, and
+items d7/d8/d9/0a/0b plus item d11's session-2-through-5 investigation trail).
 
 # Backlog
 
@@ -16,29 +18,21 @@ older than" rather than "current as of").
 ## P0 — real-hardware risk (would plausibly hang, storm, or panic a real Pi)
 
 1. **[FIXED 2026-08-27, QEMU-verified]** `BCM2837SDHCI::doAsyncReadWrite()`
-   had no serialization at all — no `IOCommandGate`, no workloop, no
-   mutex. Two concurrent requests (plausible now that the SD image has
-   two mounted partitions) could interleave register writes and corrupt
-   `fPendingIntStatus`. Fixed with `fTransferLock` (a plain `IOLock`) held
-   for the whole command-issue-through-completion span — sufficient
-   because `doAsyncReadWrite()` is already synchronous under the hood
-   (blocks on `waitForIntStatus32()` rather than completing from
-   interrupt context). **Verification caveat**: nothing in this project
-   currently issues genuinely concurrent I/O, so the QEMU boot test
-   confirms no regression, not that the actual interleaving race is
-   exercised. Full writeup (exact reasoning, `fTransferLock` placement)
-   archived to `docs/historic/backlog.md`.
+   had no serialization at all (no `IOCommandGate`, no workloop, no mutex);
+   fixed with `fTransferLock`, a plain `IOLock` held for the whole
+   command-issue-through-completion span. **Verification caveat**: nothing
+   in this project issues genuinely concurrent I/O, so the QEMU boot test
+   confirms no regression, not that the interleaving race is exercised.
+   Full writeup: `docs/historic/backlog.md`'s "P0, items 1/2/4/5" section.
 
 2. **[FIXED 2026-08-27, QEMU-verified]** No error recovery anywhere in
    `BCM2837SDHCI` — every error path was `IOLog(); return false;`. Fixed
-   with `resetCmdLine()`/`resetDatLine()` (SDHCI spec 3.7.1
-   `SOFTWARE_RESET_CMD`/`_DATA`, matching Linux's `sdhci_reset()` split),
-   wired into every real error/timeout path in `sendCommand()`/
-   `readBlocksPIO()`/`writeBlocksPIO()`. **Verification caveat**: QEMU's
-   SD model still doesn't inject real CRC/timeout/card-removal errors, so
-   the boot test confirms the reset paths compile and don't regress a
-   clean boot, not that they trigger correctly under a real error. Full
-   writeup archived to `docs/historic/backlog.md`.
+   with `resetCmdLine()`/`resetDatLine()` (SDHCI spec 3.7.1, matching
+   Linux's `sdhci_reset()` split), wired into every real error/timeout
+   path. **Verification caveat**: QEMU's SD model injects no real CRC/
+   timeout/card-removal errors, so this is verified only as "the reset
+   paths compile and don't regress a clean boot". Full writeup:
+   `docs/historic/backlog.md`'s "P0, items 1/2/4/5" section.
 
 3. **NOT FIXED — deliberately, after real investigation, not just
    deferred.** `BCM2837SDHCI`'s SD clock still never leaves ~490 kHz /
@@ -72,27 +66,21 @@ older than" rather than "current as of").
 
 4. **[FIXED 2026-08-27, QEMU-verified]** No power-on ramp / 74-clock delay
    before `CMD0`, and power was enabled *after* the clock in `start()`
-   rather than before. Fixed by reordering `start()` to assert
-   `kRegPowerControl` before `setClock()`, plus real `IODelay()`s for the
-   ≥1ms power-on ramp (spec 6.4.1) and ≥74-clock identification delay.
-   Only changes ordering/idle delays, not signal rate/timing, so unlike
-   item 3 there's no way a wrong guess here makes things worse on real
-   hardware. QEMU has no power/clock-dependent reset behavior to catch
-   the old ordering being wrong, so this is verified only as "boots
-   clean, no regression." Full writeup archived to
-   `docs/historic/backlog.md`.
+   rather than before. Fixed by reordering `start()` and adding real
+   `IODelay()`s. Only changes ordering/idle delays, not signal rate/timing,
+   so unlike item 3 there's no way a wrong guess here makes real hardware
+   worse. Full writeup: `docs/historic/backlog.md`'s "P0, items 1/2/4/5"
+   section.
 
 5. **[FIXED 2026-08-27, code correct but genuinely unverifiable from
    QEMU — exactly as this item originally predicted.]** No memory barrier
    in `BCM2837InterruptController::enableVector()`/`disableVectorHard()`
-   before the next `IRQ_PENDING` read. Fixed with
-   `__asm__ volatile ("dsb sy" ::: "memory")` after each register write,
-   matching the barrier style `BCM2837DWC2.cpp` already uses. Genuinely
-   unverifiable from QEMU/TCG (all MMIO is strongly ordered there
-   regardless of the barrier's presence) — the boot test only confirms
-   the added instruction doesn't itself break anything. Full writeup
-   (including a correction to this item's own original "no barriers
-   anywhere" claim) archived to `docs/historic/backlog.md`.
+   before the next `IRQ_PENDING` read; fixed with
+   `__asm__ volatile ("dsb sy" ::: "memory")` after each register write.
+   All MMIO is strongly ordered under QEMU/TCG regardless of the barrier.
+   Full writeup (including a correction to this item's own original "no
+   barriers anywhere" claim): `docs/historic/backlog.md`'s "P0, items
+   1/2/4/5" section.
 
 6. **Re-verified, not re-tested (inherently real-hardware-only).** GPIO
     pinmux for the SD slot is still only ever exercised in QEMU, where
@@ -107,19 +95,14 @@ older than" rather than "current as of").
     QEMU boot can close this, confirmed again this pass rather than
     assumed.
 
-**On items 1, 2, 4, 5 above**: all four were rebuilt together
-(`tools/build_kexts.sh` clean compile, then a full `tools/
-build_xnu_7195.sh` kernel rebuild) and verified with one real QEMU boot
-(`tools/boot_test.py --login --cmd 'ls /' --cmd 'cat /etc/hosts' --cmd
-'ls /System'`, `--expect-fail 'panic\('`) — real boot, real login, real
-reads against both mounted partitions (`disk0s1` root / `disk0s2` boot),
-zero panics, `BCM2837SDHCI` log confirms a real hardware interrupt still
-observed and the card still identifies correctly (RCA=0x4567, SDHC,
-1200MB). This confirms no regression from any of the four changes
-together; it does not and cannot exercise the specific fault conditions
-items 1/2/5 exist to guard against (concurrent I/O, a real card/bus
-error, or a real MMIO-ordering violation), since QEMU reproduces none of
-those - noted individually above rather than glossed over.
+**On items 1, 2, 4, 5 above**: all four were rebuilt together and verified
+with one real QEMU boot — real login, real reads against both mounted
+partitions (`disk0s1` root / `disk0s2` boot), zero panics, `BCM2837SDHCI`
+log confirming a real hardware interrupt and correct card identification.
+That confirms no regression from the four changes together; it does not
+and cannot exercise the specific fault conditions items 1/2/5 exist to
+guard against, since QEMU reproduces none of them. Full text archived to
+`docs/historic/backlog.md`'s "P0, items 1/2/4/5" section.
 
 7. **Real, reproducible kernel PANIC (not a hang) from sustained fast
     console output — found 2026-08-16 while QEMU-verifying the real
@@ -306,26 +289,16 @@ those - noted individually above rather than glossed over.
 
 ### Userland library debt (filed 2026-08-26, from the real libdispatch port + dylib conversion)
 
-d1. **`libdispatch.dylib` duplicates process-global state with its own
-    sibling dylibs — real heap-corruption-class risk, same shape as the
-    bug `build_libsystem_malloc.sh` already fixed once.** `tools/
-    userland_staging/build_libdispatch_dylib.sh` builds a real
-    `libdispatch.dylib` (`-nostdlib`, MH_DYLIB confirmed via `otool`) but
-    statically bundles its CURRENT dependency stack
-    (`libmach_ipc.a`/`libclosure.a`/`libmalloc.a`/`libplatform.a`/
-    `libpthread.a`/`libc_gen.a`/`libc_string.a`/`libc_stdio.a`) rather
-    than linking against this project's REAL sibling dylibs
-    (`libsystem_kernel.dylib`/`libsystem_platform.dylib`/
-    `libsystem_malloc.dylib`/`libsystem_pthread.dylib`/
-    `libsystem_c.dylib`, all already built). That means any real process
-    loading both `libdispatch.dylib` and one of those sibling dylibs
-    gets two independent copies of `mach_task_self_`, `g_zone` (the live
-    heap zone — see `build_libsystem_malloc.sh`'s own header comment for
-    why that specific duplicate is real heap-corruption territory, not
-    just "wrong value"), `errno`, etc. **Do not load this dylib alongside
-    the real sibling dylibs in a multi-dylib process until this is
-    fixed.** Real fix: relink against the sibling `.dylib`s (`-l`-style,
-    not static bundling) instead of their static ancestors.
+d1. **RESOLVED 2026-08-29/30 (static-linking cleanup, Phases 1a–1d,
+    QEMU-verified).** `libdispatch.dylib` no longer statically bundles
+    its dependency stack — it links the real sibling dylibs directly.
+    `mach_task_self_`/`g_zone`/`errno` each now have exactly one real
+    owner project-wide (errno's own fix, moving it fully into
+    `libsystem_kernel.dylib`, landed 2026-08-30 and was verified via a
+    full real QEMU boot — see `docs/static-linking-cleanup-plan.md`'s
+    2026-08-30 session section for the full trail, including one real
+    regression that boot test caught and fixed). Full detail on the
+    original bug archived in `docs/historic/backlog.md`.
 
 d2. **Real duplicate-symbol conflicts between archives built at
     different points in this project's history — surfaced while linking
@@ -348,10 +321,24 @@ d2. **Real duplicate-symbol conflicts between archives built at
       independently).
     `build_libdispatch_dylib.sh` works around all three via `ar x`
     exclusion or by simply not linking the conflicting object (see that
-    script's own comments for exactly which). None of these are fixed
-    at the source — a real followup pass should pick ONE canonical
-    provider per symbol and delete the other, project-wide, not just in
-    this one dylib's link line.
+    script's own comments for exactly which).
+
+    **Partially resolved 2026-08-30**: `_pthread_key_init_np`'s
+    `libc_locale_for_stdio.a` copy (`pthread_tsd_shim.o`) is still real
+    and still linked into `libsystem_malloc.dylib` (malloc sits *below*
+    `libsystem_pthread.dylib` in the real dependency order and cannot
+    link the real dylib back for this), but its 5 public POSIX names are
+    now narrowed to private-extern via `ld -r -keep_private_externs
+    -unexported_symbol`, so it can no longer shadow the real
+    `libsystem_pthread.dylib` copy for any other image — see
+    `docs/static-linking-cleanup-plan.md`'s 2026-08-30 session section.
+    The `mach_portUser.o`/`vm_mapUser.o` MIG-regen duplication (second
+    bullet) is also resolved the same session: `libsystem_kernel.dylib`
+    now runs its own real `mig` regen of `mach_port.defs` and owns the
+    whole `__kernelrpc_mach_port_*` set outright, and both `libxpc.dylib`
+    and `libiokituser.dylib` dropped their private copies. Still open:
+    picking one canonical provider for the `_vm_allocate` family
+    specifically (`libmalloc.a` vs `dyld_core.a`'s `vm_mapUser.o`).
 
 d3. **Standard POSIX/QoS pthread API entirely missing from this
     project's curated `libpthread.a`/`libsystem_pthread.dylib` — a real
@@ -464,669 +451,182 @@ d6. **CLOSED 2026-08-26 (critical path) — launchd's full daemon +
 
 d7. **CoreFoundation + real ICU + real libxml2 ports DONE 2026-08-26/27
     — CF dynamic trial link down to 42 undefined-symbol groups, from a
-    starting count of 153.** Real, unmodified Apple source throughout:
-    `third_party/swift-corelibs-foundation` (Apple's own actively-
-    maintained CF fork — NOT the 2014-dated `apple-oss-distributions/CF`,
-    which isn't in the `macos-112` manifest at all), real ICU 66.1
-    (`third_party/ICU`, real two-stage host+arm64-apple-ios14.4 cross
-    build), real libxml2-34.9. 94 real CF source files build clean into
-    `libCoreFoundation.a` (`build_corefoundation.sh`) — String/
-    Collections/NumberDate/Parsing/RunLoop/Stream/PlugIn(Bundle)/
-    DateFormatter/URL/AttributedString/RegularExpression, plus
-    ICU-backed Locale/Calendar/CharacterSet. `libSystem.B.dylib`'s
-    missing `-Wl,-reexport_library` (it was plain-linking its 7
-    sub-dylibs, exporting almost nothing through the umbrella — real
-    macOS's own `libSystem.dylib` is exactly this kind of thin reexport
-    umbrella) turned out to be the single biggest gap-closing fix in
-    this whole effort once found, closing 27 gaps in one rebuild. Full
-    session-by-session build/port narrative (the ICU two-stage
-    cross-build story, the CFBundle 30-for-3 trade that got reverted
-    then un-reverted once the dependency turned out already-buildable,
-    the CFError/CFDate/CFURL "just try compiling it" sweep, every
-    individual syscall wrapper closed along the way, etc) archived
-    verbatim to `docs/historic/backlog.md` — this entry only tracks
-    current state.
+    starting count of 153.** Real, unmodified Apple source throughout
+    (`third_party/swift-corelibs-foundation` — Apple's own actively-
+    maintained CF fork, NOT the 2014-dated `apple-oss-distributions/CF`;
+    real ICU 66.1 via a real two-stage host+arm64 cross build; real
+    libxml2-34.9). 94 real CF source files build clean into
+    `libCoreFoundation.a`. The single biggest gap-closing fix of the whole
+    effort was `libSystem.B.dylib`'s missing `-Wl,-reexport_library` (27
+    groups in one rebuild). Full port/build narrative archived to
+    `docs/historic/backlog.md` — the session-by-session story in its
+    2026-08-27 "item d7" section, the current-state detail in its "Third
+    archive pass, 2026-08-30" section.
 
-    **Real, confirmed compile-time exclusions (4, not build gaps — each
-    individually investigated and confirmed structural)**:
-    - `CFUserNotification.c`: real GUI alert-dialog API, hard
-      `unavailable: not available on iOS` SDK errors. No GUI on this
-      target regardless.
-    - `CFPreferences.c`/`CFXMLPreferencesDomain.c`: **CLOSED 2026-08-28,
-      stale below** — both now compile and link for real (three real
-      `TARGET_OS_OSX`/`TARGET_OS_MAC` guard mismatches, not the vaguer
-      "gethostuuid unavailable" framing this entry used to have; full
-      writeup in `docs/daemon-roadmap.md`'s "Milestone 2 CLOSED,
-      2026-08-28" section). Whether `CFPreferencesCopyAppValue` et al are
-      *behaviorally* correct against a real flat preferences file on disk
-      is a separate, not-yet-QEMU-verified question this pass didn't
-      address — but the exclusion itself (this bullet's original claim)
-      no longer holds.
-    - `CFURLSessionInterface.c`: real libcurl dependency. Apple did
-      open-source curl (`curl-121.40.2`, pinned per the manifest), but
-      its real build needs closed-source Secure Transport for TLS (out
-      of scope per the standing corecrypto/AES-only crypto decision,
-      item 0a) — `--without-ssl` would compile, but real HTTP
-      networking needs BSD socket syscalls this project's userland
-      doesn't wrap yet either. **Real prerequisite order for whoever
-      picks this up**: (1) BSD socket syscall wrappers in userland libc
-      (shared need with `CFSocket.c`), (2) a real TLS backend decision,
-      (3) a `build_libcurl.sh` off `build_libxml2.sh`'s own template.
-    - `CFWindowsUtilities.c`: Windows-only, structurally inapplicable.
+    **Real, confirmed compile-time exclusions (4, structural, not build
+    gaps)**: `CFUserNotification.c` (real GUI alert API, no GUI on this
+    target); `CFPreferences.c`/`CFXMLPreferencesDomain.c` (**CLOSED
+    2026-08-28** — both now compile and link for real, three
+    `TARGET_OS_OSX`/`TARGET_OS_MAC` guard mismatches, see
+    `docs/daemon-roadmap.md`'s "Milestone 2 CLOSED, 2026-08-28"; whether
+    `CFPreferencesCopyAppValue` et al are *behaviorally* correct against a
+    real on-disk preferences file is separately unverified);
+    `CFURLSessionInterface.c` (real libcurl → closed-source Secure
+    Transport for TLS, plus BSD socket wrappers this userland lacks — real
+    prerequisite order: socket syscall wrappers, then a TLS backend
+    decision, then a `build_libcurl.sh` off `build_libxml2.sh`'s template);
+    `CFWindowsUtilities.c` (Windows-only).
 
-    **Remaining real gaps in the dynamic trial link, 42 groups** (the
-    `-reexport_library` fix closed the entire previous 27-symbol
-    export-parity bucket — what's left is qualitatively different,
-    genuine "not built anywhere yet" or "never open-sourced" gaps):
-    - `_scalbn`, `_getpwuid_r`, `_getsectbynamefromheader_64`,
-      `_getsegbyname`: real functions, not yet confirmed built anywhere
-      in this project's curated stack — not yet investigated.
-    - `___chk_assert_no_overlap`/`___chk_fail_overflow`/`___chk_overlap`:
-      real `_FORTIFY_SOURCE`/`_chk`-family hardening routines, no shim
-      source located yet (same gap `build_libxpc_syscalls.sh` already
-      flagged).
-    - `__dispatch_queue_attr_concurrent`/`__mh_dylib_header`/
-      `__os_log_debug_impl`/`__os_log_default`/`__os_log_error_impl`/
-      `_os_log_create`/`_os_log_type_enabled`: a real, not-yet-root-
-      caused os_log/dispatch gap — confirmed genuinely absent from both
-      `libdispatch.dylib` and `libSystem.B.dylib` via `nm`.
-    - `_asl_*` (6 symbols): **CORRECTED 2026-08-27** — not actually
-      out of scope, see the parallel correction under item d6 above.
-      The real ASL client library is bundled in
-      `apple-oss-distributions/syslog`'s `libsystem_asl.tproj/src/`
-      (pinned as `syslog-385`, see `docs/daemon-roadmap.md`'s Phase 6.7
-      syslogd section) — genuine, just not yet wired into CF's own
-      trial link.
-    - `___CFPreferencesAllocator`/`__CFPreferencesDomain*`/
-      `_CFPreferencesCopyValue`/`_kCFPreferences*`/`_kCFLocale*`/
-      `_kCFDateFormatter*`/`_kCFGregorianCalendar`: real
-      `CFPreferences.c`-family gaps, tracked by the exclusion above.
-    - `sysdir_start_search_path_enumeration`/
-      `sysdir_get_next_search_path_enumeration`: confirmed never
-      open-sourced (checked real `Libc`'s full git history plus a
-      GitHub code search across the whole `apple-oss-distributions`
-      org — zero definitions anywhere, only real callers).
+    **Remaining real gaps in the dynamic trial link, 42 groups — still
+    open** (full per-symbol list archived): `_scalbn`/`_getpwuid_r`/
+    `_getsectbynamefromheader_64`/`_getsegbyname` (real functions, not
+    confirmed built anywhere in this project's stack, not investigated);
+    the `___chk_*` `_FORTIFY_SOURCE` hardening family (no shim source
+    located); an os_log/dispatch bucket (`__os_log_*`/`_os_log_create`/
+    `_os_log_type_enabled`/`__dispatch_queue_attr_concurrent`/
+    `__mh_dylib_header`, confirmed absent from both `libdispatch.dylib`
+    and `libSystem.B.dylib`); `_asl_*` (6 symbols — real and pinned as
+    `syslog-385`, just not yet wired into CF's own trial link); the
+    `CFPreferences`-family symbols tracked by the exclusion above; and
+    `sysdir_*` (confirmed never open-sourced by Apple anywhere — full
+    `Libc` git history plus an org-wide GitHub code search).
 
-d8. **Every curated support library built since the real per-library-dylib
-    convention was announced (`CLAUDE.md`'s "New project convention going
-    forward: prefer real, per-library `.dylib`s over new static
-    archives", Phase 6.5) has still shipped as a plain `.a` static
-    archive, not a `.dylib` — a real, growing gap between stated
-    convention and actual practice, not yet reconciled.** Confirmed via
-    `ls tools/userland_staging/build_*.sh` + `file libc_build/*.a`:
-    `build_libm.sh` (`libm.a`), `build_libnotify_client.sh`
-    (`libnotify_client.a`), `build_libresolv.sh` (`libresolv.a`),
-    `build_openpam.sh` (`libopenpam.a`), and `build_bsm.sh` (`libbsm.a`,
-    2026-08-27/28) were all written and built *after* the convention
-    landed, and all five chose `.a` anyway — each one's own header
-    comment documents the same real reasoning (a curated support library
-    linked into this project's still-dominant Csu-static `-nostdlib
-    -static` consumers has no real dyld-based consumer to justify the
-    extra dylib-linking complexity yet, unlike `libdyld.dylib`/
-    `libsystem_*.dylib`, which exist specifically because real dyld
-    structurally requires them). `libbsm.a` is the sharpest case: real
-    Apple's own `bsm/lib/Makefile` *already* targets a dylib
-    (`libbsm.dylib`, `-dynamiclib -install_name /usr/lib/libbsm.dylib`)
-    — this project deliberately chose `.a` anyway, for consistency with
-    the other four, not because the real upstream build system does.
+d8. **Static-archive-vs-dylib convention debt — RESOLVED 2026-08-28
+    (explicit user directive: option (a), convention NOT narrowed) and
+    2026-08-29 (all 11 "genuine conversion candidate" archives converted
+    to real dylibs, every real consumer relinked, not just left as unused
+    parallel output).** Filed 2026-08-26 after five libraries written
+    *after* the per-library-dylib convention landed all shipped as `.a`
+    anyway. Real per-library dylibs now: `libresolv`, `libsystem_notify`
+    (replaces libnotify.a + libnotify_client.a), `libbsm`, `libncurses`,
+    `libcopyfile`, `libremovefile`, `libiconv`, `libsystem_m`,
+    `libopenpam` (base library only), `libxpc`, `libiokituser`.
 
-    Not a correctness bug (every one of these `.a`s builds clean, links
-    clean, and passes its own real smoketest) — filed because the
-    convention exists precisely to stop this exact pattern from
-    compounding (see `docs/daemon-roadmap.md`'s "Static-vs-dylib
-    architecture debt" section for the same concern at the
-    `libSystem.B.dylib`-flattening scale), and five real, independent
-    instances of "wrote a new `.a` anyway" since the convention was
-    announced is a real signal the convention isn't being followed by
-    default, not just an occasional deliberate exception. Real follow-up,
-    not attempted here: either (a) revisit each of these five as a real
-    `.dylib` once/if a real dyld-loaded consumer actually needs one
-    (lowest-risk — matches `build_libdyld.sh`'s own "link against real
-    sibling dylibs, not their static ancestors" pattern, see item d1
-    above for why that matters for correctness, not just style), or (b)
-    make an explicit, documented call that `.a` is in fact still correct
-    for small curated-support libraries with no standalone runtime role,
-    and narrow the convention's own wording in `CLAUDE.md` to say so —
-    but don't leave the stated convention and the actual practice
-    silently diverging the way they are today.
+    **Standing rule this produced, still in force**: do not add a new
+    static archive for anything that is a real, standalone, nameable
+    library — build a real `.dylib` even if today's only consumer is
+    static. Per-consumer curated-extraction bundles (`cf_libc_extras.a`,
+    `launchd_libc_extras.a`, `syslogd_libc_extras.a`), per-daemon object
+    archives, and `libmach_ipc.a` stay `.a` by design; `tools/init_binary`/
+    `pwtool` (run before/without dyld) and `build_dyld_link.sh` (dyld
+    can't depend on the dylibs it loads) are the real exceptions.
 
-    **RESOLVED 2026-08-28 — explicit user directive: option (a), no
-    narrowing of the convention.** Real dyld-loaded consumers now exist
-    for real (item d9 below: all 76 `build_simple_cmds.sh` commands,
-    plus this project's real per-library `libsystem_*.dylib`/
-    `libdispatch.dylib`/`libc++.dylib`/`libunwind.dylib`/`libxml2.dylib`
-    conversions, plus this same day's launchd trial link now linking
-    real dylibs throughout) — the "no real dyld-loaded consumer to
-    justify it yet" reasoning every `.a`-choosing script above cited is
-    no longer true project-wide, even for scripts that individually
-    predate a consumer of their own. Standing rule going forward, not
-    just for the five libraries above: **do not add a new static archive
-    for anything that is a real, standalone, nameable library** (as
-    opposed to a per-consumer curated-extraction bundle like
-    `launchd_libc_extras.a`/`cf_libc_extras.a`/`syslogd_libc_extras.a` —
-    those stay `.a` by design, they're not independent libraries) —
-    build a real `.dylib` instead, even if today's only consumer is
-    still static (mirrors `tools/init_binary/build.py`'s own real,
-    narrow exception: PID-1 and `pwtool` stay fully static because they
-    run before/without dyld by design — everything else doesn't get that
-    exemption just because it hasn't been asked yet).
+    Full inventory, the real duplicate-`_res` bug the conversion closed at
+    its architectural root, and the two new gaps it surfaced (`mach_msg()`
+    now living for real in `libsystem_kernel.dylib`; a real
+    `libsystem_pthread_dylib_bootstrap_compat.c` constructor) are archived
+    verbatim to `docs/historic/backlog.md`'s "Third archive pass,
+    2026-08-30".
 
-    **Full current static-archive inventory** (`ls libc_build/*.a` +
-    `ls libc_build/system/*.dylib`, re-derived 2026-08-28, not copied
-    from the five-library list above — that list is now a subset of
-    this one):
-    - **Already real dylibs, `.a` retired/superseded** (confirmed by
-      reading each dylib's own build script, not guessed): libc_gen/
-      libc_string/libc_stdio/libc_printf/libc_locale_for_stdio/
-      libc_regex → bundled into `libsystem_c.dylib`; libcxx/libcxxabi/
-      libc_locale (selectively) → `libc++.dylib`; libmalloc →
-      `libsystem_malloc.dylib`; libplatform → `libsystem_platform.dylib`;
-      libpthread → `libsystem_pthread.dylib`; libunwind →
-      `libunwind.dylib`; libxml2 → `libxml2.dylib`. `libclosure.a` is a
-      **partial** case: `libsystem_blocks.dylib` already builds the real
-      Blocks runtime from source independently (confirmed via
-      `build_libsystem_blocks.sh`), but `libclosure.a` itself is still a
-      live, real dependency of `build_launchd_core.sh`'s own static-ish
-      trial-link line — retire the `.a` only once that trial link (or
-      its eventual real `build_launchd.sh`) links `libsystem_blocks.dylib`
-      directly instead.
-    - **Real, standalone libraries still static, genuine conversion
-      candidates** (each has a real Apple `.dylib` counterpart on actual
-      macOS, confirmed for the starred ones by reading that library's own
-      real upstream `Makefile`/build config, not assumed for the rest):
-      `libCoreFoundation.a`* (Phase 9, by far the largest and riskiest —
-      real load-time global state/constructors, scope its own session,
-      see `docs/daemon-roadmap.md`'s "Static-vs-dylib architecture debt"),
-      `libbsm.a`* (real `bsm/lib/Makefile` already targets
-      `libbsm.dylib`, see this item's own note above), `libresolv.a`,
-      `libopenpam.a` (real PAM modules are themselves per-module
-      dylib-shaped on macOS, not just the base library), `libnotify.a`/
-      `libnotify_client.a`, `libncurses.a`, `libiconv.a`,
-      `libcopyfile.a`, `libremovefile.a`, `libm.a`, `libxpc.a`/
-      `libxpc_syscalls.a`/`libxpc_syscalls2.a` (real `libxpc.dylib`),
-      `libiokituser.a` (real `IOKit.framework`, not a plain dylib, but
-      the same "should be independently loadable" concern applies).
-    - **Not real conversion candidates, stay `.a` on purpose** (this
-      project's own internal glue, not independent Apple libraries):
-      `cf_libc_extras.a`, `launchd_libc_extras.a`, `syslogd_libc_extras.a`,
-      `libcxx_locale_for_stdio_scratch.a` (per-consumer curated-extraction
-      bundles); `liblaunchd_core.a`/`liblaunchd_mig.a`/
-      `liblaunchd_syscalls.a`/`libsyslogd.a` (per-daemon object archives
-      feeding a real executable link, not a runtime-loadable library);
-      `libmach_ipc.a` (this project's own MIG-regen compat layer, no real
-      Apple equivalent to match).
-    - **Possibly dead, not yet confirmed**: `libdispatch_min.a`/
-      `libdispatch_real.a` — likely superseded now that
-      `libdispatch.dylib` is real (Phase 6.6); check for remaining real
-      consumers before deleting, don't assume. **Still open as of
-      2026-08-29** — not investigated this pass either, carried forward.
-
-    **RESOLVED 2026-08-29 — all 11 "genuine conversion candidate"
-    archives above converted to real dylibs, and every real consumer
-    relinked (not just left as unused parallel output).** User paused
-    the launchd SIGSEGV investigation (bug #6, session 2) specifically
-    to run this pass. `libCoreFoundation.a` deliberately still deferred
-    (explicit user decision, own future session — unchanged from this
-    item's own original reasoning). `libiokituser.a` converted to
-    `libiokituser.dylib` (a plain dylib, not a `.framework` bundle — this
-    project has no bundle/Info.plist packaging pipeline for kexts either,
-    same established precedent).
-    - Real per-library dylibs: `libresolv.dylib`, `libsystem_notify.dylib`
-      (replaces libnotify.a + libnotify_client.a — real Apple ships these
-      as one product), `libbsm.dylib`, `libncurses.dylib`,
-      `libcopyfile.dylib`, `libremovefile.dylib`, `libiconv.dylib`,
-      `libsystem_m.dylib` (real Apple name for what was libm.a),
-      `libopenpam.dylib` (base library only — real per-module PAM dylibs
-      need `dlopen`, which this project doesn't have; same documented gap
-      class as OpenPAM's own module loader elsewhere in this project, not
-      attempted), `libxpc.dylib` (replaces libxpc.a + libxpc_syscalls.a +
-      libxpc_syscalls2.a as one real dylib), `libiokituser.dylib`.
-    - Consumers relinked away from the static archives: `build_launchd.sh`
-      (libbsm/libxpc — the launchd SIGSEGV diagnostics from the paused
-      session were left completely untouched/uncommitted throughout),
-      `build_syslogd.sh`, `build_launchctl.sh`, `build_simple_cmds.sh`
-      (all 76 commands, re-verified 76/0 no regression), `build_corefoundation.sh`
-      (non-CF library refs only — CF itself stays static per the scope
-      decision above). `build_dyld_link.sh` deliberately left alone — a
-      real, legitimate exception (dyld itself can't depend on the real
-      dylibs it's the thing that loads), same class as `tools/init_binary`/
-      `pwtool`.
-    - Real duplicate-global-state bugs closed at the architectural root
-      (same bug class as `mach_task_self_`/`g_zone`, not hypothetical):
-      `build_libdyld.sh`/`build_libsystem.sh` now `-Wl,-reexport_library`
-      (not statically bundle) `libresolv.dylib`/`libcopyfile.dylib`/
-      `libremovefile.dylib`, closing three independently-uninitialized
-      private copies of `_res` down to one shared copy.
-    - Two new real gaps found+closed the same class of investigation this
-      whole migration already established: `mach_msg()`/`mach_msg_trap()`
-      now live for real in `libsystem_kernel.dylib` (previously bundled
-      separately into launchd.macho's static portion AND
-      libdispatch.dylib), and a real `libsystem_pthread_dylib_bootstrap_compat.c`
-      constructor closes the same "nothing calls
-      `pthread_main_thread_bootstrap()` for a real dyld-linked consumer"
-      gap at the `libsystem_pthread.dylib` level that
-      `libsystem_dyld_initializer_compat.c` already closed once for
-      `libSystem.B.dylib`.
-    - **Real, deliberately deferred residual, not silently dropped**:
-      `build_libsystem_c.sh` still does narrow, curated `ar x` object
-      extraction (not full-archive bundling) from `libm.a`/
-      `libremovefile.a`/`libopenpam.a` for a handful of specific symbols
-      ICU's own dylibs expect from "libSystem" (`acos`/`asin`/`sqrt`/
-      `fmod`/`qsort`/`heapsort`/`time`/`gettimeofday`/etc). Lower risk
-      than the `_res`-class bug above (mostly stateless math/qsort/time
-      functions, not mutable process-global state) — and genuinely
-      structurally different: `libsystem_m.dylib`/`libremovefile.dylib`/
-      `libopenpam.dylib` all link AGAINST `libsystem_c.dylib`, so
-      `libsystem_c.dylib` linking them back would be a real circular
-      build-order dependency, not just a style choice. Real follow-up,
-      not attempted here: reexport `libsystem_m.dylib`/`libopenpam.dylib`
-      through `libSystem.B.dylib` (matching the umbrella-reexport pattern
-      that already made ICU's `libresolv`/`libcopyfile`/`libremovefile`
-      needs resolve without embedding), then drop the curated extraction
-      entirely.
+    **Still open, carried forward into item d12** — do not re-derive here:
+    `libCoreFoundation.a` → `.dylib` (deliberately deferred, own future
+    session — real load-time global state/constructors);
+    `build_libsystem_c.sh`'s narrow curated `ar x` extraction from
+    `libm.a`/`libremovefile.a`/`libopenpam.a` for ICU's sake (a real
+    circular-build-order constraint, not just style — real follow-up is to
+    reexport `libsystem_m.dylib`/`libopenpam.dylib` through
+    `libSystem.B.dylib`, then drop the extraction);
+    `libdispatch_min.a`/`libdispatch_real.a` likely dead since
+    `libdispatch.dylib` became real, never actually checked for remaining
+    consumers.
 
 d9. **`build_simple_cmds.sh` converted from fully-static to real dynamic
-    linking (2026-08-28) — RESOLVED: 76 of 76 commands now build, the
-    ld64-609 crash below fixed for real.** See this item's own trailing
-    "RESOLVED 2026-08-28" paragraph for the fix; the rest of this item
-    (kept verbatim) is the real bisection trail that root-caused it.
-    This is the first real
-    dyld-loaded consumer d8 above was waiting for, and confirms d8's own
-    premise: converting a real static consumer to real dynamic linking
-    against `libSystem.B.dylib`/`libdyld.dylib` eliminates the entire
-    `-Wl,-alias` workaround class this file used to need (the ~60-entry
-    `LINK_ALIASES`/`LINK_ALIASES_TAR` saga, and the real ld64-609
-    "Assertion failed: (target != NULL)" crash in `generateLinkEditInfo`
-    that saga existed to work around) — `libSystem.B.dylib` already
-    bakes the same real UNIX2003/INODE64/DARWIN_EXTSN aliases into its
-    own build (`build_libsystem.sh`'s own tail), so a real dynamic
-    consumer needs zero alias flags of its own for anything whose real
-    base is locally resolvable at THAT dylib's own link time.
+    linking — RESOLVED 2026-08-28: 76 of 76 commands build, and the
+    ld64-609 crash that blocked 32 of them is fixed for real.** This is
+    the first real dyld-loaded consumer item d8 was waiting for, and
+    confirms d8's own premise: a real dynamic consumer needs zero
+    `-Wl,-alias` flags of its own (the ~60-entry `LINK_ALIASES` saga is
+    gone), because `libSystem.B.dylib` already bakes the same real
+    UNIX2003/INODE64/DARWIN_EXTSN aliases into its own build. Root cause
+    of the 32 failures was a real, narrow `ld64-609` bug (`Assertion
+    failed: (_mode == modeFinalAddress)` under `-Wl,-fixup_chains`), not
+    this project's object code — fixed by passing `-B"$NEWLD_BINDIR"` (the
+    daily-driver Xcode's much newer `ld`) on the final per-command link
+    only, still compiling with Xcode 12's own `clang`/SDK throughout.
 
-    Real, load-bearing finding from this conversion, not previously
-    documented anywhere: **`-Wl,-alias` inside a dylib only lands in
-    that dylib's real `LC_DYLD_EXPORTS_TRIE`** (confirmed via
-    `xcrun dyld_info -exports`, **not** `nm` — `nm`'s plain symbol-table
-    listing shows an alias-created indirect symbol regardless of whether
-    it actually made the trie, which is actively misleading) **when the
-    alias's BASE symbol is genuinely local to that same link.** Adding
-    an alias for e.g. `_fputs$UNIX2003`/`_strerror$UNIX2003` to
-    `libSystem.B.dylib`'s own build — where those bases are only
-    reachable via `-reexport_library`, not local — silently produces an
-    alias no real consumer can ever resolve (a real trial link fails
-    with "symbol not found" despite `nm -gU` claiming the alias exists).
-    The fix used throughout this conversion: add each alias at the
-    specific sub-dylib (`build_libsystem_c.sh`, `build_libsystem.sh`,
-    etc) where its base is genuinely local, never at the umbrella
-    `libSystem.B.dylib` level for a reexported base. A real runtime
-    regression from exactly this class of bug was caught live in QEMU
-    (2026-08-28): `cat.macho` linked clean but crashed at real dyld load
-    time (`dyld[3]: Symbol not found: _fdopen$UNIX2003`) because the
-    private test SD image's `/usr/lib/system/libsystem_c.dylib` was
-    stale — `tools/init_binary/inject_into_sd_image.sh` must be re-run
-    after every `build_libsystem_c.sh`/`build_libsystem.sh` rebuild, not
-    just after `build_simple_cmds.sh`, or booted binaries will resolve
-    dylib imports against old exports. A second, related finding: **any
-    sub-dylib whose real, non-aliased symbols a consumer's own compiled
-    code calls directly must also be linked directly on that consumer's
-    own command line** (`libsystem_pthread.dylib` for
-    `pthread_main_thread_bootstrap()`, `libsystem_c.dylib` for the bulk
-    of libc, `libsystem_malloc.dylib` for the private
-    `_pthread_setspecific`/`_pthread_getspecific`/`_pthread_once`
-    variants real libmalloc's own TSD-cache path needs) — ld64 does not
-    resolve a multi-level reexport chain through `libSystem.B.dylib`
-    alone for this toolchain, regardless of whether the symbol is
-    alias-derived or a real, directly-defined export.
+    **Two load-bearing findings from this item are standing rules, kept
+    here rather than archived:**
+    - **`-Wl,-alias` inside a dylib only lands in that dylib's real
+      `LC_DYLD_EXPORTS_TRIE` when the alias's BASE symbol is genuinely
+      local to that same link** — confirm with `xcrun dyld_info -exports`,
+      **not** `nm` (nm lists the alias regardless, which is actively
+      misleading). Add each alias at the specific sub-dylib where its base
+      is local, never at the umbrella `libSystem.B.dylib` level for a
+      reexported base.
+    - **`tools/init_binary/inject_into_sd_image.sh` must be re-run after
+      every `build_libsystem_c.sh`/`build_libsystem.sh` rebuild**, not
+      just after `build_simple_cmds.sh`, or booted binaries resolve dylib
+      imports against stale on-image exports (a real QEMU crash,
+      `Symbol not found: _fdopen$UNIX2003`, was caught exactly this way).
+      Related: any sub-dylib whose real, non-aliased symbols a consumer's
+      own compiled code calls directly must ALSO be linked directly on
+      that consumer's own command line — ld64 does not resolve a
+      multi-level reexport chain through `libSystem.B.dylib` alone for
+      this toolchain.
 
-    **The 32 blocked commands** (`cp`, `mv`, `ls`, `grep`, `tar`, `diff`,
-    `gzip`, `less`, `find`, `date`, `du`, `stat`, `chmod`, `chown`,
-    `sed`, `xargs`, `nice`, `printf`, `echo`, `wc`, `cut`, `vis`, `rs`,
-    `mknod`, `expand`, `unexpand`, `fold`, `hexdump`, `jot`, `nl`,
-    `tail`, `touch`) all need real locale support this project's dropped
-    `libc_locale_for_stdio.a` used to provide — at minimum
-    `__locale_key`/`__global_locale` (real `ctype.h` xlocale macros;
-    `libc_locale_globals_compat.c` already provides a narrow real
-    reproduction of these two globals, same file used by
-    `build_libdispatch_dylib.sh`), and for about 20 of them, deeper real
-    `LC_TIME`/`LC_COLLATE` support (`ls`'s date formatting; `grep`/
-    `find`/`diff`'s `[a-z]`-range `fnmatch()` matching). The real
-    blocker: `libc_locale_globals_compat.c`'s `__global_locale` needs
-    `&_DefaultRuneXLocale` — real `third_party/Libc/locale/FreeBSD/
-    table.c`'s big built-in "C"-locale character-classification table —
-    and linking that table into ANY of these 32 commands' already-
-    substantial per-command object set reproduces a real, narrow
-    ld64-609 internal crash: `Assertion failed: (_mode ==
-    modeFinalAddress), function finalAddress` (a different assertion
-    from the `generateLinkEditInfo` one d8/the alias saga hit — this one
-    fires deep in `OutputFile::applyFixUps`, under `-Wl,-fixup_chains`
-    specifically). Extensively, but so far unsuccessfully, bisected
-    (2026-08-28) — real approaches tried, in order, each with a real,
-    specific reason it didn't work:
-    - Removing the one confirmed real cross-object static relocation
-      (`__global_locale`'s static initializer took `&_DefaultRuneXLocale`
-      directly; moved to a runtime constructor assignment instead) — no
-      change, still crashes.
-    - Source-level merging of `table.c`+`none.c`+`ldpart.c`+`collate.c`+
-      `collcmp.c`+`findfp.c`+`getcwd.c` into one translation unit via
-      `#include` (fewer separate link-time objects) — crashes MORE, not
-      less (even locale-light commands started crashing once every
-      command shared the same larger bundle).
-    - Hand-copying the same real function bodies directly into `table.c`
-      instead of `#include`-merging (avoids per-file `__FBSDID`/
-      `sccsid`/license-comment overhead) — no reliable improvement over
-      `#include`-merging at the same content size.
-    - A real `ld -r` partial-link merge of the separately-compiled
-      objects into one — still crashes, ruling out "too many separate
-      *objects*" as the mechanism (it's total complexity/fixup count
-      regardless of object boundaries).
-    - Swapping `none.o` for an unrelated third object (`findfp.o`) at
-      the same `{libc_locale_globals_compat, table}` pair — still
-      crashes, ruling out anything `none.c`-specific.
-    - Dropping the by-far-largest file (`collate.c`, 1046 real lines) in
-      favor of just `collcmp.c`'s own tiny real `__collate_range_cmp()`
-      (which only needs real `wcscoll_l()`, already a direct
-      `libsystem_c.dylib` export, confirmed via `nm -gU`) — reduced but
-      did not eliminate the crash.
-    - **Results were not even consistently reproducible between a clean
-      rebuild and an incremental one with identical source** — the same
-      `{libc_locale_globals_compat, table}` pair that built 0/32 clean
-      in one run reproduced 12/32 crashes in a supposedly-identical
-      clean rebuild immediately after. This is the real reason bisection
-      was abandoned rather than continued: a threshold that doesn't
-      reproduce deterministically can't be reliably bisected against.
+    Full bisection trail, the four real ports that closed the remaining 21
+    commands (`table.c`/`none.c`; `ldpart.c`/`getcwd.c`/`findfp.c`;
+    `collate.c`'s real `__LIBC__` compile bug plus `collcmp.c`; `date`'s
+    own alias case), and both real regressions the follow-up QEMU boot
+    surfaced (`cat`'s dead aliases over a linker behavior divergence;
+    `ed`/`diff`/`less`'s missing `_pipe` bridge — a dormant regression
+    from earlier in this same conversion, invisible until something
+    actually launched under real eager chained-fixups binding, fixed via
+    `tar_pipe_compat.c`) are archived verbatim to
+    `docs/historic/backlog.md`'s "Third archive pass, 2026-08-30".
 
-    Current state: `third_party/Libc/locale/FreeBSD/table.c` is back to
-    fully pristine (`git checkout --`, no patches survive) and
-    `build_simple_cmds.sh`'s `locale_extra_objs` is deliberately left
-    empty — the 32 commands above simply don't build in this pass, a
-    real, visible failure (`build_simple_cmds: 44 built, 32 failed`,
-    stable across repeated clean rebuilds), not a silently-degraded one.
-    Real follow-up, not attempted here: either find a real ld64-609
-    workaround for this specific fixup-chains threshold (possibly
-    version-specific to this project's pinned Xcode 12 toolchain — worth
-    checking whether a newer `ld64`/`ld-prime` bundled with a later
-    Xcode still on this machine, if any, reproduces it at all before
-    assuming it's permanent), or restructure `_DefaultRuneXLocale`
-    itself (e.g. lazily-populated instead of one giant static
-    initializer) to reduce its own real fixup/atom footprint below
-    whatever this toolchain's real threshold is.
-
-    **RESOLVED 2026-08-28, same day, following the exact "worth
-    checking" follow-up above.** Real, isolated repro (minimal
-    `table.o`+`none.o`+`libc_locale_globals_compat.o`+trivial `main`,
-    same `-Wl,-fixup_chains`, same dylib set) reproduced the identical
-    `Assertion failed: (_mode == modeFinalAddress)` under Xcode 12's own
-    `ld64-609`, then the *same* link command with `clang`'s `-B` flag
-    pointed at the daily-driver Xcode's own much newer `ld` (this
-    machine: Xcode 26.6, `ld` 1267) succeeded — confirmed not just
-    "succeeds" but real load-command parity via `otool -l` against an
-    already-QEMU-verified dynamic executable (`true.macho`): identical
-    `LC_LOAD_DYLINKER`/`LC_MAIN`/`LC_DYLD_CHAINED_FIXUPS` shape. This is
-    a real, narrow ld64-609 bug in the daily-driver Xcode's own
-    predecessor, not anything about this project's object code —
-    confirmed by two back-to-back clean rebuilds (`rm -rf
-    libc_build/simple_obj`) both landing exactly `76 built, 0 failed`,
-    where the crash used to reproduce non-deterministically per the
-    bisection notes above.
-
-    Fix, in `build_simple_cmds.sh`: `NEWLD_BINDIR` (`xcode-select -p`'s
-    `Toolchains/XcodeDefault.xctoolchain/usr/bin`, fail-fast if missing)
-    passed via `-B"$NEWLD_BINDIR"` on the final per-command link only —
-    still compiling with Xcode 12's own `clang`/SDK throughout (the
-    SDK/header-vintage invariant this project's other "must be Xcode
-    12" rules are actually about is untouched; only ld64's own internal
-    bug is being routed around). `table.c`/`none.c` joined
-    `COMMON_EXTRA` (always linked, same "harmless if unreferenced"
-    precedent as `err.c`/`getopt.c`), which resolved the crash and the
-    original `___global_locale`/`___locale_key`/`__none_*` gaps
-    together (44 → 55 built). Closing the remaining 21 needed three
-    more real ports, each a genuine new finding, not just re-adding
-    files the bisection above already tried:
-    - `ldpart.c`/`getcwd.c`/`findfp.c`: compiled clean with zero
-      changes, resolving `__ldpart_free_extra`/`__part_load_locale`
-      (real `LC_TIME` via `__time_load_locale`, needed by every command
-      already linking `strftime.c`/`timelocal.c`) and `___sfprelease`
-      (`findfp.c`, needed by `freopen$UNIX2003`) — 55 → 71 built.
-    - `collate.c` (real `LC_COLLATE`/`fnmatch()` range-matching support
-      for `grep`/`find`/`diff`/`du`) has a genuine, narrow compile bug
-      *unrelated to ld64-609*: its own header
-      (`locale/FreeBSD/collate.h`) guards
-      `__collate_mbstowcs`/`__collate_wcsdup`'s prototypes behind
-      `#ifdef __LIBC__` (real Apple's own umbrella Libc build always
-      defines this; no other file this project compiles ever needed
-      to) — without it, collate.c's own internal forward-reference to
-      `__collate_mbstowcs()` gets an implicit-int declaration that then
-      conflicts with its real `wchar_t*`-returning definition later in
-      the same file. Fixed with a `collate.c`-only `-D__LIBC__`
-      override in the `COMMON_EXTRA` compile loop (scoped, not global —
-      untested whether `__LIBC__` changes anything else this project
-      compiles). `collcmp.c` (the actual home of `__collate_range_cmp`,
-      confirmed via `grep`, not assumed to live in `collate.c`) added
-      alongside it — 71 → 75 built.
-    - `cat` **regressed** during this pass (real, caught immediately by
-      the full-suite rerun, not silently missed): `cat_socket_stub.o`'s
-      link-alias case aliased `_send`/`_writev` to base symbols
-      `cat_socket_stub.c` never actually defined (only
-      `socket()`/`connect()`/`shutdown()` — real `cat.c` never calls
-      `send()`/`writev()`). Xcode 12's `ld64-609` silently tolerated
-      aliasing an undefined base; the daily-driver Xcode's newer `ld`
-      hard-fails on it (`symbol(s) not found ... in
-      command-line-aliases-file`) — a real, confirmed behavioral
-      divergence between the two linkers' `-alias` handling, not a
-      regression from anything else in this pass. Fixed by dropping the
-      two dead aliases from `cat_socket_stub.o`'s case entirely.
-    - `date` was the last failure, and a *different* real gap: its own
-      `date_compat.c` already ships honest `ENOSYS` `send()`/`writev()`
-      stubs for `oldsyslog.c`'s `vsyslog()` path (predates this pass —
-      real `netsettime()`/`pututxline()` network-daemon gaps this same
-      file's header already documents), but no `case` ever added the
-      matching `-Wl,-alias` flags for `date` specifically (only
-      `cat_socket_stub.o`'s case did, and cat doesn't need them). Fixed
-      by adding a `date`-only alias case — no new stub code needed, the
-      base symbols already existed.
-
-    **Second real regression found by the real QEMU boot-test that
-    followed (2026-08-28, not caught by any of the above — `otool -l`/
-    `gap_audit.sh` both passed clean on `ed`/`diff`/`less` first):**
-    `diff /tmp/a /tmp/b` (the first of the 76 to actually launch and
-    exercise this path — `diff` was one of the newly-unblocked 32, `ed`/
-    `less` were already in the original 44) crashed immediately at
-    process launch, before printing anything: `dyld[8]: Symbol not
-    found: _pipe / Referenced from: /bin/diff / Expected in:
-    /usr/lib/libSystem.B.dylib`. Root cause, confirmed via `nm -m` on
-    all four real `pipe(2)` consumers (`ed`, `diff`, `less`, `tar`):
-    real `ed_popen_system_compat.c` (`ed`/`less`) and real
-    `filter_fork_posix.c`/GNU `diff.c` both call plain `pipe(fd)`,
-    which needs a real `_pipe` symbol, but `ed_pipe_trap.o` (Apple's own
-    real `libsyscall/custom/__pipe.s`, which all four already link)
-    only exports the raw trap under `___pipe` (three underscores) —
-    real Apple Libc needs a thin public-name forwarder in between,
-    which `tar_pipe_compat.c` already provided (written earlier, for a
-    *different* reason — see that file's own header) but only tar ever
-    linked it. `ed`/`less` used to get this bridged for free via the
-    old static-linking era's project-wide `-alias ___pipe _pipe`
-    directive, which d9's own dynamic-link conversion earlier this same
-    day removed project-wide (the whole obsoleted `LINK_ALIASES` stack)
-    without anyone re-providing the bridge for these two specific
-    commands — a real, dormant regression from *earlier in this same
-    d9 conversion*, invisible until something actually launched under
-    real chained-fixups dyld (which binds every referenced symbol
-    eagerly at process start, unlike the old lazy-bind model — a call
-    site being unreached at runtime doesn't save you). `diff` becoming
-    linkable was what finally exercised it, but `ed`/`less` had already
-    been silently broken the same way since d9's conversion, just never
-    actually launched afterward to prove it (link-time `otool -l` /
-    `gap_audit.sh` both pass regardless, since a `(from libSystem)`
-    "safe two-level-namespace binding" classification only checks that
-    *some* dylib in the process could plausibly satisfy the symbol at
-    load, not that it actually does). Fixed by linking
-    `tar_pipe_compat.c` into `ed`/`diff`/`less` too (that file's own
-    header updated to reflect it's no longer tar-specific despite the
-    name) rather than reintroducing the removed alias mechanism. Real
-    QEMU re-verification after the fix: `ls`, `grep`, `date`, `diff`
-    (real `1c1`/`<`/`>` output), `find`, `stat`, `fold` all confirmed
-    working with no panic/assertion/dyld-symbol-not-found anywhere in
-    the transcript; `ed`'s own file-write in that same session failed
-    with an unrelated "No such file or directory" that traces to the
-    test harness's own quoting through the pty, not a `pipe()`/dyld
-    issue (ed's core buffer/file-write path doesn't call `pipe()` at
-    all — only its `!`-shell-escape and `r !cmd`/`w !cmd` forms do),
-    not chased further here.
-
-    Real, still-open, deliberately out of scope for this pass: none
-    known — all 76 commands build, and the two real regressions the
-    QEMU pass surfaced (cat's dead aliases, ed/diff/less's missing
-    `_pipe` bridge) are both fixed and re-verified. `docs/roadmap.md`'s
-    own Phase 4/4.6 command tiers should be checked for whether any of
-    them still list `date`/`ls`/etc as behaviorally-limited for a
-    *different* reason (e.g. `date`'s real clock-setting path is still
-    stubbed, see `date_compat.c`'s own header) — this item is scoped to
-    "does it link and boot," not full feature parity. `ed`'s own
-    file-write behavior under a real interactive session (as opposed to
-    this pass's scripted/piped test) has not been separately verified.
+    **Still unverified**: `ed`'s own file-write behavior under a real
+    interactive session (as opposed to this pass's scripted/piped test).
+    This item is scoped to "does it link and boot," not full feature
+    parity — e.g. `date`'s real clock-setting path is still stubbed (item
+    13 below).
 
 0a. **[DONE 2026-08-28] Real AES core wired: FreeBSD rijndael, not
     PureDarwin.** Filed 2026-08-21 as a hard prerequisite for Phase 7b
-    (`sshd`); closed by vendoring `sys/crypto/rijndael/` (public-domain,
-    Rijmen/Bosselaers/Barreto — the AES designers themselves, cleaner
-    than PureDarwin's mixed-license option scoped 2026-08-27 below and
-    never acted on) into `libkern/crypto/freebsd/rijndael-alg-fst.c`,
-    plus a new corecrypto-shaped adapter
-    (`libkern/crypto/corecrypto_aes_register.c`) implementing real
-    `ccmode_ecb`/`ccmode_cbc`/`ccmode_ctr` instances against it and
-    calling `register_crypto_functions()` with only the AES fields
-    filled (ecb/cbc/ctr encrypt+decrypt), everything else left NULL per
-    the incremental-fill plan below.
+    (`sshd`); closed by vendoring public-domain `sys/crypto/rijndael/`
+    (Rijmen/Bosselaers/Barreto — the AES designers themselves) into
+    `libkern/crypto/freebsd/rijndael-alg-fst.c`, plus a corecrypto-shaped
+    adapter (`libkern/crypto/corecrypto_aes_register.c`) implementing real
+    `ccmode_ecb`/`ccmode_cbc`/`ccmode_ctr` against it and calling
+    `register_crypto_functions()` with only the AES fields filled.
+    FIPS-197/SP 800-38A known-answer vectors run at boot *through the real
+    ccmode interfaces* (not the raw cipher core) and `panic()` on failure.
+    `tcp_tfo_init`'s TCP Fast Open path now works for real instead of
+    degrading. PureDarwin/corecrypto (scoped 2026-08-27) was investigated
+    and deliberately NOT used — mixed-license AES core, AES-128-only, no
+    CTR.
 
-    `g_crypto_funcs` (`libkern/crypto/register_crypto.c`) is a table of
-    function pointers real macOS's closed-source corecrypto kext fills in
-    via `register_crypto_functions()`; this kernel loads no kexts, so
-    nothing had ever called it before this. Bitten five separate times
-    now, each rediscovered the hard way from a fault address — the fifth
-    (`cc_rand_generate`) found and fixed *by this same AES work*, not a
-    surprise later:
+    Two real bugs found and fixed while wiring this up, both from real
+    QEMU panics, neither guessed: the registration call had to move into
+    `kernel_bootstrap_thread()` immediately before `machine_lockdown()`
+    (writing `g_crypto_funcs`, a `SECURITY_READ_ONLY_LATE` global, from
+    `bsd_init()` faults for real); and `corecrypto_rand.c`'s
+    `cc_rand_generate()` needed a field-specific null check, since it
+    guarded only on `if (g_crypto_funcs)` and then unconditionally called
+    a deliberately-NULL `ccrng_fn` — root-caused via a real A/B test.
+    Full writeup (the five-times-bitten `g_crypto_funcs` caller table,
+    context sizing against `AES_CBC_CTX_MAX_SIZE`, the PureDarwin
+    license/coverage analysis) archived to `docs/historic/backlog.md`'s
+    "Third archive pass, 2026-08-30".
 
-    | Caller | Offset | Field | Resolution |
-    |---|---|---|---|
-    | `SHA256_Init` via `devfs_mount` | `0x30` | `ccsha256_di` | real corecrypto, item 0b |
-    | MD5 | `0x20` | `ccmd5_di` | now real FreeBSD `md5c.c`, bypasses the table (see below) |
-    | `read_random` | n/a | `cckprng` | falls back to `read_erandom()` |
-    | `tcp_init`→`tcp_tfo_init` | `0x78` | `ccaes_cbc_encrypt` | **now real** — TFO auto-enables |
-    | `cc_rand_generate` (`corecrypto_rand.c`) | n/a | `ccrng_fn` | **found by this work**, see below |
+    **Still open, filed separately as P1 item 3 above**: six other
+    `g_crypto_funcs->` call sites have no null check at all.
 
-    **Two real bugs found and fixed while wiring this up, neither
-    guessed — both from real QEMU panics:**
-    1. `register_crypto_functions()` writes `g_crypto_funcs`, a
-       `SECURITY_READ_ONLY_LATE` global — that section becomes
-       hardware-write-protected at `machine_lockdown()`
-       (`osfmk/kern/startup.c`). First attempt called the registration
-       function from `bsd_init()` (which runs well after lockdown) and
-       produced a real "Unexpected fault in kernel static region"
-       (ESR=0x9600004f, a write-permission fault) at boot. Fixed by
-       moving the call into `kernel_bootstrap_thread()`
-       (`osfmk/kern/startup.c`), immediately before `machine_lockdown()`
-       — the same place a real corecrypto kext's own registration would
-       need to land relative to lockdown.
-    2. Once AES was actually live, a *second*, unrelated real panic
-       appeared inside `necp_init()` — a NULL-function-pointer jump
-       (`Kernel instruction fetch abort at pc 0x0`). Root cause:
-       `corecrypto_rand.c`'s `cc_rand_generate()` guards on
-       `if (g_crypto_funcs)` only, then unconditionally calls
-       `g_crypto_funcs->ccrng_fn(...)` — a field this table intentionally
-       leaves NULL (no RNG registered here; `read_random()` has its own
-       separate `read_erandom()` fallback). That guard was written
-       assuming corecrypto's real all-or-nothing kext fill and had never
-       been exercised, because `g_crypto_funcs` had literally never been
-       non-NULL before in this project's history. Fixed with a
-       field-specific null check
-       (`g_crypto_funcs && g_crypto_funcs->ccrng_fn`), matching the
-       pattern `corecrypto_aes.c` already uses. **Root-caused via a real
-       A/B test**, not guessed: the exact same kernel with only the
-       registration call disabled booted cleanly past this point, proving
-       the crash was caused by AES becoming active, not a pre-existing
-       gap.
-    3. **Known, deliberately NOT fixed — now filed as its own bug, P1
-       item 3**: six other `g_crypto_funcs->` call sites
-       (`corecrypto_des.c`, `corecrypto_rsa.c`, `corecrypto_aesxts.c`,
-       `corecrypto_chacha20poly1305.c`, `bsd/nfs/gss/ccrypto.c`,
-       `bsd/netinet/flow_divert.c`) have **no null check at all**, not
-       even the bare `if (g_crypto_funcs)` that `corecrypto_rand.c` had.
-       Not reached by anything exercised up through a full boot to login
-       (QEMU-verified), so not made worse by this change — but a live
-       NULL-function-pointer call waiting for whoever next touches DES/
-       RSA/AES-XTS/ChaCha20-Poly1305/NFS-GSS/flow-divert. Full writeup:
-       P1 item 3 above.
-
-    Context sizing: `libkern/libkern/crypto/aes.h`'s
-    `AES_CBC_CTX_MAX_SIZE` (a hardcoded ~280-byte budget baked into the
-    `aes_encrypt_ctx`/`aes_decrypt_ctx` typedefs used throughout the
-    kernel) comfortably fits the new adapter's per-direction context
-    (an `int` plus a 4×(Nr+1)-word key schedule, ≤244 bytes for AES-256)
-    — confirmed for real by the AES-256 case in the boot-time self-test
-    below, not just computed on paper.
-
-    **FIPS-197/SP 800-38A self-test at boot, not just KAT-in-a-vacuum**:
-    `xnu_rpi3_register_freebsd_aes()` runs AES-128/192/256 ECB
-    (FIPS-197 Appendix C.1–C.3) and AES-128 CBC/CTR (SP 800-38A Appendix
-    F.2.1/F.5.1) known-answer vectors through the real
-    `ccmode_ecb`/`ccmode_cbc`/`ccmode_ctr` interfaces — not the raw
-    cipher core directly — so a bug in the adapter glue fails loudly at
-    boot (`panic()`) exactly like a bug in the vendored core would,
-    before `register_crypto_functions()` is ever called.
-
-    ARMv8 Crypto Extensions (AESE/AESMC) on BCM2837's Cortex-A53:
-    believed absent, still not verified — irrelevant now since the
-    software core is real and working, not a blocker.
-
-    **PureDarwin/corecrypto (scoped 2026-08-27) was NOT used in the end.**
-    That investigation found real, verified-matching `struct
-    crypto_functions` ABI precedent but a mixed-license AES core
-    (`LICENSE.md` says Apache-2.0/mbedTLS, `README.md` says Botan +
-    `rafirafi/pdcrypto`, the code's own header credits `tiny-AES128-C` —
-    three different stated lineages) and AES-128-only coverage (no
-    CTR/AES-256). FreeBSD's `sys/crypto/rijndael/` turned out to need no
-    interface borrowing at all — it's just a block cipher core
-    (`rijndaelKeySetupEnc/Dec` + `rijndaelEncrypt/Decrypt`), and this
-    project's own `struct ccmode_ecb/cbc/ctr` adapter (project-specific
-    glue either way, per the original scoping above) covers ECB/CBC/CTR/
-    AES-128/192/256 cleanly under one public-domain license. Vendoring
-    details, pin, and per-file license notes: `setup_third_party.sh`'s
-    `freebsd-src` block.
-
-0b. **[DONE 2026-08-27] `ccsha256_di` wired to real corecrypto, replacing
-    the from-scratch `corecrypto_sha2.c` for code-signing/exec hashing.**
-    `SHA256_Init`/`_Update`/`_Final` (`libkern/crypto/corecrypto_sha2.c`)
-    now call real `ccdigest_init`/`_update`/`_final` + `ccsha256_di()`
-    directly (the real digest-core source was already sitting unused at
-    `third_party/xnu-7195/osfmk/corecrypto/` and already compiled into
-    the kernel binary for the PRNG's own use — only the SHA-256 call
-    sites hadn't been pointed at it). QEMU-verified: real login, real
-    shell, real `/bin/ls`/`md5` exec, no panic — commit `ceb6d419c` in
-    the `xnu-7195` checkout. Full investigation (including a corrected
-    finding that `register_crypto_functions()`/`g_crypto_funcs` was
-    never actually the right mechanism for this call site) archived to
-    `docs/historic/backlog.md`.
-
-    **[DONE 2026-08-28] SHA-384/512 and MD5 also off the from-scratch
-    path now**, alongside item 0a's AES work — no real corecrypto body
-    exists for either in this checkout (confirmed absent, only headers),
-    so per this project's Apple→FreeBSD→custom source priority: SHA-384/
-    512's compress core (the real K[80] table and round function, not
-    just constants copied by hand) is now FreeBSD's real 2-clause-BSD
-    `sys/crypto/sha2/sha512c.c` (vendored to
-    `libkern/crypto/freebsd/sha512_transform.c`, upstream's ARM64 ifunc
-    hardware-accel path dropped — dead code on Cortex-A53 either way);
-    `corecrypto_sha2.c` keeps its own buffering/padding wrapper since
-    that has to match this project's `SHA512_CTX`/`SHA384_CTX` layout,
-    not FreeBSD's differently-shaped one. MD5
-    (`libkern/crypto/corecrypto_md5.c`, deleted) is now FreeBSD's real
-    `sys/kern/md5c.c` (RSA Data Security's own 1991-2 reference
-    implementation) at `libkern/crypto/freebsd/md5c.c`, K&R-style
-    function definitions modernized to ANSI prototypes (mechanical,
-    same bodies) — this project's own `MD5_CTX` layout
-    (`state[4]`/`count[2]`/`buffer[64]`) is byte-identical to FreeBSD's,
-    no adapter needed. Both QEMU-verified as part of the same boot that
-    verified item 0a's AES work.
+0b. **[DONE 2026-08-27] `ccsha256_di` wired to real corecrypto**,
+    replacing the from-scratch `corecrypto_sha2.c` for code-signing/exec
+    hashing — the real digest core was already sitting unused at
+    `third_party/xnu-7195/osfmk/corecrypto/` and already compiled into the
+    kernel for the PRNG's own use; only the SHA-256 call sites hadn't been
+    pointed at it. QEMU-verified (`xnu-7195` commit `ceb6d419c`).
+    **[DONE 2026-08-28]** SHA-384/512 and MD5 are off the from-scratch
+    path too: no real corecrypto body exists for either in this checkout
+    (confirmed absent, only headers), so per the Apple→FreeBSD→custom
+    source priority both now use FreeBSD's real source (`sha512c.c`'s
+    compress core behind this project's own buffering/padding wrapper;
+    `md5c.c` wholesale, byte-identical `MD5_CTX` layout). Both
+    QEMU-verified in the same boot that verified item 0a's AES work. Full
+    writeups archived to `docs/historic/backlog.md` (its 2026-08-27 "item
+    0b" section and the "Third archive pass, 2026-08-30" section).
 
 0. **DWC2 transfer completion is polled, not interrupt-driven** (added
     2026-08-21 with `iokit/BCM2837DWC2/`). `docs/historic/usb-support-plan.md` task 2
@@ -1674,619 +1174,29 @@ d11. **RESOLVED 2026-08-29 (session 5, main-repo commit `76ff8cd`;
     **d14** (`_libc_initializer` tier) and **d15** (residual atfork
     handlers) below — do not treat this item as the tracker for them.
 
-    Historical context below is retained for the record; note its
-    "second thread"/`TPIDRRO_EL0`/`SP_EL0` framings are all now known
-    wrong. Full context, diagnostic infrastructure,
-    and the TPIDRRO_EL0 cross-image-confusion hypothesis:
-    project memory `project_xnu_rpi3_launchd_pid1_2026-08-28_session2.md`
-    and `project_xnu_rpi3_static_to_dylib_sweep_2026-08-29.md`. Short
-    version for anyone without memory access: after item d10's real
-    dyld-gap-closing pass, `launchd.macho` boots all the way through real
-    dyld initializers, `main()`, and `launchd_runtime_init()` — reaching
-    exactly the same failure as before: the `kqueue_demand_loop` second
-    thread starts, calls `select()`, `select()` returns, then crashes
-    with a real SIGSEGV (`namespace 2 subcode 0xb`) inside
-    `mig_get_reply_port` shortly after
-    (`qemu/launchd_boot_test48.log`).
+    Historical context (sessions 2–5) archived, not deleted: the full
+    investigation trail — the TPIDRRO_EL0 cross-image-confusion
+    hypothesis, the third and fourth duplicate-static-copy bugs found in
+    `mig_reply_port.o` and a duplicate `pthread_create`, the kernel-side
+    `IOKITDIAG15`/`16`/`17`/`18` kprintf bisection down into
+    `thread_block(ipc_mqueue_receive_continue)`, the raw
+    `handle_user_abort()` fault-register capture that finally pointed at
+    the MAIN thread, the `SP_EL0` cross-contamination theory, and the
+    `Switch_context` bracketing attempt that caused its own separate crash
+    and had to be reverted — is archived verbatim to
+    `docs/historic/backlog.md`'s "Third archive pass, 2026-08-30".
+    **Note its "second thread"/`TPIDRRO_EL0`/`SP_EL0` framings are all now
+    known wrong**; read `docs/launchd-bug6-postmortem.md` and
+    `docs/launchd-pid1-postmortem.md` first, plus project memory
+    `project_xnu_rpi3_launchd_pid1_2026-08-28_session2.md` /
+    `project_xnu_rpi3_static_to_dylib_sweep_2026-08-29.md`.
 
-    One real fix already applied and tested, confirmed **not** to
-    resolve this on its own: `third_party/PureDarwin/src/Libraries/XPC/
-    launchd/launchd.c`'s `main()` now calls
-    `pthread_main_thread_bootstrap()` explicitly before
-    `launchd_runtime_init()` (session 2's own resume-hypothesis) —
-    confirmed via `nm launchd.macho` this was genuinely the *first* call
-    against launchd's own local `_main_thread`/`__pthread_head` (not a
-    double-bootstrap; the existing `libsystem_dyld_initializer_compat.c`
-    constructor only ever touched `libsystem_pthread.dylib`'s separate
-    copy). Real, correct, keeps launchd's local pthread state
-    consistent — but the SIGSEGV in the second thread persists
-    regardless, so it's a real, separate fix, not the root cause. **This
-    change is UNCOMMITTED** (submodule `third_party/PureDarwin`),
-    consistent with how the rest of this investigation's state has been
-    left throughout (the `iokit_diag8`/`9`/`12`/`13`/`14` instrumentation
-    across `tools/userland_staging/launchd_mach_port_compat.c`,
-    `mach_msg_real.c`, `libsystem_c_gap_compat.c`,
-    `libsystem_dyld_initializer_compat.c`, plus
-    `third_party/xnu-7195`/`third_party/llvm-project` diagnostic edits) —
-    not yet proven correct/complete, don't commit as a real fix until
-    bug #6 itself is resolved.
-
-    **Real next step**: the crash site is identical to before
-    (`mig_get_reply_port` in the second thread, right after `select()`
-    returns) — add a diagnostic print inside `mig_get_reply_port` itself
-    (or wherever it dereferences whatever crashes) to see the actual
-    faulting address/register state, same method that closed every other
-    bug in this whole investigation. Don't re-derive the TPIDRRO_EL0
-    hypothesis from scratch — it's already written up in the session 2
-    memory file, just not yet confirmed or ruled out.
-
-    **UPDATE 2026-08-29, same-day resume: TWO more real duplicate-copy
-    bugs found+fixed (same bug class as d10), crash site re-isolated with
-    much higher fidelity, TPIDRRO_EL0-cross-image hypothesis effectively
-    RULED OUT, new leading hypothesis is kernel-side.**
-
-    Added finer-grained diagnostics inside `mig_get_reply_port()` (raw
-    TPIDRRO_EL0-derived TSD base + return value at each step) to
-    directly test the TPIDRRO_EL0 hypothesis — and discovered the new
-    prints never fired at all. Root cause: a **third and fourth real
-    instance** of item d10's exact duplicate-copy bug class, both newly
-    found this session, neither previously known:
-    - `launchd.macho` itself statically linked its own private copy of
-      `mig_reply_port.o` (bundled inside `libmalloc.a`, only
-      `mach_init.o` had ever been stripped from that local copy, not
-      `mig_reply_port.o`) — confirmed via `nm launchd.macho` showing
-      `T _mig_get_reply_port` as a LOCAL strong symbol, not `U`. Since
-      ld64 always prefers an executable's own local strong definition
-      over any linked dylib's export of the same name, EVERY call to
-      `mig_get_reply_port`/`mig_dealloc_reply_port`/`mig_put_reply_port`
-      from anywhere in launchd's statically-linked code silently
-      resolved to this stale local copy, not `libsystem_kernel.dylib`'s
-      real one — so the new diagnostics, added only to
-      `libsystem_kernel.dylib`'s copy, never ran. Fixed in
-      `build_launchd.sh` the same way `mach_init.o` was already stripped
-      once before: `ar d "$OUT/libmalloc_no_mach_init.a" mig_reply_port.o`
-      (verified via `nm` first that every symbol it defines is already a
-      real export of `libsystem_kernel.dylib`, same precedent as the
-      `mach_init.o` fix).
-    - `libdispatch.dylib` (via `build_libdispatch_dylib.sh`) bundles the
-      exact same `libmalloc_no_mach_init.a` local copy with the exact
-      same gap — confirmed via `nm -gU libdispatch.dylib` showing a
-      real, STRONG `T _mig_get_reply_port` (not weak, not `U`). Because
-      `libdispatch.dylib` appears before `libSystem.B.dylib` on
-      `build_launchd.sh`'s own dylib link line, two-level-namespace
-      binding picked libdispatch's copy once launchd's own local copy
-      (above) was removed — so fixing launchd's own copy alone wasn't
-      enough; had to fix both. Same fix applied
-      (`ar d ... mig_reply_port.o` on that script's own
-      `libmalloc_no_mach_init.a` copy). **Real follow-on consequence,
-      also fixed**: removing these 3 exported symbols from
-      `libdispatch.dylib` broke `libxpc.dylib` and `libc++.dylib`, which
-      had each baked a two-level-namespace bind record at their OWN
-      earlier build time expecting `_mig_dealloc_reply_port` etc "in
-      /usr/lib/system/libdispatch.dylib" — dyld enforces the specific
-      recorded provider at load time (real, observed failure: `pid 1
-      exited -- exit reason ... Symbol not found: _mig_dealloc_reply_port
-      Referenced from: /usr/lib/system/libxpc.dylib Expected in:
-      /usr/lib/system/libdispatch.dylib`). Both rebuilt
-      (`build_libxpc_dylib.sh`, `build_libcxx_dylib.sh`) to re-resolve
-      against `libsystem_kernel.dylib` instead — same "must rebuild any
-      dylib with a baked two-level-namespace expectation, not just the
-      dylib whose exports changed" gotcha item d4/session 2 already
-      documented for `libSystem.B.dylib`'s own reexports, now confirmed
-      to apply to ordinary cross-dylib binds too, not just
-      `-reexport_library`.
-    - **Unrelated real regression found+fixed along the way**:
-      `build_libdispatch_dylib.sh` could no longer build at all —
-      `ar: atoi.o: not found in archive`. Root cause: the 2026-08-29
-      static-to-dylib cleanup pass (item d8) dropped `atoi.o` from
-      `syslogd_libc_extras.a` (openpam/copyfile/etc became real dylibs,
-      so `build_syslogd.sh`'s own extraction list no longer produces
-      that member), but `build_libdispatch_dylib.sh` still tried to
-      `ar x` it from there. Fixed by compiling
-      `third_party/Libc/stdlib/FreeBSD/atoi.c` fresh, right where it's
-      needed, using the same CFLAGS already established for that
-      script's neighboring `libc_locale_globals_compat.c` compile,
-      instead of chasing a member that no longer exists anywhere.
-
-    **With all of the above fixed and real diagnostics finally executing
-    the intended code**, the crash site is NOT `mig_get_reply_port`
-    after all — `mig_get_reply_port()` now genuinely succeeds every
-    time, on both threads, confirmed via the new per-call hex dumps
-    (`qemu/launchd_boot_test53.log`). The TPIDRRO_EL0-cross-image-
-    confusion hypothesis from session 2 is therefore effectively RULED
-    OUT for this specific symptom (the second thread's own TSD/TPIDRRO_EL0
-    is demonstrably valid enough to make a real MIG reply-port
-    allocation succeed) — though the broader hypothesis (some OTHER
-    TSD-backed state being cross-image-confused) isn't fully closed,
-    just no longer the leading explanation.
-
-    Added a second, matching per-thread-tagged/atomic diagnostic dump
-    inside `mach_msg()` itself (`mach_msg_real.c`, replacing the old
-    multi-syscall-per-line `iokit_diag12` prints, which were visibly
-    interleaving/corrupting each other across the two real concurrent
-    threads) — prints a thread tag (masked TPIDRRO_EL0) plus the real
-    msg header (`msgh_bits`/`msgh_size`/`msgh_remote_port`/
-    `msgh_local_port`/`msgh_id`) and `rcv_name` immediately before/after
-    the raw trap. Result (`qemu/launchd_boot_test53.log` lines 851-853):
-    the crash is a real SIGSEGV **inside/immediately after the raw
-    `MACH_MSG_TRAP` syscall itself**, on the `kqueue_demand_loop` thread
-    (confirmed by its own distinct thread tag, `0x100ad40e0`, differing
-    from the main thread's `0x100a52470` earlier in the same boot) —
-    "about to call" prints, "returned" never does. The message being
-    sent is a completely legitimate, well-formed real Mach message, NOT
-    corrupted/garbage as first suspected from the large `msgh_id`
-    (0x21728 = 137256): cross-checked against
-    `third_party/PureDarwin/src/Libraries/XPC/launchd/internal.defs`'s
-    own `subsystem internal 137000;` declaration — 137000 decimal ==
-    0x21728 hex EXACTLY, confirming this is `handle_kqueue`'s real,
-    correct, compile-time-fixed MIG message ID (the very first routine
-    in that subsystem, so its ID == the subsystem base). `remote=0x603`/
-    `local=0x903`/`rcv_name=0x903` are real, live, valid port names in
-    the process's one shared task IPC space (0x903 was the reply port
-    `mig_get_reply_port()` had JUST successfully allocated on this same
-    thread moments earlier; 0x603 is `launchd_internal_port`, a real
-    receive right the main thread set up earlier in the very same boot).
-    So: real message, real ports, real MIG id — ruled out as a message-
-    header-corruption bug. The exact same kind of call (a MIG-client
-    send+receive round trip via `mach_msg()`) succeeded cleanly on the
-    MAIN thread earlier in the identical boot
-    (`qemu/launchd_boot_test53.log` lines 816-819, id=0xc8c for
-    `mach_port_move_member`) — so whatever's wrong is specific to this
-    being the SECOND, `bsdthread_create()`-spawned thread making the
-    call, not the message content or the reply-port machinery.
-
-    **Real next step, not yet attempted**: this now points at the
-    KERNEL side, not userland — specifically whatever
-    `bsd_pthread_workq.c`'s `real_bsdthread_create()` (verbatim port of
-    `kern_support.c`'s real `_bsdthread_create`, added 2026-08-25, see
-    that function's own header) sets up (or doesn't) for a new thread's
-    Mach-IPC-relevant kernel state that real `thread_create()` plus
-    `convert_thread_to_port()`/`ipc_port_copyout_send()` may not fully
-    cover on this simplified path, vs. whatever the kernel-created
-    original/main thread has that a `bsdthread_create()`-spawned one
-    doesn't. Mach ports themselves are task-scoped, not thread-scoped
-    (rules out "the port itself is only valid for the main thread"), so
-    the likely shape of the bug is something the kernel's real
-    `mach_msg_trap`/`ipc_kmsg_*` path reads or writes per-CALLING-THREAD
-    (not per-port) that's only correctly initialized for a thread that
-    went through the FULL real thread-creation path. Needs kernel-side
-    instrumentation (e.g. a diagnostic print at kernel entry to
-    `mach_msg_overwrite_trap`/wherever it dereferences per-thread state)
-    to find the exact faulting access — not yet attempted this session;
-    a genuinely different, kernel-side investigation from everything
-    above, which was all userland/build-system work.
-
-    All new diagnostics from this update are still live, not reverted
-    (same standing convention as every other `iokit_diag*` in this
-    investigation) — see `mig_reply_port.c`'s `iokit_diag13_hex`/
-    `iokit_diag13_tsd_base` and `mach_msg_real.c`'s `iokit_diag12_dump`.
-
-    **UPDATE 2026-08-29, later same day: crash bisected all the way into
-    the kernel's own context-switch machinery — a genuinely different,
-    much deeper class of investigation than everything above (which was
-    100% userland/build-system). Four real kernel rebuild-and-boot
-    cycles this pass, each narrowing the fault site further.**
-
-    Real prerequisite fix, needed before ANY kernel-side kprintf showed
-    up at all: `kprintf()` on this arm64 port is gated off by default
-    for a DEVELOPMENT kernel build
-    (`pexpert/arm/pe_kprintf.c`'s `disable_kprintf_output`, static-init
-    `TRUE`, only flipped `FALSE` if boot-arg `-enable_kprintf_spam`
-    parses — real, unmodified Apple gating, not a project bug). The
-    project's own earlier `TEMP DIAGNOSTIC: timer_queue_expire` kprintfs
-    (`osfmk/kern/timer_call.c`, backlog P0#7) only ever appeared during
-    the KERNEL-only pre-userland boot phase in every log checked — never
-    once during/after `load_init_program`, which is consistent with this
-    gating rather than contradicting it (not yet understood exactly why
-    those specific early ones got through un-gated; not investigated
-    further since it wasn't blocking). Fixed for real kernel-side
-    debugging going forward: added `-enable_kprintf_spam` to
-    `runvm.sh`'s own `-append` boot-args string. This is a real,
-    permanent, low-risk addition (worth keeping even after bug #6
-    closes, not a bug-#6-specific temporary hack) — it only affects
-    whether `kprintf()` calls anywhere in the kernel are visible on the
-    serial console at all; it changes zero runtime behavior otherwise.
-
-    Added real, unmodified-Apple-source-adjacent `kprintf()` diagnostics
-    (all still live, `IOKITDIAG15`/`16`/`17` tags, each printing
-    `current_thread()` as a per-thread tag matching the userland
-    `iokit_diag*` convention) at every real sub-step of the kernel-side
-    call chain a blocking `mach_msg()` receive goes through:
-    `osfmk/ipc/mach_msg.c`'s `mach_msg_overwrite_trap()` (SEND phase:
-    `ipc_kmsg_get`/`ipc_kmsg_copyin`/`ipc_kmsg_send`; RCV phase:
-    `ipc_mqueue_copyin`/`ipc_mqueue_receive`/`mach_msg_receive_results`)
-    and `mach_msg_receive_continue()`; `osfmk/ipc/ipc_mqueue.c`'s
-    `ipc_mqueue_receive_continue()` and, most granularly,
-    `ipc_mqueue_receive_on_thread()`'s real turnstile/waitq setup
-    (`turnstile_prepare`/`ipc_port_recv_update_inheritor`/
-    `waitq_assert_wait64_locked`) and `ipc_mqueue_receive()`'s own
-    `thread_block(ipc_mqueue_receive_continue)` call site.
-
-    **Real, evidenced findings, in bisection order:**
-    1. The main thread's own `mach_msg()` call (the earlier
-       `mach_port_move_member` one) never blocks at all -- its reply is
-       already ready synchronously (`THREAD_NOT_WAITING`), so it never
-       exercises any of the blocking/continuation machinery below. Only
-       the second (`kqueue_demand_loop`) thread's `handle_kqueue()` call
-       does, since its reply comes from launchd's own userspace dispatch,
-       not an immediate kernel reply.
-    2. **Confirmed real, run-to-run NONDETERMINISM with the exact same
-       kernel binary** (`qemu/launchd_boot_test57.log` vs `test58.log`,
-       back-to-back boot_test runs, zero source changes between them):
-       one run's second thread never even reaches
-       `mach_msg_overwrite_trap` entry before the panic; the very next
-       run reaches all the way to "about to call `ipc_mqueue_receive`"
-       and beyond. This is a real, load-bearing finding on its own -- the
-       exact crash SITE observed in any single boot is not fully
-       deterministic, consistent with a genuine race (not a single fixed
-       faulting instruction), and explains why earlier passes'
-       "isolated" crash sites (`mig_get_reply_port`, then raw
-       `MACH_MSG_TRAP`) kept moving as more diagnostics were added --
-       each new diagnostic's own console-write latency measurably
-       perturbs the race's timing, not just adding visibility.
-    3. **With the most granular instrumentation (`qemu/
-       launchd_boot_test59.log`), the fault is bisected to inside
-       `thread_block(ipc_mqueue_receive_continue)` itself** -- every
-       real setup step immediately before it succeeds cleanly and is
-       fully confirmed via real, non-garbage values: `imq_is_turnstile_proxy=1`
-       (the reply port IS a real turnstile proxy, as expected for a MIG
-       reply port), `turnstile_prepare()` returns a real, valid
-       `rcv_turnstile` pointer, `ipc_port_recv_update_inheritor()`
-       completes, `waitq_assert_wait64_locked()` returns `THREAD_WAITING`
-       (wresult=-1) as expected, `self`/`current_thread()` agree and are
-       non-garbage, `ith_continuation` is a real, valid, non-null kernel
-       code pointer. The very next kprintf (`IOKITDIAG17: ... about to
-       call thread_block`) is the LAST diagnostic output in the entire
-       boot log before the panic -- zero occurrences of `IOKITDIAG16`
-       (placed at the top of both `ipc_mqueue_receive_continue()` and
-       `mach_msg_receive_continue()`, i.e. the real wakeup/continuation
-       resume path) ever fire.
-    4. **Real complication, not yet resolved**: `bsd/kern/kern_exit.c`'s
-       `launchd_crashed_panic()` (the real, unmodified-Apple source that
-       prints the "pid 1 exited -- exit reason ..." line and then
-       panics) only ever fires from a genuine process exit/signal
-       delivery path -- meaning "namespace 2 subcode 0xb" really is a
-       true `OS_REASON_SIGNAL`/SIGSEGV(11) delivered to a thread running
-       in EL0 (user mode), not a raw EL1 kernel-mode data abort (which
-       would panic directly, with a full kernel register dump, never
-       reaching this signal-shaped path at all). This is in real tension
-       with finding 3 above: if the fault is genuinely EL0, it should
-       occur only AFTER `thread_syscall_return()` hands control back to
-       user mode -- which happens only via `ith_continuation`'s call
-       chain (`ipc_mqueue_receive_continue` → `mach_msg_receive_continue`
-       → `thread_syscall_return`), all of which are still real kernel
-       (EL1) C code that the still-live `IOKITDIAG16` prints should have
-       caught before any EL0 transition could occur, and never did.
-       Two live, unresolved possibilities, neither confirmed: (a) the
-       fault is right at/inside the actual `eret`-style EL1→EL0 return
-       transition itself (past the last point pure C instrumentation can
-       safely observe without risking further perturbing the race), or
-       (b) — given finding 2's confirmed nondeterminism — the thread that
-       actually faults at the moment of the panic in a given boot isn't
-       always the second thread at all; it could be the MAIN thread
-       (racing concurrently, e.g. while first entering its own MIG
-       server dispatch loop to receive+reply to `handle_kqueue`'s
-       request, a code path that has NOT yet been instrumented or
-       confirmed to even execute in any log gathered so far -- no log
-       shows a second `mach_msg_overwrite_trap` call tagged with the
-       main thread's own `current_thread()` pointer after its first,
-       successful one).
-
-    **Real next step, not yet attempted**: this is now genuinely
-    arm64 exception/context-switch-level work, a different tier from
-    everything in this investigation so far (C-level kprintf bisection
-    is reaching its practical limit -- the next boundary, the real
-    `eret`/exception-return assembly and `machine_switch_context()`,
-    needs either raw register-state capture directly from the fault
-    handler (find wherever this simplified kernel's EL0 data-abort path
-    converts a fault into `OS_REASON_SIGNAL` and log the real
-    `ESR_EL1`/`FAR_EL1`/`ELR_EL1` there, before it gets abstracted away
-    into a generic "signal 11" description) or a lower-level, lock-free
-    print primitive safe to call from inside the actual context-switch
-    path itself (kprintf's own lock may not be safe to take from
-    `thread_invoke`/`machine_switch_context` -- not yet verified either
-    way). Confirming/ruling out possibility (b) above (instrumenting the
-    main thread's own MIG server dispatch loop, not yet touched at all)
-    is a real, comparatively cheaper next step to try FIRST, before
-    committing to assembly-level fault-handler instrumentation.
-
-    Repo state: real, permanent fixes from this update (`runvm.sh`'s
-    `-enable_kprintf_spam` addition) are committable now; the
-    `IOKITDIAG15`/`16`/`17` kprintf additions in
-    `third_party/xnu-7195/osfmk/ipc/mach_msg.c` and `ipc_mqueue.c` are
-    live TEMP DIAGNOSTIC, same standing convention as everything else in
-    this investigation.
-
-    **UPDATE 2026-08-29, later still: possibility (b) tested and
-    RULED OUT — cheap (launchd.macho-only, no kernel rebuild) real
-    PureDarwin-side instrumentation, two more real findings.**
-
-    Traced the real dispatch chain for who's supposed to service
-    `launchd_internal_port`/`ipc_port_set`: `launchd.c`'s `main()` calls
-    `launchd_runtime()` → `launchd_runtime2()` (`runtime.c`), a real
-    `for (;;)` loop calling `xpc_pipe_try_receive(ipc_port_set, ...,
-    launchd_mig_demux, ...)` — this is the main thread's own receive
-    loop, and it's real, unmodified-shape Apple/PureDarwin source, not
-    fabricated. Added `iokit_diag8()` prints at its entry and around the
-    `xpc_pipe_try_receive` call (real, existing helper already used
-    throughout this file, no new infrastructure needed).
-
-    **Finding 1**: across every log gathered with this instrumentation
-    (`qemu/launchd_boot_test60.log`), the main thread's own
-    `launchd_runtime2` entry print NEVER fires before the panic — the
-    main thread is still doing earlier sequential `main()` setup
-    (`pid1_magic_init`, then a `pthread_create()` for a previously-
-    unnoticed THIRD real thread, `update_thread` -- see finding 2 --
-    then `pd_launchd_boot()`/`pd_launchd_load_daemons_dir()`) and hasn't
-    reached its receive loop at all by the time the second thread dies.
-    **This rules out possibility (b) as originally framed** (main thread
-    racing inside its OWN MIG dispatch/receive) — it hasn't started that
-    loop yet.
-
-    **Finding 2, a real, previously-missed detail**: `launchd.c`'s
-    `main()` spawns a THIRD real thread via the same `pthread_create()`
-    mechanism as the second (`kqueue_demand_loop`) — `update_thread`
-    (`pthread_create(&t, NULL, update_thread, NULL)`, right after the
-    "`*** launchd[1] has started up ***`" log line, i.e. very close in
-    wall-clock time to where the second thread's blocking receive
-    happens). Reopened possibility (b) in a broader form: not "main
-    thread racing in its dispatch loop" but "main thread racing while
-    CREATING a third thread, concurrently with the second thread's
-    context-switch/block — genuine SMP concurrency in real kernel data
-    structures (`threads` global list, run queues, turnstile subsystem)
-    this project's port may not have been exercised against before,
-    since nothing prior to this investigation ever had 2+ real threads
-    actually contending for kernel-side thread-management state at the
-    same wall-clock moment on this 4-core target." Added
-    `iokit_diag()` prints immediately around the `update_thread`
-    `pthread_create()`/`pthread_detach()` calls to test this directly.
-
-    **Result (`qemu/launchd_boot_test61.log`): also ruled out.** The
-    "about to call pthread_create for update_thread" print never fires
-    either — the main thread doesn't even reach LINE 316 (barely 30
-    lines of straight-line code, mostly `if` checks and log calls, past
-    the "started up" print) before the second thread's crash happens.
-    Combined with finding 1, this is strong evidence the crash's timing
-    is dictated entirely by the second thread's own blocking-receive
-    transition, not by anything concurrent the main thread is doing —
-    the main thread simply never gets far enough, regardless of how
-    little or much code sits between the last print it does reach and
-    whatever comes next, across every one of this session's tests.
-    **Both forms of possibility (b) are now ruled out with real evidence
-    (not just re-run and hope) — the fault is not a race with the main
-    thread doing anything in particular.**
-
-    This pushes essentially all remaining weight onto possibility (a)
-    from the prior update: the fault is at or inside the actual
-    `eret`-style EL1→EL0 return transition for THIS
-    `bsdthread_create()`-spawned thread's very first continuation-based
-    block, past what plain C-level `kprintf` bisection can safely reach
-    without either (i) raw `ESR_EL1`/`FAR_EL1`/`ELR_EL1` capture directly
-    in whatever this simplified kernel's fault handler does to convert
-    an EL0 data abort into `OS_REASON_SIGNAL`, before that detail is
-    lost, or (ii) a lock-free print primitive proven safe to call from
-    inside `thread_invoke`/`machine_switch_context` itself. Neither
-    attempted yet — genuinely different, higher-risk tier of kernel work
-    (exception-vector/context-switch assembly) than anything in this
-    investigation so far, flagged here for an explicit decision before
-    continuing rather than attempted unprompted.
-
-    Repo state: `launchd.c`/`runtime.c` (submodule `third_party/
-    PureDarwin`) diagnostic additions from this update are real,
-    live TEMP DIAGNOSTIC, not yet committed as of this writing (see
-    project memory for exact commit status at any given resume point).
-
-    **UPDATE 2026-08-29, final update this session: raw fault-register
-    capture at the real EL0 abort handler — ROOT CAUSE FOUND (not yet
-    fixed). The second thread's block was a red herring the whole time;
-    the actual crash is the MAIN thread, and the evidence points at a
-    real kernel context-switch bug (thread-stack cross-contamination),
-    not a race, not a threading-setup gap.**
-
-    Added a real diagnostic directly in `osfmk/arm64/sleh.c`'s
-    `handle_user_abort()` — the real, unmodified-Apple EL0 data/
-    instruction-abort handler, right before `exception_triage()` (the
-    call that turns an unresolved fault into the real Mach exception ->
-    `OS_REASON_SIGNAL` -> the exact "pid 1 exited... signal 11" path
-    confirmed real back in the prior update). Prints `current_thread()`,
-    the real fault PC/SP/FP/LR (`get_saved_state_pc/sp/fp/lr()`), `esr`,
-    `fault_addr` (FAR), and the `vm_fault()` result code — the actual
-    raw register state at the moment of the real fault, one tier below
-    anything C-level bisection could see before.
-
-    **Result (`qemu/launchd_boot_test62.log`/`test63.log`): decisive.**
-    `esr=0x92000047` decodes to `ESR_EC_DABORT_EL0` (confirmed real EL0
-    data abort, matching the signal-shaped exit reason) with DFSC =
-    "Translation fault, level 3" (the page is genuinely never mapped,
-    not a permission fault) and the WnR bit set (a real WRITE, not a
-    read). `pc` resolves (via `nm -n` against `launchd.macho`, cross-
-    referencing dyld's own real init-order base-address prints in the
-    same boot log to compute the real ASLR slide) to exactly
-    `___vsprintf_chk+0xc` — i.e. real, very-early function-prologue
-    stack-frame setup, not application logic.
-
-    **The critical cross-reference**: `current_thread()` at the fault
-    (`test63.log` line 901) is `0xfffffff2122f3540` — the EXACT SAME
-    thread pointer as the MAIN thread's own earlier, successful
-    `mach_port_move_member` call (line 848), NOT the second
-    (`kqueue_demand_loop`) thread's pointer (`0xfffffff2122f1aa0`,
-    confirmed still separately visible completing its own
-    `about to call thread_block` sequence normally in the very same
-    log). **The main thread is the one that actually crashes** — every
-    previous session-4 finding about the second thread's blocking
-    receive completing cleanly through real turnstile/waitq setup
-    remains true and real, it was just never the direct cause; it was
-    coincidentally the last diagnostic output before a SEPARATE,
-    main-thread-only fault, which is exactly why the "main-thread races
-    ruled out" update earlier this same session drew the wrong
-    conclusion (it only checked reachability of print points AFTER the
-    "started up" `launchd_syslog()` call, never diagnostics INSIDE that
-    call itself, where the real fault turned out to live).
-
-    **Why this points at a real kernel bug, not application logic**: the
-    faulting `fp`/`fault_addr` (`0x16ebf4000`/`0x16ebf3ff8` in
-    `test63.log`) sit **~18MB below `USRSTACK64`**
-    (`bsd/arm/vmparam.h`'s real `0x16FE00000`) — physically impossible
-    for the main thread's own process stack to reach under this
-    embedded-config target's real `MAXSSIZ` (1MB, same file). `fp` is
-    also exactly page-aligned (both 4K and 16K), matching the shape of
-    `pthread_create()`'s own `stack_top` computation
-    (`tools/userland_staging/pthread_main_thread_bootstrap.c`:
-    `stack_base + PTHREAD_CREATE_STACK_SIZE(256KB)`, 16-byte-aligned) —
-    i.e. the address pattern of the SECOND thread's own dedicated
-    mmap'd stack, not anything belonging to the main thread. Added one
-    more (cheap, userland-only) diagnostic to
-    `pthread_create()`/`iokit_diag14_hex` in
-    `pthread_main_thread_bootstrap.c` + `launchd_mach_port_compat.c` to
-    print the real `stack_base`/`stack_top` for direct same-boot
-    comparison against `handle_user_abort`'s `fp`/`fault_addr` and
-    confirm the exact-match hypothesis definitively — written but NOT
-    YET boot-tested as of this writing (session ended here on an
-    unrelated tooling interruption, not a technical blocker; the test
-    itself is cheap, launchd.macho-only, no kernel rebuild needed).
-
-    **Working theory, not yet proven**: when `thread_block()` switches
-    the CPU away from the second thread (which legitimately, correctly
-    blocks) to the main thread (the next runnable thread, since this
-    kernel is confirmed single-core — only `cpu0` ever starts, per this
-    boot log's own `"BCM2837CPU: started \"cpu0\""` line, ruling out a
-    genuine SMP/multi-core cache-visibility race as a competing
-    explanation), the kernel's arm64 context-switch/register-save-
-    restore path does not correctly keep the two threads' saved user-
-    mode `SP_EL0` values separate — the main thread appears to resume
-    executing with (or has its own saved state corrupted by) the second
-    thread's `SP_EL0`, pointing into the second thread's own private
-    256KB stack instead of the main thread's real one. The very next
-    real stack-frame-setup instruction on the main thread's resumed
-    execution (`___vsprintf_chk`'s prologue) then either legitimately
-    stack-overflows past the second thread's small 256KB region
-    (if it actually IS writing into that region but past its bounds) or
-    hits a boundary specific to how that region was mapped — either way,
-    a real, previously-undiscovered bug in this project's `thread_invoke`/
-    context-switch machinery (`osfmk/arm64/machine_routines_asm.s` or
-    wherever `machine_switch_context`/`Thread_continue`-equivalent
-    saves/restores `SP_EL0` per-thread), not anything in
-    launchd/PureDarwin application code and not the second thread's own
-    setup (already independently confirmed correct through exhaustive
-    C-level bisection earlier this session).
-
-    **Real next step**: (1) boot-test the already-written
-    stack_base/stack_top vs fp/fault_addr comparison (cheap, no kernel
-    rebuild) to convert "working theory" into "confirmed" -- this is
-    the very next action, blocked only by an unrelated tooling
-    interruption this session, not by any remaining technical unknown;
-    (2) if confirmed, find and fix the real `SP_EL0` save/restore bug in
-    the arm64 context-switch path -- likely either `thread_invoke()`'s
-    own machine-state handoff (`osfmk/kern/sched_prim.c`) or the
-    architecture-specific `machine_switch_context`/PCB save-restore
-    (`osfmk/arm64/machine_routines_asm.s`,
-    `osfmk/arm64/status.c`/`cpu_data.h`'s `cpu_active_thread`
-    bookkeeping) -- not yet located precisely, real fix work, not just
-    more diagnosis, once step (1) confirms the theory.
-
-    **UPDATE 2026-08-29, session 5: step (1) done, theory REFINED not
-    confirmed as originally stated -- one real userland bug found+fixed
-    along the way (kept), but bug #6 itself is still open.**
-
-    Ran the already-written `stack_base`/`stack_top` vs `fp`/`fault_addr`
-    comparison. It never printed at all (`IOKITDIAG19` absent from
-    `launchd_boot_test64.log`/`65.log`) -- root-caused to a *second*,
-    independent real bug: `libpthread.a` (a plain static archive, linked
-    *before* `system/libsystem_pthread.dylib` in `build_launchd.sh`) was
-    shadowing the dylib's real, shared `pthread_create` -- ld64 pulled
-    `pthread_main_thread_bootstrap.o` out of the archive to satisfy
-    `core.o`'s undefined `_pthread_create` reference before the dylib was
-    ever considered, baking a second, independently-`__bsdthread_register`'d
-    copy of the whole pthread bootstrap path into `launchd.macho`
-    (confirmed via `nm`: both `launchd.macho` and the dylib defined a
-    strong `T _pthread_create`). Exact same bug class as this same
-    script's own prior `mig_reply_port.o`/`mach_msg_real.o` fixes -- see
-    memory `feedback_suspect_duplicate_static_copy_early` for the
-    standing rule this earned. **Fixed** (iokit main repo commit
-    `a07bc1c`): narrowed a launchd-only copy of `libpthread.a`
-    (`ld -r -unexported_symbol ... -keep_private_externs`, demoting the
-    duplicated functions to private-extern while preserving the shared
-    DATA symbols `pthread_tsd.o`/`pthread_clear_qos_tsd_compat.o` still
-    need) so `pthread_create` now genuinely resolves to the dylib's one
-    real copy at runtime (verified: the launchd-only diagnostic that can
-    only fire from the old local copy no longer does).
-
-    **This did NOT fix bug #6** -- `launchd_boot_test66.log` shows the
-    identical crash (same thread pointer, same fault pc/fp/fault_addr
-    pattern) even with only one canonical `pthread_create`/
-    `__bsdthread_register` call site in the whole process. This falsifies
-    the specific "two racing `__bsdthread_register` calls" mechanism, but
-    the underlying observation (main thread's `SP_EL0` ending up pointing
-    at what looks exactly like the second thread's own private stack) is
-    unchanged and still real.
-
-    Went one level deeper at the kernel C level (xnu-7195 submodule
-    commits `6e4983dec`, `6bad23b75`, both real diagnostic-only changes,
-    both boot-tested): added `thread->machine.contextData` (the real,
-    per-thread `zalloc(user_ss_zone)`-allocated PCB, `osfmk/arm64/pcb.c`)
-    and `thread->kernel_stack` (the real, per-thread
-    `kernel_memory_allocate`-backed kernel stack with guard pages,
-    `osfmk/kern/stack.c`) to both `IOKITDIAG17` (second thread, right
-    before its own `thread_block()`) and `IOKITDIAG18` (main thread, at
-    the fault), for a direct same-boot comparison. **Both ruled out**:
-    `contextData` differs (`0xfffffff214184470` vs `0xfffffff214184b10`,
-    `test67.log`) and `kernel_stack` differs (`0xfffffff851c20000` vs
-    `0xfffffff851c30000`, 64KB apart, `test68.log`) -- the two threads'
-    per-thread state is genuinely, separately allocated, not aliased.
-    Also traced (read-only) `save_general_registers`/
-    `load_general_registers` (`osfmk/arm64/cswitch.s`) and confirmed they
-    correctly include `x21` (the exception-return machine-context
-    pointer) in the real AAPCS-64 x19-x28 callee-saved set, and
-    `arm64_thread_exception_return` (`osfmk/arm64/locore.s`) explicitly
-    recomputes `x21 = current_thread()->machine.contextData` fresh on
-    every continuation-resume, not a stale carried-over value. Every
-    generic mechanism traced so far looks like real, correct,
-    unmodified-looking Apple code -- no bug found in it yet.
-
-    **Real, still-open next step**: the corruption is proven to be a
-    *value* written into the main thread's own, correctly-separate PCB's
-    `SS64_SP` field -- not a pointer-aliasing bug of any kind checked so
-    far.
-
-    **UPDATE 2026-08-29, session 5 continued: the `Switch_context`
-    bracketing attempt itself caused a real, SEPARATE, 100%-reproducible
-    crash -- reverted, not a lead on bug #6 itself.** Added
-    `kprintf()`-based before/after prints of `thread->machine.upcb`'s
-    `SS64_SP` around the real `Switch_context()` call in
-    `machine_switch_context()` (`osfmk/arm64/pcb.c` -- confirmed via
-    `osfmk/conf/files.arm64` this is the real, compiled-for-this-target
-    file; `osfmk/arm/pcb.c`'s near-identical twin is dead armv7-only
-    code here), gated to `task != kernel_task` on both sides to avoid
-    firing during early boot. Caught by direct user question ("is one
-    specific print line crashing launchd -- does removing it fix it?"):
-    `launchd_boot_test70.log`/`71.log` showed a NEW crash, byte-identical
-    modulo ASLR across two separate boots (i.e. newly, fully
-    deterministic), in `load_init_program_at_path` -- PID 1's own very
-    first thread, resumed with `resumed_sp=0x0` (real, but premature --
-    before `exec`'s own machinery finishes setting the real initial user
-    SP) -- immediately after the added `IOKITDIAG21` print. Reverted the
-    print (xnu-7195 submodule commit `0483290d5`); `launchd_boot_test72.log`
-    confirms both (a) the new crash is gone and (b) bug #6 itself
-    reproduces again, unchanged (`panic(` match, same fault pc/fp/
-    fault_addr pattern, `contextData`/`kernel_stack` still separately
-    allocated) -- **confirming bug #6 is real and independent of any of
-    this session's instrumentation**, not an artifact, since it
-    predates all of it (session 2/3/4) and reproduces with or without
-    the reverted print.
-
-    **Lesson for next attempt**: `kprintf()` itself is evidently not
-    safe to call from inside `machine_switch_context()` this early in a
-    brand-new thread's life, independent of whether the specific data
-    being read is valid -- a `task != kernel_task` guard is not
-    sufficient by itself; also needs to exclude a thread's own first-
-    ever resume (e.g. check the thread has a real, non-zero
-    `SS64_SP` -- or better, avoid instrumenting inside
-    `machine_switch_context()`/`Switch_context()` directly at all and
-    find another way to compare a thread's own saved SP immediately
-    before it yields vs. immediately after it resumes, e.g. from
-    `ipc_mqueue.c`'s own already-safe call sites bracketing specific,
-    already-identified thread activity rather than every switch
-    process-wide.
+    Two lessons from that trail are standing rules and are kept here:
+    decode fault result codes exactly and check `lr` vs `pc` for
+    self-recursion *before* theorising about the scheduler; and
+    `kprintf()` is not safe to call from inside `machine_switch_context()`
+    on a brand-new thread's first-ever resume (a `task != kernel_task`
+    guard is not sufficient).
 
 d12. **Missing/incomplete library work, explicitly tracked so it isn't
     lost (cross-referenced from item d8, not duplicated in full here)**:
@@ -2523,6 +1433,14 @@ d18. **Possible duplicate `_getenv` inside `libsystem_c.dylib` (filed
 
 
 ---
+
+**Note on duplicate IDs**: the two `### d10`/`### d11` headed sections
+below predate the numbered `d10.`/`d11.` items in the "Userland library
+debt" list above and are *different* items with the same short IDs. Source
+comments referring to "item d10"/"item d11" may mean either — the
+`libSystem.B.dylib`/Libm-gap and locale/`strftime_l` references mean the
+`###` sections below; the chained-fixups and launchd-bug-#6 references mean
+the numbered items above. Both are kept resolvable deliberately.
 
 ### d10: launchd PID-1 boot-path integration, in progress 2026-08-28
 

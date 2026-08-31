@@ -147,14 +147,19 @@ fi
 # need one in their own image. Same situation as
 # ___gettimeofday_with_mach in build_libdispatch_dylib.sh.
 #
-# mach_portUser.o is deliberately NOT dropped: it is the MIG-generated
-# __kernelrpc_mach_port_* fallback set that libsystem_kernel.dylib itself
-# defers via -Wl,-U (see that script's comment on why it cannot generate
-# them at its own level yet), so libxpc.dylib remains their real provider
-# for now.
+# mach_portUser.o IS now dropped too (static-linking cleanup, Phase 1d,
+# 2026-08-30). It used to stay because libsystem_kernel.dylib deferred
+# the whole MIG-generated __kernelrpc_mach_port_* set via -Wl,-U, making
+# libxpc.dylib their de-facto provider. That deferral is gone:
+# build_libsystem_kernel.sh now runs `mig` on xnu-7195's own
+# osfmk/mach/mach_port.defs itself and owns all 51 stubs outright, which
+# is where real Apple puts them. Keeping this copy would leave
+# libxpc.dylib a second owner of 40 symbols libiokituser.dylib was
+# ALSO duplicating -- the largest single remaining group in the audit.
 (cd "$EXTRACT" && rm -f \
     semaphore_wrap.o mach_semaphore_traps.o mach_error_string.o \
     mach_port_allocate_compat.o mach_port_allocate_trap.o \
+    mach_portUser.o \
     setenv.o environ_lock_compat.o findenv_locked_compat.o getenv_compat.o \
     snprintf_chk.o vsnprintf_chk.o strlcpy_chk.o \
     os_assumes_compat.o)

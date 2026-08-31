@@ -110,6 +110,11 @@ echo "compiling 1 real additional file (getcwd.c for __private_getcwd)..."
 # build_libresolv_dylib.sh's own header/comment block established --
 # copied here, not re-derived.
 (cd "$EXTRACT" && ar x "../../libc_locale.a" table.o none.o)
+# See narrow_rune_locale.sh's own header (static-linking cleanup, Phase
+# 1d, 2026-08-30): demotes the 4 public rune-locale globals table.o/
+# none.o carry so they bind to libsystem_c.dylib (a sibling below)
+# instead of this dylib defining a second, independently-mutable copy.
+./narrow_rune_locale.sh "$EXTRACT"
 "$CLANG" $CFLAGS libc_locale_globals_compat.c -o "$EXTRACT/libc_locale_globals_compat.o"
 
 mkdir -p "$OUT/system"

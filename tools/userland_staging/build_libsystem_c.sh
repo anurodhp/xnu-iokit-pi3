@@ -139,6 +139,23 @@ mkdir -p "$EXTRACT"
 (cd "$EXTRACT" && ar x "../../libc_gen.a")
 (cd "$EXTRACT" && ar x "../../libc_stdio.a")
 (cd "$EXTRACT" && ar x "../../libc_locale_for_stdio.a")
+# cerror_stub.o dropped 2026-08-30 (static-linking cleanup, Phase 1d):
+# it defines a plain, MUTABLE `int errno` global plus __error/cerror/
+# cerror_nocancel/_pthread_exit_if_canceled (see cerror_stub.c's own
+# header). build_libsystem_kernel.sh compiles the exact same source
+# directly into libsystem_kernel.dylib -- a real sibling on this dylib's
+# own link line -- so before this fix, every process (which always loads
+# both via libSystem.B.dylib) had TWO separate `errno` globals: a raw
+# syscall failing in libsystem_kernel set one, while every libsystem_c
+# function that reads errno via __error() read the other, never-updated
+# copy. Real duplicate STATE, not just duplicate code -- the exact
+# priority-1 category docs/static-linking-cleanup-plan.md's residual
+# table flags ("___error/_errno/_cerror -- real duplicate-state,
+# prioritise"). libc_locale_for_stdio.a's own copy stays for its
+# original purpose (build_libc_stdio.sh's standalone smoketest, which
+# links no libsystem_kernel.dylib at all); only this dylib's build drops
+# it.
+rm -f "$EXTRACT/cerror_stub.o"
 (cd "$EXTRACT" && ar x "../../libc_printf.a")
 (cd "$EXTRACT" && ar x "../../libc_regex.a")
 rm -f "$EXTRACT/__.SYMDEF"* "$EXTRACT/pthread_tsd_shim.o" \
@@ -184,7 +201,13 @@ SIGLIST_CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fn
 # SIGSEGV. That is the exact root cause of launchd bug #6 (see
 # docs/backlog.md item d11 and this tree's own postmortem); do not
 # compile these without it.
-for f in snprintf_chk vsnprintf_chk strlcpy_chk; do
+#
+# memmove_chk/stpncpy_chk/strncat_chk added 2026-08-30 (static-linking
+# cleanup, Phase 1d): these three were the only members of the _chk
+# family libsystem_c did NOT own, so libxml2.dylib and libxpc.dylib each
+# compiled their own private copy from the same Libc/secure/ source.
+# Same real _FORTIFY_SOURCE=0 requirement applies to them.
+for f in snprintf_chk vsnprintf_chk strlcpy_chk memmove_chk stpncpy_chk strncat_chk; do
     "$CLANG" $SIGLIST_CFLAGS -I "$LIBC/secure" "$LIBC/secure/$f.c" -o "$EXTRACT/$f.o"
 done
 "$CLANG" $SIGLIST_CFLAGS "$LIBC/stdlib/FreeBSD/setenv.c" -o "$EXTRACT/setenv.o"
@@ -274,6 +297,32 @@ if [ ! -f "$OUT/libremovefile.a" ]; then
 fi
 (cd "$EXTRACT" && ar x "../../libremovefile.a" qsort.o heapsort.o)
 
+# flsl: qsort.o (just extracted) calls it for its introsort recursion-
+# depth heuristic, and this dylib had NO local definition -- it was
+# binding cross-image to libremovefile.dylib, an inverted dependency
+# (libsystem_c reaching UP into a libSystem sub-dylib for a 4-line
+# bit-twiddle). Real Apple's Libc checkout ships no flsl.c at all, only
+# the <strings.h> declaration, so this project's own last-resort
+# implementation is the source -- the same one libiconv and
+# removefile_syscalls.c each carried privately. Moved here 2026-08-30
+# (static-linking cleanup, Phase 1d) so there is one owner: this file's
+# consumer (qsort) lives here, so this is where it belongs.
+"$CLANG" $SIGLIST_CFLAGS libiconv_flsl_compat.c -o "$EXTRACT/flsl.o"
+
+# rand/srand/rand_r/sranddev + random/srandom/initstate/setstate: real
+# Apple source (Libc/stdlib/FreeBSD/rand.c + random.c), already compiled
+# once by build_removefile.sh -- extracted here, same real pattern as the
+# libm/qsort pulls above. Moved here 2026-08-30 (static-linking cleanup,
+# Phase 1d): real Apple ships the whole rand family in libsystem_c, but
+# in this tree the only copies lived in libremovefile.dylib (for
+# removefile_random.c's non-cryptographic buffer filler) and in a
+# hand-written rand_r in cf_compat_headers/libxml2_libc_extras.c. Both
+# rand.o's `_next` and random.o's state array are real MUTABLE PRNG
+# state, so those were two independently-seeded generators in one
+# process -- the same duplicate-state shape as g_zone/mach_task_self_,
+# not merely duplicate code.
+(cd "$EXTRACT" && ar x "../../libremovefile.a" rand.o random.o)
+
 # Real gap: ICU also references mktime, expected from libSystem. Real
 # Apple source (stdtime/FreeBSD/localtime.c) already compiled once for
 # liblaunchd_core.a (build_launchd_core.sh's own real LOCALTIME_FLAGS
@@ -322,7 +371,11 @@ ARCHS=arm64 perl "$XNU/libsyscall/xcodescripts/create-syscalls.pl" \
     "$TMPGEN" >/dev/null
 MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 SYSCFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -I $XNU/libsyscall/custom -I $XNU/libsyscall/mach -idirafter $XNU/osfmk -idirafter $MACSDK/usr/include"
-for s in _access _ftruncate _mkdirat _sigprocmask _read; do
+# _mkdir added 2026-08-30 (static-linking cleanup, Phase 1d): plain
+# mkdir(2) was defined only in libremovefile.dylib and libncurses.dylib,
+# neither of which is its real home, and libsystem_c already generated
+# its _mkdirat sibling from this very loop.
+for s in _access _ftruncate _mkdir _mkdirat _sigprocmask _read; do
     "$CLANG" $SYSCFLAGS "$TMPGEN/${s}.s" -o "$EXTRACT/sys${s}.o"
 done
 # fstatat: real generated _fstatat.s is an empty placeholder (no

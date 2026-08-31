@@ -23,6 +23,25 @@
  * stubs used (see build_libc_printf.sh).
  */
 
+/* REMOVEFILE_SYSCALLS_DYLIB (static-linking cleanup, Phase 1d,
+ * 2026-08-30): when this file is compiled for libremovefile.dylib rather
+ * than for libremovefile.a, five of its shims -- unlink, rmdir, read,
+ * gettimeofday and flsl -- are omitted, because libsystem_c.dylib (a
+ * real sibling on that dylib's link line) already defines all five for
+ * real, and libremovefile.dylib was a second owner of each. flsl is the
+ * odd one out only in direction: libsystem_c's own qsort.o is its real
+ * caller, so ownership moved THERE rather than staying here.
+ *
+ * The guard exists rather than a plain deletion because libremovefile.a
+ * still has real STATIC consumers that legitimately need a private copy
+ * (they run with no sibling dylibs loaded at all), so the archive build
+ * must keep every one of them.
+ *
+ * rename/unlinkat/reallocarray/getiopolicy_np/setiopolicy_np are NOT
+ * guarded: no sibling dylib defines any of them, so libremovefile.dylib
+ * is their real single owner.
+ */
+
 typedef unsigned long size_t;
 typedef long ssize_t;
 
@@ -65,6 +84,7 @@ int rename(const char *from, const char *to) {
     return (int)syscall3(SYS_rename, (long)from, (long)to, 0);
 }
 
+#ifndef REMOVEFILE_SYSCALLS_DYLIB
 int unlink(const char *path) {
     return (int)syscall3(SYS_unlink, (long)path, 0, 0);
 }
@@ -72,6 +92,7 @@ int unlink(const char *path) {
 int rmdir(const char *path) {
     return (int)syscall3(SYS_rmdir, (long)path, 0, 0);
 }
+#endif /* !REMOVEFILE_SYSCALLS_DYLIB */
 
 int unlinkat(int fd, const char *path, int flag) {
     return (int)syscall3(SYS_unlinkat, fd, (long)path, flag);
@@ -81,9 +102,11 @@ int unlinkat(int fd, const char *path, int flag) {
  * underscore-prefixed _read(); removefile_random.c calls the plain
  * public name (same real gap close() needed there, see that file's own
  * comment for the precedent). */
+#ifndef REMOVEFILE_SYSCALLS_DYLIB
 ssize_t read(int fd, void *buf, size_t n) {
     return syscall3(SYS_read, fd, (long)buf, (long)n);
 }
+#endif /* !REMOVEFILE_SYSCALLS_DYLIB */
 
 /* Minimal but real gettimeofday(2): the actual Apple Libc source
  * (third_party/Libc/sys/gettimeofday.c) is a commpage-optimized wrapper
@@ -99,6 +122,7 @@ ssize_t read(int fd, void *buf, size_t n) {
  * reduction, not a fabricated result - the returned wall-clock value
  * is real, from the real kernel). */
 struct timeval;
+#ifndef REMOVEFILE_SYSCALLS_DYLIB
 int gettimeofday(struct timeval *tp, void *tzp) {
     (void)tzp;
     long junk_mach_time = 0;
@@ -119,6 +143,7 @@ int gettimeofday(struct timeval *tp, void *tzp) {
     }
     return 0;
 }
+#endif /* !REMOVEFILE_SYSCALLS_DYLIB */
 
 /* Real IOPOL_CMD_GET (0x1) / struct _iopol_param_t layout from
  * third_party/xnu-7195/bsd/sys/resource.h - see header comment above. */
@@ -162,11 +187,13 @@ void *reallocarray(void *in_ptr, size_t nmemb, size_t size) {
  * __builtin_clzl (a real compiler builtin lowering to a real arm64 CLZ
  * instruction, not approximated), matching the standard BSD definition
  * exactly. */
+#ifndef REMOVEFILE_SYSCALLS_DYLIB
 int flsl(long mask) {
     if (mask == 0) return 0;
     unsigned long umask = (unsigned long)mask;
     return (int)(sizeof(long) * 8) - __builtin_clzl(umask);
 }
+#endif /* !REMOVEFILE_SYSCALLS_DYLIB */
 
 int getiopolicy_np(int iotype, int scope) {
     struct _iopol_param_t p;

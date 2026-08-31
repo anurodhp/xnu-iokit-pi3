@@ -100,6 +100,44 @@ rm -rf "$OUT/libsystem_malloc/extracted"
 mkdir -p "$OUT/libsystem_malloc/extracted"
 (cd "$OUT/libsystem_malloc/extracted" && ar x "../../libmalloc.a" $MEMBERS)
 
+# pthread_tsd_shim.o narrowed 2026-08-30 (static-linking cleanup, Phase
+# 1d). Real constraint, not an oversight: libsystem_pthread.dylib itself
+# links libsystem_malloc.dylib as a sibling (build_libsystem_pthread.sh's
+# own link line), so malloc cannot link the real pthread dylib back
+# without a real dependency cycle -- this is why pthread_tsd_shim.c
+# exists at all (see its own header: an independent, from-scratch TSD
+# block built on the same real TPIDRRO_EL0/platform_syscall mechanism,
+# not delegating to the real pthread library malloc sits below).
+#
+# build_libsystem_c.sh already dropped its OWN copy of this exact object
+# in favor of the real libsystem_pthread.dylib sibling (libsystem_c has
+# no such cycle) -- that fix isn't available here, but the audit-visible
+# problem is narrower than "malloc needs its own TSD": it is that this
+# object EXPORTS the same public names
+# (_pthread_getspecific/_pthread_setspecific/_pthread_key_create/
+# _pthread_once/_pthread_key_init_np) the real libsystem_pthread.dylib
+# does, so any OTHER image's genuine pthread_getspecific() call could,
+# depending on two-level-namespace search order, bind to malloc's
+# private shim instead of the real implementation -- a real symbol-
+# collision hazard, not merely a cosmetic duplicate. The shim's own
+# internal callers (magazine_*.o etc.) still resolve to it locally
+# regardless of external visibility, so hiding it changes nothing about
+# malloc's own behavior -- only which OTHER images can see the name.
+#
+# Not touched: the shim's actual TSD mechanism (QEMU-verified, per its
+# own header) -- only the 5 symbols' external visibility, via the same
+# `ld -r -keep_private_externs -unexported_symbol` narrowing this
+# project already uses in narrow_rune_locale.sh and
+# build_libdispatch_dylib.sh's ___gettimeofday_with_mach.
+XCODE12_LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+"$XCODE12_LD" -r -arch arm64 -keep_private_externs \
+    -unexported_symbol _pthread_getspecific -unexported_symbol _pthread_setspecific \
+    -unexported_symbol _pthread_key_create -unexported_symbol _pthread_once \
+    -unexported_symbol _pthread_key_init_np \
+    "$OUT/libsystem_malloc/extracted/pthread_tsd_shim.o" \
+    -o "$OUT/libsystem_malloc/extracted/pthread_tsd_shim.o.narrowed"
+mv -f "$OUT/libsystem_malloc/extracted/pthread_tsd_shim.o.narrowed" "$OUT/libsystem_malloc/extracted/pthread_tsd_shim.o"
+
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libsystem_malloc.dylib"
 # Real UNIX2003/cancelable-variant symbol aliases the magazine

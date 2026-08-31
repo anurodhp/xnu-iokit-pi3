@@ -3,20 +3,7 @@ B apply.macho ___collate_equiv_match
 B apply.macho ___collate_load_error
 B apply.macho ___collate_lookup
 B apply.macho ___collate_lookup_l
-B apply.macho ___mb_cur_max
-B apply.macho ___mb_sb_limit
 B apply.macho ___progname
-B apply.macho ___sdidinit
-B apply.macho ___sF
-B apply.macho ___sfp
-B apply.macho ___sglue
-B apply.macho ___sinit
-B apply.macho ___stderrp
-B apply.macho ___stdinp
-B apply.macho ___stdoutp
-B apply.macho __cleanup
-B apply.macho __CurrentRuneLocale
-B apply.macho __DefaultRuneLocale
 B apply.macho __err
 B apply.macho __warn
 B apply.macho _abort
@@ -32,9 +19,8 @@ B apply.macho _f_prealloc
 B apply.macho _fstatat
 B apply.macho _fstatat64
 B apply.macho _ftruncate
-B apply.macho _getcwd
+B apply.macho _getegid
 B apply.macho _getentropy
-B apply.macho _getenv
 B apply.macho _geteuid
 B apply.macho _getuid
 B apply.macho _mkdir
@@ -65,20 +51,7 @@ B basename.macho ___collate_equiv_match
 B basename.macho ___collate_load_error
 B basename.macho ___collate_lookup
 B basename.macho ___collate_lookup_l
-B basename.macho ___mb_cur_max
-B basename.macho ___mb_sb_limit
 B basename.macho ___progname
-B basename.macho ___sdidinit
-B basename.macho ___sF
-B basename.macho ___sfp
-B basename.macho ___sglue
-B basename.macho ___sinit
-B basename.macho ___stderrp
-B basename.macho ___stdinp
-B basename.macho ___stdoutp
-B basename.macho __cleanup
-B basename.macho __CurrentRuneLocale
-B basename.macho __DefaultRuneLocale
 B basename.macho __err
 B basename.macho __warn
 B basename.macho _abort
@@ -94,9 +67,8 @@ B basename.macho _f_prealloc
 B basename.macho _fstatat
 B basename.macho _fstatat64
 B basename.macho _ftruncate
-B basename.macho _getcwd
+B basename.macho _getegid
 B basename.macho _getentropy
-B basename.macho _getenv
 B basename.macho _geteuid
 B basename.macho _getuid
 B basename.macho _mkdir
@@ -126,20 +98,7 @@ B cat.macho ___collate_equiv_match
 B cat.macho ___collate_load_error
 B cat.macho ___collate_lookup
 B cat.macho ___collate_lookup_l
-B cat.macho ___mb_cur_max
-B cat.macho ___mb_sb_limit
 B cat.macho ___progname
-B cat.macho ___sdidinit
-B cat.macho ___sF
-B cat.macho ___sfp
-B cat.macho ___sglue
-B cat.macho ___sinit
-B cat.macho ___stderrp
-B cat.macho ___stdinp
-B cat.macho ___stdoutp
-B cat.macho __cleanup
-B cat.macho __CurrentRuneLocale
-B cat.macho __DefaultRuneLocale
 B cat.macho __err
 B cat.macho __warn
 B cat.macho _abort
@@ -157,9 +116,8 @@ B cat.macho _f_prealloc
 B cat.macho _fstatat
 B cat.macho _fstatat64
 B cat.macho _ftruncate
-B cat.macho _getcwd
+B cat.macho _getegid
 B cat.macho _getentropy
-B cat.macho _getenv
 B cat.macho _geteuid
 B cat.macho _getuid
 B cat.macho _mkdir
@@ -190,20 +148,7 @@ B chflags.macho ___collate_equiv_match
 B chflags.macho ___collate_load_error
 B chflags.macho ___collate_lookup
 B chflags.macho ___collate_lookup_l
-B chflags.macho ___mb_cur_max
-B chflags.macho ___mb_sb_limit
 B chflags.macho ___progname
-B chflags.macho ___sdidinit
-B chflags.macho ___sF
-B chflags.macho ___sfp
-B chflags.macho ___sglue
-B chflags.macho ___sinit
-B chflags.macho ___stderrp
-B chflags.macho ___stdinp
-B chflags.macho ___stdoutp
-B chflags.macho __cleanup
-B chflags.macho __CurrentRuneLocale
-B chflags.macho __DefaultRuneLocale
 B chflags.macho __err
 B chflags.macho __warn
 B chflags.macho _abort
@@ -219,9 +164,8 @@ B chflags.macho _f_prealloc
 B chflags.macho _fstatat
 B chflags.macho _fstatat64
 B chflags.macho _ftruncate
-B chflags.macho _getcwd
+B chflags.macho _getegid
 B chflags.macho _getentropy
-B chflags.macho _getenv
 B chflags.macho _geteuid
 B chflags.macho _getuid
 B chflags.macho _mkdir
@@ -251,20 +195,7 @@ B chmod.macho ___collate_equiv_match
 B chmod.macho ___collate_load_error
 B chmod.macho ___collate_lookup
 B chmod.macho ___collate_lookup_l
-B chmod.macho ___mb_cur_max
-B chmod.macho ___mb_sb_limit
 B chmod.macho ___progname
-B chmod.macho ___sdidinit
-B chmod.macho ___sF
-B chmod.macho ___sfp
-B chmod.macho ___sglue
-B chmod.macho ___sinit
-B chmod.macho ___stderrp
-B chmod.macho ___stdinp
-B chmod.macho ___stdoutp
-B chmod.macho __cleanup
-B chmod.macho __CurrentRuneLocale
-B chmod.macho __DefaultRuneLocale
 B chmod.macho __err
 B chmod.macho __sigprocmask
 B chmod.macho __warn
@@ -284,9 +215,8 @@ B chmod.macho _fstatat
 B chmod.macho _fstatat64
 B chmod.macho _ftruncate
 B chmod.macho _getattrlist$UNIX2003
-B chmod.macho _getcwd
+B chmod.macho _getegid
 B chmod.macho _getentropy
-B chmod.macho _getenv
 B chmod.macho _geteuid
 B chmod.macho _getuid
 B chmod.macho _mkdir
@@ -316,20 +246,7 @@ B chown.macho ___collate_equiv_match
 B chown.macho ___collate_load_error
 B chown.macho ___collate_lookup
 B chown.macho ___collate_lookup_l
-B chown.macho ___mb_cur_max
-B chown.macho ___mb_sb_limit
 B chown.macho ___progname
-B chown.macho ___sdidinit
-B chown.macho ___sF
-B chown.macho ___sfp
-B chown.macho ___sglue
-B chown.macho ___sinit
-B chown.macho ___stderrp
-B chown.macho ___stdinp
-B chown.macho ___stdoutp
-B chown.macho __cleanup
-B chown.macho __CurrentRuneLocale
-B chown.macho __DefaultRuneLocale
 B chown.macho __err
 B chown.macho __warn
 B chown.macho _abort
@@ -345,9 +262,8 @@ B chown.macho _f_prealloc
 B chown.macho _fstatat
 B chown.macho _fstatat64
 B chown.macho _ftruncate
-B chown.macho _getcwd
+B chown.macho _getegid
 B chown.macho _getentropy
-B chown.macho _getenv
 B chown.macho _geteuid
 B chown.macho _getgrgid
 B chown.macho _getgrnam
@@ -383,20 +299,7 @@ B chroot.macho ___collate_equiv_match
 B chroot.macho ___collate_load_error
 B chroot.macho ___collate_lookup
 B chroot.macho ___collate_lookup_l
-B chroot.macho ___mb_cur_max
-B chroot.macho ___mb_sb_limit
 B chroot.macho ___progname
-B chroot.macho ___sdidinit
-B chroot.macho ___sF
-B chroot.macho ___sfp
-B chroot.macho ___sglue
-B chroot.macho ___sinit
-B chroot.macho ___stderrp
-B chroot.macho ___stdinp
-B chroot.macho ___stdoutp
-B chroot.macho __cleanup
-B chroot.macho __CurrentRuneLocale
-B chroot.macho __DefaultRuneLocale
 B chroot.macho __err
 B chroot.macho __warn
 B chroot.macho _abort
@@ -412,9 +315,8 @@ B chroot.macho _f_prealloc
 B chroot.macho _fstatat
 B chroot.macho _fstatat64
 B chroot.macho _ftruncate
-B chroot.macho _getcwd
+B chroot.macho _getegid
 B chroot.macho _getentropy
-B chroot.macho _getenv
 B chroot.macho _geteuid
 B chroot.macho _getgrgid
 B chroot.macho _getgrnam
@@ -448,20 +350,7 @@ B cksum.macho ___collate_equiv_match
 B cksum.macho ___collate_load_error
 B cksum.macho ___collate_lookup
 B cksum.macho ___collate_lookup_l
-B cksum.macho ___mb_cur_max
-B cksum.macho ___mb_sb_limit
 B cksum.macho ___progname
-B cksum.macho ___sdidinit
-B cksum.macho ___sF
-B cksum.macho ___sfp
-B cksum.macho ___sglue
-B cksum.macho ___sinit
-B cksum.macho ___stderrp
-B cksum.macho ___stdinp
-B cksum.macho ___stdoutp
-B cksum.macho __cleanup
-B cksum.macho __CurrentRuneLocale
-B cksum.macho __DefaultRuneLocale
 B cksum.macho __err
 B cksum.macho __warn
 B cksum.macho _abort
@@ -477,9 +366,8 @@ B cksum.macho _f_prealloc
 B cksum.macho _fstatat
 B cksum.macho _fstatat64
 B cksum.macho _ftruncate
-B cksum.macho _getcwd
+B cksum.macho _getegid
 B cksum.macho _getentropy
-B cksum.macho _getenv
 B cksum.macho _geteuid
 B cksum.macho _getuid
 B cksum.macho _mkdir
@@ -509,20 +397,7 @@ B colrm.macho ___collate_equiv_match
 B colrm.macho ___collate_load_error
 B colrm.macho ___collate_lookup
 B colrm.macho ___collate_lookup_l
-B colrm.macho ___mb_cur_max
-B colrm.macho ___mb_sb_limit
 B colrm.macho ___progname
-B colrm.macho ___sdidinit
-B colrm.macho ___sF
-B colrm.macho ___sfp
-B colrm.macho ___sglue
-B colrm.macho ___sinit
-B colrm.macho ___stderrp
-B colrm.macho ___stdinp
-B colrm.macho ___stdoutp
-B colrm.macho __cleanup
-B colrm.macho __CurrentRuneLocale
-B colrm.macho __DefaultRuneLocale
 B colrm.macho __err
 B colrm.macho __warn
 B colrm.macho _abort
@@ -538,9 +413,8 @@ B colrm.macho _f_prealloc
 B colrm.macho _fstatat
 B colrm.macho _fstatat64
 B colrm.macho _ftruncate
-B colrm.macho _getcwd
+B colrm.macho _getegid
 B colrm.macho _getentropy
-B colrm.macho _getenv
 B colrm.macho _geteuid
 B colrm.macho _getuid
 B colrm.macho _mkdir
@@ -570,20 +444,7 @@ B comm.macho ___collate_equiv_match
 B comm.macho ___collate_load_error
 B comm.macho ___collate_lookup
 B comm.macho ___collate_lookup_l
-B comm.macho ___mb_cur_max
-B comm.macho ___mb_sb_limit
 B comm.macho ___progname
-B comm.macho ___sdidinit
-B comm.macho ___sF
-B comm.macho ___sfp
-B comm.macho ___sglue
-B comm.macho ___sinit
-B comm.macho ___stderrp
-B comm.macho ___stdinp
-B comm.macho ___stdoutp
-B comm.macho __cleanup
-B comm.macho __CurrentRuneLocale
-B comm.macho __DefaultRuneLocale
 B comm.macho __err
 B comm.macho __warn
 B comm.macho _abort
@@ -599,9 +460,8 @@ B comm.macho _f_prealloc
 B comm.macho _fstatat
 B comm.macho _fstatat64
 B comm.macho _ftruncate
-B comm.macho _getcwd
+B comm.macho _getegid
 B comm.macho _getentropy
-B comm.macho _getenv
 B comm.macho _geteuid
 B comm.macho _getuid
 B comm.macho _mkdir
@@ -631,20 +491,7 @@ B compress.macho ___collate_equiv_match
 B compress.macho ___collate_load_error
 B compress.macho ___collate_lookup
 B compress.macho ___collate_lookup_l
-B compress.macho ___mb_cur_max
-B compress.macho ___mb_sb_limit
 B compress.macho ___progname
-B compress.macho ___sdidinit
-B compress.macho ___sF
-B compress.macho ___sfp
-B compress.macho ___sglue
-B compress.macho ___sinit
-B compress.macho ___stderrp
-B compress.macho ___stdinp
-B compress.macho ___stdoutp
-B compress.macho __cleanup
-B compress.macho __CurrentRuneLocale
-B compress.macho __DefaultRuneLocale
 B compress.macho __err
 B compress.macho __warn
 B compress.macho _abort
@@ -662,9 +509,8 @@ B compress.macho _fstatat
 B compress.macho _fstatat64
 B compress.macho _ftruncate
 B compress.macho _funopen
-B compress.macho _getcwd
+B compress.macho _getegid
 B compress.macho _getentropy
-B compress.macho _getenv
 B compress.macho _geteuid
 B compress.macho _getuid
 B compress.macho _mkdir
@@ -694,20 +540,7 @@ B cp.macho ___collate_equiv_match
 B cp.macho ___collate_load_error
 B cp.macho ___collate_lookup
 B cp.macho ___collate_lookup_l
-B cp.macho ___mb_cur_max
-B cp.macho ___mb_sb_limit
 B cp.macho ___progname
-B cp.macho ___sdidinit
-B cp.macho ___sF
-B cp.macho ___sfp
-B cp.macho ___sglue
-B cp.macho ___sinit
-B cp.macho ___stderrp
-B cp.macho ___stdinp
-B cp.macho ___stdoutp
-B cp.macho __cleanup
-B cp.macho __CurrentRuneLocale
-B cp.macho __DefaultRuneLocale
 B cp.macho __err
 B cp.macho __warn
 B cp.macho _abort
@@ -726,9 +559,8 @@ B cp.macho _fstatat
 B cp.macho _fstatat64
 B cp.macho _ftruncate
 B cp.macho _getattrlist$UNIX2003
-B cp.macho _getcwd
+B cp.macho _getegid
 B cp.macho _getentropy
-B cp.macho _getenv
 B cp.macho _geteuid
 B cp.macho _getuid
 B cp.macho _mkdir
@@ -759,20 +591,7 @@ B cut.macho ___collate_equiv_match
 B cut.macho ___collate_load_error
 B cut.macho ___collate_lookup
 B cut.macho ___collate_lookup_l
-B cut.macho ___mb_cur_max
-B cut.macho ___mb_sb_limit
 B cut.macho ___progname
-B cut.macho ___sdidinit
-B cut.macho ___sF
-B cut.macho ___sfp
-B cut.macho ___sglue
-B cut.macho ___sinit
-B cut.macho ___stderrp
-B cut.macho ___stdinp
-B cut.macho ___stdoutp
-B cut.macho __cleanup
-B cut.macho __CurrentRuneLocale
-B cut.macho __DefaultRuneLocale
 B cut.macho __err
 B cut.macho __warn
 B cut.macho _abort
@@ -788,9 +607,8 @@ B cut.macho _f_prealloc
 B cut.macho _fstatat
 B cut.macho _fstatat64
 B cut.macho _ftruncate
-B cut.macho _getcwd
+B cut.macho _getegid
 B cut.macho _getentropy
-B cut.macho _getenv
 B cut.macho _geteuid
 B cut.macho _getuid
 B cut.macho _mkdir
@@ -822,20 +640,7 @@ B date.macho ___collate_lookup
 B date.macho ___collate_lookup_l
 B date.macho ___commpage_gettimeofday
 B date.macho ___gettimeofday
-B date.macho ___mb_cur_max
-B date.macho ___mb_sb_limit
 B date.macho ___progname
-B date.macho ___sdidinit
-B date.macho ___sF
-B date.macho ___sfp
-B date.macho ___sglue
-B date.macho ___sinit
-B date.macho ___stderrp
-B date.macho ___stdinp
-B date.macho ___stdoutp
-B date.macho __cleanup
-B date.macho __CurrentRuneLocale
-B date.macho __DefaultRuneLocale
 B date.macho __err
 B date.macho __warn
 B date.macho _abort
@@ -862,9 +667,8 @@ B date.macho _fesetenv
 B date.macho _fstatat
 B date.macho _fstatat64
 B date.macho _ftruncate
-B date.macho _getcwd
+B date.macho _getegid
 B date.macho _getentropy
-B date.macho _getenv
 B date.macho _geteuid
 B date.macho _gettimeofday
 B date.macho _getuid
@@ -920,20 +724,7 @@ B df.macho ___collate_equiv_match
 B df.macho ___collate_load_error
 B df.macho ___collate_lookup
 B df.macho ___collate_lookup_l
-B df.macho ___mb_cur_max
-B df.macho ___mb_sb_limit
 B df.macho ___progname
-B df.macho ___sdidinit
-B df.macho ___sF
-B df.macho ___sfp
-B df.macho ___sglue
-B df.macho ___sinit
-B df.macho ___stderrp
-B df.macho ___stdinp
-B df.macho ___stdoutp
-B df.macho __cleanup
-B df.macho __CurrentRuneLocale
-B df.macho __DefaultRuneLocale
 B df.macho __err
 B df.macho __warn
 B df.macho _abort
@@ -949,9 +740,8 @@ B df.macho _f_prealloc
 B df.macho _fstatat
 B df.macho _fstatat64
 B df.macho _ftruncate
-B df.macho _getcwd
+B df.macho _getegid
 B df.macho _getentropy
-B df.macho _getenv
 B df.macho _geteuid
 B df.macho _getuid
 B df.macho _mkdir
@@ -982,20 +772,7 @@ B diff.macho ___collate_load_error
 B diff.macho ___collate_lookup
 B diff.macho ___collate_lookup_l
 B diff.macho ___commpage_gettimeofday
-B diff.macho ___mb_cur_max
-B diff.macho ___mb_sb_limit
 B diff.macho ___progname
-B diff.macho ___sdidinit
-B diff.macho ___sF
-B diff.macho ___sfp
-B diff.macho ___sglue
-B diff.macho ___sinit
-B diff.macho ___stderrp
-B diff.macho ___stdinp
-B diff.macho ___stdoutp
-B diff.macho __cleanup
-B diff.macho __CurrentRuneLocale
-B diff.macho __DefaultRuneLocale
 B diff.macho __err
 B diff.macho __warn
 B diff.macho _abort
@@ -1019,9 +796,8 @@ B diff.macho _flsl
 B diff.macho _fstatat
 B diff.macho _fstatat64
 B diff.macho _ftruncate
-B diff.macho _getcwd
+B diff.macho _getegid
 B diff.macho _getentropy
-B diff.macho _getenv
 B diff.macho _geteuid
 B diff.macho _gettimeofday
 B diff.macho _getuid
@@ -1080,20 +856,7 @@ B dirname.macho ___collate_equiv_match
 B dirname.macho ___collate_load_error
 B dirname.macho ___collate_lookup
 B dirname.macho ___collate_lookup_l
-B dirname.macho ___mb_cur_max
-B dirname.macho ___mb_sb_limit
 B dirname.macho ___progname
-B dirname.macho ___sdidinit
-B dirname.macho ___sF
-B dirname.macho ___sfp
-B dirname.macho ___sglue
-B dirname.macho ___sinit
-B dirname.macho ___stderrp
-B dirname.macho ___stdinp
-B dirname.macho ___stdoutp
-B dirname.macho __cleanup
-B dirname.macho __CurrentRuneLocale
-B dirname.macho __DefaultRuneLocale
 B dirname.macho __err
 B dirname.macho __warn
 B dirname.macho _abort
@@ -1109,9 +872,8 @@ B dirname.macho _f_prealloc
 B dirname.macho _fstatat
 B dirname.macho _fstatat64
 B dirname.macho _ftruncate
-B dirname.macho _getcwd
+B dirname.macho _getegid
 B dirname.macho _getentropy
-B dirname.macho _getenv
 B dirname.macho _geteuid
 B dirname.macho _getuid
 B dirname.macho _mkdir
@@ -1141,20 +903,7 @@ B du.macho ___collate_equiv_match
 B du.macho ___collate_load_error
 B du.macho ___collate_lookup
 B du.macho ___collate_lookup_l
-B du.macho ___mb_cur_max
-B du.macho ___mb_sb_limit
 B du.macho ___progname
-B du.macho ___sdidinit
-B du.macho ___sF
-B du.macho ___sfp
-B du.macho ___sglue
-B du.macho ___sinit
-B du.macho ___stderrp
-B du.macho ___stdinp
-B du.macho ___stdoutp
-B du.macho __cleanup
-B du.macho __CurrentRuneLocale
-B du.macho __DefaultRuneLocale
 B du.macho __err
 B du.macho __warn
 B du.macho _abort
@@ -1177,9 +926,8 @@ B du.macho _fstatat
 B du.macho _fstatat64
 B du.macho _ftruncate
 B du.macho _getattrlist$UNIX2003
-B du.macho _getcwd
+B du.macho _getegid
 B du.macho _getentropy
-B du.macho _getenv
 B du.macho _geteuid
 B du.macho _getuid
 B du.macho _mkdir
@@ -1215,20 +963,7 @@ B echo.macho ___collate_equiv_match
 B echo.macho ___collate_load_error
 B echo.macho ___collate_lookup
 B echo.macho ___collate_lookup_l
-B echo.macho ___mb_cur_max
-B echo.macho ___mb_sb_limit
 B echo.macho ___progname
-B echo.macho ___sdidinit
-B echo.macho ___sF
-B echo.macho ___sfp
-B echo.macho ___sglue
-B echo.macho ___sinit
-B echo.macho ___stderrp
-B echo.macho ___stdinp
-B echo.macho ___stdoutp
-B echo.macho __cleanup
-B echo.macho __CurrentRuneLocale
-B echo.macho __DefaultRuneLocale
 B echo.macho __err
 B echo.macho __warn
 B echo.macho _abort
@@ -1244,9 +979,8 @@ B echo.macho _f_prealloc
 B echo.macho _fstatat
 B echo.macho _fstatat64
 B echo.macho _ftruncate
-B echo.macho _getcwd
+B echo.macho _getegid
 B echo.macho _getentropy
-B echo.macho _getenv
 B echo.macho _geteuid
 B echo.macho _getuid
 B echo.macho _mkdir
@@ -1276,20 +1010,7 @@ B ed.macho ___collate_equiv_match
 B ed.macho ___collate_load_error
 B ed.macho ___collate_lookup
 B ed.macho ___collate_lookup_l
-B ed.macho ___mb_cur_max
-B ed.macho ___mb_sb_limit
 B ed.macho ___progname
-B ed.macho ___sdidinit
-B ed.macho ___sF
-B ed.macho ___sfp
-B ed.macho ___sglue
-B ed.macho ___sinit
-B ed.macho ___stderrp
-B ed.macho ___stdinp
-B ed.macho ___stdoutp
-B ed.macho __cleanup
-B ed.macho __CurrentRuneLocale
-B ed.macho __DefaultRuneLocale
 B ed.macho __err
 B ed.macho __mktemp
 B ed.macho __warn
@@ -1313,9 +1034,8 @@ B ed.macho _fstatat
 B ed.macho _fstatat64
 B ed.macho _ftruncate
 B ed.macho _getattrlist$UNIX2003
-B ed.macho _getcwd
+B ed.macho _getegid
 B ed.macho _getentropy
-B ed.macho _getenv
 B ed.macho _geteuid
 B ed.macho _getuid
 B ed.macho _mkdir
@@ -1355,20 +1075,7 @@ B env.macho ___collate_equiv_match
 B env.macho ___collate_load_error
 B env.macho ___collate_lookup
 B env.macho ___collate_lookup_l
-B env.macho ___mb_cur_max
-B env.macho ___mb_sb_limit
 B env.macho ___progname
-B env.macho ___sdidinit
-B env.macho ___sF
-B env.macho ___sfp
-B env.macho ___sglue
-B env.macho ___sinit
-B env.macho ___stderrp
-B env.macho ___stdinp
-B env.macho ___stdoutp
-B env.macho __cleanup
-B env.macho __CurrentRuneLocale
-B env.macho __DefaultRuneLocale
 B env.macho __err
 B env.macho __warn
 B env.macho _abort
@@ -1384,9 +1091,8 @@ B env.macho _f_prealloc
 B env.macho _fstatat
 B env.macho _fstatat64
 B env.macho _ftruncate
-B env.macho _getcwd
+B env.macho _getegid
 B env.macho _getentropy
-B env.macho _getenv
 B env.macho _geteuid
 B env.macho _getuid
 B env.macho _mkdir
@@ -1416,20 +1122,7 @@ B expand.macho ___collate_equiv_match
 B expand.macho ___collate_load_error
 B expand.macho ___collate_lookup
 B expand.macho ___collate_lookup_l
-B expand.macho ___mb_cur_max
-B expand.macho ___mb_sb_limit
 B expand.macho ___progname
-B expand.macho ___sdidinit
-B expand.macho ___sF
-B expand.macho ___sfp
-B expand.macho ___sglue
-B expand.macho ___sinit
-B expand.macho ___stderrp
-B expand.macho ___stdinp
-B expand.macho ___stdoutp
-B expand.macho __cleanup
-B expand.macho __CurrentRuneLocale
-B expand.macho __DefaultRuneLocale
 B expand.macho __err
 B expand.macho __flockfile
 B expand.macho __flockfile_debug_stub
@@ -1449,9 +1142,8 @@ B expand.macho _f_prealloc
 B expand.macho _fstatat
 B expand.macho _fstatat64
 B expand.macho _ftruncate
-B expand.macho _getcwd
+B expand.macho _getegid
 B expand.macho _getentropy
-B expand.macho _getenv
 B expand.macho _geteuid
 B expand.macho _getuid
 B expand.macho _mkdir
@@ -1481,20 +1173,7 @@ B false.macho ___collate_equiv_match
 B false.macho ___collate_load_error
 B false.macho ___collate_lookup
 B false.macho ___collate_lookup_l
-B false.macho ___mb_cur_max
-B false.macho ___mb_sb_limit
 B false.macho ___progname
-B false.macho ___sdidinit
-B false.macho ___sF
-B false.macho ___sfp
-B false.macho ___sglue
-B false.macho ___sinit
-B false.macho ___stderrp
-B false.macho ___stdinp
-B false.macho ___stdoutp
-B false.macho __cleanup
-B false.macho __CurrentRuneLocale
-B false.macho __DefaultRuneLocale
 B false.macho __err
 B false.macho __warn
 B false.macho _abort
@@ -1510,9 +1189,8 @@ B false.macho _f_prealloc
 B false.macho _fstatat
 B false.macho _fstatat64
 B false.macho _ftruncate
-B false.macho _getcwd
+B false.macho _getegid
 B false.macho _getentropy
-B false.macho _getenv
 B false.macho _geteuid
 B false.macho _getuid
 B false.macho _mkdir
@@ -1542,20 +1220,7 @@ B find.macho ___collate_equiv_match
 B find.macho ___collate_load_error
 B find.macho ___collate_lookup
 B find.macho ___collate_lookup_l
-B find.macho ___mb_cur_max
-B find.macho ___mb_sb_limit
 B find.macho ___progname
-B find.macho ___sdidinit
-B find.macho ___sF
-B find.macho ___sfp
-B find.macho ___sglue
-B find.macho ___sinit
-B find.macho ___stderrp
-B find.macho ___stdinp
-B find.macho ___stdoutp
-B find.macho __cleanup
-B find.macho __CurrentRuneLocale
-B find.macho __DefaultRuneLocale
 B find.macho __err
 B find.macho __sigprocmask
 B find.macho __warn
@@ -1585,9 +1250,8 @@ B find.macho _fstatat
 B find.macho _fstatat64
 B find.macho _ftruncate
 B find.macho _getattrlist$UNIX2003
-B find.macho _getcwd
+B find.macho _getegid
 B find.macho _getentropy
-B find.macho _getenv
 B find.macho _geteuid
 B find.macho _getuid
 B find.macho _gmtime
@@ -1637,20 +1301,7 @@ B fold.macho ___collate_equiv_match
 B fold.macho ___collate_load_error
 B fold.macho ___collate_lookup
 B fold.macho ___collate_lookup_l
-B fold.macho ___mb_cur_max
-B fold.macho ___mb_sb_limit
 B fold.macho ___progname
-B fold.macho ___sdidinit
-B fold.macho ___sF
-B fold.macho ___sfp
-B fold.macho ___sglue
-B fold.macho ___sinit
-B fold.macho ___stderrp
-B fold.macho ___stdinp
-B fold.macho ___stdoutp
-B fold.macho __cleanup
-B fold.macho __CurrentRuneLocale
-B fold.macho __DefaultRuneLocale
 B fold.macho __err
 B fold.macho __flockfile
 B fold.macho __flockfile_debug_stub
@@ -1672,9 +1323,8 @@ B fold.macho _f_prealloc
 B fold.macho _fstatat
 B fold.macho _fstatat64
 B fold.macho _ftruncate
-B fold.macho _getcwd
+B fold.macho _getegid
 B fold.macho _getentropy
-B fold.macho _getenv
 B fold.macho _geteuid
 B fold.macho _getuid
 B fold.macho _mkdir
@@ -1704,20 +1354,7 @@ B grep.macho ___collate_equiv_match
 B grep.macho ___collate_load_error
 B grep.macho ___collate_lookup
 B grep.macho ___collate_lookup_l
-B grep.macho ___mb_cur_max
-B grep.macho ___mb_sb_limit
 B grep.macho ___progname
-B grep.macho ___sdidinit
-B grep.macho ___sF
-B grep.macho ___sfp
-B grep.macho ___sglue
-B grep.macho ___sinit
-B grep.macho ___stderrp
-B grep.macho ___stdinp
-B grep.macho ___stdoutp
-B grep.macho __cleanup
-B grep.macho __CurrentRuneLocale
-B grep.macho __DefaultRuneLocale
 B grep.macho __err
 B grep.macho __warn
 B grep.macho _abort
@@ -1733,9 +1370,8 @@ B grep.macho _f_prealloc
 B grep.macho _fstatat
 B grep.macho _fstatat64
 B grep.macho _ftruncate
-B grep.macho _getcwd
+B grep.macho _getegid
 B grep.macho _getentropy
-B grep.macho _getenv
 B grep.macho _geteuid
 B grep.macho _getuid
 B grep.macho _mkdir
@@ -1771,20 +1407,7 @@ B gzip.macho ___collate_equiv_match
 B gzip.macho ___collate_load_error
 B gzip.macho ___collate_lookup
 B gzip.macho ___collate_lookup_l
-B gzip.macho ___mb_cur_max
-B gzip.macho ___mb_sb_limit
 B gzip.macho ___progname
-B gzip.macho ___sdidinit
-B gzip.macho ___sF
-B gzip.macho ___sfp
-B gzip.macho ___sglue
-B gzip.macho ___sinit
-B gzip.macho ___stderrp
-B gzip.macho ___stdinp
-B gzip.macho ___stdoutp
-B gzip.macho __cleanup
-B gzip.macho __CurrentRuneLocale
-B gzip.macho __DefaultRuneLocale
 B gzip.macho __err
 B gzip.macho __warn
 B gzip.macho _abort
@@ -1811,9 +1434,8 @@ B gzip.macho _fstatat
 B gzip.macho _fstatat64
 B gzip.macho _ftruncate
 B gzip.macho _getattrlist$UNIX2003
-B gzip.macho _getcwd
+B gzip.macho _getegid
 B gzip.macho _getentropy
-B gzip.macho _getenv
 B gzip.macho _geteuid
 B gzip.macho _getuid
 B gzip.macho _gmtime
@@ -1861,20 +1483,7 @@ B head.macho ___collate_equiv_match
 B head.macho ___collate_load_error
 B head.macho ___collate_lookup
 B head.macho ___collate_lookup_l
-B head.macho ___mb_cur_max
-B head.macho ___mb_sb_limit
 B head.macho ___progname
-B head.macho ___sdidinit
-B head.macho ___sF
-B head.macho ___sfp
-B head.macho ___sglue
-B head.macho ___sinit
-B head.macho ___stderrp
-B head.macho ___stdinp
-B head.macho ___stdoutp
-B head.macho __cleanup
-B head.macho __CurrentRuneLocale
-B head.macho __DefaultRuneLocale
 B head.macho __err
 B head.macho __warn
 B head.macho _abort
@@ -1890,9 +1499,8 @@ B head.macho _f_prealloc
 B head.macho _fstatat
 B head.macho _fstatat64
 B head.macho _ftruncate
-B head.macho _getcwd
+B head.macho _getegid
 B head.macho _getentropy
-B head.macho _getenv
 B head.macho _geteuid
 B head.macho _getuid
 B head.macho _mkdir
@@ -1922,20 +1530,7 @@ B hexdump.macho ___collate_equiv_match
 B hexdump.macho ___collate_load_error
 B hexdump.macho ___collate_lookup
 B hexdump.macho ___collate_lookup_l
-B hexdump.macho ___mb_cur_max
-B hexdump.macho ___mb_sb_limit
 B hexdump.macho ___progname
-B hexdump.macho ___sdidinit
-B hexdump.macho ___sF
-B hexdump.macho ___sfp
-B hexdump.macho ___sglue
-B hexdump.macho ___sinit
-B hexdump.macho ___stderrp
-B hexdump.macho ___stdinp
-B hexdump.macho ___stdoutp
-B hexdump.macho __cleanup
-B hexdump.macho __CurrentRuneLocale
-B hexdump.macho __DefaultRuneLocale
 B hexdump.macho __err
 B hexdump.macho __flockfile
 B hexdump.macho __flockfile_debug_stub
@@ -1958,9 +1553,8 @@ B hexdump.macho _f_prealloc
 B hexdump.macho _fstatat
 B hexdump.macho _fstatat64
 B hexdump.macho _ftruncate
-B hexdump.macho _getcwd
+B hexdump.macho _getegid
 B hexdump.macho _getentropy
-B hexdump.macho _getenv
 B hexdump.macho _geteuid
 B hexdump.macho _getuid
 B hexdump.macho _mkdir
@@ -1995,20 +1589,7 @@ B hostname.macho ___collate_equiv_match
 B hostname.macho ___collate_load_error
 B hostname.macho ___collate_lookup
 B hostname.macho ___collate_lookup_l
-B hostname.macho ___mb_cur_max
-B hostname.macho ___mb_sb_limit
 B hostname.macho ___progname
-B hostname.macho ___sdidinit
-B hostname.macho ___sF
-B hostname.macho ___sfp
-B hostname.macho ___sglue
-B hostname.macho ___sinit
-B hostname.macho ___stderrp
-B hostname.macho ___stdinp
-B hostname.macho ___stdoutp
-B hostname.macho __cleanup
-B hostname.macho __CurrentRuneLocale
-B hostname.macho __DefaultRuneLocale
 B hostname.macho __err
 B hostname.macho __warn
 B hostname.macho _abort
@@ -2024,9 +1605,8 @@ B hostname.macho _f_prealloc
 B hostname.macho _fstatat
 B hostname.macho _fstatat64
 B hostname.macho _ftruncate
-B hostname.macho _getcwd
+B hostname.macho _getegid
 B hostname.macho _getentropy
-B hostname.macho _getenv
 B hostname.macho _geteuid
 B hostname.macho _gethostname
 B hostname.macho _getuid
@@ -2057,20 +1637,7 @@ B id.macho ___collate_equiv_match
 B id.macho ___collate_load_error
 B id.macho ___collate_lookup
 B id.macho ___collate_lookup_l
-B id.macho ___mb_cur_max
-B id.macho ___mb_sb_limit
 B id.macho ___progname
-B id.macho ___sdidinit
-B id.macho ___sF
-B id.macho ___sfp
-B id.macho ___sglue
-B id.macho ___sinit
-B id.macho ___stderrp
-B id.macho ___stdinp
-B id.macho ___stdoutp
-B id.macho __cleanup
-B id.macho __CurrentRuneLocale
-B id.macho __DefaultRuneLocale
 B id.macho __err
 B id.macho __warn
 B id.macho _abort
@@ -2086,9 +1653,8 @@ B id.macho _f_prealloc
 B id.macho _fstatat
 B id.macho _fstatat64
 B id.macho _ftruncate
-B id.macho _getcwd
+B id.macho _getegid
 B id.macho _getentropy
-B id.macho _getenv
 B id.macho _geteuid
 B id.macho _getgrgid
 B id.macho _getgrnam
@@ -2123,20 +1689,7 @@ B jot.macho ___collate_load_error
 B jot.macho ___collate_lookup
 B jot.macho ___collate_lookup_l
 B jot.macho ___commpage_gettimeofday
-B jot.macho ___mb_cur_max
-B jot.macho ___mb_sb_limit
 B jot.macho ___progname
-B jot.macho ___sdidinit
-B jot.macho ___sF
-B jot.macho ___sfp
-B jot.macho ___sglue
-B jot.macho ___sinit
-B jot.macho ___stderrp
-B jot.macho ___stdinp
-B jot.macho ___stdoutp
-B jot.macho __cleanup
-B jot.macho __CurrentRuneLocale
-B jot.macho __DefaultRuneLocale
 B jot.macho __err
 B jot.macho __warn
 B jot.macho _abort
@@ -2164,9 +1717,8 @@ B jot.macho _f_prealloc
 B jot.macho _fstatat
 B jot.macho _fstatat64
 B jot.macho _ftruncate
-B jot.macho _getcwd
+B jot.macho _getegid
 B jot.macho _getentropy
-B jot.macho _getenv
 B jot.macho _geteuid
 B jot.macho _gettimeofday
 B jot.macho _getuid
@@ -2219,20 +1771,7 @@ B kill.macho ___collate_equiv_match
 B kill.macho ___collate_load_error
 B kill.macho ___collate_lookup
 B kill.macho ___collate_lookup_l
-B kill.macho ___mb_cur_max
-B kill.macho ___mb_sb_limit
 B kill.macho ___progname
-B kill.macho ___sdidinit
-B kill.macho ___sF
-B kill.macho ___sfp
-B kill.macho ___sglue
-B kill.macho ___sinit
-B kill.macho ___stderrp
-B kill.macho ___stdinp
-B kill.macho ___stdoutp
-B kill.macho __cleanup
-B kill.macho __CurrentRuneLocale
-B kill.macho __DefaultRuneLocale
 B kill.macho __err
 B kill.macho __warn
 B kill.macho _abort
@@ -2248,9 +1787,8 @@ B kill.macho _f_prealloc
 B kill.macho _fstatat
 B kill.macho _fstatat64
 B kill.macho _ftruncate
-B kill.macho _getcwd
+B kill.macho _getegid
 B kill.macho _getentropy
-B kill.macho _getenv
 B kill.macho _geteuid
 B kill.macho _getuid
 B kill.macho _mkdir
@@ -2282,20 +1820,7 @@ B killall.macho ___collate_equiv_match
 B killall.macho ___collate_load_error
 B killall.macho ___collate_lookup
 B killall.macho ___collate_lookup_l
-B killall.macho ___mb_cur_max
-B killall.macho ___mb_sb_limit
 B killall.macho ___progname
-B killall.macho ___sdidinit
-B killall.macho ___sF
-B killall.macho ___sfp
-B killall.macho ___sglue
-B killall.macho ___sinit
-B killall.macho ___stderrp
-B killall.macho ___stdinp
-B killall.macho ___stdoutp
-B killall.macho __cleanup
-B killall.macho __CurrentRuneLocale
-B killall.macho __DefaultRuneLocale
 B killall.macho __err
 B killall.macho __warn
 B killall.macho _abort
@@ -2311,9 +1836,8 @@ B killall.macho _f_prealloc
 B killall.macho _fstatat
 B killall.macho _fstatat64
 B killall.macho _ftruncate
-B killall.macho _getcwd
+B killall.macho _getegid
 B killall.macho _getentropy
-B killall.macho _getenv
 B killall.macho _geteuid
 B killall.macho _getgrgid
 B killall.macho _getgrnam
@@ -2349,20 +1873,7 @@ B lam.macho ___collate_equiv_match
 B lam.macho ___collate_load_error
 B lam.macho ___collate_lookup
 B lam.macho ___collate_lookup_l
-B lam.macho ___mb_cur_max
-B lam.macho ___mb_sb_limit
 B lam.macho ___progname
-B lam.macho ___sdidinit
-B lam.macho ___sF
-B lam.macho ___sfp
-B lam.macho ___sglue
-B lam.macho ___sinit
-B lam.macho ___stderrp
-B lam.macho ___stdinp
-B lam.macho ___stdoutp
-B lam.macho __cleanup
-B lam.macho __CurrentRuneLocale
-B lam.macho __DefaultRuneLocale
 B lam.macho __err
 B lam.macho __warn
 B lam.macho _abort
@@ -2378,9 +1889,8 @@ B lam.macho _f_prealloc
 B lam.macho _fstatat
 B lam.macho _fstatat64
 B lam.macho _ftruncate
-B lam.macho _getcwd
+B lam.macho _getegid
 B lam.macho _getentropy
-B lam.macho _getenv
 B lam.macho _geteuid
 B lam.macho _getuid
 B lam.macho _mkdir
@@ -2405,1948 +1915,6 @@ B lam.macho _vwarnc
 B lam.macho _vwarnx
 B lam.macho _warnc
 B lam.macho _warnx
-B launchctl.macho ____mb_cur_max
-B launchctl.macho ____mb_cur_max_l
-B launchctl.macho ____runetype
-B launchctl.macho ____runetype_l
-B launchctl.macho ____tolower
-B launchctl.macho ____tolower_l
-B launchctl.macho ____toupper
-B launchctl.macho ____toupper_l
-B launchctl.macho ___any_on_D2A
-B launchctl.macho ___assert_rtn
-B launchctl.macho ___b2d_D2A
-B launchctl.macho ___Balloc_D2A
-B launchctl.macho ___Bfree_D2A
-B launchctl.macho ___bigtens_D2A
-B launchctl.macho ___bsdthread_create
-B launchctl.macho ___bsdthread_register
-B launchctl.macho ___bsdthread_terminate
-B launchctl.macho ___chmod_extended
-B launchctl.macho ___cleanup
-B launchctl.macho ___cmp_D2A
-B launchctl.macho ___collate_equiv_match
-B launchctl.macho ___collate_load_error
-B launchctl.macho ___collate_lookup
-B launchctl.macho ___collate_lookup_l
-B launchctl.macho ___copybits_D2A
-B launchctl.macho ___d2b_D2A
-B launchctl.macho ___darwin_check_fd_set_overflow
-B launchctl.macho ___decrement_D2A
-B launchctl.macho ___diff_D2A
-B launchctl.macho ___dtoa
-B launchctl.macho ___error
-B launchctl.macho ___exit
-B launchctl.macho ___fchmod_extended
-B launchctl.macho ___fflush
-B launchctl.macho ___fix_locale_grouping_str
-B launchctl.macho ___fpclassifyd
-B launchctl.macho ___fread
-B launchctl.macho ___freedtoa
-B launchctl.macho ___fstat64_extended
-B launchctl.macho ___getdirentries64
-B launchctl.macho ___gethex_D2A
-B launchctl.macho ___getpid
-B launchctl.macho ___hdtoa
-B launchctl.macho ___hexdig_D2A
-B launchctl.macho ___hexdig_init_D2A
-B launchctl.macho ___hexnan_D2A
-B launchctl.macho ___hi0bits_D2A
-B launchctl.macho ___hldtoa
-B launchctl.macho ___i2b_D2A
-B launchctl.macho ___increment_D2A
-B launchctl.macho ___is_threaded
-B launchctl.macho ___isctype
-B launchctl.macho ___isthreaded
-B launchctl.macho ___istype
-B launchctl.macho ___istype_l
-B launchctl.macho ___ldtoa
-B launchctl.macho ___lo0bits_D2A
-B launchctl.macho ___lshift_D2A
-B launchctl.macho ___lstat64_extended
-B launchctl.macho ___maskrune
-B launchctl.macho ___maskrune_l
-B launchctl.macho ___match_D2A
-B launchctl.macho ___mb_cur_max
-B launchctl.macho ___mb_sb_limit
-B launchctl.macho ___memcpy_chk
-B launchctl.macho ___memmove_chk
-B launchctl.macho ___memset_chk
-B launchctl.macho ___mult_D2A
-B launchctl.macho ___multadd_D2A
-B launchctl.macho ___munmap
-B launchctl.macho ___nrv_alloc_D2A
-B launchctl.macho ___opendir2
-B launchctl.macho ___os_once_reset
-B launchctl.macho ___pow5mult_D2A
-B launchctl.macho ___proc_info
-B launchctl.macho ___progname
-B launchctl.macho ___psynch_cvbroad
-B launchctl.macho ___psynch_cvclrprepost
-B launchctl.macho ___psynch_cvsignal
-B launchctl.macho ___psynch_cvwait
-B launchctl.macho ___psynch_mutexdrop
-B launchctl.macho ___psynch_mutexwait
-B launchctl.macho ___psynch_rw_rdlock
-B launchctl.macho ___psynch_rw_unlock
-B launchctl.macho ___psynch_rw_wrlock
-B launchctl.macho ___quorem_D2A
-B launchctl.macho ___ratio_D2A
-B launchctl.macho ___rshift_D2A
-B launchctl.macho ___rv_alloc_D2A
-B launchctl.macho ___s2b_D2A
-B launchctl.macho ___sclose
-B launchctl.macho ___sdidinit
-B launchctl.macho ___semwait_signal
-B launchctl.macho ___set_ones_D2A
-B launchctl.macho ___sF
-B launchctl.macho ___sflags
-B launchctl.macho ___sflush
-B launchctl.macho ___sfp
-B launchctl.macho ___sfvwrite
-B launchctl.macho ___sglue
-B launchctl.macho ___sinit
-B launchctl.macho ___slbexpand
-B launchctl.macho ___smakebuf
-B launchctl.macho ___sread
-B launchctl.macho ___srefill
-B launchctl.macho ___sseek
-B launchctl.macho ___stat64_extended
-B launchctl.macho ___stderrp
-B launchctl.macho ___stdinp
-B launchctl.macho ___stdoutp
-B launchctl.macho ___strchrnul
-B launchctl.macho ___strcp_D2A
-B launchctl.macho ___strncpy_chk
-B launchctl.macho ___strtodg
-B launchctl.macho ___strtok_r
-B launchctl.macho ___sum_D2A
-B launchctl.macho ___svfscanf
-B launchctl.macho ___swhatbuf
-B launchctl.macho ___swrite
-B launchctl.macho ___swsetup
-B launchctl.macho ___syscall_logger
-B launchctl.macho ___tens_D2A
-B launchctl.macho ___thread_selfid
-B launchctl.macho ___tinytens_D2A
-B launchctl.macho ___tolower
-B launchctl.macho ___tolower_l
-B launchctl.macho ___toupper
-B launchctl.macho ___toupper_l
-B launchctl.macho ___trailz_D2A
-B launchctl.macho ___ulock_wait
-B launchctl.macho ___ulock_wake
-B launchctl.macho ___ulp_D2A
-B launchctl.macho ___ULtod_D2A
-B launchctl.macho ___ungetc
-B launchctl.macho ___vfscanf
-B launchctl.macho ___wcwidth
-B launchctl.macho ___wcwidth_l
-B launchctl.macho ___xprintf_domain_init
-B launchctl.macho ___xprintf_domain_once
-B launchctl.macho __Block_copy
-B launchctl.macho __Block_extended_layout
-B launchctl.macho __Block_has_signature
-B launchctl.macho __Block_isDeallocating
-B launchctl.macho __Block_layout
-B launchctl.macho __Block_object_assign
-B launchctl.macho __Block_object_dispose
-B launchctl.macho __Block_release
-B launchctl.macho __Block_signature
-B launchctl.macho __Block_tryRetain
-B launchctl.macho __Block_use_RR2
-B launchctl.macho __Block_use_stret
-B launchctl.macho __c_locale
-B launchctl.macho __cleanup
-B launchctl.macho __close
-B launchctl.macho __cpu_capabilities
-B launchctl.macho __cpu_has_altivec
-B launchctl.macho __current_pid
-B launchctl.macho __CurrentRuneLocale
-B launchctl.macho __DefaultRuneLocale
-B launchctl.macho __dup2
-B launchctl.macho __dyld_get_image_slide
-B launchctl.macho __err
-B launchctl.macho __exit
-B launchctl.macho __fcntl
-B launchctl.macho __fseeko
-B launchctl.macho __fstat
-B launchctl.macho __ftello
-B launchctl.macho __fwalk
-B launchctl.macho __getprogname
-B launchctl.macho __host_page_size
-B launchctl.macho __init_cpu_capabilities
-B launchctl.macho __ioctl
-B launchctl.macho __kernelrpc_host_create_mach_voucher
-B launchctl.macho __kernelrpc_mach_port_allocate
-B launchctl.macho __kernelrpc_mach_port_allocate_trap
-B launchctl.macho __kernelrpc_mach_port_construct
-B launchctl.macho __kernelrpc_mach_port_construct_trap
-B launchctl.macho __kernelrpc_mach_port_deallocate_trap
-B launchctl.macho __kernelrpc_mach_port_destruct
-B launchctl.macho __kernelrpc_mach_port_destruct_trap
-B launchctl.macho __kernelrpc_mach_port_extract_member
-B launchctl.macho __kernelrpc_mach_port_extract_member_trap
-B launchctl.macho __kernelrpc_mach_port_get_attributes
-B launchctl.macho __kernelrpc_mach_port_get_attributes_trap
-B launchctl.macho __kernelrpc_mach_port_insert_member
-B launchctl.macho __kernelrpc_mach_port_insert_member_trap
-B launchctl.macho __kernelrpc_mach_port_mod_refs_trap
-B launchctl.macho __kernelrpc_mach_port_type
-B launchctl.macho __kernelrpc_mach_port_type_trap
-B launchctl.macho __kernelrpc_mach_vm_allocate
-B launchctl.macho __kernelrpc_mach_vm_allocate_trap
-B launchctl.macho __kernelrpc_mach_vm_deallocate
-B launchctl.macho __kernelrpc_mach_vm_deallocate_trap
-B launchctl.macho __kernelrpc_mach_vm_map
-B launchctl.macho __kernelrpc_mach_vm_map_trap
-B launchctl.macho __kernelrpc_mach_vm_protect
-B launchctl.macho __kernelrpc_mach_vm_protect_trap
-B launchctl.macho __kernelrpc_mach_vm_purgable_control
-B launchctl.macho __kernelrpc_mach_vm_purgable_control_trap
-B launchctl.macho __kernelrpc_mach_vm_read
-B launchctl.macho __kernelrpc_mach_vm_remap
-B launchctl.macho __kernelrpc_vm_map
-B launchctl.macho __kernelrpc_vm_read
-B launchctl.macho __kernelrpc_vm_remap
-B launchctl.macho __libc_printf_os_crash
-B launchctl.macho __mach_fork_child
-B launchctl.macho __main_thread
-B launchctl.macho __mal_semwait_sleep
-B launchctl.macho __malloc_no_asl_log
-B launchctl.macho __mktemp
-B launchctl.macho __NSConcreteAutoBlock
-B launchctl.macho __NSConcreteFinalizingBlock
-B launchctl.macho __NSConcreteGlobalBlock
-B launchctl.macho __NSConcreteMallocBlock
-B launchctl.macho __NSConcreteStackBlock
-B launchctl.macho __NSConcreteWeakBlockVariable
-B launchctl.macho __NSGetArgv
-B launchctl.macho __NSGetMachExecuteHeader
-B launchctl.macho __open
-B launchctl.macho __os_cpu_number_override
-B launchctl.macho __os_lock_corruption_abort
-B launchctl.macho __os_lock_handoff_lock
-B launchctl.macho __os_lock_handoff_trylock
-B launchctl.macho __os_lock_handoff_unlock
-B launchctl.macho __os_lock_nospin_lock
-B launchctl.macho __os_lock_nospin_trylock
-B launchctl.macho __os_lock_nospin_unlock
-B launchctl.macho __os_lock_spin_lock
-B launchctl.macho __os_lock_spin_trylock
-B launchctl.macho __os_lock_spin_unlock
-B launchctl.macho __os_lock_type_handoff
-B launchctl.macho __os_lock_type_nospin
-B launchctl.macho __os_lock_type_spin
-B launchctl.macho __os_lock_type_unfair
-B launchctl.macho __os_lock_unfair_lock
-B launchctl.macho __os_lock_unfair_trylock
-B launchctl.macho __os_lock_unfair_unlock
-B launchctl.macho __os_log_debug_impl
-B launchctl.macho __os_log_default
-B launchctl.macho __os_log_error_impl
-B launchctl.macho __os_log_impl
-B launchctl.macho __os_nospin_lock_lock
-B launchctl.macho __os_nospin_lock_trylock
-B launchctl.macho __os_nospin_lock_unlock
-B launchctl.macho __os_once
-B launchctl.macho __os_once_gate_corruption_abort
-B launchctl.macho __os_once_gate_recursive_abort
-B launchctl.macho __os_once_gate_unowned_abort
-B launchctl.macho __os_unfair_lock_corruption_abort
-B launchctl.macho __os_unfair_lock_recursive_abort
-B launchctl.macho __os_unfair_lock_unowned_abort
-B launchctl.macho __OSSpinLockLockSlow
-B launchctl.macho __PathLocale
-B launchctl.macho __platform_bzero
-B launchctl.macho __platform_memcmp
-B launchctl.macho __platform_memmove
-B launchctl.macho __platform_memset
-B launchctl.macho __platform_strchr
-B launchctl.macho __platform_strcmp
-B launchctl.macho __platform_strlen
-B launchctl.macho __pthread_atfork_child
-B launchctl.macho __pthread_atfork_child_handlers
-B launchctl.macho __pthread_atfork_parent
-B launchctl.macho __pthread_atfork_parent_handlers
-B launchctl.macho __pthread_atfork_prepare
-B launchctl.macho __pthread_atfork_prepare_handlers
-B launchctl.macho __pthread_exit_if_canceled
-B launchctl.macho __pthread_fork_child
-B launchctl.macho __pthread_fork_child_postinit
-B launchctl.macho __pthread_fork_parent
-B launchctl.macho __pthread_fork_prepare
-B launchctl.macho __pthread_getspecific
-B launchctl.macho __pthread_key_create
-B launchctl.macho __pthread_mutex_destroy
-B launchctl.macho __pthread_mutex_lock
-B launchctl.macho __pthread_mutex_trylock
-B launchctl.macho __pthread_mutex_unlock
-B launchctl.macho __pthread_once
-B launchctl.macho __pthread_self
-B launchctl.macho __pthread_set_self
-B launchctl.macho __pthread_setspecific
-B launchctl.macho __pthread_setspecific_static
-B launchctl.macho __read
-B launchctl.macho __Read_RuneMagi
-B launchctl.macho __readdir_unlocked
-B launchctl.macho __reclaim_telldir
-B launchctl.macho __seekdir
-B launchctl.macho __select
-B launchctl.macho __simple_asl_log
-B launchctl.macho __simple_dprintf
-B launchctl.macho __simple_esappend
-B launchctl.macho __simple_esprintf
-B launchctl.macho __simple_getenv
-B launchctl.macho __simple_put
-B launchctl.macho __simple_putline
-B launchctl.macho __simple_salloc
-B launchctl.macho __simple_sappend
-B launchctl.macho __simple_sfree
-B launchctl.macho __simple_sprintf
-B launchctl.macho __simple_sresize
-B launchctl.macho __simple_string
-B launchctl.macho __simple_vdprintf
-B launchctl.macho __simple_vesprintf
-B launchctl.macho __simple_vsprintf
-B launchctl.macho __spin_lock
-B launchctl.macho __spin_lock_try
-B launchctl.macho __spin_unlock
-B launchctl.macho __sread
-B launchctl.macho __sseek
-B launchctl.macho __swrite
-B launchctl.macho __warn
-B launchctl.macho __write
-B launchctl.macho __writev
-B launchctl.macho _abort
-B launchctl.macho _abort_report_np
-B launchctl.macho _abort_with_reason
-B launchctl.macho _abs
-B launchctl.macho _access
-B launchctl.macho _arc4random
-B launchctl.macho _arc4random_addrandom
-B launchctl.macho _arc4random_buf
-B launchctl.macho _arc4random_stir
-B launchctl.macho _arc4random_uniform
-B launchctl.macho _asprintf
-B launchctl.macho _asprintf_l
-B launchctl.macho _atoi
-B launchctl.macho _atoi_l
-B launchctl.macho _atol
-B launchctl.macho _atol_l
-B launchctl.macho _bcmp
-B launchctl.macho _bcopy
-B launchctl.macho _bind
-B launchctl.macho _Block_size
-B launchctl.macho _bootstrap_port
-B launchctl.macho _bsearch
-B launchctl.macho _bsearch_b
-B launchctl.macho _bzero
-B launchctl.macho _calloc
-B launchctl.macho _cerror
-B launchctl.macho _cerror_nocancel
-B launchctl.macho _chmod
-B launchctl.macho _close
-B launchctl.macho _closedir
-B launchctl.macho _connect$UNIX2003
-B launchctl.macho _digittoint
-B launchctl.macho _digittoint_l
-B launchctl.macho _dirfd
-B launchctl.macho _duplocale
-B launchctl.macho _environ
-B launchctl.macho _err_set_exit
-B launchctl.macho _err_set_exit_b
-B launchctl.macho _err_set_file
-B launchctl.macho _errc
-B launchctl.macho _errno
-B launchctl.macho _errx
-B launchctl.macho _exit
-B launchctl.macho _f_prealloc
-B launchctl.macho _fchmod
-B launchctl.macho _fclose
-B launchctl.macho _fcntl
-B launchctl.macho _fdopen
-B launchctl.macho _fdopendir
-B launchctl.macho _fflush
-B launchctl.macho _ffs
-B launchctl.macho _fgetln
-B launchctl.macho _fileno
-B launchctl.macho _fileno_unlocked
-B launchctl.macho _flsl
-B launchctl.macho _fmod
-B launchctl.macho _fopen
-B launchctl.macho _fpathconf
-B launchctl.macho _fprintf
-B launchctl.macho _fprintf_l
-B launchctl.macho _fputs
-B launchctl.macho _fread
-B launchctl.macho _free
-B launchctl.macho _freelocale
-B launchctl.macho _fseek
-B launchctl.macho _fseeko
-B launchctl.macho _fstat
-B launchctl.macho _fstatat
-B launchctl.macho _fstatat64
-B launchctl.macho _fstatfs
-B launchctl.macho _ftell
-B launchctl.macho _ftello
-B launchctl.macho _getattrlist
-B launchctl.macho _getcwd
-B launchctl.macho _getdtablesize
-B launchctl.macho _getegid
-B launchctl.macho _getentropy
-B launchctl.macho _getenv
-B launchctl.macho _geteuid
-B launchctl.macho _getgrgid
-B launchctl.macho _getgrnam
-B launchctl.macho _gethostname
-B launchctl.macho _getiopolicy_np
-B launchctl.macho _getpagesize
-B launchctl.macho _getpid
-B launchctl.macho _getprogname
-B launchctl.macho _getpwnam
-B launchctl.macho _getpwuid
-B launchctl.macho _getsockname
-B launchctl.macho _gettimeofday
-B launchctl.macho _getuid
-B launchctl.macho _heapsort
-B launchctl.macho _host_get_clock_service
-B launchctl.macho _host_get_io_master
-B launchctl.macho _host_info
-B launchctl.macho _host_kernel_version
-B launchctl.macho _host_lockgroup_info
-B launchctl.macho _host_page_size
-B launchctl.macho _host_processor_info
-B launchctl.macho _host_register_mach_voucher_attr_manager
-B launchctl.macho _host_register_well_known_mach_voucher_attr_manager
-B launchctl.macho _host_request_notification
-B launchctl.macho _host_self_trap
-B launchctl.macho _host_set_atm_diagnostic_flag
-B launchctl.macho _host_set_multiuser_config_flags
-B launchctl.macho _host_statistics
-B launchctl.macho _host_statistics64
-B launchctl.macho _host_virtual_physical_table_info
-B launchctl.macho _index
-B launchctl.macho _ioctl
-B launchctl.macho _isalnum
-B launchctl.macho _isalnum_l
-B launchctl.macho _isalpha
-B launchctl.macho _isalpha_l
-B launchctl.macho _isascii
-B launchctl.macho _isatty
-B launchctl.macho _isblank
-B launchctl.macho _isblank_l
-B launchctl.macho _iscntrl
-B launchctl.macho _iscntrl_l
-B launchctl.macho _isdigit
-B launchctl.macho _isdigit_l
-B launchctl.macho _isgraph
-B launchctl.macho _isgraph_l
-B launchctl.macho _ishexnumber
-B launchctl.macho _ishexnumber_l
-B launchctl.macho _isideogram
-B launchctl.macho _isideogram_l
-B launchctl.macho _islower
-B launchctl.macho _islower_l
-B launchctl.macho _isnumber
-B launchctl.macho _isnumber_l
-B launchctl.macho _isphonogram
-B launchctl.macho _isphonogram_l
-B launchctl.macho _isprint
-B launchctl.macho _isprint_l
-B launchctl.macho _ispunct
-B launchctl.macho _ispunct_l
-B launchctl.macho _isrune
-B launchctl.macho _isrune_l
-B launchctl.macho _issetugid
-B launchctl.macho _isspace
-B launchctl.macho _isspace_l
-B launchctl.macho _isspecial
-B launchctl.macho _isspecial_l
-B launchctl.macho _isupper
-B launchctl.macho _isupper_l
-B launchctl.macho _iswalnum
-B launchctl.macho _iswalnum_l
-B launchctl.macho _iswalpha
-B launchctl.macho _iswalpha_l
-B launchctl.macho _iswascii
-B launchctl.macho _iswblank
-B launchctl.macho _iswblank_l
-B launchctl.macho _iswcntrl
-B launchctl.macho _iswcntrl_l
-B launchctl.macho _iswctype
-B launchctl.macho _iswctype_l
-B launchctl.macho _iswdigit
-B launchctl.macho _iswdigit_l
-B launchctl.macho _iswgraph
-B launchctl.macho _iswgraph_l
-B launchctl.macho _iswhexnumber
-B launchctl.macho _iswhexnumber_l
-B launchctl.macho _iswideogram
-B launchctl.macho _iswideogram_l
-B launchctl.macho _iswlower
-B launchctl.macho _iswlower_l
-B launchctl.macho _iswnumber
-B launchctl.macho _iswnumber_l
-B launchctl.macho _iswphonogram
-B launchctl.macho _iswphonogram_l
-B launchctl.macho _iswprint
-B launchctl.macho _iswprint_l
-B launchctl.macho _iswpunct
-B launchctl.macho _iswpunct_l
-B launchctl.macho _iswrune
-B launchctl.macho _iswrune_l
-B launchctl.macho _iswspace
-B launchctl.macho _iswspace_l
-B launchctl.macho _iswspecial
-B launchctl.macho _iswspecial_l
-B launchctl.macho _iswupper
-B launchctl.macho _iswupper_l
-B launchctl.macho _iswxdigit
-B launchctl.macho _iswxdigit_l
-B launchctl.macho _isxdigit
-B launchctl.macho _isxdigit_l
-B launchctl.macho _kevent
-B launchctl.macho _kill
-B launchctl.macho _kmod_get_info
-B launchctl.macho _llabs
-B launchctl.macho _localeconv
-B launchctl.macho _localeconv_l
-B launchctl.macho _lock_set_create
-B launchctl.macho _lock_set_destroy
-B launchctl.macho _lseek
-B launchctl.macho _lstat
-B launchctl.macho _mach_absolute_time
-B launchctl.macho _mach_absolute_time_kernel
-B launchctl.macho _mach_continuous_time_kernel
-B launchctl.macho _mach_host_self
-B launchctl.macho _mach_init
-B launchctl.macho _mach_memory_info
-B launchctl.macho _mach_memory_object_memory_entry
-B launchctl.macho _mach_memory_object_memory_entry_64
-B launchctl.macho _mach_msg
-B launchctl.macho _mach_msg_destroy
-B launchctl.macho _mach_msg_overwrite
-B launchctl.macho _mach_msg_overwrite_trap
-B launchctl.macho _mach_msg_trap
-B launchctl.macho _mach_port_allocate
-B launchctl.macho _mach_port_construct
-B launchctl.macho _mach_port_deallocate
-B launchctl.macho _mach_port_destruct
-B launchctl.macho _mach_port_extract_member
-B launchctl.macho _mach_port_extract_right
-B launchctl.macho _mach_port_get_attributes
-B launchctl.macho _mach_port_insert_member
-B launchctl.macho _mach_port_insert_right
-B launchctl.macho _mach_port_mod_refs
-B launchctl.macho _mach_port_type
-B launchctl.macho _mach_port_unguard
-B launchctl.macho _mach_ports_lookup
-B launchctl.macho _mach_ports_register
-B launchctl.macho _mach_reply_port
-B launchctl.macho _mach_task_self_
-B launchctl.macho _mach_timebase_info
-B launchctl.macho _mach_timebase_info_trap
-B launchctl.macho _mach_vm_allocate
-B launchctl.macho _mach_vm_deallocate
-B launchctl.macho _mach_vm_map
-B launchctl.macho _mach_vm_protect
-B launchctl.macho _mach_vm_purgable_control
-B launchctl.macho _mach_vm_read
-B launchctl.macho _mach_vm_remap
-B launchctl.macho _mach_zone_info
-B launchctl.macho _mach_zone_info_for_zone
-B launchctl.macho _madvise
-B launchctl.macho _main
-B launchctl.macho _malloc
-B launchctl.macho _malloc_error_break
-B launchctl.macho _malloc_printf
-B launchctl.macho _malloc_tracing_enabled
-B launchctl.macho _malloc_zone_check_fail
-B launchctl.macho _mbr_gid_to_uuid
-B launchctl.macho _mbr_uid_to_uuid
-B launchctl.macho _mbr_uuid_to_id
-B launchctl.macho _mbrtowc
-B launchctl.macho _mbrtowc_l
-B launchctl.macho _mbsnrtowcs
-B launchctl.macho _mbsnrtowcs_l
-B launchctl.macho _mbsrtowcs
-B launchctl.macho _mbsrtowcs_l
-B launchctl.macho _memchr
-B launchctl.macho _memcmp
-B launchctl.macho _memcpy
-B launchctl.macho _memmove
-B launchctl.macho _memset
-B launchctl.macho _mergesort
-B launchctl.macho _mig_dealloc_reply_port
-B launchctl.macho _mig_get_reply_port
-B launchctl.macho _mig_put_reply_port
-B launchctl.macho _mig_strncpy
-B launchctl.macho _mig_strncpy_zerofill
-B launchctl.macho _mkdir
-B launchctl.macho _mkdirat
-B launchctl.macho _mkdtemp
-B launchctl.macho _mkdtempat_np
-B launchctl.macho _mkostemp
-B launchctl.macho _mkostemps
-B launchctl.macho _mkostempsat_np
-B launchctl.macho _mkstemp
-B launchctl.macho _mkstemp_dprotected_np
-B launchctl.macho _mkstemps
-B launchctl.macho _mkstempsat_np
-B launchctl.macho _mktemp
-B launchctl.macho _modf
-B launchctl.macho _munmap
-B launchctl.macho _nan
-B launchctl.macho _nanf
-B launchctl.macho _nanl
-B launchctl.macho _NDR_record
-B launchctl.macho _netsettime
-B launchctl.macho _newlocale
-B launchctl.macho _NXArgc
-B launchctl.macho _NXArgv
-B launchctl.macho _off32
-B launchctl.macho _off64
-B launchctl.macho _open
-B launchctl.macho _open_dprotected_np
-B launchctl.macho _openat
-B launchctl.macho _opendir
-B launchctl.macho _os_lock_lock
-B launchctl.macho _os_lock_trylock
-B launchctl.macho _os_lock_unlock
-B launchctl.macho _os_log_create
-B launchctl.macho _os_log_type_enabled
-B launchctl.macho _os_once
-B launchctl.macho _os_unfair_lock_assert_not_owner
-B launchctl.macho _os_unfair_lock_assert_owner
-B launchctl.macho _os_unfair_lock_lock
-B launchctl.macho _os_unfair_lock_lock_no_tsd
-B launchctl.macho _os_unfair_lock_lock_with_options
-B launchctl.macho _os_unfair_lock_trylock
-B launchctl.macho _os_unfair_lock_unlock
-B launchctl.macho _os_unfair_lock_unlock_no_tsd
-B launchctl.macho _os_unfair_recursive_lock_lock_with_options
-B launchctl.macho _os_unfair_recursive_lock_owned
-B launchctl.macho _os_unfair_recursive_lock_trylock
-B launchctl.macho _os_unfair_recursive_lock_tryunlock4objc
-B launchctl.macho _os_unfair_recursive_lock_unlock
-B launchctl.macho _os_unfair_recursive_lock_unlock_forked_child
-B launchctl.macho _OSAtomicAdd32
-B launchctl.macho _OSAtomicAdd32Barrier
-B launchctl.macho _OSAtomicAdd64
-B launchctl.macho _OSAtomicAdd64Barrier
-B launchctl.macho _OSAtomicAnd32
-B launchctl.macho _OSAtomicAnd32Barrier
-B launchctl.macho _OSAtomicAnd32Orig
-B launchctl.macho _OSAtomicAnd32OrigBarrier
-B launchctl.macho _OSAtomicCompareAndSwap32
-B launchctl.macho _OSAtomicCompareAndSwap32Barrier
-B launchctl.macho _OSAtomicCompareAndSwap64
-B launchctl.macho _OSAtomicCompareAndSwap64Barrier
-B launchctl.macho _OSAtomicCompareAndSwapInt
-B launchctl.macho _OSAtomicCompareAndSwapIntBarrier
-B launchctl.macho _OSAtomicCompareAndSwapLong
-B launchctl.macho _OSAtomicCompareAndSwapLongBarrier
-B launchctl.macho _OSAtomicCompareAndSwapPtr
-B launchctl.macho _OSAtomicCompareAndSwapPtrBarrier
-B launchctl.macho _OSAtomicDecrement32
-B launchctl.macho _OSAtomicDecrement32Barrier
-B launchctl.macho _OSAtomicDecrement64
-B launchctl.macho _OSAtomicDecrement64Barrier
-B launchctl.macho _OSAtomicDequeue
-B launchctl.macho _OSAtomicEnqueue
-B launchctl.macho _OSAtomicIncrement32
-B launchctl.macho _OSAtomicIncrement32Barrier
-B launchctl.macho _OSAtomicIncrement64
-B launchctl.macho _OSAtomicIncrement64Barrier
-B launchctl.macho _OSAtomicOr32
-B launchctl.macho _OSAtomicOr32Barrier
-B launchctl.macho _OSAtomicOr32Orig
-B launchctl.macho _OSAtomicOr32OrigBarrier
-B launchctl.macho _OSAtomicTestAndClear
-B launchctl.macho _OSAtomicTestAndClearBarrier
-B launchctl.macho _OSAtomicTestAndSet
-B launchctl.macho _OSAtomicTestAndSetBarrier
-B launchctl.macho _OSAtomicXor32
-B launchctl.macho _OSAtomicXor32Barrier
-B launchctl.macho _OSAtomicXor32Orig
-B launchctl.macho _OSAtomicXor32OrigBarrier
-B launchctl.macho _OSMemoryBarrier
-B launchctl.macho _OSSpinLockLock
-B launchctl.macho _OSSpinLockTry
-B launchctl.macho _OSSpinLockUnlock
-B launchctl.macho _posix_madvise
-B launchctl.macho _posix_memalign
-B launchctl.macho _pow
-B launchctl.macho _printf
-B launchctl.macho _printf_l
-B launchctl.macho _proc_pidinfo
-B launchctl.macho _processor_set_create
-B launchctl.macho _processor_set_default
-B launchctl.macho _pthread_atfork
-B launchctl.macho _pthread_attr_destroy
-B launchctl.macho _pthread_attr_init
-B launchctl.macho _pthread_attr_setdetachstate
-B launchctl.macho _pthread_create
-B launchctl.macho _pthread_detach
-B launchctl.macho _pthread_equal
-B launchctl.macho _pthread_getspecific
-B launchctl.macho _pthread_getugid_np
-B launchctl.macho _pthread_introspection_getspecific_np
-B launchctl.macho _pthread_introspection_setspecific_np
-B launchctl.macho _pthread_is_threaded_np
-B launchctl.macho _pthread_key_create
-B launchctl.macho _pthread_key_delete
-B launchctl.macho _pthread_key_init_np
-B launchctl.macho _pthread_kill
-B launchctl.macho _pthread_mach_thread_np
-B launchctl.macho _pthread_main_np
-B launchctl.macho _pthread_main_thread_bootstrap
-B launchctl.macho _pthread_main_thread_np
-B launchctl.macho _pthread_mutex_destroy
-B launchctl.macho _pthread_mutex_getprioceiling
-B launchctl.macho _pthread_mutex_init
-B launchctl.macho _pthread_mutex_lock
-B launchctl.macho _pthread_mutex_setprioceiling
-B launchctl.macho _pthread_mutex_trylock
-B launchctl.macho _pthread_mutex_unlock
-B launchctl.macho _pthread_mutexattr_destroy$UNIX2003
-B launchctl.macho _pthread_mutexattr_getpolicy_np
-B launchctl.macho _pthread_mutexattr_getprioceiling
-B launchctl.macho _pthread_mutexattr_getprotocol
-B launchctl.macho _pthread_mutexattr_getpshared
-B launchctl.macho _pthread_mutexattr_gettype
-B launchctl.macho _pthread_mutexattr_init
-B launchctl.macho _pthread_mutexattr_setpolicy_np
-B launchctl.macho _pthread_mutexattr_setprioceiling
-B launchctl.macho _pthread_mutexattr_setprotocol
-B launchctl.macho _pthread_mutexattr_setpshared
-B launchctl.macho _pthread_mutexattr_settype
-B launchctl.macho _pthread_once
-B launchctl.macho _pthread_self
-B launchctl.macho _pthread_setschedparam
-B launchctl.macho _pthread_setspecific
-B launchctl.macho _pthread_testcancel
-B launchctl.macho _pthread_threadid_np
-B launchctl.macho _pthread_tsd_shim_bootstrap
-B launchctl.macho _pthread_tsd_shim_bootstrap_with_base
-B launchctl.macho _puts
-B launchctl.macho _pututxline
-B launchctl.macho _qsort
-B launchctl.macho _querylocale
-B launchctl.macho _read
-B launchctl.macho _readdir
-B launchctl.macho _readdir_r
-B launchctl.macho _realloc
-B launchctl.macho _reallocarray
-B launchctl.macho _reallocf
-B launchctl.macho _remove
-B launchctl.macho _rename
-B launchctl.macho _rewind
-B launchctl.macho _rmdir
-B launchctl.macho _scalable_zone_info
-B launchctl.macho _scalable_zone_statistics
-B launchctl.macho _scalbn
-B launchctl.macho _select
-B launchctl.macho _semaphore_create
-B launchctl.macho _semaphore_destroy
-B launchctl.macho _send
-B launchctl.macho _sendto
-B launchctl.macho _setgroups
-B launchctl.macho _setiopolicy_np
-B launchctl.macho _setlocale
-B launchctl.macho _setsockopt
-B launchctl.macho _settimeofday
-B launchctl.macho _sigprocmask
-B launchctl.macho _skip
-B launchctl.macho _sleep
-B launchctl.macho _snprintf
-B launchctl.macho _snprintf_l
-B launchctl.macho _socket
-B launchctl.macho _spin_lock
-B launchctl.macho _spin_lock_try
-B launchctl.macho _spin_unlock
-B launchctl.macho _sprintf
-B launchctl.macho _sprintf_l
-B launchctl.macho _sscanf
-B launchctl.macho _sscanf_l
-B launchctl.macho _stat
-B launchctl.macho _strcasecmp
-B launchctl.macho _strcasecmp_l
-B launchctl.macho _strcat
-B launchctl.macho _strchr
-B launchctl.macho _strcmp
-B launchctl.macho _strcoll
-B launchctl.macho _strcoll_l
-B launchctl.macho _strcpy
-B launchctl.macho _strdup
-B launchctl.macho _strerror
-B launchctl.macho _strerror_r
-B launchctl.macho _strerror$UNIX2003
-B launchctl.macho _strlcat
-B launchctl.macho _strlcpy
-B launchctl.macho _strlen
-B launchctl.macho _strncasecmp
-B launchctl.macho _strncasecmp_l
-B launchctl.macho _strncmp
-B launchctl.macho _strncpy
-B launchctl.macho _strnlen
-B launchctl.macho _strnstr
-B launchctl.macho _strrchr
-B launchctl.macho _strsep
-B launchctl.macho _strsignal
-B launchctl.macho _strsignal_r
-B launchctl.macho _strstr
-B launchctl.macho _strtod
-B launchctl.macho _strtod_l
-B launchctl.macho _strtof
-B launchctl.macho _strtof_l
-B launchctl.macho _strtoimax
-B launchctl.macho _strtoimax_l
-B launchctl.macho _strtok
-B launchctl.macho _strtol
-B launchctl.macho _strtol_l
-B launchctl.macho _strtold
-B launchctl.macho _strtold_l
-B launchctl.macho _strtoll
-B launchctl.macho _strtoll_l
-B launchctl.macho _strtoul
-B launchctl.macho _strtoul_l
-B launchctl.macho _strtoumax
-B launchctl.macho _strtoumax_l
-B launchctl.macho _sys_errlist
-B launchctl.macho _sys_nerr
-B launchctl.macho _sys_siglist
-B launchctl.macho _sys_signame
-B launchctl.macho _sysconf
-B launchctl.macho _sysctl
-B launchctl.macho _sysctlbyname
-B launchctl.macho _syslog
-B launchctl.macho _szone_check_counter
-B launchctl.macho _szone_check_modulo
-B launchctl.macho _szone_check_start
-B launchctl.macho _task_assign
-B launchctl.macho _task_assign_default
-B launchctl.macho _task_create
-B launchctl.macho _task_create_suid_cred
-B launchctl.macho _task_generate_corpse
-B launchctl.macho _task_get_assignment
-B launchctl.macho _task_get_dyld_image_infos
-B launchctl.macho _task_get_emulation_vector
-B launchctl.macho _task_get_exc_guard_behavior
-B launchctl.macho _task_get_exception_ports
-B launchctl.macho _task_get_mach_voucher
-B launchctl.macho _task_get_special_port
-B launchctl.macho _task_get_state
-B launchctl.macho _task_info
-B launchctl.macho _task_inspect
-B launchctl.macho _task_map_corpse_info
-B launchctl.macho _task_map_corpse_info_64
-B launchctl.macho _task_policy
-B launchctl.macho _task_policy_get
-B launchctl.macho _task_policy_set
-B launchctl.macho _task_purgable_info
-B launchctl.macho _task_register_dyld_get_process_state
-B launchctl.macho _task_register_dyld_image_infos
-B launchctl.macho _task_register_dyld_set_dyld_state
-B launchctl.macho _task_register_dyld_shared_cache_image_info
-B launchctl.macho _task_resume
-B launchctl.macho _task_resume2
-B launchctl.macho _task_sample
-B launchctl.macho _task_self_trap
-B launchctl.macho _task_set_emulation
-B launchctl.macho _task_set_emulation_vector
-B launchctl.macho _task_set_exc_guard_behavior
-B launchctl.macho _task_set_exception_ports
-B launchctl.macho _task_set_info
-B launchctl.macho _task_set_mach_voucher
-B launchctl.macho _task_set_phys_footprint_limit
-B launchctl.macho _task_set_policy
-B launchctl.macho _task_set_ras_pc
-B launchctl.macho _task_set_special_port
-B launchctl.macho _task_set_state
-B launchctl.macho _task_suspend
-B launchctl.macho _task_suspend2
-B launchctl.macho _task_swap_exception_ports
-B launchctl.macho _task_swap_mach_voucher
-B launchctl.macho _task_terminate
-B launchctl.macho _task_threads
-B launchctl.macho _task_unregister_dyld_image_infos
-B launchctl.macho _task_zone_info
-B launchctl.macho _telldir
-B launchctl.macho _thread_create
-B launchctl.macho _thread_create_running
-B launchctl.macho _thread_switch
-B launchctl.macho _tiny_print_region_free_list
-B launchctl.macho _toascii
-B launchctl.macho _tolower
-B launchctl.macho _tolower_l
-B launchctl.macho _toupper
-B launchctl.macho _toupper_l
-B launchctl.macho _towlower
-B launchctl.macho _towlower_l
-B launchctl.macho _towupper
-B launchctl.macho _towupper_l
-B launchctl.macho _ungetc
-B launchctl.macho _unlink
-B launchctl.macho _unlinkat
-B launchctl.macho _uselocale
-B launchctl.macho _uuid_pack
-B launchctl.macho _valloc
-B launchctl.macho _vasprintf
-B launchctl.macho _vasprintf_l
-B launchctl.macho _verr
-B launchctl.macho _verrc
-B launchctl.macho _verrx
-B launchctl.macho _vfprintf
-B launchctl.macho _vfprintf_l
-B launchctl.macho _vfscanf_l
-B launchctl.macho _vm_allocate
-B launchctl.macho _vm_deallocate
-B launchctl.macho _vm_kernel_page_mask
-B launchctl.macho _vm_kernel_page_shift
-B launchctl.macho _vm_kernel_page_size
-B launchctl.macho _vm_map
-B launchctl.macho _vm_page_mask
-B launchctl.macho _vm_page_shift
-B launchctl.macho _vm_page_size
-B launchctl.macho _vm_protect
-B launchctl.macho _vm_purgable_control
-B launchctl.macho _vm_read
-B launchctl.macho _vm_region_64
-B launchctl.macho _vm_remap
-B launchctl.macho _voucher_mach_msg_set
-B launchctl.macho _vsnprintf
-B launchctl.macho _vsnprintf_l
-B launchctl.macho _vsprintf
-B launchctl.macho _vsprintf_l
-B launchctl.macho _vsscanf
-B launchctl.macho _vsscanf_l
-B launchctl.macho _vwarn
-B launchctl.macho _vwarnc
-B launchctl.macho _vwarnx
-B launchctl.macho _warnc
-B launchctl.macho _warnx
-B launchctl.macho _wcrtomb
-B launchctl.macho _wcrtomb_l
-B launchctl.macho _wcscmp
-B launchctl.macho _wcscoll
-B launchctl.macho _wcscoll_l
-B launchctl.macho _wcscpy
-B launchctl.macho _wcslen
-B launchctl.macho _wcsncmp
-B launchctl.macho _wcsncpy
-B launchctl.macho _wcsnrtombs
-B launchctl.macho _wcsnrtombs_l
-B launchctl.macho _wcsrtombs
-B launchctl.macho _wcsrtombs_l
-B launchctl.macho _wctob
-B launchctl.macho _wctob_l
-B launchctl.macho _write
-B launchctl.macho _writev
-B launchctl.macho _writev$UNIX2003
-B launchctl.macho _xpc_domain_mig_add_services
-B launchctl.macho _xpc_domain_mig_check_in
-B launchctl.macho _xpc_domain_mig_get_service_name
-B launchctl.macho _xpc_domain_mig_import2
-B launchctl.macho _xpc_domain_mig_load_services
-B launchctl.macho _xpc_domain_mig_set_environment
-B launchd_trial.macho ____mb_cur_max
-B launchd_trial.macho ____mb_cur_max_l
-B launchd_trial.macho ____runetype
-B launchd_trial.macho ____runetype_l
-B launchd_trial.macho ____tolower
-B launchd_trial.macho ____tolower_l
-B launchd_trial.macho ____toupper
-B launchd_trial.macho ____toupper_l
-B launchd_trial.macho ___any_on_D2A
-B launchd_trial.macho ___assert_rtn
-B launchd_trial.macho ___b2d_D2A
-B launchd_trial.macho ___Balloc_D2A
-B launchd_trial.macho ___Bfree_D2A
-B launchd_trial.macho ___bigtens_D2A
-B launchd_trial.macho ___bsdthread_create
-B launchd_trial.macho ___bsdthread_register
-B launchd_trial.macho ___bsdthread_terminate
-B launchd_trial.macho ___chmod_extended
-B launchd_trial.macho ___cleanup
-B launchd_trial.macho ___cmp_D2A
-B launchd_trial.macho ___collate_equiv_match
-B launchd_trial.macho ___collate_load_error
-B launchd_trial.macho ___collate_lookup
-B launchd_trial.macho ___collate_lookup_l
-B launchd_trial.macho ___copybits_D2A
-B launchd_trial.macho ___cxa_atexit
-B launchd_trial.macho ___cxa_finalize
-B launchd_trial.macho ___cxa_finalize_ranges
-B launchd_trial.macho ___d2b_D2A
-B launchd_trial.macho ___decrement_D2A
-B launchd_trial.macho ___diff_D2A
-B launchd_trial.macho ___dtoa
-B launchd_trial.macho ___error
-B launchd_trial.macho ___exit
-B launchd_trial.macho ___fchmod_extended
-B launchd_trial.macho ___fflush
-B launchd_trial.macho ___fix_locale_grouping_str
-B launchd_trial.macho ___fpclassifyd
-B launchd_trial.macho ___fread
-B launchd_trial.macho ___freedtoa
-B launchd_trial.macho ___fstat64_extended
-B launchd_trial.macho ___getdirentries64
-B launchd_trial.macho ___gethex_D2A
-B launchd_trial.macho ___getpid
-B launchd_trial.macho ___hdtoa
-B launchd_trial.macho ___hexdig_D2A
-B launchd_trial.macho ___hexdig_init_D2A
-B launchd_trial.macho ___hexnan_D2A
-B launchd_trial.macho ___hi0bits_D2A
-B launchd_trial.macho ___hldtoa
-B launchd_trial.macho ___i2b_D2A
-B launchd_trial.macho ___increment_D2A
-B launchd_trial.macho ___is_threaded
-B launchd_trial.macho ___isctype
-B launchd_trial.macho ___isthreaded
-B launchd_trial.macho ___istype
-B launchd_trial.macho ___istype_l
-B launchd_trial.macho ___kill
-B launchd_trial.macho ___ldtoa
-B launchd_trial.macho ___lo0bits_D2A
-B launchd_trial.macho ___lshift_D2A
-B launchd_trial.macho ___lstat64_extended
-B launchd_trial.macho ___maskrune
-B launchd_trial.macho ___maskrune_l
-B launchd_trial.macho ___match_D2A
-B launchd_trial.macho ___mb_cur_max
-B launchd_trial.macho ___mb_sb_limit
-B launchd_trial.macho ___memcpy_chk
-B launchd_trial.macho ___memset_chk
-B launchd_trial.macho ___mult_D2A
-B launchd_trial.macho ___multadd_D2A
-B launchd_trial.macho ___munmap
-B launchd_trial.macho ___nrv_alloc_D2A
-B launchd_trial.macho ___opendir2
-B launchd_trial.macho ___os_once_reset
-B launchd_trial.macho ___pow5mult_D2A
-B launchd_trial.macho ___progname
-B launchd_trial.macho ___psynch_cvbroad
-B launchd_trial.macho ___psynch_cvclrprepost
-B launchd_trial.macho ___psynch_cvsignal
-B launchd_trial.macho ___psynch_cvwait
-B launchd_trial.macho ___psynch_mutexdrop
-B launchd_trial.macho ___psynch_mutexwait
-B launchd_trial.macho ___psynch_rw_rdlock
-B launchd_trial.macho ___psynch_rw_unlock
-B launchd_trial.macho ___psynch_rw_wrlock
-B launchd_trial.macho ___quorem_D2A
-B launchd_trial.macho ___ratio_D2A
-B launchd_trial.macho ___rshift_D2A
-B launchd_trial.macho ___rv_alloc_D2A
-B launchd_trial.macho ___s2b_D2A
-B launchd_trial.macho ___sclose
-B launchd_trial.macho ___sdidinit
-B launchd_trial.macho ___semwait_signal
-B launchd_trial.macho ___set_ones_D2A
-B launchd_trial.macho ___sF
-B launchd_trial.macho ___sflags
-B launchd_trial.macho ___sflush
-B launchd_trial.macho ___sfp
-B launchd_trial.macho ___sfvwrite
-B launchd_trial.macho ___sglue
-B launchd_trial.macho ___sinit
-B launchd_trial.macho ___smakebuf
-B launchd_trial.macho ___snprintf_chk
-B launchd_trial.macho ___snprintf_object_size_chk
-B launchd_trial.macho ___sread
-B launchd_trial.macho ___srefill
-B launchd_trial.macho ___sseek
-B launchd_trial.macho ___stat64_extended
-B launchd_trial.macho ___stderrp
-B launchd_trial.macho ___stdinp
-B launchd_trial.macho ___stdoutp
-B launchd_trial.macho ___strcat_chk
-B launchd_trial.macho ___strchrnul
-B launchd_trial.macho ___strcp_D2A
-B launchd_trial.macho ___strcpy_chk
-B launchd_trial.macho ___strlcpy_chk
-B launchd_trial.macho ___strncpy_chk
-B launchd_trial.macho ___strtodg
-B launchd_trial.macho ___strtok_r
-B launchd_trial.macho ___sum_D2A
-B launchd_trial.macho ___svfscanf
-B launchd_trial.macho ___swhatbuf
-B launchd_trial.macho ___swrite
-B launchd_trial.macho ___swsetup
-B launchd_trial.macho ___syscall_logger
-B launchd_trial.macho ___tens_D2A
-B launchd_trial.macho ___thread_selfid
-B launchd_trial.macho ___tinytens_D2A
-B launchd_trial.macho ___tolower
-B launchd_trial.macho ___tolower_l
-B launchd_trial.macho ___toupper
-B launchd_trial.macho ___toupper_l
-B launchd_trial.macho ___trailz_D2A
-B launchd_trial.macho ___ulock_wait
-B launchd_trial.macho ___ulock_wake
-B launchd_trial.macho ___ulp_D2A
-B launchd_trial.macho ___ULtod_D2A
-B launchd_trial.macho ___ungetc
-B launchd_trial.macho ___vfscanf
-B launchd_trial.macho ___vsnprintf_chk
-B launchd_trial.macho ___wcwidth
-B launchd_trial.macho ___wcwidth_l
-B launchd_trial.macho ___xprintf_domain_init
-B launchd_trial.macho ___xprintf_domain_once
-B launchd_trial.macho __Block_copy
-B launchd_trial.macho __Block_extended_layout
-B launchd_trial.macho __Block_has_signature
-B launchd_trial.macho __Block_isDeallocating
-B launchd_trial.macho __Block_layout
-B launchd_trial.macho __Block_object_assign
-B launchd_trial.macho __Block_object_dispose
-B launchd_trial.macho __Block_release
-B launchd_trial.macho __Block_signature
-B launchd_trial.macho __Block_tryRetain
-B launchd_trial.macho __Block_use_RR2
-B launchd_trial.macho __Block_use_stret
-B launchd_trial.macho __c_locale
-B launchd_trial.macho __cleanup
-B launchd_trial.macho __close
-B launchd_trial.macho __cpu_capabilities
-B launchd_trial.macho __cpu_has_altivec
-B launchd_trial.macho __current_pid
-B launchd_trial.macho __CurrentRuneLocale
-B launchd_trial.macho __DefaultRuneLocale
-B launchd_trial.macho __dup2
-B launchd_trial.macho __dyld_get_image_slide
-B launchd_trial.macho __err
-B launchd_trial.macho __exit
-B launchd_trial.macho __fcntl
-B launchd_trial.macho __fseeko
-B launchd_trial.macho __fstat
-B launchd_trial.macho __ftello
-B launchd_trial.macho __fwalk
-B launchd_trial.macho __getprogname
-B launchd_trial.macho __host_page_size
-B launchd_trial.macho __init_cpu_capabilities
-B launchd_trial.macho __ioctl
-B launchd_trial.macho __kernelrpc_host_create_mach_voucher
-B launchd_trial.macho __kernelrpc_mach_port_allocate_trap
-B launchd_trial.macho __kernelrpc_mach_port_construct_trap
-B launchd_trial.macho __kernelrpc_mach_port_deallocate_trap
-B launchd_trial.macho __kernelrpc_mach_port_destruct_trap
-B launchd_trial.macho __kernelrpc_mach_port_extract_member_trap
-B launchd_trial.macho __kernelrpc_mach_port_get_attributes_trap
-B launchd_trial.macho __kernelrpc_mach_port_insert_member_trap
-B launchd_trial.macho __kernelrpc_mach_port_mod_refs_trap
-B launchd_trial.macho __kernelrpc_mach_port_type_trap
-B launchd_trial.macho __kernelrpc_mach_vm_allocate
-B launchd_trial.macho __kernelrpc_mach_vm_allocate_trap
-B launchd_trial.macho __kernelrpc_mach_vm_deallocate
-B launchd_trial.macho __kernelrpc_mach_vm_deallocate_trap
-B launchd_trial.macho __kernelrpc_mach_vm_map
-B launchd_trial.macho __kernelrpc_mach_vm_map_trap
-B launchd_trial.macho __kernelrpc_mach_vm_protect
-B launchd_trial.macho __kernelrpc_mach_vm_protect_trap
-B launchd_trial.macho __kernelrpc_mach_vm_purgable_control
-B launchd_trial.macho __kernelrpc_mach_vm_purgable_control_trap
-B launchd_trial.macho __kernelrpc_mach_vm_read
-B launchd_trial.macho __kernelrpc_mach_vm_remap
-B launchd_trial.macho __kernelrpc_vm_map
-B launchd_trial.macho __kernelrpc_vm_read
-B launchd_trial.macho __kernelrpc_vm_remap
-B launchd_trial.macho __libc_printf_os_crash
-B launchd_trial.macho __mach_fork_child
-B launchd_trial.macho __main_thread
-B launchd_trial.macho __mal_semwait_sleep
-B launchd_trial.macho __malloc_no_asl_log
-B launchd_trial.macho __mktemp
-B launchd_trial.macho __NSConcreteAutoBlock
-B launchd_trial.macho __NSConcreteFinalizingBlock
-B launchd_trial.macho __NSConcreteGlobalBlock
-B launchd_trial.macho __NSConcreteMallocBlock
-B launchd_trial.macho __NSConcreteStackBlock
-B launchd_trial.macho __NSConcreteWeakBlockVariable
-B launchd_trial.macho __NSGetEnviron
-B launchd_trial.macho __NSGetMachExecuteHeader
-B launchd_trial.macho __open
-B launchd_trial.macho __os_assert_log
-B launchd_trial.macho __os_assert_log_ctx
-B launchd_trial.macho __os_assumes_log
-B launchd_trial.macho __os_assumes_log_ctx
-B launchd_trial.macho __os_avoid_tail_call
-B launchd_trial.macho __os_cpu_number_override
-B launchd_trial.macho __os_crash
-B launchd_trial.macho __os_crash_callback
-B launchd_trial.macho __os_lock_corruption_abort
-B launchd_trial.macho __os_lock_handoff_lock
-B launchd_trial.macho __os_lock_handoff_trylock
-B launchd_trial.macho __os_lock_handoff_unlock
-B launchd_trial.macho __os_lock_nospin_lock
-B launchd_trial.macho __os_lock_nospin_trylock
-B launchd_trial.macho __os_lock_nospin_unlock
-B launchd_trial.macho __os_lock_spin_lock
-B launchd_trial.macho __os_lock_spin_trylock
-B launchd_trial.macho __os_lock_spin_unlock
-B launchd_trial.macho __os_lock_type_handoff
-B launchd_trial.macho __os_lock_type_nospin
-B launchd_trial.macho __os_lock_type_spin
-B launchd_trial.macho __os_lock_type_unfair
-B launchd_trial.macho __os_lock_unfair_lock
-B launchd_trial.macho __os_lock_unfair_trylock
-B launchd_trial.macho __os_lock_unfair_unlock
-B launchd_trial.macho __os_log_debug_impl
-B launchd_trial.macho __os_log_default
-B launchd_trial.macho __os_log_error_impl
-B launchd_trial.macho __os_log_impl
-B launchd_trial.macho __os_nospin_lock_lock
-B launchd_trial.macho __os_nospin_lock_trylock
-B launchd_trial.macho __os_nospin_lock_unlock
-B launchd_trial.macho __os_once
-B launchd_trial.macho __os_once_gate_corruption_abort
-B launchd_trial.macho __os_once_gate_recursive_abort
-B launchd_trial.macho __os_once_gate_unowned_abort
-B launchd_trial.macho __os_unfair_lock_corruption_abort
-B launchd_trial.macho __os_unfair_lock_recursive_abort
-B launchd_trial.macho __os_unfair_lock_unowned_abort
-B launchd_trial.macho __OSSpinLockLockSlow
-B launchd_trial.macho __PathLocale
-B launchd_trial.macho __platform_bzero
-B launchd_trial.macho __platform_memcmp
-B launchd_trial.macho __platform_memmove
-B launchd_trial.macho __platform_memset
-B launchd_trial.macho __platform_strchr
-B launchd_trial.macho __platform_strcmp
-B launchd_trial.macho __platform_strlen
-B launchd_trial.macho __pthread_atfork_child
-B launchd_trial.macho __pthread_atfork_child_handlers
-B launchd_trial.macho __pthread_atfork_parent
-B launchd_trial.macho __pthread_atfork_parent_handlers
-B launchd_trial.macho __pthread_atfork_prepare
-B launchd_trial.macho __pthread_atfork_prepare_handlers
-B launchd_trial.macho __pthread_exit_if_canceled
-B launchd_trial.macho __pthread_fork_child
-B launchd_trial.macho __pthread_fork_child_postinit
-B launchd_trial.macho __pthread_fork_parent
-B launchd_trial.macho __pthread_fork_prepare
-B launchd_trial.macho __pthread_getspecific
-B launchd_trial.macho __pthread_key_create
-B launchd_trial.macho __pthread_mutex_destroy
-B launchd_trial.macho __pthread_mutex_lock
-B launchd_trial.macho __pthread_mutex_trylock
-B launchd_trial.macho __pthread_mutex_unlock
-B launchd_trial.macho __pthread_once
-B launchd_trial.macho __pthread_self
-B launchd_trial.macho __pthread_set_self
-B launchd_trial.macho __pthread_setspecific
-B launchd_trial.macho __pthread_setspecific_static
-B launchd_trial.macho __read
-B launchd_trial.macho __Read_RuneMagi
-B launchd_trial.macho __readdir_unlocked
-B launchd_trial.macho __reclaim_telldir
-B launchd_trial.macho __seekdir
-B launchd_trial.macho __select
-B launchd_trial.macho __simple_asl_log
-B launchd_trial.macho __simple_dprintf
-B launchd_trial.macho __simple_esappend
-B launchd_trial.macho __simple_esprintf
-B launchd_trial.macho __simple_getenv
-B launchd_trial.macho __simple_put
-B launchd_trial.macho __simple_putline
-B launchd_trial.macho __simple_salloc
-B launchd_trial.macho __simple_sappend
-B launchd_trial.macho __simple_sfree
-B launchd_trial.macho __simple_sprintf
-B launchd_trial.macho __simple_sresize
-B launchd_trial.macho __simple_string
-B launchd_trial.macho __simple_vdprintf
-B launchd_trial.macho __simple_vesprintf
-B launchd_trial.macho __simple_vsprintf
-B launchd_trial.macho __spin_lock
-B launchd_trial.macho __spin_lock_try
-B launchd_trial.macho __spin_unlock
-B launchd_trial.macho __sread
-B launchd_trial.macho __sseek
-B launchd_trial.macho __swrite
-B launchd_trial.macho __warn
-B launchd_trial.macho __write
-B launchd_trial.macho __writev
-B launchd_trial.macho _abort
-B launchd_trial.macho _abort_report_np
-B launchd_trial.macho _abort_with_reason
-B launchd_trial.macho _access
-B launchd_trial.macho _arc4random
-B launchd_trial.macho _arc4random_addrandom
-B launchd_trial.macho _arc4random_buf
-B launchd_trial.macho _arc4random_stir
-B launchd_trial.macho _arc4random_uniform
-B launchd_trial.macho _asprintf
-B launchd_trial.macho _asprintf_l
-B launchd_trial.macho _basename
-B launchd_trial.macho _basename_r
-B launchd_trial.macho _bcmp
-B launchd_trial.macho _bcopy
-B launchd_trial.macho _bind
-B launchd_trial.macho _Block_size
-B launchd_trial.macho _bootstrap_port
-B launchd_trial.macho _bzero
-B launchd_trial.macho _calloc
-B launchd_trial.macho _cerror
-B launchd_trial.macho _cerror_nocancel
-B launchd_trial.macho _chmod
-B launchd_trial.macho _close
-B launchd_trial.macho _closedir
-B launchd_trial.macho _confstr
-B launchd_trial.macho _connect
-B launchd_trial.macho _ctime
-B launchd_trial.macho _ctime_r
-B launchd_trial.macho _daylight
-B launchd_trial.macho _digittoint
-B launchd_trial.macho _digittoint_l
-B launchd_trial.macho _dirfd
-B launchd_trial.macho _dprintf
-B launchd_trial.macho _dprintf_l
-B launchd_trial.macho _duplocale
-B launchd_trial.macho _environ
-B launchd_trial.macho _err_set_exit
-B launchd_trial.macho _err_set_exit_b
-B launchd_trial.macho _err_set_file
-B launchd_trial.macho _errc
-B launchd_trial.macho _errno
-B launchd_trial.macho _errx
-B launchd_trial.macho _exit
-B launchd_trial.macho _f_prealloc
-B launchd_trial.macho _fchmod
-B launchd_trial.macho _fclose
-B launchd_trial.macho _fcntl
-B launchd_trial.macho _fdopen
-B launchd_trial.macho _fdopendir
-B launchd_trial.macho _fegetenv
-B launchd_trial.macho _fesetenv
-B launchd_trial.macho _fflush
-B launchd_trial.macho _ffs
-B launchd_trial.macho _fileno
-B launchd_trial.macho _fileno_unlocked
-B launchd_trial.macho _flsl
-B launchd_trial.macho _fmod
-B launchd_trial.macho _fopen
-B launchd_trial.macho _fpathconf
-B launchd_trial.macho _fprintf
-B launchd_trial.macho _fprintf_l
-B launchd_trial.macho _fputs
-B launchd_trial.macho _fread
-B launchd_trial.macho _free
-B launchd_trial.macho _freeifaddrs
-B launchd_trial.macho _freelocale
-B launchd_trial.macho _fseek
-B launchd_trial.macho _fseeko
-B launchd_trial.macho _fstat
-B launchd_trial.macho _fstatat
-B launchd_trial.macho _fstatat64
-B launchd_trial.macho _fstatfs
-B launchd_trial.macho _ftell
-B launchd_trial.macho _ftello
-B launchd_trial.macho _getattrlist
-B launchd_trial.macho _getcwd
-B launchd_trial.macho _getdtablesize
-B launchd_trial.macho _getegid
-B launchd_trial.macho _getentropy
-B launchd_trial.macho _getenv
-B launchd_trial.macho _geteuid
-B launchd_trial.macho _getgrgid
-B launchd_trial.macho _getgrnam
-B launchd_trial.macho _gethostname
-B launchd_trial.macho _getifaddrs
-B launchd_trial.macho _getiopolicy_np
-B launchd_trial.macho _getpagesize
-B launchd_trial.macho _getpid
-B launchd_trial.macho _getprogname
-B launchd_trial.macho _getpwnam
-B launchd_trial.macho _getpwuid
-B launchd_trial.macho _getsockname
-B launchd_trial.macho _gettimeofday
-B launchd_trial.macho _getuid
-B launchd_trial.macho _gmtime
-B launchd_trial.macho _gmtime_r
-B launchd_trial.macho _heapsort
-B launchd_trial.macho _host_default_memory_manager
-B launchd_trial.macho _host_get_boot_info
-B launchd_trial.macho _host_get_clock_control
-B launchd_trial.macho _host_get_clock_service
-B launchd_trial.macho _host_get_exception_ports
-B launchd_trial.macho _host_get_io_master
-B launchd_trial.macho _host_get_special_port
-B launchd_trial.macho _host_get_UNDServer
-B launchd_trial.macho _host_info
-B launchd_trial.macho _host_kernel_version
-B launchd_trial.macho _host_lockgroup_info
-B launchd_trial.macho _host_page_size
-B launchd_trial.macho _host_priv_statistics
-B launchd_trial.macho _host_processor_info
-B launchd_trial.macho _host_processor_set_priv
-B launchd_trial.macho _host_processor_sets
-B launchd_trial.macho _host_processors
-B launchd_trial.macho _host_reboot
-B launchd_trial.macho _host_register_mach_voucher_attr_manager
-B launchd_trial.macho _host_register_well_known_mach_voucher_attr_manager
-B launchd_trial.macho _host_request_notification
-B launchd_trial.macho _host_self_trap
-B launchd_trial.macho _host_set_atm_diagnostic_flag
-B launchd_trial.macho _host_set_exception_ports
-B launchd_trial.macho _host_set_multiuser_config_flags
-B launchd_trial.macho _host_set_special_port
-B launchd_trial.macho _host_set_UNDServer
-B launchd_trial.macho _host_statistics
-B launchd_trial.macho _host_statistics64
-B launchd_trial.macho _host_swap_exception_ports
-B launchd_trial.macho _host_virtual_physical_table_info
-B launchd_trial.macho _index
-B launchd_trial.macho _ioctl
-B launchd_trial.macho _isalnum
-B launchd_trial.macho _isalnum_l
-B launchd_trial.macho _isalpha
-B launchd_trial.macho _isalpha_l
-B launchd_trial.macho _isascii
-B launchd_trial.macho _isatty
-B launchd_trial.macho _isblank
-B launchd_trial.macho _isblank_l
-B launchd_trial.macho _iscntrl
-B launchd_trial.macho _iscntrl_l
-B launchd_trial.macho _isdigit
-B launchd_trial.macho _isdigit_l
-B launchd_trial.macho _isgraph
-B launchd_trial.macho _isgraph_l
-B launchd_trial.macho _ishexnumber
-B launchd_trial.macho _ishexnumber_l
-B launchd_trial.macho _isideogram
-B launchd_trial.macho _isideogram_l
-B launchd_trial.macho _islower
-B launchd_trial.macho _islower_l
-B launchd_trial.macho _isnumber
-B launchd_trial.macho _isnumber_l
-B launchd_trial.macho _isphonogram
-B launchd_trial.macho _isphonogram_l
-B launchd_trial.macho _isprint
-B launchd_trial.macho _isprint_l
-B launchd_trial.macho _ispunct
-B launchd_trial.macho _ispunct_l
-B launchd_trial.macho _isrune
-B launchd_trial.macho _isrune_l
-B launchd_trial.macho _issetugid
-B launchd_trial.macho _isspace
-B launchd_trial.macho _isspace_l
-B launchd_trial.macho _isspecial
-B launchd_trial.macho _isspecial_l
-B launchd_trial.macho _isupper
-B launchd_trial.macho _isupper_l
-B launchd_trial.macho _iswalnum
-B launchd_trial.macho _iswalnum_l
-B launchd_trial.macho _iswalpha
-B launchd_trial.macho _iswalpha_l
-B launchd_trial.macho _iswascii
-B launchd_trial.macho _iswblank
-B launchd_trial.macho _iswblank_l
-B launchd_trial.macho _iswcntrl
-B launchd_trial.macho _iswcntrl_l
-B launchd_trial.macho _iswctype
-B launchd_trial.macho _iswctype_l
-B launchd_trial.macho _iswdigit
-B launchd_trial.macho _iswdigit_l
-B launchd_trial.macho _iswgraph
-B launchd_trial.macho _iswgraph_l
-B launchd_trial.macho _iswhexnumber
-B launchd_trial.macho _iswhexnumber_l
-B launchd_trial.macho _iswideogram
-B launchd_trial.macho _iswideogram_l
-B launchd_trial.macho _iswlower
-B launchd_trial.macho _iswlower_l
-B launchd_trial.macho _iswnumber
-B launchd_trial.macho _iswnumber_l
-B launchd_trial.macho _iswphonogram
-B launchd_trial.macho _iswphonogram_l
-B launchd_trial.macho _iswprint
-B launchd_trial.macho _iswprint_l
-B launchd_trial.macho _iswpunct
-B launchd_trial.macho _iswpunct_l
-B launchd_trial.macho _iswrune
-B launchd_trial.macho _iswrune_l
-B launchd_trial.macho _iswspace
-B launchd_trial.macho _iswspace_l
-B launchd_trial.macho _iswspecial
-B launchd_trial.macho _iswspecial_l
-B launchd_trial.macho _iswupper
-B launchd_trial.macho _iswupper_l
-B launchd_trial.macho _iswxdigit
-B launchd_trial.macho _iswxdigit_l
-B launchd_trial.macho _isxdigit
-B launchd_trial.macho _isxdigit_l
-B launchd_trial.macho _kext_request
-B launchd_trial.macho _kill
-B launchd_trial.macho _kmod_control
-B launchd_trial.macho _kmod_create
-B launchd_trial.macho _kmod_destroy
-B launchd_trial.macho _kmod_get_info
-B launchd_trial.macho _localeconv
-B launchd_trial.macho _localeconv_l
-B launchd_trial.macho _localtime
-B launchd_trial.macho _localtime_r
-B launchd_trial.macho _lock_set_create
-B launchd_trial.macho _lock_set_destroy
-B launchd_trial.macho _lseek
-B launchd_trial.macho _lstat
-B launchd_trial.macho _mach_absolute_time
-B launchd_trial.macho _mach_absolute_time_kernel
-B launchd_trial.macho _mach_continuous_time_kernel
-B launchd_trial.macho _mach_error_full_diag
-B launchd_trial.macho _mach_error_string
-B launchd_trial.macho _mach_error_type
-B launchd_trial.macho _mach_host_self
-B launchd_trial.macho _mach_init
-B launchd_trial.macho _mach_memory_info
-B launchd_trial.macho _mach_memory_object_memory_entry
-B launchd_trial.macho _mach_memory_object_memory_entry_64
-B launchd_trial.macho _mach_msg
-B launchd_trial.macho _mach_msg_destroy
-B launchd_trial.macho _mach_msg_overwrite
-B launchd_trial.macho _mach_msg_overwrite_trap
-B launchd_trial.macho _mach_msg_trap
-B launchd_trial.macho _mach_port_allocate
-B launchd_trial.macho _mach_port_construct
-B launchd_trial.macho _mach_port_deallocate
-B launchd_trial.macho _mach_port_destruct
-B launchd_trial.macho _mach_port_extract_member
-B launchd_trial.macho _mach_port_extract_right
-B launchd_trial.macho _mach_port_get_attributes
-B launchd_trial.macho _mach_port_insert_member
-B launchd_trial.macho _mach_port_insert_right
-B launchd_trial.macho _mach_port_mod_refs
-B launchd_trial.macho _mach_port_request_notification
-B launchd_trial.macho _mach_port_type
-B launchd_trial.macho _mach_port_unguard
-B launchd_trial.macho _mach_ports_lookup
-B launchd_trial.macho _mach_ports_register
-B launchd_trial.macho _mach_reply_port
-B launchd_trial.macho _mach_task_self_
-B launchd_trial.macho _mach_timebase_info
-B launchd_trial.macho _mach_timebase_info_trap
-B launchd_trial.macho _mach_vm_allocate
-B launchd_trial.macho _mach_vm_deallocate
-B launchd_trial.macho _mach_vm_map
-B launchd_trial.macho _mach_vm_protect
-B launchd_trial.macho _mach_vm_purgable_control
-B launchd_trial.macho _mach_vm_read
-B launchd_trial.macho _mach_vm_remap
-B launchd_trial.macho _mach_vm_wire
-B launchd_trial.macho _mach_zone_info
-B launchd_trial.macho _mach_zone_info_for_zone
-B launchd_trial.macho _madvise
-B launchd_trial.macho _main
-B launchd_trial.macho _malloc
-B launchd_trial.macho _malloc_error_break
-B launchd_trial.macho _malloc_printf
-B launchd_trial.macho _malloc_tracing_enabled
-B launchd_trial.macho _malloc_zone_check_fail
-B launchd_trial.macho _mbr_gid_to_uuid
-B launchd_trial.macho _mbr_uid_to_uuid
-B launchd_trial.macho _mbr_uuid_to_id
-B launchd_trial.macho _mbrtowc
-B launchd_trial.macho _mbrtowc_l
-B launchd_trial.macho _mbsnrtowcs
-B launchd_trial.macho _mbsnrtowcs_l
-B launchd_trial.macho _mbsrtowcs
-B launchd_trial.macho _mbsrtowcs_l
-B launchd_trial.macho _memchr
-B launchd_trial.macho _memcmp
-B launchd_trial.macho _memcpy
-B launchd_trial.macho _memmove
-B launchd_trial.macho _memset
-B launchd_trial.macho _mergesort
-B launchd_trial.macho _mig_dealloc_reply_port
-B launchd_trial.macho _mig_get_reply_port
-B launchd_trial.macho _mig_put_reply_port
-B launchd_trial.macho _mig_strncpy
-B launchd_trial.macho _mig_strncpy_zerofill
-B launchd_trial.macho _mkdir
-B launchd_trial.macho _mkdirat
-B launchd_trial.macho _mkdtemp
-B launchd_trial.macho _mkdtempat_np
-B launchd_trial.macho _mkostemp
-B launchd_trial.macho _mkostemps
-B launchd_trial.macho _mkostempsat_np
-B launchd_trial.macho _mkstemp
-B launchd_trial.macho _mkstemp_dprotected_np
-B launchd_trial.macho _mkstemps
-B launchd_trial.macho _mkstempsat_np
-B launchd_trial.macho _mktemp
-B launchd_trial.macho _mktime
-B launchd_trial.macho _modf
-B launchd_trial.macho _munmap
-B launchd_trial.macho _nan
-B launchd_trial.macho _nanf
-B launchd_trial.macho _nanl
-B launchd_trial.macho _NDR_record
-B launchd_trial.macho _newlocale
-B launchd_trial.macho _NXArgc
-B launchd_trial.macho _NXArgv
-B launchd_trial.macho _off32
-B launchd_trial.macho _off64
-B launchd_trial.macho _offtime
-B launchd_trial.macho _open
-B launchd_trial.macho _open_dprotected_np
-B launchd_trial.macho _openat
-B launchd_trial.macho _opendir
-B launchd_trial.macho _os_lock_lock
-B launchd_trial.macho _os_lock_trylock
-B launchd_trial.macho _os_lock_unlock
-B launchd_trial.macho _os_log_create
-B launchd_trial.macho _os_log_type_enabled
-B launchd_trial.macho _os_once
-B launchd_trial.macho _os_unfair_lock_assert_not_owner
-B launchd_trial.macho _os_unfair_lock_assert_owner
-B launchd_trial.macho _os_unfair_lock_lock
-B launchd_trial.macho _os_unfair_lock_lock_no_tsd
-B launchd_trial.macho _os_unfair_lock_lock_with_options
-B launchd_trial.macho _os_unfair_lock_trylock
-B launchd_trial.macho _os_unfair_lock_unlock
-B launchd_trial.macho _os_unfair_lock_unlock_no_tsd
-B launchd_trial.macho _os_unfair_recursive_lock_lock_with_options
-B launchd_trial.macho _os_unfair_recursive_lock_owned
-B launchd_trial.macho _os_unfair_recursive_lock_trylock
-B launchd_trial.macho _os_unfair_recursive_lock_tryunlock4objc
-B launchd_trial.macho _os_unfair_recursive_lock_unlock
-B launchd_trial.macho _os_unfair_recursive_lock_unlock_forked_child
-B launchd_trial.macho _OSAtomicAdd32
-B launchd_trial.macho _OSAtomicAdd32Barrier
-B launchd_trial.macho _OSAtomicAdd64
-B launchd_trial.macho _OSAtomicAdd64Barrier
-B launchd_trial.macho _OSAtomicAnd32
-B launchd_trial.macho _OSAtomicAnd32Barrier
-B launchd_trial.macho _OSAtomicAnd32Orig
-B launchd_trial.macho _OSAtomicAnd32OrigBarrier
-B launchd_trial.macho _OSAtomicCompareAndSwap32
-B launchd_trial.macho _OSAtomicCompareAndSwap32Barrier
-B launchd_trial.macho _OSAtomicCompareAndSwap64
-B launchd_trial.macho _OSAtomicCompareAndSwap64Barrier
-B launchd_trial.macho _OSAtomicCompareAndSwapInt
-B launchd_trial.macho _OSAtomicCompareAndSwapIntBarrier
-B launchd_trial.macho _OSAtomicCompareAndSwapLong
-B launchd_trial.macho _OSAtomicCompareAndSwapLongBarrier
-B launchd_trial.macho _OSAtomicCompareAndSwapPtr
-B launchd_trial.macho _OSAtomicCompareAndSwapPtrBarrier
-B launchd_trial.macho _OSAtomicDecrement32
-B launchd_trial.macho _OSAtomicDecrement32Barrier
-B launchd_trial.macho _OSAtomicDecrement64
-B launchd_trial.macho _OSAtomicDecrement64Barrier
-B launchd_trial.macho _OSAtomicDequeue
-B launchd_trial.macho _OSAtomicEnqueue
-B launchd_trial.macho _OSAtomicIncrement32
-B launchd_trial.macho _OSAtomicIncrement32Barrier
-B launchd_trial.macho _OSAtomicIncrement64
-B launchd_trial.macho _OSAtomicIncrement64Barrier
-B launchd_trial.macho _OSAtomicOr32
-B launchd_trial.macho _OSAtomicOr32Barrier
-B launchd_trial.macho _OSAtomicOr32Orig
-B launchd_trial.macho _OSAtomicOr32OrigBarrier
-B launchd_trial.macho _OSAtomicTestAndClear
-B launchd_trial.macho _OSAtomicTestAndClearBarrier
-B launchd_trial.macho _OSAtomicTestAndSet
-B launchd_trial.macho _OSAtomicTestAndSetBarrier
-B launchd_trial.macho _OSAtomicXor32
-B launchd_trial.macho _OSAtomicXor32Barrier
-B launchd_trial.macho _OSAtomicXor32Orig
-B launchd_trial.macho _OSAtomicXor32OrigBarrier
-B launchd_trial.macho _OSMemoryBarrier
-B launchd_trial.macho _OSSpinLockLock
-B launchd_trial.macho _OSSpinLockTry
-B launchd_trial.macho _OSSpinLockUnlock
-B launchd_trial.macho _perror
-B launchd_trial.macho _posix_madvise
-B launchd_trial.macho _posix_memalign
-B launchd_trial.macho _posix_spawnattr_get_qos_clamp_np
-B launchd_trial.macho _posix_spawnattr_set_qos_clamp_np
-B launchd_trial.macho _posix2time
-B launchd_trial.macho _pow
-B launchd_trial.macho _printf
-B launchd_trial.macho _printf_l
-B launchd_trial.macho _processor_set_create
-B launchd_trial.macho _processor_set_default
-B launchd_trial.macho _pthread_atfork
-B launchd_trial.macho _pthread_attr_destroy
-B launchd_trial.macho _pthread_attr_init
-B launchd_trial.macho _pthread_attr_setdetachstate
-B launchd_trial.macho _pthread_create
-B launchd_trial.macho _pthread_detach
-B launchd_trial.macho _pthread_equal
-B launchd_trial.macho _pthread_getspecific
-B launchd_trial.macho _pthread_getugid_np
-B launchd_trial.macho _pthread_introspection_getspecific_np
-B launchd_trial.macho _pthread_introspection_setspecific_np
-B launchd_trial.macho _pthread_is_threaded_np
-B launchd_trial.macho _pthread_key_create
-B launchd_trial.macho _pthread_key_delete
-B launchd_trial.macho _pthread_key_init_np
-B launchd_trial.macho _pthread_kill
-B launchd_trial.macho _pthread_mach_thread_np
-B launchd_trial.macho _pthread_main_np
-B launchd_trial.macho _pthread_main_thread_bootstrap
-B launchd_trial.macho _pthread_main_thread_np
-B launchd_trial.macho _pthread_mutex_destroy
-B launchd_trial.macho _pthread_mutex_getprioceiling
-B launchd_trial.macho _pthread_mutex_init
-B launchd_trial.macho _pthread_mutex_lock
-B launchd_trial.macho _pthread_mutex_setprioceiling
-B launchd_trial.macho _pthread_mutex_trylock
-B launchd_trial.macho _pthread_mutex_unlock
-B launchd_trial.macho _pthread_mutexattr_destroy$UNIX2003
-B launchd_trial.macho _pthread_mutexattr_getpolicy_np
-B launchd_trial.macho _pthread_mutexattr_getprioceiling
-B launchd_trial.macho _pthread_mutexattr_getprotocol
-B launchd_trial.macho _pthread_mutexattr_getpshared
-B launchd_trial.macho _pthread_mutexattr_gettype
-B launchd_trial.macho _pthread_mutexattr_init
-B launchd_trial.macho _pthread_mutexattr_setpolicy_np
-B launchd_trial.macho _pthread_mutexattr_setprioceiling
-B launchd_trial.macho _pthread_mutexattr_setprotocol
-B launchd_trial.macho _pthread_mutexattr_setpshared
-B launchd_trial.macho _pthread_mutexattr_settype
-B launchd_trial.macho _pthread_once
-B launchd_trial.macho _pthread_self
-B launchd_trial.macho _pthread_setschedparam
-B launchd_trial.macho _pthread_setspecific
-B launchd_trial.macho _pthread_testcancel
-B launchd_trial.macho _pthread_threadid_np
-B launchd_trial.macho _pthread_tsd_shim_bootstrap
-B launchd_trial.macho _pthread_tsd_shim_bootstrap_with_base
-B launchd_trial.macho _putenv$UNIX2003
-B launchd_trial.macho _puts
-B launchd_trial.macho _qsort
-B launchd_trial.macho _querylocale
-B launchd_trial.macho _read
-B launchd_trial.macho _readdir
-B launchd_trial.macho _readdir_r
-B launchd_trial.macho _realloc
-B launchd_trial.macho _reallocarray
-B launchd_trial.macho _reallocf
-B launchd_trial.macho _recvmsg
-B launchd_trial.macho _rename
-B launchd_trial.macho _rewind
-B launchd_trial.macho _rmdir
-B launchd_trial.macho _scalable_zone_info
-B launchd_trial.macho _scalable_zone_statistics
-B launchd_trial.macho _scalbn
-B launchd_trial.macho _sched_yield
-B launchd_trial.macho _select
-B launchd_trial.macho _semaphore_create
-B launchd_trial.macho _semaphore_destroy
-B launchd_trial.macho _send
-B launchd_trial.macho _sendto
-B launchd_trial.macho _setenv$UNIX2003
-B launchd_trial.macho _setlocale
-B launchd_trial.macho _setsockopt
-B launchd_trial.macho _sigprocmask
-B launchd_trial.macho _skip
-B launchd_trial.macho _sleep
-B launchd_trial.macho _snprintf
-B launchd_trial.macho _snprintf_l
-B launchd_trial.macho _socket
-B launchd_trial.macho _spin_lock
-B launchd_trial.macho _spin_lock_try
-B launchd_trial.macho _spin_unlock
-B launchd_trial.macho _sprintf
-B launchd_trial.macho _sprintf_l
-B launchd_trial.macho _sscanf
-B launchd_trial.macho _sscanf_l
-B launchd_trial.macho _stat
-B launchd_trial.macho _stpcpy
-B launchd_trial.macho _stpncpy
-B launchd_trial.macho _strcasecmp
-B launchd_trial.macho _strcasecmp_l
-B launchd_trial.macho _strcat
-B launchd_trial.macho _strchr
-B launchd_trial.macho _strcmp
-B launchd_trial.macho _strcoll
-B launchd_trial.macho _strcoll_l
-B launchd_trial.macho _strcpy
-B launchd_trial.macho _strdup
-B launchd_trial.macho _strerror
-B launchd_trial.macho _strerror_r
-B launchd_trial.macho _strlcat
-B launchd_trial.macho _strlcpy
-B launchd_trial.macho _strlen
-B launchd_trial.macho _strncasecmp
-B launchd_trial.macho _strncasecmp_l
-B launchd_trial.macho _strncmp
-B launchd_trial.macho _strncpy
-B launchd_trial.macho _strnlen
-B launchd_trial.macho _strnstr
-B launchd_trial.macho _strrchr
-B launchd_trial.macho _strsep
-B launchd_trial.macho _strsignal
-B launchd_trial.macho _strsignal_r
-B launchd_trial.macho _strstr
-B launchd_trial.macho _strtod
-B launchd_trial.macho _strtod_l
-B launchd_trial.macho _strtof
-B launchd_trial.macho _strtof_l
-B launchd_trial.macho _strtoimax
-B launchd_trial.macho _strtoimax_l
-B launchd_trial.macho _strtok
-B launchd_trial.macho _strtol
-B launchd_trial.macho _strtol_l
-B launchd_trial.macho _strtold
-B launchd_trial.macho _strtold_l
-B launchd_trial.macho _strtoumax
-B launchd_trial.macho _strtoumax_l
-B launchd_trial.macho _swtch_pri
-B launchd_trial.macho _sys_errlist
-B launchd_trial.macho _sys_nerr
-B launchd_trial.macho _sys_siglist
-B launchd_trial.macho _sys_signame
-B launchd_trial.macho _sysconf
-B launchd_trial.macho _sysctl
-B launchd_trial.macho _sysctlbyname
-B launchd_trial.macho _syslog
-B launchd_trial.macho _szone_check_counter
-B launchd_trial.macho _szone_check_modulo
-B launchd_trial.macho _szone_check_start
-B launchd_trial.macho _task_assign
-B launchd_trial.macho _task_assign_default
-B launchd_trial.macho _task_create
-B launchd_trial.macho _task_create_suid_cred
-B launchd_trial.macho _task_generate_corpse
-B launchd_trial.macho _task_get_assignment
-B launchd_trial.macho _task_get_dyld_image_infos
-B launchd_trial.macho _task_get_emulation_vector
-B launchd_trial.macho _task_get_exc_guard_behavior
-B launchd_trial.macho _task_get_exception_ports
-B launchd_trial.macho _task_get_mach_voucher
-B launchd_trial.macho _task_get_special_port
-B launchd_trial.macho _task_get_state
-B launchd_trial.macho _task_info
-B launchd_trial.macho _task_inspect
-B launchd_trial.macho _task_map_corpse_info
-B launchd_trial.macho _task_map_corpse_info_64
-B launchd_trial.macho _task_policy
-B launchd_trial.macho _task_policy_get
-B launchd_trial.macho _task_policy_set
-B launchd_trial.macho _task_purgable_info
-B launchd_trial.macho _task_register_dyld_get_process_state
-B launchd_trial.macho _task_register_dyld_image_infos
-B launchd_trial.macho _task_register_dyld_set_dyld_state
-B launchd_trial.macho _task_register_dyld_shared_cache_image_info
-B launchd_trial.macho _task_resume
-B launchd_trial.macho _task_resume2
-B launchd_trial.macho _task_sample
-B launchd_trial.macho _task_self_trap
-B launchd_trial.macho _task_set_emulation
-B launchd_trial.macho _task_set_emulation_vector
-B launchd_trial.macho _task_set_exc_guard_behavior
-B launchd_trial.macho _task_set_exception_ports
-B launchd_trial.macho _task_set_info
-B launchd_trial.macho _task_set_mach_voucher
-B launchd_trial.macho _task_set_phys_footprint_limit
-B launchd_trial.macho _task_set_policy
-B launchd_trial.macho _task_set_ras_pc
-B launchd_trial.macho _task_set_special_port
-B launchd_trial.macho _task_set_state
-B launchd_trial.macho _task_suspend
-B launchd_trial.macho _task_suspend2
-B launchd_trial.macho _task_swap_exception_ports
-B launchd_trial.macho _task_swap_mach_voucher
-B launchd_trial.macho _task_terminate
-B launchd_trial.macho _task_threads
-B launchd_trial.macho _task_unregister_dyld_image_infos
-B launchd_trial.macho _task_zone_info
-B launchd_trial.macho _telldir
-B launchd_trial.macho _thread_create
-B launchd_trial.macho _thread_create_running
-B launchd_trial.macho _thread_switch
-B launchd_trial.macho _thread_wire
-B launchd_trial.macho _time
-B launchd_trial.macho _time2posix
-B launchd_trial.macho _timegm
-B launchd_trial.macho _timelocal
-B launchd_trial.macho _timeoff
-B launchd_trial.macho _timezone
-B launchd_trial.macho _tiny_print_region_free_list
-B launchd_trial.macho _toascii
-B launchd_trial.macho _tolower
-B launchd_trial.macho _tolower_l
-B launchd_trial.macho _toupper
-B launchd_trial.macho _toupper_l
-B launchd_trial.macho _towlower
-B launchd_trial.macho _towlower_l
-B launchd_trial.macho _towupper
-B launchd_trial.macho _towupper_l
-B launchd_trial.macho _tzname
-B launchd_trial.macho _tzset
-B launchd_trial.macho _tzsetwall
-B launchd_trial.macho _ungetc
-B launchd_trial.macho _unlink
-B launchd_trial.macho _unlinkat
-B launchd_trial.macho _unsetenv$UNIX2003
-B launchd_trial.macho _uselocale
-B launchd_trial.macho _uuid_copy
-B launchd_trial.macho _uuid_pack
-B launchd_trial.macho _uuid_unparse
-B launchd_trial.macho _uuid_unparse_lower
-B launchd_trial.macho _uuid_unparse_upper
-B launchd_trial.macho _valloc
-B launchd_trial.macho _vasprintf
-B launchd_trial.macho _vasprintf_l
-B launchd_trial.macho _vdprintf
-B launchd_trial.macho _vdprintf_l
-B launchd_trial.macho _verr
-B launchd_trial.macho _verrc
-B launchd_trial.macho _verrx
-B launchd_trial.macho _vfprintf
-B launchd_trial.macho _vfprintf_l
-B launchd_trial.macho _vfscanf_l
-B launchd_trial.macho _vm_allocate
-B launchd_trial.macho _vm_allocate_cpm
-B launchd_trial.macho _vm_deallocate
-B launchd_trial.macho _vm_kernel_page_mask
-B launchd_trial.macho _vm_kernel_page_shift
-B launchd_trial.macho _vm_kernel_page_size
-B launchd_trial.macho _vm_map
-B launchd_trial.macho _vm_page_mask
-B launchd_trial.macho _vm_page_shift
-B launchd_trial.macho _vm_page_size
-B launchd_trial.macho _vm_protect
-B launchd_trial.macho _vm_purgable_control
-B launchd_trial.macho _vm_read
-B launchd_trial.macho _vm_region_64
-B launchd_trial.macho _vm_remap
-B launchd_trial.macho _vm_wire
-B launchd_trial.macho _voucher_mach_msg_set
-B launchd_trial.macho _vproc_swap_integer
-B launchd_trial.macho _vsnprintf
-B launchd_trial.macho _vsnprintf_l
-B launchd_trial.macho _vsprintf
-B launchd_trial.macho _vsprintf_l
-B launchd_trial.macho _vsscanf
-B launchd_trial.macho _vsscanf_l
-B launchd_trial.macho _vwarn
-B launchd_trial.macho _vwarnc
-B launchd_trial.macho _vwarnx
-B launchd_trial.macho _warnc
-B launchd_trial.macho _warnx
-B launchd_trial.macho _wcrtomb
-B launchd_trial.macho _wcrtomb_l
-B launchd_trial.macho _wcscmp
-B launchd_trial.macho _wcscoll
-B launchd_trial.macho _wcscoll_l
-B launchd_trial.macho _wcscpy
-B launchd_trial.macho _wcslen
-B launchd_trial.macho _wcsncmp
-B launchd_trial.macho _wcsncpy
-B launchd_trial.macho _wcsnrtombs
-B launchd_trial.macho _wcsnrtombs_l
-B launchd_trial.macho _wcsrtombs
-B launchd_trial.macho _wcsrtombs_l
-B launchd_trial.macho _wctob
-B launchd_trial.macho _wctob_l
-B launchd_trial.macho _write
-B launchd_trial.macho _writev
 B launchd.macho ____mb_cur_max
 B launchd.macho ____mb_cur_max_l
 B launchd.macho ____runetype
@@ -4361,9 +1929,6 @@ B launchd.macho ___b2d_D2A
 B launchd.macho ___Balloc_D2A
 B launchd.macho ___Bfree_D2A
 B launchd.macho ___bigtens_D2A
-B launchd.macho ___bsdthread_create
-B launchd.macho ___bsdthread_register
-B launchd.macho ___bsdthread_terminate
 B launchd.macho ___chmod_extended
 B launchd.macho ___cleanup
 B launchd.macho ___cmp_D2A
@@ -4400,7 +1965,6 @@ B launchd.macho ___hi0bits_D2A
 B launchd.macho ___hldtoa
 B launchd.macho ___i2b_D2A
 B launchd.macho ___increment_D2A
-B launchd.macho ___is_threaded
 B launchd.macho ___isctype
 B launchd.macho ___isthreaded
 B launchd.macho ___istype
@@ -4427,15 +1991,6 @@ B launchd.macho ___os_once_reset
 B launchd.macho ___pow5mult_D2A
 B launchd.macho ___proc_info
 B launchd.macho ___progname
-B launchd.macho ___psynch_cvbroad
-B launchd.macho ___psynch_cvclrprepost
-B launchd.macho ___psynch_cvsignal
-B launchd.macho ___psynch_cvwait
-B launchd.macho ___psynch_mutexdrop
-B launchd.macho ___psynch_mutexwait
-B launchd.macho ___psynch_rw_rdlock
-B launchd.macho ___psynch_rw_unlock
-B launchd.macho ___psynch_rw_wrlock
 B launchd.macho ___quorem_D2A
 B launchd.macho ___ratio_D2A
 B launchd.macho ___rshift_D2A
@@ -4473,7 +2028,6 @@ B launchd.macho ___swrite
 B launchd.macho ___swsetup
 B launchd.macho ___syscall_logger
 B launchd.macho ___tens_D2A
-B launchd.macho ___thread_selfid
 B launchd.macho ___tinytens_D2A
 B launchd.macho ___tolower
 B launchd.macho ___tolower_l
@@ -4590,8 +2144,10 @@ B launchd.macho __kernelrpc_vm_read
 B launchd.macho __kernelrpc_vm_remap
 B launchd.macho __libc_printf_os_crash
 B launchd.macho __mach_errors
-B launchd.macho __main_thread
 B launchd.macho __mal_semwait_sleep
+B launchd.macho __malloc_fork_child
+B launchd.macho __malloc_fork_parent
+B launchd.macho __malloc_fork_prepare
 B launchd.macho __malloc_no_asl_log
 B launchd.macho __mktemp
 B launchd.macho __NSConcreteAutoBlock
@@ -4637,23 +2193,12 @@ B launchd.macho __os_unfair_lock_unowned_abort
 B launchd.macho __OSSpinLockLockSlow
 B launchd.macho __PathLocale
 B launchd.macho __platform_bzero
-B launchd.macho __platform_memcmp
 B launchd.macho __platform_memmove
 B launchd.macho __platform_memset
 B launchd.macho __platform_strchr
 B launchd.macho __platform_strcmp
 B launchd.macho __platform_strlen
-B launchd.macho __pthread_atfork_child
-B launchd.macho __pthread_atfork_child_handlers
-B launchd.macho __pthread_atfork_parent
-B launchd.macho __pthread_atfork_parent_handlers
-B launchd.macho __pthread_atfork_prepare
-B launchd.macho __pthread_atfork_prepare_handlers
 B launchd.macho __pthread_exit_if_canceled
-B launchd.macho __pthread_fork_child
-B launchd.macho __pthread_fork_child_postinit
-B launchd.macho __pthread_fork_parent
-B launchd.macho __pthread_fork_prepare
 B launchd.macho __pthread_getspecific
 B launchd.macho __pthread_key_create
 B launchd.macho __pthread_mutex_destroy
@@ -4661,10 +2206,8 @@ B launchd.macho __pthread_mutex_lock
 B launchd.macho __pthread_mutex_trylock
 B launchd.macho __pthread_mutex_unlock
 B launchd.macho __pthread_once
-B launchd.macho __pthread_self
 B launchd.macho __pthread_set_self
 B launchd.macho __pthread_setspecific
-B launchd.macho __pthread_setspecific_static
 B launchd.macho __read
 B launchd.macho __Read_RuneMagi
 B launchd.macho __readdir_unlocked
@@ -4675,7 +2218,6 @@ B launchd.macho __simple_asl_log
 B launchd.macho __simple_dprintf
 B launchd.macho __simple_esappend
 B launchd.macho __simple_esprintf
-B launchd.macho __simple_getenv
 B launchd.macho __simple_put
 B launchd.macho __simple_putline
 B launchd.macho __simple_salloc
@@ -4698,7 +2240,6 @@ B launchd.macho __write
 B launchd.macho __writev
 B launchd.macho _abort
 B launchd.macho _abort_report_np
-B launchd.macho _abort_with_reason
 B launchd.macho _abs
 B launchd.macho _access
 B launchd.macho _arc4random
@@ -4786,7 +2327,6 @@ B launchd.macho _ftello
 B launchd.macho _getattrlist
 B launchd.macho _getcwd
 B launchd.macho _getdtablesize
-B launchd.macho _getegid
 B launchd.macho _getentropy
 B launchd.macho _getenv
 B launchd.macho _geteuid
@@ -4958,6 +2498,7 @@ B launchd.macho _mach_port_insert_right
 B launchd.macho _mach_port_kernel_object
 B launchd.macho _mach_port_mod_refs
 B launchd.macho _mach_port_request_notification
+B launchd.macho _mach_port_set_attributes
 B launchd.macho _mach_port_type
 B launchd.macho _mach_port_unguard
 B launchd.macho _mach_ports_lookup
@@ -5104,47 +2645,15 @@ B launchd.macho _printf_l
 B launchd.macho _proc_pidinfo
 B launchd.macho _processor_set_create
 B launchd.macho _processor_set_default
-B launchd.macho _pthread_atfork
 B launchd.macho _pthread_attr_destroy
 B launchd.macho _pthread_attr_init
 B launchd.macho _pthread_attr_setdetachstate
-B launchd.macho _pthread_detach
 B launchd.macho _pthread_getspecific
-B launchd.macho _pthread_getugid_np
-B launchd.macho _pthread_introspection_getspecific_np
-B launchd.macho _pthread_introspection_setspecific_np
-B launchd.macho _pthread_is_threaded_np
 B launchd.macho _pthread_key_create
-B launchd.macho _pthread_key_delete
 B launchd.macho _pthread_key_init_np
-B launchd.macho _pthread_kill
-B launchd.macho _pthread_mach_thread_np
-B launchd.macho _pthread_mutex_destroy
-B launchd.macho _pthread_mutex_getprioceiling
-B launchd.macho _pthread_mutex_init
-B launchd.macho _pthread_mutex_lock
-B launchd.macho _pthread_mutex_setprioceiling
-B launchd.macho _pthread_mutex_trylock
-B launchd.macho _pthread_mutex_unlock
-B launchd.macho _pthread_mutexattr_destroy$UNIX2003
-B launchd.macho _pthread_mutexattr_getpolicy_np
-B launchd.macho _pthread_mutexattr_getprioceiling
-B launchd.macho _pthread_mutexattr_getprotocol
-B launchd.macho _pthread_mutexattr_getpshared
-B launchd.macho _pthread_mutexattr_gettype
-B launchd.macho _pthread_mutexattr_init
-B launchd.macho _pthread_mutexattr_setpolicy_np
-B launchd.macho _pthread_mutexattr_setprioceiling
-B launchd.macho _pthread_mutexattr_setprotocol
-B launchd.macho _pthread_mutexattr_setpshared
-B launchd.macho _pthread_mutexattr_settype
-B launchd.macho _pthread_self
-B launchd.macho _pthread_setschedparam
+B launchd.macho _pthread_once
 B launchd.macho _pthread_setspecific
-B launchd.macho _pthread_testcancel
-B launchd.macho _pthread_threadid_np
 B launchd.macho _pthread_tsd_shim_bootstrap
-B launchd.macho _pthread_tsd_shim_bootstrap_with_base
 B launchd.macho _puts
 B launchd.macho _qsort
 B launchd.macho _querylocale
@@ -5401,20 +2910,7 @@ B less.macho ___collate_equiv_match
 B less.macho ___collate_load_error
 B less.macho ___collate_lookup
 B less.macho ___collate_lookup_l
-B less.macho ___mb_cur_max
-B less.macho ___mb_sb_limit
 B less.macho ___progname
-B less.macho ___sdidinit
-B less.macho ___sF
-B less.macho ___sfp
-B less.macho ___sglue
-B less.macho ___sinit
-B less.macho ___stderrp
-B less.macho ___stdinp
-B less.macho ___stdoutp
-B less.macho __cleanup
-B less.macho __CurrentRuneLocale
-B less.macho __DefaultRuneLocale
 B less.macho __err
 B less.macho __warn
 B less.macho _abort
@@ -5442,9 +2938,8 @@ B less.macho _fstatat
 B less.macho _fstatat64
 B less.macho _ftruncate
 B less.macho _getattrlist$UNIX2003
-B less.macho _getcwd
+B less.macho _getegid
 B less.macho _getentropy
-B less.macho _getenv
 B less.macho _geteuid
 B less.macho _getuid
 B less.macho _gmtime
@@ -5494,20 +2989,7 @@ B ln.macho ___collate_equiv_match
 B ln.macho ___collate_load_error
 B ln.macho ___collate_lookup
 B ln.macho ___collate_lookup_l
-B ln.macho ___mb_cur_max
-B ln.macho ___mb_sb_limit
 B ln.macho ___progname
-B ln.macho ___sdidinit
-B ln.macho ___sF
-B ln.macho ___sfp
-B ln.macho ___sglue
-B ln.macho ___sinit
-B ln.macho ___stderrp
-B ln.macho ___stdinp
-B ln.macho ___stdoutp
-B ln.macho __cleanup
-B ln.macho __CurrentRuneLocale
-B ln.macho __DefaultRuneLocale
 B ln.macho __err
 B ln.macho __warn
 B ln.macho _abort
@@ -5523,9 +3005,8 @@ B ln.macho _f_prealloc
 B ln.macho _fstatat
 B ln.macho _fstatat64
 B ln.macho _ftruncate
-B ln.macho _getcwd
+B ln.macho _getegid
 B ln.macho _getentropy
-B ln.macho _getenv
 B ln.macho _geteuid
 B ln.macho _getuid
 B ln.macho _mkdir
@@ -5555,20 +3036,7 @@ B logname.macho ___collate_equiv_match
 B logname.macho ___collate_load_error
 B logname.macho ___collate_lookup
 B logname.macho ___collate_lookup_l
-B logname.macho ___mb_cur_max
-B logname.macho ___mb_sb_limit
 B logname.macho ___progname
-B logname.macho ___sdidinit
-B logname.macho ___sF
-B logname.macho ___sfp
-B logname.macho ___sglue
-B logname.macho ___sinit
-B logname.macho ___stderrp
-B logname.macho ___stdinp
-B logname.macho ___stdoutp
-B logname.macho __cleanup
-B logname.macho __CurrentRuneLocale
-B logname.macho __DefaultRuneLocale
 B logname.macho __err
 B logname.macho __warn
 B logname.macho _abort
@@ -5584,9 +3052,8 @@ B logname.macho _f_prealloc
 B logname.macho _fstatat
 B logname.macho _fstatat64
 B logname.macho _ftruncate
-B logname.macho _getcwd
+B logname.macho _getegid
 B logname.macho _getentropy
-B logname.macho _getenv
 B logname.macho _geteuid
 B logname.macho _getuid
 B logname.macho _mkdir
@@ -5616,20 +3083,7 @@ B ls.macho ___collate_equiv_match
 B ls.macho ___collate_load_error
 B ls.macho ___collate_lookup
 B ls.macho ___collate_lookup_l
-B ls.macho ___mb_cur_max
-B ls.macho ___mb_sb_limit
 B ls.macho ___progname
-B ls.macho ___sdidinit
-B ls.macho ___sF
-B ls.macho ___sfp
-B ls.macho ___sglue
-B ls.macho ___sinit
-B ls.macho ___stderrp
-B ls.macho ___stdinp
-B ls.macho ___stdoutp
-B ls.macho __cleanup
-B ls.macho __CurrentRuneLocale
-B ls.macho __DefaultRuneLocale
 B ls.macho __err
 B ls.macho __warn
 B ls.macho _abort
@@ -5690,9 +3144,8 @@ B ls.macho _fstatat
 B ls.macho _fstatat64
 B ls.macho _ftruncate
 B ls.macho _getattrlist$UNIX2003
-B ls.macho _getcwd
+B ls.macho _getegid
 B ls.macho _getentropy
-B ls.macho _getenv
 B ls.macho _geteuid
 B ls.macho _getuid
 B ls.macho _gmtime
@@ -5744,20 +3197,7 @@ B md5.macho ___collate_equiv_match
 B md5.macho ___collate_load_error
 B md5.macho ___collate_lookup
 B md5.macho ___collate_lookup_l
-B md5.macho ___mb_cur_max
-B md5.macho ___mb_sb_limit
 B md5.macho ___progname
-B md5.macho ___sdidinit
-B md5.macho ___sF
-B md5.macho ___sfp
-B md5.macho ___sglue
-B md5.macho ___sinit
-B md5.macho ___stderrp
-B md5.macho ___stdinp
-B md5.macho ___stdoutp
-B md5.macho __cleanup
-B md5.macho __CurrentRuneLocale
-B md5.macho __DefaultRuneLocale
 B md5.macho __err
 B md5.macho __warn
 B md5.macho _abort
@@ -5773,9 +3213,8 @@ B md5.macho _f_prealloc
 B md5.macho _fstatat
 B md5.macho _fstatat64
 B md5.macho _ftruncate
-B md5.macho _getcwd
+B md5.macho _getegid
 B md5.macho _getentropy
-B md5.macho _getenv
 B md5.macho _geteuid
 B md5.macho _getuid
 B md5.macho _mkdir
@@ -5805,20 +3244,7 @@ B mkdir.macho ___collate_equiv_match
 B mkdir.macho ___collate_load_error
 B mkdir.macho ___collate_lookup
 B mkdir.macho ___collate_lookup_l
-B mkdir.macho ___mb_cur_max
-B mkdir.macho ___mb_sb_limit
 B mkdir.macho ___progname
-B mkdir.macho ___sdidinit
-B mkdir.macho ___sF
-B mkdir.macho ___sfp
-B mkdir.macho ___sglue
-B mkdir.macho ___sinit
-B mkdir.macho ___stderrp
-B mkdir.macho ___stdinp
-B mkdir.macho ___stdoutp
-B mkdir.macho __cleanup
-B mkdir.macho __CurrentRuneLocale
-B mkdir.macho __DefaultRuneLocale
 B mkdir.macho __err
 B mkdir.macho __sigprocmask
 B mkdir.macho __warn
@@ -5836,9 +3262,8 @@ B mkdir.macho _f_prealloc
 B mkdir.macho _fstatat
 B mkdir.macho _fstatat64
 B mkdir.macho _ftruncate
-B mkdir.macho _getcwd
+B mkdir.macho _getegid
 B mkdir.macho _getentropy
-B mkdir.macho _getenv
 B mkdir.macho _geteuid
 B mkdir.macho _getuid
 B mkdir.macho _mkdir
@@ -5868,20 +3293,7 @@ B mkfifo.macho ___collate_equiv_match
 B mkfifo.macho ___collate_load_error
 B mkfifo.macho ___collate_lookup
 B mkfifo.macho ___collate_lookup_l
-B mkfifo.macho ___mb_cur_max
-B mkfifo.macho ___mb_sb_limit
 B mkfifo.macho ___progname
-B mkfifo.macho ___sdidinit
-B mkfifo.macho ___sF
-B mkfifo.macho ___sfp
-B mkfifo.macho ___sglue
-B mkfifo.macho ___sinit
-B mkfifo.macho ___stderrp
-B mkfifo.macho ___stdinp
-B mkfifo.macho ___stdoutp
-B mkfifo.macho __cleanup
-B mkfifo.macho __CurrentRuneLocale
-B mkfifo.macho __DefaultRuneLocale
 B mkfifo.macho __err
 B mkfifo.macho __sigprocmask
 B mkfifo.macho __warn
@@ -5898,9 +3310,8 @@ B mkfifo.macho _f_prealloc
 B mkfifo.macho _fstatat
 B mkfifo.macho _fstatat64
 B mkfifo.macho _ftruncate
-B mkfifo.macho _getcwd
+B mkfifo.macho _getegid
 B mkfifo.macho _getentropy
-B mkfifo.macho _getenv
 B mkfifo.macho _geteuid
 B mkfifo.macho _getuid
 B mkfifo.macho _mkdir
@@ -5930,20 +3341,7 @@ B mknod.macho ___collate_equiv_match
 B mknod.macho ___collate_load_error
 B mknod.macho ___collate_lookup
 B mknod.macho ___collate_lookup_l
-B mknod.macho ___mb_cur_max
-B mknod.macho ___mb_sb_limit
 B mknod.macho ___progname
-B mknod.macho ___sdidinit
-B mknod.macho ___sF
-B mknod.macho ___sfp
-B mknod.macho ___sglue
-B mknod.macho ___sinit
-B mknod.macho ___stderrp
-B mknod.macho ___stdinp
-B mknod.macho ___stdoutp
-B mknod.macho __cleanup
-B mknod.macho __CurrentRuneLocale
-B mknod.macho __DefaultRuneLocale
 B mknod.macho __err
 B mknod.macho __warn
 B mknod.macho _abort
@@ -5961,9 +3359,8 @@ B mknod.macho _f_prealloc
 B mknod.macho _fstatat
 B mknod.macho _fstatat64
 B mknod.macho _ftruncate
-B mknod.macho _getcwd
+B mknod.macho _getegid
 B mknod.macho _getentropy
-B mknod.macho _getenv
 B mknod.macho _geteuid
 B mknod.macho _getuid
 B mknod.macho _mkdir
@@ -5995,20 +3392,7 @@ B mktemp.macho ___collate_equiv_match
 B mktemp.macho ___collate_load_error
 B mktemp.macho ___collate_lookup
 B mktemp.macho ___collate_lookup_l
-B mktemp.macho ___mb_cur_max
-B mktemp.macho ___mb_sb_limit
 B mktemp.macho ___progname
-B mktemp.macho ___sdidinit
-B mktemp.macho ___sF
-B mktemp.macho ___sfp
-B mktemp.macho ___sglue
-B mktemp.macho ___sinit
-B mktemp.macho ___stderrp
-B mktemp.macho ___stdinp
-B mktemp.macho ___stdoutp
-B mktemp.macho __cleanup
-B mktemp.macho __CurrentRuneLocale
-B mktemp.macho __DefaultRuneLocale
 B mktemp.macho __err
 B mktemp.macho __mktemp
 B mktemp.macho __warn
@@ -6035,9 +3419,8 @@ B mktemp.macho _fstatat
 B mktemp.macho _fstatat64
 B mktemp.macho _ftruncate
 B mktemp.macho _getattrlist$UNIX2003
-B mktemp.macho _getcwd
+B mktemp.macho _getegid
 B mktemp.macho _getentropy
-B mktemp.macho _getenv
 B mktemp.macho _geteuid
 B mktemp.macho _getuid
 B mktemp.macho _mkdir
@@ -6078,20 +3461,7 @@ B mv.macho ___collate_equiv_match
 B mv.macho ___collate_load_error
 B mv.macho ___collate_lookup
 B mv.macho ___collate_lookup_l
-B mv.macho ___mb_cur_max
-B mv.macho ___mb_sb_limit
 B mv.macho ___progname
-B mv.macho ___sdidinit
-B mv.macho ___sF
-B mv.macho ___sfp
-B mv.macho ___sglue
-B mv.macho ___sinit
-B mv.macho ___stderrp
-B mv.macho ___stdinp
-B mv.macho ___stdoutp
-B mv.macho __cleanup
-B mv.macho __CurrentRuneLocale
-B mv.macho __DefaultRuneLocale
 B mv.macho __err
 B mv.macho __warn
 B mv.macho _abort
@@ -6110,9 +3480,8 @@ B mv.macho _fstatat
 B mv.macho _fstatat64
 B mv.macho _ftruncate
 B mv.macho _getattrlist$UNIX2003
-B mv.macho _getcwd
+B mv.macho _getegid
 B mv.macho _getentropy
-B mv.macho _getenv
 B mv.macho _geteuid
 B mv.macho _getuid
 B mv.macho _mkdir
@@ -6143,20 +3512,7 @@ B nice.macho ___collate_equiv_match
 B nice.macho ___collate_load_error
 B nice.macho ___collate_lookup
 B nice.macho ___collate_lookup_l
-B nice.macho ___mb_cur_max
-B nice.macho ___mb_sb_limit
 B nice.macho ___progname
-B nice.macho ___sdidinit
-B nice.macho ___sF
-B nice.macho ___sfp
-B nice.macho ___sglue
-B nice.macho ___sinit
-B nice.macho ___stderrp
-B nice.macho ___stdinp
-B nice.macho ___stdoutp
-B nice.macho __cleanup
-B nice.macho __CurrentRuneLocale
-B nice.macho __DefaultRuneLocale
 B nice.macho __err
 B nice.macho __warn
 B nice.macho _abort
@@ -6174,9 +3530,8 @@ B nice.macho _f_prealloc
 B nice.macho _fstatat
 B nice.macho _fstatat64
 B nice.macho _ftruncate
-B nice.macho _getcwd
+B nice.macho _getegid
 B nice.macho _getentropy
-B nice.macho _getenv
 B nice.macho _geteuid
 B nice.macho _getuid
 B nice.macho _mkdir
@@ -6206,20 +3561,7 @@ B nl.macho ___collate_equiv_match
 B nl.macho ___collate_load_error
 B nl.macho ___collate_lookup
 B nl.macho ___collate_lookup_l
-B nl.macho ___mb_cur_max
-B nl.macho ___mb_sb_limit
 B nl.macho ___progname
-B nl.macho ___sdidinit
-B nl.macho ___sF
-B nl.macho ___sfp
-B nl.macho ___sglue
-B nl.macho ___sinit
-B nl.macho ___stderrp
-B nl.macho ___stdinp
-B nl.macho ___stdoutp
-B nl.macho __cleanup
-B nl.macho __CurrentRuneLocale
-B nl.macho __DefaultRuneLocale
 B nl.macho __err
 B nl.macho __flockfile
 B nl.macho __flockfile_debug_stub
@@ -6239,9 +3581,8 @@ B nl.macho _f_prealloc
 B nl.macho _fstatat
 B nl.macho _fstatat64
 B nl.macho _ftruncate
-B nl.macho _getcwd
+B nl.macho _getegid
 B nl.macho _getentropy
-B nl.macho _getenv
 B nl.macho _geteuid
 B nl.macho _getuid
 B nl.macho _mkdir
@@ -6273,20 +3614,7 @@ B nohup.macho ___collate_equiv_match
 B nohup.macho ___collate_load_error
 B nohup.macho ___collate_lookup
 B nohup.macho ___collate_lookup_l
-B nohup.macho ___mb_cur_max
-B nohup.macho ___mb_sb_limit
 B nohup.macho ___progname
-B nohup.macho ___sdidinit
-B nohup.macho ___sF
-B nohup.macho ___sfp
-B nohup.macho ___sglue
-B nohup.macho ___sinit
-B nohup.macho ___stderrp
-B nohup.macho ___stdinp
-B nohup.macho ___stdoutp
-B nohup.macho __cleanup
-B nohup.macho __CurrentRuneLocale
-B nohup.macho __DefaultRuneLocale
 B nohup.macho __err
 B nohup.macho __warn
 B nohup.macho _abort
@@ -6302,9 +3630,8 @@ B nohup.macho _f_prealloc
 B nohup.macho _fstatat
 B nohup.macho _fstatat64
 B nohup.macho _ftruncate
-B nohup.macho _getcwd
+B nohup.macho _getegid
 B nohup.macho _getentropy
-B nohup.macho _getenv
 B nohup.macho _geteuid
 B nohup.macho _getuid
 B nohup.macho _mkdir
@@ -6334,20 +3661,7 @@ B paste.macho ___collate_equiv_match
 B paste.macho ___collate_load_error
 B paste.macho ___collate_lookup
 B paste.macho ___collate_lookup_l
-B paste.macho ___mb_cur_max
-B paste.macho ___mb_sb_limit
 B paste.macho ___progname
-B paste.macho ___sdidinit
-B paste.macho ___sF
-B paste.macho ___sfp
-B paste.macho ___sglue
-B paste.macho ___sinit
-B paste.macho ___stderrp
-B paste.macho ___stdinp
-B paste.macho ___stdoutp
-B paste.macho __cleanup
-B paste.macho __CurrentRuneLocale
-B paste.macho __DefaultRuneLocale
 B paste.macho __err
 B paste.macho __warn
 B paste.macho _abort
@@ -6363,9 +3677,8 @@ B paste.macho _f_prealloc
 B paste.macho _fstatat
 B paste.macho _fstatat64
 B paste.macho _ftruncate
-B paste.macho _getcwd
+B paste.macho _getegid
 B paste.macho _getentropy
-B paste.macho _getenv
 B paste.macho _geteuid
 B paste.macho _getuid
 B paste.macho _mkdir
@@ -6395,20 +3708,7 @@ B pathchk.macho ___collate_equiv_match
 B pathchk.macho ___collate_load_error
 B pathchk.macho ___collate_lookup
 B pathchk.macho ___collate_lookup_l
-B pathchk.macho ___mb_cur_max
-B pathchk.macho ___mb_sb_limit
 B pathchk.macho ___progname
-B pathchk.macho ___sdidinit
-B pathchk.macho ___sF
-B pathchk.macho ___sfp
-B pathchk.macho ___sglue
-B pathchk.macho ___sinit
-B pathchk.macho ___stderrp
-B pathchk.macho ___stdinp
-B pathchk.macho ___stdoutp
-B pathchk.macho __cleanup
-B pathchk.macho __CurrentRuneLocale
-B pathchk.macho __DefaultRuneLocale
 B pathchk.macho __err
 B pathchk.macho __warn
 B pathchk.macho _abort
@@ -6424,9 +3724,8 @@ B pathchk.macho _f_prealloc
 B pathchk.macho _fstatat
 B pathchk.macho _fstatat64
 B pathchk.macho _ftruncate
-B pathchk.macho _getcwd
+B pathchk.macho _getegid
 B pathchk.macho _getentropy
-B pathchk.macho _getenv
 B pathchk.macho _geteuid
 B pathchk.macho _getuid
 B pathchk.macho _mkdir
@@ -6457,9 +3756,12 @@ B pd_console_login.macho ___bsdthread_register
 B pd_console_login.macho ___bsdthread_terminate
 B pd_console_login.macho ___chmod_extended
 B pd_console_login.macho ___cleanup
+B pd_console_login.macho ___environ_lock
+B pd_console_login.macho ___environ_unlock
 B pd_console_login.macho ___error
 B pd_console_login.macho ___exit
 B pd_console_login.macho ___fchmod_extended
+B pd_console_login.macho ___findenv_locked
 B pd_console_login.macho ___fstat64_extended
 B pd_console_login.macho ___getdirentries64
 B pd_console_login.macho ___getpid
@@ -6484,10 +3786,14 @@ B pd_console_login.macho ___syscall_logger
 B pd_console_login.macho ___tcdrain
 B pd_console_login.macho ___ulock_wait
 B pd_console_login.macho ___ulock_wake
+B pd_console_login.macho __allocenvstate
 B pd_console_login.macho __close
+B pd_console_login.macho __copyenv
 B pd_console_login.macho __cpu_capabilities
 B pd_console_login.macho __cpu_has_altivec
+B pd_console_login.macho __cthread_init_routine
 B pd_console_login.macho __current_pid
+B pd_console_login.macho __deallocenvstate
 B pd_console_login.macho __dup2
 B pd_console_login.macho __dyld_get_image_slide
 B pd_console_login.macho __exit
@@ -6516,7 +3822,11 @@ B pd_console_login.macho __kernelrpc_vm_remap
 B pd_console_login.macho __mach_fork_child
 B pd_console_login.macho __main_thread
 B pd_console_login.macho __mal_semwait_sleep
+B pd_console_login.macho __malloc_fork_child
+B pd_console_login.macho __malloc_fork_parent
+B pd_console_login.macho __malloc_fork_prepare
 B pd_console_login.macho __malloc_no_asl_log
+B pd_console_login.macho __NSGetEnviron
 B pd_console_login.macho __NSGetMachExecuteHeader
 B pd_console_login.macho __open
 B pd_console_login.macho __os_cpu_number_override
@@ -6564,6 +3874,7 @@ B pd_console_login.macho __pthread_setspecific
 B pd_console_login.macho __pthread_setspecific_static
 B pd_console_login.macho __read
 B pd_console_login.macho __select
+B pd_console_login.macho __setenvp
 B pd_console_login.macho __simple_asl_log
 B pd_console_login.macho __simple_dprintf
 B pd_console_login.macho __simple_esappend
@@ -6583,6 +3894,7 @@ B pd_console_login.macho __simple_vsprintf
 B pd_console_login.macho __spin_lock
 B pd_console_login.macho __spin_lock_try
 B pd_console_login.macho __spin_unlock
+B pd_console_login.macho __unsetenvp
 B pd_console_login.macho __write
 B pd_console_login.macho __writev
 B pd_console_login.macho _abort
@@ -6766,11 +4078,14 @@ B pd_console_login.macho _pthread_setspecific
 B pd_console_login.macho _pthread_testcancel
 B pd_console_login.macho _pthread_tsd_shim_bootstrap
 B pd_console_login.macho _pthread_tsd_shim_bootstrap_with_base
+B pd_console_login.macho _putenv$UNIX2003
 B pd_console_login.macho _realloc
 B pd_console_login.macho _reallocf
 B pd_console_login.macho _scalable_zone_info
 B pd_console_login.macho _scalable_zone_statistics
 B pd_console_login.macho _select
+B pd_console_login.macho _setenv
+B pd_console_login.macho _setenv$UNIX2003
 B pd_console_login.macho _sigprocmask
 B pd_console_login.macho _spin_lock
 B pd_console_login.macho _spin_lock_try
@@ -6797,6 +4112,8 @@ B pd_console_login.macho _tcsetattr
 B pd_console_login.macho _tcsetpgrp
 B pd_console_login.macho _thread_switch
 B pd_console_login.macho _tiny_print_region_free_list
+B pd_console_login.macho _unsetenv
+B pd_console_login.macho _unsetenv$UNIX2003
 B pd_console_login.macho _valloc
 B pd_console_login.macho _vm_allocate
 B pd_console_login.macho _vm_deallocate
@@ -6817,20 +4134,7 @@ B printenv.macho ___collate_equiv_match
 B printenv.macho ___collate_load_error
 B printenv.macho ___collate_lookup
 B printenv.macho ___collate_lookup_l
-B printenv.macho ___mb_cur_max
-B printenv.macho ___mb_sb_limit
 B printenv.macho ___progname
-B printenv.macho ___sdidinit
-B printenv.macho ___sF
-B printenv.macho ___sfp
-B printenv.macho ___sglue
-B printenv.macho ___sinit
-B printenv.macho ___stderrp
-B printenv.macho ___stdinp
-B printenv.macho ___stdoutp
-B printenv.macho __cleanup
-B printenv.macho __CurrentRuneLocale
-B printenv.macho __DefaultRuneLocale
 B printenv.macho __err
 B printenv.macho __warn
 B printenv.macho _abort
@@ -6846,9 +4150,8 @@ B printenv.macho _f_prealloc
 B printenv.macho _fstatat
 B printenv.macho _fstatat64
 B printenv.macho _ftruncate
-B printenv.macho _getcwd
+B printenv.macho _getegid
 B printenv.macho _getentropy
-B printenv.macho _getenv
 B printenv.macho _geteuid
 B printenv.macho _getuid
 B printenv.macho _mkdir
@@ -6878,20 +4181,7 @@ B printf.macho ___collate_equiv_match
 B printf.macho ___collate_load_error
 B printf.macho ___collate_lookup
 B printf.macho ___collate_lookup_l
-B printf.macho ___mb_cur_max
-B printf.macho ___mb_sb_limit
 B printf.macho ___progname
-B printf.macho ___sdidinit
-B printf.macho ___sF
-B printf.macho ___sfp
-B printf.macho ___sglue
-B printf.macho ___sinit
-B printf.macho ___stderrp
-B printf.macho ___stdinp
-B printf.macho ___stdoutp
-B printf.macho __cleanup
-B printf.macho __CurrentRuneLocale
-B printf.macho __DefaultRuneLocale
 B printf.macho __err
 B printf.macho __warn
 B printf.macho _abort
@@ -6909,9 +4199,8 @@ B printf.macho _f_prealloc
 B printf.macho _fstatat
 B printf.macho _fstatat64
 B printf.macho _ftruncate
-B printf.macho _getcwd
+B printf.macho _getegid
 B printf.macho _getentropy
-B printf.macho _getenv
 B printf.macho _geteuid
 B printf.macho _getuid
 B printf.macho _mkdir
@@ -6941,20 +4230,7 @@ B pwd.macho ___collate_equiv_match
 B pwd.macho ___collate_load_error
 B pwd.macho ___collate_lookup
 B pwd.macho ___collate_lookup_l
-B pwd.macho ___mb_cur_max
-B pwd.macho ___mb_sb_limit
 B pwd.macho ___progname
-B pwd.macho ___sdidinit
-B pwd.macho ___sF
-B pwd.macho ___sfp
-B pwd.macho ___sglue
-B pwd.macho ___sinit
-B pwd.macho ___stderrp
-B pwd.macho ___stdinp
-B pwd.macho ___stdoutp
-B pwd.macho __cleanup
-B pwd.macho __CurrentRuneLocale
-B pwd.macho __DefaultRuneLocale
 B pwd.macho __err
 B pwd.macho __warn
 B pwd.macho _abort
@@ -6970,9 +4246,8 @@ B pwd.macho _f_prealloc
 B pwd.macho _fstatat
 B pwd.macho _fstatat64
 B pwd.macho _ftruncate
-B pwd.macho _getcwd
+B pwd.macho _getegid
 B pwd.macho _getentropy
-B pwd.macho _getenv
 B pwd.macho _geteuid
 B pwd.macho _getuid
 B pwd.macho _mkdir
@@ -7002,20 +4277,7 @@ B renice.macho ___collate_equiv_match
 B renice.macho ___collate_load_error
 B renice.macho ___collate_lookup
 B renice.macho ___collate_lookup_l
-B renice.macho ___mb_cur_max
-B renice.macho ___mb_sb_limit
 B renice.macho ___progname
-B renice.macho ___sdidinit
-B renice.macho ___sF
-B renice.macho ___sfp
-B renice.macho ___sglue
-B renice.macho ___sinit
-B renice.macho ___stderrp
-B renice.macho ___stdinp
-B renice.macho ___stdoutp
-B renice.macho __cleanup
-B renice.macho __CurrentRuneLocale
-B renice.macho __DefaultRuneLocale
 B renice.macho __err
 B renice.macho __warn
 B renice.macho _abort
@@ -7031,9 +4293,8 @@ B renice.macho _f_prealloc
 B renice.macho _fstatat
 B renice.macho _fstatat64
 B renice.macho _ftruncate
-B renice.macho _getcwd
+B renice.macho _getegid
 B renice.macho _getentropy
-B renice.macho _getenv
 B renice.macho _geteuid
 B renice.macho _getgrgid
 B renice.macho _getgrnam
@@ -7067,20 +4328,7 @@ B rev.macho ___collate_equiv_match
 B rev.macho ___collate_load_error
 B rev.macho ___collate_lookup
 B rev.macho ___collate_lookup_l
-B rev.macho ___mb_cur_max
-B rev.macho ___mb_sb_limit
 B rev.macho ___progname
-B rev.macho ___sdidinit
-B rev.macho ___sF
-B rev.macho ___sfp
-B rev.macho ___sglue
-B rev.macho ___sinit
-B rev.macho ___stderrp
-B rev.macho ___stdinp
-B rev.macho ___stdoutp
-B rev.macho __cleanup
-B rev.macho __CurrentRuneLocale
-B rev.macho __DefaultRuneLocale
 B rev.macho __err
 B rev.macho __warn
 B rev.macho _abort
@@ -7096,9 +4344,8 @@ B rev.macho _f_prealloc
 B rev.macho _fstatat
 B rev.macho _fstatat64
 B rev.macho _ftruncate
-B rev.macho _getcwd
+B rev.macho _getegid
 B rev.macho _getentropy
-B rev.macho _getenv
 B rev.macho _geteuid
 B rev.macho _getuid
 B rev.macho _mkdir
@@ -7128,20 +4375,7 @@ B rm.macho ___collate_equiv_match
 B rm.macho ___collate_load_error
 B rm.macho ___collate_lookup
 B rm.macho ___collate_lookup_l
-B rm.macho ___mb_cur_max
-B rm.macho ___mb_sb_limit
 B rm.macho ___progname
-B rm.macho ___sdidinit
-B rm.macho ___sF
-B rm.macho ___sfp
-B rm.macho ___sglue
-B rm.macho ___sinit
-B rm.macho ___stderrp
-B rm.macho ___stdinp
-B rm.macho ___stdoutp
-B rm.macho __cleanup
-B rm.macho __CurrentRuneLocale
-B rm.macho __DefaultRuneLocale
 B rm.macho __err
 B rm.macho __warn
 B rm.macho _abort
@@ -7157,9 +4391,8 @@ B rm.macho _f_prealloc
 B rm.macho _fstatat
 B rm.macho _fstatat64
 B rm.macho _ftruncate
-B rm.macho _getcwd
+B rm.macho _getegid
 B rm.macho _getentropy
-B rm.macho _getenv
 B rm.macho _geteuid
 B rm.macho _getgrgid
 B rm.macho _getgrnam
@@ -7194,20 +4427,7 @@ B rmdir.macho ___collate_equiv_match
 B rmdir.macho ___collate_load_error
 B rmdir.macho ___collate_lookup
 B rmdir.macho ___collate_lookup_l
-B rmdir.macho ___mb_cur_max
-B rmdir.macho ___mb_sb_limit
 B rmdir.macho ___progname
-B rmdir.macho ___sdidinit
-B rmdir.macho ___sF
-B rmdir.macho ___sfp
-B rmdir.macho ___sglue
-B rmdir.macho ___sinit
-B rmdir.macho ___stderrp
-B rmdir.macho ___stdinp
-B rmdir.macho ___stdoutp
-B rmdir.macho __cleanup
-B rmdir.macho __CurrentRuneLocale
-B rmdir.macho __DefaultRuneLocale
 B rmdir.macho __err
 B rmdir.macho __warn
 B rmdir.macho _abort
@@ -7223,9 +4443,8 @@ B rmdir.macho _f_prealloc
 B rmdir.macho _fstatat
 B rmdir.macho _fstatat64
 B rmdir.macho _ftruncate
-B rmdir.macho _getcwd
+B rmdir.macho _getegid
 B rmdir.macho _getentropy
-B rmdir.macho _getenv
 B rmdir.macho _geteuid
 B rmdir.macho _getuid
 B rmdir.macho _mkdir
@@ -7255,20 +4474,7 @@ B rs.macho ___collate_equiv_match
 B rs.macho ___collate_load_error
 B rs.macho ___collate_lookup
 B rs.macho ___collate_lookup_l
-B rs.macho ___mb_cur_max
-B rs.macho ___mb_sb_limit
 B rs.macho ___progname
-B rs.macho ___sdidinit
-B rs.macho ___sF
-B rs.macho ___sfp
-B rs.macho ___sglue
-B rs.macho ___sinit
-B rs.macho ___stderrp
-B rs.macho ___stdinp
-B rs.macho ___stdoutp
-B rs.macho __cleanup
-B rs.macho __CurrentRuneLocale
-B rs.macho __DefaultRuneLocale
 B rs.macho __err
 B rs.macho __warn
 B rs.macho _abort
@@ -7286,9 +4492,8 @@ B rs.macho _f_prealloc
 B rs.macho _fstatat
 B rs.macho _fstatat64
 B rs.macho _ftruncate
-B rs.macho _getcwd
+B rs.macho _getegid
 B rs.macho _getentropy
-B rs.macho _getenv
 B rs.macho _geteuid
 B rs.macho _getuid
 B rs.macho _mkdir
@@ -7319,20 +4524,7 @@ B sed.macho ___collate_equiv_match
 B sed.macho ___collate_load_error
 B sed.macho ___collate_lookup
 B sed.macho ___collate_lookup_l
-B sed.macho ___mb_cur_max
-B sed.macho ___mb_sb_limit
 B sed.macho ___progname
-B sed.macho ___sdidinit
-B sed.macho ___sF
-B sed.macho ___sfp
-B sed.macho ___sglue
-B sed.macho ___sinit
-B sed.macho ___stderrp
-B sed.macho ___stdinp
-B sed.macho ___stdoutp
-B sed.macho __cleanup
-B sed.macho __CurrentRuneLocale
-B sed.macho __DefaultRuneLocale
 B sed.macho __err
 B sed.macho __warn
 B sed.macho _abort
@@ -7352,9 +4544,8 @@ B sed.macho _fstatat
 B sed.macho _fstatat64
 B sed.macho _ftruncate
 B sed.macho _getattrlist$UNIX2003
-B sed.macho _getcwd
+B sed.macho _getegid
 B sed.macho _getentropy
-B sed.macho _getenv
 B sed.macho _geteuid
 B sed.macho _getuid
 B sed.macho _mkdir
@@ -7384,20 +4575,7 @@ B seq.macho ___collate_equiv_match
 B seq.macho ___collate_load_error
 B seq.macho ___collate_lookup
 B seq.macho ___collate_lookup_l
-B seq.macho ___mb_cur_max
-B seq.macho ___mb_sb_limit
 B seq.macho ___progname
-B seq.macho ___sdidinit
-B seq.macho ___sF
-B seq.macho ___sfp
-B seq.macho ___sglue
-B seq.macho ___sinit
-B seq.macho ___stderrp
-B seq.macho ___stdinp
-B seq.macho ___stdoutp
-B seq.macho __cleanup
-B seq.macho __CurrentRuneLocale
-B seq.macho __DefaultRuneLocale
 B seq.macho __err
 B seq.macho __warn
 B seq.macho _abort
@@ -7416,9 +4594,8 @@ B seq.macho _floor
 B seq.macho _fstatat
 B seq.macho _fstatat64
 B seq.macho _ftruncate
-B seq.macho _getcwd
+B seq.macho _getegid
 B seq.macho _getentropy
-B seq.macho _getenv
 B seq.macho _geteuid
 B seq.macho _getuid
 B seq.macho _mkdir
@@ -7449,20 +4626,7 @@ B sleep.macho ___collate_equiv_match
 B sleep.macho ___collate_load_error
 B sleep.macho ___collate_lookup
 B sleep.macho ___collate_lookup_l
-B sleep.macho ___mb_cur_max
-B sleep.macho ___mb_sb_limit
 B sleep.macho ___progname
-B sleep.macho ___sdidinit
-B sleep.macho ___sF
-B sleep.macho ___sfp
-B sleep.macho ___sglue
-B sleep.macho ___sinit
-B sleep.macho ___stderrp
-B sleep.macho ___stdinp
-B sleep.macho ___stdoutp
-B sleep.macho __cleanup
-B sleep.macho __CurrentRuneLocale
-B sleep.macho __DefaultRuneLocale
 B sleep.macho __err
 B sleep.macho __host_page_size
 B sleep.macho __kernelrpc_host_create_mach_voucher
@@ -7485,9 +4649,8 @@ B sleep.macho _fstatat64
 B sleep.macho _ftruncate
 B sleep.macho _g_mach_ipc_clock_port
 B sleep.macho _g_mach_ipc_clock_sem
-B sleep.macho _getcwd
+B sleep.macho _getegid
 B sleep.macho _getentropy
-B sleep.macho _getenv
 B sleep.macho _geteuid
 B sleep.macho _getuid
 B sleep.macho _host_get_clock_service
@@ -7597,7 +4760,6 @@ B sleep.macho _thread_create_running
 B sleep.macho _verr
 B sleep.macho _verrc
 B sleep.macho _verrx
-B sleep.macho _voucher_mach_msg_set
 B sleep.macho _vwarn
 B sleep.macho _vwarnc
 B sleep.macho _vwarnx
@@ -7610,20 +4772,7 @@ B stat.macho ___collate_lookup
 B stat.macho ___collate_lookup_l
 B stat.macho ___commpage_gettimeofday
 B stat.macho ___gettimeofday
-B stat.macho ___mb_cur_max
-B stat.macho ___mb_sb_limit
 B stat.macho ___progname
-B stat.macho ___sdidinit
-B stat.macho ___sF
-B stat.macho ___sfp
-B stat.macho ___sglue
-B stat.macho ___sinit
-B stat.macho ___stderrp
-B stat.macho ___stdinp
-B stat.macho ___stdoutp
-B stat.macho __cleanup
-B stat.macho __CurrentRuneLocale
-B stat.macho __DefaultRuneLocale
 B stat.macho __err
 B stat.macho __warn
 B stat.macho _abort
@@ -7644,9 +4793,8 @@ B stat.macho _f_prealloc
 B stat.macho _fstatat
 B stat.macho _fstatat64
 B stat.macho _ftruncate
-B stat.macho _getcwd
+B stat.macho _getegid
 B stat.macho _getentropy
-B stat.macho _getenv
 B stat.macho _geteuid
 B stat.macho _getgrgid
 B stat.macho _getgrnam
@@ -7707,9 +4855,6 @@ B syslogd.macho ___b2d_D2A
 B syslogd.macho ___Balloc_D2A
 B syslogd.macho ___Bfree_D2A
 B syslogd.macho ___bigtens_D2A
-B syslogd.macho ___bsdthread_create
-B syslogd.macho ___bsdthread_register
-B syslogd.macho ___bsdthread_terminate
 B syslogd.macho ___chmod_extended
 B syslogd.macho ___cleanup
 B syslogd.macho ___cmp_D2A
@@ -7741,7 +4886,6 @@ B syslogd.macho ___hi0bits_D2A
 B syslogd.macho ___hldtoa
 B syslogd.macho ___i2b_D2A
 B syslogd.macho ___increment_D2A
-B syslogd.macho ___is_threaded
 B syslogd.macho ___isctype
 B syslogd.macho ___isthreaded
 B syslogd.macho ___istype
@@ -7876,7 +5020,9 @@ B syslogd.macho __kernelrpc_vm_remap
 B syslogd.macho __libc_printf_os_crash
 B syslogd.macho __mach_errors
 B syslogd.macho __mach_fork_child
-B syslogd.macho __main_thread
+B syslogd.macho __malloc_fork_child
+B syslogd.macho __malloc_fork_parent
+B syslogd.macho __malloc_fork_prepare
 B syslogd.macho __malloc_no_asl_log
 B syslogd.macho __NSConcreteAutoBlock
 B syslogd.macho __NSConcreteFinalizingBlock
@@ -8251,14 +5397,9 @@ B syslogd.macho _OSSpinLockUnlock
 B syslogd.macho _pipe
 B syslogd.macho _posix_madvise
 B syslogd.macho _posix_memalign
-B syslogd.macho _pthread_create
-B syslogd.macho _pthread_equal
 B syslogd.macho _pthread_getspecific
 B syslogd.macho _pthread_key_create
 B syslogd.macho _pthread_key_init_np
-B syslogd.macho _pthread_main_np
-B syslogd.macho _pthread_main_thread_bootstrap
-B syslogd.macho _pthread_main_thread_np
 B syslogd.macho _pthread_mutex_destroy
 B syslogd.macho _pthread_mutex_getprioceiling
 B syslogd.macho _pthread_mutex_init
@@ -8294,7 +5435,6 @@ B syslogd.macho _pthread_rwlockattr_init
 B syslogd.macho _pthread_rwlockattr_setpshared
 B syslogd.macho _pthread_setspecific
 B syslogd.macho _pthread_tsd_shim_bootstrap
-B syslogd.macho _pthread_tsd_shim_bootstrap_with_base
 B syslogd.macho _puts
 B syslogd.macho _pututxline
 B syslogd.macho _qsort
@@ -8471,20 +5611,7 @@ B tail.macho ___collate_equiv_match
 B tail.macho ___collate_load_error
 B tail.macho ___collate_lookup
 B tail.macho ___collate_lookup_l
-B tail.macho ___mb_cur_max
-B tail.macho ___mb_sb_limit
 B tail.macho ___progname
-B tail.macho ___sdidinit
-B tail.macho ___sF
-B tail.macho ___sfp
-B tail.macho ___sglue
-B tail.macho ___sinit
-B tail.macho ___stderrp
-B tail.macho ___stdinp
-B tail.macho ___stdoutp
-B tail.macho __cleanup
-B tail.macho __CurrentRuneLocale
-B tail.macho __DefaultRuneLocale
 B tail.macho __err
 B tail.macho __flockfile
 B tail.macho __flockfile_debug_stub
@@ -8511,9 +5638,8 @@ B tail.macho _fstatat64
 B tail.macho _ftruncate
 B tail.macho _g_mach_ipc_clock_port
 B tail.macho _g_mach_ipc_clock_sem
-B tail.macho _getcwd
+B tail.macho _getegid
 B tail.macho _getentropy
-B tail.macho _getenv
 B tail.macho _geteuid
 B tail.macho _getuid
 B tail.macho _host_get_clock_service
@@ -8627,7 +5753,6 @@ B tail.macho _thread_create_running
 B tail.macho _verr
 B tail.macho _verrc
 B tail.macho _verrx
-B tail.macho _voucher_mach_msg_set
 B tail.macho _vwarn
 B tail.macho _vwarnc
 B tail.macho _vwarnx
@@ -8638,20 +5763,7 @@ B tar.macho ___collate_equiv_match
 B tar.macho ___collate_load_error
 B tar.macho ___collate_lookup
 B tar.macho ___collate_lookup_l
-B tar.macho ___mb_cur_max
-B tar.macho ___mb_sb_limit
 B tar.macho ___progname
-B tar.macho ___sdidinit
-B tar.macho ___sF
-B tar.macho ___sfp
-B tar.macho ___sglue
-B tar.macho ___sinit
-B tar.macho ___stderrp
-B tar.macho ___stdinp
-B tar.macho ___stdoutp
-B tar.macho __cleanup
-B tar.macho __CurrentRuneLocale
-B tar.macho __DefaultRuneLocale
 B tar.macho __err
 B tar.macho __warn
 B tar.macho _abort
@@ -8686,9 +5798,8 @@ B tar.macho _fstatat
 B tar.macho _fstatat64
 B tar.macho _ftruncate
 B tar.macho _getattrlist$UNIX2003
-B tar.macho _getcwd
+B tar.macho _getegid
 B tar.macho _getentropy
-B tar.macho _getenv
 B tar.macho _geteuid
 B tar.macho _getuid
 B tar.macho _gmtime
@@ -8742,20 +5853,7 @@ B tee.macho ___collate_equiv_match
 B tee.macho ___collate_load_error
 B tee.macho ___collate_lookup
 B tee.macho ___collate_lookup_l
-B tee.macho ___mb_cur_max
-B tee.macho ___mb_sb_limit
 B tee.macho ___progname
-B tee.macho ___sdidinit
-B tee.macho ___sF
-B tee.macho ___sfp
-B tee.macho ___sglue
-B tee.macho ___sinit
-B tee.macho ___stderrp
-B tee.macho ___stdinp
-B tee.macho ___stdoutp
-B tee.macho __cleanup
-B tee.macho __CurrentRuneLocale
-B tee.macho __DefaultRuneLocale
 B tee.macho __err
 B tee.macho __warn
 B tee.macho _abort
@@ -8771,9 +5869,8 @@ B tee.macho _f_prealloc
 B tee.macho _fstatat
 B tee.macho _fstatat64
 B tee.macho _ftruncate
-B tee.macho _getcwd
+B tee.macho _getegid
 B tee.macho _getentropy
-B tee.macho _getenv
 B tee.macho _geteuid
 B tee.macho _getuid
 B tee.macho _mkdir
@@ -8803,20 +5900,7 @@ B test.macho ___collate_equiv_match
 B test.macho ___collate_load_error
 B test.macho ___collate_lookup
 B test.macho ___collate_lookup_l
-B test.macho ___mb_cur_max
-B test.macho ___mb_sb_limit
 B test.macho ___progname
-B test.macho ___sdidinit
-B test.macho ___sF
-B test.macho ___sfp
-B test.macho ___sglue
-B test.macho ___sinit
-B test.macho ___stderrp
-B test.macho ___stdinp
-B test.macho ___stdoutp
-B test.macho __cleanup
-B test.macho __CurrentRuneLocale
-B test.macho __DefaultRuneLocale
 B test.macho __err
 B test.macho __warn
 B test.macho _abort
@@ -8832,9 +5916,8 @@ B test.macho _f_prealloc
 B test.macho _fstatat
 B test.macho _fstatat64
 B test.macho _ftruncate
-B test.macho _getcwd
+B test.macho _getegid
 B test.macho _getentropy
-B test.macho _getenv
 B test.macho _geteuid
 B test.macho _getuid
 B test.macho _mkdir
@@ -8866,20 +5949,7 @@ B touch.macho ___collate_lookup
 B touch.macho ___collate_lookup_l
 B touch.macho ___commpage_gettimeofday
 B touch.macho ___gettimeofday
-B touch.macho ___mb_cur_max
-B touch.macho ___mb_sb_limit
 B touch.macho ___progname
-B touch.macho ___sdidinit
-B touch.macho ___sF
-B touch.macho ___sfp
-B touch.macho ___sglue
-B touch.macho ___sinit
-B touch.macho ___stderrp
-B touch.macho ___stdinp
-B touch.macho ___stdoutp
-B touch.macho __cleanup
-B touch.macho __CurrentRuneLocale
-B touch.macho __DefaultRuneLocale
 B touch.macho __err
 B touch.macho __warn
 B touch.macho _abort
@@ -8901,9 +5971,8 @@ B touch.macho _f_prealloc
 B touch.macho _fstatat
 B touch.macho _fstatat64
 B touch.macho _ftruncate
-B touch.macho _getcwd
+B touch.macho _getegid
 B touch.macho _getentropy
-B touch.macho _getenv
 B touch.macho _geteuid
 B touch.macho _gettimeofday
 B touch.macho _getuid
@@ -8951,20 +6020,7 @@ B true.macho ___collate_equiv_match
 B true.macho ___collate_load_error
 B true.macho ___collate_lookup
 B true.macho ___collate_lookup_l
-B true.macho ___mb_cur_max
-B true.macho ___mb_sb_limit
 B true.macho ___progname
-B true.macho ___sdidinit
-B true.macho ___sF
-B true.macho ___sfp
-B true.macho ___sglue
-B true.macho ___sinit
-B true.macho ___stderrp
-B true.macho ___stdinp
-B true.macho ___stdoutp
-B true.macho __cleanup
-B true.macho __CurrentRuneLocale
-B true.macho __DefaultRuneLocale
 B true.macho __err
 B true.macho __warn
 B true.macho _abort
@@ -8980,9 +6036,8 @@ B true.macho _f_prealloc
 B true.macho _fstatat
 B true.macho _fstatat64
 B true.macho _ftruncate
-B true.macho _getcwd
+B true.macho _getegid
 B true.macho _getentropy
-B true.macho _getenv
 B true.macho _geteuid
 B true.macho _getuid
 B true.macho _mkdir
@@ -9012,20 +6067,7 @@ B unexpand.macho ___collate_equiv_match
 B unexpand.macho ___collate_load_error
 B unexpand.macho ___collate_lookup
 B unexpand.macho ___collate_lookup_l
-B unexpand.macho ___mb_cur_max
-B unexpand.macho ___mb_sb_limit
 B unexpand.macho ___progname
-B unexpand.macho ___sdidinit
-B unexpand.macho ___sF
-B unexpand.macho ___sfp
-B unexpand.macho ___sglue
-B unexpand.macho ___sinit
-B unexpand.macho ___stderrp
-B unexpand.macho ___stdinp
-B unexpand.macho ___stdoutp
-B unexpand.macho __cleanup
-B unexpand.macho __CurrentRuneLocale
-B unexpand.macho __DefaultRuneLocale
 B unexpand.macho __err
 B unexpand.macho __flockfile
 B unexpand.macho __flockfile_debug_stub
@@ -9045,9 +6087,8 @@ B unexpand.macho _f_prealloc
 B unexpand.macho _fstatat
 B unexpand.macho _fstatat64
 B unexpand.macho _ftruncate
-B unexpand.macho _getcwd
+B unexpand.macho _getegid
 B unexpand.macho _getentropy
-B unexpand.macho _getenv
 B unexpand.macho _geteuid
 B unexpand.macho _getuid
 B unexpand.macho _mkdir
@@ -9077,20 +6118,7 @@ B uniq.macho ___collate_equiv_match
 B uniq.macho ___collate_load_error
 B uniq.macho ___collate_lookup
 B uniq.macho ___collate_lookup_l
-B uniq.macho ___mb_cur_max
-B uniq.macho ___mb_sb_limit
 B uniq.macho ___progname
-B uniq.macho ___sdidinit
-B uniq.macho ___sF
-B uniq.macho ___sfp
-B uniq.macho ___sglue
-B uniq.macho ___sinit
-B uniq.macho ___stderrp
-B uniq.macho ___stdinp
-B uniq.macho ___stdoutp
-B uniq.macho __cleanup
-B uniq.macho __CurrentRuneLocale
-B uniq.macho __DefaultRuneLocale
 B uniq.macho __err
 B uniq.macho __warn
 B uniq.macho _abort
@@ -9107,9 +6135,8 @@ B uniq.macho _f_prealloc
 B uniq.macho _fstatat
 B uniq.macho _fstatat64
 B uniq.macho _ftruncate
-B uniq.macho _getcwd
+B uniq.macho _getegid
 B uniq.macho _getentropy
-B uniq.macho _getenv
 B uniq.macho _geteuid
 B uniq.macho _getuid
 B uniq.macho _mkdir
@@ -9139,20 +6166,7 @@ B unvis.macho ___collate_equiv_match
 B unvis.macho ___collate_load_error
 B unvis.macho ___collate_lookup
 B unvis.macho ___collate_lookup_l
-B unvis.macho ___mb_cur_max
-B unvis.macho ___mb_sb_limit
 B unvis.macho ___progname
-B unvis.macho ___sdidinit
-B unvis.macho ___sF
-B unvis.macho ___sfp
-B unvis.macho ___sglue
-B unvis.macho ___sinit
-B unvis.macho ___stderrp
-B unvis.macho ___stdinp
-B unvis.macho ___stdoutp
-B unvis.macho __cleanup
-B unvis.macho __CurrentRuneLocale
-B unvis.macho __DefaultRuneLocale
 B unvis.macho __err
 B unvis.macho __warn
 B unvis.macho _abort
@@ -9168,9 +6182,8 @@ B unvis.macho _f_prealloc
 B unvis.macho _fstatat
 B unvis.macho _fstatat64
 B unvis.macho _ftruncate
-B unvis.macho _getcwd
+B unvis.macho _getegid
 B unvis.macho _getentropy
-B unvis.macho _getenv
 B unvis.macho _geteuid
 B unvis.macho _getuid
 B unvis.macho _mkdir
@@ -9200,20 +6213,7 @@ B vis.macho ___collate_equiv_match
 B vis.macho ___collate_load_error
 B vis.macho ___collate_lookup
 B vis.macho ___collate_lookup_l
-B vis.macho ___mb_cur_max
-B vis.macho ___mb_sb_limit
 B vis.macho ___progname
-B vis.macho ___sdidinit
-B vis.macho ___sF
-B vis.macho ___sfp
-B vis.macho ___sglue
-B vis.macho ___sinit
-B vis.macho ___stderrp
-B vis.macho ___stdinp
-B vis.macho ___stdoutp
-B vis.macho __cleanup
-B vis.macho __CurrentRuneLocale
-B vis.macho __DefaultRuneLocale
 B vis.macho __err
 B vis.macho __warn
 B vis.macho _abort
@@ -9231,9 +6231,8 @@ B vis.macho _f_prealloc
 B vis.macho _fstatat
 B vis.macho _fstatat64
 B vis.macho _ftruncate
-B vis.macho _getcwd
+B vis.macho _getegid
 B vis.macho _getentropy
-B vis.macho _getenv
 B vis.macho _geteuid
 B vis.macho _getuid
 B vis.macho _mkdir
@@ -9277,20 +6276,7 @@ B wc.macho ___collate_equiv_match
 B wc.macho ___collate_load_error
 B wc.macho ___collate_lookup
 B wc.macho ___collate_lookup_l
-B wc.macho ___mb_cur_max
-B wc.macho ___mb_sb_limit
 B wc.macho ___progname
-B wc.macho ___sdidinit
-B wc.macho ___sF
-B wc.macho ___sfp
-B wc.macho ___sglue
-B wc.macho ___sinit
-B wc.macho ___stderrp
-B wc.macho ___stdinp
-B wc.macho ___stdoutp
-B wc.macho __cleanup
-B wc.macho __CurrentRuneLocale
-B wc.macho __DefaultRuneLocale
 B wc.macho __err
 B wc.macho __warn
 B wc.macho _abort
@@ -9306,9 +6292,8 @@ B wc.macho _f_prealloc
 B wc.macho _fstatat
 B wc.macho _fstatat64
 B wc.macho _ftruncate
-B wc.macho _getcwd
+B wc.macho _getegid
 B wc.macho _getentropy
-B wc.macho _getenv
 B wc.macho _geteuid
 B wc.macho _getuid
 B wc.macho _mkdir
@@ -9338,20 +6323,7 @@ B which.macho ___collate_equiv_match
 B which.macho ___collate_load_error
 B which.macho ___collate_lookup
 B which.macho ___collate_lookup_l
-B which.macho ___mb_cur_max
-B which.macho ___mb_sb_limit
 B which.macho ___progname
-B which.macho ___sdidinit
-B which.macho ___sF
-B which.macho ___sfp
-B which.macho ___sglue
-B which.macho ___sinit
-B which.macho ___stderrp
-B which.macho ___stdinp
-B which.macho ___stdoutp
-B which.macho __cleanup
-B which.macho __CurrentRuneLocale
-B which.macho __DefaultRuneLocale
 B which.macho __err
 B which.macho __warn
 B which.macho _abort
@@ -9367,9 +6339,8 @@ B which.macho _f_prealloc
 B which.macho _fstatat
 B which.macho _fstatat64
 B which.macho _ftruncate
-B which.macho _getcwd
+B which.macho _getegid
 B which.macho _getentropy
-B which.macho _getenv
 B which.macho _geteuid
 B which.macho _getuid
 B which.macho _mkdir
@@ -9399,20 +6370,7 @@ B xargs.macho ___collate_equiv_match
 B xargs.macho ___collate_load_error
 B xargs.macho ___collate_lookup
 B xargs.macho ___collate_lookup_l
-B xargs.macho ___mb_cur_max
-B xargs.macho ___mb_sb_limit
 B xargs.macho ___progname
-B xargs.macho ___sdidinit
-B xargs.macho ___sF
-B xargs.macho ___sfp
-B xargs.macho ___sglue
-B xargs.macho ___sinit
-B xargs.macho ___stderrp
-B xargs.macho ___stdinp
-B xargs.macho ___stdoutp
-B xargs.macho __cleanup
-B xargs.macho __CurrentRuneLocale
-B xargs.macho __DefaultRuneLocale
 B xargs.macho __err
 B xargs.macho __warn
 B xargs.macho _abort
@@ -9428,9 +6386,8 @@ B xargs.macho _f_prealloc
 B xargs.macho _fstatat
 B xargs.macho _fstatat64
 B xargs.macho _ftruncate
-B xargs.macho _getcwd
+B xargs.macho _getegid
 B xargs.macho _getentropy
-B xargs.macho _getenv
 B xargs.macho _geteuid
 B xargs.macho _getuid
 B xargs.macho _mkdir
@@ -9465,20 +6422,7 @@ B yes.macho ___collate_equiv_match
 B yes.macho ___collate_load_error
 B yes.macho ___collate_lookup
 B yes.macho ___collate_lookup_l
-B yes.macho ___mb_cur_max
-B yes.macho ___mb_sb_limit
 B yes.macho ___progname
-B yes.macho ___sdidinit
-B yes.macho ___sF
-B yes.macho ___sfp
-B yes.macho ___sglue
-B yes.macho ___sinit
-B yes.macho ___stderrp
-B yes.macho ___stdinp
-B yes.macho ___stdoutp
-B yes.macho __cleanup
-B yes.macho __CurrentRuneLocale
-B yes.macho __DefaultRuneLocale
 B yes.macho __err
 B yes.macho __warn
 B yes.macho _abort
@@ -9494,9 +6438,8 @@ B yes.macho _f_prealloc
 B yes.macho _fstatat
 B yes.macho _fstatat64
 B yes.macho _ftruncate
-B yes.macho _getcwd
+B yes.macho _getegid
 B yes.macho _getentropy
-B yes.macho _getenv
 B yes.macho _geteuid
 B yes.macho _getuid
 B yes.macho _mkdir
@@ -9523,292 +6466,36 @@ B yes.macho _warnc
 B yes.macho _warnx
 D ____mb_cur_max
 D ____mb_cur_max_l
-D ____runetype
-D ____runetype_l
-D ____tolower
-D ____tolower_l
-D ____toupper
-D ____toupper_l
-D ___assert_rtn
-D ___bsdthread_create
-D ___bsdthread_register
-D ___bsdthread_terminate
-D ___chkstk_darwin
-D ___cleanup
 D ___collate_equiv_match
 D ___collate_load_error
 D ___collate_lookup
 D ___collate_lookup_l
 D ___commpage_gettimeofday
 D ___darwin_check_fd_set_overflow
-D ___error
-D ___fflush
-D ___fix_locale_grouping_str
-D ___fpclassifyd
-D ___getdirentries64
-D ___getpid
 D ___gettimeofday
-D ___is_threaded
-D ___isctype
-D ___istype
-D ___istype_l
 D ___kill
-D ___maskrune
-D ___maskrune_l
 D ___mb_cur_max
 D ___mb_sb_limit
-D ___memcpy_chk
 D ___memmove_chk
-D ___memset_chk
-D ___mprotect
-D ___os_once_reset
 D ___progname
-D ___psynch_cvbroad
-D ___psynch_cvclrprepost
-D ___psynch_cvsignal
-D ___psynch_cvwait
-D ___psynch_mutexdrop
-D ___psynch_mutexwait
-D ___psynch_rw_rdlock
-D ___psynch_rw_unlock
-D ___psynch_rw_wrlock
-D ___sclose
-D ___sdidinit
-D ___semwait_signal
-D ___sF
-D ___sflush
-D ___sfp
-D ___sglue
-D ___sinit
-D ___snprintf_chk
-D ___snprintf_object_size_chk
-D ___sread
-D ___sseek
-D ___stack_chk_fail
-D ___stack_chk_guard
-D ___stderrp
-D ___stdinp
-D ___stdoutp
 D ___stpncpy_chk
-D ___strchrnul
 D ___strcpy_chk
-D ___strlcpy_chk
 D ___strncpy_chk
-D ___strtok_r
-D ___swrite
-D ___syscall_logger
 D ___thread_selfid
-D ___tolower
-D ___tolower_l
-D ___toupper
-D ___toupper_l
-D ___ulock_wait
-D ___ulock_wake
-D ___unw_add_dynamic_fde
-D ___unw_remove_dynamic_fde
-D ___vsnprintf_chk
-D ___wcwidth
-D ___wcwidth_l
-D __Block_copy
-D __Block_extended_layout
-D __Block_has_signature
-D __Block_isDeallocating
-D __Block_layout
-D __Block_object_assign
-D __Block_object_dispose
-D __Block_release
-D __Block_signature
-D __Block_tryRetain
-D __Block_use_RR2
-D __Block_use_stret
 D __c_locale
-D __cleanup
-D __close
-D __current_pid
 D __CurrentRuneLocale
 D __DefaultRuneLocale
-D __dup2
 D __dyld_find_unwind_sections
 D __dyld_get_image_slide
 D __dyld_is_memory_immutable
 D __dyld_register_func_for_remove_image
-D __fcntl
-D __fstat
-D __fwalk
-D __getprogname
-D __host_page_size
-D __ioctl
 D __kernelrpc_host_create_mach_voucher
-D __kernelrpc_mach_port_allocate
-D __kernelrpc_mach_port_allocate_full
-D __kernelrpc_mach_port_allocate_name
-D __kernelrpc_mach_port_allocate_qos
-D __kernelrpc_mach_port_allocate_trap
-D __kernelrpc_mach_port_construct
-D __kernelrpc_mach_port_deallocate
-D __kernelrpc_mach_port_deallocate_trap
-D __kernelrpc_mach_port_destroy
-D __kernelrpc_mach_port_destruct
-D __kernelrpc_mach_port_dnrequest_info
-D __kernelrpc_mach_port_extract_member
-D __kernelrpc_mach_port_extract_right
-D __kernelrpc_mach_port_get_attributes
-D __kernelrpc_mach_port_get_attributes_trap
-D __kernelrpc_mach_port_get_context
-D __kernelrpc_mach_port_get_refs
-D __kernelrpc_mach_port_get_set_status
-D __kernelrpc_mach_port_get_srights
-D __kernelrpc_mach_port_guard
-D __kernelrpc_mach_port_guard_with_flags
-D __kernelrpc_mach_port_insert_member
-D __kernelrpc_mach_port_insert_right
-D __kernelrpc_mach_port_insert_right_trap
-D __kernelrpc_mach_port_kernel_object
-D __kernelrpc_mach_port_kobject
-D __kernelrpc_mach_port_kobject_description
-D __kernelrpc_mach_port_mod_refs
-D __kernelrpc_mach_port_mod_refs_trap
-D __kernelrpc_mach_port_move_member
-D __kernelrpc_mach_port_names
-D __kernelrpc_mach_port_peek
-D __kernelrpc_mach_port_rename
-D __kernelrpc_mach_port_request_notification
-D __kernelrpc_mach_port_request_notification_trap
-D __kernelrpc_mach_port_set_attributes
-D __kernelrpc_mach_port_set_context
-D __kernelrpc_mach_port_set_mscount
-D __kernelrpc_mach_port_set_seqno
-D __kernelrpc_mach_port_space_basic_info
-D __kernelrpc_mach_port_space_info
-D __kernelrpc_mach_port_special_reply_port_reset_link
-D __kernelrpc_mach_port_swap_guard
-D __kernelrpc_mach_port_type
-D __kernelrpc_mach_port_unguard
-D __kernelrpc_mach_port_unguard_trap
-D __kernelrpc_mach_vm_allocate
-D __kernelrpc_mach_vm_allocate_trap
-D __kernelrpc_mach_vm_deallocate
-D __kernelrpc_mach_vm_deallocate_trap
-D __kernelrpc_mach_vm_map
-D __kernelrpc_mach_vm_map_trap
-D __kernelrpc_mach_vm_protect
-D __kernelrpc_mach_vm_protect_trap
-D __kernelrpc_mach_vm_purgable_control
-D __kernelrpc_mach_vm_purgable_control_trap
-D __kernelrpc_mach_vm_read
-D __kernelrpc_mach_vm_remap
-D __kernelrpc_task_set_port_space
-D __kernelrpc_vm_map
-D __kernelrpc_vm_read
-D __kernelrpc_vm_remap
-D __main_thread
-D __mal_semwait_sleep
-D __malloc_no_asl_log
-D __NSConcreteAutoBlock
-D __NSConcreteFinalizingBlock
-D __NSConcreteGlobalBlock
-D __NSConcreteMallocBlock
-D __NSConcreteStackBlock
-D __NSConcreteWeakBlockVariable
-D __NSGetEnviron
-D __NSGetMachExecuteHeader
-D __open
 D __os_alloc_once
 D __os_alloc_once_table
-D __os_assert_log
-D __os_assert_log_ctx
-D __os_assumes_log
-D __os_assumes_log_ctx
-D __os_avoid_tail_call
-D __os_cpu_number_override
-D __os_crash
-D __os_crash_callback
-D __os_lock_corruption_abort
-D __os_lock_handoff_lock
-D __os_lock_handoff_trylock
-D __os_lock_handoff_unlock
-D __os_lock_nospin_lock
-D __os_lock_nospin_trylock
-D __os_lock_nospin_unlock
-D __os_lock_spin_lock
-D __os_lock_spin_trylock
-D __os_lock_spin_unlock
-D __os_lock_type_handoff
-D __os_lock_type_nospin
-D __os_lock_type_spin
-D __os_lock_type_unfair
-D __os_lock_unfair_lock
-D __os_lock_unfair_trylock
-D __os_lock_unfair_unlock
-D __os_nospin_lock_lock
-D __os_nospin_lock_trylock
-D __os_nospin_lock_unlock
-D __os_once
-D __os_once_gate_corruption_abort
-D __os_once_gate_recursive_abort
-D __os_once_gate_unowned_abort
-D __os_unfair_lock_corruption_abort
-D __os_unfair_lock_recursive_abort
-D __os_unfair_lock_unowned_abort
-D __OSSpinLockLockSlow
 D __PathLocale
-D __platform_memcmp
-D __platform_memmove
 D __platform_memset
-D __platform_strchr
-D __platform_strcmp
-D __platform_strlen
-D __pthread_exit_if_canceled
-D __pthread_getspecific
-D __pthread_key_create
-D __pthread_once
-D __pthread_rwlock_rdlock
-D __pthread_rwlock_unlock
-D __pthread_rwlock_wrlock
-D __pthread_self
 D __pthread_set_self
-D __pthread_setspecific
-D __pthread_setspecific_static
-D __read
-D __Read_RuneMagi
-D __select
-D __simple_asl_log
-D __simple_dprintf
-D __simple_esappend
-D __simple_esprintf
-D __simple_getenv
-D __simple_put
-D __simple_putline
-D __simple_salloc
-D __simple_sappend
-D __simple_sfree
-D __simple_sprintf
-D __simple_sresize
-D __simple_string
-D __simple_vdprintf
-D __simple_vesprintf
-D __simple_vsprintf
-D __spin_lock
-D __spin_lock_try
-D __spin_unlock
-D __sread
-D __sseek
-D __swrite
-D __Unwind_DeleteException
-D __Unwind_ForcedUnwind
-D __Unwind_GetGR
-D __Unwind_GetIP
-D __Unwind_GetLanguageSpecificData
-D __Unwind_GetRegionStart
-D __Unwind_RaiseException
-D __Unwind_Resume
-D __Unwind_SetGR
-D __Unwind_SetIP
-D __write
-D __writev
 D __xpc_runtime_is_app_sandboxed
-D _abort
-D _abort_with_reason
 D _abs
 D _access
 D _acos
@@ -9822,626 +6509,115 @@ D _asctime_r
 D _asin
 D _atoi
 D _atoi_l
-D _bcopy
-D _Block_size
-D _btowc
-D _btowc_l
-D _bzero
-D _calloc
-D _catclose
-D _catgets
-D _catopen
-D _cerror
-D _cerror_nocancel
 D _chmod
 D _chmod$UNIX2003
-D _clock_alarm
-D _clock_get_attributes
-D _clock_get_time
-D _clock_gettime
-D _close
 D _close$UNIX2003
 D _connect
 D _ctime
 D _ctime_r
 D _daylight
-D _digittoint
-D _digittoint_l
 D _dladdr
 D _dlclose
 D _dlopen
 D _dlsym
 D _duplocale
-D _errno
-D _exit
-D _f_prealloc
 D _fabs
-D _fclose
-D _fcntl
 D _fcntl$UNIX2003
-D _fdopen
 D _fegetenv
 D _fesetenv
-D _fflush
-D _ffs
-D _fileno
 D _fileport_makefd
 D _fileport_makeport
-D _flsl
 D _fmod
 D _fpathconf
 D _fputs$UNIX2003
-D _fread
-D _free
 D _freelocale
-D _fstat
 D _fstat$INODE64
-D _fstatat
-D _fstatat64
-D _fstatfs
 D _ftruncate
 D _g_mach_ipc_clock_port
 D _g_mach_ipc_clock_sem
 D _getcwd
-D _getdtablesize
 D _getegid
 D _getentropy
-D _getenv
 D _geteuid
-D _getpid
-D _getprogname
 D _gettimeofday
 D _getuid
 D _gmtime
 D _gmtime_r
-D _heapsort
-D _host_get_clock_service
-D _host_get_io_master
-D _host_info
-D _host_kernel_version
-D _host_lockgroup_info
-D _host_processor_info
-D _host_register_mach_voucher_attr_manager
-D _host_register_well_known_mach_voucher_attr_manager
-D _host_request_notification
-D _host_self_trap
-D _host_set_atm_diagnostic_flag
-D _host_set_multiuser_config_flags
-D _host_statistics
-D _host_statistics64
-D _host_virtual_physical_table_info
-D _ioctl
-D _isalnum
-D _isalnum_l
-D _isalpha
-D _isalpha_l
-D _isascii
-D _isatty
-D _isblank
-D _isblank_l
-D _iscntrl
-D _iscntrl_l
-D _isdigit
-D _isdigit_l
-D _isgraph
-D _isgraph_l
-D _ishexnumber
-D _ishexnumber_l
-D _isideogram
-D _isideogram_l
-D _islower
-D _islower_l
-D _isnumber
-D _isnumber_l
-D _isphonogram
-D _isphonogram_l
-D _isprint
-D _isprint_l
-D _ispunct
-D _ispunct_l
-D _isrune
-D _isrune_l
-D _issetugid
-D _isspace
-D _isspace_l
-D _isspecial
-D _isspecial_l
-D _isupper
-D _isupper_l
-D _isxdigit
-D _isxdigit_l
 D _kdebug_trace
 D _kill
 D _kill$UNIX2003
-D _kmod_get_info
-D _labs
-D _localeconv
-D _localeconv_l
 D _localtime
 D _localtime_r
-D _lock_set_create
-D _lock_set_destroy
-D _log10
-D _lseek
-D _lstat
 D _lstat$INODE64
-D _mach_absolute_time
-D _mach_absolute_time_kernel
-D _mach_continuous_time_kernel
-D _mach_error_full_diag
-D _mach_error_string
-D _mach_error_type
-D _mach_host_self
 D _mach_ipc_clock_init
-D _mach_memory_info
-D _mach_memory_object_memory_entry
-D _mach_memory_object_memory_entry_64
-D _mach_msg
-D _mach_msg_destroy
-D _mach_msg_overwrite
-D _mach_msg_overwrite_trap
-D _mach_msg_trap
-D _mach_port_allocate
 D _mach_port_deallocate
-D _mach_port_extract_right
-D _mach_port_get_attributes
-D _mach_port_insert_right
-D _mach_port_kernel_object
 D _mach_port_mod_refs
-D _mach_port_unguard
-D _mach_ports_lookup
-D _mach_ports_register
-D _mach_reply_port
-D _mach_timebase_info
-D _mach_timebase_info_trap
-D _mach_vm_allocate
-D _mach_vm_deallocate
-D _mach_vm_map
-D _mach_vm_protect
-D _mach_vm_purgable_control
-D _mach_vm_read
-D _mach_vm_remap
-D _mach_zone_info
-D _mach_zone_info_for_zone
-D _madvise
-D _malloc
-D _malloc_error_break
-D _malloc_printf
 D _malloc_size
-D _malloc_tracing_enabled
-D _malloc_zone_check_fail
-D _mblen
-D _mblen_l
-D _mbrlen
-D _mbrlen_l
-D _mbrtowc
-D _mbrtowc_l
-D _mbsinit
-D _mbsinit_l
 D _mbsnrtowcs
 D _mbsnrtowcs_l
-D _mbsrtowcs
-D _mbsrtowcs_l
-D _mbstowcs
-D _mbstowcs_l
-D _mbtowc
-D _mbtowc_l
-D _memchr
-D _memcmp
 D _memcpy
-D _memmem
-D _memmove
 D _memset
-D _mig_strncpy
-D _mig_strncpy_zerofill
 D _mkdir
 D _mktime$UNIX2003
 D _mmap
 D _modf
-D _mprotect
 D _mprotect$UNIX2003
 D _munmap
-D _nan
-D _nanf
-D _nanl
 D _nanosleep
 D _newlocale
-D _nextwctype
-D _nextwctype_l
-D _nl_langinfo
-D _nl_langinfo_l
-D _off32
-D _off64
 D _offtime
-D _open
 D _open_dprotected_np
 D _open$UNIX2003
-D _openat
-D _os_lock_lock
-D _os_lock_trylock
-D _os_lock_unlock
-D _os_unfair_lock_assert_not_owner
-D _os_unfair_lock_assert_owner
-D _os_unfair_lock_lock
-D _os_unfair_lock_lock_no_tsd
-D _os_unfair_lock_lock_with_options
-D _os_unfair_lock_trylock
-D _os_unfair_lock_unlock
-D _os_unfair_lock_unlock_no_tsd
-D _os_unfair_recursive_lock_lock_with_options
-D _os_unfair_recursive_lock_owned
-D _os_unfair_recursive_lock_trylock
-D _os_unfair_recursive_lock_tryunlock4objc
-D _os_unfair_recursive_lock_unlock
-D _os_unfair_recursive_lock_unlock_forked_child
-D _OSAtomicAdd32
-D _OSAtomicAdd32Barrier
-D _OSAtomicAdd64
-D _OSAtomicAdd64Barrier
-D _OSAtomicAnd32
-D _OSAtomicAnd32Barrier
-D _OSAtomicAnd32Orig
-D _OSAtomicAnd32OrigBarrier
-D _OSAtomicCompareAndSwap32
-D _OSAtomicCompareAndSwap32Barrier
-D _OSAtomicCompareAndSwap64
-D _OSAtomicCompareAndSwap64Barrier
-D _OSAtomicCompareAndSwapInt
-D _OSAtomicCompareAndSwapIntBarrier
-D _OSAtomicCompareAndSwapLong
-D _OSAtomicCompareAndSwapLongBarrier
-D _OSAtomicCompareAndSwapPtr
-D _OSAtomicCompareAndSwapPtrBarrier
-D _OSAtomicDecrement32
-D _OSAtomicDecrement32Barrier
-D _OSAtomicDecrement64
-D _OSAtomicDecrement64Barrier
-D _OSAtomicDequeue
-D _OSAtomicEnqueue
-D _OSAtomicIncrement32
-D _OSAtomicIncrement32Barrier
-D _OSAtomicIncrement64
-D _OSAtomicIncrement64Barrier
-D _OSAtomicOr32
-D _OSAtomicOr32Barrier
-D _OSAtomicOr32Orig
-D _OSAtomicOr32OrigBarrier
-D _OSAtomicTestAndClear
-D _OSAtomicTestAndClearBarrier
-D _OSAtomicTestAndSet
-D _OSAtomicTestAndSetBarrier
-D _OSAtomicXor32
-D _OSAtomicXor32Barrier
-D _OSAtomicXor32Orig
-D _OSAtomicXor32OrigBarrier
-D _OSMemoryBarrier
-D _OSSpinLockLock
-D _OSSpinLockTry
-D _OSSpinLockUnlock
-D _posix_madvise
-D _posix_memalign
 D _posix2time
 D _pow
 D _pread
-D _processor_set_create
-D _processor_set_default
-D _pthread_cond_broadcast
-D _pthread_cond_destroy
-D _pthread_cond_init$UNIX2003
-D _pthread_cond_signal
-D _pthread_cond_signal_thread_np
-D _pthread_cond_timedwait_relative_np
-D _pthread_cond_wait
-D _pthread_condattr_destroy
-D _pthread_condattr_getpshared
-D _pthread_condattr_init
-D _pthread_condattr_setpshared
-D _pthread_create
-D _pthread_equal
-D _pthread_getspecific
-D _pthread_introspection_getspecific_np
-D _pthread_introspection_setspecific_np
-D _pthread_key_create
-D _pthread_key_delete
-D _pthread_key_init_np
-D _pthread_mach_thread_np
-D _pthread_main_np
-D _pthread_main_thread_bootstrap
-D _pthread_main_thread_np
-D _pthread_mutex_destroy
-D _pthread_mutex_getprioceiling
-D _pthread_mutex_init
-D _pthread_mutex_lock
-D _pthread_mutex_setprioceiling
-D _pthread_mutex_trylock
-D _pthread_mutex_unlock
-D _pthread_mutexattr_destroy$UNIX2003
-D _pthread_mutexattr_getpolicy_np
-D _pthread_mutexattr_getprioceiling
-D _pthread_mutexattr_getprotocol
-D _pthread_mutexattr_getpshared
-D _pthread_mutexattr_gettype
-D _pthread_mutexattr_init
-D _pthread_mutexattr_setpolicy_np
-D _pthread_mutexattr_setprioceiling
-D _pthread_mutexattr_setprotocol
-D _pthread_mutexattr_setpshared
-D _pthread_mutexattr_settype
-D _pthread_once
 D _pthread_rwlock_rdlock
 D _pthread_rwlock_unlock
 D _pthread_rwlock_wrlock
-D _pthread_self
-D _pthread_setspecific
 D _pthread_testcancel
 D _pthread_testcancel$UNIX2003
-D _pthread_tsd_shim_bootstrap
-D _pthread_tsd_shim_bootstrap_for_libc
-D _pthread_tsd_shim_bootstrap_with_base
-D _putenv$UNIX2003
 D _pwrite
-D _qsort
 D _querylocale
-D _rand_r
 D _read
 D _read$UNIX2003
-D _realloc
-D _reallocf
 D _recvmsg
-D _rewind
-D _rindex
-D _rmdir
-D _rpmatch
-D _scalable_zone_info
-D _scalable_zone_statistics
 D _scalbn
 D _sched_yield
 D _select
-D _semaphore_create
-D _semaphore_destroy
-D _semaphore_signal
-D _semaphore_signal_trap
-D _semaphore_wait
-D _semaphore_wait_trap
 D _send
-D _setenv$UNIX2003
 D _setlocale
 D _sigprocmask
-D _skip
 D _sleep
 D _sleep$UNIX2003
 D _socket
-D _spin_lock
-D _spin_lock_try
-D _spin_unlock
 D _sqrt
-D _stat
 D _stat$INODE64
-D _stpcpy
-D _stpncpy
-D _strcasecmp
-D _strcasecmp_l
-D _strcasestr
-D _strcasestr_l
-D _strcat
-D _strchr
-D _strcmp
-D _strcoll
-D _strcoll_l
-D _strcpy
-D _strcspn
-D _strdup
-D _strerror
-D _strerror_r
 D _strftime_l$UNIX2003
 D _strftime$UNIX2003
-D _strlcat
-D _strlcpy
-D _strlen
-D _strmode
-D _strncasecmp
-D _strncasecmp_l
-D _strncat
-D _strncmp
-D _strncpy
-D _strndup
-D _strnlen
-D _strnstr
-D _strpbrk
-D _strrchr
-D _strsep
-D _strsignal
-D _strsignal_r
-D _strspn
 D _strstr
-D _strtok
-D _strtol
-D _strtol_l
 D _strtoll
 D _strtoll_l
 D _strtoul
 D _strtoul_l
-D _strxfrm
-D _strxfrm_l
-D _swab
 D _swtch_pri
-D _sys_errlist
-D _sys_nerr
-D _sysconf
-D _sysctl
-D _sysctlbyname
 D _syslog
-D _szone_check_counter
-D _szone_check_modulo
-D _szone_check_start
-D _task_assign
-D _task_assign_default
-D _task_create
-D _task_create_suid_cred
-D _task_generate_corpse
-D _task_get_assignment
-D _task_get_dyld_image_infos
-D _task_get_emulation_vector
-D _task_get_exc_guard_behavior
-D _task_get_exception_ports
-D _task_get_mach_voucher
-D _task_get_special_port
-D _task_get_state
-D _task_info
-D _task_inspect
-D _task_map_corpse_info
-D _task_map_corpse_info_64
-D _task_policy
-D _task_policy_get
-D _task_policy_set
-D _task_purgable_info
-D _task_register_dyld_get_process_state
-D _task_register_dyld_image_infos
-D _task_register_dyld_set_dyld_state
-D _task_register_dyld_shared_cache_image_info
-D _task_resume
-D _task_resume2
-D _task_sample
-D _task_self_trap
-D _task_set_emulation
-D _task_set_emulation_vector
-D _task_set_exc_guard_behavior
-D _task_set_exception_ports
-D _task_set_info
-D _task_set_mach_voucher
-D _task_set_phys_footprint_limit
-D _task_set_policy
-D _task_set_ras_pc
-D _task_set_special_port
-D _task_set_state
-D _task_suspend
-D _task_suspend2
-D _task_swap_exception_ports
-D _task_swap_mach_voucher
-D _task_terminate
-D _task_threads
-D _task_unregister_dyld_image_infos
-D _task_zone_info
-D _thread_create
-D _thread_create_running
-D _thread_destruct_special_reply_port
-D _thread_switch
 D _time
 D _time2posix
 D _timegm
 D _timelocal
 D _timeoff
 D _timezone$UNIX2003
-D _timingsafe_bcmp
-D _tiny_print_region_free_list
 D _tlv_get_addr
-D _toascii
-D _tolower
-D _tolower_l
-D _toupper
-D _toupper_l
-D _towctrans
-D _towctrans_l
 D _trunc
 D _tzname
 D _tzset
 D _tzsetwall
-D _unlink
-D _unsetenv$UNIX2003
-D _unw_get_fpreg
-D _unw_get_proc_info
-D _unw_get_proc_name
-D _unw_get_reg
-D _unw_getcontext
-D _unw_init_local
-D _unw_is_fpreg
-D _unw_is_signal_frame
-D _unw_iterate_dwarf_unwind_cache
-D _unw_local_addr_space
-D _unw_regname
-D _unw_resume
-D _unw_set_fpreg
-D _unw_set_reg
-D _unw_step
 D _uselocale
 D _uuid_unparse
 D _uuid_unparse_lower
 D _uuid_unparse_upper
-D _valloc
-D _vm_allocate
-D _vm_deallocate
-D _vm_map
-D _vm_protect
-D _vm_purgable_control
-D _vm_read
-D _vm_remap
-D _voucher_mach_msg_set
 D _vproc_swap_integer
-D _wcpcpy
-D _wcpncpy
-D _wcrtomb
-D _wcrtomb_l
-D _wcscasecmp
-D _wcscasecmp_l
-D _wcscat
-D _wcschr
-D _wcscmp
-D _wcscoll
-D _wcscoll_l
-D _wcscpy
-D _wcscspn
-D _wcsdup
-D _wcslcat
-D _wcslcpy
-D _wcslen
-D _wcsncasecmp
-D _wcsncasecmp_l
-D _wcsncat
-D _wcsncmp
-D _wcsncpy
-D _wcsnlen
 D _wcsnrtombs
 D _wcsnrtombs_l
-D _wcspbrk
-D _wcsrchr
-D _wcsrtombs
-D _wcsrtombs_l
-D _wcsspn
-D _wcsstr
-D _wcstoimax
-D _wcstoimax_l
-D _wcstok
-D _wcstol
-D _wcstol_l
-D _wcstoll
-D _wcstoll_l
-D _wcstombs
-D _wcstombs_l
-D _wcstoul
-D _wcstoul_l
-D _wcstoull
-D _wcstoull_l
-D _wcstoumax
-D _wcstoumax_l
-D _wcswidth
-D _wcswidth_l
-D _wcsxfrm
-D _wcsxfrm_l
-D _wctob
-D _wctob_l
-D _wctomb
-D _wctomb_l
-D _wctrans
-D _wctrans_l
-D _wctype
-D _wctype_l
-D _wcwidth
-D _wcwidth_l
-D _wmemchr
-D _wmemcmp
-D _wmemcpy
-D _wmemmove
-D _wmemset
-D _write
 D _write$UNIX2003
 D _writev

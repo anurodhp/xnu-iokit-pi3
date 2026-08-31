@@ -102,6 +102,11 @@ fi
 
 (cd "$EXTRACT" && ar x "../../libncurses.a")
 (cd "$EXTRACT" && ar x "../../libc_locale.a" table.o none.o)
+# See narrow_rune_locale.sh's own header (static-linking cleanup, Phase
+# 1d, 2026-08-30): demotes the 4 public rune-locale globals table.o/
+# none.o carry so they bind to libsystem_c.dylib (a sibling below)
+# instead of this dylib defining a second, independently-mutable copy.
+./narrow_rune_locale.sh "$EXTRACT"
 (cd "$EXTRACT" && ar x "../../libmach_ipc.a" mach_ipc_clock_init.o)
 
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \

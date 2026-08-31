@@ -76,7 +76,28 @@ if [ ! -x "$NEWLD_BINDIR/ld" ]; then
 fi
 
 (cd "$EXTRACT" && ar x "../../libiconv.a")
+
+# table.o/none.o are NO LONGER extracted from libc_locale.a here
+# (static-linking cleanup, Phase 1d, 2026-08-30). Between them they carry
+# __CurrentRuneLocale, __DefaultRuneLocale, ___mb_cur_max and
+# ___mb_sb_limit -- real, MUTABLE process-wide locale state, not just
+# code. Five separate leaf dylibs were each extracting the same two
+# objects, so a process holding two of them had two "current locales"
+# that setlocale() on one could never update in the other. All four are
+# real exports of libsystem_c.dylib, a sibling on the link line below,
+# which is where real Apple keeps them.
+#
+# Members dropped from libiconv.a's own extraction for the same reason:
+#   qsort.o/heapsort.o    -> libsystem_c.dylib (which extracts the very
+#                            same objects out of libremovefile.a)
+#   libiconv_flsl_compat.o-> flsl moved to libsystem_c.dylib, next to the
+#                            qsort.o that is its only real caller (see
+#                            build_libsystem_c.sh); this file's own header
+#                            already noted it was a deliberate duplicate
+#                            of removefile_syscalls.c's copy.
+(cd "$EXTRACT" && rm -f qsort.o heapsort.o libiconv_flsl_compat.o)
 (cd "$EXTRACT" && ar x "../../libc_locale.a" table.o none.o)
+./narrow_rune_locale.sh "$EXTRACT"
 
 # Same real CFLAGS recipe every locale-touching compat file in this
 # project uses (see build_libresolv_dylib.sh's own copy for the fuller

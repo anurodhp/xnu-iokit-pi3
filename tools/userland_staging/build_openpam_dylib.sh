@@ -117,6 +117,11 @@ fi
 
 (cd "$EXTRACT" && ar x "../../libopenpam.a")
 (cd "$EXTRACT" && ar x "../../libc_locale.a" table.o none.o)
+# See narrow_rune_locale.sh's own header (static-linking cleanup, Phase
+# 1d, 2026-08-30): demotes the 4 public rune-locale globals table.o/
+# none.o carry so they bind to libsystem_c.dylib (a sibling below)
+# instead of this dylib defining a second, independently-mutable copy.
+./narrow_rune_locale.sh "$EXTRACT"
 (cd "$EXTRACT" && ar x "../../syslogd_libc_extras.a" geteuid.o)
 (cd "$EXTRACT" && ar x "../../liblaunchd_syscalls.a" sys__setgroups.o)
 (cd "$EXTRACT" && ar x "../../libpthread.a" pthread_getegid.o)

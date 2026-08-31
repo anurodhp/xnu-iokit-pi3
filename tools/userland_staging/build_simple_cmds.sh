@@ -615,19 +615,74 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
 # two; harmless to always link both (unused-but-linked, same tolerance
 # this project's other tiers already take with e.g. libclosure/libmalloc
 # stand-ins -- confirmed no duplicate-symbol conflicts, zero of these
-# tier-1 sources define their own err/getopt).
+# tier-1 sources define their own err/getopt). Neither is duplicated:
+# `_err`/`_warn`/`_getopt`/`_optarg`/`_optind`/`_opterr`/`_optreset` are
+# genuinely absent from every LINK_DYLIBS sibling (confirmed via nm -gUj,
+# 2026-08-30 static-linking cleanup audit) -- this project's own
+# libsystem_kernel.dylib is a narrow Mach/VM-focused port, not a full
+# syscalls.master surface, and libsystem_c.dylib never picked up
+# getopt/err at all. These stay for real.
+#
 # table.c/none.c added 2026-08-28 alongside the NEWLD_BINDIR fix above --
 # real third_party/Libc/locale/FreeBSD/table.c (_DefaultRuneXLocale, the
 # C-locale ctype table libc_locale_globals_compat.c's __global_locale
 # points at) and its own real none.c dependency (the encoding-stub
 # __none_mbrtowc/__none_wcrtomb/etc functions table.c's static
-# initializer references). Always linked, like err.c/getopt.c above --
-# harmless for the 44 commands that don't reference these symbols
-# (nothing here pulls them in transitively), and is what actually
-# resolves the ___global_locale/___locale_key/__none_* undefined-symbol
-# failures the 32 locale-dependent commands hit (see docs/backlog.md item
-# d9).
-COMMON_EXTRA="$LIBC/gen/FreeBSD/err.c $LIBC/stdlib/FreeBSD/getopt.c simple_cmds_read_compat.c simple_cmds_getenv_compat.c libc_locale_globals_compat.c simple_cmds_libsystem_c_gap_compat.c cp_mv_syscalls.c $LIBC/locale/FreeBSD/table.c $LIBC/locale/FreeBSD/none.c $LIBC/locale/FreeBSD/ldpart.c $LIBC/gen/FreeBSD/getcwd.c $LIBC/stdio/FreeBSD/findfp.c $LIBC/locale/FreeBSD/collate.c $LIBC/locale/FreeBSD/collcmp.c"
+# initializer references). Still always linked -- but now NARROWED (see
+# the `narrow_rune_locale.sh` call right after this loop): compiled under
+# this file's own CFLAGS, table.c/none.c ALSO define
+# `__CurrentRuneLocale`/`__DefaultRuneLocale`/`___mb_cur_max`/
+# `___mb_sb_limit`, real PUBLIC process-wide locale globals that
+# libsystem_c.dylib -- a real sibling on every command's link line --
+# already exports for real. Before 2026-08-30 every one of the ~70
+# commands here carried its OWN independently-mutable copy of "the
+# current locale", the same duplicate-STATE bug class as
+# mach_task_self_/g_zone (docs/static-linking-cleanup-plan.md). The
+# private-extern internals these two files are actually needed for
+# (`_DefaultRuneXLocale`/`__none_*`/whatever `___global_locale` cascades
+# into) are untouched by the narrowing -- same treatment already applied
+# to libiconv/libncurses/libcopyfile/libresolv/libopenpam.dylib.
+#
+# getcwd.c/simple_cmds_getenv_compat.c REMOVED from this list entirely
+# 2026-08-30 (static-linking cleanup, Phase 2a) -- verified via `nm -m`
+# that every symbol each one defines is BOTH fully external (no
+# private-extern content requiring a local copy) AND already a real
+# export of libsystem_c.dylib:
+#   simple_cmds_getenv_compat.c -> its own separate getenv/setenv/
+#                  unsetenv/putenv/_NSGetEnviron, each managing a SECOND,
+#                  disconnected environ array -- real duplicate MUTABLE
+#                  STATE, the same class of bug as the FILE table above,
+#                  and arguably worse (a setenv() through this copy would
+#                  be invisible to any real libsystem_c.dylib consumer,
+#                  and vice versa). libsystem_c.dylib's real setenv.c
+#                  family (build_libsystem_c.sh) covers every one of
+#                  these for real, confirmed via nm -gUj.
+#   getcwd.c's own real export (`_getcwd`) is likewise already a real
+#                  libsystem_c.dylib export.
+#
+# collate.c/collcmp.c/ldpart.c stay -- a first pass (2026-08-30) tried
+# dropping these too on the same "libsystem_c already covers their
+# public exports" theory, but a real rebuild of all ~70 commands proved
+# it wrong: several PER-COMMAND extra objects need symbols these files
+# provide that libsystem_c.dylib does NOT export --
+# `___part_load_locale`/`___ldpart_free_extra` (ldpart.c, needed by every
+# command that links a `*_timelocal.o` extra: date/gzip/diff/tar/less)
+# and `___collate_collating_symbol`/`___collate_equiv_class`/
+# `___collate_range_cmp` (collate.c, needed by diff's fnmatch wrapper).
+#
+# findfp.c ALSO stays, for the same real reason, discovered the same
+# way: 6 commands (tail/fold/expand/unexpand/hexdump/nl) link
+# Libc/stdio/FreeBSD/freopen.c as a per-command extra, and real Apple's
+# freopen() calls `__sfprelease()` -- which is `__private_extern__` in
+# real findfp.c (confirmed via `nm -m`: libsystem_c.dylib's own copy is
+# "non-external (was a private external)" too), so no image can reach
+# another's copy. Unlike collate.c/ldpart.c, findfp.c's OTHER 9 symbols
+# (___sF/___sfp/___sglue/___sdidinit/__cleanup/___sinit/___stdinp/
+# ___stdoutp/___stderrp) really are fully public and really are
+# libsystem_c.dylib's job -- so findfp.c gets the same narrowing
+# treatment as table.c/none.c below, rather than being linked wholesale
+# the way it was before this pass.
+COMMON_EXTRA="$LIBC/gen/FreeBSD/err.c $LIBC/stdlib/FreeBSD/getopt.c simple_cmds_read_compat.c libc_locale_globals_compat.c simple_cmds_libsystem_c_gap_compat.c cp_mv_syscalls.c $LIBC/locale/FreeBSD/table.c $LIBC/locale/FreeBSD/none.c $LIBC/locale/FreeBSD/ldpart.c $LIBC/locale/FreeBSD/collate.c $LIBC/locale/FreeBSD/collcmp.c $LIBC/stdio/FreeBSD/findfp.c"
 # cp_mv_syscalls.c promoted from a cp/mv-only CMD_LIST extra source to a
 # common object (2026-08-28): its real lchown()/setattrlist()/waitpid()
 # turned out to be needed by many more commands once the dynamic-link
@@ -642,16 +697,10 @@ for f in $COMMON_EXTRA; do
     if [ ! -f "$out" ]; then
         # collate.c only: real Libc/locale/FreeBSD/collate.h guards its
         # own __collate_mbstowcs/__collate_wcsdup/etc prototypes behind
-        # `#ifdef __LIBC__` (the real umbrella Libc build always defines
-        # this; this project's per-command CFLAGS never has, since no
-        # other COMMON_EXTRA file needs it) -- without it, collate.c's
-        # own internal forward uses of those two functions get an
-        # implicit-int declaration that then conflicts with their real
-        # wchar_t*-returning definitions later in the same file
-        # ("conflicting types" compile error, confirmed real and
-        # unrelated to the ld64-609/NEWLD_BINDIR saga above -- a plain
-        # missing-prototype bug in how this project invokes an
-        # unmodified Apple header, not a linker issue).
+        # `#ifdef __LIBC__` -- without it, collate.c's own internal
+        # forward uses of those two functions get an implicit-int
+        # declaration that conflicts with their real wchar_t*-returning
+        # definitions later in the same file.
         f_flags=""
         case "$base" in
             collate) f_flags="-D__LIBC__" ;;
@@ -659,6 +708,33 @@ for f in $COMMON_EXTRA; do
         "$CLANG" $CFLAGS $f_flags "$f" -o "$out"
     fi
 done
+# Narrow common_table.o/common_none.o's public rune-locale globals so
+# they bind to libsystem_c.dylib instead of this project's ~70 commands
+# each carrying their own copy (static-linking cleanup, Phase 2a,
+# 2026-08-30) -- see narrow_rune_locale.sh's own header and COMMON_EXTRA's
+# comment above for the full rationale. Idempotent: narrowing an
+# already-narrowed object a second time is a correctness-preserving
+# no-op (the symbols are already private), so this is safe to run every
+# build even though common_table.o/common_none.o are cached across runs.
+./narrow_rune_locale.sh "$OUT/simple_obj" common_
+
+# Narrow common_findfp.o's 9 fully-public stdio FILE-table symbols the
+# same way (static-linking cleanup, Phase 2a, 2026-08-30) -- see
+# COMMON_EXTRA's own comment on findfp.c above. __sfprelease (private
+# extern) and anything else findfp.c defines survive untouched via
+# -keep_private_externs, same mechanism narrow_rune_locale.sh uses.
+FINDFP_OBJ="$OUT/simple_obj/common_findfp.o"
+if [ -f "$FINDFP_OBJ" ]; then
+    XCODE12_LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+    "$XCODE12_LD" -r -arch arm64 -keep_private_externs \
+        -unexported_symbol ___sF -unexported_symbol ___sfp \
+        -unexported_symbol ___sglue -unexported_symbol ___sdidinit \
+        -unexported_symbol __cleanup -unexported_symbol ___sinit \
+        -unexported_symbol ___stdinp -unexported_symbol ___stdoutp \
+        -unexported_symbol ___stderrp \
+        "$FINDFP_OBJ" -o "$FINDFP_OBJ.narrowed"
+    mv -f "$FINDFP_OBJ.narrowed" "$FINDFP_OBJ"
+fi
 
 # Real, unmodified find(1) getdate.y (third_party/shell_cmds/find/
 # getdate.y) -- find's real -newerXY predicate can take either a
@@ -1794,7 +1870,12 @@ for spec in "${CMD_LIST[@]}"; do
     # real ld64-609 crash this used to trigger only reproduces under
     # Xcode 12's own bundled linker; NEWLD_BINDIR's -B override on the
     # link line below avoids it.
-    locale_extra_objs="$OUT/simple_obj/common_libc_locale_globals_compat.o $OUT/simple_obj/common_table.o $OUT/simple_obj/common_none.o $OUT/simple_obj/common_ldpart.o $OUT/simple_obj/common_getcwd.o $OUT/simple_obj/common_findfp.o $OUT/simple_obj/common_collate.o $OUT/simple_obj/common_collcmp.o"
+    #
+    # getcwd.o dropped 2026-08-30 (static-linking cleanup, Phase 2a) --
+    # see COMMON_EXTRA's own comment. ldpart.o/collate.o/collcmp.o/
+    # findfp.o (now narrowed) stay: real per-command extras need symbols
+    # only they provide.
+    locale_extra_objs="$OUT/simple_obj/common_libc_locale_globals_compat.o $OUT/simple_obj/common_table.o $OUT/simple_obj/common_none.o $OUT/simple_obj/common_ldpart.o $OUT/simple_obj/common_collate.o $OUT/simple_obj/common_collcmp.o $OUT/simple_obj/common_findfp.o"
 
     # Real dynamic link (2026-08-28) -- no -static/-e start (see
     # LINK_DYLIBS's own header comment near LINK_COMMON for what this
@@ -1815,7 +1896,7 @@ for spec in "${CMD_LIST[@]}"; do
         -o "${name}.macho" \
         ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
         "$wrapper_obj" "$obj" $extra_objs \
-        "$OUT/simple_obj/common_err.o" "$OUT/simple_obj/common_getopt.o" "$OUT/simple_obj/common_simple_cmds_getenv_compat.o" \
+        "$OUT/simple_obj/common_err.o" "$OUT/simple_obj/common_getopt.o" \
         "$OUT/simple_obj/common_simple_cmds_libsystem_c_gap_compat.o" \
         "$OUT/simple_obj/common_cp_mv_syscalls.o" \
         $extra_libs $locale_extra_objs \

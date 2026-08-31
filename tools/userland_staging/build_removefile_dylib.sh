@@ -70,6 +70,44 @@ fi
 
 (cd "$EXTRACT" && ar x "../../libremovefile.a")
 
+# Members dropped 2026-08-30 (static-linking cleanup, Phase 1d). Each was
+# a second owner of something libsystem_c.dylib -- already a sibling on
+# the link line below -- defines for real:
+#
+#   geteuid.o    -> raw BSD syscall stub, real Apple puts it in libSystem
+#   qsort.o      -> Libc/stdlib/FreeBSD/qsort.c; libsystem_c extracts THIS
+#                   VERY OBJECT out of libremovefile.a for its own build
+#   heapsort.o   -> ditto (qsort's real fallback path)
+#   fstatat64.o  -> _fstatat/_fstatat64, generated syscall stubs
+#   mkdir.o      -> _mkdir, generated syscall stub
+#   rand.o       -> _rand/_rand_r/_srand/_sranddev
+#   random.o     -> _random/_srandom/_initstate/_setstate/_srandomdev
+#
+# rand.o/random.o matter most of the seven: both hold real MUTABLE PRNG
+# state (rand.c's `_next`, random.c's state array), so before this change
+# a process holding both libremovefile.dylib and libsystem_c.dylib had
+# two independently-seeded generators answering to one API. libsystem_c
+# now extracts both objects for itself (see build_libsystem_c.sh), so
+# there is exactly one.
+#
+# qsort_b.o is deliberately KEPT: libsystem_c takes qsort.o/heapsort.o but
+# not the Block-based qsort_b(), so this dylib remains its single owner.
+(cd "$EXTRACT" && rm -f \
+    geteuid.o qsort.o heapsort.o fstatat64.o mkdir.o rand.o random.o)
+
+# removefile_syscalls.o is REBUILT here rather than reused from the
+# archive: four of its shims (unlink/rmdir/read/gettimeofday) are also
+# real libsystem_c.dylib exports, and the remaining six (rename,
+# unlinkat, reallocarray, flsl, getiopolicy_np, setiopolicy_np) are not
+# defined by any sibling, so the object cannot simply be dropped.
+# -DREMOVEFILE_SYSCALLS_DYLIB compiles out exactly the four duplicates --
+# see removefile_syscalls.c's own header for why the guard exists instead
+# of a deletion (libremovefile.a still has real static consumers that run
+# with no siblings loaded and genuinely need their own copies).
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -DREMOVEFILE_SYSCALLS_DYLIB \
+    removefile_syscalls.c -o "$EXTRACT/removefile_syscalls.o"
+
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libremovefile.dylib"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \

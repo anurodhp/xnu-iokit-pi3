@@ -345,12 +345,193 @@ each change, not in a batch.
 | # | task | status |
 |---|---|---|
 | 1 | `dup_symbol_audit.sh` + baseline | **done** |
-| 2 | Phase 1a: de-static `libdispatch.dylib` (backlog d1) | **done, unverified** (490 → 2) |
-| 3 | Phase 1b: de-static `libc++.dylib` | **done, unverified** (426 → 59) |
-| 4 | Phase 1c: de-static `libxpc.dylib` + `libxml2.dylib` | libxpc **done** (189 → 62); **libxml2 not started** |
-| 5 | Phase 1d: residual dylib duplicate state | not started (262 left, table above) |
-| 6 | Phase 2a: simple-commands baseline | not started |
-| 7 | Phase 2b: launchd/launchctl/syslogd/pd_console_login | not started |
+| 2 | Phase 1a: de-static `libdispatch.dylib` (backlog d1) | **done, QEMU-verified** (490 → 2) |
+| 3 | Phase 1b: de-static `libc++.dylib` | **done, QEMU-verified** (426 → 59, then 21+18 further via Phase 1d below) |
+| 4 | Phase 1c: de-static `libxpc.dylib` + `libxml2.dylib` | **both done, QEMU-verified** |
+| 5 | Phase 1d: residual dylib duplicate state | **done, QEMU-verified**: 262 → 157 (session totals below) |
+| 6 | Phase 2a: simple-commands baseline | **done, QEMU-verified**: ~70 commands' own shadowed-symbol count roughly halved (66-72 → 47-53 each) |
+| 7 | Phase 2b: launchd/launchctl/syslogd/pd_console_login | **rebuilt against the refreshed chain only** — deep dup-fixing (900+ shadowed symbols each) not started |
+| 8 | Real QEMU boot verification + baseline refresh | **done** (2026-08-30 session) |
+
+## Session 2026-08-30: Phase 1d + Phase 2a, QEMU-verified
+
+Picked up where the handoff above left off. Real, measured results —
+`dup_symbol_audit.sh --summary` before/after this session:
+
+| | dylib duplicates | binary shadowing facts |
+|---|---|---|
+| start of this session | 262 | 8918 |
+| end of this session | 157 | 6466 (7518 before the pre-existing `_getegid` gap surfaced by baseline staleness, see below) |
+
+### What was fixed, by owner
+
+- **`libsystem_kernel.dylib`** gained the whole `__kernelrpc_mach_port_*`
+  MIG client-stub set (51 symbols) via a real `mig` regen of
+  `osfmk/mach/mach_port.defs` run directly in
+  `build_libsystem_kernel.sh`, plus a narrowed `mach_port_set_attributes`
+  extracted from `mach_port_wrappers_real.c`. Previously this set had
+  **two** owners (`libxpc.dylib` and `libiokituser.dylib`) and
+  `libsystem_kernel` — its real Apple home — had neither. Both siblings'
+  build scripts now drop their own copies.
+- **`libsystem_c.dylib`** gained real single ownership of two duplicate-
+  **state** bugs, the highest-priority category per this doc's own
+  "state, not count" rule:
+  - `errno`/`__error()`/`cerror`/`cerror_nocancel` — previously ALSO
+    defined by `libsystem_c.dylib` (via a stray `cerror_stub.o` member of
+    `libc_locale_for_stdio.a`) even though `libsystem_kernel.dylib` (a
+    real sibling) already owned the canonical copy. Every process had
+    two live `errno` globals.
+  - the real BSD `rand`/`srand`/`rand_r`/`sranddev`/`random`/`srandom`
+    family (extracted from `libremovefile.a`, replacing a hand-written
+    `rand_r` and libremovefile's own private copy) — same duplicate-PRNG-
+    state shape.
+  - Also picked up the three `_chk` members it didn't already own
+    (`memmove_chk`/`stpncpy_chk`/`strncat_chk`), `flsl` (moved here next
+    to its real caller, `qsort.o`), and a generated `_mkdir` stub.
+- **`libsystem_malloc.dylib`**: `pthread_tsd_shim.o`'s 5 public POSIX
+  names (`pthread_getspecific`/`setspecific`/`key_create`/`once`/
+  `key_init_np`) narrowed to private-extern via `ld -r
+  -keep_private_externs -unexported_symbol`. malloc sits *below*
+  `libsystem_pthread.dylib` in the real dependency order (pthread links
+  malloc, not the reverse), so it cannot link the real dylib back — this
+  keeps its own from-scratch TSD block (real, QEMU-verified mechanism,
+  untouched) but stops it from shadowing the real pthread API for any
+  *other* image that might resolve to it via flat/two-level namespace
+  luck.
+- **Five leaf dylibs** (`libiconv`, `libncurses`, `libcopyfile`,
+  `libresolv`, `libopenpam`) each stopped extracting `table.o`/`none.o`
+  from `libc_locale.a` unnarrowed — all five were independent owners of
+  `__CurrentRuneLocale`/`__DefaultRuneLocale`/`___mb_cur_max`/
+  `___mb_sb_limit` (real mutable "current locale" state). New shared
+  helper `narrow_rune_locale.sh` demotes just those four public globals
+  per extract dir via the same `ld -r -keep_private_externs
+  -unexported_symbol` idiom, leaving the genuinely private-extern
+  internals (`__DefaultRuneXLocale`, `__none_*`) untouched and local, per
+  real Apple's own visibility rules (verified with `nm -m`, not
+  assumed).
+- **`libremovefile.dylib`**: dropped `geteuid.o`/`qsort.o`/`heapsort.o`/
+  `fstatat64.o`/`mkdir.o`/`rand.o`/`random.o` (all now owned by
+  `libsystem_c.dylib`); `removefile_syscalls.c` gained a
+  `REMOVEFILE_SYSCALLS_DYLIB` compile guard so the dylib build omits its
+  now-duplicate `unlink`/`rmdir`/`read`/`gettimeofday`/`flsl` while the
+  **static** archive (real standalone consumers, no sibling dylibs
+  loaded) keeps every one.
+- **`libunwind.dylib`**: dropped a dead 3-symbol `-Wl,-alias` re-export
+  of `__pthread_rwlock_{rdlock,wrlock,unlock}` that just duplicated a
+  real, already-present `libsystem_pthread.dylib` export.
+- **`libc++.dylib`**: stopped compiling its own copy of
+  `libcxx_dylib_compat.c` (`catopen`/`catgets`/`catclose`/
+  `clock_gettime`/`_dyld_find_unwind_sections`/
+  `_dyld_register_func_for_remove_image`/`dladdr`) now that it genuinely
+  links the real `libunwind.dylib` sibling, which defines the exact same
+  7 symbols from the exact same source file. Also deleted a dead,
+  unreferenced `libunwind_scratch.a` copy step left over from before that
+  sibling link was wired up.
+- **`build_simple_cmds.sh`** (~70 commands, Phase 2a): removed
+  `findfp.c`'s 9 fully-public FILE-table symbols (narrowed, same
+  `-unexported_symbol` treatment — `__sfprelease` is real
+  `__private_extern__` and 6 commands' `freopen.c` need it locally, so
+  the file couldn't just be dropped), `getcwd.c` (`_getcwd` now via
+  `libsystem_c.dylib`), and `simple_cmds_getenv_compat.c` entirely (its
+  own disconnected `getenv`/`setenv`/`unsetenv`/`putenv`/`_NSGetEnviron`
+  — a second, un-synchronized `environ` array per binary, arguably the
+  worst duplicate-state bug this session found: a `setenv()` through one
+  copy was invisible to the other). `collate.c`/`collcmp.c`/`ldpart.c`
+  were tried for removal too and **reverted** after a real full rebuild
+  proved several per-command extras (`*_timelocal.o`, diff's fnmatch
+  wrapper) still need symbols only they provide that `libsystem_c.dylib`
+  doesn't export (`___part_load_locale`, `___collate_collating_symbol`,
+  etc.) — a reminder that a symbol-table diff against sibling exports is
+  necessary but not sufficient; a real rebuild of every consumer is the
+  actual test.
+
+### Consciously deferred, not silently skipped
+
+- **`libc++.dylib` ↔ `libsystem_c.dylib` xlocale ownership** (21+18
+  duplicate symbols: `newlocale`/`duplocale`/`uselocale`/`setlocale`/
+  `strtoll`/`strtoll_l`/the full `___collate_*` family). Root cause
+  identical to the rune-locale fix above but for a bigger, riskier
+  surface: real Apple's `___global_locale`/`___locale_key` (the current-
+  locale state itself) are `.private extern`, so `libsystem_c.dylib`
+  cannot export them without `ld64 -globalize_symbol` (or equivalent) —
+  a deliberate divergence from Apple's own visibility, previously flagged
+  in this doc as "the real follow-up... must be a conscious decision,
+  not a silent one." Not attempted this session: the blast radius (every
+  real locale call in the process) and the fact that nothing in this
+  project calls `setlocale()` away from `"C"` yet (so the duplicate is
+  currently inert) argued for deferring to a dedicated session with its
+  own QEMU verification, rather than bundling it into an already-large
+  change set.
+- **`libsystem_c.dylib` ↔ `libsystem_m.dylib` math functions** (9
+  symbols: `acos`/`asin`/`fabs`/`fmod`/`modf`/`pow`/`scalbn`/`sqrt`/
+  `trunc`). `libsystem_c` carries these because this project's ICU port
+  predates `libsystem_m.dylib`'s existence and was linked against
+  `libsystem_c` for them; `libsystem_m` itself links `libsystem_c` as a
+  sibling (real Apple's actual layering), so `libsystem_c` cannot link
+  `libsystem_m` back. Fixing this for real means re-linking ICU's own
+  target dylibs against `libsystem_m` directly — out of scope for a
+  userland_staging-only pass.
+- **`third_party/Csu/crt.c`'s own `environ = NULL` storage** — a NEW
+  finding, not previously documented: crt.c (this project's own startup
+  code, linked into *every* binary including the two that must stay
+  fully static) allocates its own `environ` storage, separate from the
+  REAL one dyld's `libdyldGlue.o` provides inside `libdyld.dylib` (per
+  `build_libsystem_c.sh`'s own comment: "only `_environ` itself comes
+  from dyld's real libdyldGlue.o"). Every dynamically-linked binary that
+  reads `environ` directly (not through `getenv()`/`setenv()`, which do
+  go through the real one) would see crt.c's own, never-updated copy.
+  **Not touched this session** — crt.c is linked into `init.macho`/
+  `pwtool.macho` too (the two binaries that must stay fully static by
+  design), so any fix has to be conditional on real-dyld-vs-static-boot,
+  and needs its own dedicated QEMU verification pass across both boot
+  paths, not a rushed addition to an already-large session.
+
+### The real QEMU-boot gate, and one real bug it caught
+
+A full bottom-up rebuild of the entire dylib chain (kernel → platform →
+malloc → pthread → c → unwind → c++ → dispatch → xpc → dyld →
+libSystem.B → every leaf dylib → iokituser/xml2 → launchd/syslogd/
+pd_console_login → all 76 simple commands) plus `inject_into_sd_image.sh`
+plus `tools/boot_test.py` caught a real regression the symbol-table
+analysis alone missed: after `libsystem_c.dylib` dropped `errno`,
+`libxpc.dylib` (rebuilt *before* that fix landed) still had chained
+fixups baked in expecting `___error` from `libsystem_c.dylib`
+specifically — real Darwin chained fixups record a specific owning
+dylib ordinal at THE CONSUMER's link time, not just a name to
+re-resolve at load time. Real panic:
+`initproc exited ... Symbol not found: ___error / Referenced from:
+/usr/lib/system/libxpc.dylib / Expected in: /usr/lib/system/
+libsystem_c.dylib`. Fixed by the full rebuild above, not a targeted
+patch — **every** downstream consumer of a symbol whose owner moves
+needs relinking, not just the two dylibs involved.
+
+After the full rebuild, three consecutive real boots produced zero
+panics and reached the identical byte-for-byte checkpoint (module ASLR
+addresses) as `qemu/launchd_boot_test110_final.log` — the last known-good
+state *before* this session's changes. Userland does not yet reach an
+interactive shell prompt from a cold boot (it stops silently after
+`jnl: b(14, 2): flushing fs disk buffer returned 0x2d`, twice, same as
+that reference log) — this is **pre-existing**, unrelated to static
+linking, and already tracked (`docs/backlog.md` item d13, the
+`_dyld_fork_child` hang investigation and its unresolved successor). Do
+not re-diagnose it as a static-linking regression; the byte-for-byte log
+match rules that out.
+
+### Baseline-staleness note
+
+`dup_symbol_audit.sh`'s checked-in baseline predates several unrelated
+commits (the `libSystem_atfork`/malloc-fork-hook/atexit work). Refreshing
+it this session surfaced one pre-existing, real duplicate that had never
+been in the baseline text at all: `_getegid` in ~50 simple commands (a
+real, always-there `LINK_COMMON` syscall wrapper) against
+`libsystem_kernel.dylib`'s own `sys_getegid.o` — confirmed via `git diff`
+that neither producing line was touched this session. Left as a real,
+now-baselined residual rather than fixed blind, since raw-syscall
+wrapper consolidation across `LINK_COMMON`/`libsystem_kernel.dylib` is
+its own separate pass, not part of this session's scope. Also found and
+deleted: `libc_build/launchd_trial.macho`, a gitignored, un-reproducible
+build artifact with no current producing script that was polluting the
+audit's binary scan.
 
 ## Method notes for whoever picks this up
 
