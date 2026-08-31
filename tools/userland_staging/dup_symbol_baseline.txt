@@ -6564,7 +6564,6 @@ D _ctime
 D _ctime_r
 D _daylight
 D _dladdr
-D _dlclose
 D _dlopen
 D _dlsym
 D _duplocale

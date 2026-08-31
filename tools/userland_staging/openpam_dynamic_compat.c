@@ -91,10 +91,28 @@ openpam_dynamic(const char *path)
  * always-fails stand-in, not a fabricated success) -- reimplemented here
  * rather than shared, because bash_syscalls.c's stubs are compiled
  * directly into bash.macho, not exported from any archive this tier can
- * link against. */
+ * link against.
+ *
+ * DYLIB BUILD: omitted entirely (see OPENPAM_DYNAMIC_COMPAT_DYLIB_VARIANT
+ * below). Real dyld now exists (Phase 6.5) and libdyld.dylib's own
+ * DyldAPIs.cpp (third_party/dyld/dyld/DyldAPIs.cpp, APIs::dlclose) is a
+ * genuine, real implementation of this exact symbol -- there is no
+ * reason for a second, honestly-fake copy to live in libopenpam.dylib
+ * once it can link the real one back as a sibling (confirmed no link
+ * cycle: libdyld.dylib does not depend on libopenpam.dylib, and every
+ * real consumer of libopenpam.dylib in this project -- syslogd.macho --
+ * already loads libdyld.dylib directly regardless, so this adds no new
+ * dylib to any process's load set). The dead-code status above is
+ * unchanged either way (module->dlh is always NULL here), so linking the
+ * real dlclose() back in is a pure single-owner cleanup, not a behavior
+ * change. build_openpam.sh's OWN static-archive build (consumed by
+ * dyld.macho, which runs before any dylib -- including libdyld.dylib --
+ * exists, so it cannot link one back) keeps this local stub, unchanged. */
+#ifndef OPENPAM_DYNAMIC_COMPAT_DYLIB_VARIANT
 int
 dlclose(void *handle)
 {
 	(void)handle;
 	return (-1);
 }
+#endif

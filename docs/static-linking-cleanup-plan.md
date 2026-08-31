@@ -1296,3 +1296,89 @@ deferred remainders (`_dlclose`, `_vproc_swap_integer`) -- left open.
 
 Baseline updated (`dup_symbol_audit.sh --update-baseline`) to lock in
 94→91.
+
+## Session 2026-08-31 (continuation 5): `_dlclose` fixed -- libopenpam.dylib now links libdyld.dylib
+
+`dup_symbol_audit.sh --summary` total: **91 → 90**, QEMU-verified. Picked
+up the one real, tractable remainder this doc's own prior session flagged
+in DAR-8 (`_dlclose` vs `libopenpam.dylib`) -- `_vproc_swap_integer`
+stays deliberately deferred, unchanged, per that same session's own real-
+behavioral-risk reasoning.
+
+### `_dlclose`: real dead-code stub retired in favor of the real dyld owner
+
+`libopenpam.dylib`'s `openpam_dynamic_compat.c` (this project's own honest
+replacement for OpenPAM's real dlopen-based module loader, which is
+structurally impossible here -- see that file's own header) defines a
+`dlclose()` stub that always returns `-1`. Confirmed genuinely
+**unreachable dead code**, not merely unused: `openpam_load.c`'s only
+call site (`openpam_release_module()`) is guarded by
+`if (module->dlh == NULL) return;` immediately above it, and this
+build's `openpam_dynamic()` never returns a module with a non-NULL `dlh`
+(`OPENPAM_STATIC_MODULES` is undefined, matching Apple's own real Xcode
+config). The stub exists purely to satisfy the linker for source that
+can never actually execute that branch.
+
+Real Apple's actual owner is dyld itself: `third_party/dyld/dyld/
+DyldAPIs.cpp`'s `APIs::dlclose` (real, unmodified source), already
+compiled into this project's own `libdyld.dylib` as of Phase 6.5. Fix:
+added `libdyld.dylib` as a real sibling link to
+`build_openpam_dylib.sh` (both the dependency-file check and the final
+link line), and gated `openpam_dynamic_compat.c`'s `dlclose()` definition
+behind a new `OPENPAM_DYNAMIC_COMPAT_DYLIB_VARIANT` compile guard --
+same shape as this project's existing `REMOVEFILE_SYSCALLS_DYLIB`/
+`LIBMALLOC_DISPATCH_DYLIB_VARIANT` guarded-recompile pattern (recompile
+the one source file fresh for the dylib build with the guard defined,
+replacing the `ar x`-extracted object; the static archive build,
+`build_openpam.sh`, is untouched since `dyld.macho` -- which statically
+links `libopenpam.a` and runs before any dylib including `libdyld.dylib`
+exists -- still needs its own local copy).
+
+**Confirmed no link cycle before making the change, not after**:
+`otool -L libdyld.dylib` does not list `libopenpam.dylib` among its
+dependents. **Confirmed zero new dylib enters any process's load set
+either**: grepped every built `.macho`'s `otool -L` output for
+`libopenpam` -- only `syslogd.macho` loads it, and `syslogd.macho`
+already loads `libdyld.dylib` directly regardless (both were already
+independently present in that one process).
+
+Verified single-owner via `nm -m libopenpam.dylib` (no local `_dlclose`
+definition remains) and `xcrun dyld_info -fixups libopenpam.dylib` (real
+`bind libdyld/_dlclose`, not `<flat-namespace>`). Swept every built
+`.macho`'s own `dyld_info -fixups` output for a stale bind to
+`libopenpam/_dlclose` specifically (the exact `___error`/`_uuid_unparse`-
+class chained-fixups gotcha this doc already documents twice) --
+`launchd.macho` is the only binary that references `_dlclose` at all, and
+it already bound to `libdyld` before this change (it never linked
+`libopenpam.dylib` to begin with), so no relink was required anywhere.
+
+### Real QEMU verification
+
+Full downstream refresh: rebuilt `libopenpam.a` (unchanged, confirmed via
+`git stash` that its own pre-existing smoketest-link failure -- a real,
+unrelated `_mmap` gap in `libpthread.a`'s `pthread_main_thread_bootstrap.o`
+-- reproduces identically on a clean checkout, not a regression) then
+`libopenpam.dylib`, then `tools/init_binary/inject_into_sd_image.sh`
+(refreshes the real SD image's dylibs + all 76 simple commands + `/sbin/
+launchd`/`pwtool`/`/etc`). Ran `tools/boot_test.py`
+(`qemu/static_link_batch8_dlclose_boot.log`), diffed address-stripped
+against the last known-good log (`static_link_batch7_dyld_helpers_boot.log`,
+end of the immediately-prior session): tails are **byte-for-byte
+identical**, including the benign, already-documented
+`DIAG: first_panic latched=125042432 ...` diagnostic string; the only
+diff lines in between are expected QEMU/TCG thread-scheduling-order
+jitter (`TEMP DIAGNOSTIC` lines reordered, single-digit
+`vm_page_bootstrap` free/wired page-count deltas), the same shape every
+prior session's boot diff has shown. Zero panics, zero "Symbol not
+found".
+
+### Linear
+
+DAR-8 (libdyld.dylib) commented: 7→6, `_dlclose` fixed,
+`_vproc_swap_integer` the sole remaining real, deliberately-deferred
+symbol -- left open. DAR-7 (libopenpam.dylib) commented: 35→34, same
+fix, left open (34 remaining are the already-documented xlocale/time-
+function family plus accepted ENOSYS-stub exceptions).
+
+Baseline updated (`dup_symbol_audit.sh --update-baseline`) to lock in
+91→90.

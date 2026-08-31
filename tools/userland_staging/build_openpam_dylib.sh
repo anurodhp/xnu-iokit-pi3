@@ -71,6 +71,20 @@
 #     project-wide BSD socket syscall gap build_libresolv_dylib.sh's own
 #     header already documents (docs/backlog.md item d7's CFSocket.c
 #     prerequisite) -- not resolv/openpam-specific.
+#
+# `_dlclose` DUPLICATE-SYMBOL FIX (2026-08-31, static-linking cleanup,
+# DAR-8): this dylib now also links libdyld.dylib as a sibling (added to
+# both the dependency check and the final link line below) purely to
+# obtain the real `_dlclose` real dyld's DyldAPIs.cpp implements, in
+# place of openpam_dynamic_compat.c's own honest-but-now-redundant stub
+# (that file's own dlclose() body is genuinely unreachable dead code --
+# see its header -- so this is a pure single-owner cleanup, not a
+# behavior change). No link cycle: libdyld.dylib does not depend on
+# libopenpam.dylib, and this dylib's one real consumer (syslogd.macho)
+# already loads libdyld.dylib directly regardless, so no new dylib
+# enters any process's load set. See openpam_dynamic_compat.c's own
+# "DYLIB BUILD" comment and this script's OPENPAM_DYNAMIC_COMPAT_DYLIB_VARIANT
+# recompile step below for the mechanism.
 set -e
 cd "$(dirname "$0")"
 
@@ -82,6 +96,7 @@ mkdir -p "$EXTRACT"
 LIBC="../../third_party/Libc"
 PTHREAD="../../third_party/libpthread"
 XNU="../../third_party/xnu-7195"
+OPENPAM="../../third_party/OpenPAM/openpam"
 
 XCODE12="/Applications/Xcode-12.app/Contents/Developer"
 CLANG="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
@@ -96,7 +111,7 @@ for a in libopenpam libc_locale syslogd_libc_extras liblaunchd_syscalls libpthre
         exit 1
     fi
 done
-for d in libsystem_c libsystem_malloc libsystem_platform libsystem_kernel libsystem_pthread; do
+for d in libsystem_c libsystem_malloc libsystem_platform libsystem_kernel libsystem_pthread libdyld; do
     if [ ! -f "$OUT/system/$d.dylib" ]; then
         echo "error: $OUT/system/$d.dylib not found -- run build_${d}.sh first" >&2
         exit 1
@@ -147,6 +162,25 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
     -I ../../generated"
 "$CLANG" $CFLAGS libc_locale_globals_compat.c -o "$EXTRACT/libc_locale_globals_compat.o"
 
+# openpam_dynamic_compat.o REPLACED 2026-08-31 (static-linking cleanup,
+# dylib-vs-dylib duplicate-symbol pass, DAR-8): the object `ar x`
+# extracted above still carries the honest-stub `dlclose()` this file's
+# own header documents as permanently-dead code (openpam never returns a
+# module with a non-NULL dlh) -- but real dyld now exists, and
+# libdyld.dylib linked below is the real, canonical owner of `_dlclose`
+# (see that file's own DYLIB BUILD comment). Recompile the same source
+# fresh with OPENPAM_DYNAMIC_COMPAT_DYLIB_VARIANT defined, which omits
+# just the dlclose() definition (openpam_dynamic() itself, still
+# genuinely needed, is untouched) so this dylib's own undefined
+# `_dlclose` reference resolves externally to libdyld.dylib's real
+# implementation instead of a second, private copy. The static archive
+# build (build_openpam.sh, consumed by dyld.macho -- which runs before
+# libdyld.dylib exists and cannot link one back) keeps the original,
+# unguarded compile untouched.
+CFLAGS_OPENPAM="$CFLAGS -I $OPENPAM/include -I $OPENPAM/lib -DLIB_MAJ=2 -D_GNU_SOURCE -DOPENPAM_DYNAMIC_COMPAT_DYLIB_VARIANT"
+rm -f "$EXTRACT/openpam_dynamic_compat.o"
+"$CLANG" $CFLAGS_OPENPAM openpam_dynamic_compat.c -o "$EXTRACT/openpam_dynamic_compat.o"
+
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libopenpam.dylib"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
@@ -162,7 +196,7 @@ rm -f "$OUT/system/libopenpam.dylib"
     "$EXTRACT"/*.o \
     "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_malloc.dylib" \
     "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_kernel.dylib" \
-    "$OUT/system/libsystem_pthread.dylib" \
+    "$OUT/system/libsystem_pthread.dylib" "$OUT/system/libdyld.dylib" \
     2>"$OUT/libopenpam_dylib_link.err" \
     && echo "wrote $OUT/system/libopenpam.dylib" \
     || { echo "libopenpam.dylib link found real undefined symbols:" >&2; grep '^  "' "$OUT/libopenpam_dylib_link.err" | sed 's/,.*//' | sort -u >&2; exit 1; }
@@ -173,7 +207,7 @@ otool -hv "$OUT/system/libopenpam.dylib" | grep -q " DYLIB " || {
 }
 echo "declared -Wl,-U deferrals (expect: <flat-namespace> bind target):"
 xcrun dyld_info -fixups "$OUT/system/libopenpam.dylib" 2>/dev/null | grep '<flat-namespace>' | awk '{print "  " $NF}'
-UNEXPECTED=$(xcrun dyld_info -fixups "$OUT/system/libopenpam.dylib" 2>/dev/null | grep -v -E '<flat-namespace>|<weak-def-coalesce>' | grep 'bind' | grep -v -E 'libsystem_c/|libsystem_malloc/|libsystem_platform/|libsystem_kernel/|libsystem_pthread/' || true)
+UNEXPECTED=$(xcrun dyld_info -fixups "$OUT/system/libopenpam.dylib" 2>/dev/null | grep -v -E '<flat-namespace>|<weak-def-coalesce>' | grep 'bind' | grep -v -E 'libsystem_c/|libsystem_malloc/|libsystem_platform/|libsystem_kernel/|libsystem_pthread/|libdyld/' || true)
 if [ -n "$UNEXPECTED" ]; then
     echo "error: real, unexpected non-sibling bind targets found:" >&2
     echo "$UNEXPECTED" >&2
