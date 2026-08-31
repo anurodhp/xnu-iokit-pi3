@@ -190,6 +190,20 @@ fi
 rm -f "$EXTRACT"/time.o "$EXTRACT"/gettimeofday.o \
       "$EXTRACT"/ls_fenv_compat.o "$EXTRACT"/ps_commpage_gettimeofday_stub.o \
       "$EXTRACT"/simple_cmds_time_compat.o
+
+# openpam_syscalls_compat.o REMOVED too 2026-08-31 (static-linking
+# cleanup, dylib-vs-dylib duplicate-symbol pass, continuation): its own
+# header explains it exists ONLY for libopenpam.a's own static
+# smoketest link (real, unmodified localtime.c's tzload() calls
+# access() to probe for /usr/share/zoneinfo/<TZ>, and the static
+# archive has no sibling dylib to resolve it from) -- it defines ONLY
+# `_access` (confirmed via nm, no other symbol), a full real duplicate
+# of libsystem_c.dylib's own real copy. This dylib already links
+# libsystem_c.dylib as a sibling below, so localtime.o's real reference
+# resolves there instead. Not removed from libopenpam.a itself -- the
+# static archive (dyld.macho's build, and libopenpam.a's own smoketest)
+# still needs its own local copy.
+rm -f "$EXTRACT"/openpam_syscalls_compat.o
 (cd "$EXTRACT" && ar x "../../libc_locale.a" table.o none.o)
 # See narrow_rune_locale.sh's own header (static-linking cleanup, Phase
 # 1d, 2026-08-30): demotes the 4 public rune-locale globals table.o/

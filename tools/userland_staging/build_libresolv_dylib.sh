@@ -206,6 +206,20 @@ rm -f "$EXTRACT/arc4random.o" "$EXTRACT/libresolv_getentropy_syscall.o"
 # (res_send.o) now resolves the same way `_close$UNIX2003` always did.
 rm -f "$EXTRACT/libresolv_arc4random_deps_compat.o"
 
+# atoi.o REMOVED 2026-08-31 (static-linking cleanup, dylib-vs-dylib
+# duplicate-symbol pass, continuation): real, unmodified Libc/stdlib/
+# FreeBSD/atoi.c, defining `_atoi`/`_atoi_l` -- full real duplicate of
+# libsystem_c.dylib's own real copy of the same source (already a
+# linked sibling below). Its ONE real in-archive consumer,
+# res_init.o's undefined reference to `_atoi`, now resolves there
+# instead. NOT the same object as the `__locale_key`/`__global_locale`
+# direct-address gotcha this script's own header documents above --
+# that fix (libc_locale_globals_compat.c + table.o/none.o) is
+# independently required by other members regardless of atoi.o's
+# presence, confirmed via a real trial link after removing atoi.o alone
+# (0 undefined symbols, no new fixup_chains error).
+rm -f "$EXTRACT/atoi.o"
+
 # Same real CFLAGS recipe build_libresolv.sh's own header already
 # documents (USE__RES_9/PRIVATE and the dnsinfo.h compat_include it
 # generates), reused verbatim so these three new files see the exact

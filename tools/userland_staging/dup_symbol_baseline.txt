@@ -6549,14 +6549,10 @@ D __dyld_find_unwind_sections
 D __dyld_register_func_for_remove_image
 D __PathLocale
 D __xpc_runtime_is_app_sandboxed
-D _abs
-D _access
 D _acos
 D _asctime
 D _asctime_r
 D _asin
-D _atoi
-D _atoi_l
 D _connect
 D _ctime
 D _ctime_r
@@ -6569,8 +6565,6 @@ D _fabs
 D _fmod
 D _fpathconf
 D _freelocale
-D _ftruncate
-D _getcwd
 D _gmtime
 D _gmtime_r
 D _localtime
@@ -6579,7 +6573,6 @@ D _mbsnrtowcs
 D _mbsnrtowcs_l
 D _memcpy
 D _memset
-D _mkdir
 D _mktime$UNIX2003
 D _modf
 D _nanosleep
@@ -6597,7 +6590,6 @@ D _socket
 D _sqrt
 D _strftime_l$UNIX2003
 D _strftime$UNIX2003
-D _strstr
 D _strtoll
 D _strtoll_l
 D _strtoul

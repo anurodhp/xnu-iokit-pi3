@@ -101,6 +101,21 @@ if [ ! -x "$NEWLD_BINDIR/ld" ]; then
 fi
 
 (cd "$EXTRACT" && ar x "../../libncurses.a")
+# ______third_party_Libc_stdlib_FreeBSD_{atoi,abs}_c.o REMOVED entirely
+# 2026-08-31 (static-linking cleanup, dylib-vs-dylib duplicate-symbol
+# pass): these are real, unmodified Libc/stdlib/FreeBSD/{atoi,abs}.c,
+# each defining ONLY `_atoi`/`_atoi_l` and `_abs` respectively (confirmed
+# via nm -- no other symbols) -- full, real duplicates of
+# libsystem_c.dylib's own real copies of the same source. Every other
+# real consumer inside libncurses.a (lib_setup.o/lib_termcap.o for
+# `_atoi`, hashmap.o/lib_mvcur.o for `_abs`) already holds an UNDEFINED
+# reference to these names (confirmed via nm), so removing the two
+# defining objects just makes those real references resolve externally
+# to the already-linked libsystem_c.dylib sibling below instead of a
+# second, private copy -- not narrowed, since nothing else in this
+# archive independently defines them.
+rm -f "$EXTRACT"/______third_party_Libc_stdlib_FreeBSD_atoi_c.o \
+      "$EXTRACT"/______third_party_Libc_stdlib_FreeBSD_abs_c.o
 # ncurses_extra_syscalls.o narrowed 2026-08-30 (static-linking cleanup,
 # dylib-vs-dylib duplicate-symbol pass): this project-authored compat
 # file's own `_gettimeofday`/`_pthread_testcancel`/`_read`/
@@ -124,10 +139,27 @@ fi
 # earlier deferral was about libresolv/libxpc specifically, which are
 # moot now that kernel owns it). Narrowed alongside the other four for
 # the same reason and via the same technique.
+#
+# `_access`/`_mkdir`/`_strstr` (also in this same object) added to this
+# narrowing list 2026-08-31 (static-linking cleanup continuation):
+# same real-duplicate shape, confirmed real single canonical owner
+# libsystem_c.dylib (already a linked sibling below) plus real, other,
+# already-undefined consumers inside this archive (access.o/
+# write_entry.o/lib_mouse.o+lib_mvcur.o+lib_setup.o+trim_sgr0.o) via
+# nm. `_fpathconf`/`_sleep`/`___darwin_check_fd_set_overflow` (also in
+# this object) are deliberately NOT narrowed here -- investigated and
+# found to have no existing real dylib owner anywhere in this project
+# yet (`_fpathconf` only otherwise duplicated in libcopyfile.dylib,
+# `_sleep` only in libdispatch.dylib, `___darwin_check_fd_set_overflow`
+# only in libxpc.dylib -- none of those is libsystem_c.dylib/
+# libsystem_kernel.dylib, real Apple's actual homes for these). Flagged
+# as a "needs a new home" batch (same shape as the BSD socket family
+# fix), not attempted this pass.
 XCODE12_LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
 "$XCODE12_LD" -r -arch arm64 -keep_private_externs \
     -unexported_symbol _gettimeofday -unexported_symbol _pthread_testcancel \
     -unexported_symbol _read -unexported_symbol _sigprocmask -unexported_symbol _select \
+    -unexported_symbol _access -unexported_symbol _mkdir -unexported_symbol _strstr \
     "$EXTRACT/ncurses_extra_syscalls.o" -o "$EXTRACT/ncurses_extra_syscalls.o.narrowed"
 mv -f "$EXTRACT/ncurses_extra_syscalls.o.narrowed" "$EXTRACT/ncurses_extra_syscalls.o"
 (cd "$EXTRACT" && ar x "../../libc_locale.a" table.o none.o)

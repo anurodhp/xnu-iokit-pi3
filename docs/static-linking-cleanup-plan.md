@@ -1538,3 +1538,132 @@ remainders, xlocale and math, untouched this session).
 
 Baseline updated (`dup_symbol_audit.sh --update-baseline`) to lock in
 90→84.
+
+## Session 2026-08-31 (continuation 7): leftover plain-libc duplicates in libncurses/libresolv/libopenpam/libcopyfile, + a real regression caught and fixed
+
+`dup_symbol_audit.sh --summary` total: **84 → 76**, QEMU-verified. Picked
+the next coherent, safe batch: pure-code plain-libc functions that
+several leaf dylibs still bundle their own copy of despite
+libsystem_c.dylib already being the real, established, single canonical
+owner and an already-linked sibling in every case. Identified by
+computing real dylib ownership directly (`xcrun dyld_info -exports`,
+the same mechanism `dup_symbol_audit.sh` itself uses) rather than
+re-running the full audit's slow binary-scan pass per symbol.
+
+### Fixed (all mechanical single-owner removals, verified via `nm -m`)
+
+- **`libncurses.dylib`** (10→4): removed `______third_party_Libc_stdlib_
+  FreeBSD_atoi_c.o` (`_atoi`/`_atoi_l`) and `..._abs_c.o` (`_abs`)
+  entirely from the extract dir -- each defines only that symbol, real
+  other in-archive consumers (`lib_setup.o`/`lib_termcap.o`,
+  `hashmap.o`/`lib_mvcur.o`) already held undefined references, now
+  resolved externally. Added `_access`/`_mkdir`/`_strstr` to the
+  existing `ncurses_extra_syscalls.o` narrowing list (same
+  `ld -r -keep_private_externs -unexported_symbol` technique already
+  used there) since they share that object file with syscalls this
+  dylib still needs to keep public.
+- **`libresolv.dylib`** (2→0, DAR-11 closed): removed `atoi.o` entirely
+  (real, unmodified Libc/stdlib/FreeBSD/atoi.c) -- its one real
+  in-archive consumer, `res_init.o`, already held an undefined
+  reference.
+- **`libopenpam.dylib`** (28→27): removed `openpam_syscalls_compat.o`
+  (`_access` only) -- this project-authored file's own header already
+  explained it exists solely for `libopenpam.a`'s static-archive
+  smoketest (no sibling dylib to resolve `access()` from there); the
+  dylib build already links libsystem_c.dylib as a sibling, so this
+  copy was pure redundancy specific to the dylib link. Not removed from
+  `libopenpam.a` itself.
+- **`libcopyfile.dylib`** (8→4): removed `ftruncate.o` entirely (defines
+  only `_ftruncate`, one real consumer `copyfile.o` already undefined).
+  Removed `strtoul.o` entirely (`_strtoul`/`_strtoul_l`) -- confirmed a
+  genuine THIRD independently-compiled copy (libc++.dylib/
+  libsystem_c.dylib already duplicate these two under the deferred
+  xlocale umbrella, DAR-159) with no remaining in-archive consumer
+  (`parse.o`, the one real reference, was already dropped from this
+  dylib's own extract dir in an earlier session for an unrelated
+  uuid-ownership reason) -- doesn't close the audit-flagged duplicate
+  (2 owners still remain) but is real, safe dedup. `getcwd.c` stays
+  compiled locally (needed for `__private_getcwd`, realpath.c's real
+  dependency, no other provider anywhere in this project) but its other
+  public symbol, plain `_getcwd`, is now hidden via
+  `-Wl,-unexported_symbol,_getcwd` on the final link -- same "keep the
+  object for one private-use symbol, hide the other public name" shape
+  already established here for `pread`/`pwrite`.
+
+### Investigated and deliberately NOT fixed: `open_dprotected_np()` (real regression caught before it shipped)
+
+Real canonical home is libsystem_c.dylib's own
+`libsystem_c_syscall_compat.c` (same syscall #216); guarding
+`copyfile_syscalls.c`'s own copy out under the existing
+`LIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT` macro (same pattern as the
+chmod() guard already there) compiled and linked cleanly. A real
+`xcrun dyld_info -fixups` sweep of every built `.macho` -- done BEFORE
+declaring this fix done, per this doc's own repeated lesson about
+chained-fixups ordinals -- found `ed.macho`/`mktemp.macho` (both part
+of the 76 `build_simple_cmds.sh` commands, explicitly out of scope for
+a rebuild this pass per this sweep's own standing rules) already carry
+a real bind recorded specifically as `libcopyfile/_open_dprotected_np`.
+Shipping the guard would have silently broken both binaries' next load
+until the deferred end-of-sweep `build_simple_cmds.sh` rebuild happens.
+Reverted the guard (kept `open_dprotected_np()` locally defined and
+exported in the dylib build, unchanged) and documented the real fix +
+the reason it's blocked directly in `copyfile_syscalls.c` -- left open,
+not structural, a natural pickup for whoever does that end-of-sweep
+rebuild.
+
+### A second real regression caught by the QEMU boot gate itself, not by the offline sweep
+
+The first boot test after this batch's fixes **panicked for real**:
+`pid 1 exited ... Symbol not found: _atoi / Referenced from:
+/usr/lib/libbsm.dylib / Expected in: /usr/lib/libresolv.9.dylib`.
+`libbsm.dylib` (untouched by this session, last touched in the Phase 1e
+sweep and already closed as DAR-21) had a real, pre-existing chained-
+fixups bind recorded specifically against `libresolv.9.dylib`'s copy of
+`_atoi` -- the exact "consumer bakes in a specific owning-dylib ordinal
+at its own link time" bug class this doc already documents twice
+(`___error`/libxpc, `_uuid_unparse`/libxpc). The offline
+`xcrun dyld_info -fixups` sweep run just before this boot missed it
+entirely: it only globbed `libc_build/*.macho`/`*.macho`, never
+`libc_build/system/*.dylib` -- dylibs can carry chained-fixups binds to
+sibling dylibs too, not just executables. Fixed with a plain relink
+(`build_bsm_dylib.sh`, no source change), confirmed via
+`dyld_info -fixups` it now binds `libsystem_c/_atoi`, and re-verified
+with a second real QEMU boot: PASS, byte-for-byte identical (address-
+stripped) tail to the last known-good log. **Lesson recorded for the
+next session**: the stale-chained-fixups sweep must glob dylibs too,
+not just `.macho` binaries -- this project has now hit this exact class
+of bug against both binary and dylib consumers.
+
+### Real QEMU verification
+
+Full downstream rebuild: `libncurses.dylib`, `libresolv.dylib`,
+`libopenpam.dylib`, `libcopyfile.dylib` (all four independently, each
+own trial link showing 0 undefined symbols before moving on) →
+`libSystem.B.dylib` (reexports `libcopyfile.dylib`/`libresolv.dylib`
+wholesale) → `libbsm.dylib` (the regression fix above) →
+`tools/init_binary/inject_into_sd_image.sh` → `tools/boot_test.py`.
+First boot caught the real `libbsm.dylib` regression above (not a false
+positive -- a real panic, `[boot_test] FAIL`-equivalent). Second boot,
+after the fix: `[boot_test] PASS`, 251s. Diffed address-stripped against
+the last known-good log (`static_link_batch9_openpam_time_boot.log`,
+end of the immediately-prior session): only expected QEMU/TCG
+scheduling-order jitter (reordered `TEMP DIAGNOSTIC` lines, single-digit
+`vm_page_bootstrap` page-count deltas, a ~1.6ms `pmap_startup()` timing
+delta) plus byte-for-byte identical tails (`launchd[1] has started up`
+through the same pre-existing `jnl: ... flushing fs disk buffer
+returned 0x2d` stopping point, twice). Zero panics (checked past the
+benign, already-documented `DIAG: first_panic latched=...` string and
+the unrelated `IOPanicPlatform` kext-class-name log line, which also
+false-positives a naive `panic` grep), zero "Symbol not found" in the
+final log.
+
+### Linear
+
+DAR-11 (libresolv) fully cleared and self-closed. DAR-10 (libncurses,
+10→4), DAR-12 (libcopyfile, 8→4), DAR-7 (libopenpam, 28→27) commented
+with before/after + verification detail, left open (each has a real
+remainder). DAR-21 (libbsm, already Done) commented with the transient
+regression + fix detail, not reopened (count is back to 0).
+
+Baseline updated (`dup_symbol_audit.sh --update-baseline`) to lock in
+84→76.

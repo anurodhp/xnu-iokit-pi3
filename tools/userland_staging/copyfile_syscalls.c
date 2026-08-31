@@ -95,6 +95,24 @@ int getattrlist(const char *path, struct attrlist *alist, void *attributeBuffer,
                           (long)attributeBuffer, (long)bufferSize, (long)options);
 }
 
+/* open_dprotected_np(): INVESTIGATED 2026-08-31 (static-linking cleanup,
+ * dylib-vs-dylib duplicate-symbol pass, continuation) and found real,
+ * canonical home is libsystem_c.dylib's own libsystem_c_syscall_compat.c
+ * (same real syscall #216, see that file's own comment), which
+ * build_copyfile_dylib.sh already links as a sibling -- same shape as
+ * the chmod() guard above. NOT guarded out here, unlike chmod(): a real
+ * `xcrun dyld_info -fixups` sweep of every already-built .macho found
+ * `ed.macho`/`mktemp.macho` (both part of the 76 build_simple_cmds.sh
+ * commands, explicitly out of scope for a rebuild this pass -- see
+ * docs/static-linking-cleanup-plan.md's own sweep rules) already carry
+ * a real chained-fixups bind recorded specifically as
+ * `libcopyfile/_open_dprotected_np` -- the same "consumer bakes in a
+ * specific owning-dylib ordinal at ITS OWN link time" class of bug this
+ * project has hit before (___error/libxpc, _uuid_unparse/libxpc).
+ * Guarding this out would silently break both binaries' next load until
+ * the full end-of-sweep build_simple_cmds.sh rebuild happens. Left as a
+ * real, still-open, deliberately-deferred duplicate (not structural --
+ * a real future fix, gated on that rebuild, not a permanent exception). */
 int open_dprotected_np(const char *path, int flags, int pclass, int dpflags, int mode) {
     return (int)syscall5(SYS_open_dprotected_np, (long)path, flags, pclass, dpflags, mode);
 }

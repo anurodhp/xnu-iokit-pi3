@@ -23,6 +23,16 @@
 # getcwd.c, for `__private_getcwd` (realpath.c's own real dependency;
 # self-contained, standard headers only, same low-risk-addition bar as
 # build_libresolv_dylib.sh's if_indextoname.c/herror.c/nsap_addr.c).
+# getcwd.c's OTHER public symbol, plain `_getcwd`, is a real, full
+# duplicate of libsystem_c.dylib's own real copy (already a linked
+# sibling below) -- same "keep the object locally compiled for one
+# private-use symbol, hide the other public name" shape already
+# established for pread.o/pwrite.o's `$UNIX2003` aliases below, not a
+# case where the whole object could just be dropped (this dylib's own
+# `__private_getcwd` has no other real provider anywhere in this
+# project). Hidden via `-Wl,-unexported_symbol,_getcwd` on the final
+# link (2026-08-31, static-linking cleanup, dylib-vs-dylib duplicate-
+# symbol pass, continuation).
 #
 # Real, honestly-classified `-Wl,-U` deferrals:
 #   - __global_locale/__locale_key: SAME real gotcha build_libresolv_
@@ -129,6 +139,26 @@ rm -f "$EXTRACT/getuid.o"
 # that archive stays intact for dyld.macho's real static link.
 rm -f "$EXTRACT/copy.o" "$EXTRACT/parse.o" "$EXTRACT/unparse.o" "$EXTRACT/pack.o"
 
+# ftruncate.o/strtoul.o REMOVED 2026-08-31 (static-linking cleanup,
+# dylib-vs-dylib duplicate-symbol pass, continuation): both real,
+# unmodified Libc source, both full real duplicates of
+# libsystem_c.dylib's own copies of the same source (already a linked
+# sibling below).
+#   - ftruncate.o defines ONLY `_ftruncate` (confirmed via nm); this
+#     archive's one real consumer, copyfile.o's undefined reference to
+#     `_ftruncate`, now resolves externally to the sibling instead.
+#   - strtoul.o defines `_strtoul`/`_strtoul_l`. Removing it here does
+#     NOT fully single-owner these two (libc++.dylib independently
+#     compiles its own copy too, part of the same already-deferred
+#     xlocale family docs/static-linking-cleanup-plan.md tracks under
+#     DAR-159 -- confirmed via nm -m this dylib's strtoul.o is a THIRD,
+#     genuinely redundant copy, not the one the xlocale wall is about),
+#     but it is still a real, safe dedup: one fewer independently-
+#     compiled copy of real mutable-free numeric-parsing code in the
+#     process, and removes this dylib from that duplicate's owner set
+#     entirely.
+rm -f "$EXTRACT/ftruncate.o" "$EXTRACT/strtoul.o"
+
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness \
     -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
@@ -186,6 +216,7 @@ rm -f "$OUT/system/libcopyfile.dylib"
     `# base" bug.` \
     -Wl,-alias,_pread,'_pread$UNIX2003' -Wl,-alias,_pwrite,'_pwrite$UNIX2003' \
     -Wl,-unexported_symbol,_pread -Wl,-unexported_symbol,_pwrite \
+    -Wl,-unexported_symbol,_getcwd \
     -Wl,-alias,_getattrlist,'_getattrlist$UNIX2003' -Wl,-alias,_statfs,'_statfs$INODE64' \
     -o "$OUT/system/libcopyfile.dylib" \
     "$EXTRACT"/*.o \
