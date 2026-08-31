@@ -102,10 +102,12 @@ fi
 # icu_build/host/ -- those never reach the guest.
 #
 # Binaries: the real .macho files inject_into_sd_image.sh installs.
-# dyld.macho, init.macho and pwtool.macho are excluded ON PURPOSE and
-# not as an oversight: all three run before or entirely without dyld by
-# design (CLAUDE.md's own "must stay fully static" invariant), so a
-# private static copy of libc in them is correct, not debt.
+# dyld.macho and pwtool.macho are excluded ON PURPOSE and not as an
+# oversight: both run before or entirely without dyld by design
+# (CLAUDE.md's own "must stay fully static" invariant), so a private
+# static copy of libc in them is correct, not debt. (init.macho was a
+# third entry here until tools/init_binary/init.c was retired
+# 2026-08-31 -- see docs/static-linking-cleanup-plan.md.)
 # ------------------------------------------------------------------
 DYLIBS=()
 for f in "$SYSDIR"/*.dylib; do
@@ -121,7 +123,7 @@ if [ "${#DYLIBS[@]}" -eq 0 ]; then
     exit 1
 fi
 
-STATIC_BY_DESIGN="dyld.macho init.macho pwtool.macho"
+STATIC_BY_DESIGN="dyld.macho pwtool.macho"
 BINARIES=()
 for f in *.macho "$OUT"/*.macho; do
     [ -f "$f" ] || continue

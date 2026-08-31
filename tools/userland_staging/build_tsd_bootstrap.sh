@@ -17,9 +17,9 @@
 # host, not a signal about this file's correctness. Real functional
 # verification (does TPIDRRO_EL0 actually get set, does a value actually
 # round-trip) needs this project's own QEMU/kernel environment - inject
-# this .macho as PID 1 the same way tools/init_binary/inject_into_sd_image.sh
-# does for init.macho, or run it standalone under QEMU with -kernel/-initrd
-# the way tools/init_binary/run_qemu.sh does.
+# this .macho into the real SD image the way
+# tools/init_binary/inject_into_sd_image.sh does for launchd.macho/
+# pwtool.macho, or run it standalone under QEMU with -kernel/-initrd.
 set -e
 cd "$(dirname "$0")"
 

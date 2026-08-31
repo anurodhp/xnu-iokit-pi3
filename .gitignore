@@ -4,7 +4,6 @@
 # Build intermediates
 devicetrees/*.p
 __pycache__/
-tools/init_binary/init.macho
 tools/userland_staging/*.o
 tools/userland_staging/*.macho
 tools/userland_staging/libsyscall_smoketest/*.o
@@ -28,26 +27,25 @@ tools/libinfo_custom/crypt_des_host_test
 tools/libinfo_custom/*.o
 
 # Phase 5 provisioning tool -- build artifact, rebuild via
-# tools/pwtool/build.py (same reasoning as init.macho above)
+# tools/pwtool/build.py (fully static, freestanding Mach-O -- same
+# build shape formerly cited via tools/init_binary/init.c, retired
+# 2026-08-31)
 tools/pwtool/pwtool.macho
 tools/pwtool/host_test
 tools/pwtool/*.o
 
-# Phase 5 login host test binary, same reasoning
-tools/init_binary/host_test
-
 # Phase 7.5 real-bsdthread_create smoke test -- build artifact, rebuild via
-# tools/pthread_kthread_test/build.py (same reasoning as init.macho above)
+# tools/pthread_kthread_test/build.py (same build shape as pwtool above)
 tools/pthread_kthread_test/pthread_kthread_test.macho
 
 # Phase 7.5 real workq_* thread-stack hooks smoke test -- build artifact,
-# rebuild via tools/workq_kthread_test/build.py (same reasoning as
-# init.macho above)
+# rebuild via tools/workq_kthread_test/build.py (same build shape as
+# pwtool above)
 tools/workq_kthread_test/workq_kthread_test.macho
 
 # Phase 7.5 real ulock_wait/ulock_wake blocking-handoff smoke test -- build
-# artifact, rebuild via tools/ulock_kthread_test/build.py (same reasoning as
-# init.macho above)
+# artifact, rebuild via tools/ulock_kthread_test/build.py (same build
+# shape as pwtool above)
 tools/ulock_kthread_test/ulock_kthread_test.macho
 
 # Downloaded precompiled binaries and local QEMU test scaffolding -

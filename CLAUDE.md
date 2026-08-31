@@ -6,10 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A from-source port of XNU (Darwin 20.3.0 / xnu-7195) to the Raspberry Pi 3
 (BCM2837), booted primarily under QEMU (`-M raspi3`) with real hardware as
-a secondary target. There is no launchd, no opendirectoryd, no
-prelink/kext-cache pipeline — userland's PID-1 (`tools/init_binary/`) is a
-custom static binary and the handful of IOKit drivers under `iokit/` are
-compiled directly into the kernel, not loaded as kext bundles. **As of
+a secondary target. There is no opendirectoryd, no
+prelink/kext-cache pipeline — userland's PID-1 is real, dynamically-linked
+`launchd.macho` (`tools/userland_staging/build_launchd.sh`), an explicit
+"outright replace" of this project's earlier custom static PID-1
+(`tools/init_binary/init.c`, retired 2026-08-31 — see
+`docs/static-linking-cleanup-plan.md`) — and the handful of IOKit drivers
+under `iokit/` are compiled directly into the kernel, not loaded as kext
+bundles. **As of
 2026-08-25, real dyld-940 exists and boots** (Phase 6.5, see
 `docs/daemon-roadmap.md`) — it loads a real, dynamically-linked test
 executable against real `/usr/lib/system/libdyld.dylib` and
@@ -23,9 +27,9 @@ into one dylib rather than real, separate per-library dylibs matching
 Apple's actual modular architecture — a known, flagged migration debt
 (see `docs/daemon-roadmap.md`'s "Static-vs-dylib architecture debt"
 section), not a design goal to replicate for new work.
-`tools/init_binary/build.py`/`tools/pwtool/build.py` (PID-1 and the
-password tool specifically) are the one legitimate exception that should
-stay fully static, since they run before/without dyld by design. See
+`tools/pwtool/build.py` (the password tool) is the one legitimate
+exception that should stay fully static, since it runs before/without
+dyld by design. See
 `docs/roadmap.md` for the full multi-phase plan and current phase status,
 and `docs/backlog.md` for the open bug/risk list (P0 = real-hardware risk,
 P1 = correctness bugs, P2 = known gaps, P3 = hygiene).
@@ -77,10 +81,10 @@ tools/build_kexts.sh [outdir]    # compile iokit/*/*.cpp standalone (default: bu
   removed private framework), so it invokes `clang++` directly using
   `compile_flags.txt`. Kexts built this way: `BCM2837InterruptController`,
   `BCM2837SDHCI`, `SMSC9514Ethernet`.
-- `tools/init_binary/build.py`, `tools/pwtool/build.py` — build the
-  freestanding userland Mach-O binaries (see below). Both warn loudly if
-  `otool -l` output isn't fully static (`LC_UNIXTHREAD`, zero
-  `LC_LOAD_DYLIB`) — that invariant is load-bearing, not cosmetic.
+- `tools/pwtool/build.py` — builds the freestanding password-tool Mach-O
+  binary (see below). Warns loudly if `otool -l` output isn't fully
+  static (`LC_UNIXTHREAD`, zero `LC_LOAD_DYLIB`) — that invariant is
+  load-bearing, not cosmetic.
 - `tools/userland_staging/build_*.sh` — 30+ scripts, one per curated
   libSystem/libc library or real command, each producing a static
   archive/binary under `tools/userland_staging/libc_build/`. This is a
@@ -98,9 +102,9 @@ tools/build_kexts.sh [outdir]    # compile iokit/*/*.cpp standalone (default: bu
   `.dylib`s on purpose. New work should prefer real per-library dylibs
   over new static archives going forward (see `docs/daemon-roadmap.md`'s
   "Static-vs-dylib architecture debt" section) — the "must stay fully
-  static" invariant now applies specifically to `tools/init_binary/
-  build.py`/`tools/pwtool/build.py` (real reasons: they run before/
-  without dyld by design), not to every script in this directory.
+  static" invariant now applies specifically to `tools/pwtool/build.py`
+  (real reason: it runs before/without dyld by design), not to every
+  script in this directory.
   **`build_libc_regex.sh` is the reference template for porting one more
   Apple library** (real per-file compile loop reporting gaps, real `ar`
   archive step, real dependency check against already-built `.a` files,
@@ -147,12 +151,6 @@ Interact with a running QEMU instance via its monitor socket
 (`qemu/mon.sock`). Use monitor `x` (virtual memory) for kernel/userspace
 addresses, **not** `xp` (physical) — using `xp` on a guest virtual address
 silently reads zeroed/garbage RAM and has produced false diagnoses before.
-
-Host-side logic testing without booting a kernel:
-```
-python3 tools/init_binary/host_test.c   # (compiled) — INIT_HOST_TEST guards the syscall layer
-python3 tools/init_binary/_pty_test_phase5.py   # real pty-driven interactive shell test
-```
 
 ## Architecture
 

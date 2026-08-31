@@ -11,12 +11,13 @@
 # tools/userland_staging/libc_build/launchd.macho -- an explicit, user-
 # picked "outright replace" of tools/init_binary/'s custom static PID-1
 # (the alternative considered was init_binary exec()ing into launchd;
-# outright replace was chosen instead). tools/init_binary/init.macho is
-# still built by build.py below (still a real, working artifact, still
-# useful standalone/for host_test) but is no longer installed as
-# /sbin/launchd -- the kernel's own load_init_program() hardcodes that
-# exact path (bsd/kern/kern_exec.c), unmodified stock XNU behavior, so no
-# kernel change was needed for this swap.
+# outright replace was chosen instead). The kernel's own
+# load_init_program() hardcodes the exact /sbin/launchd path
+# (bsd/kern/kern_exec.c), unmodified stock XNU behavior, so no kernel
+# change was needed for this swap. tools/init_binary/init.c itself (the
+# retired custom PID-1) and its build.py/host_test.c/_pty_test*.py were
+# removed 2026-08-31 -- see docs/static-linking-cleanup-plan.md and
+# Linear DAR-166/DAR-106/DAR-137.
 #
 # Also ensures /etc exists on the image -- fresh images have no /etc dir,
 # so pwtool's lock-file open(O_CREAT, "/etc/.pwtool.lock") fails ENOENT on
@@ -51,7 +52,6 @@ if [ ! -f "$SD_IMAGE" ]; then
     exit 1
 fi
 
-python3 tools/init_binary/build.py
 python3 tools/pwtool/build.py
 
 DISK=$(hdiutil attach -nomount "$SD_IMAGE" | awk 'NR==1{print $1}')
@@ -208,8 +208,10 @@ fi
 # that exact line but not root-caused further. Shipping a daemon that
 # reliably crashes on every boot is worse than not shipping it (spams
 # the console right at the login prompt, leaves an unreaped zombie --
-# see tools/init_binary/init.c's now-disabled spawn_cron() for the full
-# writeup). crontab(1) itself has two separate real bugs already fixed
+# the full writeup used to be cited via the now-retired
+# tools/init_binary/init.c's spawn_cron() comment, content not
+# preserved elsewhere -- see docs/static-linking-cleanup-plan.md).
+# crontab(1) itself has two separate real bugs already fixed
 # (a broken pthread_once()-based COMPAT_MODE, a broken setlinebuf()) but
 # was never fully confirmed end-to-end (a host-side QEMU test image
 # journal issue blocked the last verification pass, unrelated to the

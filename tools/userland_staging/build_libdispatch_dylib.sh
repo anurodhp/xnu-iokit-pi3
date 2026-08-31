@@ -167,9 +167,11 @@
 # 2026-08-27: closed kevent_qos, kpersona_get, pread/pwrite, sigsuspend,
 # sleep, semaphore_timedwait, malloc_engaged_nano/memory_event_handler,
 # mach_continuous_time/mach_get_times, mach_make_memory_entry_64, and all
-# 7 mach_port_* + thread_destruct_special_reply_port real gaps -- see
-# tools/init_binary/init.c's spawn_syslogd() comment for the full trail
-# and gap_audit.sh's own output for how each was found/verified. Real,
+# 7 mach_port_* + thread_destruct_special_reply_port real gaps -- the
+# full trail of how each was found/verified used to be cited via the
+# now-retired tools/init_binary/init.c's spawn_syslogd() comment (see
+# docs/static-linking-cleanup-plan.md for the 2026-08-31 retirement;
+# that specific comment's content was not preserved elsewhere). Real,
 # still-open gaps kept below: the 7-symbol mach_eventlink_* family
 # (genuinely needs new MIG regen against mach_eventlink.defs, out of
 # this pass's scope) and pthread_get_stackaddr_np (thread-list-tracking
@@ -415,9 +417,11 @@ XNU_FOR_TRAP="../../third_party/xnu-7195"
 # Only real dependency is _cerror_nocancel (confirmed via nm before
 # adding), already resolved via the libsystem_c.dylib sibling link below,
 # same as geteuid.o above -- adds zero new gaps. Closes one entry off
-# this dylib's own real remaining-gap list (see
-# tools/init_binary/init.c's spawn_syslogd() comment for the full current
-# list and why it's still disabled: kevent_qos was the FIRST symbol dyld's
+# this dylib's own real remaining-gap list (the full current
+# list and why it's still disabled used to be cited via the now-retired
+# tools/init_binary/init.c's spawn_syslogd() comment, content not
+# preserved elsewhere -- see docs/static-linking-cleanup-plan.md):
+# kevent_qos was the FIRST symbol dyld's
 # eager chained-fixups binding aborted on when syslogd was actually
 # exec'd, found via a real QEMU boot test, not the only one left).
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
@@ -484,8 +488,10 @@ CFLAGS_SECURE=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -f
 # same flag for the same reason (launchd bug #6).
 
 # 2026-08-27 gap-closure pass: real remaining-gap symbols closed at once
-# (see tools/init_binary/init.c's spawn_syslogd() comment for the full
-# real trail of what each needed and why -- not re-derived here).
+# (the full real trail of what each needed and why used to be cited via
+# the now-retired tools/init_binary/init.c's spawn_syslogd() comment,
+# content not preserved elsewhere -- see
+# docs/static-linking-cleanup-plan.md -- not re-derived here).
 XNU_FOR_GAPS="../../third_party/xnu-7195"
 
 # kpersona_get: real, unmodified libsyscall/wrappers/persona.c (all 9

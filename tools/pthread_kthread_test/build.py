@@ -4,10 +4,10 @@ Build pthread_kthread_test.macho - the real-second-Mach-thread smoke test
 for third_party/xnu-7195/bsd/kern/bsd_pthread_stub.c's real bsdthread_create()
 (see pthread_kthread_test.c's own header comment for what it proves and how).
 
-Same build shape as tools/init_binary/build.py: fully static arm64 Mach-O,
+Same build shape as tools/pwtool/build.py: fully static arm64 Mach-O,
 LC_UNIXTHREAD entry, zero LC_LOAD_DYLIB, -O0 (this project hit a real -O2
 miscompile on a similarly-shaped freestanding binary before - see
-tools/init_binary/build.py's own comment - so -O0 is kept here too as the
+tools/pwtool/build.py's own comment - so -O0 is kept here too as the
 safe default rather than re-deriving that risk independently).
 
 Usage: tools/pthread_kthread_test/build.py [-o OUTPUT]

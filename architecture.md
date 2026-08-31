@@ -25,10 +25,8 @@ Driver matching cascade (iokit/*, hand-built personalities — no kext bundles)
 vfs_mountroot() -> real 2-partition SD card (FAT32 boot + HFS+ root)
         |
         v
-bsd_init() -> load_init_program() -> execs tools/init_binary/init.macho as PID 1
-        |
-        v
-Custom static PID-1: fork/exec/wait/reap, shell (ls/cat/cd/pwd/echo/mkdir/bash)
+bsd_init() -> load_init_program() -> execs real, dynamically-linked
+                                       launchd.macho as PID 1
 ```
 
 QEMU boots via `third_party/qemu-zhuowei` specifically (not stock
@@ -127,29 +125,30 @@ partition itself. `devfs` auto-mounts at `/dev`.
 mechanism: an Apple mechanism (not invented for this project) that treats
 a device-tree `RAMDisk` memory-map region as a single Mach-O file and
 execs it directly as `/sbin/launchd`, with no real directory tree (no
-`VNOP_MKDIR`/`VNOP_CREATE`). Superseded by the real SD/HFS+ path above,
-but `tools/init_binary/`'s design (fully static, no dyld, virtual in-
-process command dispatch) still reflects constraints that mattered most
-under mockfs and remain true today (no dyld regardless of root fs).
+`VNOP_MKDIR`/`VNOP_CREATE`). Superseded by the real SD/HFS+ path above.
+This project's original PID-1, `tools/init_binary/init.c` (a custom,
+fully static, freestanding fork/exec/wait shell with no dyld dependency —
+built to satisfy exactly this mockfs-era constraint), was itself retired
+2026-08-31 once real launchd.macho became PID 1 (see below); see
+`docs/static-linking-cleanup-plan.md` and Linear DAR-166/DAR-106/DAR-137
+for the retirement record. `tools/init_binary/` today holds only
+`inject_into_sd_image.sh`, the real SD-image installer for
+`launchd.macho`/`pwtool.macho`.
 
 ## Userland
 
-No dyld, no launchd, no opendirectoryd — none of these are open-sourced by
-Apple and would require a huge dependent stack (CoreFoundation, XPC) even
-if they were.
+No opendirectoryd — never open-sourced by Apple and would require a huge
+dependent stack (CoreFoundation, XPC) to replicate. Real dyld (Phase 6.5)
+and real, ported `launchd.macho` (Phase 6.8, PID 1) both exist and boot
+today — see `docs/daemon-roadmap.md` for the full porting history; this
+file's userland section predates both and describes the earlier
+static-archive/custom-PID-1 bring-up phase below for historical context.
 
-- **`tools/init_binary/`** — the actual PID-1 binary the kernel execs
-  (`init.macho`, statically linked, `LC_UNIXTHREAD` entry, zero
-  `LC_LOAD_DYLIB`). Implements real `fork`/`exec`/`wait`/reap (found and
-  fixed a real arm64 ABI quirk: the child-process flag comes back in `x1`,
-  not `x0`, on this kernel's `fork()` return convention) and a shell with
-  both virtual/in-process builtins and, incrementally, real syscalls
-  against the real HFS+ root (`ls`/`cat`/`cd`/`pwd`/`mkdir` — required
-  discovering that plain `fstat`/`getdirentries` fill an *older* struct
-  layout than the `64` variants, which is what's actually needed).
-  `INIT_HOST_TEST` compiles the same C logic for host-side testing without
-  a kernel (`host_test.c`, `_pty_test_phase5.py` for real pty-driven
-  interactive tests).
+- **`tools/userland_staging/`** now also builds real per-library
+  `.dylib`s (`libdyld.dylib`, `libSystem.B.dylib`, `launchd.macho` and
+  its dependency graph) on top of the static bring-up described next —
+  see `CLAUDE.md`'s "New project convention going forward" note and
+  `docs/daemon-roadmap.md`'s "Static-vs-dylib architecture debt" section.
 - **`tools/userland_staging/`** — incremental libSystem/libc bring-up
   (Phase 4): real Csu `crt0`, real libsyscall stubs, a real `libc_string.a`
   (20 Apple + 9 FreeBSD-fallback functions), TSD bootstrap

@@ -1,14 +1,16 @@
 #!/bin/bash
 # Builds crt0_smoketest.macho using Apple's real, unmodified Csu crt0.o
 # (third_party/Csu, static/no-dyld build path) instead of a hand-written
-# LC_UNIXTHREAD entry point like tools/init_binary/init.c uses. Proves Csu's
+# LC_UNIXTHREAD entry point like tools/pwtool/pwtool.c uses (the retired
+# tools/init_binary/init.c used this same hand-written-entry pattern
+# too, see docs/static-linking-cleanup-plan.md). Proves Csu's
 # real start.s/crt.c work unmodified on this project's toolchain before
 # committing to using it for the eventual real-libc userland (Phase 4).
 #
 # No libc linked in yet -- Phase 4's Libc build is separate, larger,
 # unfinished work (see docs/roadmap.md Phase 4 and project memory
 # project_xnu_rpi3_userspace_libc_dyld.md). main() below only issues raw
-# syscalls directly, same as tools/init_binary/init.c does, to isolate
+# syscalls directly, same as tools/pwtool/pwtool.c does, to isolate
 # "does crt0's _start -> main() -> exit() handoff work" from "does a full
 # libSystem build work."
 set -e

@@ -7,7 +7,7 @@ ulock_kthread_test.c's own header comment for what it proves and how).
 Same build shape as tools/pthread_kthread_test/build.py and
 tools/workq_kthread_test/build.py: fully static arm64 Mach-O, LC_UNIXTHREAD
 entry, zero LC_LOAD_DYLIB, -O0 (this project hit a real -O2 miscompile on a
-similarly-shaped freestanding binary before - see tools/init_binary/
+similarly-shaped freestanding binary before - see tools/pwtool/
 build.py's own comment).
 
 Usage: tools/ulock_kthread_test/build.py [-o OUTPUT]

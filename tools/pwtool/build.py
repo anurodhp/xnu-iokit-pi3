@@ -3,11 +3,12 @@
 Build pwtool -- the freestanding Phase 5 account-provisioning tool (see
 pwtool.c's own header comment for what it covers and why it's one binary).
 
-Same build shape as tools/init_binary/build.py (fully static arm64
-Mach-O, LC_UNIXTHREAD entry, zero LC_LOAD_DYLIB, -O0 -- this project hit a
-real miscompile at -O2 for a similarly-shaped freestanding binary
-(tools/init_binary/build.py's own comment), so -O0 is kept here too as the
-safe default rather than re-deriving that risk independently), except this
+Fully static arm64 Mach-O, LC_UNIXTHREAD entry, zero LC_LOAD_DYLIB, -O0 --
+this project hit a real miscompile at -O2 for a similarly-shaped
+freestanding binary (the retired tools/init_binary/init.c, 2026-08-31;
+see docs/static-linking-cleanup-plan.md for the retirement, project
+memory for the original empirical bisection), so -O0 is kept here too as
+the safe default rather than re-deriving that risk independently. This
 one links three source files together (pwtool.c itself, plus
 libinfo_custom.c and crypt_des.c from tools/libinfo_custom/ -- the account
 resolver and the DES-crypt port this tool builds on).
@@ -44,8 +45,8 @@ def main():
         "-static",
         "-Wall", "-Wextra",
         "-I", LIBINFO_DIR,
-        "-O0",  # see header comment -- matches init_binary's own real,
-                # empirically-motivated choice, not copied blindly
+        "-O0",  # see header comment -- an empirically-motivated choice,
+                # not copied blindly
         "-e", "__start",
         "-o", args.output,
     ] + srcs

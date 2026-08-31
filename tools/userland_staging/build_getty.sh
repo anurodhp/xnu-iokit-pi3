@@ -8,7 +8,8 @@
 # `execle(LO, "login", ..., name, ..., env)` -- i.e. hand off to a
 # SEPARATE real login(1) binary, which then does the actual password
 # prompt/account verification/credential drop/shell exec. This project's
-# actual login flow (tools/init_binary/init.c's do_login(), invoked
+# actual login flow (the retired tools/init_binary/init.c's do_login(),
+# see docs/static-linking-cleanup-plan.md -- invoked
 # in-process by single_user_child() before it execve()s straight to
 # /bin/bash) does username+password+account-lookup+shell-exec as ONE
 # step in ONE process -- there is no separate real login(1) binary at
@@ -99,8 +100,8 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
 # getty_syscalls.c's dbopen() comment).
 # real Libc/util/login_tty.c: opentty()'s real login_tty() (makes the
 # opened tty this process's controlling tty and dup2()s it onto fd
-# 0/1/2 -- same real function tools/init_binary/init.c's own
-# open_console() conceptually parallels by hand).
+# 0/1/2 -- same real function the retired tools/init_binary/init.c's
+# own open_console() conceptually paralleled by hand).
 # real Libc/gen/oldsyslog.c + cat_socket_stub.c + date_compat.c: real
 # openlog()/syslog()/vsyslog()/closelog() -- getty's own openlog("getty",
 # ...LOG_CONS...) call. This EXACT bundle (unmodified) is already real,

@@ -102,7 +102,7 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
 # investigation) - the "full termios ioctl surface" gap this comment used
 # to cite them for was never actually verified, just assumed, and turned
 # out to be wrong: a disposable ioctl(TIOCGETA/TIOCSETA) probe built
-# into tools/init_binary/init.c (see libc_gen_syscalls.c's new ioctl/
+# into the retired tools/init_binary/init.c (see libc_gen_syscalls.c's new ioctl/
 # _ioctl header comment for the full transcript-backed writeup) proved
 # third_party/xnu-7195's real BSD tty stack (bsd/dev/arm/km.c's kmopen/
 # kmioctl -> bsd/kern/tty.c's ttioctl_locked/ttread) is already fully
