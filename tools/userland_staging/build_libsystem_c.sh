@@ -339,6 +339,30 @@ fi
 (cd "$EXTRACT" && ar x "../../liblaunchd_core.a" localtime.o timezone_unix03.o strcat_chk.o)
 (cd "$EXTRACT" && ar x "../../libxpc_syscalls2.a" chk_fail_compat.o strcpy_chk.o strncpy_chk.o)
 
+# darwin_check_fd_set_overflow_compat.o added 2026-08-31 (static-linking
+# cleanup, "needs a new home" batch): same libxpc_syscalls2.a archive as
+# the _chk tier just above, same real reasoning -- real Apple's
+# `__darwin_check_fd_set_overflow()` is part of the same `_FORTIFY_SOURCE`
+# hardening family (the FD_SET/FD_CLR/FD_ISSET bounds check), and this
+# project's own curated copy (darwin_check_fd_set_overflow_compat.c,
+# already compiled into this archive by build_libxpc_syscalls2.sh) had no
+# real single owner before this: libxpc.dylib and libncurses.dylib each
+# independently carried their own copy, and libresolv.dylib's own link
+# already deferred to a flat-namespace `-Wl,-U` HOPING some loaded image
+# would provide it. Making libsystem_c.dylib -- the dylib every one of
+# those three already links as a sibling and the same real _chk-family
+# home as strcpy_chk.o/etc above -- the one real exporter closes all
+# three at once (see build_libxpc_dylib.sh's and build_ncurses_dylib.sh's
+# own updated comments for their halves of this fix).
+(cd "$EXTRACT" && ar x "../../libxpc_syscalls2.a" darwin_check_fd_set_overflow_compat.o)
+
+# sleep()/_sleep: new file, not extracted from an existing archive --
+# see libsystem_c_sleep_compat.c's own header for the full real-owner
+# investigation (2026-08-31, "needs a new home" batch). Needs plain
+# `nanosleep()`, a real export of the libsystem_kernel.dylib sibling
+# linked below as of this same batch.
+"$CLANG" $SIGLIST_CFLAGS libsystem_c_sleep_compat.c -o "$EXTRACT/sleep_compat.o"
+
 # strftime/strftime_l: real Apple source (stdtime/FreeBSD/strftime.c),
 # newly compiled here 2026-08-31 (static-linking cleanup, locale/
 # timezone-string consolidation batch) -- this dylib had NO copy of

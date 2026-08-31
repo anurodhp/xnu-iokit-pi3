@@ -268,30 +268,31 @@ LIBCXXABI="../../third_party/llvm-project/libcxxabi"
 # was wired up. Real Apple's own architecture has libunwind provide all
 # of these anyway.
 #
-# Real, working nanosleep(2) -- real Apple algorithm (host_get_clock_service
-# + semaphore_create + clock_get_time + __semwait_signal, real Mach IPC,
-# already QEMU-verified, see that file's own header comment for the full
-# story), reused verbatim rather than re-deriving a second nanosleep --
-# needed by real atomic.o/chrono.o (std::atomic's wait/notify timeout
-# path). clock_gettime itself has no real source anywhere in this
-# project's pinned checkouts to reuse (it's not a raw BSD syscall at all
-# -- confirmed absent from syscalls.master -- and real Apple's own
-# gen/clock_gettime.c is commpage-accelerated, more machinery than this
-# narrow need justifies porting), so libcxx_dylib_compat.c's own version
-# combines two already-real, already-working primitives
-# (gettimeofday/mach_absolute_time) behind the standard POSIX name
-# instead.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    -I "$XNU/osfmk" -I ../../generated \
-    simple_cmds_nanosleep_pub_compat.c -o "$EXTRACT/nanosleep_compat.o"
-
+# nanosleep_compat.o REMOVED entirely 2026-08-31 (static-linking
+# cleanup, "needs a new home" batch): this dylib's own copy of
+# simple_cmds_nanosleep_pub_compat.c (real Apple algorithm --
+# host_get_clock_service + semaphore_create + clock_get_time +
+# __semwait_signal, real Mach IPC, already QEMU-verified, see that
+# file's own header comment for the full story) had no real single
+# owner before this -- libncurses.dylib independently compiled the exact
+# same source. Its real Mach-IPC clock plumbing dependency
+# (_g_mach_ipc_clock_port/_g_mach_ipc_clock_sem via _mach_ipc_clock_init)
+# was already moved to libsystem_kernel.dylib back in the 2026-08-29
+# sweep noted below -- this session finishes the job by moving the
+# `nanosleep()` FUNCTION ITSELF there too (build_libsystem_kernel.sh's
+# own new nanosleep_compat.o), matching real Apple's own architecture
+# (nanosleep is a Libsyscall/libsystem_kernel-tier custom wrapper, not
+# plain Libc). This dylib already links libsystem_kernel.dylib as a
+# sibling below, so real atomic.o/chrono.o's own undefined `_nanosleep`
+# reference (std::atomic's wait/notify timeout path) now resolves
+# externally instead of to a private copy.
+#
 # libmach_ipc.a is no longer bundled here (static-linking cleanup, Phase
-# 1a, 2026-08-29). nanosleep_compat.o still needs the same real Mach-IPC
-# clock plumbing (host_get_clock_service/semaphore_create/clock_get_time
-# and their traps), but all of it is now a real export of
-# libsystem_kernel.dylib -- already a sibling on this link line -- rather
-# than a private copy in each of libc++.dylib, libdispatch.dylib,
-# libxpc.dylib and libncurses.dylib. Two of the symbols involved
+# 1a, 2026-08-29) -- the clock plumbing (host_get_clock_service/
+# semaphore_create/clock_get_time and their traps) was already a real
+# export of libsystem_kernel.dylib as of that sweep, rather than a
+# private copy in each of libc++.dylib, libdispatch.dylib, libxpc.dylib
+# and libncurses.dylib. Two of the symbols involved
 # (_g_mach_ipc_clock_port/_sem) are real cached Mach port rights, so
 # those copies were duplicate state, not just duplicate code.
 

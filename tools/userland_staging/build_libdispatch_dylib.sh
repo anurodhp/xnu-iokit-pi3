@@ -190,18 +190,24 @@ UNDEF_SYMS=(
     _thread_get_special_reply_port
 )
 # Real, defined-elsewhere-in-the-process symbols this dylib's own
-# gap-closure .o's (mach_port_gap_closures2.o/cf_mach_port_syscalls.o/
-# dispatch_gap_closures4.o) reference but can't resolve at THIS dylib's
-# own standalone `-nostdlib` link time, because the archives that really
-# define them (libxpc_syscalls2.a's mach_portUser.o for the 11
-# _kernelrpc_mach_port_* MIG fallbacks; syslogd_libc_extras.a for
-# _nanosleep) are deliberately NOT linked into this narrow dylib -- same
-# real flat-namespace mechanism as every other -U symbol here: they
-# resolve for real once syslogd.macho (which DOES link both archives)
+# gap-closure .o's (mach_port_gap_closures2.o/cf_mach_port_syscalls.o)
+# reference but can't resolve at THIS dylib's own standalone `-nostdlib`
+# link time, because the archive that really defines them
+# (libxpc_syscalls2.a's mach_portUser.o for the 11 _kernelrpc_mach_port_*
+# MIG fallbacks) is deliberately NOT linked into this narrow dylib --
+# same real flat-namespace mechanism as every other -U symbol here: they
+# resolve for real once syslogd.macho (which DOES link that archive)
 # loads this dylib, confirmed via nm -g syslogd.macho showing the MIG
-# fallbacks and nanosleep already real+defined there. NOT the same class
-# as this dylib's own honestly-still-open gaps above -- kept in a
-# separate array to avoid muddying that list's meaning.
+# fallbacks already real+defined there. NOT the same class as this
+# dylib's own honestly-still-open gaps above -- kept in a separate array
+# to avoid muddying that list's meaning.
+#
+# _nanosleep REMOVED from this array 2026-08-31 (static-linking cleanup,
+# "needs a new home" batch): it was here only for dispatch_gap_
+# closures4.o's own sleep(), which is now gone from this dylib entirely
+# (moved to libsystem_c.dylib, see that file's own updated header) --
+# confirmed via nm -m that no other object in this dylib's own extract
+# dir references `_nanosleep`.
 UNDEF_SYMS_ELSEWHERE_IN_PROCESS=(
     __kernelrpc_mach_port_allocate __kernelrpc_mach_port_construct
     __kernelrpc_mach_port_destruct __kernelrpc_mach_port_extract_member
@@ -209,7 +215,6 @@ UNDEF_SYMS_ELSEWHERE_IN_PROCESS=(
     __kernelrpc_mach_port_insert_member __kernelrpc_mach_port_insert_right
     __kernelrpc_mach_port_kernel_object __kernelrpc_mach_port_request_notification
     __kernelrpc_mach_port_type __kernelrpc_mach_port_unguard
-    _nanosleep
 )
 UNDEF_SYMS+=("${UNDEF_SYMS_ELSEWHERE_IN_PROCESS[@]}")
 UNDEF_FLAGS=()

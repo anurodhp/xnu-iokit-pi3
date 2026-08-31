@@ -128,6 +128,20 @@ fi
 # nothing outside this dylib can bind to the plain names here anymore.
 rm -f "$EXTRACT/getuid.o"
 
+# fpathconf.o REMOVED 2026-08-31 (static-linking cleanup, "needs a new
+# home" batch): same real shape as getuid.o just above -- a single-
+# symbol raw syscall trap (real, generated via create-syscalls.pl in
+# build_copyfile.sh, confirmed via nm -m no other member of this extract
+# dir defines it) that now has a real canonical home,
+# libsystem_kernel.dylib (build_libsystem_kernel.sh's own new
+# `_fpathconf` syscall-stub generation, same batch) -- this dylib
+# already links libsystem_kernel.dylib as a sibling below, so
+# copyfile.o's own undefined `_fpathconf` reference now resolves
+# externally instead of to a second private copy. Not from
+# libcopyfile.a itself -- that archive stays intact for dyld.macho's
+# real static link.
+rm -f "$EXTRACT/fpathconf.o"
+
 # copy.o/parse.o/unparse.o/pack.o REMOVED 2026-08-31 (static-linking
 # cleanup, libcopyfile-vs-libxpc ownership investigation): real Apple
 # source (third_party/Libc/uuid/uuidsrc/*.c), same class of "genuinely

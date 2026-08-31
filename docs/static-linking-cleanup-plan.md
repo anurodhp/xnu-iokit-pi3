@@ -2098,3 +2098,187 @@ investigated this session).
 
 Baseline updated (`dup_symbol_audit.sh --update-baseline`) to lock in
 54→28.
+
+## Session 2026-08-31 (continuation 12): "needs a new home" BSD/libc leftover cluster, 28→24
+
+Picked up round 9's own "needs a new home" flag: `_fpathconf`/`_sleep`/
+`_nanosleep`/`___darwin_check_fd_set_overflow` each had 2 independent
+owners and, unlike every earlier round, NEITHER owner was
+`libsystem_c.dylib`/`libsystem_kernel.dylib` -- real Apple's actual
+homes for all four. `_strtoll`/`_strtoul` (also named in this round's
+brief) turned out already fixed by round 11's xlocale consolidation, not
+re-investigated. `_memcpy`/`_memset` confirmed still the real,
+already-documented `libsystem_malloc.dylib` structural exception (DAR-13)
+-- left alone. `_open_dprotected_np` confirmed still exactly the
+already-documented deferral (`ed.macho`/`mktemp.macho`'s chained-fixups
+bind to `libcopyfile/_open_dprotected_np`, blocked on the end-of-sweep
+`build_simple_cmds.sh` rebuild) -- re-confirmed, not re-attempted.
+
+### Real owners established
+
+- **`_fpathconf`** -> `libsystem_kernel.dylib`: plain syscall #192, not
+  `NO_SYSCALL_STUB` -- added to `build_libsystem_kernel.sh`'s own
+  `create-syscalls.pl` stub loop (same real generator every other entry
+  there uses). Dropped from `libcopyfile.dylib` (`build_copyfile_dylib.sh`,
+  `rm -f "$EXTRACT/fpathconf.o"`, same shape as that script's own
+  pre-existing `getuid.o` precedent) and narrowed out of
+  `libncurses.dylib`'s `ncurses_extra_syscalls.o` (hand-rolled inline-asm
+  copy, kept local via `-unexported_symbol` since nothing else in that
+  object needed removing).
+- **`_nanosleep`** -> `libsystem_kernel.dylib`: real Apple architecture
+  places nanosleep as a Libsyscall/libsystem_kernel-tier custom wrapper,
+  not plain Libc -- and this project's own real port
+  (`simple_cmds_nanosleep_pub_compat.c`) already depended on
+  `_g_mach_ipc_clock_port`/`_g_mach_ipc_clock_sem`/`_mach_ipc_clock_init`,
+  which the 2026-08-29 sweep had already made libsystem_kernel.dylib's
+  own real canonical copies -- compiling the function itself there too
+  (instead of reaching back into a sibling for those globals) finishes
+  that job. Needed a real `-Wl,-alias,_nanosleep,'_nanosleep$UNIX2003'`
+  (base genuinely local to that link) once a UNIX03-compiled caller
+  elsewhere (`libsystem_c_sleep_compat.c`, next item) surfaced a real
+  link failure -- the SDK's own `<time.h>` `__DARWIN_ALIAS_C` macro
+  asm-labels a direct `nanosleep()` call site to the versioned symbol
+  under `__DARWIN_UNIX03=1`, same real ABI-versioning mechanism as every
+  other `$UNIX2003` alias in this file. Removed entirely from
+  `libc++.dylib` (standalone compile step, no other in-archive consumer)
+  and narrowed (not removed) out of `libncurses.dylib`'s own
+  `simple_cmds_nanosleep_pub_compat_c.o` (kept local for `lib_napms.o`'s
+  real internal reference, confirmed via `nm -m`).
+- **`___darwin_check_fd_set_overflow`** -> `libsystem_c.dylib`: same
+  real `_FORTIFY_SOURCE` hardening family as the `_chk` tier
+  `build_libsystem_c.sh` already established as its own canonical
+  responsibility (strcpy_chk/strncpy_chk/etc, all from the same
+  `libxpc_syscalls2.a`) -- `darwin_check_fd_set_overflow_compat.o` was a
+  real leftover from that same archive that got missed at the time.
+  Dropped from `libxpc.dylib` (same `rm -f` shape as that script's own
+  sibling `_chk`-family removal) and narrowed out of `libncurses.dylib`.
+- **`_sleep`** -> `libsystem_c.dylib`: new file
+  `libsystem_c_sleep_compat.c`, NOT real `third_party/Libc/gen/FreeBSD/
+  sleep.c` verbatim -- that real file calls the cancelable-internal
+  symbol `_nanosleep` (linker name `__nanosleep`), a real/internal split
+  this project's own nanosleep port never replicated (confirmed via nm
+  before writing, not guessed), so the real file's call fails to link.
+  Reused `dispatch_gap_closures4.c`'s own already-QEMU-verified narrowed
+  algorithm (same overflow-avoidance and EINTR-rounding logic, calling
+  plain `nanosleep()` instead) verbatim rather than re-deriving a third
+  copy -- that file's own `sleep()` is exactly what `libdispatch.dylib`
+  had been carrying as its one real duplicate (DAR-22). Removed
+  `sleep()` from `dispatch_gap_closures4.c` entirely (libdispatch.dylib
+  already reexports `libsystem_c.dylib` wholesale, so nothing downstream
+  lost the symbol) and dropped the now-dead `_nanosleep` entry from that
+  script's own `UNDEF_SYMS_ELSEWHERE_IN_PROCESS` array. Narrowed out of
+  `libncurses.dylib`'s `ncurses_extra_syscalls.o` (its own
+  `_mal_semwait_sleep`-based version, kept local -- confirmed via nm no
+  other object in that archive needs it).
+
+### `__semwait_signal` note (not a new duplicate)
+
+`nanosleep_compat.o`'s own `__semwait_signal` dependency has no real
+copy anywhere in `libsystem_kernel.dylib`'s own build -- the only real
+owner is `libsystem_malloc.dylib`'s `sys_semwait_signal.o`. Confirmed
+`libsystem_malloc.dylib` already links `libsystem_kernel.dylib` as a
+sibling (so the reverse -- kernel linking malloc -- would be circular),
+matching the SAME "flat-namespace, always loaded alongside" deferral
+shape this script's own `-Wl,-U,_abort`/`_memcpy`/
+`_pthread_tsd_shim_bootstrap` trio already use, just extended by one
+more symbol (`-Wl,-U,___semwait_signal` -- three underscores, confirmed
+via nm against the real linker symbol name, not the plain C name) rather
+than a new pattern.
+
+### Stale-bind sweep (rule 3) found two real, different-shaped issues
+
+Ran `xcrun dyld_info -fixups` across every shipped `.dylib` AND `.macho`
+(not just one glob) for binds to the four symbols under their
+now-superseded owning ordinals, per this doc's own repeated lesson.
+Found two:
+
+- `libsystem_notify.dylib` had a real, stale chained-fixups bind to
+  `libncurses.5/_nanosleep` -- a genuine regression risk (this dylib
+  really does link `libncurses.dylib` directly, and its own object
+  really calls `nanosleep()`), not caught until this sweep because
+  `libsystem_notify.dylib` itself wasn't one of the dylibs this batch
+  edited. Fixed with a plain relink (`build_libsystem_notify.sh`, no
+  source change) -- confirmed via `dyld_info -fixups` it now binds
+  `libsystem_kernel/_nanosleep`. `syslogd.macho` also relinked
+  (`build_syslogd.sh`) for the same reason (it references `_dispatch`/
+  ICU functions from several of the touched dylibs); after relinking it
+  STILL shows a real, pre-existing (confirmed via a fixups scan taken
+  before this session touched anything) `bind libdispatch/_nanosleep`
+  chained-fixups entry even though `libdispatch.dylib` has never
+  actually exported `_nanosleep` (own nm sweep confirmed zero
+  references, defined or undefined, in the freshly-rebuilt dylib) --
+  this predates this session, is unrelated to the fix here, and
+  `syslogd` is not currently auto-spawned at all (DAR-153), so it's
+  flagged as a real, pre-existing oddity worth a dedicated look
+  (probably a chained-fixups ordinal-selection quirk in the toolchain's
+  `ld`, same general class as this doc's own `-Wl,-alias` nonlocal-base
+  finding) but explicitly NOT this session's job to chase further.
+- `tar.macho` (one of the 76 `build_simple_cmds.sh` binaries, explicitly
+  out of scope for a rebuild this pass per rule 6) has a real, now-stale
+  bind to `libcopyfile/_fpathconf` -- same exact deferred-until-the-
+  end-of-sweep-rebuild shape as `_open_dprotected_np`'s already-
+  documented `ed.macho`/`mktemp.macho` finding above. Left alone,
+  documented here rather than forced.
+
+### Real QEMU verification
+
+Rebuilt bottom-up: `libsystem_kernel.dylib` (gained real `sys_fpathconf.o`
++ `nanosleep_compat.o` + the `_nanosleep$UNIX2003` alias) ->
+`libsystem_c.dylib` (gained `sleep_compat.o` +
+`darwin_check_fd_set_overflow_compat.o`) -> `libc++.dylib` (lost
+`nanosleep_compat.o` entirely) -> `libncurses.dylib` (narrowed all four)
+-> `libcopyfile.dylib` (lost `fpathconf.o` entirely) ->
+`libxpc.dylib` (lost `darwin_check_fd_set_overflow_compat.o` entirely)
+-> `libdispatch.dylib` (lost its own `sleep()`) -> `libsystem_notify.dylib`
++ `syslogd.macho` (relinked for the stale-bind fix above) ->
+`libSystem.B.dylib` (rebuilt for parity, unchanged -- pure
+`-reexport_library`, confirmed via `otool -l`). `dup_symbol_audit.sh
+--dylibs`: `OK: no new duplicate symbols`, `4 baseline dylib
+duplicate(s) fixed`. `dup_symbol_audit.sh --binaries` initially FAILed
+with 3 new facts (`pd_console_login.macho` newly shadowing
+`___darwin_check_fd_set_overflow`/`_sleep`, `sleep.macho` newly shadowing
+`_nanosleep$UNIX2003`) -- both are the exact same pre-existing
+"statically links the Libc tiers AND links libSystem.B.dylib/
+libsystem_c.dylib directly" architecture already tracked for
+`launchd.macho` (DAR-23/DAR-162) and every `build_simple_cmds.sh`
+binary, just now touching 2 more symbols because those symbols finally
+have a real single dylib-tier owner; `pd_console_login.macho` has its
+own dedicated ticket for this (DAR-25) already scoped under DAR-162's
+"Phase 2b: dedup daemon binaries" umbrella, and `sleep.macho` is part of
+the already-blanket-deferred 76 simple_cmds. Not attempted this
+session; baseline updated to capture the real (structural, tracked) +3.
+Ran `tools/init_binary/inject_into_sd_image.sh` then `tools/boot_test.py`
+(`qemu/static_link_new_home_batch_boot.log`, **PASS**, 190.8s). Diffed
+address-stripped against the last known-good log
+(`static_link_dar159_xlocale_boot.log`): only the same benign,
+already-documented QEMU/TCG scheduling-order jitter (reordered
+`IOConfigThread`/`startMatching` lines, a 2-page `vm_page_bootstrap`
+count delta) and the byte-identical `DIAG: first_panic latched=...`
+diagnostic line; identical final `jnl` flush checkpoint
+(`load_init_program: attempting to load /sbin/launchd` through
+`jnl: b(14, 2): flushing fs disk buffer returned 0x2d`). Zero real
+`panic`/`Symbol not found`/`undefined symbol`/`fatal error` hits.
+
+### Linear
+
+DAR-10 (libncurses.dylib) CLOSED: 4→0, this batch's own fix resolved
+every one of its remaining duplicates. DAR-22 (libdispatch.dylib)
+CLOSED: 1→0, its one duplicate (`_sleep`) was exactly this batch's fix.
+DAR-14 (libsystem_kernel.dylib), DAR-5 (libsystem_c.dylib) commented
+with current counts (unaffected -- both symbols were NEW exports there,
+not previously-duplicated ones, so neither ticket's own count changes).
+DAR-12 (libcopyfile.dylib, 4→3: `fpathconf` closed, `syslog`/
+`__xpc_runtime_is_app_sandboxed`/`open_dprotected_np` remain, none
+investigated this session), DAR-9 (libxpc.dylib, 3→2:
+`___darwin_check_fd_set_overflow` closed, `__xpc_runtime_is_app_
+sandboxed`/`vproc_swap_integer` remain) and DAR-6 (libc++.dylib, 3→2:
+`nanosleep` closed, `dlopen`/`dlsym` vs `libdyld.dylib` remain) all
+commented with current real counts, left open. DAR-25 (pd_console_
+login.macho shadow count) commented with the +2 side effect and a
+pointer to DAR-162 for the real underlying fix. New remainder
+documented but not filed as a fresh ticket: `syslogd.macho`'s
+pre-existing (not-this-session) `libdispatch/_nanosleep` chained-fixups
+oddity, flagged above for a future dedicated look.
+
+Baseline updated (`dup_symbol_audit.sh --update-baseline`) to lock in
+28→24 dylib duplicates (6527→6530 binary-shadowing facts, the +3 above).

@@ -147,19 +147,25 @@ rm -f "$EXTRACT"/______third_party_Libc_stdlib_FreeBSD_atoi_c.o \
 # already-undefined consumers inside this archive (access.o/
 # write_entry.o/lib_mouse.o+lib_mvcur.o+lib_setup.o+trim_sgr0.o) via
 # nm. `_fpathconf`/`_sleep`/`___darwin_check_fd_set_overflow` (also in
-# this object) are deliberately NOT narrowed here -- investigated and
-# found to have no existing real dylib owner anywhere in this project
-# yet (`_fpathconf` only otherwise duplicated in libcopyfile.dylib,
-# `_sleep` only in libdispatch.dylib, `___darwin_check_fd_set_overflow`
-# only in libxpc.dylib -- none of those is libsystem_c.dylib/
-# libsystem_kernel.dylib, real Apple's actual homes for these). Flagged
-# as a "needs a new home" batch (same shape as the BSD socket family
-# fix), not attempted this pass.
+# this object) NARROWED here 2026-08-31 (static-linking cleanup, "needs
+# a new home" batch): each now has a real single canonical owner --
+# `_fpathconf` -> libsystem_kernel.dylib (new real generated syscall
+# stub, build_libsystem_kernel.sh), `_sleep` -> libsystem_c.dylib (new
+# libsystem_c_sleep_compat.c, see that file's own header), `___darwin_
+# check_fd_set_overflow` -> libsystem_c.dylib (extracted from the same
+# libxpc_syscalls2.a member build_libsystem_c.sh already pulls the rest
+# of the real `_FORTIFY_SOURCE` `_chk` tier from) -- this dylib already
+# links both siblings below. Confirmed via nm -m this object's own
+# `getpgrp()`/`read()`/`select()` neighbors are the only other real
+# consumers inside it and none of them reference these three, so
+# narrowing is a pure export-visibility change, not a functional one.
 XCODE12_LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
 "$XCODE12_LD" -r -arch arm64 -keep_private_externs \
     -unexported_symbol _gettimeofday -unexported_symbol _pthread_testcancel \
     -unexported_symbol _read -unexported_symbol _sigprocmask -unexported_symbol _select \
     -unexported_symbol _access -unexported_symbol _mkdir -unexported_symbol _strstr \
+    -unexported_symbol _fpathconf -unexported_symbol _sleep \
+    -unexported_symbol ___darwin_check_fd_set_overflow \
     "$EXTRACT/ncurses_extra_syscalls.o" -o "$EXTRACT/ncurses_extra_syscalls.o.narrowed"
 mv -f "$EXTRACT/ncurses_extra_syscalls.o.narrowed" "$EXTRACT/ncurses_extra_syscalls.o"
 (cd "$EXTRACT" && ar x "../../libc_locale.a" table.o none.o)
@@ -204,6 +210,26 @@ XCODE12_LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
     -unexported_symbol _mach_ipc_clock_init \
     "$EXTRACT/mach_ipc_clock_init.o" -o "$EXTRACT/mach_ipc_clock_init.o.narrowed"
 mv -f "$EXTRACT/mach_ipc_clock_init.o.narrowed" "$EXTRACT/mach_ipc_clock_init.o"
+
+# _nanosleep (from simple_cmds_nanosleep_pub_compat_c.o, extracted above
+# via `ar x ../../libncurses.a`) NARROWED 2026-08-31 (static-linking
+# cleanup, "needs a new home" batch): this object's own public
+# `nanosleep()` now has a real single canonical owner,
+# libsystem_kernel.dylib (build_libsystem_kernel.sh's own new
+# nanosleep_compat.o, compiled from this exact same real source) -- this
+# dylib already links libsystem_kernel.dylib as a sibling below. NOT
+# removed outright the same way libc++.dylib's copy was (that dylib
+# compiled it as a standalone step with no other in-archive consumer):
+# confirmed via nm -m that `lib_napms.o` (this archive's real, only
+# consumer, napms()'s own delay support) holds a genuine undefined
+# reference to plain `_nanosleep` -- same "keep the local definition for
+# an internal consumer, hide the public export" shape as
+# mach_ipc_clock_init.o's own narrowing just above, not a full removal.
+XCODE12_LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+"$XCODE12_LD" -r -arch arm64 -keep_private_externs \
+    -unexported_symbol _nanosleep \
+    "$EXTRACT/simple_cmds_nanosleep_pub_compat_c.o" -o "$EXTRACT/simple_cmds_nanosleep_pub_compat_c.o.narrowed"
+mv -f "$EXTRACT/simple_cmds_nanosleep_pub_compat_c.o.narrowed" "$EXTRACT/simple_cmds_nanosleep_pub_compat_c.o"
 
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness \

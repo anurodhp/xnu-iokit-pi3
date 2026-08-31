@@ -1,13 +1,15 @@
-/* sleep(): NOT third_party/Libc/gen/FreeBSD/sleep.c verbatim -- that
- * real file calls the cancelable-variant symbol `_nanosleep` (link name
- * `__nanosleep`), a real/internal split this project's own nanosleep
- * port (simple_cmds_nanosleep_pub_compat_c.o, in syslogd_libc_extras.a)
- * never replicated -- it only exports the plain public `nanosleep`
- * (confirmed via nm before writing this, not guessed), so linking the
- * real file's `_nanosleep` call fails. Real algorithm reproduced
- * narrowly against the symbol that actually exists instead (same
- * overflow-avoidance-for-huge-`seconds` and EINTR-remaining-time-
- * rounding logic as the real file, not simplified away).
+/* sleep() REMOVED from this file 2026-08-31 (static-linking cleanup,
+ * "needs a new home" batch): it had no real single canonical owner
+ * before this (this file's own copy vs libncurses.dylib's independent
+ * one), and neither was real Apple's actual home for it. Moved to
+ * libsystem_c.dylib instead (libsystem_c_sleep_compat.c, same real
+ * algorithm, reused verbatim not re-derived -- see that file's own
+ * header for the full citation, including why real
+ * third_party/Libc/gen/FreeBSD/sleep.c still can't be used verbatim
+ * here). This dylib already reexports libsystem_c.dylib wholesale
+ * (see this script's own final link command), so nothing downstream
+ * lost the symbol -- it just resolves through the reexport now instead
+ * of a private copy compiled into this file.
  *
  * mach_continuous_time/mach_get_times: real origin
  * third_party/xnu-7195/libsyscall/wrappers/mach_continuous_time.c and
@@ -44,29 +46,6 @@
 #include <sys/time.h>
 #include <mach/mach_time.h>
 #include <arm/cpu_capabilities.h>
-
-unsigned int
-sleep(unsigned int seconds)
-{
-	struct timespec time_to_sleep;
-	struct timespec time_remaining;
-
-	if (seconds > INT_MAX) {
-		return (seconds - INT_MAX + sleep(INT_MAX));
-	}
-
-	time_to_sleep.tv_sec = seconds;
-	time_to_sleep.tv_nsec = 0;
-	time_remaining.tv_sec = 0;
-	time_remaining.tv_nsec = 0;
-	if (nanosleep(&time_to_sleep, &time_remaining) != -1) {
-		return 0;
-	}
-	if (errno != EINTR) {
-		return seconds;
-	}
-	return (unsigned int)(time_remaining.tv_sec + (time_remaining.tv_nsec != 0));
-}
 
 static uint64_t
 _mach_continuous_time_base(void)

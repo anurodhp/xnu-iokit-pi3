@@ -156,6 +156,19 @@ rm -f "$EXTRACT/dyldgen____thread_selfid.o" \
 rm -f "$EXTRACT/memmove_chk.o" "$EXTRACT/stpncpy_chk.o" \
       "$EXTRACT/strcpy_chk.o" "$EXTRACT/strncpy_chk.o"
 
+# darwin_check_fd_set_overflow_compat.o REMOVED 2026-08-31 (static-
+# linking cleanup, "needs a new home" batch): a leftover from the same
+# libxpc_syscalls2.a _chk-family removal just above that got missed at
+# the time -- real Apple's `__darwin_check_fd_set_overflow()` is the
+# same `_FORTIFY_SOURCE` hardening family as memmove_chk/strcpy_chk/
+# strncpy_chk, and now has the same real canonical home,
+# libsystem_c.dylib (build_libsystem_c.sh's own new extraction of this
+# exact object, same batch) -- this dylib already links libsystem_c.
+# dylib as a sibling below. Confirmed via nm -m the only in-dylib
+# consumer (liblaunch.o's own FD_SET/FD_ISSET use) merely references it
+# as undefined, so it now resolves externally instead.
+rm -f "$EXTRACT/darwin_check_fd_set_overflow_compat.o"
+
 # time.o REMOVED: its own `_time` duplicates libsystem_c.dylib's real
 # BSD `time()` syscall wrapper (already a linked sibling below);
 # confirmed via nm -m no other object in this extract dir references

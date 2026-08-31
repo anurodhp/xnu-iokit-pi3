@@ -3797,6 +3797,7 @@ B pd_console_login.macho ___bsdthread_register
 B pd_console_login.macho ___bsdthread_terminate
 B pd_console_login.macho ___chmod_extended
 B pd_console_login.macho ___cleanup
+B pd_console_login.macho ___darwin_check_fd_set_overflow
 B pd_console_login.macho ___environ_lock
 B pd_console_login.macho ___environ_unlock
 B pd_console_login.macho ___error
@@ -4127,6 +4128,7 @@ B pd_console_login.macho _select
 B pd_console_login.macho _setenv
 B pd_console_login.macho _setenv$UNIX2003
 B pd_console_login.macho _sigprocmask
+B pd_console_login.macho _sleep
 B pd_console_login.macho _spin_lock
 B pd_console_login.macho _spin_lock_try
 B pd_console_login.macho _spin_unlock
@@ -4743,6 +4745,7 @@ B sleep.macho _mig_strncpy
 B sleep.macho _mig_strncpy_zerofill
 B sleep.macho _mkdir
 B sleep.macho _mkdirat
+B sleep.macho _nanosleep$UNIX2003
 B sleep.macho _NXArgc
 B sleep.macho _NXArgv
 B sleep.macho _pread
@@ -6525,7 +6528,6 @@ B yes.macho _vwarnc
 B yes.macho _vwarnx
 B yes.macho _warnc
 B yes.macho _warnx
-D ___darwin_check_fd_set_overflow
 D __dyld_find_unwind_sections
 D __dyld_register_func_for_remove_image
 D __xpc_runtime_is_app_sandboxed
@@ -6537,16 +6539,13 @@ D _dlopen
 D _dlsym
 D _fabs
 D _fmod
-D _fpathconf
 D _memcpy
 D _memset
 D _modf
-D _nanosleep
 D _open_dprotected_np
 D _pow
 D _scalbn
 D _send
-D _sleep
 D _socket
 D _sqrt
 D _syslog

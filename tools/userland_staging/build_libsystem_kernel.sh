@@ -348,9 +348,19 @@ MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 # each marked NO_SYSCALL_STUB in bsd/kern/syscalls.master, meaning real
 # Apple needs real hand-written C logic on top, not just a generated
 # asm stub -- see the real wrapper compiles below).
+# _fpathconf added 2026-08-31 (static-linking cleanup, "needs a new
+# home" batch): plain fpathconf(2), syscall #192, not NO_SYSCALL_STUB
+# (same real Perl-generated-stub shape as every other entry in this
+# loop) -- real canonical home, previously owned independently by
+# libcopyfile.dylib (a real generated stub, build_copyfile.sh's own
+# create-syscalls.pl invocation) and libncurses.dylib (a hand-rolled
+# inline-asm reimplementation, ncurses_extra_syscalls.c) with neither
+# being libsystem_kernel.dylib/libsystem_c.dylib -- real Apple's actual
+# home for a plain raw syscall wrapper. See build_copyfile_dylib.sh's
+# and build_ncurses_dylib.sh's own updated comments for their halves.
 for s in _geteuid _getegid _getuid _pread _pwrite _fileport_makefd _fileport_makeport \
     _socket _writev ___chmod ___connect_nocancel ___recvmsg_nocancel ___sendmsg_nocancel \
-    ___select_nocancel ___sendto_nocancel; do
+    ___select_nocancel ___sendto_nocancel _fpathconf; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
         -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
         -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
@@ -430,6 +440,35 @@ done
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
     mach_ipc_traps.s -o "$OUT/libsystem_kernel/mach_ipc_traps.o"
 
+# nanosleep() added 2026-08-31 (static-linking cleanup, "needs a new
+# home" batch): simple_cmds_nanosleep_pub_compat.c (this project's real,
+# already-QEMU-verified Mach-IPC nanosleep port -- see that file's own
+# header for the full algorithm citation) had no single real owner
+# before this -- libc++.dylib and libncurses.dylib each independently
+# compiled their own copy. Its two data-symbol dependencies
+# (_g_mach_ipc_clock_port/_g_mach_ipc_clock_sem, via _mach_ipc_clock_init)
+# are ALREADY this dylib's own real canonical copies (MACH_IPC_EXTRACT's
+# mach_ipc_clock_init.o above, per build_ncurses_dylib.sh's own comment:
+# "this dylib already links libsystem_kernel.dylib as a sibling below,
+# which owns the real canonical copy") -- so compiling the function
+# itself here too, instead of in a sibling that has to reach back for
+# those globals, matches real Apple's own architecture (nanosleep is a
+# Libsyscall/libsystem_kernel-tier custom wrapper, not a plain Libc
+# "gen" function -- see libsystem_c_sleep_compat.c's own header for the
+# other half of this same investigation, sleep() itself).
+#
+# __semwait_signal deferred via -Wl,-U below (see the final link
+# command): the only other real, already-working copy of this raw
+# syscall trap is libsystem_malloc.dylib's own sys_semwait_signal.o
+# (build_libmalloc.sh), and this dylib is BELOW libsystem_malloc.dylib
+# in real dependency order (malloc already links kernel as a sibling;
+# the reverse would be circular) -- same "flat-namespace, always loaded
+# alongside" reasoning this script's own -Wl,-U,_abort/_memcpy/
+# _pthread_tsd_shim_bootstrap already use just below, not a new pattern.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -I "$XNU/osfmk" -I ../../generated \
+    simple_cmds_nanosleep_pub_compat.c -o "$OUT/libsystem_kernel/nanosleep_compat.o"
+
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libsystem_kernel.dylib"
     # -not_for_dyld_shared_cache: real, newly-surfaced requirement of
@@ -455,6 +494,11 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     `# loads libsystem_kernel.dylib without libSystem.B.dylib (which` \
     `# re-exports both) also in the process.` \
     -Wl,-U,_abort -Wl,-U,_memcpy -Wl,-U,_pthread_tsd_shim_bootstrap \
+    `# __semwait_signal: nanosleep_compat.o's own real dependency, see` \
+    `# that compile step's own comment just above -- real canonical copy` \
+    `# is libsystem_malloc.dylib's sys_semwait_signal.o, always loaded` \
+    `# alongside this dylib (same class of deferral as the 3 just above).` \
+    -Wl,-U,___semwait_signal \
     `# BSD socket family additions, 2026-08-31 (static-linking cleanup,` \
     `# dylib-vs-dylib duplicate-symbol pass). chmod/connect/recvmsg/` \
     `# writev's $UNIX2003 aliases are created HERE (base is genuinely` \
@@ -467,6 +511,16 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     `# left creating these aliases.` \
     -Wl,-alias,_chmod,'_chmod$UNIX2003' -Wl,-alias,_connect,'_connect$UNIX2003' \
     -Wl,-alias,_recvmsg,'_recvmsg$UNIX2003' -Wl,-alias,_writev,'_writev$UNIX2003' \
+    `# _nanosleep$UNIX2003 added 2026-08-31 ("needs a new home" batch):` \
+    `# real Apple genuinely exports both the plain and $UNIX2003 names` \
+    `# from libsystem_kernel.dylib (the SDK's own <time.h> __DARWIN_ALIAS_C` \
+    `# macro asm-labels any UNIX03-compiled caller's direct nanosleep()` \
+    `# call to the versioned symbol -- confirmed by libsystem_c_sleep_` \
+    `# compat.o's own real link failure needing exactly this before this` \
+    `# alias was added). Base is genuinely local to this link` \
+    `# (nanosleep_compat.o, just above), same nonlocal-base requirement as` \
+    `# every other alias here.` \
+    -Wl,-alias,_nanosleep,'_nanosleep$UNIX2003' \
     `# _sendto unexported (kept private-extern, not removed): libresolv.a` \
     `# still owns the real, public canonical PLAIN+$UNIX2003 _sendto pair` \
     `# (its own local base is required there for its own -Wl,-alias, same` \
@@ -502,6 +556,7 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/sys___chmod.o" "$OUT/libsystem_kernel/sys___connect_nocancel.o" \
     "$OUT/libsystem_kernel/sys___recvmsg_nocancel.o" "$OUT/libsystem_kernel/sys___sendmsg_nocancel.o" \
     "$OUT/libsystem_kernel/sys___select_nocancel.o" "$OUT/libsystem_kernel/sys___sendto_nocancel.o" \
+    "$OUT/libsystem_kernel/sys_fpathconf.o" "$OUT/libsystem_kernel/nanosleep_compat.o" \
     "$OUT/libsystem_kernel/chmod_wrap.o" "$OUT/libsystem_kernel/xpc_syscall_wrappers_compat.o" \
     "$OUT/libsystem_kernel/select_wrap.o" "$OUT/libsystem_kernel/sendto_wrap.o" \
     "$OUT/libsystem_kernel/mach_semaphore_traps.o" "$OUT/libsystem_kernel/semaphore_wrap.o" \
