@@ -260,7 +260,24 @@ echo "compiling 3 real additional files (if_indextoname.c, herror.c, nsap_addr.c
 # specific (see libresolv_more_socket_syscalls.c's own header). Real
 # raw wrappers compiled in, real $UNIX2003/$1050 aliases added to this
 # dylib's own link below (base symbols now genuinely local here).
-"$CLANG" $CFLAGS libresolv_more_socket_syscalls.c -o "$EXTRACT/libresolv_more_socket_syscalls.o"
+#
+# -DLIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT=1 added 2026-08-31
+# (static-linking cleanup, dylib-vs-dylib duplicate-symbol pass): guards
+# out chmod()/recvmsg()/writev() for this dylib build specifically --
+# see libresolv_more_socket_syscalls.c's own comment. getpeername()/
+# getsockname()/pselect() are unaffected (not guarded in that file).
+"$CLANG" $CFLAGS -DLIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT=1 libresolv_more_socket_syscalls.c -o "$EXTRACT/libresolv_more_socket_syscalls.o"
+
+# libresolv_socket_syscalls.o recompiled fresh here (NOT `ar x`-extracted
+# from libresolv.a like most of this dylib's other members) 2026-08-31,
+# same reason and pattern as above: guards out socket()/connect()/
+# send()/select() (real canonical home now libsystem_kernel.dylib, see
+# that script's own "BSD socket family" comment) while keeping bind()/
+# setsockopt()/sendto() (this dylib's own real, only copies -- sendto()
+# specifically must stay local here for this dylib's own
+# `-Wl,-alias,_sendto,'_sendto$UNIX2003'` below, see that file's own
+# comment on the ld64 nonlocal-base constraint).
+"$CLANG" $CFLAGS -DLIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT=1 libresolv_socket_syscalls.c -o "$EXTRACT/libresolv_socket_syscalls.o"
 
 # REAL BUG FOUND+FIXED 2026-08-29, same real class as above:
 # getprotobynumber/getprotoent/setprotoent/endprotoent/getservbyport/
@@ -311,12 +328,18 @@ rm -f "$OUT/system/libresolv.dylib"
     -Wl,-not_for_dyld_shared_cache \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
-    -Wl,-alias,_bind,'_bind$UNIX2003' -Wl,-alias,_connect,'_connect$UNIX2003' \
+    -Wl,-alias,_bind,'_bind$UNIX2003' \
     -Wl,-alias,_sendto,'_sendto$UNIX2003' \
-    -Wl,-alias,_chmod,'_chmod$UNIX2003' \
     -Wl,-alias,_getpeername,'_getpeername$UNIX2003' -Wl,-alias,_getsockname,'_getsockname$UNIX2003' \
-    -Wl,-alias,_recvmsg,'_recvmsg$UNIX2003' -Wl,-alias,_writev,'_writev$UNIX2003' \
     -Wl,-alias,_pselect,'_pselect$1050' \
+    `# chmod/connect/recvmsg/writev's $UNIX2003 aliases REMOVED 2026-08-31` \
+    `# (static-linking cleanup, dylib-vs-dylib duplicate-symbol pass) --` \
+    `# their real bases moved to libsystem_kernel.dylib (see that` \
+    `# script's own comment); this dylib no longer defines the plain` \
+    `# names locally (libresolv_socket_syscalls.c/libresolv_more_socket_` \
+    `# syscalls.c's own LIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT guards),` \
+    `# so re-creating these aliases here would hit the documented ld64` \
+    `# "-alias nonlocal base" bug (malformed ordinal-0 re-export).` \
     -Wl,-U,_kevent -Wl,-U,_kqueue -Wl,-U,_pipe \
     -Wl,-U,___darwin_check_fd_set_overflow \
     -o "$OUT/system/libresolv.dylib" \

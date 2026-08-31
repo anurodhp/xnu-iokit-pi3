@@ -975,3 +975,71 @@ each). DAR-13 (libsystem_malloc), DAR-18 (libunwind) closed under the new
 structural-necessity policy. DAR-8 (libdyld) commented distinguishing its
 8 structural-and-effectively-done symbols from its 2 genuinely open ones,
 left open.
+
+## Session 2026-08-31 (continuation 2): BSD socket family moved to libsystem_kernel.dylib
+
+`dup_symbol_audit.sh --summary` total: **102 → 98**, QEMU-verified.
+
+Moved the whole `_chmod`/`_connect`/`_recvmsg`/`_select`/`_send`/`_socket`/
+`_writev` family (plus real `$UNIX2003` aliases for chmod/connect/recvmsg/
+writev) to its real canonical home, `libsystem_kernel.dylib`, reusing
+`libxpc.dylib`'s own already-proven-and-QEMU-verified curated source
+(`xpc_syscall_wrappers_compat.c`/`xpc_select_compat.c`, real Apple
+`legacy/{connect,recvmsg,sendmsg}.c`/`select-base.c` bodies curated to
+drop `_NONSTD_SOURCE` scaffolding this SDK target rejects) plus real
+unmodified `wrappers/unix03/chmod.c` plus a new
+`libsystem_kernel_sendto_compat.c`. Removed the now-redundant private
+copies from `libresolv.dylib` (via a new `LIBRESOLV_SOCKET_SYSCALLS_
+DYLIB_VARIANT` compile guard on `libresolv_socket_syscalls.c`/
+`libresolv_more_socket_syscalls.c` -- static-archive consumers of
+`libresolv.a`, incl. `dyld.macho`, keep every one), `libxpc.dylib` (its
+own copies were literally the same source, now doubly redundant --
+also had to remove the now-dead raw `_nocancel` trap objects those
+wrappers called, a real gap the first audit pass after the fix missed
+since the audit only flags *duplicated* symbols and these were briefly
+unique-but-dead before removal), `libcopyfile.dylib` (`chmod()` only,
+same guard-macro name reused), and `libncurses.dylib` (`_select`,
+narrowed alongside the 4 symbols already narrowed there in the
+2026-08-30 session).
+
+**Real ld64 "-alias nonlocal base" landmine hit twice this batch,
+avoided both times**: `sendto()`/`connect()`/`recvmsg()`/`writev()`/
+`chmod()` in `libresolv.dylib`/`libcopyfile.dylib` each have (or had) a
+local `-Wl,-alias` creating a `$UNIX2003`-suffixed public name. Moving
+the *base* function's ownership to `libsystem_kernel.dylib` without
+also either (a) keeping a local, now-private-extern copy specifically
+for alias purposes (`sendto`'s case: kept local+hidden in both
+libsystem_kernel.dylib and libresolv.dylib, since libresolv.dylib's own
+`_sendto$UNIX2003` alias needed to keep its real, only, local base) or
+(b) moving the alias creation itself to libsystem_kernel.dylib's own
+link too (chmod/connect/recvmsg/writev's case, since nothing needed
+libresolv/libcopyfile to keep being the alias's home) would have
+silently produced the malformed-ordinal-0-re-export bug on the very
+first rebuild. Caught the `_connect$UNIX2003` case via a real "link
+found real undefined symbols" build failure (a stale libsystem_kernel.
+dylib on disk, rebuilt before the alias was added) -- not by reasoning
+it out in advance the first time; flagging so the next mover of a
+`-Wl,-alias` base checks EVERY dylib that creates an alias off it, not
+just the ones already suspected.
+
+**Consciously NOT touched**: `libopenpam.dylib`'s own `_connect`/
+`_socket`/`_send`/`_writev` (`cat_socket_stub.c`/`date_compat.c`) are
+honest, documented ENOSYS stubs -- load-bearing behavior (their real
+job is making `vsyslog()` take its designed LOG_CONS fallback instead
+of trying a real socket that has nothing listening on it), not a
+duplicate-symbol oversight. Redirecting them to `libsystem_kernel.
+dylib`'s now-real implementations would be a real behavior change, out
+of scope for this pass. This reopened `libsystem_kernel.dylib`'s own
+Linear ticket (DAR-14) at 4/257 -- all 4 in this same accepted
+category, re-closed with that reasoning recorded rather than treated as
+regression.
+
+Linear: DAR-11 (libresolv, 10→2), DAR-9 (libxpc, 10→6), DAR-10
+(libncurses, 11→10), DAR-12 (libcopyfile, 13→11) commented with
+before/after, left open. DAR-14 (libsystem_kernel) commented + re-closed
+with the openpam-exception reasoning above.
+
+Session paused here per explicit request, before starting the next two
+prioritized items (libcopyfile-vs-libxpc `_uuid_unparse`/`__xpc_runtime_
+is_app_sandboxed` ownership, and the `___progname` real-duplicate-state
+investigation) -- both still open, next in line.

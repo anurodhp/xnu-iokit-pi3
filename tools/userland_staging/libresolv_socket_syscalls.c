@@ -99,6 +99,33 @@ static inline long syscall6(long num, long a0, long a1, long a2, long a3, long a
 #define SYS_setsockopt 105
 #define SYS_sendto     133
 
+/* socket()/connect()/send()/select() guarded out under
+ * LIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT 2026-08-31 (static-linking
+ * cleanup, dylib-vs-dylib duplicate-symbol pass): all four now have a
+ * real, canonical home in libsystem_kernel.dylib (build_libsystem_
+ * kernel.sh's own "BSD socket family" comment -- the exact same real
+ * Apple source this project's other real consumer of these symbols,
+ * libxpc.dylib's xpc_syscall_wrappers_compat.c/xpc_select_compat.c,
+ * already proved compiles and works here), which build_libresolv_
+ * dylib.sh already links as a sibling. `bind()`/`setsockopt()` are NOT
+ * guarded -- libsystem_kernel.dylib doesn't have real copies of those
+ * (yet), so this dylib's own real implementations stay the correct,
+ * only copy. `sendto()` is ALSO NOT guarded, even though
+ * libsystem_kernel.dylib now has a real copy too (kept private-extern
+ * there specifically to avoid this exact conflict, see that script's
+ * own comment): this dylib's own final link creates `_sendto$UNIX2003`
+ * as a `-Wl,-alias` of this file's local `sendto()`, and per this
+ * project's own documented ld64 finding an alias's base must be
+ * genuinely local to the same link or ld64 silently emits a malformed
+ * ordinal-0 re-export -- removing this local `sendto()` would break
+ * that alias. `send()` has no such alias and calls this file's own
+ * `sendto()` either way, so it's the one that moves.
+ * Static-archive consumers of libresolv.a (dyld.macho via
+ * build_dyld_link.sh, which must stay fully static; build_ping.sh;
+ * build_corefoundation.sh) keep every one of these unchanged --
+ * this guard only affects the dylib build's own recompiled variant,
+ * see build_libresolv_dylib.sh's own comment. */
+#ifndef LIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT
 int socket(int domain, int type, int protocol) {
     return (int)syscall3(SYS_socket, domain, type, protocol);
 }
@@ -106,6 +133,7 @@ int socket(int domain, int type, int protocol) {
 int connect(int fd, const void *addr, unsigned int addrlen) {
     return (int)syscall3(SYS_connect, fd, (long)addr, addrlen);
 }
+#endif /* !LIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT */
 
 int bind(int fd, const void *addr, unsigned int addrlen) {
     return (int)syscall3(SYS_bind, fd, (long)addr, addrlen);
@@ -119,6 +147,7 @@ ssize_t sendto(int fd, const void *buf, size_t len, int flags, const void *to, u
     return syscall6(SYS_sendto, fd, (long)buf, (long)len, flags, (long)to, tolen);
 }
 
+#ifndef LIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT
 ssize_t send(int fd, const void *buf, size_t len, int flags) {
     return sendto(fd, buf, len, flags, (const void *)0, 0);
 }
@@ -132,3 +161,4 @@ extern int _select(int nfds, void *readfds, void *writefds, void *exceptfds, voi
 int select(int nfds, void *readfds, void *writefds, void *exceptfds, void *timeout) {
     return _select(nfds, readfds, writefds, exceptfds, timeout);
 }
+#endif /* !LIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT */

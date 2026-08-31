@@ -66,9 +66,26 @@ static inline long syscall6(long num, long a0, long a1, long a2, long a3, long a
     return x0;
 }
 
+/* chmod()/recvmsg()/writev() guarded out under
+ * LIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT 2026-08-31 (static-linking
+ * cleanup, dylib-vs-dylib duplicate-symbol pass): all three (AND their
+ * `$UNIX2003` aliases -- see build_libsystem_kernel.sh's own comment)
+ * now have a real, canonical home in libsystem_kernel.dylib, which
+ * build_libresolv_dylib.sh already links as a sibling. `getpeername()`/
+ * `getsockname()`/`pselect()` are NOT guarded -- libsystem_kernel.dylib
+ * doesn't have real copies of those (yet), so this dylib's own real
+ * implementations (and their own `$UNIX2003`/`$1050` aliases, still
+ * created in build_libresolv_dylib.sh's own link below) stay the
+ * correct, only copies. Static-archive consumers of libresolv.a
+ * (dyld.macho via build_dyld_link.sh, which must stay fully static;
+ * build_ping.sh; build_corefoundation.sh) keep every one of these
+ * unchanged -- this guard only affects the dylib build's own
+ * recompiled variant, see build_libresolv_dylib.sh's own comment. */
+#ifndef LIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT
 int chmod(const char *path, int mode) {
     return (int)syscall3(15, (long)path, mode, 0);
 }
+#endif /* !LIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT */
 
 int getpeername(int fdes, void *asa, unsigned int *alen) {
     return (int)syscall3(31, fdes, (long)asa, (long)alen);
@@ -78,6 +95,7 @@ int getsockname(int fdes, void *asa, unsigned int *alen) {
     return (int)syscall3(32, fdes, (long)asa, (long)alen);
 }
 
+#ifndef LIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT
 struct msghdr;
 ssize_t recvmsg(int s, struct msghdr *msg, int flags) {
     return (ssize_t)syscall3(27, s, (long)msg, flags);
@@ -87,6 +105,7 @@ struct iovec;
 ssize_t writev(int fd, const struct iovec *iovp, int iovcnt) {
     return (ssize_t)syscall3(121, fd, (long)iovp, iovcnt);
 }
+#endif /* !LIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT */
 
 struct timespec;
 struct sigset_pselect_compat;

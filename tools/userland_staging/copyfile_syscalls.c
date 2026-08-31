@@ -64,9 +64,25 @@ static inline long syscall5(long num, long a0, long a1, long a2, long a3, long a
 #define SYS_lstat64_extended 342
 #define SYS_fstat64_extended 343
 
+/* chmod() guarded out under LIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT
+ * 2026-08-31 (static-linking cleanup, dylib-vs-dylib duplicate-symbol
+ * pass, BSD socket family): real, canonical home now
+ * libsystem_kernel.dylib (build_libsystem_kernel.sh's own "BSD socket
+ * family" comment), which build_copyfile_dylib.sh already links as a
+ * sibling. Reusing the same macro name as libresolv_socket_syscalls.c/
+ * libresolv_more_socket_syscalls.c's own guards rather than inventing a
+ * new one -- same real fix, same real pass, same convention.
+ * `fchmod()` is NOT guarded: libsystem_kernel.dylib doesn't have a real
+ * copy of it (yet), so this dylib's own real implementation (and its
+ * own `-Wl,-alias,_fchmod,'_fchmod$UNIX2003'` in build_copyfile_
+ * dylib.sh's own link, unaffected by this change) stays the correct,
+ * only copy. Confirmed via `nm -m` that no other member of
+ * libcopyfile.a needs `_chmod` locally. */
+#ifndef LIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT
 int chmod(const char *path, int mode) {
     return (int)syscall3(SYS_chmod, (long)path, mode, 0);
 }
+#endif /* !LIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT */
 
 int fchmod(int fd, int mode) {
     return (int)syscall3(SYS_fchmod, fd, mode, 0);

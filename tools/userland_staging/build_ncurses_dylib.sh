@@ -114,15 +114,20 @@ fi
 # definitions to local so those OTHER objects' references resolve
 # externally to the real siblings instead, same
 # `ld -r -keep_private_externs -unexported_symbol` technique as
-# narrow_rune_locale.sh. `_select` (also in this object, also a real
-# 3-way duplicate against libresolv.dylib/libxpc.dylib) is deliberately
-# LEFT ALONE here: this dylib does not currently link either sibling,
-# so narrowing it would turn a real duplicate into a real undefined-
-# symbol link failure -- deferred to a libresolv/libxpc-focused pass.
+# narrow_rune_locale.sh. `_select` (also in this object) was previously
+# left exported here on purpose ("this dylib does not currently link
+# either sibling [libresolv/libxpc]") -- no longer true as of 2026-08-31
+# (static-linking cleanup, BSD socket family pass): `_select` now has a
+# real, canonical home in libsystem_kernel.dylib (build_libsystem_
+# kernel.sh's own "BSD socket family" comment), and this dylib already
+# links libsystem_kernel.dylib as a sibling (it always did -- the
+# earlier deferral was about libresolv/libxpc specifically, which are
+# moot now that kernel owns it). Narrowed alongside the other four for
+# the same reason and via the same technique.
 XCODE12_LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
 "$XCODE12_LD" -r -arch arm64 -keep_private_externs \
     -unexported_symbol _gettimeofday -unexported_symbol _pthread_testcancel \
-    -unexported_symbol _read -unexported_symbol _sigprocmask \
+    -unexported_symbol _read -unexported_symbol _sigprocmask -unexported_symbol _select \
     "$EXTRACT/ncurses_extra_syscalls.o" -o "$EXTRACT/ncurses_extra_syscalls.o.narrowed"
 mv -f "$EXTRACT/ncurses_extra_syscalls.o.narrowed" "$EXTRACT/ncurses_extra_syscalls.o"
 (cd "$EXTRACT" && ar x "../../libc_locale.a" table.o none.o)

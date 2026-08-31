@@ -134,6 +134,18 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
 echo "compiling 1 real additional file (getcwd.c for __private_getcwd)..."
 "$CLANG" $CFLAGS "$LIBC/gen/FreeBSD/getcwd.c" -o "$EXTRACT/getcwd.o"
 
+# copyfile_syscalls.o recompiled fresh here (NOT left as the `ar x`-
+# extracted copy above) 2026-08-31 (static-linking cleanup, dylib-vs-
+# dylib duplicate-symbol pass, BSD socket family): guards out chmod()
+# (real canonical home now libsystem_kernel.dylib, see that script's
+# own "BSD socket family" comment and copyfile_syscalls.c's own
+# comment) while keeping every other real symbol in this file
+# (fchmod()/getattrlist()/the mbr_*/getpwnam-family/syslog()/
+# open_dprotected_np() -- libsystem_kernel.dylib doesn't have real
+# copies of those (yet), so this dylib's own real implementations stay
+# the correct, only copies).
+"$CLANG" $CFLAGS -DLIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT=1 copyfile_syscalls.c -o "$EXTRACT/copyfile_syscalls.o"
+
 # Real fix for __global_locale/__locale_key, same exact recipe
 # build_libresolv_dylib.sh's own header/comment block established --
 # copied here, not re-derived.
@@ -152,7 +164,15 @@ rm -f "$OUT/system/libcopyfile.dylib"
     -Wl,-not_for_dyld_shared_cache \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
-    -Wl,-alias,_chmod,'_chmod$UNIX2003' -Wl,-alias,_fchmod,'_fchmod$UNIX2003' \
+    -Wl,-alias,_fchmod,'_fchmod$UNIX2003' \
+    `# _chmod/_chmod$UNIX2003 alias REMOVED 2026-08-31 (static-linking` \
+    `# cleanup, BSD socket family pass): real base moved to` \
+    `# libsystem_kernel.dylib (which creates its own _chmod$UNIX2003` \
+    `# alias there, base genuinely local to that link); this dylib no` \
+    `# longer defines plain _chmod locally (copyfile_syscalls.c's own` \
+    `# LIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT guard), so re-creating` \
+    `# this alias here would hit the documented ld64 "-alias nonlocal` \
+    `# base" bug.` \
     -Wl,-alias,_pread,'_pread$UNIX2003' -Wl,-alias,_pwrite,'_pwrite$UNIX2003' \
     -Wl,-unexported_symbol,_pread -Wl,-unexported_symbol,_pwrite \
     -Wl,-alias,_getattrlist,'_getattrlist$UNIX2003' -Wl,-alias,_statfs,'_statfs$INODE64' \

@@ -338,12 +338,65 @@ ARCHS=arm64 perl "$XNU/libsyscall/xcodescripts/create-syscalls.pl" \
     iPhoneOS \
     "$SYSGEN" >/dev/null
 MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
-for s in _geteuid _getegid _getuid _pread _pwrite _fileport_makefd _fileport_makeport; do
+# BSD socket family added 2026-08-31 (static-linking cleanup,
+# dylib-vs-dylib duplicate-symbol pass): `_socket`/`_writev` are plain
+# generated stubs (real Apple's own public name, confirmed via a real
+# create-syscalls.pl run, not guessed); `___chmod`/`___connect_nocancel`/
+# `___recvmsg_nocancel`/`___sendmsg_nocancel`/`___select_nocancel`/
+# `___sendto_nocancel` are the real raw traps the NO_SYSCALL_STUB public
+# wrappers below call (chmod/connect/recvmsg/sendmsg/select/sendto are
+# each marked NO_SYSCALL_STUB in bsd/kern/syscalls.master, meaning real
+# Apple needs real hand-written C logic on top, not just a generated
+# asm stub -- see the real wrapper compiles below).
+for s in _geteuid _getegid _getuid _pread _pwrite _fileport_makefd _fileport_makeport \
+    _socket _writev ___chmod ___connect_nocancel ___recvmsg_nocancel ___sendmsg_nocancel \
+    ___select_nocancel ___sendto_nocancel; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
         -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
         -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
         "$SYSGEN/${s}.s" -o "$OUT/libsystem_kernel/sys${s}.o"
 done
+
+# Real public-name wrappers on top of the raw traps above:
+#   - wrappers/unix03/chmod.c: real, unmodified Apple source, already
+#     proven to compile cleanly in this exact toolchain (build_getty.sh/
+#     build_simple_cmds.sh's mkdir/touch/cp/mv/chmod/gzip/compress/tar
+#     entries all already compile this same file verbatim) -- needs
+#     `-I .../libsyscall/wrappers` for its own quoted `#include
+#     "_errno.h"` (lives one directory up from unix03/, confirmed by
+#     the same -I flag those other scripts already use).
+#   - xpc_syscall_wrappers_compat.c/xpc_select_compat.c: real, already
+#     proven, already-QEMU-verified curated source
+#     build_libxpc_syscalls.sh's own header comment documents in full
+#     (Apple's real legacy/{connect,recvmsg,sendmsg}.c and
+#     select-base.c bodies, curated only to drop the `_NONSTD_SOURCE`
+#     preprocessor scaffolding this project's LP64/arm64-only
+#     __DARWIN_ONLY_UNIX_CONFORMANCE SDK target rejects -- confirmed via
+#     a real trial compile, not guessed) -- reused verbatim from the
+#     same shared tools/userland_staging/ directory, not duplicated.
+#   - libsystem_kernel_sendto_compat.c: new this session, same real
+#     curation shape as the two files above, for sendto()/send() (see
+#     that file's own header for the full citation).
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+    -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" -I "$OUT/compat_include" \
+    -I "$OUT/malloc_mig" -I "$XNU/libsyscall/wrappers" \
+    "$XNU/libsyscall/wrappers/unix03/chmod.c" -o "$OUT/libsystem_kernel/chmod_wrap.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+    -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" -I "$OUT/compat_include" \
+    -I "$OUT/malloc_mig" \
+    xpc_syscall_wrappers_compat.c -o "$OUT/libsystem_kernel/xpc_syscall_wrappers_compat.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+    -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" -I "$OUT/compat_include" \
+    -I "$OUT/malloc_mig" \
+    xpc_select_compat.c -o "$OUT/libsystem_kernel/select_wrap.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+    -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" -I "$OUT/compat_include" \
+    -I "$OUT/malloc_mig" \
+    libsystem_kernel_sendto_compat.c -o "$OUT/libsystem_kernel/sendto_wrap.o"
 
 # Real gap found+fixed 2026-08-28 booting launchd as PID 1 with real
 # libdispatch.dylib loaded alongside it: real mach_msg()/mach_msg_trap()
@@ -402,6 +455,26 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     `# loads libsystem_kernel.dylib without libSystem.B.dylib (which` \
     `# re-exports both) also in the process.` \
     -Wl,-U,_abort -Wl,-U,_memcpy -Wl,-U,_pthread_tsd_shim_bootstrap \
+    `# BSD socket family additions, 2026-08-31 (static-linking cleanup,` \
+    `# dylib-vs-dylib duplicate-symbol pass). chmod/connect/recvmsg/` \
+    `# writev's $UNIX2003 aliases are created HERE (base is genuinely` \
+    `# local to this link) rather than in libresolv.dylib (their` \
+    `# previous real home) specifically to avoid the documented ld64` \
+    `# "-alias nonlocal base" bug -- libresolv_more_socket_syscalls.c's/` \
+    `# libresolv_socket_syscalls.c's own plain chmod()/connect()/` \
+    `# recvmsg()/writev() are now guarded out of the dylib build (see` \
+    `# those files' own comments) so this is genuinely the one place` \
+    `# left creating these aliases.` \
+    -Wl,-alias,_chmod,'_chmod$UNIX2003' -Wl,-alias,_connect,'_connect$UNIX2003' \
+    -Wl,-alias,_recvmsg,'_recvmsg$UNIX2003' -Wl,-alias,_writev,'_writev$UNIX2003' \
+    `# _sendto unexported (kept private-extern, not removed): libresolv.a` \
+    `# still owns the real, public canonical PLAIN+$UNIX2003 _sendto pair` \
+    `# (its own local base is required there for its own -Wl,-alias, same` \
+    `# nonlocal-base constraint as above) -- this dylib's own copy exists` \
+    `# ONLY so send() here has something to call locally, and must not` \
+    `# become a second public owner. See libsystem_kernel_sendto_compat.c` \
+    `# and libresolv_socket_syscalls.c's own comments for the full trail.` \
+    -Wl,-unexported_symbol,_sendto \
     `# The 12 __kernelrpc_mach_port_* -Wl,-U deferrals that used to sit` \
     `# here are GONE (2026-08-30, static-linking cleanup Phase 1d): their` \
     `# real bodies -- MIG-generated mach_portUser.o -- are now generated` \
@@ -425,6 +498,12 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/sys_getuid.o" \
     "$OUT/libsystem_kernel/sys_pread.o" "$OUT/libsystem_kernel/sys_pwrite.o" \
     "$OUT/libsystem_kernel/sys_fileport_makefd.o" "$OUT/libsystem_kernel/sys_fileport_makeport.o" \
+    "$OUT/libsystem_kernel/sys_socket.o" "$OUT/libsystem_kernel/sys_writev.o" \
+    "$OUT/libsystem_kernel/sys___chmod.o" "$OUT/libsystem_kernel/sys___connect_nocancel.o" \
+    "$OUT/libsystem_kernel/sys___recvmsg_nocancel.o" "$OUT/libsystem_kernel/sys___sendmsg_nocancel.o" \
+    "$OUT/libsystem_kernel/sys___select_nocancel.o" "$OUT/libsystem_kernel/sys___sendto_nocancel.o" \
+    "$OUT/libsystem_kernel/chmod_wrap.o" "$OUT/libsystem_kernel/xpc_syscall_wrappers_compat.o" \
+    "$OUT/libsystem_kernel/select_wrap.o" "$OUT/libsystem_kernel/sendto_wrap.o" \
     "$OUT/libsystem_kernel/mach_semaphore_traps.o" "$OUT/libsystem_kernel/semaphore_wrap.o" \
     "$OUT/libsystem_kernel/mach_error_string.o" "$OUT/libsystem_kernel/mach_error_string_minimal_compat.o" \
     "$OUT/libsystem_kernel/mach_port_gap_closures2.o" "$OUT/libsystem_kernel/mach_port_gap_closures2_traps.o" \

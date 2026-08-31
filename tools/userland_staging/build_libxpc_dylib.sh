@@ -172,6 +172,36 @@ rm -f "$EXTRACT/time.o"
 # nm -m) now resolve there instead of this dylib's own private trap.
 rm -f "$EXTRACT/sys__fileport_makefd.o" "$EXTRACT/sys__fileport_makeport.o"
 
+# select_wrap.o/xpc_syscall_wrappers_compat.o/sys__socket.o REMOVED
+# 2026-08-31 (static-linking cleanup, dylib-vs-dylib duplicate-symbol
+# pass, BSD socket family): `_connect`/`_recvmsg`/`_select`/`_sendmsg`/
+# `_socket` now all have a real, canonical home in
+# libsystem_kernel.dylib -- build_libsystem_kernel.sh directly reuses
+# THIS project's own xpc_select_compat.c/xpc_syscall_wrappers_compat.c
+# (the exact same real, already-proven, already-QEMU-verified curated
+# source build_libxpc_syscalls.sh's own header comment documents in
+# full) verbatim, so this is a real move to the correct owner, not a
+# behavior change. This dylib already links libsystem_kernel.dylib as a
+# sibling below. `liblaunch.o`'s real, undefined references to all five
+# (confirmed via nm -m -- the only consumer in this dylib's own archive
+# set) now resolve there instead.
+rm -f "$EXTRACT/select_wrap.o" "$EXTRACT/xpc_syscall_wrappers_compat.o" "$EXTRACT/sys__socket.o"
+
+# sys____connect_nocancel.o/sys____recvmsg_nocancel.o/
+# sys____select_nocancel.o/sys____sendmsg_nocancel.o REMOVED too: these
+# are the raw `_nocancel` trap objects the just-removed
+# xpc_syscall_wrappers_compat.o/select_wrap.o used to call -- with those
+# wrappers gone, nothing in this dylib's own archive set references
+# them locally any more (confirmed via nm -m), and libsystem_kernel.
+# dylib's own build now generates the exact same raw traps (same
+# create-syscalls.pl recipe, confirmed identical filenames) for its own
+# real xpc_syscall_wrappers_compat.c/xpc_select_compat.c compiles.
+# Leaving these as pure dead weight here would just be a second,
+# unused, fully-external copy of the exact same duplicate-symbol shape
+# this whole pass exists to close.
+rm -f "$EXTRACT/sys____connect_nocancel.o" "$EXTRACT/sys____recvmsg_nocancel.o" \
+      "$EXTRACT/sys____select_nocancel.o" "$EXTRACT/sys____sendmsg_nocancel.o"
+
 # Members dropped 2026-08-29 (static-linking cleanup, Phase 1a). Every
 # one of these was a second copy of something a sibling dylib already on
 # this link line now owns, so every process loading libxpc.dylib next to
