@@ -2566,3 +2566,138 @@ classified as either fixed-in-a-prior-round or a confirmed permanent
 exception except `open_dprotected_np`, `dlopen`/`dlsym` (DAR-6), and the
 `acos`/`asin`/... math family (DAR-160/DAR-16, confirmed unsafe last
 round)).
+
+## Session 2026-08-31 (continuation 14): `_vproc_swap_integer` (DAR-8) investigated for real -- confirmed unsafe, but for a DIFFERENT, more concrete reason than the one this doc had repeated five times
+
+`dup_symbol_audit.sh --summary` total: **24 -> 24** (net zero -- a real
+trial fix was built, boot-tested, and reverted; nothing shipped). This is
+DAR-8's last real remainder (`_dlclose` fixed round 5, `___progname`
+fixed earlier) and had been flagged identically across rounds 5/6/9/12/
+13/14 as "a real Mach-IPC call toward launchd, possibly not up yet this
+early in dyld's bootstrap" -- always deferred, never actually checked
+against real dyld source. This session did that check for real, and the
+real reason turned out to be different from (and more concrete than) the
+one that had been copy-pasted forward five times.
+
+### What the prior reasoning got wrong
+
+`libdyld.dylib`'s `libdyld_vproc_compat.c` stub exists specifically for
+`LibSystemHelpers::isLaunchdOwned()` (`third_party/dyld/libdyld/
+LibSystemHelpers.cpp`), and real dyld source has exactly ONE call site
+for it: `RuntimeState::setUpLogging()` in `third_party/dyld/dyld/
+DyldRuntimeState.cpp`, itself only reached lazily from `vlog()` when dyld
+actually needs to emit diagnostic output (verbose logging, error
+messages) AND its normal log descriptor isn't usable. Real Apple's own
+code at that call site is explicitly gated on `libSystemHelpers !=
+nullptr` with the comment "we can only check if launchd owned after
+libSystem initialized" -- i.e. Apple's own source already defends against
+exactly the "too early in bootstrap" scenario this doc worried about;
+this is not part of dyld's mandatory/unconditional startup path at all.
+The comment right next to the real call (`"the vproc_swap_integer() call
+has to be to libSystem.dylib's function - not a static copy in dyld"`)
+is in fact evidence FOR consolidating, not against it -- Apple's own
+source says a local dyld-side copy is the wrong architecture. The
+originally-flagged IPC-deadlock-during-bootstrap risk does not hold up
+against the real call site; it should stop being cited as the reason.
+
+### The real reason found instead: universal-dependency + eager-binding incompatibility, verified via a real trial build
+
+`libxpc.dylib`'s copy (PureDarwin `libvproc.c`, confirmed real: sends a
+genuine `vproc_mig_swap_integer()` MIG RPC to `bootstrap_port`) is the
+correct real owner. No link cycle blocks pointing `libdyld.dylib` at it
+(`libxpc.dylib` links `libdispatch`/`libsystem_blocks`/`libsystem_c`/
+`libsystem_malloc`/`libsystem_platform`/`libsystem_kernel` only, none of
+which depend back on `libdyld.dylib`). A real trial edit (drop
+`vproc_compat.o` from `build_libdyld.sh`'s link line, add
+`"$OUT/system/libxpc.dylib"` as a sibling) built cleanly: `nm -m` on the
+resulting `libdyld.dylib` showed `_vproc_swap_integer` resolving `(from
+libxpc)`, a real two-level bind, and the same `grep undefined | grep -v
+"(from "` technique `build_libdispatch_dylib.sh` itself uses to self-audit
+showed **zero new real gaps in libdyld.dylib's own object files**.
+
+That check is necessary but not sufficient, and chasing the sufficient
+version is what actually mattered this session: `libdyld.dylib` is a
+mandatory, hardcoded dependency of literally every process
+(`dyldMain.cpp`: `halt("libdyld.dylib not found")`), and this project's
+dyld does ONLY eager chained-fixups binding, no lazy resolution --
+established precedent from round 13's own real, reproduced boot-panic
+(`__muldc3` "symbol not found in flat namespace", from making
+`libsystem_m.dylib` a universal dependency via a `libSystem.B.dylib`
+reexport). Adding `libxpc.dylib` to `libdyld.dylib` transitively adds
+`libdispatch.dylib` to literally every process's dependency closure too.
+A real `nm -m ... | grep -v "(from "` audit of `libxpc.dylib` and
+`libdispatch.dylib` themselves (not just the newly-built `libdyld.dylib`)
+found `libxpc.dylib` has zero real flat-namespace gaps, but
+`libdispatch.dylib` has one that matters: `_thread_get_special_reply_port`
+(a real Mach trap wrapper, `notify_mig_special_reply_port_trap.o` in
+`libnotify.a`) is declared `-Wl,-U` in `build_libdispatch_dylib.sh` on
+purpose, resolved today only because it happens to be a real, LOCALLY
+DEFINED symbol inside specific consumer binaries' own object code --
+confirmed via `nm -g`: `launchd.macho` defines it directly (`T
+_thread_get_special_reply_port`), not via any dylib.
+
+A real sweep of every built `.macho` for which binaries actually load
+`libdyld.dylib` today (`otool -L`) found exactly two:
+`launchd.macho` (defines the symbol locally, fine) and
+`pd_console_login.macho` (does NOT define it anywhere -- confirmed via
+`nm -g`/`nm -m`, and it does not otherwise reference or need it). If
+`libxpc.dylib`/`libdispatch.dylib` became `libdyld.dylib`'s dependency,
+`pd_console_login.macho` would gain that flat-namespace requirement with
+no way to satisfy it, and per round 13's own proven mechanism that is a
+load-time "symbol not found in flat namespace" failure, not a runtime
+one -- it would happen whether or not `pd_console_login.macho`'s own code
+ever calls anything related to it.
+
+### Why this could not be closed out with a real boot-crash repro (and why that's not a gap in this session's evidence)
+
+Rule 1 of this sweep is a real QEMU boot per change. A real trial build
+was boot-tested twice: first a plain 190s run, which reached real
+`launchd[1] has started up` and the same journal-replay checkpoint as the
+last known-good reference log (`qemu/static_link_dar160_revert_confirm_
+boot.log`) byte-for-byte modulo documented TCG scheduling jitter -- zero
+panics, zero "symbol not found", `launchd.macho` itself is fine (it
+defines the symbol locally, as predicted). A second, deeper 300s run
+explicitly targeted `pd-console-login: start` (`org.puredarwin.
+console-login.plist`'s `RunAtLoad` job) to try to force the actual
+predicted failure -- it never matched, but not because of a crash: `grep
+-a` across the full log found zero mentions of `pd-console`/`pd_console`
+at all. This project's real launchd does not yet reach the point of
+`exec()`-ing forked daemon children on the current boot path at all
+(separately tracked, DAR-163) -- `pd_console_login.macho` is never
+actually spawned today regardless of this change. The predicted failure
+is real and mechanically certain (a hard binary-compatibility fact, not
+a guess: the symbol table facts above are unconditional), but it is not
+currently *exercisable* end-to-end by any boot this project can run,
+because the one process that would expose it can't be reached yet for an
+unrelated reason. Recorded honestly rather than either forcing a false
+"boot passed" conclusion from the first (less informative) trial, or
+claiming a crash repro this session did not actually observe.
+
+### Reverted, confirmed byte-for-byte
+
+`build_libdyld.sh` restored from a saved copy, confirmed identical via
+`diff`. `libdyld.dylib` rebuilt from the restored script; `nm -m` shows
+`_vproc_swap_integer` resolving locally again (no external bind), `dup_
+symbol_audit.sh --summary`: back to exactly 24. `git status --short`
+shows zero diff on this file or any dylib build script.
+
+### Linear
+
+DAR-8 stays OPEN with `_vproc_swap_integer` as its one real, permanently-
+deferred remainder -- but the recorded reason is now the real one (universal-
+dependency + eager-binding incompatibility against a real, currently-open
+`libdispatch.dylib` gap, verified via a real trial build/boot rather than
+assumed), not the previously-repeated-but-never-checked IPC-bootstrap-
+timing theory, which real `third_party/dyld` source reading in this
+session showed does not actually apply to this call site. Revisit if
+either (a) `libdispatch.dylib`'s `_thread_get_special_reply_port` gap
+gets a real dylib-level owner (matching the `__kernelrpc_mach_port_*`
+`UNDEF_SYMS_ELSEWHERE_IN_PROCESS` pattern already established in that
+same script), or (b) `libSystem.B.dylib` stops being a flat reexport shim
+and gains real umbrella coverage of `libxpc.dylib`/`libdispatch.dylib`
+(the already-flagged "Static-vs-dylib architecture debt" in
+`docs/daemon-roadmap.md`) -- either would remove the specific blocker
+found this session. Not closing DAR-8 outright since this remainder is
+real and still open, just far better understood than before.
+
+Baseline unchanged (still 24).
