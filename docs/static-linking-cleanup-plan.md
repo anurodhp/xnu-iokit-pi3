@@ -2282,3 +2282,179 @@ oddity, flagged above for a future dedicated look.
 
 Baseline updated (`dup_symbol_audit.sh --update-baseline`) to lock in
 28→24 dylib duplicates (6527→6530 binary-shadowing facts, the +3 above).
+
+## Session 2026-08-31 (continuation 13): DAR-160/DAR-16 math family -- investigated, real fix found UNSAFE, reverted to the documented-deferred state
+
+`dup_symbol_audit.sh --summary` total: **24 -> 24** (net zero -- both attempted
+fixes were reverted after a real QEMU boot regression; nothing shipped).
+Picked up this session's own assigned batch: consolidate the 9-symbol
+`acos`/`asin`/`fabs`/`fmod`/`modf`/`pow`/`scalbn`/`sqrt`/`trunc` overlap
+between `libsystem_c.dylib` and `libsystem_m.dylib` onto `libsystem_m.dylib`
+(DAR-160/DAR-16), the exact "consciously deferred" item this doc's own
+2026-08-31 (continuation) session already flagged.
+
+### What was verified first (all real, not assumed)
+
+- `nm -m` across every shipped dylib confirmed the overlap is exactly the
+  9 symbols above, exactly 2 owners each (`libsystem_c.dylib` and
+  `libsystem_m.dylib`), same underlying `libm.a` objects on both sides
+  (`acos_freeBSD.o`/`asin_freeBSD.o`/`libm_freebsd_fallback.o`/`sqrt.o`/
+  `fmod.o`) -- a real, single-source duplicate, not two implementations.
+- `otool -L` confirmed `libsystem_m.dylib` links `libsystem_c.dylib` (real
+  Apple layering, Libm above Libc) and does NOT link `libSystem.B.dylib`
+  back -- so reexporting `libsystem_m.dylib` through the umbrella
+  (docs/historic/backlog.md item d12's own proposed fix) is NOT a
+  circular BUILD dependency. This confirmed half of the task brief's own
+  premise (no build-order cycle) -- but turned out to be the wrong
+  question to ask.
+- `xcrun dyld_info -fixups` on ICU's real target dylibs
+  (`libicuuc.66.1.dylib`/`libicui18n.66.1.dylib`) showed they bind these
+  9 symbols via a generic `libSystem/_acos` etc ordinal (the umbrella),
+  not a specific-sub-dylib ordinal -- unlike the `___error`/`_uuid_unparse`
+  class of bug this doc already documents twice, an umbrella-ordinal bind
+  is resolved against whatever `libSystem.B.dylib` actually reexports AT
+  REAL LOAD TIME, so no ICU relink is needed if the umbrella's own
+  reexport set changes. `libxml2.dylib` already links `libsystem_m.dylib`
+  DIRECTLY today (confirmed via `otool -L` + `dyld_info -fixups`: its own
+  `_fmod`/`_pow` already bind `libsystem_m/_fmod`/`libsystem_m/_pow`, not
+  `libsystem_c`) -- proof the direct-link pattern already works
+  correctly elsewhere in this project.
+- Swept ALL built `.dylib`/`.macho` for any bind to `libsystem_c/_<one
+  of the 9>` specifically: **zero hits**. This meant no consumer had a
+  chained-fixups ordinal baked in against `libsystem_c.dylib` for these
+  symbols specifically -- the earlier `___error`/`_uuid_unparse`-class
+  stale-bind risk this doc warns about repeatedly does NOT apply here.
+
+### The fix that looked complete and was NOT: reexporting libsystem_m.dylib through libSystem.B.dylib
+
+Implemented docs/historic/backlog.md item d12 as originally scoped:
+`build_libsystem_c.sh` dropped its 5-object `ar x` extraction (deferring
+its own 2 genuinely-internal callers -- `libsystem_c_gap_compat.o`'s
+`atan()` calls `asin()`/`sqrt()` directly, see that file's own header --
+via `-Wl,-U,_asin -Wl,-U,_sqrt`), and `build_libsystem.sh` added
+`-Wl,-reexport_library,libsystem_m.dylib` to `libSystem.B.dylib`'s link,
+matching the existing `libcopyfile`/`libremovefile`/`libresolv` treatment
+exactly. Rebuilt bottom-up (`libsystem_m.dylib` -> `libsystem_c.dylib` ->
+`libSystem.B.dylib`), confirmed `nm -m`: 24 -> 15 (24 -> 15) dylib
+duplicates, `dup_symbol_audit.sh --dylibs`: `OK: no new duplicate
+symbols`, `9 baseline dylib duplicate(s) fixed`. Every static analysis
+check passed. This is exactly the kind of result that looks done without
+a real boot test.
+
+**Real QEMU boot test found a genuine, previously-dormant boot-blocking
+bug, not a false alarm**: `pid 1 exited -- exit reason namespace 6 subcode
+0x9, description symbol not found in flat namespace '__muldc3'`, followed
+by a real kernel panic (`initproc exited`). Root cause: `libSystem.B.dylib`
+is a REQUIRED load dependency of every launched process (dyldMain.cpp's
+own hardcoded install-name check) -- reexporting `libsystem_m.dylib`
+through it makes `libsystem_m.dylib` a required load dependency of every
+process too. This project's dyld does ONLY eager chained-fixups binding
+(no lazy PLT stubs, confirmed already by an existing comment in
+`build_icu_target.sh` about ICU needing `-Wl,-fixup_chains` for the same
+reason) -- so EVERY bind in `libsystem_m.dylib`'s own fixup chain must
+resolve at load time, including its own real, PRE-EXISTING `-Wl,-U`
+deferrals that `build_libm_dylib.sh`'s own header already documents as a
+known, out-of-scope gap: `__muldc3`/`__mulsc3` (real compiler-rt
+complex-multiply intrinsics, confirmed genuinely absent anywhere in this
+checkout -- `third_party/llvm-project` is a `blob:none` partial clone
+sparse-checked-out to `libcxx`/`libcxxabi` only, no `compiler-rt`) plus
+13 unported float-precision Libm entry points (`asinhf`/`atan2f`/
+`copysign`/`expf`/`expm1f`/`fabsf`/`hypot`/`hypotf`/`log1pf`/`logf`/
+`scalbnf`/`sinf`/`tanf`). This gap was ALWAYS there (visible in
+`build_libm_dylib.sh`'s own `-Wl,-U` list since it was written) but
+NEVER boot-blocking before, because nothing on the actual boot-critical
+path ever loaded `libsystem_m.dylib` -- confirmed `launchd.macho` itself
+directly loads `libicuuc.66.dylib`/`libicui18n.66.dylib` (ICU IS on the
+real boot path, not merely optional), and ICU's own binds resolved fine
+via `libsystem_c.dylib`'s pre-existing copies without ever pulling
+`libsystem_m.dylib` into the process at all. The reexport is what turns
+"a gap in an optionally-linked sibling dylib" into "a boot-blocking
+landmine for every process, including PID 1."
+
+### Reverted, confirmed byte-for-byte back to the known-good boot
+
+Reverted both files (`build_libsystem_c.sh`'s extraction + `-Wl,-U`
+additions, `build_libsystem.sh`'s reexport line) -- confirmed via
+`git diff` that every remaining changed line in both files is a comment
+(`grep -E '^\+[^+]|^-[^-]'` minus lines starting `+#`: zero output),
+i.e. both scripts now produce byte-identical link commands to before
+this session. Rebuilt `libsystem_c.dylib` -> `libSystem.B.dylib`,
+confirmed `nm -m`: all 9 symbols back in `libsystem_c.dylib`,
+`libSystem.B.dylib` no longer reexports `libsystem_m.dylib`,
+`dup_symbol_audit.sh --summary`: back to exactly 24. Ran
+`tools/init_binary/inject_into_sd_image.sh` then `tools/boot_test.py`
+(`qemu/static_link_dar160_revert_confirm_boot.log`, **PASS**, 310.6s).
+Diffed against the pre-session reference
+(`qemu/static_link_new_home_batch_boot.log`): **identical byte count**
+(28039 bytes both), address-stripped diff shows only the same benign
+QEMU/TCG scheduling-order jitter this doc documents in every other
+session (`IOConfigThread`/`startMatching`/`BCM2837*` line reordering, a
+2-page `vm_page_bootstrap` count delta, a ~0.5ms `pmap_startup()` timing
+delta), and the tail from `load_init_program: attempting to load
+/sbin/launchd` through `jnl: ... flushing fs disk buffer returned 0x2d`
+is byte-for-byte identical (empty `diff` on the last 30 lines of both,
+address-stripped). Zero panics beyond the pre-existing benign
+`DIAG: first_panic latched=...` string. The panicking boot log
+(`qemu/static_link_dar160_math_boot.log`) is kept on disk (gitignored)
+as evidence for the next session, alongside the confirming clean-revert
+log.
+
+### What a real fix actually requires (for whoever picks this up next)
+
+Two real paths forward, neither completed this session:
+
+1. **Port the missing compiler-rt intrinsics + 13 float-precision Libm
+   entries for real**, then the umbrella-reexport fix above becomes safe
+   and is otherwise complete and correct (verified: it DOES correctly
+   resolve ICU's needs via `libsystem_m.dylib` once loaded -- the panic
+   was specifically and only the `__muldc3` gap, not a flaw in the
+   reexport approach itself). `__muldc3`/`__mulsc3` real source exists in
+   `llvm-project`'s `compiler-rt/lib/builtins/` (confirmed fetchable via
+   the pinned `blob:none` partial clone -- `git show HEAD:compiler-rt/
+   lib/builtins/muldc3.c` returned real source on a real network check
+   this session) but needs `int_lib.h`/`int_math.h` and the AArch64
+   complex-return-value ABI macros ported alongside it, not just the two
+   leaf files -- a real, if bounded, Libm-completeness task, same one
+   `build_libm_dylib.sh`'s own header already flags as out of scope for
+   that script. The 13 float-precision entries are a larger, separate
+   ARM64 Libm-porting task per that same header.
+2. **Relink ICU's own target dylibs directly against `libsystem_m.dylib`**
+   (matching `build_libxml2.sh`'s already-working direct-link pattern),
+   so ICU's binds move from the `libSystem` umbrella ordinal to a
+   specific `libsystem_m` ordinal and `libsystem_m.dylib` is loaded only
+   into processes that actually load ICU (already true today, dormant,
+   for anything loading `libxml2.dylib`) rather than into every process.
+   Investigated, not completed: `build_icu_target.sh` uses ICU's own
+   real autoconf/gmake build, which bakes `LDFLAGS` into generated
+   Makefiles at `./configure` time -- a plain rebuild does not pick up a
+   link-line change (target `.dylib` mtimes don't change, so `make`
+   correctly decides there's nothing to do). A real fix needs either a
+   forced reconfigure or a `gmake LDFLAGS=... ` command-line override
+   plus deleting the stale target `.dylib`s to force a relink -- not
+   attempted this session, and even if mechanically successful, ICU is
+   not currently exercised by any dedicated real QEMU boot-path check on
+   its own symbol resolution (it's loaded by `launchd.macho` but this
+   project's current boot never reaches the point where `launchd` would
+   exercise ICU's calendar/locale internals -- see this doc's own
+   `docs/daemon-roadmap.md` Phase 9 note about CF/ICU not being touched
+   by launchd's current real code paths), so this path's own correctness
+   would need its own dedicated verification, not a rushed addition to
+   an already-large session.
+
+Both are real, separately-scoped follow-ups, neither a quick addendum to
+this batch. DAR-160/DAR-16 stay open with this finding recorded on both
+tickets; DAR-5 commented for cross-reference. `docs/backlog.md`/
+`docs/historic/backlog.md` item d12 should be read as "investigated,
+found unsafe as originally proposed" rather than "not yet attempted."
+
+### Files changed (comments only, zero functional diff)
+
+`tools/userland_staging/build_libsystem_c.sh`,
+`tools/userland_staging/build_libsystem.sh` -- both now carry an
+expanded comment recording this real investigation and its real result,
+so the next session doesn't re-derive or, worse, re-attempt the same
+now-known-unsafe fix blind. `git diff` on both files shows only added
+comment lines; every line touched previously by the trial fix was
+reverted to its original content.
+
+Baseline unchanged (still 24) -- nothing to update, no baseline drift.

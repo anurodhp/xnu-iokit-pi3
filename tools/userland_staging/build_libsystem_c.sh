@@ -278,6 +278,62 @@ rm -f "$EXTRACT/nsgetenviron_raw.o"
 # libm_freebsd_fallback.o) -- harmless, this is a separate dylib image
 # from launchd.macho's own already-extracted libm_scalbn_only_compat.o,
 # no duplicate-symbol conflict is possible across separate Mach-O images.
+#
+# CONSOLIDATION ONTO libsystem_m.dylib INVESTIGATED AND REVERTED
+# 2026-08-31 (static-linking cleanup, DAR-160/DAR-16) -- real, hard
+# finding, not a style choice, kept here so the next session doesn't
+# re-attempt the same fix blind:
+#
+# libsystem_m.dylib (build_libm_dylib.sh) already extracts these exact
+# same 5 libm.a objects -- a real, live 9-symbol duplicate, confirmed
+# single-source (not two independent implementations). The "textbook"
+# fix is real Apple's own layering: make libsystem_m.dylib the single
+# owner, reexported through libSystem.B.dylib the same way
+# libresolv/libcopyfile/libremovefile already are (docs/historic/
+# backlog.md item d12's own proposal). Tried it for real:
+# `build_libsystem.sh` gained `-Wl,-reexport_library,libsystem_m.dylib`,
+# this script dropped its own 5-object extraction, and the 2 symbols
+# this dylib's own code genuinely calls internally (libsystem_c_gap_
+# compat.o's atan() calls asin()/sqrt(), see that file's header) were
+# deferred via `-Wl,-U`. Confirmed NO circular BUILD dependency first
+# (`otool -L` on libsystem_m.dylib: links libsystem_c.dylib, not the
+# reverse; does not link libSystem.B.dylib back) -- but a real QEMU
+# boot test found a different, more severe real problem: reexporting
+# libsystem_m.dylib through the umbrella makes it a REQUIRED load
+# dependency of every single process (every launched process must link
+# libSystem.B.dylib, dyldMain.cpp's own hardcoded check), and this
+# project's dyld does ONLY eager chained-fixups binding (no lazy PLT
+# stubs) -- so EVERY bind in libsystem_m.dylib's own fixup chain must
+# resolve at load time, including its own real, pre-existing `-Wl,-U`
+# deferrals (see build_libm_dylib.sh's own header: `__muldc3`/
+# `__mulsc3`, real compiler-rt complex-multiply intrinsics never ported
+# anywhere in this checkout, plus 13 unported float-precision Libm
+# entry points -- `asinhf`/`atan2f`/`copysign`/`expf`/`expm1f`/`fabsf`/
+# `hypot`/`hypotf`/`log1pf`/`logf`/`scalbnf`/`sinf`/`tanf`). Real
+# result: PID 1 (`launchd.macho`, which directly loads
+# `libicuuc.66.dylib`/`libicui18n.66.dylib` -- ICU IS on this project's
+# real boot-critical path, not merely optional) panicked --
+# `pid 1 exited -- exit reason ... symbol not found in flat namespace
+# '__muldc3'`. Not a regression this session introduced into a working
+# path -- the gap already existed, dormant, in libsystem_m.dylib's own
+# `-Wl,-U` list -- but the reexport is what turns "a gap in an
+# optionally-linked sibling" into "a boot-blocking landmine for every
+# process." REVERTED (both this file's extraction and the
+# `build_libsystem.sh` reexport). Real fix requires ONE of: (a) porting
+# the missing compiler-rt intrinsics plus the 13 float-precision
+# entries for real (a substantial, separately-scoped Libm-completeness
+# task -- build_libm_dylib.sh's own header already flags this as
+# out of scope for that script), or (b) relinking ICU's own target
+# dylibs directly against libsystem_m.dylib (matching build_libxml2.sh's
+# already-working direct link) instead of resolving via the umbrella --
+# investigated as an alternative but not completed this session: ICU's
+# autoconf/gmake build bakes LDFLAGS into its generated Makefiles at
+# configure time, so a plain rebuild does not pick up a link-line change
+# without forcing a real relink (stale target mtimes), and ICU is not
+# currently exercised by any real QEMU boot test on its own, so that
+# path's own correctness would need its own dedicated verification
+# pass -- out of scope for this batch. Neither attempted further;
+# tracked on DAR-160/DAR-16, left open with this finding recorded.
 if [ ! -f "$OUT/libm.a" ]; then
     echo "error: $OUT/libm.a not found -- run build_libm.sh first" >&2
     exit 1

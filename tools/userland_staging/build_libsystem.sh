@@ -68,6 +68,44 @@ for d in libcopyfile libremovefile libresolv; do
         exit 1
     fi
 done
+# libsystem_m.dylib reexport ATTEMPTED and REVERTED 2026-08-31
+# (static-linking cleanup, DAR-160/DAR-16). docs/historic/backlog.md
+# item d12 proposed reexporting libsystem_m.dylib here (same treatment
+# as libcopyfile/libremovefile/libresolv above) so build_libsystem_c.sh
+# could drop its own curated acos/asin/fabs/fmod/modf/pow/scalbn/sqrt/
+# trunc extraction. Confirmed no circular BUILD dependency (libsystem_m
+# links libsystem_c, not the reverse; libsystem_m does not link
+# libSystem.B.dylib back) -- but a real QEMU boot test of the built
+# result found a genuine, different, more severe problem: reexporting
+# libsystem_m.dylib here makes it a REQUIRED LOAD DEPENDENCY of every
+# single process on this system (every launched process must link
+# libSystem.B.dylib per dyldMain.cpp's own hardcoded check). This
+# project's dyld only does eager chained-fixups binding, no lazy PLT
+# stubs -- so EVERY bind in libsystem_m.dylib's own fixups must resolve
+# at load time, including its own pre-existing, real, `-Wl,-U`-deferred
+# gaps (see build_libm_dylib.sh's own header: `___muldc3`/`__mulsc3`,
+# real compiler-rt complex-multiply intrinsics this project has never
+# ported, confirmed genuinely absent anywhere in this checkout, plus 13
+# unported float-precision Libm entry points). Real result: PID 1 itself
+# panicked at boot -- `pid 1 exited -- exit reason ... symbol not found
+# in flat namespace '___muldc3'` -- because launchd, like every process,
+# now transitively loads libsystem_m.dylib via this reexport, and dyld
+# eagerly tried and failed to resolve that flat-namespace deferral with
+# nothing in the process actually providing it. This is a real,
+# previously-DORMANT gap (build_libm_dylib.sh's own 15-symbol `-Wl,-U`
+# list already documented it), not something this session broke, but
+# reexporting through the umbrella is what turns it from "a gap in an
+# optionally-linked sibling dylib" into "a boot-blocking landmine for
+# every process" -- confirmed via a real, address-stripped QEMU boot log
+# (see docs/static-linking-cleanup-plan.md's DAR-160 writeup). REVERTED:
+# not attempted here again without first either porting the missing
+# compiler-rt intrinsics for real, or narrowing libsystem_m.dylib's own
+# `-Wl,-U` list down to symbols proven safe to leave permanently
+# unresolved on this specific boot path -- both larger, separately-
+# scoped tasks. build_libsystem_c.sh's own curated extraction from
+# libm.a therefore stays in place unchanged; see that script's own
+# comment for the current, real, narrower single-owner fix actually
+# applied instead (asin/sqrt only).
 # libc_gen.a/libc_string.a/libc_stdio.a/libc_printf.a/
 # libcxx_locale_for_stdio_scratch.a/libcxx_tsd_shim_bootstrap_compat.o no
 # longer required here (static-to-dylib migration step 4, docs/
