@@ -6,7 +6,10 @@ networking -> a genuinely usable OS -> package management). For the full
 phase-by-phase history -- exact bugs found and fixed, exact commands run,
 exact QEMU-verified transcripts -- see `docs/historic/roadmap.md`, which
 archives Phases 1-3.5 in full and every completed Phase 4/4.6 sub-item
-verbatim; this file only summarizes what's still open. `docs/backlog.md`
+verbatim, plus (third archive pass, 2026-08-30) the completed Phase
+6a/6b/6.5/6.6/9 and Phase 7.5 step 1-3 writeups; this file only summarizes
+what's still open, keeping a one-line status pointer per archived item.
+`docs/backlog.md`
 remains the authoritative, detailed open-bug tracker (P0 = real-hardware
 risk, P1 = correctness bugs, P2 = known gaps, P3 = hygiene) -- the "known
 bugs" section below just points at it plus a couple of bugs the roadmap
@@ -45,36 +48,17 @@ and exact files touched per command):
   order** (reorganized 2026-08-20, see "Remaining future work" below):
   rarely-used utilities are deliberately deferred until Phase 8's package
   manager exists rather than pre-baked into the base image.
-- **Real Apple `Libm` pinned 2026-08-27, retiring this project's 3
-  hand-rolled math shims.** `apple-oss-distributions/Libm` at tag
-  `Libm-2026` — the newest Apple has published, since Apple stopped
-  releasing `Libm` source after OS X Lion (2011), a decade before this
-  project's Darwin 20.3/macOS 11.2 target and ~2 years before arm64
-  existed, so unlike every other pin here this one is **not**
-  manifest-verifiable; documented honestly as such in
-  `setup_third_party.sh`/`docs/apple-oss-catalog.md` rather than silently
-  treated as equivalent to the rest. `tools/userland_staging/build_libm.sh`
-  builds `libc_build/libm.a`: 62 real object files from Apple's real
-  `Source/ARM/*.c` portable subset (all ~40 `.s` files are real
-  armv6/armv7 assembly with no AArch64 variant in any tag, skipped
-  outright), exporting 111 real functions — `sqrt`/`fmod` compiled with
-  `-D__SOFTFP__` to reach Apple's real portable branch (AArch64 has no
-  hardware `fmod` either), plus the fuller real fdlibm/FreeBSD-derived
-  trig/hyperbolic/Bessel/gamma/log/exp families. A handful of functions
-  with no usable portable Apple source (`fabs`/`trunc`/`modf`/`pow`/
-  `scalbn` — asm-only or an Apple-acknowledged "IncrediblySkanky" hack)
-  come from real, attributed FreeBSD `lib/msun/src` source in a new
-  `libm_freebsd_fallback.c` instead. Replaces `ping_libm_compat.c`
-  (`sqrt`), `cf_compat_headers/libm_compat.c` (`fmod`/`modf`/`pow`), and
-  `simple_cmds_libm_compat.c` — verification per consumer: `ping`
-  QEMU-boot-tested with real stddev output; CF's trial link confirmed via
-  `nm` that those 3 symbols no longer appear in its undefined-symbol gap
-  list; `df`'s `simple_cmds_libm_compat.c` replacement was initially
-  compile-level verified only, link-level verification blocked by the
-  ld64-609 bug below — now resolved (`docs/backlog.md` item d9), `df`
-  links and QEMU-boots cleanly. None of the 3
-  old shim `.c` files were deleted (confirmed nothing else references
-  them, except `build_libxml2.sh`'s own separate, untouched copy).
+- **Real Apple `Libm` pinned 2026-08-27 (tag `Libm-2026`), retiring this
+  project's 3 hand-rolled math shims.** `tools/userland_staging/build_libm.sh`
+  builds `libc_build/libm.a` — 62 real objects / 111 real functions from
+  Apple's real portable `Source/ARM/*.c` subset, with attributed FreeBSD
+  `lib/msun/src` fallbacks (`libm_freebsd_fallback.c`) where Apple has no
+  usable portable source. This is the one pin here that is **not**
+  manifest-verifiable (Apple stopped releasing `Libm` after Lion, 2011),
+  documented honestly as such in `setup_third_party.sh`/
+  `docs/apple-oss-catalog.md`. Full writeup (per-consumer verification, the
+  three shim files it replaces) archived to `docs/historic/roadmap.md`'s
+  "Third archive pass, 2026-08-30".
 
 See `docs/historic/roadmap.md` for the full narrative (real bugs found,
 exact syscalls/structs involved, per-command QEMU transcripts) behind
@@ -85,41 +69,25 @@ every bullet above.
 Currently open, real bugs the roadmap narrative flagged as not-yet-fixed
 (see `docs/backlog.md` for the full, authoritative list and detail):
 
-- **`bash -i` loops forever printing `exit`** -- FIXED 2026-08-19 (see
-  Current status above and `docs/historic/roadmap.md`'s "Twenty-third
-  pass"). Real interactive bash now works correctly.
+- **`bash -i` loops forever printing `exit`** -- FIXED 2026-08-19. Real
+  interactive bash now works correctly. See `docs/historic/roadmap.md`'s
+  "Twenty-third pass".
 - **`yes` reliably panics the kernel** (`_rtclock_intr` interrupt-processing
   watchdog, under sustained fast syscall load) -- a real kernel bug, not a
   port bug in `yes.c` itself. Ships anyway, flagged. See `docs/backlog.md`
   P0 item 29.
 - **Every command run from bash printed an empty `err(3)`/`warn(3)` prefix**
-  -- FIXED 2026-08-20. Originally suspected to be bash's own `execve()`
-  call passing an empty `argv[0]` to the child (found 2026-08-20 while
-  QEMU-verifying `cp`/`mv`, Block 1); a real QEMU A/B instrumentation test
-  disproved that theory -- both bash's own `args[0]` right before
-  `execve()` and the spawned child's own `argv[0]` (read directly in its
-  `main()`) were already correct. The real root cause was one layer
-  further down: `third_party/Csu/start.s`'s arm64 entry point (this
-  project's static/no-dyld target never runs the C `_start()` in
-  `crt.c`, which is dead code here -- see that file's own
-  `crt_init_program_vars()` comment) never wrote `__progname` (only
-  `environ`, added by the earlier Phase 4.6 item 2 fix), so
-  `getprogname()` read back an unset global for every process on this
-  target, unconditionally -- not a bash-specific bug at all. Fixed by
-  adding a real `crt_init_program_vars()` to `crt.c` (computes
-  `__progname`/`NXArgc`/`NXArgv` from `argv[0]`, matching Apple's own
-  dead `crt_basename()` logic) and calling it from `start.s` right after
-  the existing `environ` store. QEMU-verified via a real transcript:
-  `cp`/`mv`/`cat` against nonexistent paths now correctly prefix their
-  own name (`cp: /nonexistent-src-file: No such file or directory`), zero
-  regression (login, `echo`, `pwd` all still work). See
-  `docs/historic/roadmap.md`'s Phase 4 entry for the full evidence trail.
-- **Also every command in `build_simple_cmds.sh`'s tier (28 commands as
-  of 2026-08-19) had a wrong-`getprogname()` bug** (hardcoded
-  `"libc_locale_smoketest"` literal) **that was silently masking the
-  `__progname`-never-initialized bug fixed above** -- the
-  `getprogname()` fix itself landed as part of the same Block 1 pass,
-  see `docs/historic/roadmap.md`.
+  -- FIXED 2026-08-20. The obvious theory (bash's `execve()` passing an
+  empty `argv[0]`) was disproved by a real QEMU A/B instrumentation test;
+  the real root cause was one layer down, `third_party/Csu/start.s` never
+  writing `__progname`, so `getprogname()` read an unset global for every
+  process on this target. Fixed with a real `crt_init_program_vars()` in
+  `crt.c`, called from `start.s`. Full evidence trail archived to
+  `docs/historic/roadmap.md`'s "Third archive pass, 2026-08-30".
+- **Also every command in `build_simple_cmds.sh`'s tier (28 commands as of
+  2026-08-19) had a wrong-`getprogname()` bug** (a hardcoded
+  `"libc_locale_smoketest"` literal) **that was silently masking the bug
+  above** -- fixed in the same pass, same archive section.
 - **`hexdump` prints no data rows** (`freopen`+`getc`/`ungetc` idiom bug)
   -- found 2026-08-20, ships anyway. See `docs/backlog.md` P1 item 3.
 - **`pathchk ""` doesn't error per POSIX** -- low impact. See
@@ -164,17 +132,14 @@ need a real implementation later:
   of each path, and the Phase 7.5 entry below for the fuller design
   writeup.
 - **Real AES (FreeBSD rijndael) + real SHA-256 (corecrypto) + real
-  SHA-384/512/MD5 (FreeBSD)** (2026-08-28, `docs/backlog.md` item 0a/0b):
-  `g_crypto_funcs` now gets a real `register_crypto_functions()` call
-  (AES ecb/cbc/ctr only, boot-time FIPS-197/SP 800-38A self-test gates
-  it) -- `tcp_tfo_init`'s TCP Fast Open path now works for real instead
-  of degrading. `SHA256_Init`/`_Update`/`_Final` still call real
-  `ccdigest_init`/`ccsha256_di()`; SHA-384/512 and MD5 are no longer
-  from-scratch either, now FreeBSD's real compress core/reference impl
-  (corecrypto has no real body for either in this checkout). Still no
-  HMAC/RSA/ECDSA/DH/ECDH via this table. Was the blocker for real
-  `sshd` (Phase 7b); `pkg`'s `libecc` signature verification (Phase 8)
-  is a separate, still-open gap.
+  SHA-384/512/MD5 (FreeBSD)** -- DONE 2026-08-27/28 (`docs/backlog.md`
+  items 0a/0b). `g_crypto_funcs` now gets a real
+  `register_crypto_functions()` call (AES ecb/cbc/ctr only, gated by a
+  boot-time FIPS-197/SP 800-38A self-test), so `tcp_tfo_init`'s TCP Fast
+  Open path works for real instead of degrading. Still no HMAC/RSA/ECDSA/
+  DH/ECDH via this table. Was the blocker for real `sshd` (Phase 7b);
+  `pkg`'s `libecc` signature verification (Phase 8) is a separate,
+  still-open gap.
 - **`cerror_stub.c`** -- minimal errno/`cerror` stand-in used where real
   Apple `errno.c`'s TSD dependency wasn't available yet.
 - **Residual no-op `os_once`/`pthread_mutex_*` copies** in
@@ -189,10 +154,8 @@ need a real implementation later:
   RPC to the task subsystem wasn't attempted this pass).
 - **`simple_cmds_nanosleep_compat.c`/`simple_cmds_nanosleep_pub_compat.c`:
   DONE 2026-08-21** -- both now real, genuinely blocking `nanosleep(2)`/
-  `_nanosleep` via real Mach IPC (`host_get_clock_service` +
-  `semaphore_create` + `clock_get_time` + `__semwait_signal`), replacing
-  the prior CPU-burning `mach_absolute_time()` spin-wait. See Phase 4.6
-  item 5 below for the full writeup.
+  `_nanosleep` via real Mach IPC, replacing the prior CPU-burning
+  `mach_absolute_time()` spin-wait. See Phase 4.6 item 5 below.
 - **`simple_cmds_rpmatch_compat.c`** -- a real but C-locale-only
   `rpmatch()` (used by `rm -i`'s y/n prompt) stands in for real Apple
   `Libc/gen/FreeBSD/rpmatch.c`'s `regcomp`/`regexec`-backed match against
@@ -214,24 +177,17 @@ need a real implementation later:
 - **`cat_socket_stub.c`** -- honest `ENOSYS` for `cat`'s `AF_UNIX`-socket
   read path; no real networking exists yet (Phase 6).
 - **`chmod`/`chown`: DONE 2026-08-20 (Block 4) for the common mode-bit/
-  ownership case** -- this entry's own premise (real ACLs needed even
-  for plain `chmod`) turned out false on inspection: real Apple
-  `posix1e/acl.c` (`acl_get_file`/`acl_set_file`/etc) was already
-  compiled into `libcopyfile.a` back in the `cp`/`mv` block (real
-  `copyfile()`'s own ACL-preserving-copy path needed it), so real,
-  unmodified `chmod.c`+`chmod_acl.c` link and run against that already-
-  built archive with only one small new stand-in
-  (`chmod_mbr_compat.c`'s `mbr_identifier_to_uuid()`, reached only by
-  the ACL-by-name path, not plain mode bits). QEMU-verified: `chmod
-  600`/`755`/`+x` and `chown` by name/numeric-id/nonexistent-user all
-  independently confirmed correct. What's still genuinely unverified:
-  real ACL-specific flags (`-N`/`+a`) -- HFS+ has no real ACL storage on
-  this target, so those need confirming as honest `ENOTSUP`/`EINVAL`
-  failures specifically, not assumed to "just work" the way the common
-  case does. `<membership.h>` UUID-based lookups remain unbuilt (no
-  directory service at all, same gap `copyfile_syscalls.c`'s `mbr_*()`
-  stand-ins already document) -- only reachable from ACL-by-name, not
-  plain `chmod`/`chown`.
+  ownership case** -- this entry's own original premise (real ACLs needed
+  even for plain `chmod`) turned out false on inspection: real Apple
+  `posix1e/acl.c` was already compiled into `libcopyfile.a` by the `cp`/
+  `mv` block, so real unmodified `chmod.c`/`chmod_acl.c` link against it
+  with one small new stand-in (`chmod_mbr_compat.c`, reached only by the
+  ACL-by-name path). What's still genuinely unverified: real ACL-specific
+  flags (`-N`/`+a`), which need confirming as honest `ENOTSUP`/`EINVAL`
+  failures specifically (HFS+ has no real ACL storage on this target), and
+  `<membership.h>` UUID-based lookups remain unbuilt (no directory
+  service). Full writeup archived to `docs/historic/roadmap.md`'s "Third
+  archive pass, 2026-08-30".
 - **Bash's own remaining honest failure stand-ins** (`bash_syscalls.c`):
   `dlopen`/`dlclose`/`dlsym`/`dlerror` always fail (no dyld at all);
   `alarm`/interval timers are silent no-ops (no `SIGALRM` subsystem);
@@ -249,31 +205,22 @@ need a real implementation later:
 - **`libmalloc_vm_mig_stubs.c`** -- real but provably-unreachable
   dead-code MIG-fallback bodies (`KERN_FAILURE`) behind `libmalloc`'s real
   Mach-trap fast path; harmless, kept for completeness only.
-- **`dyld`** -- real dyld-940 now boots, runs a real dynamically-linked
+- **`dyld`** -- real dyld-940 boots, runs a real dynamically-linked
   program's `main()`, and exits cleanly with no crash (Phase 6.5 Phase
-  C+D, fully closed 2026-08-25) -- see `docs/daemon-roadmap.md`'s Phase
-  6.5 section. Real architecture debt remains: `libSystem.B.dylib`/
-  `libdyld.dylib` still bundle most of this project's OTHER libc/
-  libpthread/etc as flattened static archives rather than real, separate
-  per-library dylibs. Migration started 2026-08-25: step 1
-  (`libsystem_kernel.dylib`, the real Mach-bootstrap/VM-trap layer --
-  `mach_init.c`/`mach_vm.c`/`mig_reply_port.c`/the project's own
-  Mach-trap stub files) is DONE and QEMU-verified, both dylibs now share
-  one real `mach_task_self_` via a real `LC_LOAD_DYLIB` instead of each
-  carrying an independently-never-initialized private copy (the exact
-  bug class that closed Phase D). BSD syscalls (`open`/`read`/`write`)
-  and the rest of the curated libc stack are still static-archive copies
-  -- see `docs/daemon-roadmap.md`'s "Static-to-dylib migration, step 1"
-  section for the full writeup and next-step candidates.
-- **`libdispatch`/GCD** -- STALE, superseded 2026-08-26/27: a real
-  `libdispatch.dylib` now exists and is linkable (Phase 6.6/6.7, see
-  `docs/daemon-roadmap.md`'s Phase 6.6/6.7 sections and `docs/backlog.md`
-  item 17) -- `syslogd.macho` links it dynamically and, as of 2026-08-27,
-  runs to completion against it with zero undefined symbols and no
-  crash. Real concurrent `dispatch_async` still can't exist until real
-  threading does (Phase 7.5's pthread ceiling), so this remains
-  single-thread-honest in practice, but "zero API surface, not attempted"
-  is no longer an accurate description.
+  C+D, fully closed 2026-08-25). Real architecture debt remains:
+  `libSystem.B.dylib`/`libdyld.dylib` still bundle part of this project's
+  other libc/libpthread stack as flattened static archives rather than
+  real, separate per-library dylibs. Migration steps 1-5 are DONE (see
+  Phase 6.5 below); see `docs/daemon-roadmap.md`'s "Static-to-dylib
+  migration" sections and `docs/backlog.md` items d8/d12 for exactly
+  what's left.
+- **`libdispatch`/GCD** -- a real `libdispatch.dylib` exists and is
+  linkable (Phase 6.6/6.7, 2026-08-26/27; `docs/backlog.md` item 17);
+  `syslogd.macho` links it dynamically and runs to completion against it
+  with zero undefined symbols and no crash. Real concurrent
+  `dispatch_async` still can't exist until real threading does (Phase
+  7.5's pthread ceiling), so this remains single-thread-honest in
+  practice -- but "zero API surface, not attempted" is no longer accurate.
 - **`ed_setjmp_raw.s`/`ed_setjmp_compat.c`** (Phase 4.6 grep/sed/nl/
   xargs/ed sweep) -- real AAPCS64 register-save/restore core for
   `setjmp`/`longjmp`/`sigsetjmp`/`siglongjmp`, standing in for Apple's
@@ -335,110 +282,53 @@ need a real implementation later:
   own dedicated pass, matching this file's own standing guidance not to
   rush a real architectural gap into a command-sweep pass:
   5. **[PARTIALLY DONE 2026-08-21]** Real Mach IPC (`mach_msg()` trap +
-     MIG RPC) in userland -- kernel-side implementation was already real
-     and present (`third_party/xnu-7195` `osfmk/kern/ipc_*`/`clock.c`),
-     never exercised from a userland binary before this pass. The
-     smaller-scoped first target (`docs/backlog.md` item 7's own
-     suggestion) landed for real: **blocking `nanosleep(2)`/`_nanosleep`
-     is DONE** (`simple_cmds_nanosleep_compat.c`/
-     `simple_cmds_nanosleep_pub_compat.c`, used by `tail -f`'s poll
-     interval and `sleep(1)`) -- **`ps`'s CPU%/RSS/VSZ/thread-count
-     columns (`task_for_pid`/`task_info`/`task_threads`/`thread_info`,
-     `ps_task_info_stub.c`) is NOT done**, not attempted this pass, still
-     printing honest zeros.
-
-     Real chain now built (`tools/userland_staging/build_libmach_ipc.sh`,
-     new `libc_build/libmach_ipc.a`): `mach_host_self()` -> real
-     `host_get_clock_service()` -> real `semaphore_create()` (once, at
-     first use) -> per-call real `clock_get_time()` +
-     `__semwait_signal()` (the real, cancelable BSD syscall 334 --
-     already linked via `libmalloc.a`'s `sys_semwait_signal.o`, this is
-     its first real semaphore-backed caller). `host_get_clock_service`/
-     `clock_get_time`/`semaphore_create` client stubs are real,
-     `mig`-generated code (`/usr/bin/mig` run fresh each build against
-     the real, unmodified `osfmk/mach/{clock,mach_host,task}.defs`, same
-     tool/source-regeneration precedent `build_libmalloc.sh`'s own
-     `mach_vm_internal.h` step already established) -- not hand-derived
-     wire format. Two new real arm64 trap stubs needed generating by
-     hand (`mach_ipc_traps.s`, same pattern as `libplatform_mach_traps.s`/
-     `libmalloc_vm_traps.s`): `mach_msg_trap` (-31) and `host_self_trap`
-     (-29). A handful of genuinely-unreachable-for-these-3-routines MIG
-     support symbols (`mach_port_insert_right`/`mach_port_extract_right`/
-     `mach_port_unguard`/`voucher_mach_msg_set`) got honest `KERN_FAILURE`/
-     `FALSE` stand-ins (`mach_ipc_dead_stubs.c`, same pattern as
-     `libmalloc_vm_mig_stubs.c`) -- proven unreachable via each routine's
-     own real generated reply-disposition check, not assumed.
-
-     QEMU-verified via a real pty-driven boot + login, three independent
-     ways: (1) the real, unmodified `/bin/sleep 3` and `tail -f` binaries
-     link with zero undefined symbols and `sleep 3` completes and returns
-     the shell to its prompt without hanging; (2) a dedicated smoketest
-     (`mach_ipc_smoketest.macho`, calling the exact same real `nanosleep()`
-     `sleep(1)` uses) self-measured a real 3000ms requested sleep at
-     `ELAPSED_MS=3032` via `mach_absolute_time()` + a real, non-1:1
-     `mach_timebase_info()` ratio (numer=125/denom=3) -- accurate to
-     within 1%; (3) independently, the QEMU monitor's `info registers`
-     was polled (non-invasively, VM kept running) during the sleep window
-     and caught the guest PC at `_processor_idle+0x168` -- the real
-     kernel idle-loop symbol, confirming genuine blocking/descheduling
-     rather than the old `mach_absolute_time()` spin-wait it replaced.
-     `task_for_pid`'s real MIG RPC to the task subsystem (`ps` stats) is
-     a separate, larger follow-on -- left for a future pass, not
-     forgotten.
+     MIG RPC) in userland -- the kernel side was already real
+     (`osfmk/kern/ipc_*`/`clock.c`), just never exercised from a userland
+     binary. **Blocking `nanosleep(2)`/`_nanosleep` is DONE**
+     (`tools/userland_staging/build_libmach_ipc.sh` →
+     `libc_build/libmach_ipc.a`: real `mach_host_self()` →
+     `host_get_clock_service()` → `semaphore_create()` → per-call
+     `clock_get_time()` + `__semwait_signal()`, with real `mig`-generated
+     client stubs and two hand-written arm64 trap stubs). QEMU-verified
+     three independent ways, including catching the guest PC at
+     `_processor_idle+0x168` during the sleep window, confirming genuine
+     descheduling rather than the spin-wait it replaced.
+     **`ps`'s CPU%/RSS/VSZ/thread-count columns (`task_for_pid`/
+     `task_info`/`task_threads`/`thread_info`, `ps_task_info_stub.c`) are
+     NOT done** -- not attempted, still printing honest zeros;
+     `task_for_pid`'s own MIG RPC to the task subsystem is the separate,
+     larger follow-on. Full writeup archived to
+     `docs/historic/roadmap.md`'s "Third archive pass, 2026-08-30".
   6. **[DONE 2026-08-21]** CommonCrypto-shaped digest API for `md5`. Real,
-     unmodified `text_cmds/md5/md5.c` (tag `text_cmds-106`) now builds and
-     links via a new pin, `third_party/CommonCrypto` (tag
-     `CommonCrypto-60178.40.2`, confirmed against the `macos-112` manifest
-     the same way as every other pin) -- its real, unmodified
-     `CommonDigest.h`/`CommonDigestSPI.h` headers supply the real
-     `CCDigestCtx`/`CCDigestAlg`/`CC_MD5_DIGEST_LENGTH` types md5.c's own
-     real sibling `commoncrypto.h` expects. Real CommonCrypto's own
-     `lib/CommonDigest.c` glue turned out unusable as-is: it `#include`s
-     `<corecrypto/ccmd5.h>` etc and calls `ccdigest_init/update/final`,
-     and corecrypto's actual digest cores are confirmed NOT open-sourced
-     anywhere in this checkout (only 4 headers under
-     `xnu-7195/EXTERNAL_HEADERS/corecrypto/`, zero `.c` bodies, and this
-     CommonCrypto clone doesn't vendor corecrypto either). No FreeBSD
-     libmd precedent existed in-checkout either. Per source priority,
-     `tools/userland_staging/md5_commoncrypto_shim.c` implements the real
-     `CCDigestInit/Update/Final/OutputSize` + `Digest_End/Data/File`
-     surface `commoncrypto.h` declares (blocking `open()`/`read()` instead
-     of real `commoncrypto.c`'s `dispatch_io()`/GCD-based version --
-     libdispatch is already ruled out project-wide, see Known stubbings);
-     the actual MD5 math (`md5_rfc1321_core.c`) is a userland port of
-     `xnu-7195`'s own already-proven, already-kernel-boot-verified
-     `libkern/crypto/corecrypto_md5.c` (last-resort custom RFC 1321, not
-     Apple/FreeBSD source -- that kernel file's own header explains why).
-     QEMU-verified via a real pty-driven boot + login: `md5 -x` (built-in
-     self-test) printed all 8 RFC 1321 reference vectors as
-     `- verified correct`; `md5 -s abc`, `md5 <file containing "abc">`,
-     and `printf '' | md5` (stdin filter path) all produced
-     `900150983cd24fb0d6963f7d28e17f72` / `d41d8cd98f00b204e9800998ecf8427e`
-     respectively, matching this host's own real `/sbin/md5` byte-for-byte.
-     `sha1sum`/`shasum`-class follow-on (same shim pattern, wiring in this
-     project's existing from-scratch SHA-2 instead) not attempted this
-     pass -- `md5` was the item's actual named consumer; left for a future
-     pass, not forgotten.
+     unmodified `text_cmds/md5/md5.c` builds and links against a new
+     `third_party/CommonCrypto` pin (`CommonCrypto-60178.40.2`, confirmed
+     against the `macos-112` manifest). Real CommonCrypto's own
+     `CommonDigest.c` glue was unusable — it calls corecrypto digest cores
+     that are confirmed NOT open-sourced anywhere in this checkout — so
+     `md5_commoncrypto_shim.c` + `md5_rfc1321_core.c` (a userland port of
+     this kernel's own already-boot-verified RFC 1321 implementation)
+     stand in. QEMU-verified: `md5 -x` printed all 8 RFC 1321 reference
+     vectors as verified, and `-s`/file/stdin paths matched this host's
+     own `/sbin/md5` byte-for-byte. `sha1sum`/`shasum`-class follow-on not
+     attempted. Full writeup archived to `docs/historic/roadmap.md`'s
+     "Third archive pass, 2026-08-30".
   7. **`posix_spawn(2)`** -- an unbuilt process-creation API; blocks
      `install`, which also needs its own real `strip(1)` subprocess helper
      once spawning works.
-  8. **[DONE 2026-08-21]** `sysctl(2)` was already real and general-purpose
-     here (`tools/userland_staging/libc_gen_syscalls.c`'s `sysctl()`/
-     `sysctlbyname()`, `SYS_sysctl` = 202). `df` and `killall` are now
-     both built and QEMU-verified against it -- see Current status above.
-     `w`/`who` still need this same `KERN_PROC` MIB plus `utmp`/`wtmp`
-     (item 11 below), not filed here.
+  8. **[DONE 2026-08-21]** `sysctl(2)` was already real and
+     general-purpose here (`tools/userland_staging/libc_gen_syscalls.c`'s
+     `sysctl()`/`sysctlbyname()`, `SYS_sysctl` = 202); `df` and `killall`
+     are now both built and QEMU-verified against it. `w`/`who` still need
+     this same `KERN_PROC` MIB plus `utmp`/`wtmp` (item 11 below).
   9. **Real System V IPC** (`semget`/`shmget`/`msgget` family) -- blocks
      `ipcs`/`ipcrm`. `dd`'s more involved I/O-conversion logic wasn't
      surveyed in depth either; group it here for a first look.
-  10. **[DONE 2026-08-20]** zlib compression (deflate side) landed with
-      the Tier A sweep's `gzip` (`gz_deflate_impl.c`, real
-      `deflateInit2()`/`deflate()` against the same real, unmodified
-      zlib core at `third_party/u-boot/lib/zlib` the grep/sed/nl/xargs/ed
-      sweep's inflate-only `gz_gzip_impl.c` already used) and `compress`
-      (a separate, self-contained LZW codec, no zlib dependency at all).
-      Both standalone commands built and QEMU-verified real round-trip
-      -- see Current status above / historic archive for detail.
+  10. **[DONE 2026-08-20]** zlib compression (deflate side) landed with the
+      Tier A sweep's `gzip` (`gz_deflate_impl.c`, real
+      `deflateInit2()`/`deflate()` against the same vendored zlib core the
+      earlier inflate-only `gz_gzip_impl.c` used) and `compress` (a
+      separate, self-contained LZW codec, no zlib dependency). Both
+      QEMU-verified real round-trip -- see `docs/historic/roadmap.md`.
   11. **Real `utmp`/`wtmp`/`lastlog` accounting file format + writers** --
       blocks `who`/`w`/`lastcomm` (distinct from item 8's `sysctl`
       dependency; both are needed for `who`/`w`).
@@ -579,105 +469,37 @@ need a real implementation later:
      infrastructure needed beyond Phase 6b's already-landed UDP/INET work.
 - **Phase 6 (networking)**: **6a DONE 2026-08-21** -- the DWC2 USB host
   controller driver (`iokit/BCM2837DWC2/`), device enumeration and the hub
-  protocol subset are implemented and QEMU-verified: a real device
-  descriptor is read from the root-port device, and a second device is
-  enumerated through a downstream hub port, which is the exact topology the
-  LAN9514 presents. See `docs/historic/usb-support-plan.md`'s STATUS section for the
-  boot-log evidence.
-  Testing USB at all first required backporting a DWC2 model into
-  `third_party/qemu-zhuowei` (QEMU 2.12.91 modelled no USB for `-M raspi3`),
-  a prerequisite the plan doc had wrongly assumed away.
+  protocol subset are implemented and QEMU-verified (a real descriptor read
+  from the root-port device, plus a second device enumerated through a
+  downstream hub port -- the exact topology the LAN9514 presents). Testing
+  USB at all first required backporting a DWC2 model into
+  `third_party/qemu-zhuowei`, a prerequisite the plan doc had wrongly
+  assumed away. See `docs/historic/usb-support-plan.md`'s STATUS section.
 
-  **6b DONE 2026-08-22**, in three real-hardware-driven passes the same day:
-  1. A root-port `HFIR` write in `portReset()` was silently corrupting the
-     bus cadence for any device reached through the hub (deterministic
-     XACTERR on the LAN9514's Ethernet function, invisible to QEMU - its
-     dwc2 model stores HFIR and never reads it back for scheduling). Fixing
-     it (removing the write, not correcting its value - see the commit) let
-     `0424:ec00` enumerate on real hardware for the first time.
-  2. `SMSC9514USBTransport::probe()`, a read-only self-test, then confirmed
-     the SMSC vendor-request register protocol against real silicon:
-     distinct register values (rules out the wIndex/wValue-swap failure
-     mode) and `ID_REV`'s chip field matching the enumerated USB product ID.
-     This is the one layer QEMU can never verify, in any version - see the
-     LAN9514-never-emulated note below.
-  3. IONetworkingFamily was vendored into the kernel build for real
-     (`third_party/xnu-7195/iokit/Network/`, `iokit/IOKit/network/`,
-     `iokit/conf/files`, `iokit/conf/Makefile.template`'s CFLAGS), closing
-     out the integration scoped below - all four gaps it predicted were
-     confirmed exactly as measured, plus three more only a REAL (not
-     trial-compile) build surfaced: `bsd/net/dlil.h` reaching two
-     KERNEL_PRIVATE-only headers (`net/classq/classq.h`, `net/flowadv.h`)
-     that Apple's own export manifest never puts on this monolithic
-     build's search path (fixed with `-I$(SRCROOT)/bsd -I$(SRCROOT)/osfmk`,
-     giving iokit the same live-source view bsd's/osfmk's own code already
-     has - real Apple builds never hit this because IONetworkingFamily is
-     always a separate kext project against an already-built SDK there,
-     never inside the xnu Makefile); and a plain SDK header,
-     `TargetConditionals.h`, invisible under the kernel's `-nostdinc`
-     (vendored directly rather than broadly adding the SDK's `usr/include`
-     to the search path - that was tried first and reverted, since it
-     silently shadowed `libkern/os/base.h` with the SDK's own `os/base.h`
-     at the same relative path and broke an unrelated file, DriverKit's
-     `OSObject.iig.cpp`, with no error until parsing an unrelated macro
-     several files downstream - a real lesson on how broad `-I` additions
-     can regress something they look nowhere near).
-     `SMSC9514Ethernet.cpp` then compiled into the kernel cleanly on its
-     first real attempt (the standalone `tools/build_kexts.sh` verification
-     from when it was chip-logic-only, transport-less, held up).
-     `SMSC9514Ethernet::start()` was also wired to call `attachInterface()`
-     (previously missing - chip logic was real but no `IOEthernetInterface`
-     was ever created, so nothing would have been reachable from
-     `ifconfig` regardless of the register protocol underneath it), and
-     `BCM2837DWC2::start()`'s existing probe-only scaffolding was extended
-     to actually construct, `attach()`, and `start()` a real
-     `SMSC9514Ethernet` once `probe()` confirms the transport - manual
-     construction rather than personality-based matching, since
-     `BCM2837USBEnum.cpp` does not publish per-device nubs a personality
-     could match against (a real follow-up, not done here).
-     QEMU-boot-verified with zero regressions (its LAN9514-vendor-ID device
-     never exists, so the new code path is a clean no-op there); the
-     construct/attach/start sequence itself is real-hardware-only, like
-     `probe()` before it -- **CONFIRMED on real hardware 2026-08-22**:
-     `en0` attaches, link comes up, and the interface responds to ICMP
-     echo (ping) over a real Ethernet link. This confirms L2/driver +
-     basic L3 (no DHCP/address assignment yet) end to end on silicon,
-     ahead of Phase 6c below.
-  The INET half is DONE on branch `phase-6b-inet` (IPv4 stack initializes,
-  `lo0` attaches, zero panics) and this work landed on the same branch.
+  **6b DONE 2026-08-22, and CONFIRMED on real hardware the same day** -- in
+  three real-hardware-driven passes: (1) a root-port `HFIR` write in
+  `portReset()` was silently corrupting the bus cadence for anything
+  reached through the hub (invisible to QEMU, whose dwc2 model never reads
+  HFIR back) -- removing it let `0424:ec00` enumerate on real silicon for
+  the first time; (2) `SMSC9514USBTransport::probe()`, a read-only
+  self-test, confirmed the SMSC vendor-request register protocol against
+  real silicon -- the one layer QEMU can never verify in any version; (3)
+  IONetworkingFamily was vendored into the kernel build for real, and
+  `SMSC9514Ethernet::start()` was wired to actually `attachInterface()`
+  (previously missing entirely). Result on real hardware: `en0` attaches,
+  link comes up, and the interface responds to ICMP echo over a real
+  Ethernet link -- real L2/driver plus basic L3 end to end on silicon (no
+  DHCP/address assignment; see 6c below). The INET half is DONE on branch
+  `phase-6b-inet`, where this work also landed.
 
-  **IONetworkingFamily integration, scoped 2026-08-22** (measured, not
-  estimated -- all 12 `third_party/IONetworkingFamily/*.cpp` were
-  trial-compiled individually) -- kept for history; DONE per above:
-  - **`-D__PRIVATE_SPI__` is required.** `IONetworkController.h:1500` gates
-    `outputStart`/`pollInputPackets`/`setInputPacketPollingEnable`/
-    `IOMbufServiceClass` behind it while the `.cpp` defines them
-    unconditionally, so without it the base class alone fails with
-    "out-of-line definition does not match any declaration". Adding it took
-    `IONetworkController.cpp` from 4 errors to zero. Confirmed to be
-    Apple's own build flag, not a workaround: the real
-    `IONetworkingFamily.xcodeproj` sets
-    `GCC_PREPROCESSOR_DEFINITIONS = __PRIVATE_SPI__` for every one of its
-    targets.
-  - **7 of 12 sources then compile clean** (`IOKernelDebugger`,
-    `IOMbufMemoryCursor`, `IONetworkController`, `IONetworkData`,
-    `IONetworkMedium`, `IOOutputQueue`, `IOPacketQueue`).
-  - Of the rest, **most errors were trial-harness artifacts, not real
-    skew, confirmed by the real build**: `io_filter_policy_t`
-    (`IOUserClient.h:170`, behind `#if PRIVATE`), `kqueue_id_t`
-    (`bsd/sys/event.h`, same class), and `DriverKit/IODMACommand.h` all
-    evaporated once vendored into the tree and built via
-    `iokit/conf/files`, exactly as predicted.
-  - **The predicted "genuine vintage skew" list turned out to be a
-    trial-harness artifact too, not real skew** - a correction worth
-    recording since it was stated with confidence at the time:
-    `IFNET_LQM_THRESH_GOOD`, `IFNET_LQM_THRESH_OFF`, `if_bandwidths_t`,
-    `DLIL_MODIDLEN`, `DLIL_MODARGLEN` are all genuinely present and
-    complete in this xnu-7195 checkout's real `bsd/net/if.h`,
-    `bsd/net/if_var.h`, and `bsd/net/kpi_interface.h` (checked directly
-    against source before trusting the old note). The three real gaps the
-    live build did surface (`classq.h`/`flowadv.h`/`TargetConditionals.h`,
-    detailed above) were never on this predicted list at all.
+  Full writeup -- all three passes, the seven real integration gaps the
+  live kernel build surfaced (including the `classq.h`/`flowadv.h`/
+  `TargetConditionals.h` finds and the real lesson about broad `-I`
+  additions silently shadowing `libkern/os/base.h`), and the measured
+  12-file IONetworkingFamily scoping that preceded it (including the
+  correction that its own predicted "genuine vintage skew" list was a
+  trial-harness artifact) -- archived to `docs/historic/roadmap.md`'s
+  "Third archive pass, 2026-08-30".
 
   **6c, revised 2026-08-22: DHCP deprioritized, not planned for now** --
   manual static IP assignment via `ifconfig` is sufficient for this
@@ -693,174 +515,62 @@ need a real implementation later:
   `third_party/network_cmds/{ping,ping6,netstat,arp,route}.tproj` --
   natural next candidates for basic network usability now that manual
   addressing is the plan.
-- **Phase 6.5 (dyld)**: started 2026-08-25 (explicit user override of the
-  prior "defer until Phase 6 forces it" sequencing below, motivated by
-  unlocking a future PureDarwin `launchd` port). Phases A/B/C/D are all
-  DONE and fully closed as of 2026-08-25 -- real dyld-940 boots, runs a
-  real dynamically-linked program's real `main()` (loading real
-  `libdyld.dylib` + `libSystem.B.dylib`), and exits cleanly with no
-  crash. See `docs/daemon-roadmap.md`'s Phase 6.5 section for the full
-  writeup (6 real bugs found+fixed in Phase C; the libdyld/libSystem
-  build in Phase D; two more real bugs -- both instances of the same
-  duplicated-`mach_task_self_`-per-flattened-dylib failure mode -- found
-  and fixed closing Phase D for real). Also flagged: this project's
-  `libSystem.B.dylib`/`libdyld.dylib` are a flattened bundle of
-  pre-existing static archives, not real per-library dylibs matching
-  Apple's actual modular architecture -- a real migration effort, per
-  explicit user direction ("do 2 library at a time and finish all") to
-  stop building new static-archive-plus-shim code and instead finish
-  this migration. Steps 1-5 DONE and QEMU-verified same day:
-  `libsystem_kernel.dylib`; `libsystem_platform.dylib` +
-  `libsystem_blocks.dylib`; `libsystem_malloc.dylib` +
-  `libsystem_pthread.dylib`; `libsystem_c.dylib` (string+gen+stdio+
-  printf+locale+regex combined into ONE dylib); `libc++.dylib`
-  (libcxx+libcxxabi combined -- real RTTI-identity correctness reason,
-  not just convenience: splitting them risks `typeid`/`dynamic_cast`
-  silently failing across the dylib boundary). Each step's own audit
-  found real duplicate-global-state bugs before they could cause a
-  crash -- `errno` (step 2); the most serious yet, `libmalloc`'s
-  heap-zone pointer and `libpthread`'s thread registry (step 3); step
-  4's live gap (dyld's `LibSystemHelpers::mkstemp()` needed a real
-  working `mkstemp()`); and step 5 found THREE more identical bugs
-  lurking in an old loose compat file (`libdyld_compat_misc.c`) nobody
-  had re-audited since steps 3-4 landed their real replacements.
-  `libdyld.dylib`/`libSystem.B.dylib` now link 7 real dylibs directly
-  (10 total transitively) instead of bundling static archives. Real,
-  honestly-scoped exclusions remain: `std::thread`/`std::condition_variable`/
-  `std::timed_mutex` are unusable in this project's C++ runtime until
-  real `pthread_join`/`pthread_detach`/`pthread_cond_timedwait` exist
-  (none do yet). See `docs/daemon-roadmap.md`'s "Static-to-dylib
-  migration" sections for what moved, what's left (libunwind + smaller
-  archives next), and next-step candidates.
-- **Phase 6.6 (libdispatch/GCD)**: no longer a placeholder -- real
-  `libdispatch.dylib` ported, compiled, and converted to a dylib
-  2026-08-26, then had its full remaining undefined-symbol gap closed
-  2026-08-27 (`3fab93c`/`7629e79`, see `docs/backlog.md` item 17 and
-  `docs/daemon-roadmap.md`'s Phase 6.6/6.7 sections) driven by real
-  `syslogd`'s own dispatch-queue usage as the first consumer. Real
+- **Phase 6.5 (dyld): DONE 2026-08-25.** Started that day as an explicit
+  user override of the prior "defer until Phase 6 forces it" sequencing,
+  motivated by unlocking a future PureDarwin `launchd` port. Phases A/B/C/D
+  are all closed: real dyld-940 boots, runs a real dynamically-linked
+  program's real `main()` (loading real `libdyld.dylib` +
+  `libSystem.B.dylib`), and exits cleanly with no crash. The follow-on
+  static-to-dylib migration's steps 1-5 are also DONE and QEMU-verified
+  (`libsystem_kernel`, `libsystem_platform` + `libsystem_blocks`,
+  `libsystem_malloc` + `libsystem_pthread`, `libsystem_c`, and `libc++`
+  with libcxxabi deliberately combined for RTTI-identity correctness) --
+  `libdyld.dylib`/`libSystem.B.dylib` now link 7 real dylibs directly (10
+  transitively) instead of bundling static archives. Each step's own audit
+  caught real duplicate-global-state bugs before they could crash (`errno`;
+  libmalloc's heap-zone pointer and libpthread's thread registry; three
+  more lurking in an old loose compat file). Real, honestly-scoped
+  exclusion: `std::thread`/`std::condition_variable`/`std::timed_mutex`
+  stay unusable until real `pthread_join`/`pthread_detach`/
+  `pthread_cond_timedwait` exist. See `docs/daemon-roadmap.md`'s Phase 6.5
+  + "Static-to-dylib migration" sections and `docs/backlog.md` items d8/d12
+  for what's left; full roadmap-side writeup archived to
+  `docs/historic/roadmap.md`'s "Third archive pass, 2026-08-30".
+- **Phase 6.6 (libdispatch/GCD): DONE 2026-08-26/27** -- real
+  `libdispatch.dylib` ported, compiled, converted to a dylib, then had its
+  full remaining undefined-symbol gap closed (`3fab93c`/`7629e79`), driven
+  by real `syslogd`'s own dispatch-queue usage as the first consumer. Real
   concurrent `dispatch_async` still can't exist until real threading does
-  (Phase 7.5's pthread ceiling), so this remains single-thread-honest in
-  practice, matching the scope this entry originally predicted --
-  correctly predicted, just no longer "not started."
-- **Phase 9 (CoreFoundation): DONE 2026-08-26** -- real Apple CF (via
-  swift-corelibs-foundation, since apple-oss-distributions/CF is dead/
-  stale) ported and wired into launchd's trial link; ICU confirmed not
-  needed on launchd's actual CF call path. ~150 honest remaining gaps
-  (ICU, ASL, `libSystem.B.dylib` export-parity debt) are scope decisions,
-  not unstarted work -- see `docs/backlog.md` item d7 for the full
-  categorized list.
-- **Real ICU port started 2026-08-26** (was scoped out of Phase 9 above;
-  no longer a scope decision, now underway for real): pinned
-  `ICU-66109` (confirmed via the `macos-112` manifest, same as every
-  other pin). Both stages DONE the same day: stage 1 (native host build,
-  a real prerequisite for ICU4C's own `--with-cross-build` two-stage
-  cross-compile, via `build_icu_host.sh`) and stage 2 (the real
-  arm64-apple-ios14.4 target cross build, via `build_icu_target.sh`) --
-  real `libicuuc`/`libicui18n`/`libicuio`/`libicudata` arm64 dylibs with
-  real packaged CLDR/Unicode data, confirmed exporting the exact symbols
-  (`u_hasBinaryProperty`, `ucol_open`, etc) CF's own CFUniChar/
-  CFCharacterSet/CFLocale gap list needs. Six real build-system gaps
-  found and fixed across both stages (none required faking any
-  behavior). **CF wiring DONE same day**: `build_corefoundation.sh` now
-  builds 21 more real CF source files this ICU port unblocks
-  (CFCharacterSet/CFUniChar + real embedded Unicode data,
-  CFStringUtilities' real ICU collation, CFLocale/CFLocaleIdentifier/
-  CFLocaleKeys/CFNumberFormatter, CFCalendar/CFTimeZone, and several
-  supporting String/StringEncodings files) and links the real ICU
-  dylibs. **Full-sweep pass DONE same day**: rather than trust the
-  original scope note's untested assumption that RunLoop/Stream/
-  Socket/MachPort/PlugIn needed new kqueue+Mach port infrastructure, a
-  real "just try compiling it" pass across every remaining file found
-  it was wrong -- CFRunLoop/CFMachPort/CFSocket/CFStream and the entire
-  CFBundle/CFPlugIn family all compile clean on this project's existing
-  syscall layer, plus the DateFormatter family (unblocked now that
-  Locale/Calendar exist), CFURLComponents, CFAttributedString, and
-  more. CF is now 95 real files (up from the original 17). Gap count
-  for this trial link is 100 symbol groups (up from 83 pre-sweep, not a
-  regression -- the newly-included subsystems bring their own real,
-  previously-invisible transitive syscall dependencies -- Mach ports,
-  BSD sockets, mk_timer, pthread attrs -- none of which exist in any
-  archive this project has built yet, confirmed via `nm`, real
-  follow-up work not chased this session).
-- **libxml2 DONE 2026-08-27**: investigated whether libxml2/curl were
-  portable enough to close two of the full-sweep's five remaining
-  exclusions; libxml2 was a real, easy win (real pregenerated
-  `config.h` in Apple's own checkout, no `configure` needed unlike
-  ICU -- `tools/userland_staging/build_libxml2.sh`, 45 files, real
-  per-library dylib), closing `CFXMLInterface.c` with **zero new gaps**
-  introduced. The earlier blocker was never really libxml2 at all -- a
-  tiny, unrelated `Boolean`/`bool` mismatch bug in this exact
-  swift-corelibs-foundation checkout. curl was investigated and NOT
-  pursued: Apple's real iOS build needs closed-source Secure Transport
-  for TLS (this project has no TLS stack and isn't adding one per the
-  standing corecrypto/AES-only crypto scope decision), and real
-  networking would need socket syscalls this project doesn't have
-  either -- a much bigger, murkier lift for a smaller real payoff. CF
-  is down to **four** genuine, verified exclusions (GUI-only
-  CFUserNotification, a real multi-part CFPreferences.c gap,
-  libcurl-dependent CFURLSessionInterface, Windows-only
-  CFWindowsUtilities). `docs/backlog.md` item d7's own "Real ICU port
-  started" entry has the full writeup for the port, the CF wiring, the
-  full-sweep pass, and the libxml2 completion.
-- **Real syscall work started 2026-08-27**: 27 of the trial link's 100
-  remaining undefined-symbol groups closed (100 -> 73), via real
-  hand-written raw syscall/Mach-trap wrappers and verbatim-extracted
-  real Apple functions -- the full BSD socket family (12 symbols:
-  socket/bind/listen/accept/connect/getsockname/getsockopt/setsockopt/
-  socketpair/recvfrom/sendto/recv), the `mach_port_*` family (7
-  symbols, real trap-first with an honest stubbed MIG fallback since
-  real `mach_msg()` doesn't exist yet), the `mk_timer_*` family (4
-  symbols, plain traps), and 4 of 6 `pthread_attr_*` functions (the
-  other 2 need real `bsdthread_register`, an already-diagnosed wall).
-  `docs/backlog.md` item d7's own entry has the full per-category
-  writeup and what was left at that point (since closed, see next
-  bullet).
-- **Next-steps pass DONE 2026-08-27**: 73 -> 70. Real `__proc_info` raw
-  syscall (fresh `create-syscalls.pl` generation) closed both
-  `proc_pidinfo`/`pthread_setname_np` (a real twofer, as scoped); a new
-  real `cctools-973.0.1` pin (NOT part of the `macos-112` manifest --
-  matched instead against this project's own pinned Xcode 12's real
-  `otool --version`) closed `NXFindBestFatArch`/`NXGetLocalArchInfo` via
-  its real, unmodified `libmacho/arch.c`, zero new gaps. Investigating
-  `sysdir_*` found a real, confirmed answer instead of a fix: never
-  open-sourced by Apple anywhere (full `Libc` git history + an org-wide
-  GitHub code search both checked, not guessed) -- same category as
-  ASL, folded into that bucket. The `__proc_info` twofer surfaced one
-  real new gap, `__pthread_ptr_munge_token`, which turned up something
-  bigger than itself: `libSystem.B.dylib`'s build never
-  `-reexport_library`s its own real per-library sub-dylibs at all (a
-  real `nm -gU` check found it exports only ~19 of its own locally-
-  compiled symbols, nothing from `libsystem_pthread.dylib`/etc), so this
-  is likely the real root cause behind several of the OTHER already-
-  documented "export-parity" entries too, not a one-off.
-- **`libSystem.B.dylib` real `-reexport_library` fix DONE 2026-08-27**:
-  70 -> 42, the single biggest gap-closing change of this whole item d7
-  effort, done same-day as the follow-up it was flagged from. Swapped
-  `build_libsystem.sh`'s plain positional linking of its 7 real
-  per-library sub-dylibs for `-Wl,-reexport_library` each -- real
-  macOS's own `libSystem.dylib` is exactly this kind of thin
-  `LC_REEXPORT_DYLIB` umbrella, confirmed via a real ld64-609 smoke test
-  before touching the shared build, then a real rebuild (`nm -u`
-  byte-identical to the old dylib, zero regressions; `otool -l` shows
-  all 7 real `LC_REEXPORT_DYLIB` commands). Closed the entire pthread
-  export-parity bucket plus a dozen-plus libc symbols in one structural
-  fix (27 groups). The one straggler this surfaced,
-  `__pthread_ptr_munge_token`, needed a second fix: real ld64 resolves
-  that specific common/tentative symbol to LOCAL within
-  `libsystem_pthread.dylib`'s own link regardless of export lists or
-  cross-object references (confirmed via two real failed trials, not
-  guessed) -- since real Apple never needed it exported either (private
-  `pthread.c` implementation detail), dropped the
-  `_pthread_validate_signature` corruption-check call (not the actual
-  rename logic) from `cf_pthread_setname_syscalls.c` instead, same
-  "no corruption path exists on this project's threading model" pattern
-  `pthread_thread_ops_compat.c` already established. 43 -> 42. What's
-  left is qualitatively different from the closed export-parity bucket:
-  genuine "not built anywhere yet" gaps (`_scalbn`/`_getpwuid_r`/
-  `_getsectbynamefromheader_64`/`_getsegbyname`), the already-flagged
-  `_chk`-family hardening routines, and the already-categorized os_log/
-  ASL/CFPreferences/sysdir buckets. See `docs/backlog.md` item d7's own
-  entry for the full detail.
+  (Phase 7.5's ceiling), exactly as this entry originally predicted. See
+  `docs/backlog.md` item 17 and `docs/daemon-roadmap.md`'s Phase 6.6/6.7.
+- **Phase 9 (CoreFoundation) + real ICU + real libxml2: DONE
+  2026-08-26/27.** Real Apple CF via swift-corelibs-foundation (95 real
+  files, up from an original 17 after a real "just try compiling it" sweep
+  disproved the assumption that RunLoop/Stream/Socket/MachPort/PlugIn
+  needed new infrastructure); real ICU 66.1 through a genuine two-stage
+  host + `arm64-apple-ios14.4` cross build (six real build-system gaps
+  found and fixed, none requiring faked behavior); real libxml2-34.9 as a
+  per-library dylib, closing `CFXMLInterface.c` with zero new gaps. curl
+  was investigated and deliberately NOT pursued (needs closed-source
+  Secure Transport for TLS plus socket syscalls this project lacks). CF is
+  down to four genuine, individually verified exclusions -- see
+  `docs/backlog.md` item d7 for those and for the current remaining-gap
+  list.
+- **Real syscall + export-parity gap-closing on CF's trial link: DONE
+  2026-08-27**, 100 → 42 undefined-symbol groups across four passes: the
+  BSD socket / `mach_port_*` / `mk_timer_*` / `pthread_attr_*` families
+  (100 → 73); real `__proc_info` plus a new `cctools-973.0.1` pin, matched
+  against this project's pinned Xcode 12's real `otool --version` rather
+  than the `macos-112` manifest (73 → 70); and the single biggest
+  structural fix of the whole effort -- `build_libsystem.sh` was
+  plain-linking its 7 real per-library sub-dylibs instead of
+  `-Wl,-reexport_library`ing them, so `libSystem.B.dylib` exported almost
+  nothing through the umbrella (70 → 42, closing the entire pthread
+  export-parity bucket in one rebuild). Also confirmed along the way, as a
+  real answer rather than a fix: `sysdir_*` was never open-sourced by
+  Apple anywhere (full `Libc` git history plus an org-wide GitHub code
+  search), same category as ASL. Full per-pass writeups archived to
+  `docs/historic/roadmap.md`'s "Third archive pass, 2026-08-30".
 - **Phase 6.8 (`launchd`+XPC via PureDarwin): critical-path gap-closing
   pass DONE 2026-08-26**, real port itself still open. Source is
   PureDarwin/PureDarwin's own `next` branch (a current, actively
@@ -901,281 +611,59 @@ need a real implementation later:
   "complete" -- real pthread multithreading and real corecrypto-backed
   crypto are permanent gaps short of a from-scratch reimplementation of a
   closed Apple subsystem (see Known Stubbings above).
-  - **Real pthread kernel bridge, step 1: real thread creation, DONE +
-    QEMU-verified 2026-08-20.** Confirmed independently (not just trusting
-    `bsd_pthread_stub.c`'s own header comment) that no
-    `pthread_synch.c`/`pthread_shims`-style kernel *implementation* exists
-    anywhere in `third_party/xnu-7195` -- only the thin, real, open-source
-    shim layer (`bsd/pthread/pthread_shims.c`) that a real closed-source
-    pthread.kext would have plugged into via `pthread_kext_register()`.
-    One real nuance the original framing undersold:
-    `bsd/pthread/pthread_workqueue.c` (3683 lines, real Apple source,
-    already in this tree) DOES implement real `workq_open`/
-    `workq_kernreturn` workqueue *policy* logic (deciding when to spin up/
-    down worker threads, kqueue integration) -- but it still delegates the
-    actual thread-creation mechanics to the same closed `pthread_functions`
-    vtable (`workq_create_threadstack`/`workq_setup_thread`/
-    `workq_destroy_threadstack`/`workq_markfree_threadstack`/
-    `workq_handle_stack_events`, all still `bsd_pthread_stub.c` stubs
-    returning `ENOTSUP`/doing nothing). Filling in those five hooks for
-    real would light up *already-present* real Apple scheduling logic, not
-    just extend a hand-rolled stub -- a real, valuable, and narrower-than-
-    expected next scope for whoever picks up workqueues, worth knowing
-    before assuming that's "more closed-source design work" like
-    `bsdthread_create` was.
-
-    The real bridge implemented: `pthread_kern` (the real callback table
-    `pthread_shims.c` hands to any pthread.kext, already populated at
-    kernel-link-time since this project has no kext-loading boundary --
-    `bsd_pthread_stub.c` links directly against the same kernel image) is
-    used as designed -- `pthread_kern->thread_create(current_task(), &th)`
-    (real `osfmk/kern/thread.c`, leaves a suspended thread with
-    `user_stop_count=1`), then `pthread_kern->thread_set_wq_state64(th,
-    &state)` (real `osfmk/arm64/status.c`, sets `thread->machine.upcb`'s
-    pc/sp/x0 -- the exact same struct `bsd/dev/arm/unix_signal.c`'s real,
-    already-QEMU-verified `sendsig_set_thread_state64()` sets for signal
-    delivery on this same board), then `pthread_kern->thread_resume(th)`.
-    The new thread's very first return to userspace goes through
-    `thread_bootstrap_return` -> `arm64_thread_exception_return`
-    (`osfmk/arm64/locore.s`) -- the identical real, already-proven-safe
-    return-to-EL0 path every `exec()` in this project already exercises,
-    not new/invented machine-dependent code. Reference-counting mirrors
-    this project's own already-working `fork()` (`kern_fork.c`'s
-    "drop the extra references we got during the creation" ->
-    `thread_deallocate()` after `thread_resume()`).
-
-    Deliberately NOT implemented (out of scope for this step, per the
-    session's own instructions): no real libpthread-ABI trampoline
-    (kport/self/flags register conventions), no TSD/dispatch-queue
-    offsets, no thread port returned in `*retval` (so nothing in userspace
-    can `bsdthread_terminate`/signal the new thread individually yet -- it
-    only stops when the whole task exits), `bsdthread_register`/
-    `psynch_*`/`workq_*` all remain `ENOTSUP` stubs, untouched.
-
-    Verification: `tools/pthread_kthread_test/` (new, raw-syscall
-    freestanding test binary, same build shape as `tools/init_binary/`) --
-    a real second Mach thread writes a magic value and spins forever; the
-    main thread observes it and calls real `exit(2)`, which for the first
-    time in this project has to tear down a task with >1 live thread (real
-    `task_terminate_internal()` reaping, structurally untested here until
-    now). QEMU-confirmed via two separate real boot+login sessions:
-    `pthread_kthread_test` printed "SUCCESS: second real Mach thread ran
-    and wrote the magic value" both times, exited 0, and bash remained
-    alive and fully functional immediately afterward. Zero-regression
-    check (not just the new binary in isolation): in the same two sessions,
-    `pwd`/`true`/`false`/pipes/`wc`/`head`/`tail`/`mkdir`/`touch`/output-
-    redirection/`grep`/`sed`/`cat`/`cp`/`mv`/`rm`/`which`/`id`/`uname`/
-    `hostname`/`stat`/`ps`, plus real login itself, all ran identically to
-    before, interleaved before AND after the pthread test in the same
-    continuous shell session -- no panic, no hang, no crash, no divergent
-    output anywhere in either session's full serial log. Committed as a
-    real, working, regression-verified change (see `third_party/xnu-7195`
-    commit history for `bsd/kern/bsd_pthread_stub.c`); not pushed.
-
-  - **Real pthread kernel bridge, step 2: real workqueue thread-stack
-    hooks, DONE + QEMU-verified 2026-08-21.** Major correction to step 1's
-    own framing above (found by actually reading
-    `third_party/libpthread/kern/` instead of trusting the inherited
-    "never open-sourced" assumption): `workq_create_threadstack`/
-    `workq_destroy_threadstack`/`workq_markfree_threadstack`/
-    `workq_setup_thread`/`workq_handle_stack_events` -- and
-    `bsdthread_register` itself -- all DO have real, unmodified,
-    already-open-source Apple implementations. Apple ships pthread.kext's
-    kernel-support code as `third_party/libpthread`'s own `kern/`
-    subdirectory (`kern_support.c`/`kern_init.c`/`kern_internal.h`,
-    pinned `libpthread-454.80.2`, confirmed against
-    `distribution-macOS`'s `macos-112` manifest via
-    `setup_third_party.sh`'s own established method, same as every other
-    pin in this project) -- built as a real kext on real macOS/iOS; this
-    project has no kext-loading boundary, so (exactly like every other
-    "kext" here) it needed linking directly into the kernel instead, not
-    reinventing. A prior pass (`build_libpthread.sh`, Phase 4's userland
-    libpthread tier) had already noticed this `kern/` subdirectory but
-    filed it as "the KERNEL-side pthread.kext internals bsd_pthread_stub.c
-    stands in for" and moved on without checking further -- this session's
-    real find was actually reading it.
-
-    What was ported, into a new file
-    (`third_party/xnu-7195/bsd/kern/bsd_pthread_workq.c`, ~460 lines):
-    real `workq_create_threadstack`/`workq_destroy_threadstack` (real
-    `mach_vm_map_external`/`mach_vm_allocate_external` + `mach_vm_protect`
-    guard-page setup in the target process's own `vm_map` -- note:
-    `mach_vm_map`/`mach_vm_allocate`'s convenience-wrapper names are
-    `__x86_64__`-only in this xnu checkout, `osfmk/vm/vm_user.c` confirmed
-    by reading it; arm64 needs the real `_external` entry points
-    directly, same functions, different names), real
-    `workq_markfree_threadstack` (`mach_vm_behavior_set(...,
-    VM_BEHAVIOR_REUSABLE)`), real `workq_setup_thread` (real arm64
-    register-state setup -- x0=self, x1=kport, x2=stack_bottom,
-    x3=kevent_list, x4=upcall_flags, x5=kevent_count, pc=the real
-    wqthread entry point, sp=stack top -- via
-    `pthread_kern->thread_set_wq_state64`, then a real noreturn jump back
-    to userspace via `thread_bootstrap_return()`/`unix_syscall_return()`),
-    real `workq_handle_stack_events` (real kevent-list marshalling via
-    the already-real `pthread_kern->kevent_workq_internal` callback, this
-    kernel's own already-built kqueue plumbing), and real
-    `real_bsdthread_register` (ported from `_bsdthread_register`,
-    per-process pthread registration via the already-real
-    `pthread_kern` `proc_set_threadstart`/`proc_set_wqthread`/
-    `proc_set_pthsize`/`proc_set_register`/etc. callback family).
-    `bsd_pthread_stub.c` itself only changed to wire these six real
-    functions into its `pthread_functions` vtable in place of their old
-    `stub_workq_*`/`stub_bsdthread_register` ENOTSUP stand-ins (now
-    deleted, not left as dead code) -- `bsdthread_register2`/`psynch_*`/
-    `bsdthread_terminate`/`thread_selfid` remain untouched ENOTSUP stubs,
-    out of scope.
-
-    One real, evidence-backed (not guessed) wiring correction, found by
-    reading both sides rather than assuming: `bsd_pthread_stub.c`'s
-    `.version` field changed from `PTHREAD_FUNCTIONS_TABLE_VERSION` (1)
-    to `0`. `bsd/pthread/pthread_shims.c`'s real `bsdthread_register()`
-    syscall wrapper branches on `pthread_functions->version >= 1` to pick
-    between the OLDER `.bsdthread_register` vtable slot and the newer
-    `.bsdthread_register2` one; `third_party/libpthread/kern/kern_init.c`'s
-    own real `pthread_internal_functions` initializer leaves `.version`
-    unset (so it's 0), meaning real Apple's own pairing for this exact
-    libpthread vintage uses the OLDER slot -- confirmed by also checking
-    that the old slot's real (if stale-named) signature
-    (`pthsize`/`dummy_value`/`targetconc_ptr`) matches
-    `_bsdthread_register`'s actual parameter types 1:1 (Apple just
-    renamed two params to `pthread_init_data`/`pthread_init_data_size` in
-    a later revision without changing the vtable slot itself).
-    `.bsdthread_register2` stays populated with its old ENOTSUP stub,
-    now genuinely unreachable by design rather than by accident. Verified
-    only one call site in the whole tree reads `pthread_functions->version`,
-    and `bsdthread_create`'s own syscall wrapper never checks it at all --
-    so this change carries zero risk to step 1's already-verified
-    `real_bsdthread_create` path.
-
-    Verification: `tools/workq_kthread_test/` (new, raw-syscall
-    freestanding test binary, same shape as `tools/pthread_kthread_test/`)
-    drives the real, full, unmodified userspace-facing API in order: (1)
-    real `bsdthread_register(2)` (syscall 366) registers a real wqthread
-    entry point; (2) real `workq_open(2)` (syscall 367, real
-    `bsd/pthread/pthread_workqueue.c`, allocates this process's real
-    `struct workqueue`); (3) real `workq_kernreturn(2)` (syscall 368) with
-    `WQOPS_QUEUE_REQTHREADS`, `pp=0x8FF` (a real, hand-derived
-    `pthread_priority_t` for `THREAD_QOS_LEGACY` -- verified by tracing
-    `_pthread_priority_thread_qos()` back against it, documented in the
-    test's own header comment) -- which drives real
-    `workq_reqthreads()` -> `workq_schedule_creator()` ->
-    `workq_add_new_idle_thread()` (real `workq_create_threadstack()` +
-    the pre-existing, unmodified real `osfmk/kern/thread.c`
-    `thread_create_workq_waiting()`) -> a real wakeup of the newly idle
-    thread, which runs real `workq_setup_thread()` on its own real
-    return-to-userspace path, landing at the test's `wq_entry` (real
-    arm64 wqthread register convention, not a fabricated one) which
-    writes a magic value the main thread observes. QEMU-confirmed via two
-    separate full boot + login + 37-command regression-sweep sessions,
-    byte-for-byte identical real transcript both times:
-    `workq_kthread_test` printed `bsdthread_register OK` / `workq_open OK`
-    / `workq_kernreturn(REQTHREADS) OK, waiting for real workqueue
-    thread...` / `SUCCESS: real workqueue thread ran via real
-    workq_setup_thread and wrote the magic value`, exited 0. Zero
-    regression: in the same two sessions, `pthread_kthread_test` (step
-    1's own real second-Mach-thread test) ran identically and still
-    printed its own real success line immediately before the workqueue
-    test in the same continuous shell session; `pwd`/`true`/`false`/
-    pipes/`ls`/`mkdir`/`touch`/output-redirection/`grep`/`sed`/`cat`/
-    `cp`/`mv`/`rm`/`which`/`id`/`uname`/`hostname`/`stat`/`ps`, plus real
-    login itself, all ran identically to before and after both tests --
-    no panic, no hang, no crash, no divergent output in either session's
-    full serial log (`DONE cmd_idx=37/37` both times). Adversarially
-    self-reviewed before commit: confirmed the new `panic()` call inside
-    `workq_set_register_state()` (real Apple code, fires if
-    `bsdthread_register` was never called for the process) is not
-    reachable by any of the 79 already-shipped commands -- none of them
-    call `workq_open`/`bsdthread_register`/`workq_kernreturn` (no
-    libdispatch/GCD, no pthread-workqueue-consuming program existed in
-    this project before this session's own new test binary) -- and swept
-    the diff for stray debug instrumentation (none found). Committed as a
-    real, working, regression-verified change (see `third_party/xnu-7195`
-    commit history for `bsd/kern/bsd_pthread_workq.c` and
-    `bsd/kern/bsd_pthread_stub.c`); not pushed.
-
-  - **Real pthread kernel bridge, step 3: `ulock_wait`/`ulock_wake` as a
-    real, non-psynch synchronization path (2026-08-24)**: `psynch_mutex*`/
-    `psynch_cvwait`'s real backing *protocol logic* was never
-    open-sourced -- only the generic primitives it calls
-    (`turnstile_prepare`/`waitq_assert_wait64_leeway`/
-    `waitq_wakeup64_thread`, in `pthread_shims.c`'s `psynch_wait_prepare`/
-    `psynch_wait_wakeup`) are real. Re-implementing the actual psynch
-    wire protocol from scratch was the standing "real next step" note
-    left by step 2 above. This step found a real shortcut instead:
-    `bsd/kern/sys_ulock.c` (`ulock_wait`/`ulock_wake`/`ulock_wait2`, BSD
-    syscalls 515/516/544) is itself real, unmodified, already-open-source
-    Apple code, was already compiled into this kernel the whole time
-    (`bsd/conf/files`: `bsd/kern/sys_ulock.c standard`), and -- confirmed
-    by grep, zero hits -- has **no dependency at all** on the closed
-    `pthread_functions`/`pthread_kern` vtable that gates every `psynch_*`
-    call. And `third_party/libpthread` itself already ships a real,
-    Apple-documented opt-in fast path that uses it instead of psynch:
-    `pthread_mutex.c`'s `PTHREAD_MUTEX_USE_ULOCK=1` env knob (default
-    off, `types_internal.h:187`) routes `pthread_mutex_t` through
-    `__ulock_wait`/`__ulock_wake` (`UL_UNFAIR_LOCK`) instead of
-    `psynch_mutexwait`/`psynch_mutexdrop`, and `pthread_cond.c` has a
-    matching `_PTHREAD_COND_SIG_ulock` state that uses `__ulock_wait2`/
-    `__ulock_wake` once paired with a ulock-mode mutex. (No such path
-    exists for `pthread_rwlock.c` -- rwlocks stay fully psynch-dependent,
-    genuinely deferred, not addressed here.) Per this project's
-    Apple-first source-priority convention, this is strictly better than
-    the originally-flagged option: it needs zero new kernel code and zero
-    reverse-engineered protocol design, just exercising code that was
-    already sitting in the tree unused.
-
-    Verification: `tools/ulock_kthread_test/` -- a new freestanding,
-    no-libc raw-syscall test spawning a second real kernel thread via the
-    already-verified `bsdthread_create()`, where the child writes a magic
-    value and calls `ulock_wake(2)` directly while the main thread
-    genuinely blocks in `ulock_wait(2)` (`UL_COMPARE_AND_WAIT`, bounded
-    5s timeout so a kernel-side bug would show up as a diagnosable
-    timeout, not hang QEMU forever). This is the project's first real
-    exercise of the turnstile/waitq blocking path being driven by actual
-    userland syscalls rather than busy-polling (both `pthread_kthread_test`
-    and `workq_kthread_test` predate any real blocking wait/wake and
-    poll a shared word instead). Race-safety relies on `ulock_wait2`'s own
-    copyin-under-lock "value no longer matches -> return immediately, do
-    not block" check (`sys_ulock.c`), not on any ordering assumption in
-    the test itself. Boot-verified twice on real QEMU
-    (`third_party/qemu-zhuowei`, via `_pty_test_phase5.py`), both runs
-    printing `SUCCESS: real ulock_wait/ulock_wake handoff observed` and
-    exiting 0, with zero regressions in `pthread_kthread_test`/
-    `workq_kthread_test` or the standing shell command set in the same
-    session. Adversarial self-review before commit caught one real latent
-    bug: `lockword` was originally declared `volatile long` (64-bit) but
-    `UL_COMPARE_AND_WAIT` only compares/copies the low 32 bits
-    (`sys_ulock.c`: `lock_size = sizeof(uint32_t)`) -- harmless with the
-    specific `MAGIC` value used and arm64's little-endian layout, but a
-    real type/op mismatch that would silently misbehave for a different
-    magic value or op; fixed by narrowing `lockword` to `volatile
-    uint32_t` and the child's store to a 32-bit `str w1, [x0]` before
-    committing. New artifact wired into
-    `tools/init_binary/inject_into_sd_image.sh`'s copy loop per this
-    project's "every built artifact needs a reproducing script" rule.
-
-    Real next step for whoever continues this: build an actual minimal,
-    linkable subset of `third_party/libpthread` for this project's
-    userland with `PTHREAD_MUTEX_USE_ULOCK` forced on, giving a real
-    `pthread_create()`/`pthread_mutex_lock()`-compatible API backed
-    end-to-end by kernel code that's genuinely open-source top to bottom
-    -- this session's test is a kernel-level stepping stone toward that,
-    not the finish line. `psynch_rw_*` (rwlocks) has no such shortcut and
-    would still need the original harder approach (reverse-engineer the
-    protocol against the real `turnstile`/`waitq` primitives) if ever
-    tackled. A real minimal libpthread-ABI-compatible userspace
-    `pthread_create()` wrapper still separately needs real
+  - **Step 1: real thread creation -- DONE + QEMU-verified 2026-08-20.**
+    Confirmed independently that no `pthread_synch.c`-style kernel
+    *implementation* exists in `third_party/xnu-7195` — only the thin,
+    real, open-source `bsd/pthread/pthread_shims.c` a closed pthread.kext
+    would have plugged into. `real_bsdthread_create` uses that
+    `pthread_kern` callback table as designed (`thread_create` →
+    `thread_set_wq_state64` → `thread_resume`), landing the new thread on
+    the same already-proven `thread_bootstrap_return` →
+    `arm64_thread_exception_return` path every `exec()` here already uses.
+    Verified by `tools/pthread_kthread_test/` across two full boot + login
+    + regression-sweep sessions.
+  - **Step 2: real workqueue thread-stack hooks + `bsdthread_register` --
+    DONE + QEMU-verified 2026-08-21.** A major correction to step 1's own
+    framing, found by actually reading `third_party/libpthread/kern/`
+    instead of trusting the inherited "never open-sourced" assumption: all
+    five `workq_*` hooks *and* `bsdthread_register` have real, unmodified,
+    already-open-source Apple implementations there (Apple ships
+    pthread.kext's kernel-support code as that repo's own `kern/`
+    subdirectory). Ported into `bsd/kern/bsd_pthread_workq.c` rather than
+    hand-rolled, lighting up the already-real
+    `bsd/pthread/pthread_workqueue.c` policy logic. Verified by
+    `tools/workq_kthread_test/` across two full boot + 37-command
+    regression sessions, and adversarially self-reviewed before commit.
+    `bsdthread_register2`/`psynch_*`/`bsdthread_terminate`/`thread_selfid`
+    remain untouched ENOTSUP stubs by design.
+  - **Step 3: `ulock_wait`/`ulock_wake` as a real, non-psynch
+    synchronization path -- DONE + QEMU-verified 2026-08-24.** Rather than
+    reverse-engineering the never-open-sourced psynch wire protocol (step
+    2's standing "real next step"), this found a real shortcut:
+    `bsd/kern/sys_ulock.c` is real, unmodified, already-open-source Apple
+    code, was already compiled into this kernel, and has zero dependency
+    on the closed `pthread_functions` vtable — and `third_party/libpthread`
+    already ships a matching Apple-documented `PTHREAD_MUTEX_USE_ULOCK=1`
+    opt-in fast path. Verified by `tools/ulock_kthread_test/` (two real
+    boots), with an adversarial self-review catching a real latent
+    32-vs-64-bit `lockword` type mismatch before commit.
+    **Still open from step 3**: `psynch_rw_*` (rwlocks) has no such
+    shortcut and would still need the original, harder
+    reverse-engineer-the-protocol approach; a real minimal
+    libpthread-ABI-compatible userspace `pthread_create()` still needs real
     TSD/dispatch-queue-offset wiring end to end (the kernel-side plumbing
-    for it, `proc_set_pthread_tsd_offset`, etc., is real and exercised by
-    `real_bsdthread_register` from step 2, but no real userspace
-    libpthread on this target calls it with real offsets yet --
-    `tools/workq_kthread_test/` deliberately passes 0s, see its own
-    header comment). `workq_kernreturn`'s other real op codes
-    (`WQOPS_THREAD_RETURN`/`WQOPS_THREAD_KEVENT_RETURN`/
-    `WQOPS_QUEUE_REQTHREADS2`/etc.) also remain unexercised --
-    `tools/workq_kthread_test/`'s worker thread just spins forever rather
-    than really parking back into the kernel, a real, narrower,
-    deliberately-scoped simplification documented in the test's own
-    header comment.
+    exists and is exercised, but no real userspace caller passes real
+    offsets yet); and `workq_kernreturn`'s other real op codes
+    (`WQOPS_THREAD_RETURN`/`_KEVENT_RETURN`/`QUEUE_REQTHREADS2`) remain
+    unexercised, since the test's worker thread spins rather than really
+    parking back into the kernel.
+
+    Full writeups for all three steps -- exact `pthread_kern` call
+    sequences, the real `.version` vtable-slot correction, the real arm64
+    wqthread register convention, the hand-derived `pthread_priority_t`
+    `0x8FF` (`THREAD_QOS_LEGACY`) constant `tools/workq_kthread_test/`
+    cites, and every verification transcript -- archived to
+    `docs/historic/roadmap.md`'s "Third archive pass, 2026-08-30".
 - **Phase 8 (`pkg` package management)**: fully planned, not started.
   `freebsd/pkg` is the chosen vehicle (native Mach-O awareness, real
   custom-repo support already documented). Needs `libsqlite`/`libucl`/
