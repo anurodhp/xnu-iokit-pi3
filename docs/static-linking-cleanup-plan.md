@@ -1382,3 +1382,159 @@ function family plus accepted ENOSYS-stub exceptions).
 
 Baseline updated (`dup_symbol_audit.sh --update-baseline`) to lock in
 91→90.
+
+## Session 2026-08-31 (continuation 6): libopenpam.dylib's time/gettimeofday/fenv duplicates -- + a real, structural wall found and documented
+
+`dup_symbol_audit.sh --summary` total: **90 → 84**, QEMU-verified. Picked
+the next-highest-value item off the summary table: `libsystem_c.dylib`
+(70 dup) and `libc++.dylib` (51 dup) were the two largest offenders, but
+their overlap is almost entirely the already-deferred xlocale/math
+families (docs' own "do not touch" list). `libopenpam.dylib` (34 dup)
+was the next largest with real, un-investigated remainder.
+
+### What was fixed: `build_openpam_dylib.sh`'s wholesale `ar x libopenpam.a` never got narrowed
+
+`build_openpam_dylib.sh` extracts every member of `libopenpam.a` with a
+single unfiltered `ar x` (unlike every other dylib script's selective
+extraction). `build_libsystem_c.sh` separately extracts several of the
+same members from that same archive on purpose (its own "Real gap: ICU
+also references time/mktime, expected from libSystem" comments) -- but
+nobody ever went back to `build_openpam_dylib.sh` to drop its now-
+redundant copies once `libsystem_c.dylib` became the real owner. Fixed:
+deleted 5 re-extracted objects from `libopenpam.dylib`'s own extract dir
+right after the `ar x` -- `time.o` (`_time`), `gettimeofday.o`
+(`_gettimeofday`), `ls_fenv_compat.o` (`_fegetenv`/`_fesetenv`),
+`ps_commpage_gettimeofday_stub.o` (`___commpage_gettimeofday`),
+`simple_cmds_time_compat.o`. The last one turned out to be a bonus sixth
+fix: it defines `___gettimeofday`, which was ALSO a genuine public
+duplicate with `libsystem_c.dylib`'s own copy (not the already-documented
+`___gettimeofday_with_mach`-adjacent private-extern exception -- that one
+lives in a different file entirely; confirmed via `nm -m` this specific
+copy had no reason to stay public). `libopenpam.dylib` already links
+`libsystem_c.dylib` as a sibling, so all 6 symbols' undefined references
+now resolve there. Verified via a real trial link (0 undefined symbols,
+only the pre-existing documented `-Wl,-U` deferrals in the "declared"
+list) and confirmed `syslogd.macho` (the only binary that loads
+`libopenpam.dylib`) has no stale `dyld_info -fixups` bind to any of the 6
+symbols under the `libopenpam/` ordinal (it was already binding `_time`/
+`_gettimeofday` to `libdispatch.dylib`, a third, separate, untouched
+owner -- confirms no relink was needed anywhere for this fix).
+
+### What was investigated and found genuinely structural, not fixed: the tzset/localtime/mktime/tzname/daylight family
+
+The obvious next, higher-value target: `localtime.o` (defines
+`tzset`/`tzsetwall`/`localtime`/`localtime_r`/`gmtime`/`gmtime_r`/
+`ctime`/`ctime_r`/`offtime`/`mktime`/`timegm`/`timeoff`/`time2posix`/
+`posix2time`/`timelocal`, PLUS real mutable state `_tzname`/`_daylight`/
+`_lcl_rwlock`/`___darwin_altzone`) and `timezone_unix03.o`
+(`_timezone`/`__st_get_timezone`/`__st_set_timezone`) are each
+independently compiled/extracted THREE times across `libsystem_c.dylib`
+(from `liblaunchd_core.a`, deliberately built without
+`-D__DARWIN_UNIX03=1` for ICU's sake -- see `build_launchd_core.sh`'s own
+comment), `libopenpam.dylib` (wholesale `ar x`, UNIX03-enabled compile),
+and `libc++.dylib` (its own fresh compile, also UNIX03-enabled). Real
+duplicate STATE (`_tzname`/`_daylight`) made this look like the exact
+same bug class as the already-fixed `errno`/`mach_task_self_` cases, and
+the fact that ONLY `mktime` differs symbol-name-wise between the two
+UNIX03 configurations (confirmed via real
+`third_party/Libc/include/time.h`: only `mktime`/`timezone`/`clock`/
+`strftime`/`strptime` get `__DARWIN_ALIAS` treatment -- `tzset`/
+`localtime`/`gmtime`/`ctime`/`tzname`/`daylight` do not) meant a single
+`-Wl,-alias,_mktime,'_mktime$UNIX2003'` on `libsystem_c.dylib` looked
+like it would be enough to let both siblings drop their local copies
+entirely.
+
+Real trial removal (both from `libc++.dylib`'s compile loop and
+`libopenpam.dylib`'s extraction) broke the link identically in both
+places: `Undefined symbols ... "__st_get_timezone", referenced from
+__st_fmt in strftime.o` (and, once that was worked around, `
+"___darwin_altzone", referenced from __st_fmt in strftime.o`). Checked
+via `nm -m`, not assumed: both `__st_get_timezone`/`__st_set_timezone`
+(in `timezone_unix03.o`) and `___darwin_altzone` (in `localtime.o`) are
+real Apple `.private_extern` symbols in the actual source. Private
+externs cannot resolve across a dylib boundary by construction -- so
+`strftime.o` (kept local in both siblings; see the asctime paragraph
+below for why) structurally REQUIRES its own sibling copies of both
+objects to stay in the same image as itself. Deleting them the way the 5
+objects above were deleted is not an option.
+
+The tempting workaround -- keep the objects linked locally but narrow
+just their PUBLIC exports (`tzset`/`tzname`/`daylight`/etc, via the same
+`ld -r -keep_private_externs -unexported_symbol` trick
+`narrow_rune_locale.sh` already established for the rune-locale globals)
+-- was deliberately rejected, not just untried: that trick is only
+correct for symbols that are REALLY `.private_extern` in Apple's own
+source (verified via `nm -m` showing "was a private external"), used as
+a tool to stop them being SEEN as false dylib-boundary conflicts. Using
+it here on symbols that are genuinely, intentionally public
+(`_tzname`/`_daylight` are real exported globals in Apple's own
+`libSystem`) would not fix the duplicate-state bug, it would HIDE it --
+the object would still be resident and linkable in the same image, so
+any as-yet-unaudited internal caller in that same dylib link (e.g. if
+`libc++.dylib`'s own `locale.cpp`/`time_get`/`time_put` facets ever call
+`tzset()`/`localtime()` directly rather than only `strftime_l()`) would
+silently keep resolving to the now-invisible local copy instead of
+`libsystem_c.dylib`'s real one, and `dup_symbol_audit.sh` would no longer
+be able to catch it. Chose to leave the real duplicate visible and
+documented over trading it for an invisible one -- a real regression
+risk for a cosmetic count reduction, the kind of trade this sweep's own
+rules (rule 6: only accept a duplicate as deliberate when consolidating
+would be a real behavior regression) exist to prevent taking casually.
+
+Flagged for a dedicated future session, same treatment as `libdyld.dylib`'s
+`_vproc_swap_integer` (DAR-8): the real fix needs either routing
+`%z`/`%Z` timezone formatting through `libsystem_c.dylib`'s own
+externally-callable timezone API instead of these two private helpers,
+or a deeper source-level restructure of how `strftime.c`'s timezone
+lookup works in this project -- not a mechanical symbol move.
+
+### A related, pre-existing exception reconfirmed, not newly created
+
+`_asctime`/`_asctime_r` duplication between `libsystem_c.dylib` and both
+`libc++.dylib`/`libopenpam.dylib` is NOT the same bug shape as the
+tzset/localtime family above, and was deliberately left alone for a
+different reason: `libsystem_c.dylib`'s own `_asctime`/`_asctime_r` is a
+project-authored, deliberately temporary stand-in
+(`libsystem_c_gap_compat.c`, blocked on the real `strftime_l()`/xlocale
+chain -- matches this project's own prior memory note "asctime hand-impl
+is deliberately temporary"), while both siblings' copies are the real,
+unmodified FreeBSD `stdtime/FreeBSD/asctime.c`. Consolidating onto
+`libsystem_c.dylib` today would silently downgrade every libc++/openpam
+consumer to the inferior stub -- a real behavior regression, not a
+symbol-hygiene win. Documented in place in both `build_openpam_dylib.sh`
+and `build_libcxx_dylib.sh` (this session touched neither file's asctime
+handling, just added the comment recording why).
+
+### Real QEMU verification
+
+Rebuilt bottom-up: `libsystem_c.dylib` (rebuilt for parity, unchanged),
+`libSystem.B.dylib`, `libc++.dylib` (rebuilt for parity, unchanged),
+`libopenpam.a` (pre-existing, already-documented `_mmap`-in-
+`pthread_main_thread_bootstrap.o` smoketest-link failure reproduced
+identically, not a regression -- confirmed the same way the
+continuation-5 session did), `libopenpam.dylib`. Ran
+`tools/init_binary/inject_into_sd_image.sh` then `tools/boot_test.py`
+(`qemu/static_link_batch9_openpam_time_boot.log`, PASS, 191s). Diffed
+address-stripped against the last known-good log
+(`static_link_batch8_dlclose_boot.log`): only expected QEMU/TCG
+scheduling-order jitter (`TEMP DIAGNOSTIC: _IOConfigThread::main
+entered`/`registerService`/`configThread` lines reordered around the USB
+and SD driver probes, a ~2ms `pmap_startup()` timing delta) -- confirmed
+via `grep -a` (the log's own `debug_buf content:` diagnostic line
+embeds raw non-UTF8 bytes that make plain `grep`/`sed` silently report 0
+matches or error out; `-a` forces text mode) for
+`panic`/`Symbol not found`/`undefined`/`fatal`: zero real hits, only the
+same benign, already-documented `DIAG: first_panic latched=125042432 ...`
+diagnostic string present byte-for-byte in the prior session's log too.
+
+### Linear
+
+DAR-7 (libopenpam.dylib, 34→28) and DAR-5 (libsystem_c.dylib, 70→64)
+both commented with the full fix + the structural-wall investigation
+writeup, left open (neither is fully cleared -- DAR-7 still has the
+tzset/localtime family, asctime exception, and prior sessions'
+xlocale/ENOSYS categories; DAR-5 still has its own two big documented
+remainders, xlocale and math, untouched this session).
+
+Baseline updated (`dup_symbol_audit.sh --update-baseline`) to lock in
+90→84.

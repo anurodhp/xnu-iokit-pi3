@@ -6539,9 +6539,7 @@ D ___collate_equiv_match
 D ___collate_load_error
 D ___collate_lookup
 D ___collate_lookup_l
-D ___commpage_gettimeofday
 D ___darwin_check_fd_set_overflow
-D ___gettimeofday
 D ___mb_cur_max
 D ___mb_sb_limit
 D __c_locale
@@ -6568,14 +6566,11 @@ D _dlopen
 D _dlsym
 D _duplocale
 D _fabs
-D _fegetenv
-D _fesetenv
 D _fmod
 D _fpathconf
 D _freelocale
 D _ftruncate
 D _getcwd
-D _gettimeofday
 D _gmtime
 D _gmtime_r
 D _localtime
@@ -6608,7 +6603,6 @@ D _strtoll_l
 D _strtoul
 D _strtoul_l
 D _syslog
-D _time
 D _time2posix
 D _timegm
 D _timelocal

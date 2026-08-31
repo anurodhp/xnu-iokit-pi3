@@ -131,6 +131,65 @@ if [ ! -x "$NEWLD_BINDIR/ld" ]; then
 fi
 
 (cd "$EXTRACT" && ar x "../../libopenpam.a")
+# Real duplicate-symbol fix (static-linking cleanup, 2026-08-31): the
+# wholesale `ar x` above pulls in 5 members that `build_libsystem_c.sh`
+# ALREADY separately extracts from this exact same `libopenpam.a` (its
+# own "Real gap: ICU also references time..." comment) -- `time.o`
+# (`_time`), `gettimeofday.o` (`_gettimeofday`), `ls_fenv_compat.o`
+# (`_fegetenv`/`_fesetenv`), `ps_commpage_gettimeofday_stub.o`
+# (`___commpage_gettimeofday`), `simple_cmds_time_compat.o`. This dylib
+# already links `libsystem_c.dylib` as a sibling below, so deleting these
+# 5 re-extracted objects here (rather than trying to select every OTHER
+# member by name) makes this dylib's own undefined references resolve
+# there instead of to a second, private copy -- confirmed via a real
+# trial link (0 undefined symbols) before treating this as done, not
+# assumed.
+#
+# `localtime.o`/`timezone_unix03.o`/`asctime.o` are deliberately KEPT
+# (NOT removed, despite also duplicating libsystem_c.dylib's own
+# separately-extracted copies of the same two members) -- investigated
+# and found structural, not a quick fix:
+#   - `localtime.o`+`timezone_unix03.o` together provide the whole
+#     tzset/localtime/gmtime/ctime/mktime/timegm/tzname/daylight family,
+#     including real MUTABLE STATE (`_tzname`/`_daylight`/`_lcl_rwlock`)
+#     -- genuinely the same duplicate-state shape as `mach_task_self_`/
+#     `g_zone`/`errno` already fixed elsewhere in this sweep, and a
+#     tempting next target. Real trial removal broke the link: this
+#     dylib's own (also wholesale-extracted, still-present) `strftime.o`
+#     directly references `__st_get_timezone` (timezone_unix03.o) and
+#     `___darwin_altzone` (localtime.o) for `%z`/`%Z` formatting, and
+#     both are real Apple `.private_extern` symbols (confirmed via
+#     `nm -m`, "was a private external") -- private externs cannot cross
+#     a dylib boundary, so `strftime.o` structurally requires its own
+#     sibling copies of both objects to stay in the SAME image. Since
+#     `localtime.o`/`timezone_unix03.o` would therefore stay
+#     link-resident regardless, narrowing just their OTHER, genuinely-
+#     public duplicate exports (tzset/tzname/daylight/etc, via the same
+#     `ld -r -unexported_symbol` trick `narrow_rune_locale.sh` uses)
+#     would only hide the duplicate state from `nm`/`dup_symbol_audit.sh`
+#     without eliminating it, since nothing else in this project's build
+#     graph currently proves no OTHER already-compiled object in this
+#     dylib's own extract dir calls tzset()/localtime() through the
+#     now-would-be-hidden local copy instead of the sibling's -- a real
+#     regression risk, not a hygiene win. Flagged for a dedicated future
+#     session (same treatment as `_vproc_swap_integer`, DAR-8): the real
+#     fix needs either routing `%z`/`%Z` formatting through
+#     libsystem_c.dylib's own externally-callable API instead of these
+#     private helpers, or a deeper source-level restructure, not a
+#     mechanical symbol move.
+#   - `asctime.o`: libsystem_c.dylib's own `_asctime`/`_asctime_r` is a
+#     project-authored, deliberately temporary stand-in
+#     (`libsystem_c_gap_compat.c`, blocked on the real strftime_l()/
+#     xlocale chain), while this dylib's `asctime.o` is the real,
+#     unmodified FreeBSD source. Consolidating onto libsystem_c.dylib
+#     today would silently downgrade this dylib to the inferior stub --
+#     a real behavior regression, not a symbol-hygiene win -- so this is
+#     left as a documented, deliberate exception, same shape as the
+#     openpam ENOSYS-stub/DAR-18 cases already recorded in
+#     docs/static-linking-cleanup-plan.md.
+rm -f "$EXTRACT"/time.o "$EXTRACT"/gettimeofday.o \
+      "$EXTRACT"/ls_fenv_compat.o "$EXTRACT"/ps_commpage_gettimeofday_stub.o \
+      "$EXTRACT"/simple_cmds_time_compat.o
 (cd "$EXTRACT" && ar x "../../libc_locale.a" table.o none.o)
 # See narrow_rune_locale.sh's own header (static-linking cleanup, Phase
 # 1d, 2026-08-30): demotes the 4 public rune-locale globals table.o/
