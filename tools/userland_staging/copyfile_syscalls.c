@@ -154,18 +154,34 @@ int bcmp(const void *a, const void *b, size_t n) {
     return memcmp(a, b, n);
 }
 
-/* syslog: real Libc has no syslog.c in this checkout at all (it's a real
- * network/domain-socket protocol to syslogd, which this project has no
- * equivalent of - see architecture.md, no launchd-managed daemons here).
- * copyfile.c's own real call sites are all non-fatal diagnostic logging
- * (permission-copy warnings etc, never checked for a return value) - this
- * stand-in drops the message rather than fabricating delivery to a
- * daemon that doesn't exist, matching the same "real subsystem genuinely
- * absent" pattern as bsd_pthread_stub.c. A real implementation writing to
- * the console/stderr was considered but skipped to avoid this tier
- * depending on libc_printf.a's variadic vsnprintf machinery only to
- * immediately discard the result - not printing is honestly equivalent
- * for a target with no log daemon to receive it either way. */
+/* syslog: real Libc DOES have a syslog.c in this checkout (Libc/gen/
+ * oldsyslog.c, compiled for real into libopenpam.dylib for openpam_log.c's
+ * vsyslog() calls - see build_openpam.sh/build_openpam_dylib.sh) - it's a
+ * real network/domain-socket protocol to syslogd, which this project has
+ * no running instance of (no launchd-managed daemons here, syslogd is
+ * never auto-spawned, DAR-153). copyfile.c's own real call sites are all
+ * non-fatal diagnostic logging (permission-copy warnings etc, never
+ * checked for a return value) - this stand-in drops the message rather
+ * than fabricating delivery to a daemon that doesn't exist, matching the
+ * same "real subsystem genuinely absent" pattern as bsd_pthread_stub.c. A
+ * real implementation writing to the console/stderr was considered but
+ * skipped to avoid this tier depending on libc_printf.a's variadic
+ * vsnprintf machinery only to immediately discard the result - not
+ * printing is honestly equivalent for a target with no log daemon to
+ * receive it either way.
+ *
+ * DUPLICATE-SYMBOL INVESTIGATION (2026-08-31, static-linking cleanup,
+ * DAR-7/DAR-12): this `_syslog` and libopenpam.dylib's real oldsyslog.c
+ * one were investigated as a dylib-vs-dylib duplicate and CONSCIOUSLY
+ * left unmerged - libcopyfile.dylib is loaded by nearly every simple
+ * command (cp/mv/tar/ls/find/du/gzip/less/ed/chmod/mktemp/sed, plus
+ * libSystem.B.dylib/libdyld.dylib itself), so pointing it at
+ * libopenpam.dylib's real implementation would force all of them to load
+ * an unrelated PAM dylib, and - since copyfile.c's call sites never call
+ * openlog() - would still print nothing (oldsyslog.c's default
+ * _sl_LogStat has no LOG_CONS/LOG_PERROR bit set) after a real, wasted
+ * socket()+connect() pair against a syslogd that never runs. Permanent
+ * exception, see build_openpam_dylib.sh's matching comment. */
 void syslog(int priority, const char *fmt, ...) {
     (void)priority;
     (void)fmt;

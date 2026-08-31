@@ -85,6 +85,40 @@
 # enters any process's load set. See openpam_dynamic_compat.c's own
 # "DYLIB BUILD" comment and this script's OPENPAM_DYNAMIC_COMPAT_DYLIB_VARIANT
 # recompile step below for the mechanism.
+#
+# `_syslog` DUPLICATE-SYMBOL INVESTIGATION (2026-08-31, static-linking
+# cleanup, DAR-7): `libopenpam.dylib` and `libcopyfile.dylib` both export
+# `_syslog` -- investigated, CONSCIOUSLY NOT consolidated, same accepted-
+# exception category as this dylib's own `_connect`/`_socket`/`_send`/
+# `_writev` ENOSYS stubs above. This dylib's copy is the real, unmodified
+# `Libc/gen/oldsyslog.c` (openpam_log.c's vsyslog() call needs its real
+# LOG_CONS console fallback, which depends on those same local socket
+# stubs failing on purpose -- see build_openpam.sh's own header).
+# `libcopyfile.dylib`'s copy (copyfile_syscalls.c) is a deliberate,
+# separately-documented no-op stand-in for a much more widely-loaded
+# library (cp/mv/tar/ls/find/du/gzip/less/ed/chmod/mktemp/sed, plus
+# libSystem.B.dylib/libdyld.dylib itself, vs. this dylib's one real
+# consumer, syslogd.macho). Confirmed unsafe to naively point
+# libcopyfile.dylib at this dylib's real implementation instead: (1)
+# architecturally backwards -- would force every copyfile.dylib consumer
+# to also load a PAM-specific dylib for an unrelated feature; (2) not
+# even a behavior improvement -- copyfile.c's own `syslog(LOG_WARNING/
+# LOG_DEBUG, ...)` call sites never call `openlog()`, so oldsyslog.c's
+# default `_sl_LogStat == 0` means no LOG_CONS/LOG_PERROR bit is ever
+# set and the real implementation would still print nothing, just after
+# a real wasted `socket()`+`connect()` syscall pair against a
+# `/var/run/syslog` this target never runs (no syslogd is auto-spawned,
+# DAR-153) on every non-fatal diagnostic call site across most of the
+# 76 simple commands -- a real regression, not a cleanup. Confirmed no
+# live dyld ambiguity either: swept every built `.dylib`/`.macho` for an
+# undefined external reference to `_syslog` (`nm -m`) -- zero hits
+# anywhere; both copies are purely self-contained (copyfile.c's macros
+# resolve to copyfile_syscalls.c's local copy, openpam_log.c's vsyslog()
+# resolves to oldsyslog.c's local copy), so even though syslogd.macho
+# ends up loading both dylibs at once (this one directly, libcopyfile.dylib
+# transitively via libSystem.B.dylib), two-level-namespace chained fixups
+# mean neither side's bind can ever be shadowed by the other. Left as a
+# permanent, documented exception -- do not attempt to merge these two.
 set -e
 cd "$(dirname "$0")"
 

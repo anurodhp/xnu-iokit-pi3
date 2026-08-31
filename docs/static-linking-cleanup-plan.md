@@ -2458,3 +2458,111 @@ comment lines; every line touched previously by the trial fix was
 reverted to its original content.
 
 Baseline unchanged (still 24) -- nothing to update, no baseline drift.
+
+## Session 2026-08-31 (continuation 14): `_syslog` duplicate (DAR-7) -- investigated, confirmed a real permanent exception, zero code-behavior changes
+
+`dup_symbol_audit.sh --summary` total: **24 -> 24** (no consolidation; this
+was a pure investigation, comments-only diff). Picked up DAR-7's own last
+real un-investigated remainder, flagged by round 9: `_syslog` is defined
+by both `libcopyfile.dylib` and `libopenpam.dylib`.
+
+### What was verified first (all real, not assumed)
+
+- `nm -m`/`otool -L` confirmed both are real, external, non-private-extern
+  definitions (not a re-export/alias artifact).
+- Traced each to source via its build script: `libopenpam.dylib`'s copy is
+  the real, unmodified `Libc/gen/oldsyslog.c` (`build_openpam.sh`'s own
+  header already documents this -- `syslog()`/`vsyslog()`/`openlog()`/
+  `closelog()`/`setlogmask()`, compiled in because `openpam_log.c` calls
+  `vsyslog()` unconditionally). `libcopyfile.dylib`'s copy is a hand-
+  written no-op stand-in in `tools/userland_staging/copyfile_syscalls.c`
+  (`void syslog(int, const char *, ...) { }`), predating this session,
+  with its own already-thorough rationale comment (fixed a stale claim in
+  that comment while here -- it said "real Libc has no syslog.c in this
+  checkout at all," which is no longer true now that `oldsyslog.c` is
+  real and compiled into `libopenpam.dylib`).
+- Read `oldsyslog.c` directly to confirm the real mechanism: `vsyslog()`
+  unconditionally calls `openlog()` -> `socket()`/`connect()` to
+  `_PATH_LOG`, then `send()`; only on `send()` failure does it fall back
+  to `LOG_CONS` (`write`/`writev` to `/dev/console`), gated on the
+  `LOG_CONS`/`LOG_PERROR` bits of `_sl_LogStat` (default 0, set only via
+  an explicit `openlog()` call). This is exactly the mechanism
+  `libopenpam.dylib`'s own local `connect`/`socket`/`send`/`writev` ENOSYS
+  stubs (already an accepted DAR-7/DAR-14 exception, see the "Consciously
+  NOT touched" writeup earlier in this doc) are there to force: real
+  syslog(3) source, deliberately starved of a working transport so
+  `openpam_log.c`'s diagnostics take their real, designed console
+  fallback instead of silently hanging/erroring against a socket nothing
+  listens on.
+- Checked `copyfile.c`'s own call sites (`third_party/copyfile/copyfile.c`
+  lines 355/362): plain `syslog(LOG_WARNING/LOG_DEBUG, ...)`, `openlog()`
+  never called anywhere in this project's copyfile usage. Consequence: even
+  if `libcopyfile.dylib` were pointed at the real `oldsyslog.c`
+  implementation, `_sl_LogStat` would stay its default 0, neither
+  `LOG_CONS` nor `LOG_PERROR` would ever be set, and the real
+  implementation would *still* print nothing -- just after wasting a real
+  `socket()`+`connect()` syscall pair against `/var/run/syslog` (no
+  syslogd ever runs on this target, DAR-153) on every non-fatal
+  diagnostic call site. Consolidating would be a straight regression
+  (added real syscall overhead across most of the 76 simple commands
+  linking `libcopyfile.dylib`), not a cleanup, for zero behavioral gain.
+- Checked the dependency-direction risk explicitly (this doc's own round
+  6/13 circular-dependency lesson): `libcopyfile.dylib` is loaded by
+  `cp`/`mv`/`tar`/`ls`/`find`/`du`/`gzip`/`less`/`ed`/`chmod`/`mktemp`/
+  `sed`, plus `libSystem.B.dylib`/`libdyld.dylib` themselves (`otool -L`
+  swept across every built image, not guessed); `libopenpam.dylib` is
+  loaded by exactly one binary, `syslogd.macho`. Pointing the widely-
+  loaded library at the narrow one would be architecturally backwards
+  regardless of the syscall-overhead point above -- it would force nearly
+  every simple command to newly load an unrelated PAM dylib.
+- Checked for a live dyld two-level-namespace conflict (the actual reason
+  this class of duplicate usually matters), not just a static count: `nm
+  -m` swept every built `.dylib`/`.macho` for an undefined external
+  reference to `_syslog` -- **zero hits anywhere**. Both copies are purely
+  self-contained (`copyfile.c`'s macros resolve to `copyfile_syscalls.c`'s
+  own local definition inside the same dylib link; `openpam_log.c`'s
+  `vsyslog()` call resolves to `oldsyslog.c`'s own local definition inside
+  the same dylib link). `syslogd.macho` does end up with both dylibs
+  loaded simultaneously (`libopenpam.dylib` directly, `libcopyfile.dylib`
+  transitively via `libSystem.B.dylib`), but chained fixups/two-level
+  namespace means neither side's bind can ever be shadowed by the other --
+  this is a static double-export bookkeeping fact, not a live resolution
+  ambiguity.
+
+### Verdict: real, deliberate, permanent behavior divergence -- NOT consolidated
+
+Same accepted-exception category as `libopenpam.dylib`'s own `_connect`/
+`_socket`/`_send`/`_writev` ENOSYS stubs and `__xpc_runtime_is_app_
+sandboxed`. Left both copies exactly as they are. Zero functional diff;
+only change is two comment blocks recording the investigation so a future
+session doesn't re-open this (`build_openpam_dylib.sh`'s new comment
+block right after its `_dlclose` fix writeup, and `copyfile_syscalls.c`'s
+`syslog()` comment, both cross-referencing each other and this writeup).
+No rebuild/QEMU boot needed -- no binary changed.
+
+### Files changed (comments only, zero functional diff)
+
+`tools/userland_staging/build_openpam_dylib.sh`,
+`tools/userland_staging/copyfile_syscalls.c` -- comment-only additions/
+corrections, confirmed via `git diff --stat` to touch no non-comment
+line.
+
+### Linear
+
+DAR-7 (libopenpam.dylib) CLOSED: 5 remaining duplicates
+(`_connect`/`_socket`/`_send`/`_writev`/`_syslog`) are now **all** in the
+accepted-exception category (the socket family already was, per round 9;
+`_syslog` confirmed this session) -- no real un-investigated remainder
+left on this ticket. DAR-12 (libcopyfile.dylib) commented: of its 3
+remaining (`_syslog`/`__xpc_runtime_is_app_sandboxed`/
+`open_dprotected_np`), `_syslog` is now also a confirmed accepted
+exception and `__xpc_runtime_is_app_sandboxed` already was (a prior
+session's finding) -- `open_dprotected_np` is the one real remaining
+un-investigated item, left open for a future session, out of this
+session's scope.
+
+Baseline unchanged (still 24, all dylib-vs-dylib duplicates now
+classified as either fixed-in-a-prior-round or a confirmed permanent
+exception except `open_dprotected_np`, `dlopen`/`dlsym` (DAR-6), and the
+`acos`/`asin`/... math family (DAR-160/DAR-16, confirmed unsafe last
+round)).
