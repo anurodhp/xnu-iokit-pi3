@@ -6548,7 +6548,6 @@ D __c_locale
 D __CurrentRuneLocale
 D __DefaultRuneLocale
 D __dyld_find_unwind_sections
-D __dyld_is_memory_immutable
 D __dyld_register_func_for_remove_image
 D __PathLocale
 D __xpc_runtime_is_app_sandboxed
@@ -6582,7 +6581,6 @@ D _gmtime
 D _gmtime_r
 D _localtime
 D _localtime_r
-D _malloc_size
 D _mbsnrtowcs
 D _mbsnrtowcs_l
 D _memcpy
@@ -6617,7 +6615,6 @@ D _timegm
 D _timelocal
 D _timeoff
 D _timezone$UNIX2003
-D _tlv_get_addr
 D _trunc
 D _tzname
 D _tzset

@@ -110,14 +110,18 @@ if [ ! -f "$RTLIB" ]; then
     exit 1
 fi
 
-# Real __cxa_atexit/malloc_size compat this same combination already
-# needed for libdyld.dylib -- reused, not re-derived. pthread-fork-child/
-# TLV/mkdirat pieces in that same file are harmless here too (same real
-# archive combination, same real gaps).
-if [ ! -f "$OUT/libdyld/compat_misc.o" ]; then
-    echo "error: $OUT/libdyld/compat_misc.o not found -- run build_libdyld.sh first" >&2
-    exit 1
-fi
+# compat_misc.o (malloc_size/tlv_get_addr stubs) REMOVED from this
+# dylib's own link 2026-08-31 (static-linking cleanup, dylib-vs-dylib
+# duplicate-symbol pass): confirmed via `nm -u` that neither of this
+# dylib's own project-authored objects (dyld_initializer_compat.o is the
+# only one) references either symbol -- only libdyld.dylib's own
+# LibSystemHelpers.o (real Apple dyld source) does, and that object is
+# never compiled into this dylib at all. The copy here was pure,
+# unreferenced duplication of libdyld.dylib's real, structurally-needed
+# one (LibSystemHelpers::malloc_size()/getTLVGetAddrFunc() -- see
+# libdyld_compat_misc.c's own per-function comments), not a second
+# consumer that legitimately needed its own. Real single owner:
+# libdyld.dylib.
 
 # dyld_unwind_shim_compat.c REMOVED 2026-08-30 (static-linking cleanup,
 # dylib-vs-dylib duplicate-symbol pass). This comment used to (correctly,
@@ -131,10 +135,12 @@ fi
 # own header comment). This dylib already `-Wl,-reexport_library`s
 # libunwind.dylib below (and libc++.dylib, which itself depends on
 # libunwind.dylib) -- confirmed via nm -m that this SCRATCH object was
-# the ONLY remaining local definition of all 3 symbols in this dylib
-# (compat_misc.o, the other object on this link line, defines neither).
-# Removing it lets the real reexport chain actually supply them instead
-# of a second, independently-compiled stub copy at a different address.
+# the ONLY remaining local definition of all 3 symbols in this dylib at
+# the time (compat_misc.o, the other object on this link line back then,
+# defined neither -- and was itself removed from this link entirely on
+# 2026-08-31, see the comment above). Removing it let the real reexport
+# chain actually supply them instead of a second, independently-compiled
+# stub copy at a different address.
 
 # libmalloc.a/libpthread.a and the libmalloc_dispatch.o trim-and-rebuild
 # dance that used to live here are gone as of static-to-dylib migration
@@ -222,7 +228,6 @@ rm -f "$OUT/system/libSystem.B.dylib"
     -Wl,-U,__dyld_initializer \
     -o "$OUT/system/libSystem.B.dylib" \
     "$OUT/libsystem/dyld_initializer_compat.o" \
-    "$OUT/libdyld/compat_misc.o" \
     -Wl,-reexport_library,"$OUT/system/libsystem_kernel.dylib" \
     -Wl,-reexport_library,"$OUT/system/libsystem_platform.dylib" \
     -Wl,-reexport_library,"$OUT/system/libsystem_blocks.dylib" \

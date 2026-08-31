@@ -81,7 +81,7 @@ if [ ! -f "$OUT/libnotify.a" ] || [ ! -f "$OUT/libnotify_client.a" ]; then
     echo "error: libnotify.a / libnotify_client.a not found -- run build_libnotify.sh and build_libnotify_client.sh first" >&2
     exit 1
 fi
-for d in libsystem_c libsystem_malloc libsystem_platform libsystem_kernel libsystem_pthread libdispatch libsystem_blocks libncurses; do
+for d in libsystem_c libsystem_malloc libsystem_platform libsystem_kernel libsystem_pthread libdispatch libsystem_blocks libncurses libdyld; do
     if [ ! -f "$OUT/system/$d.dylib" ]; then
         echo "error: $OUT/system/$d.dylib not found -- run build_${d}.sh first" >&2
         exit 1
@@ -115,6 +115,22 @@ fi
 # `_fileport_makeport` (confirmed via nm -m) now resolves there instead.
 rm -f "$EXTRACT/notify_fileport_syscalls.o"
 
+# notify_dyld_compat.o REMOVED from THIS dylib's own extract dir 2026-08-31
+# (static-linking cleanup, dylib-vs-dylib duplicate-symbol pass) -- same
+# "extract everything, then drop the one member a real sibling now
+# covers" treatment as notify_fileport_syscalls.o above. That file's own
+# header comment ("this project's fully-static (no dyld) build") is
+# stale: real dyld exists now (Phase 6.5), and this project's real
+# libdyld.dylib genuinely implements `_dyld_is_memory_immutable()` for
+# real (libdyldGlue.cpp, real Apple source) -- notify_client.o's one
+# call site (`_notify_strdup_if_mutable()`) gets the real answer instead
+# of this project's own honest-but-now-superseded "always false" stand-in.
+# libdyld.dylib does not depend on libsystem_notify.dylib (confirmed via
+# `otool -L`), so linking it here is not circular. Left in place inside
+# libnotify_client.a itself (unchanged) for any other, still-static
+# consumer of that archive.
+rm -f "$EXTRACT/notify_dyld_compat.o"
+
 # REAL BUG FOUND+FIXED 2026-08-29: creat/shm_open/usleep/
 # os_fault_with_payload/os_variant_has_internal_diagnostics were
 # deferred via `-Wl,-U` on the assumption an unreached symbol is
@@ -143,6 +159,7 @@ rm -f "$OUT/system/libsystem_notify.dylib"
     "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/system/libsystem_pthread.dylib" "$OUT/system/libdispatch.dylib" \
     "$OUT/system/libsystem_blocks.dylib" "$OUT/system/libncurses.dylib" \
+    "$OUT/system/libdyld.dylib" \
     2>"$OUT/libsystem_notify_link.err" \
     && echo "wrote $OUT/system/libsystem_notify.dylib" \
     || { echo "libsystem_notify.dylib link found real undefined symbols:" >&2; grep '^  "' "$OUT/libsystem_notify_link.err" | sed 's/,.*//' | sort -u >&2; cat "$OUT/libsystem_notify_link.err" >&2; exit 1; }
@@ -159,9 +176,9 @@ otool -hv "$OUT/system/libsystem_notify.dylib" | grep -q " DYLIB " || {
 # else bound to a real, named sibling dylib.
 echo "declared -Wl,-U deferrals (expect: <flat-namespace> bind target, resolved at real load time):"
 xcrun dyld_info -fixups "$OUT/system/libsystem_notify.dylib" 2>/dev/null | grep '<flat-namespace>' | awk '{print "  " $NF}'
-UNEXPECTED=$(xcrun dyld_info -fixups "$OUT/system/libsystem_notify.dylib" 2>/dev/null | grep -v -E '<flat-namespace>|<weak-def-coalesce>' | grep 'bind' | grep -v -E 'libsystem_c/|libsystem_malloc/|libsystem_platform/|libsystem_kernel/|libsystem_pthread/|libdispatch/|libsystem_blocks/|libncurses' || true)
+UNEXPECTED=$(xcrun dyld_info -fixups "$OUT/system/libsystem_notify.dylib" 2>/dev/null | grep -v -E '<flat-namespace>|<weak-def-coalesce>' | grep 'bind' | grep -v -E 'libsystem_c/|libsystem_malloc/|libsystem_platform/|libsystem_kernel/|libsystem_pthread/|libdispatch/|libsystem_blocks/|libncurses|libdyld/' || true)
 if [ -n "$UNEXPECTED" ]; then
-    echo "error: real, unexpected non-sibling bind targets found (not flat-namespace, not one of the 7 linked sibling dylibs):" >&2
+    echo "error: real, unexpected non-sibling bind targets found (not flat-namespace, not one of the 8 linked sibling dylibs):" >&2
     echo "$UNEXPECTED" >&2
     exit 1
 fi

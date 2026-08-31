@@ -1181,3 +1181,118 @@ DAR-8 (libdyld, `___progname` fixed, `_dlclose` still open), DAR-9
 (libxpc, 6→3), DAR-12 (libcopyfile, 11→8) all commented with full detail
 and left open (each has a real remainder). No ticket fully cleared this
 session, so none self-closed.
+
+## Session 2026-08-31 (continuation 4): libSystem.B.dylib/libsystem_notify.dylib now-stale pre-dyld stubs replaced with libdyld.dylib's real ones
+
+`dup_symbol_audit.sh --summary` total: **94 → 91**, QEMU-verified.
+
+Picked a coherent theme not yet swept: symbols that were duplicated
+because a sibling dylib hand-rolled its own honest stub "back when this
+project had no dyld at all" -- reasoning that Phase 6.5's real dyld has
+since made stale in at least two concrete, fixable cases (a third,
+`libcxx_dlfcn_stub.c`'s `dlopen`/`dlsym`, turned out to still be
+structurally necessary once actually checked -- see below).
+
+### `libSystem.B.dylib`'s `_malloc_size`/`_tlv_get_addr`: pure dead duplication, not a second consumer
+
+`build_libsystem.sh` linked `$OUT/libdyld/compat_misc.o` (`libdyld_
+compat_misc.c` -- two `libdyld.dylib`-authored stub functions, both
+unconditional `return 0`/`NULL`, reused "same combination already
+needed for libdyld.dylib" per the script's own old comment) into
+`libSystem.B.dylib`'s own link. Checked whether libSystem.B.dylib
+actually needed either symbol via `nm -u` on its own one project-
+authored object (`dyld_initializer_compat.o`): it does not reference
+`malloc_size` or `tlv_get_addr` at all. Only `libdyld.dylib`'s own
+`LibSystemHelpers.o` (real, unmodified Apple dyld source) does, and that
+object is never compiled into libSystem.B.dylib. The copy here was
+therefore pure, unreferenced duplication -- not a second legitimate
+consumer needing its own copy the way DAR-13's memcpy/memset genuinely
+is. Fix: dropped the dependency check + link-line entry entirely.
+`libSystem.B.dylib` now has **zero** local exports -- a pure reexport
+umbrella, matching real Apple's own libSystem.dylib architecture even
+more closely than before this fix.
+
+### `libsystem_notify.dylib`'s `__dyld_is_memory_immutable`: real dyld now exists, so link it instead of hand-rolling it
+
+`notify_dyld_compat.c` (`libsystem_notify.dylib`, compiled as part of
+`libnotify_client.a`) always returned `false` from
+`_dyld_is_memory_immutable()`, justified by its own header comment as
+"this project's fully-static (no dyld) build". Stale since Phase 6.5:
+this project's real `libdyld.dylib` genuinely implements this function
+for real (from real, unmodified `libdyldGlue.cpp` Apple source).
+Confirmed via `otool -L` that `libdyld.dylib` does not depend on
+`libsystem_notify.dylib` (no cycle), so added `libdyld.dylib` as a real
+sibling link dependency in `build_libsystem_notify.sh` and excluded
+`notify_dyld_compat.o` from this dylib's own `ar x` extraction -- same
+treatment `notify_fileport_syscalls.o` already got in an earlier
+session, left untouched inside `libnotify_client.a` itself for whatever
+other still-static consumer needs it. Real, minor correctness
+improvement, not just symbol hygiene: `_notify_strdup_if_mutable()`'s
+one call site now gets the real answer instead of always taking the
+non-optimal "assume mutable" path.
+
+### `libc++.dylib`'s `_dlopen`/`_dlsym`: investigated, confirmed genuinely structural (not fixed)
+
+Same "no dyld at all" stale-reasoning shape as the notify fix above, but
+here the real, current reason turned out to still hold: `libcxx_dlfcn_
+stub.c`'s comment was updated to state it correctly, but the code itself
+was not changed. Confirmed via `otool -L` that `libdyld.dylib` already
+links `libc++.dylib` directly (a real dependency, for C++ runtime
+support) -- so `libc++.dylib` linking `libdyld.dylib` back to get its
+real `dlopen`/`dlsym` would be a genuine mutual-dependency cycle between
+the two dylibs, the same shape already established for `libunwind.
+dylib`'s dyld-unwind trio (DAR-18) and `libsystem_malloc.dylib`'s
+memcpy/memset (DAR-13). Left as a documented structural duplicate, not
+touched further.
+
+### `libdyld.dylib`'s `_vproc_swap_integer` vs `libxpc.dylib`: investigated, deliberately deferred (real behavioral risk, not structural)
+
+`libxpc.dylib`'s copy (`libvproc.c`, real PureDarwin source) is a full,
+real Mach-MIG implementation that talks to a real launchd via
+`bootstrap_port`; `libdyld.dylib`'s own copy (`libdyld_vproc_compat.c`)
+is an honest "never launchd-managed" stub. Unlike the three cases above,
+no link cycle blocks consolidating -- `libdyld.dylib` doesn't currently
+depend on `libxpc.dylib` and technically could. Not fixed anyway: doing
+so would mean dyld's own early process-bootstrap path starts making real
+Mach IPC calls toward a bootstrap-port-owning launchd that may not be up
+yet this early in launch on this launchd-less-at-boot project -- a real
+behavioral-risk question, not a mechanical symbol move, and out of scope
+for a duplicate-symbol batch. Flagged for a dedicated session with its
+own QEMU verification, same treatment as `libdyld.dylib`'s other real
+remainder, `_dlclose` (vs `libopenpam.dylib`, still open, still not
+attempted).
+
+### Real QEMU verification
+
+Rebuilt only the two dylibs actually changed (`libSystem.B.dylib`,
+`libsystem_notify.dylib` -- `libdyld.dylib` itself was not touched, it
+was already the correct real owner in both fixed cases). Swept every
+built `.macho` via `xcrun dyld_info -fixups` for a stale bind to
+`libSystem.B/_malloc_size`, `libSystem.B/_tlv_get_addr`, or
+`libsystem_notify/__dyld_is_memory_immutable` before declaring done --
+zero hits, confirming nothing ever actually consumed these symbols from
+these specific dylibs (consistent with both being pure, never-called
+duplication). No binary needed relinking. Ran `tools/init_binary/
+inject_into_sd_image.sh` to refresh the SD image's dylibs, then `tools/
+boot_test.py` (log `qemu/static_link_batch7_dyld_helpers_boot.log`).
+Diffed against the prior session's own known-good log
+(`static_link_batch6_socket_family_boot.log`) with hex addresses
+stripped: identical apart from expected QEMU/TCG scheduling-order
+jitter (reordered `_IOConfigThread::main entered` lines, a couple-page
+vm_page_bootstrap count delta) -- confirmed via a direct grep for
+error/fail/panic/"not found"/abort across both sorted logs, zero new
+hits. Zero panics (checked past the benign, already-documented
+`DIAG: first_panic latched=...` string), zero "Symbol not found".
+
+### Linear
+
+DAR-17 (libSystem.B.dylib, 6→0) and DAR-19 (libsystem_notify.dylib,
+3→0, the last 1 of which was this session's fix) both fully cleared and
+self-closed with full before/after detail. DAR-8 (libdyld.dylib, 31→7
+since ticket creation) commented with the current, fully re-categorized
+7: 3 already-structural (DAR-18), 2 newly-confirmed-structural this
+session (`_dlopen`/`_dlsym`), and 2 real, still-open, deliberately
+deferred remainders (`_dlclose`, `_vproc_swap_integer`) -- left open.
+
+Baseline updated (`dup_symbol_audit.sh --update-baseline`) to lock in
+94→91.
