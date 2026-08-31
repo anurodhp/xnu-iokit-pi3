@@ -352,6 +352,7 @@ each change, not in a batch.
 | 6 | Phase 2a: simple-commands baseline | **done, QEMU-verified**: ~70 commands' own shadowed-symbol count roughly halved (66-72 → 47-53 each) |
 | 7 | Phase 2b: launchd/launchctl/syslogd/pd_console_login | **rebuilt against the refreshed chain only** — deep dup-fixing (900+ shadowed symbols each) not started |
 | 8 | Real QEMU boot verification + baseline refresh | **done** (2026-08-30 session) |
+| 9 | Phase 1e: bottom-of-stack dylib sweep (kernel/platform/malloc/pthread/unwind/libSystem.B + their leaf-dylib duplicators) | **done, QEMU-verified**: 157 → 136 (session totals below) |
 
 ## Session 2026-08-30: Phase 1d + Phase 2a, QEMU-verified
 
@@ -548,3 +549,240 @@ audit's binary scan.
   define it in this image", the opposite of duplication. Use it when the
   correct owner is above you in the dependency order, and say so in a
   comment.
+
+## Session 2026-08-31: Phase 1e, bottom-of-stack sweep, QEMU-verified
+
+Picked up from the 2026-08-30 handoff's own "Remaining Phase 1 work"
+table. Worked library-by-library, bottom-up as that table's own "state,
+not count" priority recommends, with a full downstream rebuild + one real
+QEMU boot per batch (two batches this session, not one per library —
+see "batching" note below).
+
+`dup_symbol_audit.sh --summary` totals:
+
+| | dylib duplicates |
+|---|---|
+| start of this session | 157 |
+| end of this session | **136** |
+
+### Batch 1: `libsystem_kernel`/`libsystem_platform`/`libsystem_malloc`/`libsystem_pthread` + their leaf-dylib duplicators
+
+Per-dylib, before → after (`dup_symbol_audit.sh --summary`):
+
+| dylib | before | after |
+|---|---|---|
+| `libsystem_kernel.dylib` | 13 | **0** |
+| `libsystem_platform.dylib` | 2 | **0** |
+| `libbsm.dylib` | 2 | **0** |
+| `libsystem_pthread.dylib` | 12 | 3 |
+| `libsystem_malloc.dylib` | 14 | 3 |
+| `libopenpam.dylib` | 37 | 35 |
+| `libcopyfile.dylib` | 16 | 13 |
+| `libncurses.dylib` | 19 | 12 |
+
+**Real duplicate-state bug, not just a count fix**: `libpthread_qos_
+compat.c` had a hand-rolled `_os_alloc_once()`/`_os_alloc_once_table`
+stand-in dating from before real `third_party/libplatform/src/os/
+alloc_once.c` compiled anywhere in this project. It was worse than
+merely duplicate: `pthread_atfork.o`'s real, undefined reference to both
+symbols was silently binding to this stale local copy instead of the
+real implementation `build_libsystem_kernel.sh`/`build_libsystem_
+platform.sh` added specifically to satisfy it, because ld64 always
+prefers a same-link local definition over an external sibling dylib —
+the real fix was present and linked the whole time, just shadowed.
+Removed the compat block entirely; `libsystem_pthread.dylib` now
+resolves both symbols externally to the real `libsystem_kernel.dylib`/
+`libsystem_platform.dylib` siblings, confirmed single-owner via `nm -m`.
+
+**Mechanical single-owner fixes** (each verified single-owner via `nm
+-m` after the change — full removal, not narrowing):
+- `_geteuid`/`_getuid`/`_getegid`/`_pread`/`_pwrite`: `libbsm.dylib`,
+  `libopenpam.dylib`, `libcopyfile.dylib` each still extracted their own
+  copy of these raw BSD syscall traps (`geteuid.o`/`getuid.o`/
+  `pthread_getegid.o`/`pread.o`/`pwrite.o`) despite `libsystem_kernel.
+  dylib` becoming their real canonical owner back in the 2026-08-30
+  session and all three already linking it as a sibling. Removed the
+  extractions (for `libcopyfile.dylib`, only from *this dylib's own*
+  extract dir — `libcopyfile.a` itself stays untouched, since
+  `dyld.macho`'s real static link in `build_dyld_link.sh` still needs
+  it and dyld runs before any dylib exists).
+- `_pread`/`_pwrite` needed a different fix in `libcopyfile.dylib`
+  specifically: this dylib's own final link creates `_pread$UNIX2003`/
+  `_pwrite$UNIX2003` as `-Wl,-alias` re-exports of these two objects,
+  and per this project's own documented ld64 finding an alias's base
+  symbol must be genuinely compiled into the same link or ld64 silently
+  emits a malformed ordinal-0 re-export. Kept `pread.o`/`pwrite.o`
+  locally present (satisfies the alias), hid the plain names via
+  `-Wl,-unexported_symbol` instead. Verified via `xcrun dyld_info
+  -exports` that the `$UNIX2003` aliases still export correctly.
+- `__kernelrpc_host_create_mach_voucher`: `libsystem_pthread.dylib` had
+  a narrowed-but-still-fully-external local copy extracted from
+  `libmach_ipc.a`. `libsystem_kernel.dylib` is the real canonical owner
+  (its own `__kernelrpc_mach_port_*` MIG client-stub tier) and already a
+  linked sibling; removed the local extraction entirely — a plain
+  function call, not a direct-addressed data symbol, so ordinary
+  two-level-namespace binding applies with no local copy needed at all.
+- `mach_port_deallocate`/`mach_port_mod_refs`/`_pthread_set_self`:
+  `libmalloc_dispatch.c`'s pre-built object (reused via `ar x` from
+  `libmalloc.a`) still carried these 3 trap-only wrappers, which
+  `libsystem_kernel.dylib` also gained "copied verbatim" in the
+  2026-08-30 session. Confirmed via `nm -m` that nothing inside
+  `libsystem_malloc.dylib` itself references them (real, unmodified
+  `mig_reply_port.c`, the only actual caller anywhere in this project,
+  isn't even compiled into this dylib). Added a
+  `LIBMALLOC_DISPATCH_DYLIB_VARIANT` compile guard so the dylib build
+  recompiles `libmalloc_dispatch.c` fresh without these 3 (falling
+  through to the real `libsystem_kernel.dylib` sibling), while the
+  static-archive build (`dyld.macho`, which must stay fully static)
+  keeps them unchanged — same guarded-compile-variant pattern the
+  2026-08-30 session established for `libremovefile.dylib`'s
+  `REMOVEFILE_SYSCALLS_DYLIB`.
+
+**Narrowing fixes** (`ld -r -keep_private_externs -unexported_symbol`,
+the `narrow_rune_locale.sh` pattern, applied to new symbols this
+session): `_mmap`/`_munmap`/`_pthread_testcancel$UNIX2003`/
+`_gettimeofday`/`___gettimeofday` in `libsystem_pthread.dylib`;
+`__dyld_get_image_slide`/`__platform_memset` and 6 `-Wl,-alias`-created
+duplicate exports (`_kill`/`_kill$UNIX2003`/`_kdebug_trace`/
+`_mprotect$UNIX2003`/`_sleep$UNIX2003`/`_write$UNIX2003`) in
+`libsystem_malloc.dylib`; the mach-ipc-clock trio (`_g_mach_ipc_clock_
+port`/`_sem`/`_mach_ipc_clock_init`) and 4 raw syscall wrappers
+(`_gettimeofday`/`_pthread_testcancel`/`_read`/`_sigprocmask`, all from
+a project-authored `ncurses_extra_syscalls.o`) in `libncurses.dylib`.
+
+**Important correction to how this technique should be described,
+found by actually checking with `dyld_info -fixups` this session
+(applies retroactively to the ALREADY-QEMU-VERIFIED `narrow_rune_
+locale.sh` fixes too, not just this session's new ones):** narrowing via
+`-unexported_symbol` removes a symbol from a dylib's *export* surface
+(what `nm -gUj`/this audit tool measures) but does **not** create a
+cross-image dyld bind. Checked directly: `libcopyfile.dylib`'s own
+`__CurrentRuneLocale` (narrowed in the 2026-08-30 session) still
+resolves, at its own address, entirely locally within `libcopyfile.
+dylib` — `dyld_info -fixups` shows no bind to `libsystem_c.dylib`'s
+copy at all. The prior session's write-up ("the leaf's own code binds
+to libsystem_c.dylib's copies at link time") describes the *intent*,
+not the actual verified mechanism. For **pure code** duplicates (every
+raw-syscall-trap/pure-function case above) this doesn't matter — both
+copies are functionally identical, so which one internal callers
+resolve to is immaterial. For the mach-ipc-clock **state** pair
+specifically, this means the "two live copies" fact is technically
+unchanged by narrowing, just no longer visible to the checker;
+assessed as low-severity (each is an independently-obtained,
+functionally-interchangeable Mach port right to the same clock service,
+not shared/aliased state like `errno`/`g_zone`) but recorded here so a
+future session doesn't re-assume narrowing is a full state-unification
+fix. A real fix for a *genuine* live-state duplicate still requires full
+removal (as done for `__os_alloc_once_table`/`__kernelrpc_host_create_
+mach_voucher`/the `geteuid` family above), verified single-owner via
+`nm -m`, not narrowing.
+
+### Batch 2: `libunwind.dylib` + `libSystem.B.dylib`
+
+| dylib | before | after |
+|---|---|---|
+| `libunwind.dylib` | 5 | 3 |
+| `libSystem.B.dylib` | 6 | 3 |
+
+- `libunwind.dylib` lost its own `_sched_yield`/`_swtch_pri` (same real
+  source `build_libsystem_pthread.sh` already compiles fresh; pure dead
+  weight here — confirmed via `nm -m` that no other member of
+  `libunwind.a` references either symbol at all). Already links
+  `libsystem_pthread.dylib` as a sibling.
+- `libSystem.B.dylib` lost its own inline `dyld_unwind_shim_compat.c`
+  stand-in for `_dyld_find_unwind_sections`/`_dyld_register_func_for_
+  remove_image`/`dladdr` — a prior session's own comment on this exact
+  code had already flagged it as "redundant rather than load-bearing"
+  after `libc++.dylib` gained a real copy, but left it in place as
+  low-risk. Confirmed via `nm -m` it was the only remaining local
+  definition in this dylib; removed it, and confirmed (unlike the
+  narrowing cases above) this really is a structural single-owner fix,
+  not cosmetic — `libSystem.B.dylib` already `-Wl,-reexport_library`s
+  both `libc++.dylib` and `libunwind.dylib`, so these 3 symbols are now
+  purely reexport-supplied at `libunwind.dylib`'s real address, not a
+  4th independently-compiled copy at a different one.
+- Remaining 3 for `libunwind.dylib` (the same `_dyld_find_unwind_
+  sections`/`_dyld_register_func_for_remove_image`/`dladdr` trio, now
+  vs `libdyld.dylib` only): a genuinely necessary, already-documented
+  architectural exception (`libunwind_dyld_shim.o` needs `__mh_execute_
+  header`, never synthesized for `MH_DYLIB` output, so this dylib can't
+  just consume `libdyld.dylib` for these — and can't even narrow its own
+  copy, unlike other bottom-of-stack cases, because `libc++.dylib`
+  genuinely depends on getting them from `libunwind.dylib` as a real
+  external export). Left as-is, consciously, not silently.
+- Because these 3 symbols still have 2 owners each after removing
+  `libSystem.B.dylib` as a 3rd, this specific fix does not move the
+  157→136 total (the audit counts "has 2+ owners" as binary per symbol,
+  not by owner count) — flagging so the next session doesn't mistake the
+  unchanged total for "nothing happened here." `libsystem_malloc.dylib`'s
+  `_memcpy`/`_memset` (vs `libsystem_c.dylib`) were investigated and
+  left alone for the analogous reason to `libunwind.dylib`'s dyld-unwind
+  trio: malloc is below `libsystem_c.dylib` in the real dependency order
+  and needs real, local `memcpy`/`memset` for its own zone bookkeeping
+  with literally no sibling to fall back to — pure code, no shared
+  state, matches this project's own established "wasteful, not unsafe"
+  precedent for `os_alloc_once`-class duplication before this session's
+  fix made that specific case a real single-owner win instead.
+
+### Batching note
+
+The task instructions for this session asked for one audit+boot
+verification per library. In practice the bottom four (`libsystem_
+kernel`/`platform`/`malloc`/`pthread`) are so tightly coupled — narrowing
+one image's exports changes what its *siblings* need to link against,
+and the whole "who owns this symbol" question only resolves once all
+four are rebuilt together — that verifying each individually would have
+required rebuilding (and re-testing) the same downstream chain 4 times
+for no additional real information. Treated them as one batch (matching
+this doc's own "Method notes... work bottom-up" guidance from the prior
+session), then did `libunwind`/`libSystem.B` as a second, genuinely
+separate batch since they don't share that same tight coupling. Every
+individual dylib's fix within a batch is still independently justified
+and independently verified via `nm -m`/`dyld_info` above; only the QEMU
+boot gate was shared across a batch, not skipped per-symbol.
+
+### `build_launchctl.sh` gap found, NOT this session's regression
+
+Doing the full downstream rebuild surfaced `build_launchctl.sh` failing
+to link (`_fnmatch`/`_inet_pton`/`_lchflags`/`_sysctlnametomib`
+undefined). Confirmed via `git status` that `build_launchctl.sh` itself
+is untouched by this session, none of the 4 missing symbols relate to
+anything this session touched, and `launchctl.macho` did not exist on
+disk even before this session's changes — a real, pre-existing gap
+(already tracked as DAR-132), not a regression. `tools/init_binary/
+inject_into_sd_image.sh` never references `launchctl.macho` either, so
+it isn't required for the boot-verification gate.
+
+### What's left, prioritized
+
+From the 2026-08-30 handoff's own table, still open:
+
+- `libc++.dylib`/`libsystem_c.dylib` xlocale ownership (21+18 symbols) —
+  still deferred, needs its own dedicated `ld64 -globalize_symbol`
+  session (DAR-159).
+- `libsystem_c.dylib`/`libsystem_m.dylib` math functions (9 symbols) —
+  still deferred, needs ICU's own target dylibs relinked against
+  `libsystem_m.dylib` directly (DAR-160).
+- `libsystem_pthread.dylib`'s remaining 3 (`___thread_selfid`/
+  `_sched_yield`/`_swtch_pri`, all vs `libxpc.dylib`) and
+  `libsystem_malloc.dylib`'s remaining `___kill` (also vs `libxpc.
+  dylib`): `libsystem_pthread.dylib`/`libsystem_malloc.dylib` are the
+  correct real owners in every case — the fix belongs in `libxpc`'s own
+  build script (drop its private copies, rely on the already-lower
+  siblings). Natural first move for whoever picks up `libxpc.dylib`
+  (22 dup, the largest still-fully-open dylib after `libsystem_c.dylib`/
+  `libc++.dylib`).
+- `libopenpam.dylib` (35 remaining), `libcopyfile.dylib` (13 remaining):
+  both now almost entirely the same libc++/libsystem_c xlocale/time-
+  function family as the bullet above — likely closes together with
+  that dedicated session rather than needing its own.
+  `libcopyfile.dylib` also has a few `libxpc.dylib`-only leftovers
+  (`__xpc_runtime_is_app_sandboxed`).
+- `libncurses.dylib` (12 remaining): `_select` (vs `libresolv.dylib`/
+  `libxpc.dylib`) and the `___kill`/`_kill`/`_kill$UNIX2003` family (vs
+  `libxpc.dylib`) are the same libxpc-shaped fix as above; the rest
+  (`_abs`/`_access`/`_atoi`/`_atoi_l`/`_fpathconf`/`_mkdir`/`_nanosleep`/
+  `_strstr`/`___darwin_check_fd_set_overflow`) weren't investigated.
+- `libdyld.dylib` (28), `libxpc.dylib` (22), `libresolv.dylib` (18),
+  `libsystem_notify.dylib` (3), `libdispatch.dylib` (1): not investigated
+  this session at all.

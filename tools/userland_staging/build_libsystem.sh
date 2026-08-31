@@ -119,30 +119,22 @@ if [ ! -f "$OUT/libdyld/compat_misc.o" ]; then
     exit 1
 fi
 
-# libunwind.a scratch-exclusion trick removed (static-to-dylib migration
-# step 5) -- real libc++.dylib below already resolves this internally.
-# dyld_unwind_shim_compat.c itself stays: libc++.dylib DOES now export
-# real (if stub) _dyld_find_unwind_sections/dladdr too (confirmed via
-# nm -g), making this copy redundant rather than load-bearing, but
-# removing it isn't a correctness fix (both are pure, stateless stubs)
-# so it's left as-is rather than risking an unrelated change here.
-SCRATCH="$OUT/libsystem_scratch"
-rm -rf "$SCRATCH"
-mkdir -p "$SCRATCH"
-cat > "$SCRATCH/dyld_unwind_shim_compat.c" << 'EOF'
-int _dyld_find_unwind_sections(void *addr, void *info) {
-    (void)addr; (void)info;
-    return 0;
-}
-void _dyld_register_func_for_remove_image(void (*func)(const void *, unsigned long)) {
-    (void)func;
-}
-void *dladdr(const void *addr, void *info) {
-    (void)addr; (void)info;
-    return 0;
-}
-EOF
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c "$SCRATCH/dyld_unwind_shim_compat.c" -o "$SCRATCH/dyld_unwind_shim_compat.o"
+# dyld_unwind_shim_compat.c REMOVED 2026-08-30 (static-linking cleanup,
+# dylib-vs-dylib duplicate-symbol pass). This comment used to (correctly,
+# at the time) note the copy was "redundant rather than load-bearing"
+# once libc++.dylib gained its own real `_dyld_find_unwind_sections`/
+# `dladdr` stubs -- but left it in place as low-risk. Real state since
+# then (Session 2026-08-30, see docs/static-linking-cleanup-plan.md):
+# libc++.dylib's own copy was ALSO removed once it started genuinely
+# linking libunwind.dylib as a real sibling -- libunwind.dylib is real
+# Apple's actual home for these 3 symbols (build_libunwind_dylib.sh's
+# own header comment). This dylib already `-Wl,-reexport_library`s
+# libunwind.dylib below (and libc++.dylib, which itself depends on
+# libunwind.dylib) -- confirmed via nm -m that this SCRATCH object was
+# the ONLY remaining local definition of all 3 symbols in this dylib
+# (compat_misc.o, the other object on this link line, defines neither).
+# Removing it lets the real reexport chain actually supply them instead
+# of a second, independently-compiled stub copy at a different address.
 
 # libmalloc.a/libpthread.a and the libmalloc_dispatch.o trim-and-rebuild
 # dance that used to live here are gone as of static-to-dylib migration
@@ -208,7 +200,7 @@ rm -f "$OUT/system/libSystem.B.dylib"
     -Wl,-fixup_chains \
     -Wl,-U,__dyld_initializer \
     -o "$OUT/system/libSystem.B.dylib" \
-    "$SCRATCH/dyld_unwind_shim_compat.o" "$OUT/libsystem/progname_compat.o" \
+    "$OUT/libsystem/progname_compat.o" \
     "$OUT/libsystem/dyld_initializer_compat.o" \
     "$OUT/libdyld/compat_misc.o" \
     -Wl,-reexport_library,"$OUT/system/libsystem_kernel.dylib" \

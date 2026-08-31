@@ -107,7 +107,17 @@ if [ ! -x "$NEWLD_BINDIR/ld" ]; then
 fi
 
 (cd "$EXTRACT" && ar x "../../libbsm.a")
-(cd "$EXTRACT" && ar x "../../syslogd_libc_extras.a" geteuid.o getuid.o)
+# geteuid.o/getuid.o REMOVED 2026-08-30 (static-linking cleanup,
+# dylib-vs-dylib duplicate-symbol pass): these two objects' own real
+# _geteuid/_getuid syscall wrappers are, as of 2026-08-29 (see
+# build_libsystem_kernel.sh's own "geteuid/getegid" comment), ALSO real
+# exports of libsystem_kernel.dylib -- real Apple's actual home for
+# every raw BSD syscall trap. This dylib already links
+# libsystem_kernel.dylib as a sibling below, so libbsm.a's own undefined
+# references to _geteuid/_getuid now resolve there instead of a second,
+# private copy. Confirmed via nm -m that both symbols are fully
+# external (not private-extern) in libsystem_kernel.dylib, i.e. a real
+# duplicate export, not a false positive.
 
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libbsm.dylib"

@@ -93,12 +93,60 @@ fi
 MEMBERS="bitarray.o magazine_large.o magazine_malloc.o magazine_medium.o magazine_rack.o \
     magazine_small.o magazine_tiny.o malloc_printf.o vm.o simple_string_io.o \
     memcpy_chk.o memset_chk.o chk_fail.o memcpy.o memset.o \
-    libmalloc_sleep_shim.o libmalloc_dispatch.o pthread_tsd_shim.o \
+    libmalloc_sleep_shim.o pthread_tsd_shim.o \
     sys_getpid.o sys_mprotect.o sys_kill.o sys_write.o sys_madvise.o sys_kdebug_trace.o \
     sys_exit.o sys_semwait_signal.o"
 rm -rf "$OUT/libsystem_malloc/extracted"
 mkdir -p "$OUT/libsystem_malloc/extracted"
 (cd "$OUT/libsystem_malloc/extracted" && ar x "../../libmalloc.a" $MEMBERS)
+
+# libmalloc_dispatch.o recompiled fresh here (NOT `ar x`-extracted from
+# libmalloc.a like the rest of MEMBERS) 2026-08-30 (static-linking
+# cleanup, dylib-vs-dylib duplicate-symbol pass): the pre-built object
+# in libmalloc.a carries real, working `_pthread_set_self`/
+# `mach_port_deallocate`/`mach_port_mod_refs` for its OTHER, static-only
+# consumers (dyld.macho via build_dyld_link.sh, which must stay fully
+# static and cannot link any dylib) -- but those 3 duplicate real
+# exports libsystem_kernel.dylib already has (see that script's own
+# comment: "copied verbatim from ... libmalloc_dispatch.c"), and nothing
+# else in THIS dylib references them locally (confirmed via nm -m on
+# every other MEMBERS object). LIBMALLOC_DISPATCH_DYLIB_VARIANT (see
+# libmalloc_dispatch.c's own header comment on this exact guard) compiles
+# a variant without those 3, so this dylib falls through to the real
+# libsystem_kernel.dylib sibling it already links below instead.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -DPRIVATE=1 -D_LIBC_NO_FEATURE_VERIFICATION -DLIBMALLOC_DISPATCH_DYLIB_VARIANT=1 -I libc_build/compat_include \
+    libmalloc_dispatch.c -o "$OUT/libsystem_malloc/extracted/libmalloc_dispatch_dylib.o"
+
+# __dyld_get_image_slide/__platform_memset narrowed to private-extern:
+# this dylib is BELOW libdyld.dylib AND libsystem_platform.dylib in the
+# real dependency order for these two specific symbols (malloc cannot
+# link dyld back -- circular, dyld itself needs malloc to allocate
+# memory; and while malloc DOES link libsystem_platform.dylib as a
+# sibling below, this file's own `_platform_memset` predates that real
+# sibling existing at all -- see this file's own header comment: "there
+# is NO real _platform_memset source anywhere in this [checkout]", so
+# it's a genuine hand-written stand-in, not merely stale), so real,
+# unmodified vm.c's mvm_aslr_init() and the magazine allocator's own
+# memset(-via-macro) calls genuinely need local definitions here (same
+# bottom-of-stack necessity as pthread_tsd_shim.o above) -- but nothing
+# OUTSIDE this dylib should ever bind to malloc's own copies instead of
+# libdyld.dylib's/libsystem_platform.dylib's real ones. Same
+# `ld -r -keep_private_externs -unexported_symbol` narrowing this
+# project already uses in narrow_rune_locale.sh/build_libdispatch_
+# dylib.sh's ___gettimeofday_with_mach/this script's own pthread_tsd_
+# shim.o block below.
+XCODE12_LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+"$XCODE12_LD" -r -arch arm64 -keep_private_externs \
+    -unexported_symbol __dyld_get_image_slide -unexported_symbol __platform_memset \
+    "$OUT/libsystem_malloc/extracted/libmalloc_dispatch_dylib.o" \
+    -o "$OUT/libsystem_malloc/extracted/libmalloc_dispatch.o"
+rm -f "$OUT/libsystem_malloc/extracted/libmalloc_dispatch_dylib.o"
+# Not `ar x`-extracted above (see comment there) -- added back to
+# MEMBERS here, after the freshly-compiled+narrowed object already
+# exists on disk under the same filename, purely so the final link's
+# `for m in $MEMBERS` loop below picks it up.
+MEMBERS="$MEMBERS libmalloc_dispatch.o"
 
 # pthread_tsd_shim.o narrowed 2026-08-30 (static-linking cleanup, Phase
 # 1d). Real constraint, not an oversight: libsystem_pthread.dylib itself
@@ -157,6 +205,19 @@ rm -f "$OUT/system/libsystem_malloc.dylib"
     # project builds no real dyld shared cache at all, so opting every
     # real dylib out is correct, not a workaround (docs/backlog.md item
     # d9's NEWLD_BINDIR sweep, 2026-08-28).
+# The 6 aliases below exist ONLY because this dylib's own magazine
+# allocator source calls these exact names internally (see the comment
+# above this link command) -- they were never meant to be PUBLIC
+# exports, and every one of them duplicates a real export already owned
+# elsewhere (libdyld.dylib/libsystem_c.dylib for the $UNIX2003/plain
+# forms) -- hidden via `-Wl,-unexported_symbol` right below each alias,
+# 2026-08-30 (static-linking cleanup, dylib-vs-dylib duplicate-symbol
+# pass). Real base symbols (___kill, ___kdebug_trace, _mprotect,
+# __mal_semwait_sleep, _write) are left exported -- they are NOT
+# themselves flagged duplicates today (see docs/static-linking-cleanup-
+# plan.md's session notes: ___kill vs libxpc's own separate copy is a
+# distinct, not-yet-fixed fact, deferred to a libxpc-focused pass rather
+# than folded in here).
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
     -install_name /usr/lib/system/libsystem_malloc.dylib \
     -Wl,-not_for_dyld_shared_cache \
@@ -169,6 +230,9 @@ rm -f "$OUT/system/libsystem_malloc.dylib"
     -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
     -Wl,-alias,__mal_semwait_sleep,'_sleep$UNIX2003' \
     -Wl,-alias,_write,'_write$UNIX2003' \
+    -Wl,-unexported_symbol,_kill -Wl,-unexported_symbol,'_kill$UNIX2003' \
+    -Wl,-unexported_symbol,_kdebug_trace -Wl,-unexported_symbol,'_mprotect$UNIX2003' \
+    -Wl,-unexported_symbol,'_sleep$UNIX2003' -Wl,-unexported_symbol,'_write$UNIX2003' \
     -o "$OUT/system/libsystem_malloc.dylib" \
     $(for m in $MEMBERS; do echo "$OUT/libsystem_malloc/extracted/$m"; done) \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib"

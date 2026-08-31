@@ -101,6 +101,30 @@ if [ ! -x "$NEWLD_BINDIR/ld" ]; then
 fi
 
 (cd "$EXTRACT" && ar x "../../libncurses.a")
+# ncurses_extra_syscalls.o narrowed 2026-08-30 (static-linking cleanup,
+# dylib-vs-dylib duplicate-symbol pass): this project-authored compat
+# file's own `_gettimeofday`/`_pthread_testcancel`/`_read`/
+# `_sigprocmask` all predate this dylib linking real libsystem_c.dylib/
+# libsystem_pthread.dylib as siblings (both already below on the final
+# link line) -- all four are real, fully-external duplicates of those
+# siblings' own real exports (confirmed via nm -m). Other real members
+# of libncurses.a (lib_getch.o/lib_mouse.o/read_entry.o/lib_tstp.o/
+# lib_twait.o/tty_update.o) hold real, undefined references to these
+# same names; narrowing just demotes ncurses_extra_syscalls.o's
+# definitions to local so those OTHER objects' references resolve
+# externally to the real siblings instead, same
+# `ld -r -keep_private_externs -unexported_symbol` technique as
+# narrow_rune_locale.sh. `_select` (also in this object, also a real
+# 3-way duplicate against libresolv.dylib/libxpc.dylib) is deliberately
+# LEFT ALONE here: this dylib does not currently link either sibling,
+# so narrowing it would turn a real duplicate into a real undefined-
+# symbol link failure -- deferred to a libresolv/libxpc-focused pass.
+XCODE12_LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+"$XCODE12_LD" -r -arch arm64 -keep_private_externs \
+    -unexported_symbol _gettimeofday -unexported_symbol _pthread_testcancel \
+    -unexported_symbol _read -unexported_symbol _sigprocmask \
+    "$EXTRACT/ncurses_extra_syscalls.o" -o "$EXTRACT/ncurses_extra_syscalls.o.narrowed"
+mv -f "$EXTRACT/ncurses_extra_syscalls.o.narrowed" "$EXTRACT/ncurses_extra_syscalls.o"
 (cd "$EXTRACT" && ar x "../../libc_locale.a" table.o none.o)
 # See narrow_rune_locale.sh's own header (static-linking cleanup, Phase
 # 1d, 2026-08-30): demotes the 4 public rune-locale globals table.o/
@@ -108,6 +132,41 @@ fi
 # instead of this dylib defining a second, independently-mutable copy.
 ./narrow_rune_locale.sh "$EXTRACT"
 (cd "$EXTRACT" && ar x "../../libmach_ipc.a" mach_ipc_clock_init.o)
+# Real duplicate-STATE bug found 2026-08-30 (static-linking cleanup,
+# dylib-vs-dylib duplicate-symbol pass), same shape as mach_task_self_/
+# g_zone: `_g_mach_ipc_clock_port`/`_g_mach_ipc_clock_sem` are real,
+# plain (__DATA,__common) globals caching a live Mach clock-service port
+# right and semaphore -- build_libsystem_kernel.sh's own comment already
+# documents this exact pair as duplicate state when it moved
+# libmach_ipc.a's whole MIG runtime there, but this dylib independently
+# extracts its OWN copy of the same mach_ipc_clock_init.o member, so a
+# process with both libncurses.dylib and libsystem_kernel.dylib loaded
+# had two live clock ports/semaphores. This dylib already links
+# libsystem_kernel.dylib as a sibling below, which owns the real
+# canonical copy.
+#
+# NOT simply removed: the header comment above already established
+# (empirically, via a real ld64 failure) that `simple_cmds_nanosleep_
+# pub_compat.o`'s references to these are direct-addressed data
+# symbols that need a real LOCAL definition present in this dylib's own
+# link -- `-Wl,-U` alone fails here the same way it does for the
+# rune-locale globals. Same fix as narrow_rune_locale.sh instead: keep
+# the real local definition (still satisfies the direct-address
+# relocations), but demote its externally-visible names via
+# `ld -r -keep_private_externs -unexported_symbol` so this dylib stops
+# ALSO being a second public exporter. Confirmed via nm -m that
+# `simple_cmds_nanosleep_pub_compat_c.o` (a real, separate member of
+# libncurses.a extracted above, this dylib's only real consumer) holds
+# genuine undefined references to all three names -- narrowing this
+# object's own definitions means THAT object's references now resolve
+# externally, at this dylib's own link time, to the real
+# libsystem_kernel.dylib sibling instead of the local copy.
+XCODE12_LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+"$XCODE12_LD" -r -arch arm64 -keep_private_externs \
+    -unexported_symbol _g_mach_ipc_clock_port -unexported_symbol _g_mach_ipc_clock_sem \
+    -unexported_symbol _mach_ipc_clock_init \
+    "$EXTRACT/mach_ipc_clock_init.o" -o "$EXTRACT/mach_ipc_clock_init.o.narrowed"
+mv -f "$EXTRACT/mach_ipc_clock_init.o.narrowed" "$EXTRACT/mach_ipc_clock_init.o"
 
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness \

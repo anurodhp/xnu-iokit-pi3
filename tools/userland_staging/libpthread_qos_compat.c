@@ -117,55 +117,44 @@ uint32_t __bsdthread_ctl(uintptr_t cmd, uintptr_t arg1, uintptr_t arg2, uintptr_
     return (uint32_t)syscall4(SYS_bsdthread_ctl, (long)cmd, (long)arg1, (long)arg2, (long)arg3);
 }
 
-/* Real gap: qos.c's own inline_internal.h:245 calls
- * os_alloc_once(OS_ALLOC_ONCE_KEY_LIBSYSTEM_PTHREAD, ...) -- same real
- * mechanism-present-but-never-compiled-here situation as syslogd's own
- * syslogd_alloc_once_compat.c (see that file's header for the full real
- * finding: third_party/libplatform/src/os/alloc_once.c itself doesn't
- * compile here due to a real os/atomic_private.h wall, but the
- * underlying primitive it would be built on, __os_once, is already
- * real and linked). This is a SEPARATE link unit from syslogd.macho
- * (this compiles into libdispatch.dylib, a different Mach-O image), so
- * reusing the identical real implementation here is not a duplicate-
- * symbol risk -- just the same real fix applied to its second real
- * consumer, with its own real, distinct per-consumer key. */
-typedef long os_once_t;
-typedef void (*os_function_t)(void *_Nullable_context);
-
-struct _os_alloc_once_s {
-    os_once_t once;
-    void *ptr;
-};
-
-extern void _os_once(os_once_t *predicate, void *context, os_function_t function);
-
-#define OS_ALLOC_ONCE_KEY_MAX 100
-#define OS_ALLOC_ONCE_KEY_LIBSYSTEM_PTHREAD 3
-struct _os_alloc_once_s _os_alloc_once_table[OS_ALLOC_ONCE_KEY_MAX];
-
-struct _pthread_qos_alloc_once_ctx {
-    struct _os_alloc_once_s *slot;
-    size_t_compat sz;
-    os_function_t init;
-};
-
-static void _pthread_qos_alloc_once_runner(void *raw_ctx) {
-    struct _pthread_qos_alloc_once_ctx *ctx = (struct _pthread_qos_alloc_once_ctx *)raw_ctx;
-    void *ptr = malloc(ctx->sz);
-    if (ptr) {
-        for (size_t_compat i = 0; i < ctx->sz; i++) ((char *)ptr)[i] = 0;
-    }
-    ctx->slot->ptr = ptr;
-    if (ptr != NULL && ctx->init != NULL) {
-        ctx->init(ptr);
-    }
-}
-
-void *_os_alloc_once(struct _os_alloc_once_s *slot, size_t_compat sz, os_function_t init) {
-    struct _pthread_qos_alloc_once_ctx ctx = { slot, sz, init };
-    _os_once(&slot->once, &ctx, _pthread_qos_alloc_once_runner);
-    return slot->ptr;
-}
+/* REMOVED 2026-08-30 (static-linking cleanup, dylib-vs-dylib duplicate-
+ * state pass): this block used to hand-roll `_os_alloc_once()` +
+ * `_os_alloc_once_table` here because, at the time it was written, real
+ * third_party/libplatform/src/os/alloc_once.c did not compile into this
+ * project's tree at all (see the removed comment's own "os/
+ * atomic_private.h wall" citation). That wall is gone -- both real
+ * pieces now exist as real sibling exports this dylib already links:
+ * build_libsystem_kernel.sh compiles xnu-7195's own libsyscall/os/
+ * alloc_once.c for the real `_os_alloc_once_table` definition, and
+ * build_libsystem_platform.sh compiles real libplatform/src/os/
+ * alloc_once.c for the real `_os_alloc_once()` logic. Both
+ * libsystem_kernel.dylib and libsystem_platform.dylib are already
+ * linked below as siblings of libsystem_pthread.dylib.
+ *
+ * Keeping this hand-rolled copy WASN'T merely wasteful the way
+ * build_libsystem_platform.sh's own header documents os_alloc_once
+ * duplication can be (per-key slots, no cross-image state assumed) --
+ * it was actively worse than a no-op: pthread_atfork.o (a real MEMBERS
+ * member of this same dylib, see build_libsystem_pthread.sh) has its
+ * own real, undefined reference to `_os_alloc_once`/
+ * `_os_alloc_once_table` for its real pthread_atfork() fork-handler
+ * registration. Because ld64 always resolves an undefined reference
+ * against a LOCAL definition already present in the same link before
+ * ever consulting a sibling dylib, pthread_atfork.o was silently
+ * binding to THIS file's hand-rolled stand-in instead of the real,
+ * purpose-built xnu/libplatform implementation build_libsystem_kernel.sh
+ * added specifically to satisfy it -- the real fix was present and
+ * linked, but shadowed by this now-stale compat code the whole time.
+ * Confirmed via `nm -m` that both symbols are fully external (not
+ * private-extern) in every image that had a copy -- a genuine
+ * duplicate-state fact, not a private-extern false positive.
+ *
+ * qos.c's own real `os_alloc_once()` inline (third_party/libplatform/
+ * private/os/alloc_once_impl.h, reached via the compat_include/os/
+ * alloc_once_private.h forwarder build_libpthread.sh already sets up)
+ * indexes `_os_alloc_once_table[token]` and calls `_os_alloc_once()`
+ * directly -- removing this block just lets both resolve externally to
+ * the real siblings, exactly like pthread_atfork.o always should have. */
 
 /* Real gap: qos.c calls posix_spawnattr_get_qos_clamp_np()/
  * _set_qos_clamp_np() -- real, narrow field accessors on the real

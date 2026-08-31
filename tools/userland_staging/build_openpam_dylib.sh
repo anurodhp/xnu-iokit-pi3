@@ -122,9 +122,16 @@ fi
 # none.o carry so they bind to libsystem_c.dylib (a sibling below)
 # instead of this dylib defining a second, independently-mutable copy.
 ./narrow_rune_locale.sh "$EXTRACT"
-(cd "$EXTRACT" && ar x "../../syslogd_libc_extras.a" geteuid.o)
 (cd "$EXTRACT" && ar x "../../liblaunchd_syscalls.a" sys__setgroups.o)
-(cd "$EXTRACT" && ar x "../../libpthread.a" pthread_getegid.o)
+# geteuid.o (syslogd_libc_extras.a) / pthread_getegid.o (libpthread.a)
+# REMOVED 2026-08-30 (static-linking cleanup, dylib-vs-dylib duplicate-
+# symbol pass), same fix + same real reasoning as build_bsm_dylib.sh's
+# own geteuid.o/getuid.o removal: _geteuid/_getegid are both real
+# libsystem_kernel.dylib exports as of 2026-08-29 (see that script's own
+# "geteuid/getegid" comment), and this dylib already links
+# libsystem_kernel.dylib as a sibling below -- libopenpam.a's own
+# undefined references now resolve there instead of a second, private
+# copy of each raw syscall trap.
 
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness \

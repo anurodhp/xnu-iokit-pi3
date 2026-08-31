@@ -74,6 +74,17 @@ rm -rf "$EXTRACT"
 mkdir -p "$EXTRACT"
 (cd "$EXTRACT" && ar x "../../libunwind.a")
 rm -f "$EXTRACT/__.SYMDEF"* "$EXTRACT/libunwind_dyld_shim.o"
+# libunwind_sched_yield_trap.o/libunwind_sched_yield.o REMOVED 2026-08-30
+# (static-linking cleanup, dylib-vs-dylib duplicate-symbol pass): the
+# exact same real source (libunwind_sched_yield.s/.c) is ALSO compiled
+# fresh by build_libsystem_pthread.sh for libsystem_pthread.dylib's own
+# `_sched_yield`/`_swtch_pri` (that script's own header: "compiled fresh
+# here rather than pulled from libunwind.a, which isn't a dylib
+# dependency of this one" -- untrue as of this dylib's own migration
+# below, which already links libsystem_pthread.dylib as a real sibling).
+# Confirmed via nm -m these two archive members define both symbols and
+# nothing else; libsystem_pthread.dylib already exports both for real.
+rm -f "$EXTRACT/libunwind_sched_yield_trap.o" "$EXTRACT/libunwind_sched_yield.o"
 
 # Removed 2026-08-30 (static-linking cleanup, Phase 1d): three
 # `-Wl,-alias` entries used to re-export

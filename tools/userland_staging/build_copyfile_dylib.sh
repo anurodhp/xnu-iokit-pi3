@@ -89,6 +89,34 @@ if [ ! -x "$NEWLD_BINDIR/ld" ]; then
 fi
 
 (cd "$EXTRACT" && ar x "../../libcopyfile.a")
+# getuid.o REMOVED (not from libcopyfile.a itself -- that archive stays
+# intact, dyld.macho's own real static link in build_dyld_link.sh still
+# needs it, and dyld runs before any dylib including this one exists)
+# 2026-08-30 (static-linking cleanup, dylib-vs-dylib duplicate-symbol
+# pass): once extracted into THIS dylib's own build, _getuid duplicates
+# a real export libsystem_kernel.dylib already has (see
+# build_libsystem_kernel.sh's "geteuid/egid"/create-syscalls.pl
+# comment) -- this dylib already links libsystem_kernel.dylib as a
+# sibling below, so dropping just this one extracted copy (a
+# single-symbol raw syscall trap, confirmed via nm -m, no other member
+# depends on it) lets libcopyfile.a's own undefined references resolve
+# to the real sibling instead.
+#
+# pread.o/pwrite.o are NOT dropped the same way: this dylib's own final
+# link below creates `_pread$UNIX2003`/`_pwrite$UNIX2003` as
+# `-Wl,-alias` re-exports of these two objects' real `_pread`/`_pwrite`
+# definitions, and docs/backlog.md's own ld64 finding (2026-08-2x
+# session, "-Wl,-alias nonlocal-base bug") is that an alias's BASE must
+# be a symbol genuinely compiled into THIS SAME link, or ld64 silently
+# emits a malformed ordinal-0 re-export instead of erroring -- removing
+# pread.o/pwrite.o and relying on the libsystem_kernel.dylib sibling for
+# the base would trigger exactly that. Kept locally, but the PLAIN
+# `_pread`/`_pwrite` names (the actual libsystem_kernel.dylib duplicate)
+# are hidden from this dylib's export trie via `-Wl,-unexported_symbol`
+# on the final link instead -- the alias step still sees a real local
+# definition to point `_pread$UNIX2003`/`_pwrite$UNIX2003` at, but
+# nothing outside this dylib can bind to the plain names here anymore.
+rm -f "$EXTRACT/getuid.o"
 
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness \
@@ -126,6 +154,7 @@ rm -f "$OUT/system/libcopyfile.dylib"
     -Wl,-fixup_chains \
     -Wl,-alias,_chmod,'_chmod$UNIX2003' -Wl,-alias,_fchmod,'_fchmod$UNIX2003' \
     -Wl,-alias,_pread,'_pread$UNIX2003' -Wl,-alias,_pwrite,'_pwrite$UNIX2003' \
+    -Wl,-unexported_symbol,_pread -Wl,-unexported_symbol,_pwrite \
     -Wl,-alias,_getattrlist,'_getattrlist$UNIX2003' -Wl,-alias,_statfs,'_statfs$INODE64' \
     -o "$OUT/system/libcopyfile.dylib" \
     "$EXTRACT"/*.o \

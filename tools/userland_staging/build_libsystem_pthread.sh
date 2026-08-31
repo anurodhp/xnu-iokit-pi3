@@ -146,24 +146,23 @@ QOS_MEMBERS="qos.o libpthread_attr_compat.o libpthread_qos_compat.o host_privUse
 (cd "$OUT/libsystem_pthread/extracted" && ar x "../../libpthread_qos.a" $QOS_MEMBERS)
 MEMBERS="$MEMBERS $QOS_MEMBERS"
 
-# __kernelrpc_host_create_mach_voucher: real MIG output, but it lives in
-# libmach_ipc.a's mach_hostUser.o alongside ~20 OTHER host_*() routines
-# this dylib has no business exporting (and which would collide with the
-# copies libdispatch/libxpc already carry). Narrowed to the one routine
-# with `ld -r -exported_symbol` -- same real precedent
-# build_libdispatch_dylib.sh already established for pulling
-# _mach_make_memory_entry_64 out of a multi-routine vm_mapUser.o.
-if [ ! -f "$OUT/libmach_ipc.a" ]; then
-    echo "error: $OUT/libmach_ipc.a not found -- run build_libmach_ipc.sh first" >&2
-    exit 1
-fi
-LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
-ar p "$OUT/libmach_ipc.a" mach_hostUser.o > "$OUT/libsystem_pthread/mach_hostUser_raw.o"
-"$LD" -r -arch arm64 -exported_symbol __kernelrpc_host_create_mach_voucher \
-    "$OUT/libsystem_pthread/mach_hostUser_raw.o" \
-    -o "$OUT/libsystem_pthread/extracted/kernelrpc_host_create_mach_voucher.o"
-rm -f "$OUT/libsystem_pthread/mach_hostUser_raw.o"
-MEMBERS="$MEMBERS kernelrpc_host_create_mach_voucher.o"
+# __kernelrpc_host_create_mach_voucher: REMOVED 2026-08-30 (static-
+# linking cleanup, dylib-vs-dylib duplicate-symbol pass). This used to
+# extract just this one routine out of libmach_ipc.a's mach_hostUser.o
+# (which carries ~20 OTHER host_*() routines this dylib has no business
+# exporting) via `ld -r -exported_symbol`. That narrowed copy was still
+# a real, fully-external duplicate of libsystem_kernel.dylib's own real
+# `__kernelrpc_mach_port_*`-tier MIG client-stub set (see that script's
+# own comment on gaining "the whole __kernelrpc_mach_port_* MIG
+# client-stub set" via a real mig regen) -- confirmed via nm -m that
+# both copies are fully external, not private-extern. The only real
+# consumer within this dylib, libpthread_qos_compat.o's voucher path
+# (undefined reference, confirmed via nm), is a plain function call
+# (not a direct-addressed data symbol like the rune-locale/mach_ipc_
+# clock_init cases elsewhere in this pass), so it resolves fine via
+# normal two-level-namespace dylib binding against the
+# libsystem_kernel.dylib sibling already linked below -- no local copy
+# needed at all here, unlike those data-symbol cases.
 
 # Real gap: real pthread_rwlock.c/pthread_cond.c call sched_yield() in
 # their real contended-lock backoff paths; this project's libpthread
@@ -220,6 +219,21 @@ rm -f "$OUT/system/libsystem_pthread.dylib"
     # project builds no real dyld shared cache at all, so opting every
     # real dylib out is correct, not a workaround (docs/backlog.md item
     # d9's NEWLD_BINDIR sweep, 2026-08-28).
+#
+# _mmap/_munmap/_pthread_testcancel$UNIX2003 unexported 2026-08-30
+# (static-linking cleanup, dylib-vs-dylib duplicate-symbol pass): this
+# dylib is BELOW libdyld.dylib/libsystem_c.dylib in the real dependency
+# order (pthread cannot link either back), so real pthread source's own
+# calls to `mmap()`/`munmap()`/the UNIX2003 testcancel spelling
+# genuinely need local aliases -- but nothing OUTSIDE this dylib should
+# ever bind to pthread's copies instead of libdyld.dylib's/
+# libsystem_c.dylib's real ones. `_pthread_testcancel` itself (the
+# PLAIN, non-suffixed name) is NOT unexported here: this dylib IS real
+# Apple's actual home for that one (the duplicate is libncurses.dylib's
+# own separate copy -- a leaf dylib that CAN link this one back,
+# deferred to its own pass rather than folded in here). Same
+# `ld -r`-adjacent `-Wl,-unexported_symbol` narrowing this project
+# already uses in narrow_rune_locale.sh/build_libsystem_malloc.sh.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
     -install_name /usr/lib/system/libsystem_pthread.dylib \
     -Wl,-not_for_dyld_shared_cache \
@@ -227,9 +241,12 @@ rm -f "$OUT/system/libsystem_pthread.dylib"
     -Wl,-fixup_chains \
     -Wl,-alias,___mmap,_mmap \
     -Wl,-alias,___munmap,_munmap \
+    -Wl,-unexported_symbol,_mmap -Wl,-unexported_symbol,_munmap \
     -Wl,-alias,__pthread_cond_wait,_pthread_cond_wait \
     -Wl,-alias,'_pthread_cond_init$UNIX2003',_pthread_cond_init \
     -Wl,-alias,_pthread_testcancel,'_pthread_testcancel$UNIX2003' \
+    -Wl,-unexported_symbol,'_pthread_testcancel$UNIX2003' \
+    -Wl,-unexported_symbol,___gettimeofday -Wl,-unexported_symbol,_gettimeofday \
     -Wl,-alias,'_pthread_mutexattr_destroy$UNIX2003',_pthread_mutexattr_destroy \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',__pthread_rwlock_rdlock \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',__pthread_rwlock_wrlock \

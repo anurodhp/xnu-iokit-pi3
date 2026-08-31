@@ -370,32 +370,33 @@ _Bool malloc_zone_check_fail(void) {
 void malloc_error_break(void) {
 }
 
-/* ---- Real Apple documents "_pthread_set_self() must be called
- * explicitly in static executables" alongside mach_init() (see
- * mach_init.c's mach_init_doit(), which calls it with a NULL/0 arg to
- * reset the main thread's pthread_t placeholder). This target has no
- * real libpthread port yet (separate, larger future Phase 4 item --
- * this project's real thread-local-storage needs are already served by
- * tsd_bootstrap.c/pthread_tsd_shim.c, QEMU-verified, see
- * project_rpi3_userspace_libc_dyld memory) -- documented no-op stand-in
- * for a subsystem this target doesn't have yet, same class as
- * bsd_pthread_stub.c on the kernel side. */
+/* _pthread_set_self/mach_port_deallocate/mach_port_mod_refs: guarded
+ * out under LIBMALLOC_DISPATCH_DYLIB_VARIANT 2026-08-30 (static-linking
+ * cleanup, dylib-vs-dylib duplicate-symbol pass). build_libsystem_
+ * kernel.sh's own header comment says it "copied verbatim from ...
+ * libmalloc_dispatch.c" these exact 3 functions into
+ * libsystem_kernel_compat.c, because real, unmodified mach_init.c/
+ * mig_reply_port.c (compiled INTO libsystem_kernel.dylib) need them and
+ * that narrowly-scoped dylib doesn't link real libpthread/a MIG mach_
+ * port header. That made libsystem_kernel.dylib the real, canonical
+ * owner of all 3 -- but this file's own copies kept shipping too,
+ * because build_libsystem_malloc.sh reuses this same pre-built object
+ * wholesale via `ar x`. Confirmed via `nm -m` on every other object
+ * this dylib links (magazine_*.o, vm.o, etc.) that NOTHING inside
+ * libsystem_malloc.dylib itself references `_pthread_set_self`/
+ * `mach_port_deallocate`/`mach_port_mod_refs` by name -- real,
+ * unmodified mig_reply_port.c (the only real caller anywhere in this
+ * project) isn't even compiled into this dylib. Guarding them out only
+ * for the dylib build variant lets libsystem_malloc.dylib fall through
+ * to the real libsystem_kernel.dylib sibling it already links, while
+ * every static-archive consumer of libmalloc.a (build_dyld_link.sh's
+ * dyld.macho, etc, which must stay fully static and cannot link any
+ * dylib) keeps its own copy unchanged. */
+#ifndef LIBMALLOC_DISPATCH_DYLIB_VARIANT
 void _pthread_set_self(void *p) {
     (void)p;
 }
 
-/* ---- Real dyld-slide query: this target has no dyld, PID-1 execve()s
- * a statically-linked fixed-address Mach-O directly with no ASLR slide
- * ever applied -- see third_party/libmalloc/src/vm.c's mvm_aslr_init(),
- * whose real "ASLR disabled" branch (zero malloc_entropy) is exactly
- * correct here, not a workaround. */
-/* ---- mach_port_deallocate/mach_port_mod_refs: real trap-only wrappers
- * (see libmalloc_vm_traps.s's own comment on why these are hand-written
- * rather than compiling real mach_port.c, which needs a MIG-generated
- * header this project's build doesn't produce). Only caller in this
- * project's build is real, unmodified mig_reply_port.c's
- * mig_dealloc_reply_port(); real signatures copied verbatim from
- * mach_port.c. */
 typedef unsigned int mach_port_name_t;
 typedef mach_port_name_t ipc_space_t;
 typedef unsigned int mach_port_right_t;
@@ -410,6 +411,7 @@ int mach_port_deallocate(ipc_space_t task, mach_port_name_t name) {
 int mach_port_mod_refs(ipc_space_t task, mach_port_name_t name, mach_port_right_t right, mach_port_delta_t delta) {
     return _kernelrpc_mach_port_mod_refs_trap(task, name, right, delta);
 }
+#endif /* !LIBMALLOC_DISPATCH_DYLIB_VARIANT */
 
 /* ---- _simple_asl_log: real Apple third_party/libplatform/src/simple/
  * asl.c (the real implementation malloc_printf.c's malloc_vreport()
