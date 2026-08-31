@@ -1987,6 +1987,7 @@ B launchd.macho ___fstat64_extended
 B launchd.macho ___getdirentries64
 B launchd.macho ___gethex_D2A
 B launchd.macho ___getpid
+B launchd.macho ___global_locale
 B launchd.macho ___hdtoa
 B launchd.macho ___hexdig_D2A
 B launchd.macho ___hexdig_init_D2A
@@ -2002,6 +2003,7 @@ B launchd.macho ___istype_l
 B launchd.macho ___kill
 B launchd.macho ___ldtoa
 B launchd.macho ___lo0bits_D2A
+B launchd.macho ___locale_key
 B launchd.macho ___lshift_D2A
 B launchd.macho ___lstat64_extended
 B launchd.macho ___maskrune
@@ -4927,6 +4929,7 @@ B syslogd.macho ___fstat64_extended
 B syslogd.macho ___getdirentries64
 B syslogd.macho ___gethex_D2A
 B syslogd.macho ___getpid
+B syslogd.macho ___global_locale
 B syslogd.macho ___hdtoa
 B syslogd.macho ___hexdig_D2A
 B syslogd.macho ___hexdig_init_D2A
@@ -4941,6 +4944,7 @@ B syslogd.macho ___istype
 B syslogd.macho ___istype_l
 B syslogd.macho ___ldtoa
 B syslogd.macho ___lo0bits_D2A
+B syslogd.macho ___locale_key
 B syslogd.macho ___lshift_D2A
 B syslogd.macho ___lstat64_extended
 B syslogd.macho ___maskrune
@@ -6521,21 +6525,9 @@ B yes.macho _vwarnc
 B yes.macho _vwarnx
 B yes.macho _warnc
 B yes.macho _warnx
-D ____mb_cur_max
-D ____mb_cur_max_l
-D ___collate_equiv_match
-D ___collate_load_error
-D ___collate_lookup
-D ___collate_lookup_l
 D ___darwin_check_fd_set_overflow
-D ___mb_cur_max
-D ___mb_sb_limit
-D __c_locale
-D __CurrentRuneLocale
-D __DefaultRuneLocale
 D __dyld_find_unwind_sections
 D __dyld_register_func_for_remove_image
-D __PathLocale
 D __xpc_runtime_is_app_sandboxed
 D _acos
 D _asin
@@ -6543,35 +6535,21 @@ D _connect
 D _dladdr
 D _dlopen
 D _dlsym
-D _duplocale
 D _fabs
 D _fmod
 D _fpathconf
-D _freelocale
-D _mbsnrtowcs
-D _mbsnrtowcs_l
 D _memcpy
 D _memset
 D _modf
 D _nanosleep
-D _newlocale
 D _open_dprotected_np
 D _pow
-D _querylocale
 D _scalbn
 D _send
-D _setlocale
 D _sleep
 D _socket
 D _sqrt
-D _strtoll
-D _strtoll_l
-D _strtoul
-D _strtoul_l
 D _syslog
 D _trunc
-D _uselocale
 D _vproc_swap_integer
-D _wcsnrtombs
-D _wcsnrtombs_l
 D _writev

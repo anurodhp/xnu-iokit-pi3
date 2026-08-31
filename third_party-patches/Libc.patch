@@ -1,8 +1,8 @@
 From fd2c67eba97954b0a1493aa04309985ae8088b82 Mon Sep 17 00:00:00 2001
 From: Anurodh Pokharel <anurodhp@icloud.com>
 Date: Thu, 27 Aug 2026 21:39:14 -0400
-Subject: [PATCH] xlocale.c: call real __xlocale_init() via constructor, real
- device targets need it
+Subject: [PATCH 1/2] xlocale.c: call real __xlocale_init() via constructor,
+ real device targets need it
 
 Real Apple's own libSystem calls __xlocale_init() exactly once from its
 own _libc_initializer(), which runs before any userland main() via a
@@ -75,6 +75,71 @@ index 6efb9a5..f279fcf 100644
 +	__xlocale_init();
 +}
 +
+-- 
+2.50.1 (Apple Git-155)
+
+
+From 028cf86e87825afe28720b104195c69312e629f4 Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@icloud.com>
+Date: Mon, 31 Aug 2026 14:38:01 -0400
+Subject: [PATCH 2/2] xlocale_private.h: widen __global_locale/__locale_key to
+ default visibility
+
+Real Apple marks both hidden -- a real optimization on real macOS,
+where exactly one libsystem_c.dylib per process makes it moot, not a
+correctness requirement. iokit/xnu-rpi3's own libc++.dylib compiles a
+real, otherwise-unavailable-elsewhere strtoull.c/strtoull_l (Libc's own
+FreeBSD source, needed because build_libc_gen.sh's strtoll.c/strtoul.c
+port never grew a strtoull.c sibling) that genuinely needs this
+process's one real current-locale state, and hidden visibility makes
+that impossible across the dylib boundary by construction. Widened
+narrowly (just these two symbols; _DefaultRuneXLocale and table.o's
+__none_* stay hidden, unaffected) so libsystem_c.dylib can export the
+one real copy and libc++.dylib's strtoull.o can bind to it instead of
+each image growing its own independent xlocale.o. See
+docs/static-linking-cleanup-plan.md's DAR-159 entry for the full
+investigation.
+---
+ locale/xlocale_private.h | 24 ++++++++++++++++++++++--
+ 1 file changed, 22 insertions(+), 2 deletions(-)
+
+diff --git a/locale/xlocale_private.h b/locale/xlocale_private.h
+index 99bf7c3..0844536 100644
+--- a/locale/xlocale_private.h
++++ b/locale/xlocale_private.h
+@@ -189,10 +189,30 @@ struct _xlocale {
+ __attribute__((visibility("hidden")))
+ extern struct __xlocale_st_runelocale _DefaultRuneXLocale;
+ 
+-__attribute__((visibility("hidden")))
++/* __global_locale/__locale_key: real Apple marks both hidden because on
++ * real macOS every process has exactly one libsystem_c.dylib, so nothing
++ * outside it could ever need to see them -- hidden here is a real
++ * optimization there, not a correctness requirement being relied upon.
++ * iokit/xnu-rpi3 (this project) is not that: build_llvm_libcxx.sh's own
++ * strtoull.c/strtoull_l (real FreeBSD source, ported because
++ * build_libc_gen.sh's strtoll.c/strtoul.c port never grew a strtoull.c
++ * sibling) is a second real image needing the current-locale state these
++ * two globals ARE, and hidden visibility makes that impossible -- a
++ * private extern cannot satisfy another image's undefined reference by
++ * construction (confirmed via nm -m/dyld_info -exports, not assumed;
++ * see docs/static-linking-cleanup-plan.md's DAR-159 writeup for the full
++ * investigation). Widened to default visibility 2026-08-31 so
++ * libsystem_c.dylib exports the one real current-locale state and
++ * libc++.dylib's strtoull.o binds to it cross-image instead of each
++ * image compiling its own independent xlocale.o (28 duplicate exports,
++ * one of them this exact live, mutable state) -- a deliberate, narrowly
++ * scoped divergence from real Apple's own visibility, not a blanket
++ * "make everything default visibility" change: _DefaultRuneXLocale
++ * above and table.o's other private internals (e.g. __none_ symbols)
++ * stay hidden, unaffected, because nothing outside their own defining
++ * object needs them (verified the same way). */
+ extern struct _xlocale	__global_locale;
+ 
+-__attribute__((visibility("hidden")))
+ extern pthread_key_t	__locale_key;
+ 
+ __BEGIN_DECLS
 -- 
 2.50.1 (Apple Git-155)
 

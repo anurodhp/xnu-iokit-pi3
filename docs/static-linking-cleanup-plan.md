@@ -1911,3 +1911,190 @@ attempted, per its own recommendation.
 
 Baseline updated (`dup_symbol_audit.sh --update-baseline`) to lock in
 76→54.
+
+## Session 2026-08-31 (continuation 9): xlocale family consolidated onto libsystem_c.dylib, DAR-159 closed
+
+Dedicated batch for DAR-159, picked up exactly where continuation 8 left
+it: `libc++.dylib`/`libsystem_c.dylib` shared 26 real symbols (the
+`newlocale`/`duplocale`/`uselocale`/`freelocale`/`querylocale`/
+`setlocale`/the `___collate_*` family/rune-locale globals/`strtoll`/
+`strtoll_l`/`strtoul`/`strtoul_l`/`mbsnrtowcs`/`wcsnrtombs` (+`_l`
+variants) family -- re-measured directly via `comm -12` on `dyld_info
+-exports` rather than trusting the prior session's "21+18" table, which
+was already stale by the time this session started: `libopenpam.dylib`
+turned out to have ZERO overlap with either sibling for this family
+(continuation 8 had already dropped its `localtime.o`/`timezone_unix03.
+o`/`strftime.o`/`asctime.o`), so this was purely a 2-dylib problem, not
+3.
+
+### Root cause, confirmed via source
+
+Real Apple's `third_party/Libc/locale/xlocale.c` defines `__global_
+locale`/`__locale_key` (the current-locale state itself, lines 45-46);
+`third_party/Libc/locale/xlocale_private.h` marks both `extern`
+declarations `__attribute__((visibility("hidden")))` (lines 192/195,
+confirmed via `grep`, not assumed -- the definition site itself carries
+no attribute, it inherits hidden visibility from the extern declaration
+already seen via this header's earlier `#include`). Confirmed with a
+real fresh compile (`nm -m` on the resulting `.o`: both report
+"private external" pre-fix, "external" post-fix) rather than trusting
+`nm -m`'s "non-external (was a private external)" report on the
+*already-built* dylib alone.
+
+Traced every one of the 26 duplicate symbols to its owning object in
+`libcxx_dylib/extracted`: all but 4 (`strtoll.o`/`strtoul.o`, both
+pulled in from `libcxx.a` itself, not `libc_locale.a`) trace to the same
+`xlocale.o`-cascade family continuation 8 already reasoned about for
+`strftime.o`'s two private-extern deps (`ldpart.o`/`setlocale.o`/
+`setrunelocale.o`/`collate.o`/`lmessages.o`/`lmonetary.o`/`lnumeric.o`/
+`table.o`/8 encoding-table objects/`mbsnrtowcs.o`/`wcsnrtombs.o`/
+`timelocal.o`). Checked with `nm` across every OTHER (non-family)
+extracted object in `libc++.dylib` (LLVM's own `locale.o`/`cxa_demangle.
+o`/`string.o`) for a direct reference to `___global_locale`/`___locale_
+key`: none found -- every one of them only calls the PUBLIC API
+(`_newlocale`/`_setlocale`/`_strtoll_l`/etc, already-external, ordinary
+symbols needing no visibility change at all), confirming the entire
+family is genuinely redundant in `libc++.dylib`, not merely narrowable.
+The one exception: `strtoll.o`/`strtoul.o`/`strtoull.o` (from `libcxx.a`,
+compiled by `build_llvm_libcxx.sh`) all three DO reference `___global_
+locale`/`___locale_key` directly. Checked against `libsystem_c.dylib`'s
+real exports: `_strtoll`/`_strtoll_l`/`_strtoul`/`_strtoul_l` are ALL
+already real, current exports there (`build_libc_gen.sh` grew real
+`strtoll.c`/`strtoul.c` ports since `build_llvm_libcxx.sh`'s own header
+comment -- "only its 3 siblings that tier never attempted" -- was
+written; that comment was stale, not re-verified, exactly the kind of
+staleness this project's memory keeps flagging). `strtoull`/`strtoull_l`
+is NOT anywhere else -- a real, currently-unique gap, confirmed via `nm
+-m` against every shipped dylib.
+
+### Fix mechanism: macro-gated visibility widening, not a blanket header change
+
+First attempt removed the `visibility("hidden")` attribute from
+`xlocale_private.h` unconditionally. This compiled and linked fine and
+looked like a complete fix -- until rebuilding `libopenpam.dylib` for
+parity (this sweep's own standing rule: rebuild every real consumer, not
+just the two you changed) immediately surfaced a brand-new FAIL from
+`dup_symbol_audit.sh --dylibs`: `___global_locale`/`___locale_key` now
+duplicated between `libopenpam.dylib` and `libsystem_c.dylib` -- a
+symbol pair `nm -m` had ALWAYS shown as "non-external (was a private
+external)" in `libopenpam.dylib` before, at every prior session's
+inspection, without ever being flagged as a duplicate. Root cause: a
+SEPARATE, project-authored file, `tools/userland_staging/libc_locale_
+globals_compat.c` (a narrow, from-scratch, deliberately-scoped-down
+reproduction of these exact same two globals, written 2026-08-27+
+specifically because pulling in real `xlocale.o`'s whole cascade was
+rejected as bloat for `build_libdispatch_dylib.sh`'s original `atoi.o`
+need), ALSO `#include`s `xlocale_private.h` and ALSO defines these two
+symbols -- compiled into 5 leaf dylibs (`libcopyfile`/`libiconv`/
+`libncurses`/`libopenpam`/`libresolv`, confirmed via `grep -rl` across
+every `build_*.sh`, the exact same 5-dylib set `narrow_rune_locale.sh`
+already handles for the OTHER 4 rune-locale globals) plus `build_
+simple_cmds.sh`'s ~70 commands. Before this session, BOTH sides of every
+one of those 5 potential pairs were private-extern, so `dup_symbol_
+audit.sh`'s exports-based check could never see any of them as a
+duplicate -- a real, live, N-way duplicate-state situation that had
+existed since 2026-08-27, invisible to tooling the entire time, and the
+unconditional header fix would have made 5 of them suddenly LOUD and
+EXPORTED instead of fixing anything. Exactly the "narrowing/hiding
+masks a real duplicate instead of resolving it" failure mode this whole
+sweep exists to catch -- caught by this session's own "rebuild every
+real consumer" rule, not by review.
+
+Fixed by gating the visibility change behind a macro
+(`XLOCALE_STATE_EXPORTED`) in `xlocale_private.h` (`#ifdef` ... default,
+still hidden; only set when actually intended) and setting that macro in
+exactly two places:
+
+- `build_libc_locale.sh` (compiles the ONE real Apple canonical
+  definition, `xlocale.c`) -- its `xlocale.o`, which is what actually
+  ships inside `libsystem_c.dylib` (via `libc_locale_for_stdio.a`),
+  becomes the one real exported copy.
+- `build_llvm_libcxx.sh`'s `strtoull.c`/`strtoll.c`/`strtoul.c` compile
+  (`STRTOL_CFLAGS`) -- required for a second, non-obvious reason found
+  the hard way: a first pass left this compile WITHOUT the macro
+  (reasoning: "it's just a reference, not a definition, visibility on a
+  declaration shouldn't matter for codegen"), and linking
+  `build_libcxx_dylib.sh` failed with a real, specific error: `ld:
+  fixup error (kind=arm64_adrp_lo12) at '_strtoull_l'+0x48 from
+  strtoull.o, target '___global_locale' does not have address`. Real
+  mechanism: clang's arm64 codegen for a global-variable reference
+  chooses DIRECT (PC-relative `adrp`+`add`, assumes the target will be
+  resolved WITHIN THE SAME final linked image) vs INDIRECT (GOT-relative
+  `adrp`+`ldr`, safe for a target dyld binds from ANOTHER image) based on
+  the visibility the compiler sees on the declaration at the reference
+  site -- hidden means "assume same-image, use the fast direct form",
+  which breaks once the actual definition moves to a different dylib.
+  This reverses what continuation 8's own xlocale note assumed
+  ("Private externs are image-local by construction... this dylib's own
+  locale.o/strftime.o cannot bind to them across the boundary") into a
+  more precise statement: it's not just that a private-extern DEFINITION
+  can't be exported -- a hidden-visibility REFERENCE also can't safely
+  bind cross-image even once the definition IS exported elsewhere, for a
+  different, codegen-level reason. Fixed by adding the macro to
+  `STRTOL_CFLAGS` too; rebuild succeeded, and `xcrun dyld_info -fixups
+  libc_build/system/libc++.dylib` confirmed the fix worked for the RIGHT
+  reason (`__DATA_CONST __got 0x...  bind  libsystem_c/___global_locale`
+  /`.../___locale_key`, a real GOT-indirect cross-image bind, not a
+  coincidentally-still-working direct one).
+
+`build_libcxx_dylib.sh` then dropped the entire redundant family from
+its own `ar x libc_locale.a ...` extraction line (all 20 objects) plus
+the `timelocal.o` compile loop (only needed because `xlocale.o` was
+resident; gone once `xlocale.o` is) plus `strtoll.o`/`strtoul.o` (via a
+targeted `rm -f` after `ar x libcxx.a`, since those two objects still
+have to stay IN `libcxx.a` itself for `build_dyld_link.sh`'s fully
+static `dyld.macho`, which has no sibling dylib to fall back to --
+same "static consumer keeps its own copy, dylib consumer doesn't" split
+this project already established for `libremovefile.dylib`'s
+`REMOVEFILE_SYSCALLS_DYLIB` guard and `libmalloc_dispatch.c`'s
+`LIBMALLOC_DISPATCH_DYLIB_VARIANT`). `strtoull.o`/`strtoull_l` is the
+only member of the family still compiled into `libc++.dylib` -- a real,
+currently-unique gap, not a duplicate.
+
+### Real QEMU verification
+
+Rebuilt bottom-up: `libc_locale.a` (113 compiled, 0 skipped -- the
+"blanket fix" attempt's own intermediate state, before the macro gating
+landed, briefly regressed this to 22/91 skipped from a literal `*/`
+inside this session's own first draft of the new header comment
+prematurely closing the surrounding C block comment -- caught
+immediately via the compiler's own "unknown type name" error, fixed by
+rewording, not by disabling anything) → `libc_stdio.a`/`libc_locale_for_
+stdio.a` → `libsystem_c.dylib` → `libcxx.a` → `libc++.dylib` →
+`libopenpam.dylib` (parity/regression check, confirmed back to its
+pre-existing hidden/isolated state and 5 dup after the macro-gating fix)
+→ `libSystem.B.dylib`/`liblaunchd_core.a`+`launchd.macho`/`syslogd.
+macho`/`libCoreFoundation.a`/`bash.macho` (downstream parity). Swept
+every built `.macho` AND `.dylib` via `xcrun dyld_info -fixups` for
+stale binds to the removed family under `libc++`'s ordinal: zero found.
+`dup_symbol_audit.sh --dylibs`: `OK: no new duplicate symbols` after the
+final (macro-gated) fix, `26 baseline dylib duplicate(s) fixed`. Ran
+`tools/init_binary/inject_into_sd_image.sh` then `tools/boot_test.py`
+(`qemu/static_link_dar159_xlocale_boot.log`, **PASS**), independently
+diffed address-stripped against the last known-good log
+(`static_link_batch11_locale_time_boot.log`) by the orchestrating
+session: only the same benign, already-documented QEMU/TCG
+scheduling-order jitter (`IOConfigThread`/`bsd_init` ordering, 1-3 page
+`vm_page_bootstrap` count deltas) and the same pre-existing benign
+`DIAG: first_panic latched=...` diagnostic string; zero real panics,
+zero real "Symbol not found", identical final jnl-flush checkpoint.
+
+### Linear
+
+DAR-159 CLOSED: real root cause (source-confirmed), real fix
+(macro-gated visibility widening, not a blanket change), real
+verification (bottom-up rebuild + QEMU), and the real circular-dylib
+near-miss this session found and avoided are all recorded on the issue
+itself. DAR-5 (libsystem_c.dylib, 38→12), DAR-6 (libc++.dylib, 29→3),
+DAR-7 (libopenpam.dylib, confirmed still 5, unaffected/rebuilt for
+parity) all commented with current real counts; left open (DAR-5's
+remaining 12 split across DAR-160's math-function remainder (9),
+`libsystem_malloc.dylib`'s already-documented `memcpy`/`memset`
+precedent (2), and the already-documented `open_dprotected_np` deferral
+(1); DAR-6's remaining 3 are `dlopen`/`dlsym` vs `libdyld.dylib` and
+`nanosleep` vs `libncurses.dylib`, neither investigated this session;
+DAR-7's remaining 5 are unrelated to the xlocale family and also not
+investigated this session).
+
+Baseline updated (`dup_symbol_audit.sh --update-baseline`) to lock in
+54→28.

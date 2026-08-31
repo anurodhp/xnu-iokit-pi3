@@ -122,9 +122,18 @@ fi
 # or build_libiconv.sh bundling qsort.c/heapsort.c into its own archive:
 #   - strtoll/strtoul/strtoull: real FreeBSD source (third_party/Libc/
 #     stdlib/FreeBSD), needs the SAME xlocale-adjacent include set
-#     build_libc_locale.sh already worked out for strtol.c (that file's
-#     own strtol.o already ships in libc_locale.a -- not duplicated
-#     here, only its 3 siblings that tier never attempted).
+#     build_libc_locale.sh already worked out for strtol.c. The header
+#     comment here used to claim strtoll/strtoul were real gaps build_
+#     libc_gen.sh's tier "never attempted" -- stale by the time DAR-159
+#     (static-linking cleanup, 2026-08-31) checked: build_libc_gen.sh
+#     grew real strtoll.c/strtoul.c ports since, making THESE two real
+#     duplicates of libsystem_c.dylib's own copies (confirmed via nm -m).
+#     build_libcxx_dylib.sh now drops its own strtoll.o/strtoul.o from
+#     the dylib for that reason; only strtoull.o/strtoull_l stays a real,
+#     currently-unique gap (no other owner anywhere in this project) --
+#     all three are still compiled here since libcxx.a is also consumed
+#     statically elsewhere (dyld.macho via build_dyld_link.sh) where
+#     there's no sibling dylib to fall back to for any of the three.
 #   - wcstod/wcstof/wcstold: real Apple/FreeBSD source for these three
 #     needs `_simple.h`, missing from this checkout entirely (same real,
 #     already-documented gap build_libc_locale.sh's own skip list
@@ -134,8 +143,24 @@ fi
 #     implementation, not a stand-in).
 #   - dlopen/dlsym: libcxx_dlfcn_stub.c -- see that file's header
 #     comment (real "not available" answer, this target has no dyld).
+# -DXLOCALE_STATE_EXPORTED=1: DAR-159 (static-linking cleanup,
+# 2026-08-31). strtoull.c (below) is a real cross-image reference to
+# __global_locale/__locale_key -- it ends up in libc++.dylib, which no
+# longer carries its own xlocale.o, so it must bind to libsystem_c.
+# dylib's real copy instead (see xlocale_private.h's own `#ifdef
+# XLOCALE_STATE_EXPORTED` comment for the full reasoning). Without this,
+# clang compiles the reference assuming hidden/image-local visibility
+# and emits a direct (non-GOT) arm64_adrp_lo12 relocation -- confirmed
+# via a real link failure ("fixup error (kind=arm64_adrp_lo12) ...
+# target '___global_locale' does not have address") before adding this
+# flag, not guessed. Harmless for strtoll.c/strtoul.c (their own
+# duplicate copies are dropped from the dylib entirely, see the comment
+# above) and for dyld.macho's static consumption of all three via
+# libcxx.a directly (no dylib boundary there at all, visibility is moot
+# for a fully static link).
 STRTOL_CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness \
+    -DXLOCALE_STATE_EXPORTED=1 \
     -include libc_build_prototypes.h \
     -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
     -DVARIANT_STATIC -DVARIANT_CANCELABLE -DVARIANT_DARWINEXTSN -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \

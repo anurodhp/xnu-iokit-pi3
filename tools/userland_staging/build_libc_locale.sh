@@ -115,8 +115,21 @@ EOF
 #   (runetype.c/tolower.c/toupper.c), same underlying `int` either way.
 # -D__va_list=__builtin_va_list: same class of naming gap, hits printf-
 #   adjacent files.
+# -DXLOCALE_STATE_EXPORTED=1: real fix for DAR-159 (static-linking
+#   cleanup, 2026-08-31) -- this is the ONE compile of real Apple's
+#   actual xlocale.c (this project's canonical owner of __global_locale/
+#   __locale_key, matching the real Apple source's own single-definition
+#   model), so this is the one place that should get default visibility
+#   for those two symbols instead of xlocale_private.h's normal
+#   real-Apple-matching hidden default. See that header's own comment
+#   on the `#ifdef XLOCALE_STATE_EXPORTED` block for the full reasoning,
+#   including why tools/userland_staging/libc_locale_globals_compat.c's
+#   OWN from-scratch reproduction of these two globals (compiled by 5
+#   leaf dylibs' build scripts, each deliberately keeping its own
+#   independent copy) must NOT also get this macro.
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness \
+    -DXLOCALE_STATE_EXPORTED=1 \
     -include libc_build_prototypes.h \
     -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
     -DVARIANT_STATIC -DVARIANT_CANCELABLE -DVARIANT_DARWINEXTSN -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \

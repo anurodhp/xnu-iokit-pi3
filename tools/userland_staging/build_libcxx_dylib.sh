@@ -122,48 +122,63 @@ mkdir -p "$EXTRACT"
 # libc_locale.a is no longer bundled wholesale here (static-linking
 # cleanup, Phase 1a, 2026-08-29). It was contributing ~244 duplicate
 # exports against libsystem_c.dylib -- the entire rune/ctype/collate
-# surface plus a full second copy of the string primitives -- for the
-# sake of two symbols. See the xlocale.o note further down for the one
-# part that genuinely has to stay.
+# surface plus a full second copy of the string primitives.
 #
-# xlocale.o and ldpart.o DO have to stay, and for a real reason rather
-# than convenience: real Apple's xlocale.c declares `___global_locale`
-# and `___locale_key` -- the current-locale state itself -- as
-# `.private external` (confirmed with `nm -m` against
-# libsystem_c.dylib, which has its own copy marked "non-external (was a
-# private external)"). Private externs are image-local by construction,
-# so libsystem_c.dylib physically cannot export them and this dylib's
-# own locale.o/strftime.o cannot bind to them across the boundary. The
-# pre-existing consequence is unchanged and still honestly scoped: two
-# images hold two copies of the current locale, which is inert only
-# because nothing in this project ever calls setlocale() away from "C".
-# Making libsystem_c.dylib the single owner means giving these two
-# symbols default visibility -- a deliberate, documented divergence from
-# Apple's source -- and is the real follow-up for whoever wires up
-# locale switching. ldpart.o comes along as xlocale's own real table
-# loader (___part_load_locale/___ldpart_free_extra).
-# xlocale.o cascades into the rest of Apple's locale-loading subsystem,
-# and every entry point it reaches (___setrunelocale,
-# ___collate_load_tables, ___get_locale_env, ___detect_path_locale,
-# ___open_path_locale, ___monetary_load_locale, ___numeric_load_locale,
-# ___messages_load_locale, __DefaultRuneXLocale) is ALSO private extern
-# in real Apple's source -- verified one by one with `nm -m` against
-# libsystem_c.dylib, all reported "non-external (was a private
-# external)". Apple's locale internals are image-private by
-# construction, so any image that instantiates locale state has to carry
-# the machinery; there is no version of this that resolves across the
-# dylib boundary without changing their visibility. That is the same
-# single follow-up described above, not a separate one.
-(cd "$EXTRACT" && ar x "../../libc_locale.a" \
-    xlocale.o ldpart.o setlocale.o setrunelocale.o collate.o \
-    lmessages.o lmonetary.o lnumeric.o table.o \
-    ascii.o big5.o euc.o gb18030.o gb2312.o gbk.o mskanji.o none.o \
-    utf2.o utf8.o mbsnrtowcs.o wcsnrtombs.o)
+# xlocale.o/ldpart.o/setlocale.o/setrunelocale.o/collate.o/lmessages.o/
+# lmonetary.o/lnumeric.o/table.o/ascii.o/big5.o/euc.o/gb18030.o/gb2312.o/
+# gbk.o/mskanji.o/none.o/utf2.o/utf8.o/mbsnrtowcs.o/wcsnrtombs.o (the
+# WHOLE real Apple locale-loading subsystem xlocale.o cascades into) were
+# ALSO extracted here until 2026-08-31 (static-linking cleanup, DAR-159)
+# for a real reason, not convenience: xlocale.c's `__global_locale`/
+# `__locale_key` -- the current-locale state itself -- were real Apple
+# `.private_extern` (confirmed via `nm -m` reporting libsystem_c.dylib's
+# own copy "non-external (was a private external)"), so libsystem_c.
+# dylib could not export them and this dylib's own locale.o/strftime.o/
+# collate.o/etc couldn't bind to a single shared copy across the dylib
+# boundary -- each image that instantiated any part of this cascade had
+# to carry the whole thing, landing this dylib 26 duplicate exports
+# (checked via `comm -12` on `dyld_info -exports`, not the stale ~21+18
+# split an earlier session's table recorded) against libsystem_c.dylib,
+# nearly half of which (the rune-locale globals, `__CurrentRuneLocale`/
+# `__DefaultRuneLocale`/`___mb_cur_max`/`___mb_sb_limit`) are real, live,
+# MUTABLE current-locale state -- the same duplicate-state bug class as
+# mach_task_self_/g_zone, not just duplicate code.
+#
+# DAR-159's real fix (2026-08-31): widened `__global_locale`/
+# `__locale_key` to default visibility at the real Apple source
+# (third_party/Libc/locale/xlocale_private.h, local commit + regenerated
+# third_party-patches/Libc.patch -- see that commit's own message and
+# this project's docs/static-linking-cleanup-plan.md DAR-159 entry for
+# the full investigation) so libsystem_c.dylib -- which already carries
+# a complete, real copy of this entire cascade via libc_locale_for_
+# stdio.a -- can export the one real current-locale state for real.
+# Confirmed via `nm -u` on every OTHER object in this dylib (locale.o,
+# cxa_demangle.o, string.o -- LLVM's own real <locale>/<string> code)
+# that none of them reference `___global_locale`/`___locale_key`
+# directly, only the public API (`_newlocale`/`_setlocale`/`_strtoll_l`/
+# etc, already ordinary external symbols, no visibility change needed)
+# -- so the entire family above is now genuinely redundant here, not
+# merely narrowable, and is dropped outright rather than re-extracted.
+# strtoll.o/strtoul.o (below, from libcxx.a itself, not this archive)
+# are the one other place this dylib independently defined part of the
+# same family; dropped for the identical reason.
 rm -f "$EXTRACT/__.SYMDEF"* \
     "$EXTRACT/thread.o" "$EXTRACT/mutex.o" "$EXTRACT/condition_variable.o" \
     "$EXTRACT/future.o" "$EXTRACT/shared_mutex.o" \
     "$EXTRACT/cxa_thread_atexit.o" "$EXTRACT/wcsftime.o" "$EXTRACT/debug.o" \
-    "$EXTRACT/cxa_noexception.o"
+    "$EXTRACT/cxa_noexception.o" \
+    "$EXTRACT/strtoll.o" "$EXTRACT/strtoul.o"
+# strtoll.o/strtoul.o dropped here (DAR-159, 2026-08-31): real
+# duplicates of libsystem_c.dylib's own build_libc_gen.sh-compiled
+# _strtoll/_strtoll_l/_strtoul/_strtoul_l (confirmed via nm -m against
+# the shipped libsystem_c.dylib) -- build_llvm_libcxx.sh's own header
+# comment claiming these were "never attempted" by that tier was stale,
+# not re-verified since libc_gen.a grew real strtoll.c/strtoul.c
+# support. strtoull.o/strtoull_l is a genuine remaining gap (no other
+# owner anywhere in this project) and stays -- its own undefined
+# `___global_locale`/`___locale_key` refs now resolve cross-image to
+# libsystem_c.dylib's newly-widened real copy (see the xlocale note
+# above) instead of needing a local xlocale.o here.
 # mutex.o: first pass tried keeping it (std::mutex/std::recursive_mutex
 # themselves need nothing beyond what libsystem_pthread.dylib already
 # has -- see the real, working $UNIX2003 alias in
@@ -302,13 +317,12 @@ LIBCXXABI="../../third_party/llvm-project/libcxxabi"
 # file's own locale.o, calling plain _strftime_l) already expected, so
 # no other relink was needed just to keep resolving.
 #
-# timelocal.o STAYS (real, separate reason, not the same bug): xlocale.o
-# just below (kept resident for the still-open, differently-scoped
-# xlocale/DAR-159 reason -- ___global_locale/___locale_key are ALSO real
-# `.private_extern` symbols) directly calls ___time_load_locale, itself
-# ALSO private-extern (confirmed via `nm -m`) -- so timelocal.o must stay
-# resident beside xlocale.o regardless of what happened to strftime.o
-# above.
+# timelocal.o REMOVED 2026-08-31 (same session, DAR-159): it stayed
+# resident only because xlocale.o's own ___time_load_locale reference
+# needed it in the same image -- confirmed via nm that setlocale.o/
+# xlocale.o were the ONLY consumers of _timelocal/___time_load_locale in
+# this whole dylib. Now that the xlocale family itself is gone (see the
+# extraction comment above), this goes with it.
 #
 # asctime.o ALSO REMOVED 2026-08-31 (same session, closing DAR-134): the
 # pre-existing documented exception ("real FreeBSD source here vs
@@ -320,23 +334,9 @@ LIBCXXABI="../../third_party/llvm-project/libcxxabi"
 # asctime.c needs neither localtime.o/timezone_unix03.o (it hardcodes
 # its own day/month name tables) nor timelocal.o, so removing it doesn't
 # disturb anything else in this loop.
-LOCALE_CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    -Wno-nullability-completeness \
-    -include libc_build_prototypes.h \
-    -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
-    -DVARIANT_STATIC -DVARIANT_CANCELABLE -DVARIANT_DARWINEXTSN -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \
-    -D__ct_rune_t=__darwin_ct_rune_t -D__va_list=__builtin_va_list \
-    -I $OUT/compat_include \
-    -I $LIBC/include -I $LIBC/darwin -I $LIBC/fbsdcompat -I $LIBC/locale -I $LIBC/locale/FreeBSD \
-    -I $LIBC/stdtime/FreeBSD \
-    -I ../../third_party/libpthread/include -I ../../third_party/libpthread/private \
-    -I $XNU/bsd -I $XNU/osfmk -I $XNU/libsyscall \
-    -I ../../generated"
-for f in timelocal; do
-    src="$LIBC/stdtime/FreeBSD/${f}.c"
-    [ -f "$src" ] || src="$LIBC/stdtime/${f}.c"
-    "$CLANG" $LOCALE_CFLAGS "$src" -o "$EXTRACT/${f}.o"
-done
+# LOCALE_CFLAGS/the timelocal.o compile loop that used to live here were
+# removed 2026-08-31 along with the rest of the xlocale family (DAR-159)
+# -- see the extraction comment near the top of this file.
 
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libc++.dylib"
