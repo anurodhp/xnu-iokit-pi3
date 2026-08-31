@@ -786,3 +786,192 @@ From the 2026-08-30 handoff's own table, still open:
 - `libdyld.dylib` (28), `libxpc.dylib` (22), `libresolv.dylib` (18),
   `libsystem_notify.dylib` (3), `libdispatch.dylib` (1): not investigated
   this session at all.
+
+## Session 2026-08-31 (continuation): audit-tool false-positive fix + libxpc/libdyld/libresolv/libsystem_notify sweep
+
+Picked up from the 2026-08-31 (Phase 1e) handoff above. `dup_symbol_audit.sh --summary` totals:
+
+| | dylib duplicates |
+|---|---|
+| start of this session | 136 |
+| after `dup_symbol_audit.sh` false-positive fix (no dylib content changed) | 128 |
+| end of this session | **102** |
+
+### The most important finding this session: the audit tool itself had a false-positive bug
+
+Investigating `libdyld.dylib`'s 28 flagged duplicates, 17 turned out not to be
+duplicates at all. `nm -gUj` (what `dup_symbol_audit.sh`'s dylib-mode pass used)
+cannot distinguish "this image really defines this symbol" from "this image's
+export trie merely republishes a sibling's own symbol via `-Wl,-alias
+realname,aliasname` where `realname` itself comes from a dylib on the link
+line" -- both look like a plain external symbol to `nm`. Confirmed via
+`xcrun dyld_info -exports`: entries like `_kill$UNIX2003 (___kill from
+libsystem_malloc)` are real, valid `[re-export]`s at the SAME address as
+the sibling's own copy, not a second independently-compiled definition.
+
+Fixed `dup_symbol_audit.sh` itself: added `defined_syms_dylib_local()`,
+which parses `dyld_info -exports` and keeps only lines with a real `0xADDR`
+(excluding `[re-export]` lines), used in place of `nm -gUj` for the
+dylib-mode pass only (binaries still use plain `nm -gUj` -- they don't
+reexport). This dropped the total from 136 to 128 with **zero dylib
+content changed** -- a pure measurement-accuracy fix. `libdyld.dylib`
+alone went from 28 to 11 flagged duplicates from this one change.
+
+**Important caveat, confirmed empirically, for whoever touches this next:**
+`dyld_info -exports` only expands individual `-Wl,-alias`-created
+reexports into visible `[re-export]` lines -- it does NOT expand a
+wholesale `-Wl,-reexport_library` (e.g. `libSystem.B.dylib`'s reexport of
+`libsystem_kernel.dylib`/`libsystem_c.dylib`/etc). Confirmed directly:
+`dyld_info -exports libSystem.B.dylib` prints only 6 symbols, despite the
+umbrella providing hundreds via real `LC_REEXPORT_DYLIB` entries -- real
+dyld only flattens that chain at actual load time. An offline script
+trying to verify "does binary X's undefined symbol Y resolve via its
+loaded dylib's `dyld_info -exports` output" will report hundreds of false
+`SYMBOL_NOT_EXPORTED` failures for anything routed through a wholesale
+umbrella reexport (attempted this session while trying to spot-verify the
+76 simple commands offline; recognized the false-positive pattern before
+trusting it -- do not re-attempt this exact approach without first
+replicating `dup_symbol_audit.sh`'s own binary-mode `collect_exports()`
+recursive-`LC_REEXPORT_DYLIB`-walk, which is the one already-correct
+implementation of this in the codebase).
+
+### `libxpc.dylib`: 22 → 10 (two passes)
+
+First pass (9 members removed from `libxpc_syscalls.a`/`libxpc_syscalls2.a`'s
+wholesale extraction in `build_libxpc_dylib.sh`, all confirmed single-owner
+via `nm -m` after):
+- `dyldgen____thread_selfid.o`, `simple_sched_yield.o`/
+  `simple_sched_yield_trap.o` (`___thread_selfid`/`_sched_yield`/
+  `_swtch_pri`): real Apple's own `libsystem_pthread.dylib` API, already
+  a linked sibling.
+- `kill_wrap.o`/`sys____kill.o` (`_kill`/`___kill`): `libsystem_malloc.dylib`
+  is the real canonical owner of `___kill`; plain `_kill` had no other
+  consumer in this dylib at all.
+- `memmove_chk.o`/`stpncpy_chk.o`/`strcpy_chk.o`/`strncpy_chk.o`: duplicated
+  `libsystem_c.dylib`'s real `_FORTIFY_SOURCE` `_chk` tier.
+- `time.o` (`_time`): duplicated `libsystem_c.dylib`'s real BSD `time()`.
+
+Second pass (real BSD syscalls moved to their actual home,
+`libsystem_kernel.dylib` -- see below): `sys__fileport_makefd.o`/
+`sys__fileport_makeport.o` removed.
+
+Remaining 10, not investigated: `__xpc_runtime_is_app_sandboxed`/
+`_uuid_unparse` family (vs `libcopyfile.dylib`, ambiguous ownership --
+neither side is obviously "real Apple's home"), `_connect`/`_socket`/
+`_recvmsg`/`_select` (vs `libresolv.dylib`/`libopenpam.dylib`/
+`libncurses.dylib` -- see "needs a new home" below), `___darwin_check_
+fd_set_overflow` (vs `libncurses.dylib`).
+
+### `libresolv.dylib`: 18 → 10
+
+Real duplicate-**state** bug, this session's highest-priority fix:
+`arc4random.o` is a complete, self-contained RC4 PRNG with real internal
+state (`_rs`/`_rdat`/`_rs_stired`/`_arc4_count`/`_arc4_lock`, confirmed
+`__DATA` storage via `nm -m`, not stateless code) -- `libsystem_c.dylib`
+already has its own complete, independently-seeded copy of the exact same
+algorithm. Two live PRNG states in one process, arguably worse than
+`errno`/`g_zone`: reseeding via `arc4random_stir()`/`arc4random_
+addrandom()` through one copy has zero effect on the other's output
+stream. Removed `arc4random.o` from this dylib's own extract dir (NOT
+from `libresolv.a` itself -- `dyld.macho`'s real static link still needs
+it); `res_init.o`'s one real consumer (DNS-query-ID randomization) now
+resolves to the single, real, canonical copy in `libsystem_c.dylib`
+(already a linked sibling).
+
+Also removed: `libresolv_getentropy_syscall.o` (duplicate raw syscall
+trap) and `libresolv_arc4random_deps_compat.o` (its own header explained
+it existed to give `arc4random.c`'s fallback path local `_open$UNIX2003`/
+`_read$UNIX2003` forwarders under an assumption -- "nothing else in this
+build calls plain read()/open() directly" -- that no longer held once
+`libsystem_c.dylib` gained real `$UNIX2003` exports; confirmed via `nm -m`
+that `_close$UNIX2003`, needed by the exact same `res_init`/`res_query`/
+`res_send` consumers, was ALREADY resolving externally with zero local
+copy, proving the other two didn't need one either).
+
+Remaining 10: BSD socket syscalls (`_connect`/`_socket`/`_recvmsg`/
+`_select`/`_send`/`_writev`, `_chmod`/`_chmod$UNIX2003`) split across
+`libresolv`/`libopenpam`/`libxpc`/`libncurses`/`libcopyfile` with **no
+dylib currently owning them from `libsystem_kernel.dylib`** -- a "needs a
+new home" gap (see below), not a "wrong dylib has the right copy" fix;
+`_atoi`/`_atoi_l` (vs `libncurses.dylib`/`libsystem_c.dylib`) not
+investigated.
+
+### `libsystem_kernel.dylib`/`libsystem_notify.dylib`: real syscalls moved to their actual home
+
+`_fileport_makefd`/`_fileport_makeport` are real BSD syscalls (#430/#431,
+`bsd/kern/syscalls.master`, confirmed by grep) whose real Apple home is
+`libsystem_kernel.dylib` -- but this project only ever had them as private
+stand-ins in `libnotify_client.a`'s `notify_fileport_syscalls.o` AND,
+separately, `libxpc.dylib`'s own `sys__fileport_make{fd,port}.o` -- a
+real 2-way duplicate with **neither side being the correct owner**. Added
+both to `build_libsystem_kernel.sh`'s existing `create-syscalls.pl`
+generator loop (same recipe as `geteuid`/`getegid`; confirmed the
+generator really emits `_fileport_makefd.s`/`_fileport_makeport.s`, not
+`sys_`-prefixed, by actually running it), removed both dylibs' private
+copies. `libsystem_notify.dylib`: 3 → 1. `libxpc.dylib` (see above): the
+other 2 of its fixes this session.
+
+This is the general pattern for the "needs a new home" gaps flagged
+above (`_connect`/`_socket`/`_recvmsg`/`_select`/`_send`/`_writev`/
+`_chmod`) -- check `bsd/kern/syscalls.master` for the real syscall number,
+add it to `build_libsystem_kernel.sh`'s generator loop, then remove every
+sibling's private copy. Not attempted for the socket family this session
+(larger surface, would touch `libresolv`/`libopenpam`/`libxpc`/
+`libncurses`/`libcopyfile` simultaneously) -- flagged as the natural next
+batch.
+
+### Ticket-closing policy update, applied retroactively this session
+
+Structurally-necessary duplicates (a dylib genuinely cannot link its
+"real" owner back due to dependency-order/circularity, verified against
+real Apple's architecture where applicable) are now closed with a
+documented reason, not left open waiting for a fix that shouldn't happen.
+Applied this session: `libsystem_malloc.dylib`'s `_memcpy`/`_memset` (DAR-13,
+closed -- malloc is below `libsystem_c.dylib`, no sibling to fall back to,
+pure code, no shared state) and `libunwind.dylib`'s `__dyld_find_unwind_
+sections`/`__dyld_register_func_for_remove_image`/`_dladdr` (DAR-18,
+closed -- `libunwind_dyld_shim.o` needs `__mh_execute_header`, never
+synthesized for `MH_DYLIB`, AND `libc++.dylib` genuinely depends on
+getting these 3 from `libunwind.dylib` as a real export). `libdyld.dylib`
+(DAR-8) has a similar mix -- 8 of its 11 remaining symbols are now
+documented as structural in a comment there, but the ticket stays open
+because 2 (`___progname` real-state duplicate, `_dlclose` vs
+`libopenpam.dylib`) are genuinely still-fixable gaps, not structural.
+
+### Required final step: full `build_simple_cmds.sh` rebuild + its own limits
+
+Per this session's own explicit instruction, ran a full rebuild of all 76
+simple commands after the sweep (previously skipped per-library to save
+time, per the same instruction) -- **76 built, 0 failed**. This is a real,
+meaningful verification: `ld64`'s own real two-level-namespace symbol
+resolution at link time is the same mechanism dyld uses at load time, so
+zero link failures across all 76 against the fully-updated dylib set is
+authoritative for "these will resolve correctly," not merely a build-succeeds
+formality.
+
+**What could NOT be verified this session, and why:** an actual interactive
+QEMU spot-check (`tools/boot_test.py --login --cmd 'ls /' --cmd 'date' ...`)
+was attempted and did not reach a shell prompt -- confirmed via the log's
+own tail that the boot reached the exact same known-good checkpoint as
+every other boot this session (`jnl: ... flushing fs disk buffer returned
+0x2d`, zero panics, zero "Symbol not found"), i.e. this is the **same
+pre-existing, already-tracked "userland does not yet reach an interactive
+shell prompt from a cold boot" gap** noted in the 2026-08-30 session
+write-up above (backlog item, `_dyld_fork_child`-hang class) -- not a
+regression from this session's changes. Until that gap closes, the
+simple-commands tier's real-world correctness rests on the link-time
+verification above plus the fact that none of this session's symbol moves
+touched anything the 76 commands' own build scripts needed to newly
+resolve (confirmed by their own 0-failure rebuild) -- not a live,
+interactive functional test. Flag this explicitly to any session that
+assumes "boots clean" implies "every command verified interactively";
+it does not, yet.
+
+### Linear
+
+DAR-9 (libxpc), DAR-11 (libresolv), DAR-19 (libsystem_notify) commented
+with before/after + verification detail, left open (real remainder in
+each). DAR-13 (libsystem_malloc), DAR-18 (libunwind) closed under the new
+structural-necessity policy. DAR-8 (libdyld) commented distinguishing its
+8 structural-and-effectively-done symbols from its 2 genuinely open ones,
+left open.

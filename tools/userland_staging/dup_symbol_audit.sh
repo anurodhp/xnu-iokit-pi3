@@ -137,6 +137,38 @@ done
 # otherwise inject "(indirect ...)" text into the name field).
 defined_syms() { nm -gUj "$1" 2>/dev/null | sed '/^$/d' | sort -u; }
 
+# defined_syms_dylib_local <dylib> -- real LOCALLY-DEFINED external
+# symbols only, one per line -- i.e. `defined_syms` MINUS anything that
+# is merely a `-Wl,-reexport_library`/`-Wl,-alias`-of-a-nonlocal-base
+# passthrough of a SIBLING dylib's own real definition.
+#
+# Found 2026-08-31 auditing libdyld.dylib: `nm -gUj` cannot tell "this
+# image really defines this symbol" apart from "this image's export
+# trie merely republishes another image's symbol at the same address"
+# -- both show up as a plain external symbol. `libdyld.dylib` alone had
+# 17 of its 28 "duplicates" turn out to be exactly this: real, valid
+# `[re-export]` entries (confirmed via `xcrun dyld_info -exports`,
+# e.g. "_kill$UNIX2003 (___kill from libsystem_malloc)") pointing at
+# the SAME real address as their sibling's own copy -- not a second,
+# independently-compiled definition at all. Real Darwin does not
+# consider a reexport a duplicate owner; this audit shouldn't either.
+# `dyld_info -exports` distinguishes the two: a genuine local
+# definition prints as "0xADDR  symbol", a reexport prints as
+# "[re-export] symbol (...)" with no address of its own.
+#
+# Deliberately NOT used for `defined_syms` above (binaries, and the
+# `--explain`/general-purpose helper): ordinary executables don't
+# reexport, so `nm -gUj` is already correct and cheaper there. Only
+# dylib-mode's Pass 1 (real bundle of siblings that legitimately
+# reexport each other -- libSystem.B.dylib/libdyld.dylib/libc++.dylib
+# all do) needs this distinction.
+defined_syms_dylib_local() {
+    xcrun dyld_info -exports "$1" 2>/dev/null \
+        | awk '{ gsub(/^[ \t]+/, ""); if ($1 ~ /^0x/) print $2 }' \
+        | sed 's/\[.*//' \
+        | sed '/^$/d' | sort -u
+}
+
 tag() { basename "$1"; }
 
 # ------------------------------------------------------------------
@@ -144,7 +176,7 @@ tag() { basename "$1"; }
 # ------------------------------------------------------------------
 mkdir -p "$WORK/dylib"
 for f in "${DYLIBS[@]}"; do
-    defined_syms "$f" > "$WORK/dylib/$(tag "$f").syms"
+    defined_syms_dylib_local "$f" > "$WORK/dylib/$(tag "$f").syms"
 done
 cat "$WORK"/dylib/*.syms | sort | uniq -d > "$WORK/dylib_dupes.txt"
 

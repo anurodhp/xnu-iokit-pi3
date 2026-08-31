@@ -101,6 +101,19 @@ if [ ! -x "$NEWLD_BINDIR/ld" ]; then
 fi
 
 (cd "$EXTRACT" && ar x "../../libnotify.a" && ar x "../../libnotify_client.a")
+# notify_fileport_syscalls.o REMOVED from THIS dylib's own extract dir
+# 2026-08-31 (static-linking cleanup, dylib-vs-dylib duplicate-symbol
+# pass) -- not from libnotify_client.a itself, which build_bsm_dylib.sh/
+# build_bsm.sh/build_libresolv_dylib.sh/build_syslogd.sh also consume
+# (confirmed via grep none of them extract this specific member).
+# `_fileport_makefd`/`_fileport_makeport` are real BSD syscalls
+# (#430/#431) whose real Apple home is libsystem_kernel.dylib, which now
+# generates them for real via the same create-syscalls.pl recipe used
+# for geteuid/getegid/etc (see build_libsystem_kernel.sh's own comment)
+# -- this dylib already links libsystem_kernel.dylib as a sibling below.
+# `notify_client.o`'s one real, undefined reference to
+# `_fileport_makeport` (confirmed via nm -m) now resolves there instead.
+rm -f "$EXTRACT/notify_fileport_syscalls.o"
 
 # REAL BUG FOUND+FIXED 2026-08-29: creat/shm_open/usleep/
 # os_fault_with_payload/os_variant_has_internal_diagnostics were

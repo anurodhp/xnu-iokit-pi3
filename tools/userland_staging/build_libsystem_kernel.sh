@@ -167,6 +167,20 @@ fi
 # already established (see its own header comment); regenerating here
 # rather than sharing output because the two scripts are independently
 # runnable by design.
+#
+# _fileport_makefd/_fileport_makeport added 2026-08-31 (static-linking
+# cleanup, dylib-vs-dylib duplicate-symbol pass): same exact shape as
+# geteuid/getegid above -- real BSD syscalls #430/#431
+# (bsd/kern/syscalls.master: sys_fileport_makeport/sys_fileport_makefd),
+# real Apple's own home is libsystem_kernel.dylib, but this project only
+# ever had hand-written stand-ins in libsystem_notify.dylib
+# (notify_dyld_compat.c -- its own header comment is stale, dated "this
+# project's fully-static (no dyld) build") and libxpc.dylib
+# (sys__fileport_makefd.o/sys__fileport_makeport.o), each a private
+# copy with no canonical owner. Confirmed via create-syscalls.pl's own
+# real output that it generates `_fileport_makefd.s`/
+# `_fileport_makeport.s` (not `sys_`-prefixed -- same convention as
+# every other entry in this loop).
 # libmach_ipc.a's Mach MIG user-stub runtime, moved here 2026-08-29
 # (static-linking cleanup, Phase 1a). This archive is the real generated
 # MIG client side of clock.defs/mach_host.defs/task.defs plus
@@ -324,7 +338,7 @@ ARCHS=arm64 perl "$XNU/libsyscall/xcodescripts/create-syscalls.pl" \
     iPhoneOS \
     "$SYSGEN" >/dev/null
 MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
-for s in _geteuid _getegid _getuid _pread _pwrite; do
+for s in _geteuid _getegid _getuid _pread _pwrite _fileport_makefd _fileport_makeport; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
         -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
         -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
@@ -410,6 +424,7 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/sys_geteuid.o" "$OUT/libsystem_kernel/sys_getegid.o" \
     "$OUT/libsystem_kernel/sys_getuid.o" \
     "$OUT/libsystem_kernel/sys_pread.o" "$OUT/libsystem_kernel/sys_pwrite.o" \
+    "$OUT/libsystem_kernel/sys_fileport_makefd.o" "$OUT/libsystem_kernel/sys_fileport_makeport.o" \
     "$OUT/libsystem_kernel/mach_semaphore_traps.o" "$OUT/libsystem_kernel/semaphore_wrap.o" \
     "$OUT/libsystem_kernel/mach_error_string.o" "$OUT/libsystem_kernel/mach_error_string_minimal_compat.o" \
     "$OUT/libsystem_kernel/mach_port_gap_closures2.o" "$OUT/libsystem_kernel/mach_port_gap_closures2_traps.o" \

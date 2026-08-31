@@ -162,6 +162,49 @@ if [ ! -x "$NEWLD_BINDIR/ld" ]; then
 fi
 
 (cd "$EXTRACT" && ar x "../../libresolv.a")
+# arc4random.o/libresolv_getentropy_syscall.o REMOVED from THIS dylib's
+# own extract dir 2026-08-31 (static-linking cleanup, dylib-vs-dylib
+# duplicate-symbol pass) -- NOT from libresolv.a itself, which stays
+# intact (dyld.macho's own real static link in build_dyld_link.sh still
+# needs it, and dyld runs before any dylib exists).
+#
+# Real duplicate-STATE bug, the highest-priority category this pass
+# tracks: arc4random.o is a complete, self-contained RC4-based PRNG
+# with real internal state (`_rs`/`_rdat`/`_rs_stired`/
+# `_rs_data_available`/`_arc4_count`/`_arc4_lock`, confirmed via nm -m
+# -- __DATA,__bss/__DATA,__data, not stateless code). libsystem_c.dylib
+# already has its own complete, real, independently-seeded copy of the
+# exact same algorithm -- two live PRNG states in one process is the
+# same bug class as mach_task_self_/g_zone (arguably worse: a caller
+# reseeding via `arc4random_stir()`/`arc4random_addrandom()` through one
+# copy has zero effect on the other's output stream). This dylib already
+# links libsystem_c.dylib as a sibling; the only real in-archive
+# consumer, `res_init.o`'s one undefined reference to `_arc4random`
+# (randomizing DNS query IDs), now resolves externally to the single,
+# real, canonical copy.
+#
+# libresolv_getentropy_syscall.o's own `_getentropy` is a plain,
+# stateless raw syscall trap duplicating libsystem_c.dylib's own real
+# copy of the exact same wrapper -- confirmed via nm -m no other member
+# of this archive defines it (arc4random.o's own reference to it was
+# already `undefined`, satisfied the same way).
+rm -f "$EXTRACT/arc4random.o" "$EXTRACT/libresolv_getentropy_syscall.o"
+
+# libresolv_arc4random_deps_compat.o REMOVED too: its own header
+# explains it exists purely to give arc4random.c's real fallback path
+# (_my_getentropy() opening/reading /dev/urandom directly) local
+# `_open$UNIX2003`/`_read$UNIX2003` forwarders, reasoning at the time
+# that `-Wl,-alias` needs a local base and "nothing else in this build
+# calls plain read()/open() directly." That reasoning no longer holds:
+# confirmed via nm -m that `_close$UNIX2003` -- needed by the exact same
+# res_init.o/res_query.o/res_send.o consumers, from the exact same
+# libsystem_c.dylib sibling -- was ALREADY resolving externally via
+# ordinary two-level-namespace binding with zero local copy, proving
+# `_open$UNIX2003`/`_read$UNIX2003` don't need one either. With
+# arc4random.o gone (above), `_open$UNIX2003` has no consumer left in
+# this archive at all; `_read$UNIX2003`'s one real remaining consumer
+# (res_send.o) now resolves the same way `_close$UNIX2003` always did.
+rm -f "$EXTRACT/libresolv_arc4random_deps_compat.o"
 
 # Same real CFLAGS recipe build_libresolv.sh's own header already
 # documents (USE__RES_9/PRIVATE and the dnsinfo.h compat_include it

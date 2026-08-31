@@ -122,6 +122,56 @@ fi
 (cd "$EXTRACT" && ar x "../../libxpc_syscalls2.a")
 (cd "$EXTRACT" && ar x "../../syslogd_libc_extras.a" sys__dup.o)
 
+# 5 members REMOVED 2026-08-31 (static-linking cleanup, dylib-vs-dylib
+# duplicate-symbol pass): libxpc_syscalls.a's own private copies of
+# `___thread_selfid` (dyldgen____thread_selfid.o), `_sched_yield`/
+# `_swtch_pri` (simple_sched_yield.o/simple_sched_yield_trap.o), and
+# `_kill`/`___kill` (kill_wrap.o/sys____kill.o) all duplicate real
+# exports of siblings this dylib already links: `___thread_selfid`/
+# `_sched_yield`/`_swtch_pri` are real Apple's own libsystem_pthread.
+# dylib API (see build_libsystem_pthread.sh's own header -- this
+# project moved them there specifically as "real Apple exports every
+# one of these from libsystem_pthread.dylib -- this is where they
+# belong"), and `___kill` is libsystem_malloc.dylib's real canonical
+# copy (build_libsystem_malloc.sh's own `-Wl,-alias` base). Confirmed
+# via `nm -m` across every other object in this extract dir that the
+# ONLY real consumer is `libproc.o`'s one undefined reference to
+# `___thread_selfid` -- it now resolves externally to the real
+# libsystem_pthread.dylib sibling below instead. Plain `_kill` (from
+# kill_wrap.o) has no other consumer at all in this dylib; removing it
+# also drops this dylib's contribution to a separate, still-open 4-way
+# `_kill` duplicate (libdyld.dylib/libncurses.dylib/libsystem_c.dylib).
+rm -f "$EXTRACT/dyldgen____thread_selfid.o" \
+      "$EXTRACT/simple_sched_yield.o" "$EXTRACT/simple_sched_yield_trap.o" \
+      "$EXTRACT/kill_wrap.o" "$EXTRACT/sys____kill.o"
+
+# 4 more members REMOVED same pass: libxpc_syscalls2.a's own private
+# `_chk`-tier copies (memmove_chk.o/stpncpy_chk.o/strcpy_chk.o/
+# strncpy_chk.o) duplicate libsystem_c.dylib's real `_FORTIFY_SOURCE`
+# `_chk` tier (established as libsystem_c.dylib's canonical home in the
+# 2026-08-30 session) -- this dylib already links libsystem_c.dylib as
+# a sibling. Confirmed via `nm -m` that the only in-dylib consumers
+# (liblaunch.o/libproc.o/libvproc.o) merely reference these as
+# undefined, so they now resolve externally instead.
+rm -f "$EXTRACT/memmove_chk.o" "$EXTRACT/stpncpy_chk.o" \
+      "$EXTRACT/strcpy_chk.o" "$EXTRACT/strncpy_chk.o"
+
+# time.o REMOVED: its own `_time` duplicates libsystem_c.dylib's real
+# BSD `time()` syscall wrapper (already a linked sibling below);
+# confirmed via nm -m no other object in this extract dir references
+# `_time` locally.
+rm -f "$EXTRACT/time.o"
+
+# sys__fileport_makefd.o/sys__fileport_makeport.o REMOVED 2026-08-31:
+# `_fileport_makefd`/`_fileport_makeport` are real BSD syscalls
+# (#430/#431) whose real home is libsystem_kernel.dylib, which now
+# generates them for real (see build_libsystem_kernel.sh's own
+# comment, same create-syscalls.pl recipe as geteuid/getegid/etc) --
+# this dylib already links libsystem_kernel.dylib as a sibling below.
+# `libvproc.o`/`xpc_type.o`'s real, undefined references (confirmed via
+# nm -m) now resolve there instead of this dylib's own private trap.
+rm -f "$EXTRACT/sys__fileport_makefd.o" "$EXTRACT/sys__fileport_makeport.o"
+
 # Members dropped 2026-08-29 (static-linking cleanup, Phase 1a). Every
 # one of these was a second copy of something a sibling dylib already on
 # this link line now owns, so every process loading libxpc.dylib next to
