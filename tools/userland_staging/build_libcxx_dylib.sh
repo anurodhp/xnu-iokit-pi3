@@ -285,6 +285,41 @@ LIBCXXABI="../../third_party/llvm-project/libcxxabi"
 # for real commands like date/ls/tar) -- real libc++'s <locale>
 # std::time_put/std::time_get facets (locale.o) call strftime_l()
 # directly, not just through the already-excluded wide-char wcsftime.o.
+#
+# localtime.o/timezone_unix03.o/strftime.o REMOVED from this loop
+# 2026-08-31 (static-linking cleanup, locale/timezone-string
+# consolidation batch): round 8 (continuation 6) found removing just
+# localtime.o/timezone_unix03.o structurally blocked, because this
+# dylib's own strftime.o (kept resident) directly calls
+# __st_get_timezone/___darwin_altzone, both real Apple `.private_extern`
+# symbols that cannot cross a dylib boundary -- so those two objects had
+# to stay wherever strftime.o stayed. This session moves the WHOLE
+# coupled trio to libsystem_c.dylib instead of leaving strftime.o behind
+# (see that script's own comment for the full real-owner writeup) --
+# libsystem_c.dylib is a sibling below and now exports
+# _strftime$UNIX2003/_strftime_l$UNIX2003/_strftime_l/_mktime$UNIX2003
+# with the exact same symbol names this dylib's own consumers (this
+# file's own locale.o, calling plain _strftime_l) already expected, so
+# no other relink was needed just to keep resolving.
+#
+# timelocal.o STAYS (real, separate reason, not the same bug): xlocale.o
+# just below (kept resident for the still-open, differently-scoped
+# xlocale/DAR-159 reason -- ___global_locale/___locale_key are ALSO real
+# `.private_extern` symbols) directly calls ___time_load_locale, itself
+# ALSO private-extern (confirmed via `nm -m`) -- so timelocal.o must stay
+# resident beside xlocale.o regardless of what happened to strftime.o
+# above.
+#
+# asctime.o ALSO REMOVED 2026-08-31 (same session, closing DAR-134): the
+# pre-existing documented exception ("real FreeBSD source here vs
+# libsystem_c.dylib's own deliberately temporary hand-rolled stand-in")
+# no longer holds -- libsystem_c.dylib's own asctime.o is now the SAME
+# real, unmodified FreeBSD source too (DAR-134's real blocker,
+# strftime_l(), just got ported as part of this same batch, see
+# build_libsystem_c.sh's own asctime.c comment). Confirmed via `nm -u`
+# asctime.c needs neither localtime.o/timezone_unix03.o (it hardcodes
+# its own day/month name tables) nor timelocal.o, so removing it doesn't
+# disturb anything else in this loop.
 LOCALE_CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness \
     -include libc_build_prototypes.h \
@@ -297,7 +332,7 @@ LOCALE_CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno
     -I ../../third_party/libpthread/include -I ../../third_party/libpthread/private \
     -I $XNU/bsd -I $XNU/osfmk -I $XNU/libsyscall \
     -I ../../generated"
-for f in localtime timezone_unix03 asctime strftime timelocal; do
+for f in timelocal; do
     src="$LIBC/stdtime/FreeBSD/${f}.c"
     [ -f "$src" ] || src="$LIBC/stdtime/${f}.c"
     "$CLANG" $LOCALE_CFLAGS "$src" -o "$EXTRACT/${f}.o"
@@ -307,10 +342,23 @@ mkdir -p "$OUT/system"
 rm -f "$OUT/system/libc++.dylib"
 # ___progname: same real cross-image lookup build_libsystem_c.sh's own
 # comment already documents (real per-process global living in the main
-# executable's own crt.c). _fputs$UNIX2003/_strftime_l: real UNIX2003
-# aliases this dylib's own freshly-compiled strftime.o/asctime.o need,
-# not otherwise exported by libsystem_c.dylib (base _fputs is, the
-# suffixed alias isn't).
+# executable's own crt.c). _fputs$UNIX2003: real UNIX2003 alias this
+# dylib's own locale.o/ios_base.o etc need -- ld64 resolves the alias's
+# base (_fputs) externally to libsystem_c.dylib (a sibling below) and
+# correctly emits a real `[re-export]` entry, confirmed via `dyld_info
+# -exports` (not just `nm`, per this project's own ld64 `-alias`
+# nonlocal-base landmine lesson).
+#
+# The previous `-Wl,-alias,'_strftime_l$UNIX2003',_strftime_l` entry was
+# REMOVED 2026-08-31 (static-linking cleanup, locale/timezone-string
+# consolidation batch): it existed only because this dylib used to
+# compile its own strftime.o (see the LOCALE_CFLAGS loop above, now
+# trimmed to just asctime/timelocal). Now that libsystem_c.dylib is the
+# sole owner and itself exports both `_strftime_l` and
+# `_strftime_l$UNIX2003` directly (see that script's own alias list),
+# this dylib's locale.o (which calls plain `_strftime_l`, confirmed via
+# `nm -u`) resolves straight to that sibling -- no alias needed here at
+# all any more.
     # -not_for_dyld_shared_cache: real, newly-surfaced requirement of
     # the daily-driver Xcode's newer ld (NEWLD_BINDIR above) -- it
     # refuses "-undefined dynamic_lookup"/-U on a dylib it classifies
@@ -326,7 +374,6 @@ rm -f "$OUT/system/libc++.dylib"
     -Wl,-fixup_chains \
     -Wl,-U,___progname \
     -Wl,-alias,_fputs,'_fputs$UNIX2003' \
-    -Wl,-alias,'_strftime_l$UNIX2003',_strftime_l \
     -o "$OUT/system/libc++.dylib" \
     "$EXTRACT"/*.o \
     "$OUT/system/libunwind.dylib" \

@@ -221,56 +221,23 @@ double log(double x) {
     return (double)e * 0.6931471805599453 + 2.0 * sum;
 }
 
-/* asctime()/asctime_r(): same real gap (strftime_l wall) and same real
- * locale-independent fixed-format implementation as
- * launchd_audit_syscalls_compat.c's own copy (see that file's header
- * for the full writeup, docs/backlog.md item d11) -- duplicated here
- * because localtime.o (extracted below, real Apple source) needs it
- * too and this is a separate dylib image from launchd.macho's own
- * link, no symbol conflict possible.
+/* asctime()/asctime_r(): the hand-rolled, locale-independent stand-in
+ * that used to live here (and still lives in
+ * launchd_audit_syscalls_compat.c's own separate copy, real gap docs/
+ * backlog.md item d11) was REMOVED 2026-08-31 (static-linking cleanup,
+ * locale/timezone-string consolidation batch, closing DAR-134). Real
+ * Apple/FreeBSD source (`stdtime/FreeBSD/asctime.c`) only needed
+ * `strftime_l()` to format the 4-digit year -- the one real wall this
+ * ticket was blocked on -- and this same build script now compiles a
+ * real `strftime.o` (see its own "strftime/strftime_l" comment) for the
+ * unrelated locale/timezone-string consolidation batch. Re-tested here
+ * (same "atol/strtoll/strtoul just work once retried" pattern DAR-134's
+ * own description predicted) and confirmed via a real trial compile:
+ * asctime.c's only undefined refs (`___error`/`_sprintf`/`_strcpy`/
+ * `_strftime_l$UNIX2003`/`_strlen`) are ALL already resident in this
+ * dylib. See build_libsystem_c.sh's own asctime.c compile line for
+ * where the real source is pulled in now instead.
  *
  * (__isthreaded is NOT defined here -- already real, in libc_gen.a's
  * own libc_gen_shims.o, confirmed via a real duplicate-symbol link
  * error when a first attempt also defined it here.) */
-
-static const char *iokit_wday_name[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
-static const char *iokit_mon_name[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                                           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
-
-static char *iokit_put2(char *p, int v) {
-    p[0] = (char)('0' + (v / 10) % 10);
-    p[1] = (char)('0' + v % 10);
-    return p + 2;
-}
-
-char *asctime_r(const struct tm *timeptr, char *buf) {
-    const char *wd = (timeptr->tm_wday >= 0 && timeptr->tm_wday < 7) ? iokit_wday_name[timeptr->tm_wday] : "???";
-    const char *mo = (timeptr->tm_mon >= 0 && timeptr->tm_mon < 12) ? iokit_mon_name[timeptr->tm_mon] : "???";
-    char *p = buf;
-    p[0] = wd[0]; p[1] = wd[1]; p[2] = wd[2]; p[3] = ' ';
-    p[4] = mo[0]; p[5] = mo[1]; p[6] = mo[2]; p[7] = ' ';
-    p += 8;
-    p = iokit_put2(p, timeptr->tm_mday < 0 ? 0 : timeptr->tm_mday);
-    *p++ = ' ';
-    p = iokit_put2(p, timeptr->tm_hour);
-    *p++ = ':';
-    p = iokit_put2(p, timeptr->tm_min);
-    *p++ = ':';
-    p = iokit_put2(p, timeptr->tm_sec);
-    *p++ = ' ';
-    int year = timeptr->tm_year + 1900;
-    if (year < 0) year = 0;
-    p[3] = (char)('0' + year % 10); year /= 10;
-    p[2] = (char)('0' + year % 10); year /= 10;
-    p[1] = (char)('0' + year % 10); year /= 10;
-    p[0] = (char)('0' + year % 10);
-    p += 4;
-    *p++ = '\n';
-    *p = 0;
-    return buf;
-}
-
-static char iokit_asctime_buf[26];
-char *asctime(const struct tm *timeptr) {
-    return asctime_r(timeptr, iokit_asctime_buf);
-}

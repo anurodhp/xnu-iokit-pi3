@@ -108,59 +108,25 @@ int gethostuuid(uuid_t uuid, const struct timespec *timeoutp) {
     return (int)syscall3(SYS_gethostuuid, (long)uuid, (long)timeoutp, 0);
 }
 
-/* asctime()/asctime_r(): real FreeBSD source (stdtime/FreeBSD/asctime.c)
- * exists and is pinned, but its own asctime_r() calls strftime_l() just
- * to format a 4-digit year -- a real, large, locale-aware formatter this
- * project doesn't have (see docs/backlog.md item d11 for the full real
- * investigation: isspace_l/toupper_l/__current_locale() etc from the
- * same xlocale.c already link fine now, strftime_l specifically is the
- * one still-missing piece). asctime's output format is fixed by the C
- * standard regardless of locale ("Www Mmm dd hh:mm:ss yyyy\n", exactly
- * 26 bytes with the trailing NUL) -- real callers here (core.c's
- * jobmgr_shutdown/_remove) don't need locale-aware formatting, just this
- * fixed layout, so a small direct implementation is a legitimate last
- * resort (CLAUDE.md source-priority rule), not a functional shortcut. */
-static const char *wday_name[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
-static const char *mon_name[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
-
-static char *put2(char *p, int v) {
-    p[0] = (char)('0' + (v / 10) % 10);
-    p[1] = (char)('0' + v % 10);
-    return p + 2;
-}
-
-char *asctime_r(const struct tm *timeptr, char *buf) {
-    const char *wd = (timeptr->tm_wday >= 0 && timeptr->tm_wday < 7) ? wday_name[timeptr->tm_wday] : "???";
-    const char *mo = (timeptr->tm_mon >= 0 && timeptr->tm_mon < 12) ? mon_name[timeptr->tm_mon] : "???";
-    char *p = buf;
-    p[0] = wd[0]; p[1] = wd[1]; p[2] = wd[2]; p[3] = ' ';
-    p[4] = mo[0]; p[5] = mo[1]; p[6] = mo[2]; p[7] = ' ';
-    p += 8;
-    p = put2(p, timeptr->tm_mday < 0 ? 0 : timeptr->tm_mday);
-    *p++ = ' ';
-    p = put2(p, timeptr->tm_hour);
-    *p++ = ':';
-    p = put2(p, timeptr->tm_min);
-    *p++ = ':';
-    p = put2(p, timeptr->tm_sec);
-    *p++ = ' ';
-    int year = timeptr->tm_year + 1900;
-    if (year < 0) year = 0;
-    p[3] = (char)('0' + year % 10); year /= 10;
-    p[2] = (char)('0' + year % 10); year /= 10;
-    p[1] = (char)('0' + year % 10); year /= 10;
-    p[0] = (char)('0' + year % 10);
-    p += 4;
-    *p++ = '\n';
-    *p = 0;
-    return buf;
-}
-
-static char asctime_buf[26];
-char *asctime(const struct tm *timeptr) {
-    return asctime_r(timeptr, asctime_buf);
-}
+/* asctime()/asctime_r(): the hand-rolled, locale-independent stand-in
+ * that used to live here was REMOVED 2026-08-31 (static-linking
+ * cleanup, locale/timezone-string consolidation batch, closing
+ * DAR-134). Real blocker was exactly what the comment above used to say:
+ * asctime_r() calls strftime_l() just to format the 4-digit year, and
+ * this project had no strftime_l() anywhere. `build_libsystem_c.sh` now
+ * compiles a real `strftime.o` (real FreeBSD source, for the unrelated
+ * locale/timezone-string consolidation this same session did) plus its
+ * own real `asctime.o`, so `libsystem_c.dylib` -- already a real,
+ * direct sibling on `launchd.macho`'s own link line (see
+ * build_launchd.sh) -- now exports the genuine `_asctime`/`_asctime_r`.
+ * This file's own hand-rolled copy was force_loaded into launchd.macho
+ * right alongside that sibling, so it was shadowing the real
+ * implementation with a second, private one -- the same "local define
+ * shadows a loaded dylib's real export" class this whole sweep exists to
+ * close (confirmed via `dup_symbol_audit.sh --explain`, which already
+ * flagged launchd.macho for the adjacent `_localtime` case). Removing it
+ * lets launchd.macho's own undefined `_asctime`/`_asctime_r` references
+ * (core.c's jobmgr_shutdown/_remove) resolve to the one real owner. */
 
 mach_port_name_t audit_session_self(void) {
     return MACH_PORT_NULL;

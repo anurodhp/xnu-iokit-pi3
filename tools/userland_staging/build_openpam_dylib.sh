@@ -145,51 +145,56 @@ fi
 # trial link (0 undefined symbols) before treating this as done, not
 # assumed.
 #
-# `localtime.o`/`timezone_unix03.o`/`asctime.o` are deliberately KEPT
-# (NOT removed, despite also duplicating libsystem_c.dylib's own
-# separately-extracted copies of the same two members) -- investigated
-# and found structural, not a quick fix:
-#   - `localtime.o`+`timezone_unix03.o` together provide the whole
-#     tzset/localtime/gmtime/ctime/mktime/timegm/tzname/daylight family,
-#     including real MUTABLE STATE (`_tzname`/`_daylight`/`_lcl_rwlock`)
-#     -- genuinely the same duplicate-state shape as `mach_task_self_`/
-#     `g_zone`/`errno` already fixed elsewhere in this sweep, and a
-#     tempting next target. Real trial removal broke the link: this
-#     dylib's own (also wholesale-extracted, still-present) `strftime.o`
-#     directly references `__st_get_timezone` (timezone_unix03.o) and
-#     `___darwin_altzone` (localtime.o) for `%z`/`%Z` formatting, and
-#     both are real Apple `.private_extern` symbols (confirmed via
-#     `nm -m`, "was a private external") -- private externs cannot cross
-#     a dylib boundary, so `strftime.o` structurally requires its own
-#     sibling copies of both objects to stay in the SAME image. Since
-#     `localtime.o`/`timezone_unix03.o` would therefore stay
-#     link-resident regardless, narrowing just their OTHER, genuinely-
-#     public duplicate exports (tzset/tzname/daylight/etc, via the same
-#     `ld -r -unexported_symbol` trick `narrow_rune_locale.sh` uses)
-#     would only hide the duplicate state from `nm`/`dup_symbol_audit.sh`
-#     without eliminating it, since nothing else in this project's build
-#     graph currently proves no OTHER already-compiled object in this
-#     dylib's own extract dir calls tzset()/localtime() through the
-#     now-would-be-hidden local copy instead of the sibling's -- a real
-#     regression risk, not a hygiene win. Flagged for a dedicated future
-#     session (same treatment as `_vproc_swap_integer`, DAR-8): the real
-#     fix needs either routing `%z`/`%Z` formatting through
-#     libsystem_c.dylib's own externally-callable API instead of these
-#     private helpers, or a deeper source-level restructure, not a
-#     mechanical symbol move.
-#   - `asctime.o`: libsystem_c.dylib's own `_asctime`/`_asctime_r` is a
-#     project-authored, deliberately temporary stand-in
-#     (`libsystem_c_gap_compat.c`, blocked on the real strftime_l()/
-#     xlocale chain), while this dylib's `asctime.o` is the real,
-#     unmodified FreeBSD source. Consolidating onto libsystem_c.dylib
-#     today would silently downgrade this dylib to the inferior stub --
-#     a real behavior regression, not a symbol-hygiene win -- so this is
-#     left as a documented, deliberate exception, same shape as the
-#     openpam ENOSYS-stub/DAR-18 cases already recorded in
-#     docs/static-linking-cleanup-plan.md.
+# `localtime.o`/`timezone_unix03.o`/`strftime.o` REMOVED too 2026-08-31
+# (static-linking cleanup, locale/timezone-string consolidation batch).
+# Round 8 (continuation 6) tried removing just `localtime.o`/
+# `timezone_unix03.o` and found it structurally blocked: this dylib's
+# own (also wholesale-extracted) `strftime.o` directly references
+# `__st_get_timezone` (timezone_unix03.o) and `___darwin_altzone`
+# (localtime.o) for `%z`/`%Z` formatting, and both are real Apple
+# `.private_extern` symbols (confirmed via `nm -m`, "was a private
+# external") -- private externs cannot cross a dylib boundary, so as
+# long as `strftime.o` stayed resident here, its two private-extern
+# deps had to stay right beside it. This session's fix removes the
+# WHOLE coupled trio instead of leaving `strftime.o` behind:
+# `build_libsystem_c.sh` now compiles its own `strftime.o` (same real
+# FreeBSD source, same `__DARWIN_UNIX03=1` recipe, so the exported
+# symbol names match byte-for-byte: `_strftime$UNIX2003`/
+# `_strftime_l$UNIX2003`/`_strftime_l`) and is a real, complete owner --
+# its own `localtime.o`/`timezone_unix03.o` (already resident there for
+# ICU's `mktime` gap) satisfy `strftime.o`'s private-extern refs
+# locally, plus a new `-Wl,-alias,_mktime,'_mktime$UNIX2003'` there
+# bridges the one real symbol-name difference between the two
+# `__DARWIN_UNIX03` configurations (`libsystem_c.dylib`'s own
+# `localtime.o` comes from `liblaunchd_core.a`, deliberately built
+# WITHOUT UNIX03 for ICU's plain-`_mktime` expectation -- see that
+# script's own comment). This dylib already links `libsystem_c.dylib` as
+# a sibling below, so all of `tzset`/`localtime`/`gmtime`/`ctime`/
+# `mktime`/`timegm`/`tzname`/`daylight`/`strftime`/`strftime_l` -- real
+# duplicate STATE as well as code (`_tzname`/`_daylight`/`_lcl_rwlock`
+# were each independently instantiated before this fix, the same
+# duplicate-state shape as the already-fixed `mach_task_self_`/`g_zone`/
+# `errno` cases) -- now resolve to the one real owner. Verified via a
+# real trial link (0 undefined symbols) before treating this as done.
+#
+# `asctime.o` ALSO REMOVED 2026-08-31 (same session, closing DAR-134):
+# the previous exception here ("libsystem_c.dylib's own `_asctime`/
+# `_asctime_r` is a project-authored, deliberately temporary stand-in,
+# consolidating would silently downgrade to the inferior stub") no
+# longer holds -- DAR-134's real blocker (`strftime_l()`, which
+# `asctime_r()` calls to format the 4-digit year) got ported this same
+# session as part of the strftime.o move above, so `build_libsystem_c.sh`
+# now compiles the SAME real, unmodified FreeBSD `asctime.c` too.
+# Consolidating is a plain, ordinary dedup now, not a regression.
+# Confirmed via `nm -u` that `asctime.c` needs neither `localtime.o`/
+# `timezone_unix03.o` (it hardcodes its own day/month name tables) nor
+# anything else just removed, so removing it doesn't disturb anything
+# else in this extract dir.
 rm -f "$EXTRACT"/time.o "$EXTRACT"/gettimeofday.o \
       "$EXTRACT"/ls_fenv_compat.o "$EXTRACT"/ps_commpage_gettimeofday_stub.o \
-      "$EXTRACT"/simple_cmds_time_compat.o
+      "$EXTRACT"/simple_cmds_time_compat.o \
+      "$EXTRACT"/localtime.o "$EXTRACT"/timezone_unix03.o "$EXTRACT"/strftime.o \
+      "$EXTRACT"/asctime.o
 
 # openpam_syscalls_compat.o REMOVED too 2026-08-31 (static-linking
 # cleanup, dylib-vs-dylib duplicate-symbol pass, continuation): its own

@@ -719,7 +719,6 @@ B date.macho _time2posix
 B date.macho _timegm
 B date.macho _timelocal
 B date.macho _timeoff
-B date.macho _timezone$UNIX2003
 B date.macho _tzname
 B date.macho _tzset
 B date.macho _tzsetwall
@@ -855,7 +854,6 @@ B diff.macho _time2posix
 B diff.macho _timegm
 B diff.macho _timelocal
 B diff.macho _timeoff
-B diff.macho _timezone$UNIX2003
 B diff.macho _tzname
 B diff.macho _tzset
 B diff.macho _tzsetwall
@@ -1308,7 +1306,6 @@ B find.macho _time2posix
 B find.macho _timegm
 B find.macho _timelocal
 B find.macho _timeoff
-B find.macho _timezone$UNIX2003
 B find.macho _tzname
 B find.macho _tzset
 B find.macho _tzsetwall
@@ -1493,7 +1490,6 @@ B gzip.macho _time2posix
 B gzip.macho _timegm
 B gzip.macho _timelocal
 B gzip.macho _timeoff
-B gzip.macho _timezone$UNIX2003
 B gzip.macho _tzname
 B gzip.macho _tzset
 B gzip.macho _tzsetwall
@@ -1786,7 +1782,6 @@ B jot.macho _time2posix
 B jot.macho _timegm
 B jot.macho _timelocal
 B jot.macho _timeoff
-B jot.macho _timezone$UNIX2003
 B jot.macho _tzname
 B jot.macho _tzset
 B jot.macho _tzsetwall
@@ -2282,8 +2277,6 @@ B launchd.macho _arc4random_addrandom
 B launchd.macho _arc4random_buf
 B launchd.macho _arc4random_stir
 B launchd.macho _arc4random_uniform
-B launchd.macho _asctime
-B launchd.macho _asctime_r
 B launchd.macho _asprintf
 B launchd.macho _asprintf_l
 B launchd.macho _atol
@@ -3006,7 +2999,6 @@ B less.macho _time2posix
 B less.macho _timegm
 B less.macho _timelocal
 B less.macho _timeoff
-B less.macho _timezone$UNIX2003
 B less.macho _tzname
 B less.macho _tzset
 B less.macho _tzsetwall
@@ -3214,7 +3206,6 @@ B ls.macho _time2posix
 B ls.macho _timegm
 B ls.macho _timelocal
 B ls.macho _timeoff
-B ls.macho _timezone$UNIX2003
 B ls.macho _tzname
 B ls.macho _tzset
 B ls.macho _tzsetwall
@@ -4888,7 +4879,6 @@ B stat.macho _time2posix
 B stat.macho _timegm
 B stat.macho _timelocal
 B stat.macho _timeoff
-B stat.macho _timezone$UNIX2003
 B stat.macho _tzname
 B stat.macho _tzset
 B stat.macho _tzsetwall
@@ -5893,7 +5883,6 @@ B tar.macho _time2posix
 B tar.macho _timegm
 B tar.macho _timelocal
 B tar.macho _timeoff
-B tar.macho _timezone$UNIX2003
 B tar.macho _tzname
 B tar.macho _tzset
 B tar.macho _tzsetwall
@@ -6063,7 +6052,6 @@ B touch.macho _time2posix
 B touch.macho _timegm
 B touch.macho _timelocal
 B touch.macho _timeoff
-B touch.macho _timezone$UNIX2003
 B touch.macho _tzname
 B touch.macho _tzset
 B touch.macho _tzsetwall
@@ -6550,13 +6538,8 @@ D __dyld_register_func_for_remove_image
 D __PathLocale
 D __xpc_runtime_is_app_sandboxed
 D _acos
-D _asctime
-D _asctime_r
 D _asin
 D _connect
-D _ctime
-D _ctime_r
-D _daylight
 D _dladdr
 D _dlopen
 D _dlsym
@@ -6565,21 +6548,14 @@ D _fabs
 D _fmod
 D _fpathconf
 D _freelocale
-D _gmtime
-D _gmtime_r
-D _localtime
-D _localtime_r
 D _mbsnrtowcs
 D _mbsnrtowcs_l
 D _memcpy
 D _memset
-D _mktime$UNIX2003
 D _modf
 D _nanosleep
 D _newlocale
-D _offtime
 D _open_dprotected_np
-D _posix2time
 D _pow
 D _querylocale
 D _scalbn
@@ -6588,22 +6564,12 @@ D _setlocale
 D _sleep
 D _socket
 D _sqrt
-D _strftime_l$UNIX2003
-D _strftime$UNIX2003
 D _strtoll
 D _strtoll_l
 D _strtoul
 D _strtoul_l
 D _syslog
-D _time2posix
-D _timegm
-D _timelocal
-D _timeoff
-D _timezone$UNIX2003
 D _trunc
-D _tzname
-D _tzset
-D _tzsetwall
 D _uselocale
 D _vproc_swap_integer
 D _wcsnrtombs

@@ -339,6 +339,56 @@ fi
 (cd "$EXTRACT" && ar x "../../liblaunchd_core.a" localtime.o timezone_unix03.o strcat_chk.o)
 (cd "$EXTRACT" && ar x "../../libxpc_syscalls2.a" chk_fail_compat.o strcpy_chk.o strncpy_chk.o)
 
+# strftime/strftime_l: real Apple source (stdtime/FreeBSD/strftime.c),
+# newly compiled here 2026-08-31 (static-linking cleanup, locale/
+# timezone-string consolidation batch) -- this dylib had NO copy of
+# strftime() at all before this (a real, pre-existing gap; libc++.dylib
+# and libopenpam.dylib each independently compiled their own, making
+# THEM the accidental owners of a real Apple libsystem_c export). Round
+# 8 (2026-08-31, continuation 6) investigated removing localtime.o/
+# timezone_unix03.o from those two siblings and found it structurally
+# blocked: strftime.o (kept resident in both) directly calls
+# __st_get_timezone (timezone_unix03.o) and ___darwin_altzone
+# (localtime.o), both real Apple `.private_extern` symbols that cannot
+# cross a dylib boundary -- so as long as strftime.o stayed resident
+# there, its two private-extern dependencies had to stay right beside
+# it. This session's fix moves the WHOLE coupled trio here instead of
+# leaving strftime.o behind: once strftime.o is compiled into THIS
+# image, its private-extern refs resolve locally (this dylib already
+# carries localtime.o/timezone_unix03.o for the reason above, plus
+# xlocale.o/ldpart.o/timelocal.o for __global_locale/__locale_key/
+# __get_current_time_locale, and fprintf.o/sprintf.o for
+# _fprintf_l/_sprintf_l -- confirmed via a real trial compile, every
+# other undefined symbol strftime.o needs is already resident here).
+# Compiled with the same $SIGLIST_CFLAGS (__DARWIN_UNIX03=1) recipe
+# build_libcxx_dylib.sh/build_openpam_dylib.sh already use for this
+# exact file, so the exported symbol names match what those sibling
+# dylibs' consumers already expect byte-for-byte
+# (_strftime$UNIX2003/_strftime_l$UNIX2003/_strftime_l) -- no relink
+# needed anywhere else just to keep the same names, only to repoint
+# which dylib owns them.
+"$CLANG" $SIGLIST_CFLAGS "$LIBC/stdtime/FreeBSD/strftime.c" -o "$EXTRACT/strftime.o"
+
+# asctime/asctime_r: real Apple/FreeBSD source (stdtime/FreeBSD/
+# asctime.c), replacing this dylib's own hand-rolled stand-in
+# (libsystem_c_gap_compat.c's former asctime()/asctime_r(), removed --
+# see that file's own updated comment) 2026-08-31 (static-linking
+# cleanup, locale/timezone-string consolidation batch, closes DAR-134).
+# DAR-134's own real blocker was exactly this: asctime_r() calls
+# strftime_l() internally just to format the 4-digit year, and this
+# dylib had no strftime_l() until the strftime.o compiled just above
+# (for the unrelated locale/timezone-string consolidation this session
+# is otherwise doing). Re-tested per DAR-134's own "may already just
+# work like atol/strtoll/strtoul did" prediction -- confirmed via a real
+# trial compile: asctime.c's only undefined refs (___error/_sprintf/
+# _strcpy/_strftime_l$UNIX2003/_strlen) are all already resident here.
+# Now that this copy is the same real FreeBSD source as libc++.dylib's/
+# libopenpam.dylib's own (no longer an inferior stub), this session also
+# removed THEIR asctime.o -- the old "real vs stub, don't consolidate"
+# exception no longer applies -- so this is now the one real owner, same
+# as the rest of the family above.
+"$CLANG" $SIGLIST_CFLAGS "$LIBC/stdtime/FreeBSD/asctime.c" -o "$EXTRACT/asctime.o"
+
 # uuid_unparse/uuid_unparse_lower/uuid_unparse_upper/uuid_copy/uuid_parse/
 # uuid_pack: real duplicate-ownership investigation 2026-08-31
 # (static-linking cleanup) -- dup_symbol_audit.sh flagged these as
@@ -493,6 +543,8 @@ rm -f "$OUT/system/libsystem_c.dylib"
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
     -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
     -Wl,-alias,_fputs,'_fputs$UNIX2003' \
+    -Wl,-alias,_mktime,'_mktime$UNIX2003' \
+    -Wl,-alias,'_strftime_l$UNIX2003',_strftime_l \
     -Wl,-alias,_strerror,'_strerror$UNIX2003' \
     -Wl,-alias,_fwrite,'_fwrite$UNIX2003' \
     -Wl,-alias,_fstatfs,'_fstatfs$INODE64' \

@@ -1667,3 +1667,247 @@ regression + fix detail, not reopened (count is back to 0).
 
 Baseline updated (`dup_symbol_audit.sh --update-baseline`) to lock in
 84→76.
+
+## Session 2026-08-31 (continuation 8): locale/timezone/strftime family consolidated onto libsystem_c.dylib, DAR-134 closed
+
+`dup_symbol_audit.sh --summary` total: **76 → 54**, QEMU-verified. This
+was the harder, design-y follow-up round 8/9 (continuations 6/7) had
+each independently found and left as a real, documented structural
+wall: `strftime.o`'s two real Apple `.private_extern` dependencies
+(`__st_get_timezone` in `timezone_unix03.o`, `___darwin_altzone` in
+`localtime.o`) meant `libc++.dylib`/`libopenpam.dylib` could not drop
+just `localtime.o`/`timezone_unix03.o` while keeping their own
+`strftime.o` resident -- private externs cannot cross a dylib boundary,
+so as long as `strftime.o` stayed, its two dependencies had to stay
+right beside it.
+
+### The real fix: move the whole coupled group, not just two of three
+
+Checked real Apple source (`third_party/Libc/Libc.xcodeproj/
+project.pbxproj`): only 3 of Libc's 18 targets are dylibs, and
+`stdtime/FreeBSD/strftime.c`/`localtime.c`/`gen/FreeBSD/timezone.c` all
+compile into that one set -- Apple never recompiles this family into a
+second image. The structural wall above only blocks removing
+`localtime.o`/`timezone_unix03.o` **while leaving `strftime.o` behind**.
+Moving all three together to `libsystem_c.dylib` side-steps it entirely:
+once `strftime.o` itself is compiled into the same image as
+`localtime.o`/`timezone_unix03.o`, its private-extern references resolve
+locally, no dylib boundary involved.
+
+Real, pre-existing gap found first: `libsystem_c.dylib` had **no
+`strftime.o` of its own at all** -- only `libc++.dylib`/
+`libopenpam.dylib` exported `_strftime`/`_strftime_l`, making them the
+accidental real owners of a genuine `libSystem` export (this is exactly
+what Linear DAR-134, "strftime_l not ported", was tracking). Compiled
+`stdtime/FreeBSD/strftime.c` fresh into `build_libsystem_c.sh`'s extract
+dir with the same `$SIGLIST_CFLAGS` (`__DARWIN_UNIX03=1`) recipe
+`build_libcxx_dylib.sh`/`build_openpam_dylib.sh` already used for it, so
+the exported symbol names match byte-for-byte
+(`_strftime$UNIX2003`/`_strftime_l$UNIX2003`/`_strftime_l`) -- no other
+consumer needed a relink just to keep resolving the same names, only to
+repoint which dylib owns them. Verified via a real trial compile first:
+`strftime.o`'s only undefined refs (`___darwin_altzone`/
+`___get_current_time_locale`/`___global_locale`/`___locale_key`/
+`___stderrp`/`__c_locale`/`__st_get_timezone`/`_fprintf_l`/
+`_fputs$UNIX2003`/`_getenv`/`_memcpy`/`_mktime$UNIX2003`/`_sprintf_l`/
+`_tzname`/`_tzset`) are ALL already resident in `libsystem_c.dylib`'s own
+extract dir (its own `localtime.o`/`timezone_unix03.o`, already there
+for ICU's `mktime` gap; `xlocale.o`/`ldpart.o`/`timelocal.o`, already
+there for the locale-loading subsystem; `fprintf.o`/`sprintf.o`) --
+except one real symbol-name mismatch: `libsystem_c.dylib`'s own
+`localtime.o` comes from `liblaunchd_core.a`, deliberately compiled
+WITHOUT `__DARWIN_UNIX03` (so ICU gets the plain `_mktime` name it
+expects), while `strftime.o` (compiled WITH UNIX03) needs
+`_mktime$UNIX2003`. Bridged with one new alias --
+`-Wl,-alias,_mktime,'_mktime$UNIX2003'` -- exactly the workaround round
+8's own writeup predicted would be needed if the wall were ever cleared.
+Also added `-Wl,-alias,'_strftime_l$UNIX2003',_strftime_l` (moved from
+`libc++.dylib`, which no longer compiles `strftime.o` so its own copy of
+that alias would have hit the ld64 `-alias` nonlocal-base landmine) so
+`libc++.dylib`'s own `locale.o` (calls plain `_strftime_l`, confirmed via
+`nm -u`) keeps resolving. Both aliases verified via `dyld_info -exports`
+showing real offsets, not `[re-export]`/malformed ordinal-0.
+
+Then removed `localtime.o`/`timezone_unix03.o`/`strftime.o` from
+`build_libcxx_dylib.sh`'s locale compile loop and from
+`build_openpam_dylib.sh`'s wholesale-`ar x` extract dir. Both dylibs
+already link `libsystem_c.dylib` as a sibling, so all of
+`tzset`/`localtime`/`localtime_r`/`gmtime`/`gmtime_r`/`ctime`/`ctime_r`/
+`mktime`/`timegm`/`offtime`/`timeoff`/`time2posix`/`posix2time`/
+`timelocal`/`tzname`/`daylight`/`strftime`/`strftime_l` now resolve
+there. `_tzname`/`_daylight`/`_lcl_rwlock` were each independently
+instantiated MUTABLE STATE before this fix -- the same duplicate-state
+shape as the already-fixed `mach_task_self_`/`g_zone`/`errno` cases, not
+just duplicate code. `timelocal.o` STAYS in `libc++.dylib` for a real,
+separate reason: `xlocale.o` (kept resident there for the still-open
+xlocale/DAR-159 reason below) directly calls `___time_load_locale`,
+itself ALSO `.private_extern` -- unrelated to strftime, so untouched.
+Verified via real trial links (0 undefined symbols) before each dylib
+was rebuilt for real, then via `xcrun dyld_info -fixups` on both
+rebuilt dylibs showing clean `libsystem_c/*` binds for the whole family
+and zero remaining local exports of it.
+
+### `asctime`/`asctime_r`: the "real vs stub" exception fully closed too (DAR-134)
+
+The pre-existing documented exception (`libsystem_c.dylib`'s own
+`_asctime`/`_asctime_r` was a project-authored, deliberately temporary
+hand-rolled stand-in in `libsystem_c_gap_compat.c`, blocked on real
+`strftime_l()` -- consolidating onto it would have downgraded
+`libc++.dylib`/`libopenpam.dylib` to the inferior stub) no longer
+applied once `strftime.o` above gave `libsystem_c.dylib` a real,
+working `strftime_l()`. Re-tested per DAR-134's own prediction ("may
+already just work like atol/strtoll/strtoul did") via a real trial
+compile: `stdtime/FreeBSD/asctime.c`'s only undefined refs
+(`___error`/`_sprintf`/`_strcpy`/`_strftime_l$UNIX2003`/`_strlen`) were
+all already resident. Removed the hand-rolled `asctime`/`asctime_r`
+(and its own static output buffer, `iokit_asctime_buf`) from
+`libsystem_c_gap_compat.c`, compiled the real, unmodified FreeBSD source
+into `build_libsystem_c.sh` instead, then removed the now-ordinary
+(no-longer-"stub-vs-real") duplicate `asctime.o` from both
+`build_libcxx_dylib.sh` and `build_openpam_dylib.sh` too. Verified via
+`nm -u` first that `asctime.c` needs neither `localtime.o`/
+`timezone_unix03.o` (it hardcodes its own day/month name tables) nor
+`timelocal.o`, so this didn't disturb `timelocal.o`'s continued
+residency in `libc++.dylib`. Both rebuilt dylibs show zero remaining
+`asctime`/`asctime_r` exports or fixups; confirmed via `nm -m`/
+`dyld_info -fixups` neither dylib's own other objects called
+`asctime()` directly (both had pulled it in only incidentally).
+
+### A second, independent hand-rolled copy found and closed inside `launchd.macho` itself
+
+DAR-134's own description named a DIFFERENT file --
+`launchd_audit_syscalls_compat.c` -- as shipping the hand-rolled
+`asctime`/`asctime_r`/`wday_name`/`mon_name`/`put2` stand-in; this is a
+real, separate, THIRD copy (its own static `asctime_buf`), compiled into
+`liblaunchd_core.a` and `-force_load`'d wholesale into `launchd.macho`
+by `build_launchd.sh` -- which ALSO links `libsystem_c.dylib` directly
+as a sibling on the same link line. That means `launchd.macho` had a
+real "local define shadows a loaded dylib's real export" duplicate
+exactly matching what `dup_symbol_audit.sh --explain _localtime` already
+independently flagged for the SAME binary (pre-existing, not fixed here
+-- see below). Removed the hand-rolled implementation from
+`launchd_audit_syscalls_compat.c`; rebuilt `liblaunchd_core.a` then
+`launchd.macho` (`build_launchd_core.sh`/`build_launchd.sh`, 0 undefined
+symbols) and confirmed via `dyld_info -fixups` it now binds
+`libsystem_c/_asctime`/`libsystem_c/_asctime_r` with zero local
+definition remaining (`nm -m` shows both as `(undefined) external ...
+(from libsystem_c)`).
+
+### Pre-existing, NOT fixed this session: `launchd.macho`'s own local `_localtime`/`_mktime`/etc
+
+`liblaunchd_core.a` still carries its own real, independently-compiled
+`localtime.o`/`timezone_unix03.o` (non-UNIX03, for ICU's plain-`_mktime`
+need -- see `build_libsystem_c.sh`'s own comment), and `launchd.macho`
+still `-force_load`s the whole archive while also linking
+`libsystem_c.dylib` directly -- so `launchd.macho` itself still locally
+shadows `_localtime`/`_tzset`/`_mktime`/etc, exactly the class
+`dup_symbol_audit.sh --explain _localtime` flags (also true of
+`date.macho`/`diff.macho`/`find.macho`/`gzip.macho`/`jot.macho`/
+`less.macho`/`ls.macho`/`stat.macho`/`tar.macho`/`touch.macho`, all part
+of the out-of-scope 76 `build_simple_cmds.sh` commands per this sweep's
+rule 5). Left alone this session -- it's a real, adjacent finding, not
+part of this batch's own scope (asctime was fixed above only because
+DAR-134 named this exact file/function pair specifically), and
+`liblaunchd_core.a`'s copy is real, deliberately independent source
+(different UNIX03 config than `libsystem_c.dylib`'s own via this
+session's new alias), not obviously safe to just delete without its own
+investigation. Flagged as a natural pickup for a future pass, same
+"pre-existing, real, not this session's job" treatment as `launchd.macho`'s
+other shadowing counts in DAR-24.
+
+### xlocale (DAR-159): investigated, confirmed matches the ticket exactly, deliberately NOT attempted
+
+Computed the real current duplicate set directly (`comm -12` on
+`dyld_info -exports` output, faster than a full audit re-scan):
+`libc++.dylib` vs `libsystem_c.dylib` still share 28 real symbols --
+`____mb_cur_max`/`____mb_cur_max_l`, the full `___collate_*` family,
+`___mb_cur_max`/`___mb_sb_limit`, `__c_locale`, `__CurrentRuneLocale`,
+`__DefaultRuneLocale`, `__PathLocale`, `_duplocale`/`_freelocale`/
+`_newlocale`/`_querylocale`/`_setlocale`/`_uselocale`, `_strtoll`/
+`_strtoll_l`/`_strtoul`/`_strtoul_l`, `_mbsnrtowcs`/`_mbsnrtowcs_l`/
+`_wcsnrtombs`/`_wcsnrtombs_l` -- matching DAR-159's own description
+almost exactly. Real root cause (confirmed via `nm -m`, not re-derived):
+`___global_locale`/`___locale_key` (the current-locale state itself) are
+real Apple `.private_extern` symbols, so `libsystem_c.dylib` cannot
+export them to `libc++.dylib` without a real `ld64 -globalize_symbol`
+(or equivalent) -- a deliberate divergence from Apple's own visibility
+model, not a mechanical symbol move. DAR-159's own description already
+recorded this exact investigation and explicitly recommended deferring
+to "a dedicated session with its own QEMU verification" because the
+blast radius is every real locale call in the process and the duplicate
+is currently inert (nothing here calls `setlocale()` away from `"C"`
+yet). Concurred with that recommendation rather than attempting it as an
+add-on to this batch -- doing the visibility change casually here would
+be exactly the kind of trade this sweep's own rules exist to prevent
+(real regression risk for a cosmetic count reduction). Left fully open
+for the next dedicated batch.
+
+### Real QEMU verification
+
+Rebuilt bottom-up: `libsystem_c.dylib` (gained real `strftime.o`/
+`asctime.o` + 3 new aliases), `libc++.dylib` (lost `localtime.o`/
+`timezone_unix03.o`/`strftime.o`/`asctime.o`, dropped the now-dead
+`_strftime_l$UNIX2003` alias), `libopenpam.dylib` (lost the same four),
+`libSystem.B.dylib` (rebuilt for parity, unchanged --
+`-reexport_library` of `libsystem_c.dylib`/`libc++.dylib` needs no
+per-symbol relink), `libCoreFoundation.a` (both trial links rebuilt;
+the "accurate" dynamic trial link -- the static one is documented as
+over-reporting -- shows zero mentions of the whole family, confirming
+its own direct link to `libopenpam.dylib` for `asctime`/`localtime`/
+`mktime` still resolves fine via flat-namespace fallthrough to
+`libsystem_c.dylib`), `liblaunchd_core.a` + `launchd.macho` (the
+`launchd_audit_syscalls_compat.c` fix), `syslogd.macho` (rebuilt for
+parity; doesn't reference this family directly, unaffected either way).
+Swept every built `.macho` AND `.dylib` (not just one glob) via
+`xcrun dyld_info -fixups` for stale binds to the removed symbols under
+the `libopenpam`/`libc++` ordinals, twice (once after the
+strftime/localtime/timezone fix, once more after the asctime fix): zero
+found both times, including across the 76 `build_simple_cmds.sh`
+binaries and every `.dylib` under `libc_build/system/`. Ran
+`tools/init_binary/inject_into_sd_image.sh` then `tools/boot_test.py`
+(`qemu/static_link_batch11_locale_time_boot.log`, **PASS**, 270.6s).
+Diffed address-stripped against the last known-good log
+(`static_link_batch10_libc_dedup_boot.log`): only the same benign,
+already-documented QEMU/TCG scheduling-order jitter (reordered
+`TEMP DIAGNOSTIC: _IOConfigThread::main entered` lines, single-digit
+`vm_page_bootstrap` page-count deltas, a ~0.7ms `pmap_startup()` timing
+delta), plus a byte-for-byte identical tail (checked via `grep -a` for
+the log's own raw-non-UTF8 `debug_buf`/`last_lookup` diagnostic line)
+from `load_init_program: attempting to load /sbin/launchd` through the
+same pre-existing `jnl: ... flushing fs disk buffer returned 0x2d`
+stopping point. Zero `panic`/`Symbol not found`/`undefined symbol`/
+`fatal error` hits past the benign, already-documented
+`DIAG: first_panic latched=125042432 ...` string (present byte-for-byte
+in both logs).
+
+One incident during this session's own QEMU runs, not a product bug:
+an earlier `pkill -9` cleanup of a stale/superseded `boot_test.py`
+process (started before the asctime fix landed, killed to avoid two
+concurrent QEMU instances per this sweep's own serialization rule) left
+`qemu/.qemu_test_lock` orphaned, since `-9` skips the script's own
+`release_lock()`. The NEXT real boot attempt correctly refused to
+proceed and sat retrying for its own `--lock-timeout`; removed the
+stale lock directory by hand (`boot_test.py`'s own error message names
+this as the correct recovery) and it acquired cleanly on the next poll.
+Noted here in case a future session hits the same "lock never released"
+symptom after their own `pkill -9`.
+
+### Linear
+
+DAR-134 ("strftime_l not ported -- asctime/asctime_r use a temporary
+hand-rolled stand-in") CLOSED: both real blockers (the missing
+`strftime_l` itself, and the resulting hand-rolled `asctime` stand-ins
+in `libsystem_c_gap_compat.c` AND `launchd_audit_syscalls_compat.c`)
+are fixed for real, verified via QEMU. DAR-5 (libsystem_c.dylib,
+56→38 after this batch, was 100 as filed 2026-08-30) and DAR-6
+(libc++.dylib, 51→29) and DAR-7 (libopenpam.dylib, 27→5) all commented
+with the full fix + before/after, left open (DAR-5/DAR-6 both still
+carry the xlocale/DAR-159 remainder and DAR-5 also its own separate
+libsystem_m math-function remainder; DAR-7 down to a handful of
+non-family duplicates not investigated this session). DAR-159 (xlocale)
+commented with this session's re-confirmation of its own prior
+analysis, left open and explicitly queued as the next batch -- not
+attempted, per its own recommendation.
+
+Baseline updated (`dup_symbol_audit.sh --update-baseline`) to lock in
+76→54.
