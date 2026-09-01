@@ -1,0 +1,168 @@
+From 8998c9832e735b6ce8706fa63ac3049c71d3f110 Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@icloud.com>
+Date: Tue, 1 Sep 2026 08:47:56 -0400
+Subject: [PATCH] libdyld: don't self-register the dlopen-lock atfork triple
+ (DAR-191)
+
+_dyld_initializer() calls pthread_atfork(&beforeForkPrepareDlopen,
+&afterForkParentDlopen, &afterForkChildDlopen) unconditionally at
+libSystem init time -- real, unmodified upstream dyld source, exercised
+in every process that loads libdyld.dylib.
+
+On this port, the child-side handler (afterForkChildDlopen ->
+_dyld_after_fork_dlopen_child() -> RuntimeState::
+resetDlopenLockInForkChild(), third_party/dyld/dyld/DyldRuntimeState.cpp)
+never returns for any forked child. Confirmed via layered instrumentation
+(full trail in DAR-191): every one of launchd's 3 daemon children hung
+at 100% host CPU immediately after job_start()'s fork(), before even
+reaching bootstrap_init(). A marker inside libSystem_atfork_child()
+(iokit project's fork_compat.c) showed all 3 children entering, and
+never returning from, _pthread_atfork_child_handlers() -- the walk over
+pthread_atfork()'s own registered-handler array. A marker inside that
+walk (third_party/libpthread/src/pthread_atfork.c) showed a real,
+non-corrupt single entry (atfork_count == 1) whose three function
+pointers were address-matched byte-for-byte against libdyld.dylib's own
+symbol table for beforeForkPrepareDlopen/afterForkParentDlopen/
+afterForkChildDlopen (consistent 0x2c/0x58-byte spacing at every
+observed slide) -- i.e. genuinely this registration, not a corrupted
+pointer or some other caller. A further marker bracketing
+afterForkChildDlopen()'s own call confirmed the hang is inside
+_dyld_after_fork_dlopen_child(), whose only real body is guarded by
+`libSystemHelpers->version() >= 2` -- checked directly
+(third_party/dyld/libdyld/LibSystemHelpers.cpp), version() unconditionally
+returns 2 on this port, so that specific "version() mismatch" theory
+(already flagged as unproven in this port's own d13/DAR-8 writeup for
+the OTHER, direct dyld atfork trio) is falsified for this lock. The
+remaining candidate is libplatform's own
+os_unfair_recursive_lock_unlock_forked_child() (third_party/libplatform/
+src/os/lock.c), whose only non-trivial statement __LIBPLATFORM_CLIENT_
+CRASH__s with "Lock was not held" if the lock looks unheld in the child
+-- and this port's abort()-family path is already documented
+(docs/launchd-pid1-postmortem.md Bug D) to spin forever instead of
+terminating, since kill(getpid(), SIGABRT) has no real signal delivery
+here. That matches the observed symptom exactly: no panic, no corpse,
+100% CPU, kernel-side PCs bouncing through _lck_mtx_lock/_hw_lock_lock
+via _exception_deliver/_bsd_ast (captured by an earlier live QEMU
+monitor probe) -- the signature of a thread whose SIGABRT never
+actually terminates it.
+
+This is a second, previously-unknown instance of the same hazard class
+already documented and worked around for the DIRECT
+_dyld_atfork_prepare/_parent/_dyld_fork_child trio (iokit project's
+build_launchd_syscalls.sh, "DYLD -- REAL, BUILT, AND DELIBERATELY NOT
+CALLED", docs/backlog.md d13) -- that earlier fix only covered the three
+direct calls libSystem_atfork_child() makes and didn't know about this
+SEPARATE, indirect registration path, so it kept firing regardless.
+
+Not calling this registration is not a regression: nothing on this port
+relies on the dlopen lock being reset after fork (no concurrent
+dlopen-during-fork scenario exists in this port's own daemon-spawn
+path), and every forked child that was permanently stuck before even
+reaching bootstrap_init() is now unblocked.
+
+Verified by real QEMU boot (iokit project, qemu/dar191_fix_verify_pdtrace.log):
+all 3 of launchd's daemon children (com.apple.launchctl.System,
+com.apple.syslogd, org.puredarwin.console-login) now print "child after
+runtime_fork" and "child bootstrap_init" -- both previously unreachable
+in every prior trace, where children hung inside fork() itself before
+ever returning 0 to the caller. qemu/dar191_fix_verify1.log (no
+tracing) confirms no panic/regression on a plain boot. Root-causing the
+exact byte state of apiLock.oul_value at the moment of the crash check
+(real dyld source, #if BUILDING_DYLD, a materially bigger change
+surface) is left as a real, separate follow-up -- see DAR-191. Boot now
+reaches a new, later, separate stall inside bootstrap_init()'s own MIG
+call, tracked as its own follow-up, not fixed here.
+---
+ libdyld/libdyldGlue.cpp | 71 +++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 71 insertions(+)
+
+diff --git a/libdyld/libdyldGlue.cpp b/libdyld/libdyldGlue.cpp
+index 38f6c03..d4f5717 100644
+--- a/libdyld/libdyldGlue.cpp
++++ b/libdyld/libdyldGlue.cpp
+@@ -130,11 +130,82 @@ static void afterForkChildDlopen()
+ // This is called during libSystem.dylib initialization.
+ // It calls back into dyld and lets it know it can start using libSystem.dylib
+ // functions which are wrapped in the LibSystemHelpers class.
++//
++// iokit project (DAR-191, 2026-09-01): the pthread_atfork() registration
++// below is REAL, UNMODIFIED upstream dyld source, and is DELIBERATELY NOT
++// CALLED on this port -- a second, previously-unknown instance of the
++// same hazard class already documented and worked around for the direct
++// _dyld_atfork_prepare/_parent/_dyld_fork_child trio (see
++// tools/userland_staging/build_launchd_syscalls.sh's fork_compat.c, "DYLD
++// -- REAL, BUILT, AND DELIBERATELY NOT CALLED", docs/backlog.md d13).
++// That earlier fix skipped the three DIRECT calls libSystem_atfork_child()
++// makes; it did not know about this SEPARATE, indirect registration path
++// -- every process that loads libdyld.dylib (i.e. everything on this
++// port) self-registers this exact prepare/parent/child triple via the
++// generic pthread_atfork() mechanism at libSystem init time, so it fires
++// through _pthread_atfork_child_handlers()'s array walk regardless of
++// what the direct six-call sequence in fork_compat.c does or doesn't call.
++//
++// Real, QEMU-proven symptom: every one of launchd's 3 daemon children
++// (com.apple.launchctl.System, com.apple.syslogd,
++// org.puredarwin.console-login) hung permanently, 100% host CPU, no
++// panic, no corpse, immediately after job_start()'s fork() -- boot never
++// reached pd_launchd_load_daemons_dir()'s own post-import work, let alone
++// exec. Root-caused via layered instrumentation (see DAR-191 in Linear
++// for the full trail): a raw write(2)-based marker bracketing every call
++// in libSystem_atfork_child() showed all 3 children reaching, and never
++// returning from, the LAST call, _pthread_atfork_child_handlers(); a
++// marker inside that function (third_party/libpthread/src/
++// pthread_atfork.c) showed a real, non-corrupt, single registered entry
++// (atfork_count == 1) whose prepare/parent/child function pointers were
++// address-matched byte-for-byte (after accounting for a consistent
++// 0x2c/0x58-byte spacing) against libdyld.dylib's own real symbol table
++// for beforeForkPrepareDlopen/afterForkParentDlopen/afterForkChildDlopen
++// -- i.e. this exact registration, not a corrupted pointer or some other
++// caller. A further marker bracketing afterForkChildDlopen()'s own call
++// into gDyld.apis->_dyld_after_fork_dlopen_child() confirmed the hang is
++// inside that call, whose only real body (RuntimeState::
++// resetDlopenLockInForkChild(), third_party/dyld/dyld/DyldRuntimeState.cpp)
++// is guarded by `libSystemHelpers->version() >= 2` -- version() was
++// checked directly (third_party/dyld/libdyld/LibSystemHelpers.cpp) and
++// unconditionally returns 2 on this port, so the "version() mismatch"
++// theory the earlier d13 writeup flagged as unproven is FALSIFIED for
++// this specific lock. The remaining, unfalsified mechanism: libplatform's
++// os_unfair_recursive_lock_unlock_forked_child() (third_party/libplatform/
++// src/os/lock.c) is the only statement in that whole call chain capable
++// of not returning normally -- it __LIBPLATFORM_CLIENT_CRASH__s with
++// "Lock was not held" if the lock's oul_value looks unheld in the child,
++// and on this port __LIBPLATFORM_CLIENT_CRASH__'s abort()-family path is
++// already documented (docs/launchd-pid1-postmortem.md Bug D) to spin
++// forever instead of terminating the process, because kill(getpid(),
++// SIGABRT) has no real signal delivery here -- an exact match for the
++// observed 100%-CPU-no-corpse symptom and for the kernel-side lock-spin
++// PCs (_lck_mtx_lock/_hw_lock_lock via _exception_deliver/_bsd_ast) an
++// earlier live QEMU-monitor probe captured. Root-causing the exact byte
++// state of apiLock.oul_value at the moment of that check (i.e. exactly
++// why it looks unheld) needs deeper instrumentation inside
++// RuntimeState::takeDlopenLockBeforeFork()/resetDlopenLockInForkChild()
++// themselves -- real dyld source (#if BUILDING_DYLD), a substantially
++// bigger change surface than this ticket's fix -- and is left as the
++// real, still-open, precisely-scoped follow-up (see docs/backlog.md).
++//
++// Not calling this registration is not a regression from the pre-DAR-191
++// state: nothing on this port relies on the dlopen lock being reset
++// after fork (there is no concurrent dlopen-from-another-thread-during-
++// fork scenario in this port's own daemon-spawn path), and every forked
++// child is unblocked by this change where it was previously permanently
++// stuck before even reaching exec.
+ void _dyld_initializer()
+ {
+     gDyld.apis->_libdyld_initialize(&sHelpers);
+ 
++#if 0 /* DAR-191: deliberately not called, see comment above */
+     pthread_atfork(&beforeForkPrepareDlopen, &afterForkParentDlopen, &afterForkChildDlopen);
++#else
++    (void)beforeForkPrepareDlopen;
++    (void)afterForkParentDlopen;
++    (void)afterForkChildDlopen;
++#endif
+ }
+ 
+ 
+-- 
+2.50.1 (Apple Git-155)
+

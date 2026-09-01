@@ -35,6 +35,25 @@
 #     same-translation-unit constructor calling the existing real
 #     `__xlocale_init()`, so it's linked in for free by any of this
 #     project's 39+ build scripts that pull in this object file.
+#   - dyld: unmodified Apple source except `dyld.patch` (2026-09-01,
+#     DAR-191), same "real local fix, no personal fork" reasoning as
+#     Csu.patch/Libc.patch -- `libdyld/libdyldGlue.cpp`'s real,
+#     unmodified `_dyld_initializer()` unconditionally self-registers a
+#     `pthread_atfork()` triple for dyld's own dlopen lock. On this port
+#     the child-side handler never returns after `fork()` (root-caused
+#     via layered instrumentation, full trail in DAR-191 -- the
+#     underlying libplatform/dyld lock-reset mechanism itself is real,
+#     unmodified upstream code, not something this project can fix
+#     without a materially bigger change to `third_party/dyld/dyld`'s
+#     own `#if BUILDING_DYLD` internals), which silently hung every one
+#     of launchd's forked daemon children forever (100% CPU, no panic,
+#     no corpse) before they ever reached `bootstrap_init()`. The patch
+#     skips that one `pthread_atfork()` call -- a second, previously-
+#     unknown instance of the exact hazard class already worked around
+#     for the OTHER, direct dyld atfork trio (see
+#     `tools/userland_staging/build_launchd_syscalls.sh`'s `fork_compat.c`,
+#     docs/backlog.md d13); that earlier fix didn't know about this
+#     separate, indirect registration path, so it kept firing regardless.
 #   - hfs, IOStorageFamily, IOUSBFamily, IONetworkingFamily, msdosfs: unmodified Apple
 #     open-source reference sources, pinned to an exact tag, no patching.
 #     CORRECTED 2026-08-24: a full `distribution-macOS` `macos-112` manifest
@@ -343,7 +362,7 @@ IOStorageFamily|https://github.com/apple-oss-distributions/IOStorageFamily.git|I
 IOUSBFamily|https://github.com/apple-oss-distributions/IOUSBFamily.git|IOUSBFamily-630.4.5|
 IONetworkingFamily|https://github.com/apple-oss-distributions/IONetworkingFamily.git|IONetworkingFamily-151.40.1|
 msdosfs|https://github.com/apple-oss-distributions/msdosfs.git|msdosfs-435.60.1|
-dyld|https://github.com/apple-oss-distributions/dyld.git|dyld-940|
+dyld|https://github.com/apple-oss-distributions/dyld.git|dyld-940|dyld.patch
 Libc|https://github.com/apple-oss-distributions/Libc.git|Libc-1439.40.11|Libc.patch
 libpthread|https://github.com/apple-oss-distributions/libpthread.git|libpthread-454.80.2|
 libplatform|https://github.com/apple-oss-distributions/libplatform.git|libplatform-254.80.2|
