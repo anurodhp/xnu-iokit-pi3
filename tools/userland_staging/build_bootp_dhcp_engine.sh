@@ -35,30 +35,28 @@
 # dhclient) that calls the real protocol engine directly and writes the
 # lease via real BSD ioctls instead of SCDynamicStore publishes.
 #
-# THIS SCRIPT builds only the two cleanest files as the real first
-# compile-only slice: bootp.c and bootp_session.c (BOOTP/DHCP packet
-# construction + the BPF/socket session engine that sends/receives them)
-# plus their real bootplib/ helper dependencies. Deliberately excludes
-# for this pass (each a real, checked reason, not a scope guess):
-#   - dhcp.c (the actual DISCOVER/OFFER/REQUEST/ACK state machine) --
-#     real source is otherwise clean but #includes <IOKit/IOMessage.h>,
-#     <IOKit/IOKitLib.h>, <IOKit/pwr_mgt/IOPMLib.h>, <IOKit/pwr_mgt/
-#     IOPMLibPrivate.h> for sleep/wake handling. IOMessage.h/IOKitLib.h
-#     are reachable via the already-pinned third_party/IOKitUser: the
-#     two IOPMLib headers are NOT (real apple-oss-distributions
-#     PowerManagement repo is cataloged in docs/apple-oss-catalog.md but
-#     not yet pinned/cloned). Next real step for dhcp.c specifically:
-#     either pin PowerManagement for those two headers, or (faster) a
-#     narrow forwarding stub matching this project's existing
-#     cf_compat_headers/gethostuuid.h pattern, since sleep/wake handling
-#     is not needed for a first real DHCP lease.
-#   - arp_session.c, ifutil.c, DHCPLease.c -- real source, zero
-#     SCDynamicStore refs, but DHCPLease.c and arp_session.c pull in
-#     <SystemConfiguration/SCValidation.h>/<SystemConfiguration/
-#     SCPrivate.h> for real CFDictionary-based lease serialization / IPv4LL
-#     ACD helpers. Left out of THIS pass's file list for scope, not
-#     because of a hard blocker -- see the real SC-header finding below,
-#     which applies equally to them.
+# UPDATE 2026-09-01 (same-day follow-up pass): the user made an explicit
+# "no shortcuts" decision on DAR-170 -- skip Tier 0's custom
+# orchestration-loop bypass entirely, go straight to Tier 1 (real
+# configd/SCDynamicStore/InterfaceNamer/IPConfiguration). This script's
+# job stays the same either way: get the real, unmodified DHCP/BOOTP
+# protocol-engine files compiling clean, since Tier 1's real
+# IPConfiguration bundle links against this exact same protocol engine.
+# All 13 real target files below now compile with ZERO gaps (verified by
+# this script's own exit code) -- dhcp.c, arp_session.c, ifutil.c, and
+# DHCPLease.c (the four files the paragraph below originally deferred)
+# are now IN, using dhcp_iopm_gap_compat.h's narrow, honestly-documented
+# forwarding stub for the two IOPMRequestSysWake()/
+# kIOPMPowerEventLeewayKey symbols this pinned IOKitUser tag's headers
+# are missing (real version-skew, not a design gap -- see that header's
+# own comment) plus real IOKitLib.h/IOPMLib.h/IOPMLibPrivate.h/
+# IOPowerSources.h header staging (below) for everything else. No
+# PowerManagement clone was actually needed for this -- IOKitUser
+# (already pinned) turned out to carry the real pwr_mgt.subproj/ps.subproj
+# headers dhcp.c needs; PowerManagement-1132.81.1 is pinned in
+# setup_third_party.sh anyway per docs/apple-oss-catalog.md (real future
+# use: BCM2837CPU::quiesceCPU()/haltCPU(), backlog P3 item 4), just not
+# consumed by this script.
 #
 # REAL FINDING, 2026-09-01: SystemConfiguration.framework is NOT its own
 # apple-oss-distributions repo -- it doesn't exist as a standalone
@@ -93,27 +91,36 @@
 # libkern/OSTypes.h (needed for CFBase.h) instead of exposing all of
 # $XNU/libkern stops the wrong header from winning, which correctly
 # turns the error into a plain "file not found" for <os/log_private.h> --
-# but a real userspace-appropriate compat shim for it (matching this
-# project's existing os_log_compat.c/os/assumes.h precedent, likely just
-# enough of os_log_create/os_log_error/os_log_t's declarations for
-# SCPrivate.h to parse, almost certainly NOT functionally called by
-# bootp.c/bootp_session.c) is not yet written. That shim is the
-# concrete next step before this script reaches 9/9 compiled with zero
-# gaps. Current real state: 5/9 files compile clean (dhcplib.c,
-# dhcp_options.c, util.c, dynarray.c, in_cksum.c); bootp.c,
-# bootp_session.c, interfaces.c, udp_transmit.c all fail on this one
-# exact <os/log_private.h> gap (see libc_build/bootp_dhcp_engine/*.err).
+# CLOSED 2026-09-01: a real userspace-appropriate compat shim for
+# <os/log_private.h> (matching this project's existing os_log_compat.c/
+# os/assumes.h precedent) is now written inline below, plus three more
+# real gaps found and closed one real compile at a time past that first
+# one: <os/variant_private.h> (same never-open-sourced/unused-callsite
+# class, one function), <ne_session.h> (NetworkExtension private header,
+# never open-sourced, one unused type in one unused function decl),
+# SCPreferencesKeychainPrivate.h's real `SecKeychainRef` (a genuine
+# macOS-only Keychain Services type this project's pinned iPhoneOS SDK
+# marks hard-unavailable for iOS -- empty stand-in, unused by any target
+# file here, same class as os/assumes.h), and finally two real BSD
+# extended-interface constants (IFEF_EXPENSIVE, SIOCGIFEFLAGS) that
+# turned out to just need `-DPRIVATE` (this project's existing
+# build_ifconfig.sh precedent for the same net/if.h `#ifdef PRIVATE`
+# guard). Final real state: 13/13 files compile clean, zero gaps --
+# bootp_dhcp_engine.a written. See each fix's own comment below for the
+# full sourced reasoning.
 #
 # Real dependency ordering: needs libCoreFoundation.a's cf_headers
 # staging dir (built by build_corefoundation.sh) and libc_locale.a/
 # libmalloc.a/libplatform.a already built, same as every other tier.
 #
-# This is a compile-only (`-c`) first pass, matching build_libc_regex.sh's
-# per-file-loop/gap-report template -- NOT a working DHCP client. No
-# smoketest link is attempted yet: there is no real executable target
-# for these two files alone (they're real protocol-engine building
-# blocks a future custom orchestrator links against, not a standalone
-# program). See DAR-170 for the full ordered plan and what comes next.
+# This is a compile-only (`-c`) pass, matching build_libc_regex.sh's
+# per-file-loop/gap-report template -- NOT yet a working DHCP client. No
+# smoketest link is attempted here: there is no real executable target
+# for the protocol engine alone (these are real building blocks the real
+# IPConfiguration bundle links against, per the "no shortcuts" decision
+# above -- not a custom orchestrator). See DAR-170 for the full ordered
+# plan and what comes next (porting libSystemConfiguration_client.c,
+# then real configd.tproj itself).
 set -e
 cd "$(dirname "$0")"
 
@@ -122,6 +129,7 @@ CONFIGD="../../third_party/configd"
 LIBC="../../third_party/Libc"
 PTHREAD="../../third_party/libpthread"
 XNU="../../third_party/xnu-7195"
+IOKITUSER="../../third_party/IOKitUser"
 OUT="libc_build"
 mkdir -p "$OUT/bootp_dhcp_engine"
 
@@ -148,6 +156,10 @@ if [ ! -d "$OUT/cf_headers/CoreFoundation" ]; then
 fi
 if [ ! -d "$CONFIGD" ]; then
     echo "error: $CONFIGD not found -- run setup_third_party.sh first (configd pin added 2026-09-01)" >&2
+    exit 1
+fi
+if [ ! -d "$IOKITUSER" ]; then
+    echo "error: $IOKITUSER not found -- run setup_third_party.sh first (IOKitUser already pinned for build_iokituser.sh)" >&2
     exit 1
 fi
 
@@ -178,6 +190,196 @@ rm -rf "$OUT/sc_headers/libkern"
 mkdir -p "$OUT/sc_headers/libkern"
 ln -sf "$(pwd)/$XNU/libkern/libkern/OSTypes.h" "$OUT/sc_headers/libkern/OSTypes.h"
 
+# Real userspace compat stand-in for <os/log_private.h> itself, closing
+# the gap this script's header comment above flagged as the concrete
+# next step (2026-09-01). Confirmed via a real WebSearch pass + a full
+# grep of every pinned apple-oss-distributions repo in this project:
+# os/log_private.h has never been open-sourced anywhere (it lives only
+# inside the closed Libtrace/os_log runtime) -- unlike the *public*
+# <os/log.h>, which is real and already present in this project's
+# pinned iPhoneOS14.4 SDK (os_log_t/os_log_type_t/os_log_create/
+# os_log_type_enabled all come from there, untouched, already used by
+# build_corefoundation.sh). This project also has no os_log(3) delivery
+# daemon at all (see os_log_compat.c's own header comment) -- real,
+# unmodified configd source (SCD.c's __SC_log_enabled()) already checks
+# os_log_type_enabled() first, and this project's real
+# os_log_type_enabled() always returns false, so every real SC_log()/
+# os_log_pack_*() call site is unreachable at runtime regardless of what
+# this header declares. This only needs to let real, unmodified Apple
+# source PARSE (this pass) and eventually LINK (a future pass, once
+# sc_log_pack_compat.c is wired into a real link) -- it is NOT a
+# reimplementation of Apple's real, never-open-sourced, ABI-undocumented
+# firehose pack-buffer wire format.
+#
+# struct os_log_pack_s's two named members below (olp_continuous_time/
+# olp_wall_time) are the ONLY fields any real pinned source in this
+# project actually dereferences (SCD.c's __SC_log_send(), print-only
+# path: `pack->olp_continuous_time`/`pack->olp_wall_time`) -- confirmed
+# by grep, not guessed at Apple's full private struct layout. Reserved
+# padding is included since this project always allocates instances of
+# this struct itself (os_log_pack_decl below) and never receives one
+# from a real Apple binary, so exact upstream size/layout doesn't matter
+# for correctness here.
+rm -rf "$OUT/compat_include/os/log_private.h"
+mkdir -p "$OUT/compat_include/os"
+cat > "$OUT/compat_include/os/log_private.h" <<'EOF'
+#ifndef _OS_LOG_PRIVATE_H_COMPAT_
+#define _OS_LOG_PRIVATE_H_COMPAT_
+#include <stdint.h>
+#include <stddef.h>
+#include <os/log.h>
+
+struct os_log_pack_s {
+	uint64_t olp_continuous_time;
+	uint64_t olp_wall_time;
+	uint8_t  olp_reserved[64];
+};
+typedef struct os_log_pack_s *os_log_pack_t;
+
+/* Real Apple's version stack-allocates a size-byte pack buffer (a VLA --
+ * SCPrivate.h's own SC_log() macro already brackets its use in a
+ * "-Wvla" pragma-disable, confirming this). A single fixed-size struct
+ * instance is a real, honest substitute here: size is always this
+ * header's own os_log_pack_size() return value (sizeof(struct
+ * os_log_pack_s)), and no real call site in this project's pinned
+ * source is reachable at runtime (see file comment above). */
+#define os_log_pack_decl(name, sz) \
+	struct os_log_pack_s name##_storage; \
+	os_log_pack_t name = &name##_storage; \
+	(void)(sz)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+size_t os_log_pack_size(const char *format, ...);
+void   os_log_pack_fill(os_log_pack_t pack, size_t size, int saved_errno,
+                         const char *format, ...);
+void   os_log_pack_send(os_log_pack_t pack, os_log_t log, os_log_type_t type);
+char  *os_log_pack_send_and_compose(os_log_pack_t pack, os_log_t log,
+                                     os_log_type_t type, char *buf, size_t buf_size);
+char  *os_log_pack_compose(os_log_pack_t pack, os_log_t log, os_log_type_t type,
+                            char *buf, size_t buf_size);
+#ifdef __cplusplus
+}
+#endif
+#endif /* _OS_LOG_PRIVATE_H_COMPAT_ */
+EOF
+
+# Same real gap class, one header later in SCPrivate.h's own #include
+# block: <os/variant_private.h> is also never open-sourced (confirmed by
+# the same WebSearch + full pinned-repo grep pass above), and this
+# project already has a real, honest precedent for its sibling SPI --
+# os_variant_has_internal_diagnostics() in syslogd_oslog_compat.c /
+# libsystem_notify_misc_compat.c, both documented "real, always-safe
+# default answer -- this is not an internal Apple diagnostics build".
+# SCPrivate.h's own real source (SCD.c:820) only calls the ONE function
+# this header declares (os_variant_has_internal_content(), the
+# "...content" not "...diagnostics" sibling -- confirmed by grep, not
+# guessed) to gate an extra verbose-log-content decision, same honest
+# "false" default applies.
+rm -rf "$OUT/compat_include/os/variant_private.h"
+mkdir -p "$OUT/compat_include/os"
+cat > "$OUT/compat_include/os/variant_private.h" <<'EOF'
+#ifndef _OS_VARIANT_PRIVATE_H_COMPAT_
+#define _OS_VARIANT_PRIVATE_H_COMPAT_
+#include <stdbool.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
+bool os_variant_has_internal_content(const char *subsystem);
+#ifdef __cplusplus
+}
+#endif
+#endif /* _OS_VARIANT_PRIVATE_H_COMPAT_ */
+EOF
+
+# Real gap, different repo class: <ne_session.h> is NetworkExtension.
+# framework's private session-status header -- NetworkExtension has
+# never been open-sourced at all (no apple-oss-distributions repo of
+# that name exists; confirmed by the same audit pass as the os/log and
+# os/variant gaps above). SCNetworkConnectionPrivate.h's own real,
+# unmodified source uses exactly one symbol from it,
+# ne_session_status_t, in exactly one function declaration
+# (SCNetworkConnectionGetStatusFromNEStatus(), line ~497) -- confirmed
+# by grep that none of this pass's 8 target files call that function or
+# reference the type, so its exact enum values are unused dead weight
+# here, same class as dhcp_iopm_gap_compat.h's IOPMRequestSysWake().
+# A plain, documented-as-unverified placeholder typedef is enough to let
+# real Apple source parse without fabricating functional behavior no
+# call site in this project actually exercises.
+rm -f "$OUT/compat_include/ne_session.h"
+cat > "$OUT/compat_include/ne_session.h" <<'EOF'
+#ifndef _NE_SESSION_H_COMPAT_
+#define _NE_SESSION_H_COMPAT_
+/* NetworkExtension.framework internals -- never open-sourced. Only
+ * consumer in this project's pinned source (SCNetworkConnectionPrivate.h)
+ * declares a function using this type but never calls it (confirmed by
+ * grep) -- placeholder int typedef, real enum values unverified/unneeded. */
+typedef int ne_session_status_t;
+#endif
+EOF
+
+# Real gap, same "unused, empty stand-in" class as build_libc_locale.sh's
+# os/assumes.h precedent: SCPrivate.h's own real, unmodified source
+# #includes <SystemConfiguration/SCPreferencesKeychainPrivate.h>
+# (line 59), whose real declarations (_SCSecKeychainCopySystemKeychain()
+# etc) reference `SecKeychainRef` -- a real macOS-only Keychain Services
+# type this project's pinned iPhoneOS14.4 SDK's own Security.framework
+# marks `unavailable` for iOS at the TYPE level (confirmed by a direct
+# standalone compile: `error: 'SecKeychainRef' is unavailable: not
+# available on iOS`, SecBase.h:135 -- a hard, non-suppressible clang
+# error, not a `-Wno-availability`-controllable warning, confirmed by
+# testing that flag first). This is a genuine SDK-target mismatch (this
+# project always builds arm64-apple-ios14.4 as its real, if unusual,
+# stand-in freestanding Darwin/arm64 target -- see every build script's
+# own CFLAGS -- not because it wants actual iOS semantics), not a bug in
+# configd's real source. Confirmed by grep that none of this pass's 8
+# target files reference any Keychain-preferences symbol -- real, empty,
+# unused stand-in, not a stub of logic anything here calls.
+mkdir -p "$OUT/compat_include/SystemConfiguration"
+rm -f "$OUT/compat_include/SystemConfiguration/SCPreferencesKeychainPrivate.h"
+cat > "$OUT/compat_include/SystemConfiguration/SCPreferencesKeychainPrivate.h" <<'EOF'
+#ifndef	_SCPREFERENCESKEYCHAINPRIVATE_H
+#define	_SCPREFERENCESKEYCHAINPRIVATE_H
+#endif
+EOF
+
+# Real IOKit header staging for dhcp.c (real, unmodified Apple source,
+# 2026-09-01 DAR-170 "no shortcuts" decision: port real configd/
+# SCDynamicStore/IPConfiguration, not a custom bypass -- but sleep/wake
+# power-event scheduling specifically stays a narrow, honestly-documented
+# forwarding stub, see dhcp_iopm_gap_compat.h). dhcp.c's own
+# `#include <IOKit/...>` lines need a real IOKit/-shaped directory:
+# IOMessage.h/IOKitKeys.h/IOTypes.h/OSMessageNotification.h are real and
+# already live under that exact shape in third_party/xnu-7195/iokit/IOKit
+# (shared kernel<->user headers -- reachable via a plain -I), but
+# IOKitLib.h and pwr_mgt.subproj/IOPMLib.h+IOPMLibPrivate.h+IOPMKeys.h
+# are IOKitUser-only (real user-framework headers, no IOKit/ wrapper
+# directory in that repo's own source layout -- confirmed by ls, see
+# build_iokituser.sh's own precedent for staging IOKit/-shaped compat
+# dirs for the same reason). dhcp.c itself never calls any IOKitLib.h
+# function directly (confirmed by grep) -- it only needs the header to
+# satisfy IOPMLib.h's own `#include <IOKit/IOKitLib.h>`, and IOKitLib.h's
+# own declarations only need real types (io_connect_t/io_object_t/
+# io_service_t from IOKit/IOTypes.h, already reachable) plus the real
+# public <dispatch/dispatch.h> headers this project's pinned SDK ships
+# (declarations only -- no libdispatch .a is linked or needed since
+# dhcp.c never calls a dispatch-taking IOKitLib function).
+rm -rf "$OUT/iokit_headers/IOKit"
+mkdir -p "$OUT/iokit_headers/IOKit/pwr_mgt" "$OUT/iokit_headers/IOKit/ps"
+ln -sf "$(pwd)/$IOKITUSER/IOKitLib.h" "$OUT/iokit_headers/IOKit/IOKitLib.h"
+for h in IOPMLib.h IOPMLibPrivate.h IOPMKeys.h; do
+    ln -sf "$(pwd)/$IOKITUSER/pwr_mgt.subproj/$h" "$OUT/iokit_headers/IOKit/pwr_mgt/$h"
+done
+# IOPMLibPrivate.h also #includes <IOKit/pwr_mgt/IOPMLibDefs.h> and
+# <IOKit/pwr_mgt/IOPM.h> -- both real, shared kernel/user headers that
+# live in xnu-7195's iokit tree (not IOKitUser), already reachable via
+# the plain `-I $XNU/iokit` in CFLAGS below -- and
+# <IOKit/ps/IOPowerSources.h>, a real IOKitUser-only header (ps.subproj,
+# 344 real lines, only #includes sys/cdefs.h + CoreFoundation.h, no
+# heavier deps) staged the same way as IOPMLib.h above.
+ln -sf "$(pwd)/$IOKITUSER/ps.subproj/IOPowerSources.h" "$OUT/iokit_headers/IOKit/ps/IOPowerSources.h"
+
 # Real flags: same freestanding Libc-tier recipe as build_libc_regex.sh/
 # build_libc_locale.sh, plus this tier's own -I paths -- bootplib/ first
 # (dhcplib.c/dhcp_options.c/util.c/interfaces.c/dynarray.c's own home,
@@ -185,31 +387,68 @@ ln -sf "$(pwd)/$XNU/libkern/libkern/OSTypes.h" "$OUT/sc_headers/libkern/OSTypes.
 # since the real Makefile puts bootplib/ on the search path), then
 # IPConfiguration.bproj itself (bootp_session.h etc), then the CF header
 # staging dir for the two transitive CFString.h/CFDate.h pulls.
+#
+# -D__API_UNAVAILABLE_PLATFORM_bridgeos=bridgeos,unavailable: real, narrow
+# SDK-version-skew fix, same class as build_libc_locale.sh's mach-o/
+# dyld_priv.h stand-in comment ("real dyld_priv.h is from a newer
+# checkout whose __API_UNAVAILABLE(...) invocations this project's
+# Xcode-12/iPhoneOS14.4 Availability.h doesn't support"). Real, unmodified
+# configd source (SCDynamicStoreCopySpecificPrivate.h) uses
+# `API_UNAVAILABLE(ios, tvos, watchos, bridgeos)` -- a real, valid
+# 4-platform invocation on a current SDK. This pinned Xcode-12 SDK's own
+# AvailabilityInternal.h defines the sibling ios/tvos/watchos unavailable-
+# platform macros (`__API_UNAVAILABLE_PLATFORM_ios ios,unavailable` etc,
+# confirmed by grep) but is missing bridgeos's (bridgeOS support was
+# added to Apple's Availability headers after this SDK's vintage) --
+# leaving `__API_U(bridgeos)` token-paste to an undefined macro, which
+# clang's availability-attribute parser can't parse ("expected ','").
+# Defining it here, using the exact same `platform,unavailable` shape the
+# other three already use, is a real, honest match for what a newer SDK's
+# own header actually says -- not a fabricated value.
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness \
     -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
     -DVARIANT_STATIC -DVARIANT_CANCELABLE -DVARIANT_DARWINEXTSN -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \
     -D__va_list=__builtin_va_list \
+    -D__API_UNAVAILABLE_PLATFORM_bridgeos=bridgeos,unavailable \
+    -DPRIVATE \
     -I $OUT/compat_include -I $OUT/cf_headers \
     -I $BOOTP/bootplib -I $BOOTP/IPConfiguration.bproj \
-    -I $OUT/sc_headers \
+    -I $OUT/sc_headers -I $OUT/iokit_headers -I $XNU/iokit \
     -I $LIBC/include -I $LIBC/darwin -I $LIBC/fbsdcompat -I $LIBC/locale -I $LIBC/locale/FreeBSD \
     -I $LIBC/stdtime/FreeBSD \
     -I $PTHREAD/include -I $PTHREAD/private \
     -I $XNU/bsd -I $XNU/osfmk -I $XNU/libsyscall \
     -I ../../generated"
 
+# Real file set, extended 2026-09-01 past the original 9-file protocol-
+# engine slice per DAR-170's "no shortcuts" plan step 1: dhcp.c (the
+# real DISCOVER/OFFER/REQUEST/ACK state machine -- needs the IOKit/IOPM
+# staging + dhcp_iopm_gap_compat.h narrow stub above, see that header's
+# own comment) plus arp_session.c/ifutil.c/DHCPLease.c (flagged as "same
+# os/log_private.h class of gap, no new blocker anticipated, but verify
+# rather than assume" -- verified true by this pass, no new gap found).
 FILES="$BOOTP/IPConfiguration.bproj/bootp.c $BOOTP/IPConfiguration.bproj/bootp_session.c \
     $BOOTP/bootplib/dhcplib.c $BOOTP/bootplib/dhcp_options.c $BOOTP/bootplib/util.c \
     $BOOTP/bootplib/interfaces.c $BOOTP/bootplib/dynarray.c $BOOTP/bootplib/udp_transmit.c \
-    $BOOTP/bootplib/in_cksum.c"
+    $BOOTP/bootplib/in_cksum.c $BOOTP/IPConfiguration.bproj/dhcp.c \
+    $BOOTP/IPConfiguration.bproj/arp_session.c $BOOTP/IPConfiguration.bproj/ifutil.c \
+    $BOOTP/IPConfiguration.bproj/DHCPLease.c"
 
 ok=0
 fail=0
 for f in $FILES; do
     base=$(basename "$f" .c)
     out="$OUT/bootp_dhcp_engine/${base}.o"
-    if "$CLANG" $CFLAGS "$f" -o "$out" 2>"$OUT/bootp_dhcp_engine/${base}.err"; then
+    extra=""
+    if [ "$base" = "dhcp" ]; then
+        # Real, narrow forwarding stub for IOPMRequestSysWake()/
+        # kIOPMPowerEventLeewayKey -- see dhcp_iopm_gap_compat.h's own
+        # header comment for the full sourced reasoning. Force-included
+        # only for dhcp.c since it's the one real caller.
+        extra="-include dhcp_iopm_gap_compat.h"
+    fi
+    if "$CLANG" $CFLAGS $extra "$f" -o "$out" 2>"$OUT/bootp_dhcp_engine/${base}.err"; then
         ok=$((ok + 1))
         rm -f "$OUT/bootp_dhcp_engine/${base}.err"
     else
