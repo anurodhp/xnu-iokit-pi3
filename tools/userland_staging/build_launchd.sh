@@ -105,10 +105,6 @@ for d in libxpc.dylib libbsm.dylib; do
         exit 1
     fi
 done
-if [ ! -f "$OUT/cerror_stub.o" ]; then
-    echo "error: $OUT/cerror_stub.o not found -- run build_launchd_core.sh first" >&2
-    exit 1
-fi
 for d in libdispatch.dylib libdyld.dylib libSystem.B.dylib libsystem_pthread.dylib libc++.dylib; do
     if [ ! -f "$OUT/system/$d" ]; then
         echo "error: $OUT/system/$d not found -- run the matching build_*.sh (see docs/daemon-roadmap.md's dylib migration list) first" >&2
@@ -216,6 +212,79 @@ rm -f "$OUT/sys_getpid_current_pid_only.o"
 "$LD" -r -arch arm64 -keep_private_externs \
     -unexported_symbol ___getpid -unexported_symbol _getpid \
     "$OUT/sys_getpid.o" -o "$OUT/sys_getpid_current_pid_only.o"
+
+# Real gap found continuing the DAR-23/DAR-131/DAR-162 sweep after the
+# malloc removal above: libc_locale_for_stdio.a's own pthread_tsd_shim.o
+# (the SAME pthread_tsd_shim.c that Bug A of docs/launchd-pid1-postmortem.md
+# already fixed at the SOURCE level -- the adopt-not-clobber logic in
+# pthread_tsd_shim_bootstrap() -- so this copy is not a repeat of that
+# specific TSD-base-clobber danger) still gave launchd.macho its OWN
+# independent implementation of `_pthread_getspecific`/`_setspecific`/
+# `_key_create`/`_once`/`_key_init_np`/`_tsd_shim_bootstrap`, all of which
+# are ALSO real exports of libsystem_pthread.dylib (the POSIX names) or
+# libsystem_malloc.dylib (`_pthread_tsd_shim_bootstrap` itself) -- both
+# already-linked siblings. Real danger, same "state, not count" priority
+# as the malloc fix above: this project's own xlocale.o (in the SAME
+# archive) calls these 3 expecting REAL pthread TSD key semantics, so a
+# `pthread_key_create()` done through this shim's OWN, separate key
+# table would be invisible to any REAL pthread_getspecific() call made by
+# libdispatch/CF/libc++ against a key THEY created (and vice versa) --
+# two independent TSD-key namespaces in one process.
+#
+# Fix: same "-r -unexported_symbol on a private derived copy" shape as
+# libmalloc.a's own pthread_tsd_shim.o handling above, but here the
+# archive (libc_locale_for_stdio.a) is genuinely SHARED with other
+# consumers (syslogd.macho, pd_console_login.macho, build_simple_cmds.sh,
+# build_corefoundation.sh's own smoketest) that still need their OWN
+# private copy (either fully static or not yet swept) -- so the shared
+# archive itself is untouched; only a launchd-local derived copy drops
+# the two tsd_shim members entirely (not narrowed: nothing else in this
+# link needs pthread_tsd_shim_libc_bootstrap.o's own
+# _pthread_tsd_shim_bootstrap_for_libc, confirmed via a real `nm` sweep of
+# every launchd-relevant source file -- only *_smoketest.c/
+# uname_main_wrapper.c call it, none of which are part of this link).
+# Verified via a real relink (0 undefined symbols) + `nm -m`: xlocale.o's
+# calls now show "(from libsystem_pthread)" instead of a local T
+# definition.
+if [ ! -f "$OUT/libc_locale_for_stdio.a" ]; then
+    echo "error: $OUT/libc_locale_for_stdio.a not found -- run build_libc_stdio.sh first" >&2
+    exit 1
+fi
+rm -f "$OUT/libc_locale_for_stdio_no_tsd_shim.a"
+cp "$OUT/libc_locale_for_stdio.a" "$OUT/libc_locale_for_stdio_no_tsd_shim.a"
+ar d "$OUT/libc_locale_for_stdio_no_tsd_shim.a" pthread_tsd_shim.o
+ar d "$OUT/libc_locale_for_stdio_no_tsd_shim.a" pthread_tsd_shim_libc_bootstrap.o
+# cerror_stub.o ALSO REMOVED from this same derived copy (found immediately
+# after the standalone $OUT/cerror_stub.o removal below still left
+# ___error/_cerror/_cerror_nocancel/__pthread_exit_if_canceled locally
+# defined -- libc_locale_for_stdio.a carries its OWN separate copy of this
+# same member, per build_libc_locale.sh's own `ar rcs` file list). Many
+# members of this archive (ascii.o/collate.o/setlocale.o/strtol.o/xlocale.o
+# and ~20 more) have real, undefined `___error` references that need to
+# keep resolving -- confirmed they now bind "(from libsystem_kernel)"
+# after this removal, the real canonical owner, already linked below.
+ar d "$OUT/libc_locale_for_stdio_no_tsd_shim.a" cerror_stub.o
+
+# Real gap found the same pass: cerror_stub.o (a small, freestanding
+# `___error`/`_cerror`/`_cerror_nocancel`/`_errno`/`_pthread_exit_if_
+# canceled` stand-in predating this project's real error-handling
+# tier) was still linked directly into launchd.macho as a loose object,
+# even though the 2026-08-30 static-linking-cleanup session already
+# identified this EXACT member as a stray duplicate and removed it from
+# libsystem_c.dylib's own build for precisely this reason (see
+# docs/static-linking-cleanup-plan.md's "libsystem_c.dylib gained real
+# single ownership" section) -- libsystem_kernel.dylib is the real,
+# already-transitively-linked canonical owner of all five symbols
+# (confirmed via `nm -gUj`). Dropped entirely from this link; verified
+# via a real relink that all five now resolve "(from libsystem_kernel)".
+# libsystem_kernel.dylib is not otherwise explicitly listed on this link
+# line (only reachable via libSystem.B.dylib's reexport before this
+# point) -- same reexport-depth reasoning as libsystem_malloc.dylib/
+# libremovefile.dylib above, so it is added explicitly too.
+if [ ! -f "$OUT/system/libsystem_kernel.dylib" ]; then
+    echo "error: $OUT/system/libsystem_kernel.dylib not found -- run build_libsystem_kernel.sh first" >&2
+    exit 1
+fi
 
 # Real gap found+fixed 2026-08-28, next crash after the mach_task_self_
 # fix above: runtime.c's launchd_runtime_init() calls
@@ -435,7 +504,7 @@ rm -f "$OUT/launchd.macho"
     "$OUT/liblaunchd_mig.a" "$OUT/liblaunchd_syscalls.a" \
     "$OUT/libmach_ipc_no_dead_stubs.a" "$OUT/mach_port_gap_closures2.o" "$OUT/mach_port_gap_closures2_traps.o" \
     "$OUT/mach_ipc_dead_stubs_voucher_only.o" \
-    "$OUT/libclosure.a" "$OUT/chk_fail.o" "$OUT/sys_getpid_current_pid_only.o" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    "$OUT/libclosure.a" "$OUT/chk_fail.o" "$OUT/sys_getpid_current_pid_only.o" "$OUT/libplatform.a" \
     `# libpthread_no_dup_pthread_create.a REMOVED 2026-08-30 (docs/` \
     `# daemon-roadmap.md Phase 6.8 continued item 1): launchd.macho must` \
     `# NOT carry its own static copy of the pthread implementation` \
@@ -463,7 +532,8 @@ rm -f "$OUT/launchd.macho"
     `# "(from libsystem_pthread)") because libsystem_pthread.dylib really` \
     `# does export the whole surface this binary needs. Do NOT re-add it.` \
     "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
-    "$OUT/libc_locale_for_stdio.a" \
+    "$OUT/libc_locale_for_stdio_no_tsd_shim.a" \
+    "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/system/libxpc.dylib" "$OUT/system/libbsm.dylib" \
     "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
