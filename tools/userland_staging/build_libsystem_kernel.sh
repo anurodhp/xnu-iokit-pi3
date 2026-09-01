@@ -383,12 +383,57 @@ MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 # and build_ncurses_dylib.sh's own updated comments for their halves.
 for s in _geteuid _getegid _getuid _pread _pwrite _fileport_makefd _fileport_makeport \
     _socket _writev ___chmod ___connect_nocancel ___recvmsg_nocancel ___sendmsg_nocancel \
-    ___select_nocancel ___sendto_nocancel _fpathconf _kevent _kqueue; do
+    ___select_nocancel ___sendto_nocancel _fpathconf _kevent _kqueue ___sigaction; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
         -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
         -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
         "$SYSGEN/${s}.s" -o "$OUT/libsystem_kernel/sys${s}.o"
 done
+
+# ___sigaction (DAR-164, real gap found root-causing syslogd/pd-console-
+# login's post-exec abort): the raw sigaction(2) trap (#46, plain
+# generated stub -- syscalls.master has no NO_SYSCALL_STUB marker on it),
+# real canonical home per real Apple architecture. Real Libc/sys/
+# sigaction.c (wired into libsystem_c.dylib by this same fix, see
+# build_libsystem_c.sh's own updated comment) calls libplatform's
+# __platform_sigaction(), which calls this raw trap plus __sigtramp
+# (compiled just below) directly by name -- confirmed via a real QEMU
+# boot: syslogd.macho and pd-console-login (the first real fork()+exec()'d
+# non-launchd dyld processes this port has ever booted, DAR-163) each
+# abort() immediately post-exec with dyld's own real fatal error
+# ("Symbol not found: _sigaction ... Expected in: /usr/lib/libSystem.B.dylib",
+# "Symbol not found: __sigaction_nobind ... Expected in:
+# /usr/lib/system/libdispatch.dylib") -- captured via a real kernel-side
+# abort_with_payload() probe (bsd/kern/kern_exit.c), not guessed. Both
+# reexport this dylib transitively (libSystem.B.dylib and libdispatch.dylib
+# each real-reexport libsystem_c.dylib, confirmed via otool -l), so this
+# dylib owning the raw trap + trampoline and libsystem_c.dylib owning the
+# public sigaction()/_sigaction_nobind() wrappers matches real Apple's
+# actual split and closes both binaries' bindings with one real fix.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    libsystem_kernel_sigtramp_compat.c -o "$OUT/libsystem_kernel/sigtramp_compat.o"
+
+# proc_pidinfo() (DAR-164, real gap found root-causing syslogd's
+# post-exec abort, same investigation as ___sigaction/__sigtramp above):
+# real, self-contained proc_info(2) (#336, NO_SYSCALL_STUB) wrapper,
+# already compiled and QEMU-proven once for ps(1)
+# (ps_libproc_syscall.c, build_ps.sh) -- reused verbatim, not
+# reinvented. Real canonical home is this dylib (real Apple ships
+# proc_pidinfo as part of libsystem_kernel.dylib, a plain syscall
+# wrapper, same tier as every other hand-written NO_SYSCALL_STUB trap
+# here). Found via the same real kernel-side abort_with_payload() probe:
+# "Symbol not found: _proc_pidinfo / Referenced from: /usr/sbin/syslogd /
+# Expected in: /usr/lib/libSystem.B.dylib" -- syslogd.macho also directly
+# loads libxpc.dylib (which carries its own private copy,
+# cf_libproc_syscalls.c-derived), but that doesn't satisfy this specific
+# two-level ordinal, same "Expected in: X" != "loaded somewhere" pattern
+# already diagnosed twice this session (see build_libdispatch_dylib.sh's
+# and build_libsystem_notify.sh's own updated comments). libSystem.B.dylib
+# already reexports this dylib, so no further wiring needed once this
+# dylib exports it for real.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    ps_libproc_syscall.c -o "$OUT/libsystem_kernel/proc_pidinfo_compat.o"
+
 # DAR-124/DAR-11 (libresolv.dylib), 2026-08-31 sweep continuation:
 # _kevent/_kqueue added above (plain generated stubs, syscalls.master
 # has no NO_SYSCALL_STUB marker on either -- confirmed by grep, not
@@ -638,6 +683,8 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/cf_mach_port_syscalls.o" "$OUT/libsystem_kernel/mach_port_traps.o" \
     "$OUT/libsystem_kernel/thread_get_special_reply_port_trap.o" \
     "$OUT/libsystem_kernel/mach_portUser.o" "$OUT/libsystem_kernel/mach_port_set_attributes.o" \
+    "$OUT/libsystem_kernel/sys___sigaction.o" "$OUT/libsystem_kernel/sigtramp_compat.o" \
+    "$OUT/libsystem_kernel/proc_pidinfo_compat.o" \
     "$MACH_IPC_EXTRACT"/*.o
 
 echo "wrote $OUT/system/libsystem_kernel.dylib"

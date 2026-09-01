@@ -132,6 +132,10 @@ if [ ! -f "$OUT/system/libsystem_kernel.dylib" ] || [ ! -f "$OUT/system/libsyste
     echo "error: libsystem_kernel/platform/malloc/pthread/blocks/libdyld.dylib not found -- run those build scripts first" >&2
     exit 1
 fi
+if [ ! -f "$OUT/libncurses.a" ]; then
+    echo "error: $OUT/libncurses.a not found -- run build_ncurses.sh first (this script reuses its already-built Libc_sys_sigaction.o/libplatform_sigaction.o members)" >&2
+    exit 1
+fi
 
 rm -rf "$EXTRACT"
 mkdir -p "$EXTRACT"
@@ -139,6 +143,23 @@ mkdir -p "$EXTRACT"
 (cd "$EXTRACT" && ar x "../../libc_gen.a")
 (cd "$EXTRACT" && ar x "../../libc_stdio.a")
 (cd "$EXTRACT" && ar x "../../libc_locale_for_stdio.a")
+# Libc_sys_sigaction.o/libplatform_sigaction.o (DAR-164, real gap found
+# root-causing syslogd/pd-console-login's post-exec abort -- see
+# build_libsystem_kernel.sh's own updated comment for the full real
+# kernel-side-probe trail): real Apple's public sigaction()/
+# _sigaction_nobind() (Libc/sys/sigaction.c) and libplatform's
+# __platform_sigaction() (libplatform/src/setjmp/generic/sigaction.c)
+# were never part of the archive set this dylib's own header already
+# lists (libc_string/libc_gen/libc_stdio/libc_printf/
+# libc_locale_for_stdio/libc_regex) -- sys/sigaction.c is architecturally
+# real Libc, just never one of THIS dylib's already-combined tiers.
+# Both objects are already real and built (extracted here from
+# libncurses.a, same real source, same real selective-extraction pattern
+# build_launchd_core.sh's own launchd_libc_extras_obj already established
+# for this exact pair) -- not recompiled. Needs the raw ___sigaction trap
+# + __sigtramp trampoline, both real exports of the sibling
+# libsystem_kernel.dylib linked below by this same fix.
+(cd "$EXTRACT" && ar x "../../libncurses.a" Libc_sys_sigaction.o libplatform_sigaction.o)
 # cerror_stub.o dropped 2026-08-30 (static-linking cleanup, Phase 1d):
 # it defines a plain, MUTABLE `int errno` global plus __error/cerror/
 # cerror_nocancel/_pthread_exit_if_canceled (see cerror_stub.c's own
@@ -161,6 +182,22 @@ rm -f "$EXTRACT/cerror_stub.o"
 rm -f "$EXTRACT/__.SYMDEF"* "$EXTRACT/pthread_tsd_shim.o" \
     "$EXTRACT/machdep_ldisQ.o" "$EXTRACT/wcsftime.o" "$EXTRACT/vfwscanf.o" "$EXTRACT/vswscanf.o" \
     "$EXTRACT/wscanf.o" "$EXTRACT/vwscanf.o" "$EXTRACT/fwscanf.o" "$EXTRACT/swscanf.o"
+# ldpart.o dropped 2026-09-01 (DAR-153/DAR-164): a real, newly-arrived
+# member of libc_locale_for_stdio.a (real Libc/locale/FreeBSD/ldpart.c,
+# __ldpart_free_extra + __part_load_locale) this dylib's own build was
+# never updated for. __part_load_locale needs a real __open_path_locale
+# this project's whole third_party/Libc checkout doesn't have anywhere
+# (see build_openpam_dylib.sh's own header on this exact, already-
+# documented wall) and nothing in this project's dylib graph calls it
+# (confirmed via nm -u). __ldpart_free_extra itself IS real and needed
+# (real callers in libopenpam.dylib), but its own real definition is
+# __private_extern__ -- dropped here and given a real, genuinely
+# exported second home instead (libsystem_c_ldpart_free_extra_compat.c,
+# aliased to the real public name below) rather than trying to force-
+# export ldpart.o's own hidden copy, which -Wl,-exported_symbol does not
+# actually do for private-extern symbols (tried first, see that compat
+# file's own header for the real confirmed failure).
+rm -f "$EXTRACT/ldpart.o"
 
 # Real gap: sys_siglist (real strsignal_r() dependency) and strvisx
 # (real ___printf_render_vis() dependency) have real FreeBSD source
@@ -241,6 +278,11 @@ rm -f "$EXTRACT/nsgetenviron_raw.o"
 
 "$CLANG" $SIGLIST_CFLAGS "$LIBC/gen/FreeBSD/siglist.c" -o "$EXTRACT/siglist.o"
 "$CLANG" $SIGLIST_CFLAGS "$LIBC/gen/FreeBSD/vis.c" -o "$EXTRACT/vis.o"
+
+# __ldpart_free_extra's real, genuinely-exported second home -- see
+# ldpart.o's own removal comment above and this compat file's own header
+# for the full real trail (DAR-153/DAR-164).
+"$CLANG" $SIGLIST_CFLAGS libsystem_c_ldpart_free_extra_compat.c -o "$EXTRACT/ldpart_free_extra_compat.o"
 
 # Real gap: mktemp.o (kept in this dylib -- real dyld's own
 # LibSystemHelpers::mkstemp() needs it, see libsystem_c_syscall_compat.c's
@@ -603,6 +645,28 @@ rm -f "$OUT/system/libsystem_c.dylib"
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -Wl,-U,___progname \
+    `# __ldpart_free_extra: ldpart.o's own real definition is` \
+    `# __private_extern__ (real Apple source), which -Wl,-exported_symbol` \
+    `# does NOT reverse (tried first, real confirmed-via-dyld_info` \
+    `# failure -- see libsystem_c_ldpart_free_extra_compat.c's own header` \
+    `# for the full trail). Real fix: alias a second, genuinely non-` \
+    `# hidden copy of the same real body (that compat file, extracted` \
+    `# below) to the real public name instead.` \
+    -Wl,-alias,_dar153_ldpart_free_extra_impl,___ldpart_free_extra \
+    `# ___part_load_locale: real callers (lmessages.o/lmonetary.o/` \
+    `# lnumeric.o/timelocal.o, all already part of this dylib's own` \
+    `# $EXTRACT via libc_locale_for_stdio.a) reference it. A bare` \
+    `# -Wl,-U deferral here was tried first and caused a REAL REGRESSION` \
+    `# (broke launchd itself, not just syslogd -- this project's dyld` \
+    `# does only eager chained-fixups binding, so an unresolved flat-` \
+    `# namespace bind with no real provider anywhere fails at process` \
+    `# LOAD time regardless of whether the referencing code path is ever` \
+    `# exercised; see dar153_part_load_locale_impl's own header in` \
+    `# libsystem_c_ldpart_free_extra_compat.c for the full real trail).` \
+    `# Real fix: alias a real, honest, always-_LDP_ERROR implementation` \
+    `# instead (same file), matching real Apple's own actual behavior` \
+    `# for this target's real, empty locale-file inventory.` \
+    -Wl,-alias,_dar153_part_load_locale_impl,___part_load_locale \
     -Wl,-alias,___kill,_kill \
     -Wl,-alias,___rmdir,_rmdir \
     -Wl,-alias,___unlink,_unlink \

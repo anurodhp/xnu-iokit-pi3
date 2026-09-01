@@ -32,11 +32,12 @@
 #   - xpc_dictionary_create/_set_string/_set_uint64/_release,
 #     __xpc_bool_true: real XPC API this library's real notify_post()/
 #     notify_register_dispatch() paths use to build an XPC message to
-#     notifyd -- genuine, but libxpc.a is still a static archive in this
-#     project as of this pass (its own dylib conversion is later in this
-#     same migration sweep), so there is no real sibling dylib to link
-#     against yet. Re-verify these resolve for real once
-#     libsystem_xpc.dylib (or equivalent) exists.
+#     notifyd -- genuine, but libxpc.a was still a static archive in this
+#     project as of this pass (its own dylib conversion was later in this
+#     same migration sweep). RESOLVED 2026-09-01 (DAR-164): a real
+#     libxpc.dylib now exists and is linked directly below, not deferred
+#     via `-Wl,-U` anymore -- see this file's own updated comment at the
+#     prerequisite check above for the real gap this closed.
 #   - bootstrap_look_up2: real bootstrap/launchd port-lookup routine --
 #     this project has no full launchd bootstrap namespace registrar for
 #     this library's client-side lookup path to call into (same class of
@@ -81,12 +82,37 @@ if [ ! -f "$OUT/libnotify.a" ] || [ ! -f "$OUT/libnotify_client.a" ]; then
     echo "error: libnotify.a / libnotify_client.a not found -- run build_libnotify.sh and build_libnotify_client.sh first" >&2
     exit 1
 fi
-for d in libsystem_c libsystem_malloc libsystem_platform libsystem_kernel libsystem_pthread libdispatch libsystem_blocks libncurses libdyld; do
+for d in libsystem_c libsystem_malloc libsystem_platform libsystem_kernel libsystem_pthread libdispatch libsystem_blocks libncurses libdyld libxpc; do
     if [ ! -f "$OUT/system/$d.dylib" ]; then
         echo "error: $OUT/system/$d.dylib not found -- run build_${d}.sh first" >&2
         exit 1
     fi
 done
+# libxpc.dylib real dependency added (DAR-164, real gap found root-causing
+# pd-console-login's post-exec abort -- see build_libsystem_kernel.sh's own
+# updated comment for the wider real kernel-side-probe trail): this
+# header's own comment above ("libxpc.a is still a static archive... Re-
+# verify these resolve for real once libsystem_xpc.dylib (or equivalent)
+# exists") is now stale -- a real libxpc.dylib was ported later in this
+# same migration and DOES exist, just never wired back into this dylib's
+# own link. Real, dyld-instrumented QEMU boot (a temporary raw-write probe
+# added to third_party/dyld's Loader.cpp, reverted after use) confirmed
+# the actual failure: `libresolv.dylib` (unconditionally reexported by
+# libSystem.B.dylib, so present in EVERY process) loads this dylib, whose
+# real notify_post()/notify_register_dispatch() code does a `<flat-
+# namespace>` lookup for `__xpc_bool_true`/`_xpc_dictionary_*`/
+# `_xpc_release` -- a lookup that only succeeds if the SPECIFIC PROCESS
+# also happens to separately, directly link libxpc.dylib (true for
+# syslogd.macho, false for pd-console-login/login/getty and, by the same
+# reasoning, likely most of this project's other real binaries). Real
+# Apple's shared cache always has libxpc.dylib mapped, masking this same
+# structural gap; this project has no shared cache, so the fix is to make
+# libxpc.dylib a real, direct load dependency of the one dylib whose own
+# code needs it (matches this project's own established single-owner
+# precedent, e.g. the `_dlclose`/ICU fix in build_libsystem.sh) rather
+# than depending on every future consumer happening to link it too. No
+# circular dependency (confirmed via a real `otool -L` on libxpc.dylib:
+# it does not link libsystem_notify.dylib back).
 
 # Real, verified fix (2026-08-28, see docs/backlog.md item d9 for the
 # full trail): Xcode 12's own bundled ld64-609 has a real internal crash
@@ -167,8 +193,6 @@ rm -f "$OUT/system/libsystem_notify.dylib"
     -Wl,-not_for_dyld_shared_cache \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
-    -Wl,-U,_xpc_dictionary_create -Wl,-U,_xpc_dictionary_set_string \
-    -Wl,-U,_xpc_dictionary_set_uint64 -Wl,-U,_xpc_release -Wl,-U,__xpc_bool_true \
     -Wl,-U,_bootstrap_look_up2 \
     -Wl,-U,_pipe \
     -o "$OUT/system/libsystem_notify.dylib" \
@@ -178,6 +202,7 @@ rm -f "$OUT/system/libsystem_notify.dylib"
     "$OUT/system/libsystem_pthread.dylib" "$OUT/system/libdispatch.dylib" \
     "$OUT/system/libsystem_blocks.dylib" "$OUT/system/libncurses.dylib" \
     "$OUT/system/libdyld.dylib" \
+    "$OUT/system/libxpc.dylib" \
     2>"$OUT/libsystem_notify_link.err" \
     && echo "wrote $OUT/system/libsystem_notify.dylib" \
     || { echo "libsystem_notify.dylib link found real undefined symbols:" >&2; grep '^  "' "$OUT/libsystem_notify_link.err" | sed 's/,.*//' | sort -u >&2; cat "$OUT/libsystem_notify_link.err" >&2; exit 1; }
@@ -194,7 +219,7 @@ otool -hv "$OUT/system/libsystem_notify.dylib" | grep -q " DYLIB " || {
 # else bound to a real, named sibling dylib.
 echo "declared -Wl,-U deferrals (expect: <flat-namespace> bind target, resolved at real load time):"
 xcrun dyld_info -fixups "$OUT/system/libsystem_notify.dylib" 2>/dev/null | grep '<flat-namespace>' | awk '{print "  " $NF}'
-UNEXPECTED=$(xcrun dyld_info -fixups "$OUT/system/libsystem_notify.dylib" 2>/dev/null | grep -v -E '<flat-namespace>|<weak-def-coalesce>' | grep 'bind' | grep -v -E 'libsystem_c/|libsystem_malloc/|libsystem_platform/|libsystem_kernel/|libsystem_pthread/|libdispatch/|libsystem_blocks/|libncurses|libdyld/' || true)
+UNEXPECTED=$(xcrun dyld_info -fixups "$OUT/system/libsystem_notify.dylib" 2>/dev/null | grep -v -E '<flat-namespace>|<weak-def-coalesce>' | grep 'bind' | grep -v -E 'libsystem_c/|libsystem_malloc/|libsystem_platform/|libsystem_kernel/|libsystem_pthread/|libdispatch/|libsystem_blocks/|libncurses|libdyld/|libxpc/' || true)
 if [ -n "$UNEXPECTED" ]; then
     echo "error: real, unexpected non-sibling bind targets found (not flat-namespace, not one of the 8 linked sibling dylibs):" >&2
     echo "$UNEXPECTED" >&2

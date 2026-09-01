@@ -145,6 +145,58 @@ kstrlcpy_main_thread_name(void)
  * real, not just re-stating the aspiration. */
 extern bool __pthread_mutex_use_ulock;
 
+/* DAR-164 fix (2026-09-01): real Apple's actual process bootstrap
+ * guarantees dyld's libSystem_initializer installs a valid TPIDRRO_EL0/
+ * TSD base BEFORE any Mach-O `__mod_init_func` constructor runs -- this
+ * project's static (Csu, no-dyld) binaries had no equivalent guarantee:
+ * every existing `*_main_wrapper.c` (getty/login/bash/ps/ping/ifconfig/
+ * uname) calls this function EXPLICITLY, but only from its own `main()`,
+ * which Csu's crt.c/start.s only reaches AFTER already running every
+ * `__mod_init_func` constructor first. Libc/locale/xlocale.c's own real
+ * `__xlocale_init_constructor()` (added 2026-08-27, DAR-153/Phase 6.7,
+ * to fix an earlier uninitialized-`__locale_key` snprintf crash) calls
+ * real `pthread_key_init_np()`, which -- now that this project links
+ * the REAL libpthread_tsd.c tier, not the older simplified stand-in --
+ * genuinely needs a valid TPIDRRO_EL0 (`_pthread_lock_lock()` ->
+ * `os_unfair_lock_lock_with_options()` -> `_os_lock_owner_get_self()` ->
+ * `_os_tsd_get_direct(__TSD_MACH_THREAD_SELF)`, slot 3, i.e. offset
+ * 0x18). Real, root-caused, real-QEMU-confirmed SIGSEGV found this way
+ * (kernel-side abort_with_payload()/postsig_locked()/ux_handler()
+ * probes, tools/userland_staging/login_main_wrapper.c's own temporary
+ * raw-write probe confirming main() was never even reached): pid 4
+ * (`login`, this project's first STATIC binary to combine the real
+ * libpthread tier with the xlocale constructor) faulted at address
+ * 0x18 -- TPIDRRO_EL0 was still exactly 0, the fresh post-exec value,
+ * because the constructor ran before this function's own explicit
+ * `main()`-body call ever got a chance to.
+ *
+ * First fix attempted (did NOT work, real finding, not guessed): giving
+ * this function itself `__attribute__((constructor(101)))` -- a real
+ * `otool -l` after that change still showed `__xlocale_init_constructor`
+ * FIRST in login.macho's own `__mod_init_func` array. This project's
+ * own `crt_run_static_initializers()` (third_party/Csu/crt.c) walks that
+ * section in plain array order with no priority awareness, and ld64
+ * apparently placed entries in link/object order, not by the numeric
+ * constructor priority -- Mach-O's `__mod_init_func` does not carry the
+ * same priority-bucketing guarantee ELF's `.init_array.NNNNN` sections
+ * do. Real fix landed instead in crt.c itself: a weak_import hook that
+ * calls this function BEFORE the `__mod_init_func` loop even starts,
+ * for any consumer that links this file at all (see crt.c's own updated
+ * comment for the full mechanism and why it doesn't affect pwtool/other
+ * pthread-less static consumers).
+ *
+ * This function is made idempotent (guarded by `done` below) because it
+ * now genuinely runs twice for every existing `*_main_wrapper.c`
+ * consumer: once via crt.c's new pre-`__mod_init_func` hook, once via
+ * that wrapper's own existing explicit `main()`-body call (kept as-is,
+ * both for its real success/failure return-value check and so this
+ * fix doesn't require editing every wrapper file too). Idempotency
+ * avoids double-inserting `_main_thread` into `__pthread_head` or
+ * re-randomizing `_pthread_ptr_munge_token` out from under an
+ * already-signed pthread_t on the second call. The TSD-base install
+ * itself (`pthread_tsd_shim_bootstrap_with_base()`) was already
+ * documented idempotent/safe to repeat (see that function's own header)
+ * and stays unconditional either way. */
 int
 pthread_main_thread_bootstrap(void)
 {
@@ -155,24 +207,29 @@ pthread_main_thread_bootstrap(void)
 			"the TSD-base arithmetic below would silently "
 			"compute the wrong pthread_t");
 
-	__pthread_mutex_use_ulock = true;
+	static int done = 0;
+	if (!done) {
+		__pthread_mutex_use_ulock = true;
 
-	/* Real per-process token (see this file's own header on why
-	 * mach_absolute_time() is a reasonable substitute for the real
-	 * ASLR-derived seed on this target). */
-	_pthread_ptr_munge_token = (uintptr_t)mach_absolute_time();
+		/* Real per-process token (see this file's own header on why
+		 * mach_absolute_time() is a reasonable substitute for the real
+		 * ASLR-derived seed on this target). */
+		_pthread_ptr_munge_token = (uintptr_t)mach_absolute_time();
 
-	TAILQ_INSERT_TAIL(&__pthread_head, &_main_thread, tl_plist);
-	_main_thread.tl_policy = 0; /* SCHED_OTHER-equivalent */
-	_main_thread.tl_joinable = 0; /* main thread is never joined */
-	kstrlcpy_main_thread_name();
+		TAILQ_INSERT_TAIL(&__pthread_head, &_main_thread, tl_plist);
+		_main_thread.tl_policy = 0; /* SCHED_OTHER-equivalent */
+		_main_thread.tl_joinable = 0; /* main thread is never joined */
+		kstrlcpy_main_thread_name();
 
-	main_thread_init_signature(&_main_thread);
+		main_thread_init_signature(&_main_thread);
+		done = 1;
+	}
 
 	/* Real TSD base install (platform_syscall "set cthread self",
 	 * QEMU-confirmed mechanism) - MUST point at &_main_thread.tsd[0],
 	 * not at _main_thread itself, matching the real offset arithmetic
-	 * documented above. */
+	 * documented above. Unconditional/idempotent, safe to repeat on
+	 * every call (see this function's own updated header). */
 	int ok = pthread_tsd_shim_bootstrap_with_base(&_main_thread.tsd[0]);
 
 	/* REAL BUG FOUND BY QEMU BOOT-TEST (not caught by native `ld`/host

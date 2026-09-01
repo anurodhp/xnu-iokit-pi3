@@ -52,7 +52,19 @@ LOCK = os.path.join(REPO, "qemu", ".qemu_test_lock")
 # here doesn't error, it just silently makes every --cmd never get sent
 # (since_cmd never ends with PROMPT), which looks exactly like the guest
 # hanging.
-PROMPT = "-bash-3.2# "
+#
+# DAR-164: root's real configured login shell (/etc/master.passwd, see
+# inject_into_sd_image.sh) is /bin/sh, not /bin/bash -- a real, correct
+# system convention this project already follows (/bin/sh is the SAME
+# real bash binary, argv[0]-dispatched into sh-compat mode, matching
+# real-world "/bin/sh is commonly bash" practice). Real bash's own
+# sh-compat prompt is "-sh-3.2# ", not "-bash-3.2# " -- confirmed via a
+# real QEMU --login run once DAR-164's login(1) crash fix let a real
+# post-auth shell get reached for the first time; every prior --login
+# run had silently never sent a single --cmd because of this, which
+# looked identical to the guest hanging for the same reason the comment
+# above already warns about.
+PROMPT_CANDIDATES = ("-bash-3.2# ", "-sh-3.2# ")
 
 
 def acquire_lock(timeout):
@@ -180,18 +192,37 @@ def main():
                     print(f"[boot_test] matched --expect {pat!r} at "
                           f"t={time.time() - start:.1f}s")
 
-            if need_login and since_cmd.endswith("login: "):
+            # DAR-164 fix: matching bare "login: " (no preceding \n) false-
+            # triggered on org.puredarwin.console-login's own real ctrace
+            # lines (pd_console_login.c's "pd-console-login: <msg>" prefix
+            # literally ends in the substring "login: ") whenever a pty
+            # read chunk happened to end right after that colon+space --
+            # sent the username far too early, into pd-console-login's own
+            # process (not getty's real prompt), so the real login:/
+            # Password: exchange downstream never got answered. The real
+            # getty prompt is always preceded by a newline (it prints a
+            # banner + newline first); ctrace's mid-string "login: "
+            # substring never is, since "-login: " is always preceded by
+            # "-", not "\n" -- anchoring on "\n" is robust regardless of
+            # where any given read() happens to chunk the stream.
+            if need_login and since_cmd.endswith("\nlogin: "):
                 print(f"[boot_test] logging in as {args.user!r}")
                 os.write(master, (args.user + "\n").encode())
                 since_cmd = ""
                 need_login = False
                 need_password = True
-            elif need_password and since_cmd.endswith("Password: "):
+            # Real login(1)'s DEFAULT_PASSWD_PROMPT (system_cmds/login.tproj/
+            # login.c) is literally "Password:" -- no trailing space, unlike
+            # getty's "login: ". Matching "Password: " (with a space) never
+            # fired, so the password was never sent and every login run
+            # timed out waiting -- found once DAR-164's real login crash fix
+            # let a real Password: prompt get reached for the first time.
+            elif need_password and since_cmd.endswith("Password:"):
                 os.write(master, (args.password + "\n").encode())
                 since_cmd = ""
                 need_password = False
 
-            if pending_cmds and since_cmd.endswith(PROMPT):
+            if pending_cmds and since_cmd.endswith(PROMPT_CANDIDATES):
                 cmd = pending_cmds.pop(0)
                 print(f"[boot_test] sending {cmd!r}")
                 os.write(master, (cmd + "\n").encode())

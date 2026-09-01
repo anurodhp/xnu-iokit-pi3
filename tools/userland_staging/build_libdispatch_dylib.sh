@@ -781,6 +781,25 @@ rm -f "$OUT/system/libdispatch.dylib"
     # tools/userland_staging/dup_symbol_audit.sh does not flag either
     # symbol). Reexporting libsystem_c.dylib here closes the whole class
     # at once instead of chasing it symbol-by-symbol.
+# libsystem_kernel.dylib reexport added 2026-09-01 (DAR-164, real gap
+# found root-causing syslogd's post-exec abort): same exact bug shape as
+# the libsystem_c.dylib reexport documented just above, same real
+# Xcode-12-era ld64 ordinal-folding quirk (a plain load dependency's
+# exports get folded into the SAME two-level ordinal as this dylib's own
+# real exports under `-Wl,-fixup_chains`) -- this time for `_nanosleep`
+# (real, confirmed via `nm -m`/`dyld_info -exports` to be genuinely
+# defined in libsystem_kernel.dylib, build_libsystem_kernel.sh's own
+# nanosleep_compat.o, not libdispatch's own code), found via a real
+# kernel-side abort_with_payload() probe on a real QEMU boot:
+# "Symbol not found: _nanosleep / Referenced from: /usr/sbin/syslogd /
+# Expected in: /usr/lib/system/libdispatch.dylib". No new eager-binding
+# risk (unlike the earlier, reverted libsystem_m.dylib reexport attempt
+# documented in build_libsystem_c.sh): libsystem_kernel.dylib was already
+# a plain load dependency right here, already unconditionally present in
+# every process via libSystem.B.dylib's own reexport chain since before
+# this fix -- reexporting it here doesn't make anything newly mandatory,
+# it only republishes an already-always-loaded, already-vetted sibling's
+# real exports under this dylib's own two-level namespace ordinal too.
 # $OUT/simple_obj/sys__kqueue.o REMOVED from this link 2026-08-31
 # (DAR-124 sweep): it was a bare, undocumented cross-script dependency
 # on build_simple_cmds.sh already having run (that script generates this
@@ -801,9 +820,10 @@ rm -f "$OUT/system/libdispatch.dylib"
     "$OUT"/dispatch_obj/*.o "$OUT"/dispatch_obj/event/*.o \
     "$OUT"/dispatch_dylib_extract/*.o \
     "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" \
-    "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" \
+    "$OUT/system/libsystem_platform.dylib" \
     -Wl,-reexport_library,"$OUT/system/libsystem_blocks.dylib" \
     -Wl,-reexport_library,"$OUT/system/libsystem_c.dylib" \
+    -Wl,-reexport_library,"$OUT/system/libsystem_kernel.dylib" \
     2>"$OUT/system/libdispatch_dylib_link.err" \
     || { echo "note: dylib link reported diagnostics (expected -- undefined symbols are normal in a dylib), see $OUT/system/libdispatch_dylib_link.err" >&2; }
 

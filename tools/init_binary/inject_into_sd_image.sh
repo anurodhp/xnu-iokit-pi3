@@ -595,6 +595,38 @@ else
     echo "+ $MNT/etc/hostname already exists -- leaving as-is"
 fi
 
+# /etc/ttys (DAR-164, real gap found completing the real login(1) E2E
+# flow): real login.c's own rootterm() (system_cmds/login.tproj/login.c,
+# non-PAM branch) refuses ANY root login unless getttynam(ttyn) finds a
+# matching /etc/ttys entry with the TTY_SECURE flag set -- a real,
+# intentional Apple/BSD safety check, not a bug. This project's own
+# getttyent.c port (build_login.sh) already degrades gracefully when
+# /etc/ttys is entirely missing (same "no real TZ database"-class honest
+# gap as getty's own /etc/gettytab handling) -- but "gracefully" here
+# means rootterm() returns false, so root got a real, correct, but
+# permanent "root login refused on this terminal" rejection every single
+# time (confirmed via a real QEMU boot: login prompts for a password,
+# accepts input, then unconditionally loops back to a fresh login:
+# prompt) until this file exists. `console` is the real basename
+# ttyname(STDIN_FILENO) resolves to for this project's serial/console tty
+# (login.c strips the "/dev/" prefix itself before calling getttynam()) --
+# confirmed via the same real QEMU boot. Standard /etc/ttys field order
+# (name, getty program, terminal type, flags) -- the getty-program/type
+# fields are unused by this project (nothing spawns getty from this file,
+# see build_getty.sh's own header on the real getty->login handoff this
+# project actually uses instead), included only because getttyent.c's
+# real parser expects the field positions to be present.
+if [ ! -f "$MNT/etc/ttys" ]; then
+    cat > "$MNT/etc/ttys" <<'EOF'
+console		"/usr/libexec/getty std.9600"	vt100	on secure
+EOF
+    chmod 644 "$MNT/etc/ttys"
+    echo "+ wrote $MNT/etc/ttys (console marked secure) -- real login(1)'s own"
+    echo "  rootterm() check needs this before it will ever allow a root login"
+else
+    echo "+ $MNT/etc/ttys already exists -- leaving as-is"
+fi
+
 diskutil unmount "$MNT"
 hdiutil detach "$DISK"
 trap - EXIT
