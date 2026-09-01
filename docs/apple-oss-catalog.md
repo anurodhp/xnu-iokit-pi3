@@ -241,10 +241,37 @@ each confirmed against `macos-112` the same way as Part 1 (not guessed).
 
 **Already scoped in `docs/daemon-roadmap.md`, not re-litigated here** —
 cross-referenced for completeness since they showed up in this same
-manifest sweep: `syslog` (`syslog-385`), `configd` (`configd-1109.60.2`),
-`mDNSResponder` (`mDNSResponder-1310.80.1`), `bootp`
-(`bootp-413.80.1` — DHCP client/`ipconfigd`, deprioritized per
-`project_xnu_rpi3_dhcp_ipconfiguration_analysis` memory), `PowerManagement`
+manifest sweep: `syslog` (`syslog-385`), `configd` (`configd-1109.60.2` —
+**pinned + cloned into `third_party/configd` 2026-09-01**, tag reverified
+against the real `macos-112` manifest JSON at clone time; cloned as the
+real source home of `SystemConfiguration.fproj`/`libSystemConfiguration`
+that `bootp`'s own headers transitively need, see below — the real daemon
+(`configd.tproj`) itself is NOT yet built/ported, only the source is on
+disk), `mDNSResponder` (`mDNSResponder-1310.80.1`), `bootp`
+(`bootp-413.80.1` — DHCP client/`ipconfigd`; **pinned + cloned into
+`third_party/bootp` 2026-09-01**, tag reverified against the real
+`macos-112` manifest JSON at clone time, superseding the earlier
+"deprioritized" framing from the `project_xnu_rpi3_dhcp_ipconfiguration_
+analysis` memory. That memory's conclusion — full `SCDynamicStore`/
+`configd` is a real wall, so skip Apple's client and port FreeBSD
+`dhclient` instead — undersold Apple's own source: a real per-file
+`SCDynamicStore`/`SCPreferences` grep of the pinned tag shows the coupling
+is concentrated in `IPConfiguration.bproj/ipconfigd.c` (112 refs, the
+daemon main loop/per-service state-machine driver) and `sysconfig.c` (13
+refs), while the actual DHCP/BOOTP protocol engine — `dhcp.c`, `bootp.c`,
+`bootp_session.c`, `arp_session.c`, `DHCPLease.c`, `ifutil.c` (the ioctl
+layer `dhcp.c` calls through `service_set_address()`/
+`service_remove_address()`) — has zero `SCDynamicStore` references and is
+portable standalone today. A real first build-script pass
+(`tools/userland_staging/build_bootp_dhcp_engine.sh`) got 5 of 9 targeted
+protocol-engine files compiling clean against real headers (including
+real CoreFoundation and, via a staged `-I`, `SystemConfiguration.fproj`'s
+own headers pulled from the `configd` clone); the remaining 4 hit one
+precisely-diagnosed real gap (`SCPrivate.h` → XNU's kernel-internal
+`os/log_private.h`/firehose COMM_PAGE machinery, not a userspace-
+appropriate header — same class this project already stubbed out
+elsewhere, see that script's own header comment). See Linear DAR-170 for
+the full ordered plan this finding produced), `PowerManagement`
 (`PowerManagement-1132.81.1` — also the eventual real implementation for
 `BCM2837CPU::quiesceCPU()`/`haltCPU()`'s current no-ops, backlog P3 item
 4), `bootstrap_cmds` (`bootstrap_cmds-121` — real `mig` source, though this

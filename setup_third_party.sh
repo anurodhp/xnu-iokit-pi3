@@ -406,6 +406,8 @@ ICU|https://github.com/apple-oss-distributions/ICU.git|ICU-66109|ICU.patch
 libxml2|https://github.com/apple-oss-distributions/libxml2.git|libxml2-34.9|
 cctools|https://github.com/apple-oss-distributions/cctools.git|cctools-973.0.1|
 Libm|https://github.com/apple-oss-distributions/Libm.git|Libm-2026|
+bootp|https://github.com/apple-oss-distributions/bootp.git|bootp-413.80.1|
+configd|https://github.com/apple-oss-distributions/configd.git|configd-1109.60.2|
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch; do
