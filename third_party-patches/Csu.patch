@@ -1,7 +1,7 @@
 From a2709f253bf415048767b8e8389ec4b06e8b6498 Mon Sep 17 00:00:00 2001
 From: Anurodh Pokharel <anurodhp@icloud.com>
 Date: Sun, 16 Aug 2026 08:09:13 -0400
-Subject: [PATCH 1/3] start.s: set real environ global at process entry (arm64)
+Subject: [PATCH 1/4] start.s: set real environ global at process entry (arm64)
 
 Real crt.c's own _start() C function (which does `environ = envp;`) is
 legacy, pre-10.5-only code, gated behind `#if __DYNAMIC__ &&
@@ -61,7 +61,7 @@ index 2166de5..14f472b 100644
 From 9455ffb3f22aa8ce6acd1e2ae9acd1d438a947b5 Mon Sep 17 00:00:00 2001
 From: Anurodh Pokharel <anurodhp@icloud.com>
 Date: Thu, 20 Aug 2026 14:19:36 -0400
-Subject: [PATCH 2/3] start.s/crt.c: set real __progname/NXArgc/NXArgv at
+Subject: [PATCH 2/4] start.s/crt.c: set real __progname/NXArgc/NXArgv at
  process entry (arm64)
 
 Same root cause and pattern as a2709f2's environ fix: crt.c's own C
@@ -174,7 +174,7 @@ index 14f472b..45c3c9a 100644
 From 51a079c2a080ff9b9ed08e97cacd736f6cdfc94f Mon Sep 17 00:00:00 2001
 From: Anurodh Pokharel <anurodhp@icloud.com>
 Date: Sat, 22 Aug 2026 09:05:39 -0400
-Subject: [PATCH 3/3] start.s/crt.c: run __DATA,__mod_init_func constructors at
+Subject: [PATCH 3/4] start.s/crt.c: run __DATA,__mod_init_func constructors at
  process entry (arm64)
 
 This static/no-dyld target never processes Mach-O static initializers
@@ -251,6 +251,180 @@ index 45c3c9a..4b1ab95 100644
  	mov     x0, x19
  	mov     x1, x20
  	mov     x2, x21
+-- 
+2.50.1 (Apple Git-155)
+
+
+From bc259058eb8b0b32bba09278284891b4c126567e Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@icloud.com>
+Date: Mon, 31 Aug 2026 22:43:36 -0400
+Subject: [PATCH 4/4] crt.c/start.s: defer NXArgc/NXArgv/environ/__progname to
+ dyld for real dynamic consumers (DAR-161)
+
+crt.c unconditionally defined its own local storage for these four
+globals, separate from the real, canonical copies dyld's libdyldGlue.o
+exports from libdyld.dylib. Every genuinely dynamically-linked consumer
+that read one of them directly (not through getenv()/setenv()) got
+bound to this file's own always-stale local copy instead of the real
+one -- confirmed via a real pd_console_login.macho rebuild showing a
+local `(__DATA,__common) external _environ` before this fix.
+
+New project-owned macro, CRT_DYNAMIC_LINKING (NOT real Apple's own
+__DYNAMIC__, which this project's pinned Xcode-12/iPhoneOS SDK
+toolchain predefines unconditionally for every arm64-apple-ios* compile
+regardless of -static -- confirmed via `clang -dM -E -`, and would have
+silently broken every existing static consumer had it been reused).
+Default (macro undefined) preserves today's local-storage behavior for
+every static consumer unchanged; only consumers built with
+-DCRT_DYNAMIC_LINKING get plain `extern` references that bind against
+the real dyld-owned copy via a normal chained-fixups GOT bind.
+
+start.s's own direct environ store + crt_init_program_vars() call are
+gated behind the same macro (`#if !CRT_DYNAMIC_LINKING`) since a direct
+adrp/add to a cross-image dyld-bound symbol cannot link
+(`arm64_adrp_lo12` fixup error) -- harmless to skip for a dynamic
+target regardless, since the kernel's real load_dylinker() handoff
+overwrites this binary's own thread state/PC before start.s's `start:`
+label ever runs.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+---
+ crt.c   | 68 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+ start.s | 30 +++++++++++++++++++++++++
+ 2 files changed, 98 insertions(+)
+
+diff --git a/crt.c b/crt.c
+index 36178a7..51965a4 100644
+--- a/crt.c
++++ b/crt.c
+@@ -38,11 +38,79 @@
+ 
+ /*
+  * Global data definitions (initialized data).
++ *
++ * DAR-161 (iokit repo, 2026-08-31): real Apple's own crt.c/crt1.o is
++ * simply never linked into a modern (10.5+, non-OLD_LIBSYSTEM_SUPPORT)
++ * dynamic executable at all -- dyld supplies NXArgc/NXArgv/environ/
++ * __progname itself via ProgramVars before ever reaching main(). This
++ * project's start.s links Csu unconditionally, even into genuinely
++ * dynamically-linked (LC_LOAD_DYLINKER) executables, purely to carry a
++ * real LC_UNIXTHREAD past a real kernel bug (see build_dyld_test_exec.sh's
++ * own header comment: dyld's real load_dylinker() handoff overwrites this
++ * binary's own thread state/PC before start.s's `start:` label ever runs,
++ * so none of that code executes for a real dynamic target regardless).
++ * Before this fix, crt.c's unconditional STRONG definitions below still
++ * shadowed the real, canonical dyld-owned copies at STATIC LINK TIME: any
++ * dynamically-linked binary's own code that reads `environ`/`NXArgc`/
++ * `NXArgv`/`__progname` directly (not through getenv()/setenv(), which
++ * route through a separate real accessor) got bound to THIS translation
++ * unit's own always-NULL/0 local storage instead of the real one
++ * dyld's libdyldGlue.o exports from libdyld.dylib -- confirmed via `nm -m`
++ * on tools/userland_staging/dyld_test_exec.macho showing `(__DATA,
++ * __common) external _environ` etc. (a LOCAL definition) rather than an
++ * import/bind, even though `xcrun dyld_info -exports` on libdyld.dylib
++ * shows a real, distinct, separately-live `_environ`/`_NXArgc`/`_NXArgv`/
++ * `___progname` at different addresses.
++ *
++ * Fix mechanism: a NEW, project-owned macro, `CRT_DYNAMIC_LINKING`, NOT
++ * real Apple's own `__DYNAMIC__` (tried first, reverted -- see below).
++ * When a build script compiles this file with `-DCRT_DYNAMIC_LINKING`
++ * (genuinely dynamically-linked consumers only), these four globals
++ * become plain `extern` references instead of local definitions, so any
++ * direct read/write of them (including this file's own
++ * now-dead-for-dynamic-targets crt_init_program_vars()/start.s environ
++ * store, see start.s's own matching `#if !CRT_DYNAMIC_LINKING` guard)
++ * binds against the real dyld-owned copy via a normal chained-fixups
++ * bind, exactly like every other cross-image symbol reference in this
++ * project's dylib stack. The default (macro undefined) preserves
++ * today's local-storage behavior for every existing static consumer,
++ * unchanged -- same shape as round 11's `XLOCALE_STATE_EXPORTED` macro
++ * gate on `xlocale_private.h` (default hidden/unexported, only widened
++ * where actually intended).
++ *
++ * First attempt reused real Apple's own `__DYNAMIC__` macro instead of
++ * inventing a new one (reasoning: it's already used throughout the rest
++ * of this file for exactly this static-vs-dynamic distinction, and round
++ * 11's own precedent -- macro-gate a shared file's behavior -- doesn't
++ * dictate the macro's NAME). This was WRONG and caught before landing on
++ * any consumer: `echo | clang -isysroot <iPhoneOS SDK> -target
++ * arm64-apple-ios14.4 -dM -E - | grep __DYNAMIC__` shows clang predefines
++ * `__DYNAMIC__=1` UNCONDITIONALLY for this triple, regardless of
++ * `-static`/`-dynamic` -- a real, confirmed fact about this project's
++ * pinned Xcode-12/iPhoneOS-SDK toolchain, not the "PIC vs non-PIC
++ * codegen flag from the ppc/i386 era" meaning the rest of this file's
++ * existing `__DYNAMIC__` guards were written against. Confirmed via a
++ * real, minimal repro: `clang ... -c crt.c -o crt_static_test.o` (the
++ * exact flags every one of the ~46 real STATIC consumers already uses,
++ * zero -D flags added) then `nm crt_static_test.o` showed `U _NXArgc`/
++ * `U _NXArgv`/`U ___progname` -- i.e. the `#if !__DYNAMIC__` gate as
++ * first written would have silently flipped EVERY existing static
++ * consumer into extern/import mode too, which cannot resolve at a fully
++ * static `-static` link (no dylib, no chained fixups) -- a real, would-be
++ * regression across this entire project's static binary set, caught by
++ * testing the "unaffected" claim directly rather than assuming it.
+  */
++#if !CRT_DYNAMIC_LINKING
+ int           NXArgc = 0;
+ const char**  NXArgv = NULL;
+ const char**  environ = NULL;
+ const char*   __progname = NULL;
++#else
++extern int           NXArgc;
++extern const char**  NXArgv;
++extern const char**  environ;
++extern const char*   __progname;
++#endif
+ 
+ /* Real basename-of-argv[0] helper, matching Apple's own crt_basename()
+  * further down this file (real logic, just copied up here since that
+diff --git a/start.s b/start.s
+index 4b1ab95..fd70e02 100644
+--- a/start.s
++++ b/start.s
+@@ -267,6 +267,35 @@ L1: ldr     x4, [x3], #8
+ 	; ProgramVars setup would have done for this one global (x2 still
+ 	; holds envp here, untouched by the scan loop above, which only
+ 	; mutates x3/x4).
++	;
++	; DAR-161 (iokit repo, 2026-08-31): this whole direct-store +
++	; crt_init_program_vars()/crt_run_static_initializers() sequence is
++	; the real, no-dyld-target replacement for what dyld's own ProgramVars
++	; setup + `_dyld_make_delayed_module_initializer_calls()` would do --
++	; correct ONLY when this file's own `start:` label is the real process
++	; entry point (this project's static, no-dyld consumers). For a
++	; genuinely dynamically-linked (LC_LOAD_DYLINKER) consumer, `_environ`/
++	; `_NXArgc`/`_NXArgv`/`___progname` are real dyld-owned imports (see
++	; crt.c's own matching `#if !CRT_DYNAMIC_LINKING` guard on these four
++	; globals -- a project-owned macro, NOT real Apple's `__DYNAMIC__`,
++	; which this project's pinned Xcode-12/iPhoneOS-SDK toolchain
++	; predefines unconditionally for every arm64-apple-ios* compile
++	; regardless of -static, confirmed via `clang -dM -E -`; see crt.c's
++	; own header comment for the full first-attempt-caught-it-first
++	; writeup) -- a direct `adrp`+`add` here would need a same-image,
++	; link-time-fixed address, which a cross-image dyld-bound symbol can
++	; never have (confirmed via a real link failure: `ld: fixup error
++	; (kind=arm64_adrp_lo12) ... target '_environ' does not have address`,
++	; the exact same failure class round 11 of this sweep hit for
++	; xlocale's hidden-visibility globals). Harmless to skip entirely for
++	; a dynamic target regardless: build_dyld_test_exec.sh's own header
++	; comment already documents that the kernel's real load_dylinker()
++	; handoff overwrites this binary's own thread state/PC before this
++	; `start:` label ever runs at all, so none of this code -- gated or
++	; not -- ever actually executes for a real dynamic consumer; real
++	; dyld's own entry point runs its own real ProgramVars/initializer
++	; setup instead, against the real dyld-owned copies.
++#if !CRT_DYNAMIC_LINKING
+ 	adrp    x9, _environ@PAGE
+ 	add     x9, x9, _environ@PAGEOFF
+ 	str     x2, [x9]
+@@ -294,6 +323,7 @@ L1: ldr     x4, [x3], #8
+ 	mov     x1, x20
+ 	mov     x2, x21
+ 	mov     x3, x22
++#endif
+ 	bl      _main               ; main(x0=argc, x1=argv, x2=envp, x3=apple)
+ 	b       _exit
+ 
 -- 
 2.50.1 (Apple Git-155)
 
