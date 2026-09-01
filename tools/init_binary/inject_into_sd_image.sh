@@ -124,6 +124,44 @@ else
     echo "= tools/userland_staging/libc_build/pd_console_login.macho not built -- run build_pd_console_login.sh first if wanted, skipping (no console login without it)"
 fi
 
+# real login(1) (DAR-164): real, unmodified system_cmds/login.tproj/
+# login.c, installed at the real Apple path (/usr/bin/login --
+# third_party/system_cmds/getty.tproj/pathnames.h's own _PATH_LOGIN,
+# what getty's real execle(LO, "login", ...) handoff expects too, even
+# though getty itself isn't wired into this boot path yet -- see
+# build_getty.sh's own header). pd_console_login.c's own updated real
+# exec target (see that file directly) is this exact path, replacing
+# its previous direct `/bin/bash -l` exec with zero auth prompt.
+if [ -f tools/userland_staging/login.macho ]; then
+    mkdir -p "$MNT/usr/bin"
+    cp tools/userland_staging/login.macho "$MNT/usr/bin/login"
+    chmod 755 "$MNT/usr/bin/login"
+    echo "+ wrote $(wc -c < tools/userland_staging/login.macho) bytes to $MNT/usr/bin/login"
+    echo "  (real Apple login(1), non-PAM crypt(3)/master.passwd auth branch --"
+    echo "  see tools/userland_staging/build_login.sh)"
+else
+    echo "= tools/userland_staging/login.macho not built -- run build_login.sh first if wanted, skipping (pd-console-login will fail to exec real login without it)"
+fi
+
+# real getty.tproj (docs/roadmap.md Phase 5.5 item 1): built (build_getty.sh)
+# but NOT wired into this boot path -- per that script's own header, the
+# getty|login handoff is a real, deliberate architectural change (per-tty
+# spawning) out of scope for this pass; this project's ACTUAL console-login
+# path is pd_console_login.c (already does getty's own tty-setup dance)
+# handing off directly to real login above. Installed here anyway (same
+# generic-loop convention as every other tools/userland_staging/*.macho
+# real command) so it's on the image and inspectable, matching
+# build_getty.sh's own "getty.macho is built and installed at /bin/getty
+# ... but nothing execs it yet" note -- still true today.
+if [ -f tools/userland_staging/getty.macho ]; then
+    mkdir -p "$MNT/bin"
+    cp tools/userland_staging/getty.macho "$MNT/bin/getty"
+    chmod 755 "$MNT/bin/getty"
+    echo "+ wrote $(wc -c < tools/userland_staging/getty.macho) bytes to $MNT/bin/getty (not exec'd by anything yet)"
+else
+    echo "= tools/userland_staging/getty.macho not built -- run build_getty.sh first if wanted, skipping (also: as of DAR-164, build_getty.sh currently has its own real, pre-existing, unrelated link failure -- _clock_get_time/_g_mach_ipc_clock_port/_g_mach_ipc_clock_sem/_mach_ipc_clock_init (simple_cmds_nanosleep_compat.o) and _mmap (libpthread.a's pthread_main_thread_bootstrap.o) -- not fixed here, out of DAR-164's scope, tracked separately)"
+fi
+
 cp tools/pwtool/pwtool.macho "$MNT/sbin/pwtool"
 chmod 700 "$MNT/sbin/pwtool"
 echo "+ wrote $(wc -c < tools/pwtool/pwtool.macho) bytes to $MNT/sbin/pwtool"

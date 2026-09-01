@@ -40,7 +40,7 @@ fi
 PD="../../third_party/PureDarwin/src/Libraries/XPC"
 OUT="libc_build"
 
-for a in liblaunchd_syscalls.a libxpc_syscalls.a launchd_libc_extras.a cf_libc_extras.a \
+for a in liblaunchd_syscalls.a libxpc_syscalls.a cf_libc_extras.a \
          libc_gen.a libc_string.a libc_stdio.a libc_printf.a libc_locale_for_stdio.a \
          libmalloc.a libplatform.a libpthread.a; do
     if [ ! -f "$OUT/$a" ]; then
@@ -78,6 +78,15 @@ rm -f "$OUT/pd_console_login.macho"
 # would have silently broken every existing static Csu consumer too; see
 # crt.c's own header comment on those four globals for the full
 # first-attempt-caught-it-first writeup.
+# launchd_libc_extras.a REMOVED from this link (2026-09-01, DAR-164
+# side-fix): a real duplicate-symbol error (`_kill` defined in BOTH
+# libxpc_syscalls.a's kill_wrap.o AND launchd_libc_extras.a's
+# ncurses_extra_syscalls.o -- confirmed via a real trial link, not
+# guessed) started failing this script; pd_console_login.c's own real
+# source (tty ioctl/termios/setsid/exec, no ncurses/sigaction surface)
+# never actually needed anything from launchd_libc_extras.a -- a real
+# trial link with it removed entirely succeeds clean, confirming it was
+# a redundant link input, not a real dependency.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -DCRT_DYNAMIC_LINKING \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
@@ -85,7 +94,7 @@ rm -f "$OUT/pd_console_login.macho"
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/pd_console_login.o" \
     "$OUT/liblaunchd_syscalls.a" "$OUT/libxpc_syscalls.a" \
-    "$OUT/launchd_libc_extras.a" "$OUT/cf_libc_extras.a" \
+    "$OUT/cf_libc_extras.a" \
     "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
     "$OUT/libc_locale_for_stdio.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
     "$OUT/libpthread.a" \

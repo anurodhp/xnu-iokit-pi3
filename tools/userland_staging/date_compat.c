@@ -36,6 +36,19 @@
 
 #include <stddef.h>
 
+/* DAR-164 (2026-09-01) UPDATE: this file's own header comment above is
+ * now STALE for one specific consumer -- build_login.sh compiles the
+ * REAL third_party/Libc/gen/NetBSD/utmpx.c + gen/utmpx-darwin.c pair
+ * (real pututxline(), backed by this project's own honest ASL/bootstrap
+ * compat shims, see build_login.sh's own header for the full writeup),
+ * so this stand-in would be a genuine duplicate-symbol conflict there,
+ * not a needed fallback. date(1) itself (build_simple_cmds.sh) still
+ * compiles neither of those real files, so its own build continues to
+ * need this exact honest stub unchanged -- LOGIN_REAL_UTMPX_PUTUTXLINE
+ * is only ever defined by build_login.sh's own CFLAGS, making this a
+ * per-consumer opt-out, not a behavior change for date(1) or any other
+ * existing consumer of this file. */
+#ifndef LOGIN_REAL_UTMPX_PUTUTXLINE
 struct utmpx;
 
 struct utmpx *
@@ -44,6 +57,7 @@ pututxline(const struct utmpx *utx)
 	(void)utx;
 	return (struct utmpx *)0;
 }
+#endif /* !LOGIN_REAL_UTMPX_PUTUTXLINE */
 
 typedef long date_compat_time_t;
 
