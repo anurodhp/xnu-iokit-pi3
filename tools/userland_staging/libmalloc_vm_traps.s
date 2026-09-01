@@ -139,3 +139,21 @@ __kernelrpc_mach_port_mod_refs_trap:
     mov x16, #-19
     svc #0x80
     ret
+
+// thread_self_trap (DAR-163, real gap closed): the raw trap real Apple's
+// mach_legacy.c mach_thread_self() wraps ("return thread_self_trap();").
+// build_libmach_ipc.sh's own header previously dropped mach_thread_self()
+// on the stated premise "nothing needs mach_thread_self()" -- false as of
+// DAR-163's root-cause: libsystem_pthread_atfork_compat.c's real fork-
+// child postinit (see that file's own header) needs it to refresh the
+// __TSD_MACH_THREAD_SELF slot, same as real _pthread_main_thread_init()
+// does. Real trap number -27, cross-checked against syscall_sw.h
+// (adjacent to task_self_trap -28 and mach_reply_port -26, both already
+// above).
+.text
+.align 2
+.globl _thread_self_trap
+_thread_self_trap:
+    mov x16, #-27
+    svc #0x80
+    ret

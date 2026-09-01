@@ -183,6 +183,7 @@ MEMBERS="$MEMBERS $QOS_MEMBERS"
 # deliberately never compiles), only ever reached from an actual fork()
 # child, which no dylib-loaded process in this project ever calls.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -I ../../third_party/xnu-7195/libsyscall \
     libsystem_pthread_atfork_compat.c -o "$OUT/libsystem_pthread/atfork_compat.o"
 
 # Real gap: see libsystem_pthread_dylib_bootstrap_compat.c's own comment --
