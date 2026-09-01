@@ -359,13 +359,22 @@ else
 fi
 
 if [ -f tools/userland_staging/syslogd.macho ]; then
-    mkdir -p "$MNT/usr/sbin"
+    mkdir -p "$MNT/usr/sbin" "$MNT/Library/LaunchDaemons"
     cp tools/userland_staging/syslogd.macho "$MNT/usr/sbin/syslogd"
     chmod 755 "$MNT/usr/sbin/syslogd"
     echo "+ wrote $(wc -c < tools/userland_staging/syslogd.macho) bytes to $MNT/usr/sbin/syslogd"
     echo "  (Phase 6.7 legacy-scope syslogd, tools/userland_staging/build_syslogd.sh --"
-    echo "  real dynamic Mach-O, spawned by PID-1's spawn_syslogd(); see"
+    echo "  real dynamic Mach-O, spawned by real launchd.macho via a LaunchDaemons"
+    echo "  plist -- init_binary's own custom spawn_syslogd() PID-1 no longer exists,"
+    echo "  see docs/static-linking-cleanup-plan.md's static-linking-cleanup entry;"
     echo "  docs/daemon-roadmap.md for the real, current scope/gap list)"
+    cp "third_party/syslog/syslogd.tproj/com.apple.syslogd.plist" \
+        "$MNT/Library/LaunchDaemons/com.apple.syslogd.plist"
+    chmod 644 "$MNT/Library/LaunchDaemons/com.apple.syslogd.plist"
+    echo "+ wrote com.apple.syslogd.plist to $MNT/Library/LaunchDaemons/"
+    echo "  (real, unmodified Apple plist, DAR-153; Sockets/BSDSystemLogger and"
+    echo "  MachServices/com.apple.system.logger checkin both require the real"
+    echo "  socketgroup_setup()/job_export()/launch_data_get_machport() fixes)"
 else
     echo "= tools/userland_staging/syslogd.macho not built -- run tools/userland_staging/build_syslogd.sh first if wanted, skipping"
 fi
@@ -461,6 +470,11 @@ echo "+ ensured $MNT/tmp exists (real fopen()-family O_CREAT target dir -- same"
 echo "  class of gap as /etc and /dev above; found via a real QEMU boot-test"
 echo "  FAIL when tools/userland_staging/libc_stdio_smoketest.macho's real"
 echo "  fopen(\"/tmp/...\", \"w\") returned NULL on a fresh image with no /tmp)"
+
+mkdir -p "$MNT/var/run"
+echo "+ ensured $MNT/var/run exists (real bind(2) target dir for AF_UNIX"
+echo "  Sockets -- DAR-153, launchd's real socketgroup_setup_one() needs the"
+echo "  parent directory to exist before bind(\"/var/run/syslog\") can succeed)"
 
 # Real timezone database (Phase 4.6, docs/roadmap.md) -- real, unmodified
 # Apple-shipped TZif2 binary zoneinfo files, copied directly from this
