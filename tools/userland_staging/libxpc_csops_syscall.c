@@ -43,42 +43,23 @@ int csops(pid_t pid, uint32_t ops, void *useraddr, unsigned long usersize) {
     return (int)syscall4(169, pid, (long)ops, (long)useraddr, (long)usersize);
 }
 
-/* Real pipe(2) raw syscall wrapper -- same real class as csops above,
- * found blocking the very next real QEMU boot of launchd after csops
- * was fixed ("symbol not found in flat namespace '_pipe'"). Real
- * syscall #42 (AUE_PIPE), cross-checked against syscalls.master --
- * `{ int pipe(void); }` there, but real Darwin's actual ABI returns
- * BOTH file descriptors directly in x0/x1 (not via a pointer argument)
- * despite the real public libc-level prototype being `int pipe(int
- * fildes[2])` (confirmed via the real Xcode-12 SDK's own unistd.h) --
- * the public wrapper packages the two raw return registers into the
- * caller's array, real Apple architecture, not reinvented. */
-static inline long syscall0_2ret(long num, long *second) {
-    register long x0 asm("x0");
-    register long x1 asm("x1");
-    register long x16 asm("x16") = num;
-    long is_error;
-    asm volatile("svc #0x80\n"
-                 "cset %2, cs"
-                 : "=r"(x0), "=r"(x1), "=r"(is_error)
-                 : "r"(x16)
-                 : "memory", "cc");
-    if (is_error) {
-        extern long cerror_nocancel(int err);
-        *second = 0;
-        return cerror_nocancel((int)x0);
-    }
-    *second = x1;
-    return x0;
-}
-
-int pipe(int fildes[2]) {
-    long fd1;
-    long fd0 = syscall0_2ret(42, &fd1);
-    if (fd0 < 0) {
-        return (int)fd0;
-    }
-    fildes[0] = (int)fd0;
-    fildes[1] = (int)fd1;
-    return 0;
-}
+/* Real pipe(2) raw syscall wrapper -- REMOVED 2026-08-31 (DAR-124
+ * sweep). This was a real, correct, already-QEMU-verified fix for the
+ * same real class as csops above (found blocking a real QEMU boot of
+ * launchd: "symbol not found in flat namespace '_pipe'") -- but it gave
+ * libxpc.dylib its own private copy of a symbol a broader DAR-124 audit
+ * has since found needs to be a real, single, project-wide canonical
+ * owner: libsystem_kernel.dylib (real Apple's actual home for pipe(2),
+ * confirmed via the same syscalls.master AUE_PIPE entry cited below --
+ * see build_libsystem_kernel.sh's own pipe_trap.o/pipe_forwarder.o
+ * comment for the fuller citation, including why it needs BOTH the raw
+ * __pipe.s trap AND a thin C forwarder on top). libxpc.dylib already
+ * links libsystem_kernel.dylib as a sibling, so the reference this
+ * file's csops() neighbor never needed now resolves there instead of
+ * carrying a second, independently-compiled copy -- same real class as
+ * this project's own now-closed duplicate-_kqueue finding (libdispatch.
+ * dylib vs libsystem_kernel.dylib, same session). The real syscall-ABI
+ * detail this implementation got right (kernel returns BOTH fds via
+ * x0/x1, not a pointer argument, despite the public prototype being
+ * `int pipe(int fildes[2])`) is preserved verbatim in libsystem_kernel.
+ * dylib's own real Apple __pipe.s + the same forwarder shape. */

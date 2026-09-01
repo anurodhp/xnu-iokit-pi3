@@ -49,11 +49,16 @@
 #     own build_libresolv.sh header: no mDNSResponder daemon exists
 #     here) is unchanged -- only the deferral mechanism was wrong.
 #   - kevent/kqueue/pipe (res_send.c's real kqueue-based I/O
-#     multiplexing): still an explicit, documented scope decision in
-#     build_libresolv.sh's own header, still deferred -- res_send.c's
-#     own real network I/O path is not exercised by launchd's classic
-#     resolver usage, unlike the DNS-SD path above which turned out to
-#     be referenced (not necessarily called) regardless.
+#     multiplexing): CLOSED 2026-08-31 (DAR-124 sweep) -- real Apple
+#     canonical home for all three is libsystem_kernel.dylib (already a
+#     linked sibling below), which now really owns them (see that
+#     script's own updated comment for the full "why this mattered"
+#     writeup: this dylib is unconditionally reexported into every
+#     process via libSystem.B.dylib, so a flat-namespace deferral here
+#     was never actually scoped to "launchd's classic resolver usage" as
+#     this comment used to claim -- it was a real, confirmed gap for
+#     ANY process lacking a local copy, found via a direct DAR-124
+#     audit, not by exercising res_send.c's I/O path at all).
 #   - getprotobynumber/getprotoent/setprotoent/endprotoent/getservbyport/
 #     getservent/setservent/endservent/getnameinfo: CLOSED 2026-08-29,
 #     no longer deferred -- real, honest "no protocol/service database"
@@ -100,10 +105,16 @@
 #     already flagged for CFSocket.c/CFURLSessionInterface.c ("BSD
 #     socket syscall wrappers in userland libc" as a shared, not-yet-
 #     attempted need).
-#   - __darwin_check_fd_set_overflow: real `_FORTIFY_SOURCE`-family
-#     compiler-inserted check, same already-documented `_chk`-family gap
-#     class as docs/backlog.md item d7's `___chk_assert_no_overlap` entry
-#     (no shim source located anywhere in this project yet).
+#   - __darwin_check_fd_set_overflow: CLOSED 2026-08-31 (DAR-124 sweep)
+#     -- libsystem_c.dylib (already a linked sibling below) gained real
+#     ownership of this exact symbol in the 2026-08-31 "needs a new
+#     home" round; nobody came back to relink this dylib against it
+#     until this DAR-124 audit found the stale `-Wl,-U` deferral still
+#     in place (a real chained-fixups staleness bug, same shape as the
+#     libbsm.dylib/_atoi stale-ordinal find documented elsewhere in this
+#     sweep -- this one just never got exercised by a boot test because
+#     nothing calls into the FD_SET-checked code path on the current
+#     boot path).
 #   - __global_locale/__locale_key: real, already-known project-wide gap
 #     (docs/backlog.md item d9's `libc_locale_globals_compat.c` --
 #     deliberately NOT pulled into every individual new dylib one at a
@@ -354,8 +365,30 @@ rm -f "$OUT/system/libresolv.dylib"
     `# syscalls.c's own LIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT guards),` \
     `# so re-creating these aliases here would hit the documented ld64` \
     `# "-alias nonlocal base" bug (malformed ordinal-0 re-export).` \
-    -Wl,-U,_kevent -Wl,-U,_kqueue -Wl,-U,_pipe \
-    -Wl,-U,___darwin_check_fd_set_overflow \
+    `# _kevent/_kqueue/_pipe/___darwin_check_fd_set_overflow -Wl,-U` \
+    `# deferrals REMOVED 2026-08-31 (DAR-124 sweep): these were a real,` \
+    `# confirmed-serious gap, not a theoretical one -- this dylib is` \
+    `# unconditionally reexported by libSystem.B.dylib (LC_REEXPORT_` \
+    `# DYLIB), i.e. loaded into literally every process this project` \
+    `# ships (confirmed via otool -L libSystem.B.dylib), and this` \
+    `# project's dyld does ONLY eager chained-fixups binding (round 13's` \
+    `# real __muldc3 PID-1 panic already proved this). ___darwin_check_` \
+    `# fd_set_overflow already had a real sibling owner (libsystem_c.` \
+    `# dylib, since the 2026-08-31 "needs a new home" round) that nobody` \
+    `# came back to relink against -- a real stale-declaration bug, same` \
+    `# shape as the libbsm.dylib/_atoi stale-chained-fixups-ordinal find` \
+    `# documented elsewhere in this sweep. _kevent/_kqueue/_pipe had NO` \
+    `# real sibling owner at all until this round gave libsystem_kernel.` \
+    `# dylib (already linked below) real ownership of all three (see` \
+    `# that script's own updated comment) -- confirmed via a real` \
+    `# df.macho-class audit that most of this project's own build_` \
+    `# simple_cmds.sh binaries only survived this by accident (each` \
+    `# carries a private LINK_COMMON copy of _kevent/_kqueue, but NOT of` \
+    `# _pipe, which only ed/diff/less/tar happen to define` \
+    `# locally) -- any OTHER real or future consumer of libSystem.B.` \
+    `# dylib with none of those local copies would have hit "symbol not` \
+    `# found in flat namespace '_pipe'" the instant it started, whether` \
+    `# or not it ever called pipe() itself.` \
     -o "$OUT/system/libresolv.dylib" \
     "$EXTRACT"/*.o \
     "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_malloc.dylib" \

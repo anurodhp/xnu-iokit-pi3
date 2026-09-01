@@ -64,7 +64,21 @@ done
     "$PD/launchd/pd_console_login.c" -o "$OUT/pd_console_login.o"
 
 rm -f "$OUT/pd_console_login.macho"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
+# -DCRT_DYNAMIC_LINKING (DAR-161, 2026-08-31): pd_console_login.macho is a
+# real, genuinely dynamically-linked executable (libdyld.dylib/
+# libSystem.B.dylib below). Without this flag, Csu/crt.c's own
+# NXArgc/NXArgv/environ/__progname global storage silently shadowed the
+# real, canonical copies libdyld.dylib's libdyldGlue.o exports -- any
+# direct (non-getenv/setenv) read of `environ` etc in this binary would
+# have seen a permanently-stale local copy instead of dyld's real one.
+# This is a NEW, project-owned macro, not real Apple's `__DYNAMIC__` --
+# this project's pinned Xcode-12/iPhoneOS SDK toolchain predefines
+# `__DYNAMIC__=1` unconditionally for every arm64-apple-ios* compile
+# regardless of -static (confirmed via `clang -dM -E -`), so reusing it
+# would have silently broken every existing static Csu consumer too; see
+# crt.c's own header comment on those four globals for the full
+# first-attempt-caught-it-first writeup.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -DCRT_DYNAMIC_LINKING \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -o "$OUT/pd_console_login.macho" \

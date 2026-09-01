@@ -56,6 +56,41 @@ for a in liblaunchd_core.a libCoreFoundation.a cf_libc_extras.a launchd_libc_ext
         exit 1
     fi
 done
+# libsystem_malloc.dylib -- real, single-owner heap (DAR-131/DAR-162 fix,
+# see this script's own "libmalloc_no_mach_init.a REMOVED" comment below
+# for the full story). Needed as an EXPLICIT link input, not just reachable
+# via libSystem.B.dylib's LC_REEXPORT_DYLIB of it -- same real ld64
+# limitation as this script's own pre-existing ___chkstk_darwin comment a
+# few lines down: a reexport-only symbol needs its real owning dylib
+# physically listed on this link line too.
+if [ ! -f "$OUT/system/libsystem_malloc.dylib" ]; then
+    echo "error: $OUT/system/libsystem_malloc.dylib not found -- run build_libsystem_malloc.sh first" >&2
+    exit 1
+fi
+# libremovefile.dylib -- same reexport-depth issue as libsystem_malloc.dylib
+# above, found while relinking after the malloc removal: liblaunchd_
+# syscalls.a's real glob.o (___gl_globextend) needs _reallocarray$
+# DARWIN_EXTSN, which used to be silently satisfied by libmalloc_no_mach_
+# init.a's own local (non-suffixed) copy before this session's removal.
+# The real, working $DARWIN_EXTSN alias lives in build_removefile_dylib.sh
+# (confirmed via `xcrun dyld_info -exports`: it's real and local there),
+# reachable at RUNTIME via libdyld.dylib's own -Wl,-reexport_library of
+# it -- but per this file's own pre-existing ___chkstk_darwin comment,
+# ld64's STATIC link can't resolve a reexport that's two reexport-hops
+# deep (libSystem.B.dylib -> libdyld.dylib -> libremovefile.dylib) by
+# install-name alone, so it must be listed directly here too. Only
+# surfaced once the malloc archive's own local (non-suffixed) _reallocarray
+# stopped being present to incidentally short-circuit ld64's namespace
+# walk for this one -- the real, correct owner was always this deep
+# reexport chain, never the malloc archive.
+if [ ! -f "$OUT/system/libremovefile.dylib" ]; then
+    echo "error: $OUT/system/libremovefile.dylib not found -- run build_removefile_dylib.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/chk_fail.o" ]; then
+    echo "error: $OUT/chk_fail.o not found -- run build_libmalloc.sh first" >&2
+    exit 1
+fi
 # libxpc.a/libxpc_syscalls.a/libxpc_syscalls2.a -> libxpc.dylib and
 # libbsm.a -> libbsm.dylib (static-linking cleanup pass, 2026-08-29):
 # real per-library dylibs now exist for both (build_libxpc_dylib.sh,
@@ -87,56 +122,100 @@ for d in libicuuc.dylib libicui18n.dylib libicudata.dylib; do
     fi
 done
 
-# Real gap found+fixed 2026-08-28 booting launchd as PID 1: libmalloc.a
-# bundles its own private, pre-dylib-era copy of real Apple mach_init.c
-# (magazine_malloc.o/vm.o/mach_vm.o reference _mach_task_self_ as
-# undefined, so the linker pulls the whole member in to satisfy it) --
-# same real "two private copies of one process-global" bug class already
-# documented in build_libsystem_kernel.sh's own header (mach_task_self_'s
-# Phase D bugs), a THIRD occurrence of it: this one splits launchd's own
-# statically-linked code (liblaunchd_core.a's runtime.c calls
-# mach_task_self() and gets libmalloc.a's copy, permanently 0/never
-# initialized) from the real, correctly-populated copy in
-# libsystem_kernel.dylib (which this project's own real mach_init(),
-# called once via libsystem_dyld_initializer_compat.c's constructor,
-# actually writes to). Confirmed via a real multi-layer instrumentation
-# pass: mach_task_self()==0x0 read back inside launchd_runtime_init(),
-# causing a real mach_port_allocate() failure -> os_assert_zero() ->
-# real SIGABRT (namespace 2/OS_REASON_SIGNAL subcode 6). Same established
-# `ar d`-on-a-local-copy fix already used once before for libmalloc.a
-# (see libcxx_tsd_shim_bootstrap_compat.c's own header) -- strips
-# mach_init.o (confirmed via nm: every symbol it defines --
-# _mach_task_self_, _mach_init, _bootstrap_port, _host_page_size,
-# _NDR_record, __mach_fork_child, _vm_kernel_page_*/_vm_page_* -- is also
-# a real export of libsystem_kernel.dylib, already a real input to this
-# link) from a LOCAL copy only, never the shared committed libmalloc.a
-# (other static-only consumers still need their own private copy).
+# libmalloc.a REMOVED FROM THIS LINK ENTIRELY 2026-08-31 (DAR-23/DAR-131/
+# DAR-162): launchd.macho used to carry a narrowed private copy of it
+# here (libmalloc_no_mach_init.a, `ar d`-stripped of just mach_init.o/
+# mig_reply_port.o -- see git history for the two real, QEMU-diagnosed
+# bugs that fix addressed, 2026-08-28/29) alongside the real
+# libsystem_malloc.dylib it ALSO links (transitively, via
+# libSystem.B.dylib's own real LC_REEXPORT_DYLIB of it). That is the
+# exact same "two heaps" bug class as this file's own already-fixed
+# TSD-base-clobber (Bug A) and dual-pthread_create (Bug B) duplicates
+# documented in docs/launchd-pid1-postmortem.md -- `nm libmalloc_
+# no_mach_init.a` shows `T _malloc`/`_free`/`_calloc`/`_realloc`, the
+# whole malloc-zone-introspection family (`_mach_zone_info`/
+# `_task_zone_info`/`_scalable_zone_info`/`_scalable_zone_statistics`/
+# `_szone_check_*`/`_malloc_error_break`/`_malloc_printf`/
+# `_malloc_tracing_enabled`/`_malloc_zone_check_fail`), the fork hooks
+# (`__malloc_fork_child`/`_parent`/`_prepare`), AND a private copy of
+# `pthread_tsd_shim.o`'s POSIX-named `_pthread_getspecific`/
+# `_pthread_setspecific`/`_pthread_key_create`/`_pthread_once`/
+# `_pthread_key_init_np` -- every one of those is also a real export of
+# libsystem_pthread.dylib (the pthread ones) or libsystem_malloc.dylib
+# (the malloc ones), both already-linked siblings. DAR-131's own finding
+# was concrete: `_malloc_fork_child()` in `fork()` bound to launchd's OWN
+# local zone, so a real `fork()` only ever reinitialized launchd's private
+# heap, never the real one CoreFoundation/libdispatch/libc++ actually
+# allocate from -- a real, live correctness gap on every fork this PID-1
+# does, not just a symbol-table count.
 #
-# A FOURTH occurrence of the exact same bug class, found+fixed 2026-08-29
-# resuming bug #6: libmalloc.a (via build_libmalloc.sh, which compiles
-# mach_vm.c/mach_init.c/mig_reply_port.c/init_cpu_capabilities.c as one
-# real-Apple-source group) ALSO bundles its own private copy of
-# mig_reply_port.o -- confirmed via `nm launchd.macho` showing
-# `T _mig_get_reply_port` as a LOCAL strong definition, not `U`. Because
-# ld64 resolves an executable's own local strong definitions before ever
-# consulting a linked dylib's export (even when the dylib, here
-# libsystem_kernel.dylib, exports the exact same symbol), every call to
-# mig_get_reply_port()/mig_dealloc_reply_port()/mig_put_reply_port() from
-# ANYWHERE in launchd.macho's own statically-linked code -- including
-# generated MIG client stubs -- silently resolved to this stale local
-# copy instead of libsystem_kernel.dylib's real, shared, canonical one.
-# Found while adding finer-grained diagnostics inside mig_reply_port.c
-# for bug #6 (SIGSEGV in the kqueue_demand_loop second thread) and
-# discovering none of the new prints ever fired -- the code being
-# instrumented in libsystem_kernel.dylib was never the code actually
-# executing. Confirmed via nm that every symbol mig_reply_port.o defines
-# (_mig_get_reply_port/_mig_dealloc_reply_port/_mig_put_reply_port) is
-# already a real export of libsystem_kernel.dylib, same as mach_init.o
-# above -- safe to strip the local copy the same way.
-rm -f "$OUT/libmalloc_no_mach_init.a"
-cp "$OUT/libmalloc.a" "$OUT/libmalloc_no_mach_init.a"
-ar d "$OUT/libmalloc_no_mach_init.a" mach_init.o
-ar d "$OUT/libmalloc_no_mach_init.a" mig_reply_port.o
+# Fix: drop the archive from the link line entirely (same "remove, don't
+# reconcile" shape as the libpthread_no_dup_pthread_create.a removal a
+# few lines down) and link libsystem_malloc.dylib explicitly as a sibling
+# (see the dependency check above) -- real ld64 can't resolve a
+# reexport-only symbol by install-name alone here (this file's own
+# pre-existing ___chkstk_darwin comment below explains why: the reexport
+# target doesn't exist as a real file at its /usr/lib/system install path
+# in this project's sysroot, only at this project's own build output
+# path), so any consumer of a reexported-only symbol must list the real
+# owning dylib directly, same as libsystem_c.dylib/libsystem_pthread.dylib
+# already are here.
+#
+# What broke on the first trial relink, and the real (not narrowing) fix
+# for each: `___chk_fail_overflow`/`___chk_overlap`/
+# `___chk_assert_no_overlap`/`___chk_fail_overlap` (chk_fail_compat.o's
+# real, `.private_extern`-by-construction helpers -- per this project's
+# own static-linking-cleanup-plan.md, these legitimately belong in every
+# image that carries `_chk` members, so they're relinked here from the
+# already-built standalone `$OUT/chk_fail.o` object instead of the whole
+# malloc archive).
+#
+# libmalloc.a's real mach_init.o/mig_reply_port.o duplicate-state history
+# (the two bugs referenced above) is preserved in git log/
+# docs/launchd-pid1-postmortem.md; this comment intentionally does not
+# restate it since the whole archive is gone from this link now, not just
+# those two members.
+#
+# Real gap found relinking without libmalloc.a: liblaunchd_syscalls.a's
+# own sys____fork.o (the raw __fork() trap, generated fresh in
+# build_launchd_syscalls.sh from the same real create-syscalls.pl this
+# project uses everywhere) writes the post-fork child pid into
+# __current_pid via a direct (arm64_adrp_lo12) same-image relocation --
+# real Apple's own third_party/xnu-7195/libsyscall/custom/__getpid.s
+# confirms this is by design: __getpid() and __fork() are meant to be
+# compiled into the SAME image so this addressing mode can reach the pid
+# cache directly, without a dylib-crossing GOT load. This project's real
+# canonical home for that pairing would be libsystem_kernel.dylib (which
+# owns __fork's own sibling raw traps) -- but that dylib does not
+# currently implement _getpid/__current_pid at all (confirmed via nm; a
+# real, structural, pre-existing gap, and build_libsystem_kernel.sh is
+# out of scope for this session, being actively worked by a concurrent
+# effort). Practical fallback: reuse the already-built, real Apple
+# sys_getpid.o (build_libmalloc.sh's own output, same source this
+# project's __current_pid always came from) narrowed via the same
+# `ld -r -unexported_symbol` idiom already established in this file for
+# pthread_main_thread_bootstrap.o -- keep __current_pid (the real,
+# genuinely-needed data symbol) fully external, demote _getpid/___getpid
+# to private-extern. Verified via a real relink + `nm -m`: every plain
+# _getpid() call elsewhere in this binary (core.o/ipc.o/launchd.o/log.o/
+# runtime.o, CFMessagePort.o/CFUtilities.o/cf_pthread_setname_syscalls.o,
+# liblaunchd_syscalls.a's raise.o) still binds to THIS local copy, not to
+# libsystem_malloc.dylib's own (separate, real) sys_getpid.o-derived
+# export -- i.e. _getpid/___getpid/__current_pid stay in the DAR-23
+# shadow count exactly as before (they were already shadowed via
+# libmalloc_no_mach_init.a pre-this-fix), not newly introduced and not
+# newly fixed. Left as a documented, structural exception rather than
+# force-fixed: the real fix is giving libsystem_kernel.dylib its own real
+# getpid/fork tier, tracked as a follow-up, not attempted here to avoid
+# touching a file another concurrent session owns this pass.
+if [ ! -f "$OUT/sys_getpid.o" ]; then
+    echo "error: $OUT/sys_getpid.o not found -- run build_libmalloc.sh first" >&2
+    exit 1
+fi
+rm -f "$OUT/sys_getpid_current_pid_only.o"
+"$LD" -r -arch arm64 -keep_private_externs \
+    -unexported_symbol ___getpid -unexported_symbol _getpid \
+    "$OUT/sys_getpid.o" -o "$OUT/sys_getpid_current_pid_only.o"
 
 # Real gap found+fixed 2026-08-28, next crash after the mach_task_self_
 # fix above: runtime.c's launchd_runtime_init() calls
@@ -309,10 +388,38 @@ ar r "$OUT/libpthread_no_dup_pthread_create.a" "$OUT/pthread_main_thread_bootstr
 # build_launchd_core.sh's localtime.c comment) would also work but a
 # real chkstk_darwin probe already exists as real Apple code, so linking
 # to it directly is the more correct fix.
+# -Wl,-u,__current_pid added 2026-08-31 (DAR-124 sweep, found while
+# verifying this session's OWN, unrelated dylib fixes with a real
+# rebuild -- pre-existing bug, not caused by this session's actual
+# DAR-124 work): now that libsystem_malloc.dylib is a real, explicit
+# link input here (this file's own just-preceding DAR-131/DAR-162 fix),
+# it silently short-circuits ld64's archive-member-pull for `_getpid`
+# (it exports a real `_getpid` of its own) before `liblaunchd_syscalls.a`
+# ever gets a chance to satisfy that reference from its own
+# sys____getpid.o -- which is the ONLY object in this link that defines
+# `__current_pid`, the process-wide cached-pid global real Apple's own
+# sys____fork.o/sys____vfork.o (real, unmodified libsyscall/custom/
+# __fork.s) directly ADRP-addresses (same-image, non-GOT-relative
+# codegen -- see docs/static-linking-cleanup-plan.md's "continuation 9"
+# xlocale writeup for the identical `arm64_adrp_lo12` mechanism). Once
+# libsystem_malloc.dylib's own `_getpid` wins the resolution race,
+# sys____fork.o's own private reference to `__current_pid` becomes truly
+# dangling: `ld: fixup error (kind=arm64_adrp_lo12) ... target
+# '__current_pid' does not have address`. This flag forces ld64 to treat
+# `__current_pid` as needed from the very start of the link, which pulls
+# sys____getpid.o (and therefore a second, local, real Apple `_getpid`)
+# in alongside it -- ld64 resolves the LOCAL strong definition ahead of
+# any dylib's for launchd.macho's own references, so this also makes
+# `_getpid`/`fork()` share the one real cache again, matching real
+# Apple's own architecture (both belong in the same image) rather than
+# leaving fork()'s pid cache and getpid()'s answer split across two
+# independently-compiled copies -- arguably a real correctness fix, not
+# just a link-error workaround.
 rm -f "$OUT/launchd.macho"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
+    -Wl,-u,__current_pid \
     -Wl,-alias,__mh_execute_header,__mh_dylib_header \
     -Wl,-alias,_kCFDateFormatterCalendarKey,_kCFDateFormatterCalendar \
     -Wl,-alias,_kCFDateFormatterTimeZoneKey,_kCFDateFormatterTimeZone \
@@ -328,7 +435,7 @@ rm -f "$OUT/launchd.macho"
     "$OUT/liblaunchd_mig.a" "$OUT/liblaunchd_syscalls.a" \
     "$OUT/libmach_ipc_no_dead_stubs.a" "$OUT/mach_port_gap_closures2.o" "$OUT/mach_port_gap_closures2_traps.o" \
     "$OUT/mach_ipc_dead_stubs_voucher_only.o" \
-    "$OUT/libclosure.a" "$OUT/libmalloc_no_mach_init.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    "$OUT/libclosure.a" "$OUT/chk_fail.o" "$OUT/sys_getpid_current_pid_only.o" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
     `# libpthread_no_dup_pthread_create.a REMOVED 2026-08-30 (docs/` \
     `# daemon-roadmap.md Phase 6.8 continued item 1): launchd.macho must` \
     `# NOT carry its own static copy of the pthread implementation` \
@@ -360,6 +467,7 @@ rm -f "$OUT/launchd.macho"
     "$OUT/system/libxpc.dylib" "$OUT/system/libbsm.dylib" \
     "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
+    "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libremovefile.dylib" \
     "$OUT/system/libsystem_c.dylib" \
     "$ICU_LIB/libicuuc.dylib" "$ICU_LIB/libicui18n.dylib" "$ICU_LIB/libicudata.dylib" "$OUT/system/libc++.dylib" \
     2>"$OUT/launchd_link.err" \

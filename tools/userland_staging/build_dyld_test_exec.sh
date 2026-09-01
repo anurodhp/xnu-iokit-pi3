@@ -102,8 +102,33 @@ if [ ! -f "$OUT/system/libdyld.dylib" ] || [ ! -f "$OUT/system/libSystem.B.dylib
     echo "error: $OUT/system/{libdyld,libSystem.B}.dylib not found -- run build_libdyld.sh and build_libsystem.sh first" >&2
     exit 1
 fi
+# -DCRT_DYNAMIC_LINKING (DAR-161, 2026-08-31): this is a genuinely
+# dynamically-linked (LC_LOAD_DYLINKER) consumer, so Csu's own
+# NXArgc/NXArgv/environ/__progname global storage must NOT be linked in
+# -- see crt.c's own header comment on those four globals. Without this
+# flag, crt.c's unconditional local definitions silently shadowed the
+# real, canonical copies libdyld.dylib's libdyldGlue.o exports (confirmed
+# via `nm -m`: a local `(__DATA,__common) external _environ` etc instead
+# of a bind), meaning any code in this binary that read `environ`/
+# `NXArgc`/`NXArgv`/`__progname` directly (not through getenv()/
+# setenv()) saw a permanently-stale, never-updated local copy instead of
+# dyld's real one. With this flag, those four become plain `extern`
+# references that bind against libdyld.dylib via a normal chained-fixups
+# GOT bind, verified via `xcrun dyld_info -fixups` showing
+# `bind  libdyld/_NXArgc` etc. This is a NEW, project-owned macro, not
+# real Apple's `__DYNAMIC__` -- this project's pinned Xcode-12/iPhoneOS
+# SDK toolchain predefines `__DYNAMIC__=1` unconditionally for every
+# arm64-apple-ios* compile regardless of -static (confirmed via
+# `clang -dM -E -`), so reusing it would have silently broken every
+# existing static Csu consumer too; see crt.c's own header comment for
+# the full first-attempt-caught-it-first writeup. Csu's start.s has its
+# own matching `#if !CRT_DYNAMIC_LINKING` guard on the direct-store/
+# crt_init_program_vars() sequence this same flag also disables (harmless
+# either way here since the kernel's real load_dylinker() handoff
+# overwrites this binary's own thread state/PC before start.s's `start:`
+# label ever runs at all, per this script's own header comment above).
 rm -f dyld_test_exec.macho
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -DCRT_DYNAMIC_LINKING \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -o dyld_test_exec.macho \

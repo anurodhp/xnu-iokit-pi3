@@ -311,16 +311,16 @@ rm -f "$EXTRACT/sys____connect_nocancel.o" "$EXTRACT/sys____recvmsg_nocancel.o" 
 # header: mach_error_string_minimal_compat.c (a real, honestly-empty
 # `_mach_errors` table -- the real generated per-subsystem data doesn't
 # exist in this checkout, but the struct layout and fallback behavior
-# are real, not fabricated) and libc_build/simple_obj/sys__kevent.o (a
-# real, already-generated create-syscalls.pl raw syscall stub, same one
-# kqueue_smoketest.c already uses -- reused, not recompiled).
-if [ ! -f "$OUT/simple_obj/sys__kevent.o" ]; then
-    echo "error: $OUT/simple_obj/sys__kevent.o not found -- run build_simple_cmds.sh first" >&2
-    exit 1
-fi
+# are real, not fabricated).
 # mach_error_string_minimal_compat.o moved to libsystem_kernel.dylib
 # alongside mach_error_string.o itself (static-linking cleanup, Phase 1a).
-cp "$OUT/simple_obj/sys__kevent.o" "$EXTRACT/sys__kevent.o"
+# kevent's own cp of $OUT/simple_obj/sys__kevent.o (a bare, undocumented
+# cross-script dependency on build_simple_cmds.sh already having run)
+# REMOVED 2026-08-31 (DAR-124 sweep): libsystem_kernel.dylib (already a
+# linked sibling below) gained real, canonical ownership of _kevent this
+# same session (see that script's own "needs a new home" comment) --
+# same fix, same reasoning, same session as libdispatch.dylib's own
+# now-removed sys__kqueue.o duplicate.
 
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libxpc.dylib"

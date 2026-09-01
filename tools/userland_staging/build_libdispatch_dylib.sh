@@ -184,12 +184,30 @@
 # the first place (already resolved elsewhere, confirmed via gap_audit.sh
 # -- -U on an already-defined symbol is a harmless no-op, not removed to
 # avoid churn).
+# _thread_get_special_reply_port REMOVED from this array 2026-08-31
+# (DAR-124/DAR-8/DAR-22 sweep continuation): this WAS a real, confirmed-
+# broken flat-namespace deferral -- `xcrun dyld_info -fixups` showed a
+# real `<flat-namespace>` bind here, resolved today only because
+# launchd.macho happens to compile a local copy (build_launchd_core.sh),
+# and a real, already-shipped second consumer (syslogd.macho: loads this
+# dylib + libsystem_notify.dylib + libxpc.dylib directly, confirmed via
+# otool -L, and does NOT define this symbol anywhere in its own object
+# code, confirmed via `nm -g`) would have hit "symbol not found in flat
+# namespace" the instant it's actually spawned (DAR-153). Real Apple's
+# actual home for this symbol is libsystem_kernel.dylib (a plain 2-
+# instruction Mach trap, kernel_trap(thread_get_special_reply_port,-50,0)
+# -- same tier as every other hand-written trap .s that dylib already
+# compiles) -- added there this round (see build_libsystem_kernel.sh's
+# own updated comment), already a linked sibling here, so this dylib's
+# own undefined reference now resolves via a real two-level bind instead
+# of flat-namespace lookup. Confirmed via a fresh `xcrun dyld_info
+# -fixups` after rebuild: zero remaining `<flat-namespace>` entries in
+# this dylib.
 UNDEF_SYMS=(
     _pthread_setschedparam
     __mach_errors _environ
     _mach_port_get_context _mach_port_set_context
     _semaphore_create _semaphore_destroy
-    _thread_get_special_reply_port
 )
 # Real, defined-elsewhere-in-the-process symbols this dylib's own
 # gap-closure .o's (mach_port_gap_closures2.o/cf_mach_port_syscalls.o)
@@ -763,6 +781,15 @@ rm -f "$OUT/system/libdispatch.dylib"
     # tools/userland_staging/dup_symbol_audit.sh does not flag either
     # symbol). Reexporting libsystem_c.dylib here closes the whole class
     # at once instead of chasing it symbol-by-symbol.
+# $OUT/simple_obj/sys__kqueue.o REMOVED from this link 2026-08-31
+# (DAR-124 sweep): it was a bare, undocumented cross-script dependency
+# on build_simple_cmds.sh already having run (that script generates this
+# .o as part of its own SYS_STUBS_NEEDED batch) AND a real, confirmed
+# dylib-vs-dylib duplicate with libsystem_kernel.dylib's own new,
+# canonical _kqueue export (see that script's own "needs a new home"
+# comment) -- libsystem_kernel.dylib is already a linked sibling just
+# below, so this dylib's own real reference to kqueue() now resolves
+# there instead of carrying a second, independently-compiled copy.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
     -install_name /usr/lib/system/libdispatch.dylib \
     -Wl,-not_for_dyld_shared_cache \
@@ -773,7 +800,6 @@ rm -f "$OUT/system/libdispatch.dylib"
     -o "$OUT/system/libdispatch.dylib" \
     "$OUT"/dispatch_obj/*.o "$OUT"/dispatch_obj/event/*.o \
     "$OUT"/dispatch_dylib_extract/*.o \
-    "$OUT/simple_obj/sys__kqueue.o" \
     "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" \
     -Wl,-reexport_library,"$OUT/system/libsystem_blocks.dylib" \

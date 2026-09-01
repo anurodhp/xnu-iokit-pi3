@@ -115,6 +115,24 @@ fi
 # `_fileport_makeport` (confirmed via nm -m) now resolves there instead.
 rm -f "$EXTRACT/notify_fileport_syscalls.o"
 
+# notify_mig_special_reply_port_trap.o REMOVED from THIS dylib's own
+# extract dir 2026-08-31 (DAR-124 sweep, same session as the fileport
+# fix above): this real, 2-instruction Mach trap stub
+# (thread_get_special_reply_port(), trap -50) was this dylib's own
+# private copy, needed by notify_mig_special_reply_port.o's real
+# mig_get_special_reply_port() (see that file's own header). A DAR-124
+# audit gave libsystem_kernel.dylib real, canonical ownership of this
+# exact symbol this same session (see build_libsystem_kernel.sh's own
+# comment -- it was previously a genuine, confirmed flat-namespace gap
+# in libdispatch.dylib, resolved only by accident wherever a process
+# happened to carry a local copy). This dylib already links
+# libsystem_kernel.dylib as a sibling below, so notify_mig_special_
+# reply_port.o's one real reference now resolves there instead of
+# carrying a second, independently-compiled copy -- confirmed via `nm
+# -m` after rebuild. Left in place inside libnotify.a itself (unchanged)
+# for any other, still-static consumer of that archive.
+rm -f "$EXTRACT/notify_mig_special_reply_port_trap.o"
+
 # notify_dyld_compat.o REMOVED from THIS dylib's own extract dir 2026-08-31
 # (static-linking cleanup, dylib-vs-dylib duplicate-symbol pass) -- same
 # "extract everything, then drop the one member a real sibling now

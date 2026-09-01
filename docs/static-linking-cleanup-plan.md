@@ -2701,3 +2701,366 @@ found this session. Not closing DAR-8 outright since this remainder is
 real and still open, just far better understood than before.
 
 Baseline unchanged (still 24).
+
+## Session 2026-08-31 (DAR-124 resolution pass): real per-consumer reachability audit, libsystem_m/libdispatch fully closed, libresolv's universal-reexport risk found and fixed
+
+Picked up DAR-124 itself (the ticket, not a "round N" continuation of the
+dup-symbol sweep) -- its own explicit ask: for each dylib on its list,
+find every real consumer, and determine per-consumer whether each
+`-Wl,-U` flat-namespace deferral is actually guaranteed resolvable given
+what that consumer loads, not just catalog the deferral. Re-derived every
+list with `xcrun dyld_info -fixups <dylib> | grep '<flat-namespace>'`
+first, per the ticket's own instruction -- several had shifted since
+2026-08-29 (`libbsm.dylib` lost `_getegid`, `libncurses.dylib` dropped to
+**zero** deferrals entirely, both from work already covered in rounds
+9-15 above but never reflected back onto DAR-124's own description).
+
+### `libsystem_m.dylib` (DAR-16): CLOSED for real -- zero flat-namespace deferrals
+
+Round 13 already found the real cause of all 15 deferrals (`__muldc3`/
+`__mulsc3` + 13 float functions) but stopped at "needs a Libm-completeness
+port, out of scope." This session traced each undefined reference to its
+actual source object instead of assuming a port was the only path:
+**all 15** trace to exactly two objects in `libm.a` -- `complex.o` (the
+full real FreeBSD C99 `<complex.h>` family, 44 exported symbols:
+`cabs`/`cacos`/`casin`/`catan`/`ccos`/`cexp`/`clog`/`conj`/`cpow`/
+`cproj`/`csin`/`csqrt`/`ctan` + float variants) and `scalblnf.o`
+(`scalblnf`, which calls `scalbnf` internally). A real grep across every
+consumer in this checkout (`third_party/PureDarwin`, `third_party/dyld`,
+`third_party/libxml2`, this project's own `tools/`) found **zero** callers
+of any complex-number function or of `scalblnf` anywhere -- confirmed
+further that no OTHER object inside `libm.a` itself has an undefined
+reference to anything either object defines. Both are genuinely dead
+weight for this project, not merely unexported. Fix: `rm -f` both from
+`build_libm_dylib.sh`'s own extract dir before the final link, remove the
+now-unnecessary `-Wl,-U` flags entirely, and add a hard assertion
+(`FLATNS` check) that fails the build if a flat-namespace deferral ever
+reappears, so this doesn't silently regress. Confirmed the dylib's two
+real consumers (`libxml2.dylib`, needing only `_fmod`/`_log10`/`_pow`;
+and `df.macho`, a `build_simple_cmds.sh` binary needing `_fabs`/`_trunc`
+-- both already in libsystem_c.dylib -- plus `_ilogb`, still a real
+export of this dylib) reference nothing from either removed object.
+
+**A genuinely new, higher-severity finding than DAR-124 or round 13
+recorded**: `df.macho` (already built, already injected onto the SD
+image via `build_simple_cmds.sh`'s `df` entry) directly loads
+`libsystem_m.dylib` (`extra_libs="$OUT/system/libsystem_m.dylib"` in
+`build_simple_cmds.sh`, for `fabs()`/`trunc()`/`ilogb()`). Before this
+fix, running `df` on this project's boot image was **unconditionally
+guaranteed to abort at process load** with "symbol not found in flat
+namespace `__muldc3`" -- confirmed via `nm -g df.macho` / `nm -m` across
+its whole load set that nothing anywhere in that process defined the
+symbol. This was never caught by any prior QEMU boot because userland
+still doesn't reach an interactive shell (backlog d13), so `df` has never
+actually been exec'd -- a real, latent, already-shipped bug found by
+symbol-table analysis exactly the way this ticket's own "real next step"
+describes, not by exercising it. Not rebuilt this session (`build_
+simple_cmds.sh`'s 76 commands are deferred to the end of the whole sweep
+per this doc's own standing rule) -- but the dylib-level fix means the
+NEXT rebuild of `df` will link clean.
+
+QEMU-verified: `qemu/static_link_libm_dylib_fix_boot.log`, PASS, 311s,
+byte-for-byte identical tail (address-stripped) to
+`qemu/static_link_dar160_revert_confirm_boot.log`.
+
+### `libdispatch.dylib`'s `_thread_get_special_reply_port` (DAR-22/DAR-8): CLOSED for real
+
+Round 15 already found this exact symbol was a real, confirmed gap for a
+*hypothetical* future `libdyld.dylib`-links-`libxpc.dylib` fix (never
+shipped). This session found it is **already a real, present-day gap**
+for an *existing, shipped* consumer: `syslogd.macho` directly loads
+`libdispatch.dylib`/`libsystem_notify.dylib`/`libxpc.dylib` (confirmed
+via `otool -L`) and does not define this symbol anywhere in its own
+object code (confirmed via `nm -g`) -- unlike `launchd.macho`, which
+happens to compile a local copy via `liblaunchd_core.a`. `syslogd.macho`
+is injected onto the SD image at `/usr/sbin/syslogd`, intended to be
+spawned by PID-1's `spawn_syslogd()` (not yet wired end-to-end, DAR-153)
+-- so this was a real, dormant, boot-blocking-once-triggered gap, not
+theoretical.
+
+Real Apple's actual home for this symbol is `libsystem_kernel.dylib` (a
+plain 2-instruction Mach trap, `kernel_trap(thread_get_special_reply_
+port,-50,0)`, same tier as every other hand-written trap `.s` that
+dylib already compiles). Reused the exact same source
+(`thread_get_special_reply_port_trap.s`) `build_launchd_core.sh` already
+compiles for launchd's own local copy; added it to `build_libsystem_
+kernel.sh`'s own compile+link list. `libdispatch.dylib` already links
+`libsystem_kernel.dylib` as a sibling, so its own reference now resolves
+there instead of via flat namespace -- confirmed via `xcrun dyld_info
+-fixups`: zero `<flat-namespace>` entries left in `libdispatch.dylib`.
+
+This created a real, new dylib-vs-dylib duplicate (`libsystem_notify.
+dylib` already had its OWN private copy of the exact same trap, needed by
+its real `notify_mig_special_reply_port.o`/`mig_get_special_reply_port()`
+-- confirmed via `dup_symbol_audit.sh --dylibs`, which correctly flagged
+it as new). Fixed by removing `libsystem_notify.dylib`'s own extraction
+of `notify_mig_special_reply_port_trap.o` (it already links
+`libsystem_kernel.dylib` as a sibling) -- `dup_symbol_audit.sh --dylibs`:
+back to `OK: no new duplicate symbols`.
+
+QEMU-verified: `qemu/static_link_dispatch_thread_reply_port_boot.log`,
+PASS, 310.8s, byte-for-byte identical tail to the libm fix's own log.
+
+### `libresolv.dylib` (DAR-11): the ticket's single most important finding -- CLOSED for real
+
+DAR-124's own description characterized `libresolv.dylib`'s `_kevent`/
+`_kqueue`/`_pipe` deferrals as resolving "via `libxpc.dylib`/
+`libdispatch.dylib` being loaded alongside launchd specifically -- NOT
+guaranteed for a consumer that doesn't load one of those." Checking the
+REAL current consumer graph (rule 2 of this sweep) found this framing
+itself was wrong in a way that matters a lot: **`libresolv.dylib` is
+unconditionally reexported by `libSystem.B.dylib`** (`otool -L
+libSystem.B.dylib` shows a real `LC_REEXPORT_DYLIB` of `libresolv.9.
+dylib`), and `libSystem.B.dylib` is a hardcoded, mandatory dependency of
+literally every process this project's dyld launches (`dyldMain.cpp`'s
+own install-name check, the same fact round 13's `__muldc3` panic and
+round 15's `_vproc_swap_integer` investigation both already independently
+established). So `libresolv.dylib` loads into **every single process**
+this project ships -- all 76 `build_simple_cmds.sh` binaries, launchd,
+syslogd, everything -- not just ones that happen to also load libxpc/
+libdispatch.
+
+Checked each of the four real flat-namespace deferrals against
+`libsystem_kernel.dylib`/`libsystem_c.dylib` (the only two dylibs present
+in literally every process):
+- `___darwin_check_fd_set_overflow`: a real, **stale chained-fixups
+  declaration** -- `libsystem_c.dylib` already gained real ownership of
+  this exact symbol in round 12's "needs a new home" batch, and nobody
+  came back to relink `libresolv.dylib` against it since (same shape as
+  the already-documented `libbsm.dylib`/`_atoi` stale-bind bug from an
+  earlier round). Fixed with a plain `-Wl,-U` removal (no source change
+  needed) once confirmed a real sibling already provides it.
+- `_kevent`/`_kqueue`/`_pipe`: had **no real owner anywhere** in this
+  project's dylib set until this session -- confirmed via `nm -gUj`
+  across `libsystem_c.dylib`/`libsystem_malloc.dylib`/`libsystem_
+  platform.dylib`/`libsystem_pthread.dylib`/`libsystem_notify.dylib`
+  (libresolv's other siblings), all empty. `_kevent`/`_kqueue` are plain
+  generated stubs (`create-syscalls.pl`, no `NO_SYSCALL_STUB` marker in
+  `syscalls.master` -- confirmed by grep, not guessed); added both to
+  `build_libsystem_kernel.sh`'s existing generator loop. `pipe(2)` IS
+  `NO_SYSCALL_STUB` (the real kernel trap returns two fds via x0/x1, not
+  one) -- real Apple ships a hand-written arm64 stub instead
+  (`libsyscall/custom/__pipe.s`, exporting only the private-indirection
+  name `___pipe`); compiled it directly, plus a thin C forwarder (reused
+  verbatim from `tar_pipe_compat.c`, this project's own already-QEMU-
+  verified pattern for exactly this same real gap in `ed`/`diff`/`less`/
+  `tar`) to produce the real public `_pipe` name on top. `libresolv.
+  dylib` already links `libsystem_kernel.dylib` as a sibling, so all four
+  symbols now resolve there instead of flat namespace -- confirmed via
+  `xcrun dyld_info -fixups libresolv.dylib`: **zero** `<flat-namespace>`
+  entries (down from 4).
+
+Real severity assessment, not just a count: before this fix, the
+project's whole 76-binary `build_simple_cmds.sh` tier survived this only
+by accident -- each carries its own private `LINK_COMMON` copy of
+`_kevent`/`_kqueue` (masking that half of the gap), but **not** of
+`_pipe` (only `ed`/`diff`/`less`/`tar` happen to define it locally,
+because they already needed it for their own `popen()`-equivalent path).
+Any other current or future consumer of `libSystem.B.dylib` -- which is
+to say any binary in this project at all -- with none of those
+incidental local copies would have hit "symbol not found in flat
+namespace `_pipe`" the instant it started, regardless of whether it ever
+called `pipe()`.
+
+**Cascading dedup, since the new `libsystem_kernel.dylib` ownership made
+two pre-existing private copies newly redundant** (caught by `dup_symbol_
+audit.sh --dylibs` immediately flagging `_kevent`/`_pipe` as new
+duplicates against `libxpc.dylib`, and `_kqueue` against `libdispatch.
+dylib`):
+- `libdispatch.dylib` dropped its own `$OUT/simple_obj/sys__kqueue.o`
+  link-line entry (a bare, undocumented cross-script dependency on
+  `build_simple_cmds.sh` having already run -- removing it is a small
+  bonus architecture cleanup, not just a dedup).
+- `libxpc.dylib` dropped its own `cp` of `$OUT/simple_obj/sys__kevent.o`
+  (same cross-script-dependency shape) and the `pipe()` forwarder inside
+  its own `libxpc_csops_syscall.c` (that file's real, still-needed
+  `csops()` neighbor is untouched; only the co-located, now-redundant
+  `pipe()` body was removed).
+- `dup_symbol_audit.sh --dylibs`: back to `OK: no new duplicate symbols`
+  after all three removals.
+
+Real stale-bind sweep (rule 12's own lesson, extended to cover this
+round's specific symbols): swept every built `.dylib`+`.macho` for a bind
+to the old `libdispatch/_kqueue` ordinal after removing that dylib's
+local copy -- found two real ones (`launchd.macho`, `libxpc.dylib`, both
+pre-existing binds recorded before this session's fix). Relinked both;
+confirmed via `dyld_info -fixups` they now bind `libSystem/_kqueue`/
+`libsystem_kernel/_kqueue` respectively, not a stale or flat-namespace
+target.
+
+QEMU-verified (combined with the libdispatch/libsystem_notify fixes
+above, one rebuild+boot for the whole batch): see "final combined
+verification" below for the real outcome.
+
+### `libsystem_notify.dylib` (DAR-19): `_pipe` stale bind fixed; the 6-symbol XPC family reclassified as higher-severity, still open
+
+The `_pipe` stale bind noted above (this dylib already links
+`libsystem_kernel.dylib`, plain relink picked up the new export, no
+source change). The remaining 6 (`__xpc_bool_true`/`_bootstrap_look_up2`/
+`_xpc_dictionary_create`/`_xpc_dictionary_set_string`/`_xpc_dictionary_
+set_uint64`/`_xpc_release`) are real, live binds (confirmed via `dyld_
+info -fixups`: real GOT addresses, not dead `-Wl,-U` declarations) with
+no owner besides `libxpc.dylib` anywhere in this project. Per the same
+universal-reexport chain established above for `libresolv.dylib`
+(`libSystem.B.dylib` -> `libresolv.dylib` -> `libsystem_notify.dylib`,
+confirmed via `otool -L` on each hop), **this dylib is also loaded into
+every process**, not just ones that happen to load libxpc/libdispatch
+directly -- the same reclassification-from-"scoped"-to-"universal" this
+session found for libresolv.dylib applies here too.
+
+Not fixed this session: `libxpc.dylib` is not currently a linked sibling
+of `libsystem_notify.dylib`, and no cycle blocks adding it (`otool -L
+libxpc.dylib` shows no dependency back on `libsystem_notify.dylib`) --
+but doing so would make the full `libxpc.dylib`+`libdispatch.dylib`
+dependency graph a load-time requirement of literally every process in
+this project, a real architecture-scope decision on the same scale as
+`_vproc_swap_integer` (DAR-8, round 15) and `libsystem_m.dylib`'s
+reexport attempt (DAR-160, round 13's real boot panic) -- both already
+established precedent in this doc for "needs its own dedicated session
+with its own QEMU verification, not a rider on a duplicate-symbol/
+reachability batch." Flagged on DAR-19 and DAR-124 as the ticket's own
+highest-remaining-severity open item.
+
+### `libbsm.dylib`, `libopenpam.dylib`, `libncurses.dylib`: audited, not further worked this session
+
+`libncurses.dylib` currently has **zero** flat-namespace deferrals --
+already fully closed by earlier rounds (the `_clock_get_time`/`_host_get_
+clock_service`/`_mach_host_self`/`_semaphore_create` family DAR-124
+listed was resolved when `libmach_ipc.a`'s members moved to
+`libsystem_kernel.dylib` back in the 2026-08-30 session; DAR-124's own
+description just never got updated to reflect it). `libbsm.dylib`'s
+current real list is `_getgid`/`_getgrgid`/`_getpwuid`/`_syslog` (down
+from 5 -- `_getegid` already fixed); `libopenpam.dylib`'s is 9 symbols
+(`___ldpart_free_extra`/`___part_load_locale`/`_alarm`/`_getgroups`/
+`_initgroups`/`_send$UNIX2003`/`_setegid`/`_seteuid`/`_sigaction`, down
+from 11 -- `_writev$UNIX2003` already fixed). Neither investigated
+against real per-consumer reachability this session -- time was spent on
+the higher-value, already-partially-confirmed-broken libdispatch/
+libsystem_m/libresolv items per this ticket's own prioritization, and the
+universal-reexport-chain question (does `libbsm.dylib`/`libopenpam.
+dylib` reach every process the way libresolv/libsystem_notify turned out
+to?) needs the same real `otool -L` tracing before any fix, not before a
+future session picks this up. Real next step for whoever continues this:
+`libbsm.dylib` is loaded by `launchd.macho` directly (not reexported
+anywhere else, confirmed via this session's own consumer sweep) --
+narrower blast radius than libresolv/libsystem_notify turned out to have,
+so likely lower urgency, but not yet confirmed either way for
+`libopenpam.dylib` (`syslogd.macho`'s only own direct load, per earlier
+rounds).
+
+### A real, pre-existing bug found and fixed as a side effect of this session's own verification requirement (NOT part of DAR-124's own scope)
+
+Rebuilding `launchd.macho` against this session's refreshed dylib chain
+hit a real, 100%-reproducible (confirmed via 3 consecutive attempts, not
+a one-off) link failure unrelated to any of the symbols above: `ld:
+fixup error (kind=arm64_adrp_lo12) at '___fork'+0x18 from liblaunchd_
+syscalls.a[31](sys____fork.o), target '__current_pid' does not have
+address`. Root cause traced (same `arm64_adrp_lo12` mechanism this doc's
+own "continuation 9" xlocale writeup already documents): a separate,
+concurrent, already-in-the-working-tree change to `build_launchd.sh`
+(DAR-131/DAR-162, adding `libsystem_malloc.dylib` as an explicit link
+input) made that dylib's own real `_getpid` export win ld64's symbol
+resolution ahead of `liblaunchd_syscalls.a`'s own `sys____getpid.o` --
+which is the ONLY object in the link that defines `__current_pid`, the
+process-wide cached-pid global real Apple's own `sys____fork.o`
+directly ADRP-addresses (same-image, non-GOT-relative codegen). Once
+`sys____getpid.o` stops getting pulled from the archive, `sys____fork.o`'s
+private reference to `__current_pid` becomes truly dangling.
+
+Fixed with `-Wl,-u,__current_pid` (forces ld64 to pull `sys____getpid.o`
+from the start), verified stable across 3 rebuilds. This was later
+superseded in the live file by a more targeted fix from the concurrent
+DAR-23 session (`sys_getpid_current_pid_only.o`, narrowing `sys_getpid.o`
+to keep only `__current_pid` public) -- both fixes coexisted in the file
+without conflict; this session did not touch `build_launchd.sh` again
+once told a concurrent session owned it this pass (see "final combined
+verification" below for how that was handled).
+
+### Final combined verification: a real blocker, not a DAR-124 regression
+
+A full bottom-up rebuild (`libsystem_kernel.dylib` -> `libSystem.B.dylib`
+-> `libresolv.dylib` -> `libsystem_notify.dylib` -> `libdispatch.dylib`
+-> `libxpc.dylib` -> `launchd.macho` -> `syslogd.macho` -> `pd_console_
+login.macho`) plus `inject_into_sd_image.sh` plus `tools/boot_test.py`
+produced a REAL panic: `PureDarwin libxpc misuse: Bug in client of
+libxpc: object type mismatch: Expected XPC_TYPE_FD`, followed by `pid 1
+exited ... exit status 1` and a kernel panic on initproc exit
+(`qemu/static_link_dar124_final_boot.log`).
+
+Investigated before assuming this was a DAR-124 regression, per this
+doc's own repeated "verify the diagnostic, don't trust it blind" lesson:
+- This exact string is **absent** from both of this session's own earlier,
+  isolated, clean PASS boots (`static_link_libm_dylib_fix_boot.log`,
+  `static_link_dispatch_thread_reply_port_boot.log`) -- so it wasn't
+  latent in any of this session's own fixes up to that point.
+- The identical string appears in `qemu/dar153_syslogd_plist_boot.log`,
+  a log written minutes before this session's own final attempt (same
+  day, ~22 minutes apart) by what is evidently a concurrent session
+  actively working DAR-153 (syslogd auto-spawn plist wiring, already a
+  known open item this doc references in multiple earlier rounds).
+- `git status` at the time showed `build_launchctl.sh`/`build_pd_console_
+  login.sh`/`build_dyld_test_exec.sh` ALSO concurrently modified by
+  other, unidentified sessions sharing this same working tree -- and
+  this session's own `pd_console_login.macho` rebuild (needed to refresh
+  the SD image for its own verification) used whichever version of
+  `build_pd_console_login.sh` happened to be on disk at that moment,
+  which was already someone else's in-progress edit.
+
+Conclusion: this panic traces to concurrent, in-progress, uncommitted
+work sharing this working tree (most likely DAR-153's own syslogd-spawn
+XPC-fd-passing code, not yet complete), not to any of this session's own
+DAR-124 changes -- none of which touch XPC dictionary/fd-passing logic
+at all. Per this session's own standing instruction ("if the failure
+traces into a file another concurrent session owns, stop and report
+rather than fix it"), this was NOT investigated or fixed further. The
+combined final state is therefore: every individual fix in this session
+is independently verified correct via `nm`/`xcrun dyld_info` (all
+described above), two of the highest-value fixes (`libsystem_m.dylib`,
+`libdispatch.dylib`'s `_thread_get_special_reply_port`) have their own
+clean, isolated, real QEMU PASS boots from earlier in this same session,
+and the `libresolv.dylib`/`libxpc.dylib`/`libsystem_notify.dylib` fixes
+are verified via exhaustive static analysis (every symbol traced to a
+real sibling export, a full stale-bind sweep across every shipped
+`.dylib`+`.macho` found and fixed 2 real stale binds, `dup_symbol_
+audit.sh --dylibs` confirms zero new duplicates) but do NOT yet have
+their own clean, uncontaminated combined boot -- blocked by unrelated
+concurrent work, not a fault in this session's own diff.
+
+### DAR-124 status: substantially advanced, not closed
+
+Done this session: `libsystem_m.dylib` (DAR-16) fully closed, zero
+flat-namespace deferrals. `libdispatch.dylib`'s `_thread_get_special_
+reply_port` (real remainder of DAR-22/DAR-8) fully closed. `libresolv.
+dylib` (DAR-11) fully closed, zero flat-namespace deferrals, PLUS the
+ticket's own most important real-world finding: this dylib (and,
+transitively, `libsystem_notify.dylib`) load into every process this
+project ships, not a launchd-specific subset -- DAR-124's own original
+framing understated the blast radius for both. `libncurses.dylib`
+confirmed already fully closed by earlier rounds (zero deferrals).
+
+Still open: `libsystem_notify.dylib`'s 6-symbol XPC family (now correctly
+understood as universal-exposure, not launchd-specific -- the ticket's
+own highest-severity remaining item), `libbsm.dylib` (4 symbols) and
+`libopenpam.dylib` (9 symbols) not yet investigated for real per-consumer
+reachability this session. Not closing DAR-124 -- per this ticket's own
+stated policy, a partial-progress ticket stays open with an explicit
+done/still-open breakdown rather than being closed on partial completion.
+
+### Linear
+
+DAR-124 commented with the full done/still-open breakdown above and left
+open. DAR-16 (libsystem_m.dylib) closed -- zero deferrals, QEMU-verified.
+DAR-22 commented with the `_thread_get_special_reply_port` fix detail.
+DAR-11 (libresolv.dylib) commented with the universal-reexport finding
+and closed -- zero deferrals. DAR-9 (libxpc.dylib) commented with the
+kevent/pipe dedup. DAR-19 (libsystem_notify.dylib) commented with the
+`_pipe` fix and the reclassified-severity XPC family, left open (real
+remainder). DAR-8 not independently commented this session (its own
+open remainder, `_vproc_swap_integer`, untouched).
+
+Baseline unchanged from this sweep's own dedup tool perspective (still
+24 dylib-vs-dylib duplicates -- this session's net dylib-duplicate delta
+is zero: `_thread_get_special_reply_port`/`_kevent`/`_kqueue`/`_pipe`
+each briefly became new duplicates when `libsystem_kernel.dylib` gained
+real ownership, then were immediately closed by removing the now-
+redundant sibling copies in the same session).

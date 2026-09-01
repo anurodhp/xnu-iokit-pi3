@@ -259,6 +259,29 @@ CFLAGS_MACH_PORT=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding
     -o "$OUT/libsystem_kernel/cf_mach_port_syscalls.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c mach_port_traps.s \
     -o "$OUT/libsystem_kernel/mach_port_traps.o"
+# DAR-124/DAR-8/DAR-22, 2026-08-31 sweep continuation: real Apple home for
+# _thread_get_special_reply_port is this dylib (a plain, 2-instruction
+# Mach trap stub, kernel_trap(thread_get_special_reply_port,-50,0) --
+# same real trap-number source, osfmk/mach/syscall_sw.h:133, as every
+# other hand-written trap .s compiled just above). Until this fix it was
+# a genuine, confirmed-broken flat-namespace `-Wl,-U` deferral in
+# build_libdispatch_dylib.sh, resolved only because launchd.macho happens
+# to compile its own local copy (build_launchd_core.sh's
+# thread_get_special_reply_port_trap.o) -- a real, currently-shipped
+# second consumer, syslogd.macho (loads libdispatch.dylib/libsystem_
+# notify.dylib/libxpc.dylib directly, confirmed via otool -L, and does
+# NOT define this symbol anywhere in its own object code, confirmed via
+# nm -g), would hit "symbol not found in flat namespace
+# '_thread_get_special_reply_port'" the instant it's actually spawned.
+# Reused verbatim from tools/userland_staging/thread_get_special_reply_
+# port_trap.s (the exact same file launchd_core's own copy compiles) --
+# one real source, now two real object-file instances (this dylib's, and
+# launchd.macho's own pre-existing local one) until a future session
+# also drops launchd_core's copy in favor of this dylib's (left alone
+# this round -- launchd.macho defining it locally is harmless, already-
+# tracked Phase 2b binary-shadowing debt, not a new bug).
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c thread_get_special_reply_port_trap.s \
+    -o "$OUT/libsystem_kernel/thread_get_special_reply_port_trap.o"
 
 # Real mig regen of osfmk/mach/mach_port.defs (client side), moved here
 # 2026-08-30 (static-linking cleanup, Phase 1d). This is the follow-up
@@ -360,12 +383,60 @@ MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 # and build_ncurses_dylib.sh's own updated comments for their halves.
 for s in _geteuid _getegid _getuid _pread _pwrite _fileport_makefd _fileport_makeport \
     _socket _writev ___chmod ___connect_nocancel ___recvmsg_nocancel ___sendmsg_nocancel \
-    ___select_nocancel ___sendto_nocancel _fpathconf; do
+    ___select_nocancel ___sendto_nocancel _fpathconf _kevent _kqueue; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
         -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
         -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
         "$SYSGEN/${s}.s" -o "$OUT/libsystem_kernel/sys${s}.o"
 done
+# DAR-124/DAR-11 (libresolv.dylib), 2026-08-31 sweep continuation:
+# _kevent/_kqueue added above (plain generated stubs, syscalls.master
+# has no NO_SYSCALL_STUB marker on either -- confirmed by grep, not
+# guessed) -- real Apple canonical home for both. Found via a real
+# DAR-124 audit that libresolv.dylib (unconditionally reexported by
+# libSystem.B.dylib -- i.e. loaded into literally every process this
+# project ships, not just launchd) carries real, confirmed chained-
+# fixups binds to `<flat-namespace>/_kevent`/`_kqueue`/`_pipe`/
+# `___darwin_check_fd_set_overflow`, none of which libsystem_kernel.
+# dylib (already a linked sibling) previously defined. `_kevent`/
+# `_kqueue` happened to be silently safe only for the 76
+# build_simple_cmds.sh binaries (each carries its own private LINK_COMMON
+# copy) and anything else that happens to define them locally --
+# NOT a real fix, since any OTHER real or future consumer that merely
+# loads libSystem.B.dylib (the umbrella every process needs) with no
+# such local copy would hit "symbol not found in flat namespace" the
+# instant libresolv.dylib loads, whether or not it ever calls kevent()/
+# kqueue() itself. Real Apple's own canonical home for both is this
+# dylib; giving it real ownership fixes this for every current and
+# future consumer at once, not one binary at a time. See _pipe's own
+# separate fix just below (NO_SYSCALL_STUB, can't go through this same
+# generated-stub loop) and build_libresolv_dylib.sh's updated header for
+# the other half of this fix (dropping the now-stale -Wl,-U deferrals).
+
+# pipe(2): NO_SYSCALL_STUB (the real kernel trap returns TWO fds via
+# x0/x1, not one -- a case create-syscalls.pl's generic single-return
+# generator above can't produce), so real Apple ships a hand-written
+# arm64 implementation instead: $XNU/libsyscall/custom/__pipe.s, the
+# exact same real source build_simple_cmds.sh already compiles once for
+# `ed`'s own popen()/pclose() (see that script's own ed_pipe_trap.o
+# comment) -- reused verbatim here too, now for real Apple's actual
+# intended owner (same real "needs a new home" finding as _kevent/
+# _kqueue above).
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -arch arm64 \
+    -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
+    -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
+    "$XNU/libsyscall/custom/__pipe.s" -o "$OUT/libsystem_kernel/pipe_trap.o"
+# __pipe.s (above) only exports the private-indirection name `___pipe`
+# (real Apple naming convention, same as __lchown/__platform_sigaction);
+# the real public `_pipe` name needs a thin C forwarder on top -- reused
+# verbatim from tar_pipe_compat.c (see that file's own header for the
+# full real trail: originally written for tar/ed/diff/less's own
+# real pipe(2) callers after the old static-linking-era `-alias ___pipe
+# _pipe` LINK_ALIASES directive was dropped). Found needed here the same
+# way: a first attempt at this fix compiled __pipe.s alone and confirmed
+# via `nm -gUj` that libsystem_kernel.dylib still had no `_pipe` export
+# at all, only `___pipe`.
+"$CLANG" "${CFLAGS_XNU_TRAPS[@]}" tar_pipe_compat.c -o "$OUT/libsystem_kernel/pipe_forwarder.o"
 
 # Real public-name wrappers on top of the raw traps above:
 #   - wrappers/unix03/chmod.c: real, unmodified Apple source, already
@@ -557,12 +628,15 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/sys___recvmsg_nocancel.o" "$OUT/libsystem_kernel/sys___sendmsg_nocancel.o" \
     "$OUT/libsystem_kernel/sys___select_nocancel.o" "$OUT/libsystem_kernel/sys___sendto_nocancel.o" \
     "$OUT/libsystem_kernel/sys_fpathconf.o" "$OUT/libsystem_kernel/nanosleep_compat.o" \
+    "$OUT/libsystem_kernel/sys_kevent.o" "$OUT/libsystem_kernel/sys_kqueue.o" \
+    "$OUT/libsystem_kernel/pipe_trap.o" "$OUT/libsystem_kernel/pipe_forwarder.o" \
     "$OUT/libsystem_kernel/chmod_wrap.o" "$OUT/libsystem_kernel/xpc_syscall_wrappers_compat.o" \
     "$OUT/libsystem_kernel/select_wrap.o" "$OUT/libsystem_kernel/sendto_wrap.o" \
     "$OUT/libsystem_kernel/mach_semaphore_traps.o" "$OUT/libsystem_kernel/semaphore_wrap.o" \
     "$OUT/libsystem_kernel/mach_error_string.o" "$OUT/libsystem_kernel/mach_error_string_minimal_compat.o" \
     "$OUT/libsystem_kernel/mach_port_gap_closures2.o" "$OUT/libsystem_kernel/mach_port_gap_closures2_traps.o" \
     "$OUT/libsystem_kernel/cf_mach_port_syscalls.o" "$OUT/libsystem_kernel/mach_port_traps.o" \
+    "$OUT/libsystem_kernel/thread_get_special_reply_port_trap.o" \
     "$OUT/libsystem_kernel/mach_portUser.o" "$OUT/libsystem_kernel/mach_port_set_attributes.o" \
     "$MACH_IPC_EXTRACT"/*.o
 
