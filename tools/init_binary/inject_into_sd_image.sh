@@ -108,15 +108,39 @@ else
     exit 1
 fi
 
+# DAR-165: which console-login LaunchDaemon plist gets installed as the
+# live org.puredarwin.console-login.plist. Default "getty" is the new
+# real getty->login->shell chain (pd_console_login.c's own default exec
+# target, no argv). CONSOLE_LOGIN_MODE=direct installs the DAR-164
+# fallback instead (pd_console_login.c invoked with -direct-login, skips
+# getty and execs /usr/bin/login directly) -- per DAR-165's own explicit
+# instruction to keep that path available (not deleted) until the real
+# getty chain is QEMU-verified end to end. Only ONE of the two is ever
+# installed under the live filename: this project's simplified launchd
+# core.c job_import() does NOT actually honor the plist "Disabled" key
+# (job_assumes(j, !value) just logs, never suppresses RunAtLoad/KeepAlive
+# -- confirmed by reading core.c directly), so shipping both plists live
+# in /Library/LaunchDaemons at once would race two jobs for /dev/console
+# -- CONSOLE_LOGIN_MODE picks exactly one at image-build time instead,
+# same "every built artifact needs a reproducing script" convention as
+# everything else in this file, no manual on-image edits needed to flip
+# back.
+: "${CONSOLE_LOGIN_MODE:=getty}"
+case "$CONSOLE_LOGIN_MODE" in
+    getty)  CONSOLE_LOGIN_PLIST="third_party/PureDarwin/src/Libraries/XPC/launchd/org.puredarwin.console-login.plist" ;;
+    direct) CONSOLE_LOGIN_PLIST="third_party/PureDarwin/src/Libraries/XPC/launchd/org.puredarwin.console-login-direct.plist" ;;
+    *) echo "error: CONSOLE_LOGIN_MODE must be 'getty' or 'direct', got '$CONSOLE_LOGIN_MODE'" >&2; exit 1 ;;
+esac
+
 if [ -f tools/userland_staging/libc_build/pd_console_login.macho ]; then
     mkdir -p "$MNT/usr/libexec" "$MNT/Library/LaunchDaemons"
     cp tools/userland_staging/libc_build/pd_console_login.macho "$MNT/usr/libexec/pd-console-login"
     chmod 755 "$MNT/usr/libexec/pd-console-login"
     echo "+ wrote $(wc -c < tools/userland_staging/libc_build/pd_console_login.macho) bytes to $MNT/usr/libexec/pd-console-login"
-    cp "third_party/PureDarwin/src/Libraries/XPC/launchd/org.puredarwin.console-login.plist" \
+    cp "$CONSOLE_LOGIN_PLIST" \
         "$MNT/Library/LaunchDaemons/org.puredarwin.console-login.plist"
     chmod 644 "$MNT/Library/LaunchDaemons/org.puredarwin.console-login.plist"
-    echo "+ wrote org.puredarwin.console-login.plist to $MNT/Library/LaunchDaemons/"
+    echo "+ wrote $CONSOLE_LOGIN_PLIST to $MNT/Library/LaunchDaemons/org.puredarwin.console-login.plist (CONSOLE_LOGIN_MODE=$CONSOLE_LOGIN_MODE)"
     echo "  (launchd's real getty/login-equivalent -- see"
     echo "  tools/userland_staging/build_pd_console_login.sh; loaded at boot via"
     echo "  launchd.c's pd_launchd_load_daemons_dir() call, iokit project patch)"
@@ -143,23 +167,29 @@ else
     echo "= tools/userland_staging/login.macho not built -- run build_login.sh first if wanted, skipping (pd-console-login will fail to exec real login without it)"
 fi
 
-# real getty.tproj (docs/roadmap.md Phase 5.5 item 1): built (build_getty.sh)
-# but NOT wired into this boot path -- per that script's own header, the
-# getty|login handoff is a real, deliberate architectural change (per-tty
-# spawning) out of scope for this pass; this project's ACTUAL console-login
-# path is pd_console_login.c (already does getty's own tty-setup dance)
-# handing off directly to real login above. Installed here anyway (same
-# generic-loop convention as every other tools/userland_staging/*.macho
-# real command) so it's on the image and inspectable, matching
-# build_getty.sh's own "getty.macho is built and installed at /bin/getty
-# ... but nothing execs it yet" note -- still true today.
+# real getty.tproj (docs/roadmap.md Phase 5.5 item 1; wired into the real
+# boot chain by DAR-165): pd_console_login.c's own default exec target is
+# now real /bin/getty -- it does the tty setup (getty's own carrier-safe
+# open, done here instead of inside getty itself, see pd_console_login.c's
+# header for why) then execs getty in its "old style" (argv[2]=="-") mode,
+# which prints the login: prompt, reads a username, and does getty's own
+# real execle(LO, "login", ...) handoff to /usr/bin/login above. Must be
+# installed at /bin/getty to match pd_console_login.c's execv("/bin/getty",
+# ...) call. build_getty.sh had a real pre-existing link failure
+# (_clock_get_time/_g_mach_ipc_clock_port/_g_mach_ipc_clock_sem/
+# _mach_ipc_clock_init from simple_cmds_nanosleep_compat.c's _nanosleep,
+# and _mmap from libpthread.a's pthread_main_thread_bootstrap.o) as of
+# DAR-164 -- fixed by DAR-165 by linking libmach_ipc.a (already-built real
+# Mach-IPC clock chain) and simple_cmds_mmap_compat.c + the real
+# `-Wl,-alias,'_mmap$UNIX2003',_mmap` alias every other tier already uses;
+# getty.macho now links fully static with zero undefined symbols.
 if [ -f tools/userland_staging/getty.macho ]; then
     mkdir -p "$MNT/bin"
     cp tools/userland_staging/getty.macho "$MNT/bin/getty"
     chmod 755 "$MNT/bin/getty"
-    echo "+ wrote $(wc -c < tools/userland_staging/getty.macho) bytes to $MNT/bin/getty (not exec'd by anything yet)"
+    echo "+ wrote $(wc -c < tools/userland_staging/getty.macho) bytes to $MNT/bin/getty (exec'd by pd-console-login when CONSOLE_LOGIN_MODE=getty)"
 else
-    echo "= tools/userland_staging/getty.macho not built -- run build_getty.sh first if wanted, skipping (also: as of DAR-164, build_getty.sh currently has its own real, pre-existing, unrelated link failure -- _clock_get_time/_g_mach_ipc_clock_port/_g_mach_ipc_clock_sem/_mach_ipc_clock_init (simple_cmds_nanosleep_compat.o) and _mmap (libpthread.a's pthread_main_thread_bootstrap.o) -- not fixed here, out of DAR-164's scope, tracked separately)"
+    echo "= tools/userland_staging/getty.macho not built -- run build_getty.sh first if wanted, skipping (required for CONSOLE_LOGIN_MODE=getty, the default)"
 fi
 
 cp tools/pwtool/pwtool.macho "$MNT/sbin/pwtool"

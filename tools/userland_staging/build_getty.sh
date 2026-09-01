@@ -68,9 +68,15 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     exit 1
 fi
 
-for dep in libplatform.a libmalloc.a libpthread.a libclosure.a libc_gen.a libc_stdio.a libc_printf.a libc_locale_for_stdio.a; do
+for dep in libplatform.a libmalloc.a libpthread.a libclosure.a libc_gen.a libc_stdio.a libc_printf.a libc_locale_for_stdio.a libmach_ipc.a; do
     if [ ! -f "$OUT/$dep" ]; then
-        echo "error: $OUT/$dep not found -- run its build_*.sh first" >&2
+        echo "error: $OUT/$dep not found -- run its build_*.sh first (libmach_ipc.a needs build_libmach_ipc.sh)" >&2
+        exit 1
+    fi
+done
+for dep in sys____mmap.o sys____munmap.o; do
+    if [ ! -f "$OUT/simple_obj/$dep" ]; then
+        echo "error: $OUT/simple_obj/$dep not found -- run build_simple_cmds.sh first (shared raw syscall stub)" >&2
         exit 1
     fi
 done
@@ -135,6 +141,22 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
 # symbol anywhere) -- moot here since getty never calls tcdrain() at all
 # (confirmed by grep), so simply not recompiling the file avoids the gap
 # entirely rather than needing a new stand-in for it.
+#
+# REAL LINK GAP FOUND+FIXED 2026-09-01 (DAR-165, wiring getty into boot):
+# this script previously failed to link at all --
+# simple_cmds_nanosleep_compat.c's `_nanosleep` (pulled in transitively
+# via Libc/gen/FreeBSD/usleep.c, itself needed by getty's own DE/timeout
+# sleep() calls) needs `mach_ipc_clock_init`/`g_mach_ipc_clock_port`/
+# `g_mach_ipc_clock_sem`/`clock_get_time` (build_libmach_ipc.sh's real
+# Mach-IPC clock chain, Phase 4.6 item 5), and libpthread.a's
+# pthread_main_thread_bootstrap.o needs real `mmap`/`munmap` (getty_
+# main_wrapper.c's pthread_main_thread_bootstrap() call, same TSD-bootstrap
+# gap every *_main_wrapper.c in this tier documents) -- neither was linked
+# in. Both are real, already-built, already-proven components (libmach_ipc.a
+# built+QEMU-exercised by build_libmach_ipc.sh/build_ncurses_dylib.sh;
+# simple_cmds_mmap_compat.c's real mmap()/munmap() wrapper already proven
+# by build_bash.sh/build_libpthread.sh/build_ping.sh), just not previously
+# added to getty's own link line -- not a new gap, a wiring omission.
 EXTRA_FILES="
 $LIBC/gen/FreeBSD/getcap.c
 $LIBC/util/login_tty.c
@@ -167,6 +189,7 @@ $LIBC/stdtime/timezone_unix03.c
 $LIBC/stdtime/FreeBSD/asctime.c
 $LIBC/stdtime/FreeBSD/strftime.c
 $LIBC/stdtime/FreeBSD/timelocal.c
+simple_cmds_mmap_compat.c
 "
 
 ok=0
@@ -236,11 +259,13 @@ fi
     "$OUT/simple_obj/sys__access.o" "$OUT/simple_obj/sys__sigprocmask.o" \
     "$OUT/simple_obj/sys____chmod.o" "$OUT/simple_obj/sys__chown.o" \
     "$OUT/simple_obj/sys__dup2.o" "$OUT/simple_obj/sys__execve.o" \
+    "$OUT/simple_obj/sys____mmap.o" "$OUT/simple_obj/sys____munmap.o" \
     "$OUT/libc_printf.a" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
     "$OUT/libpthread.a" \
     "$OUT/libclosure.a" \
+    "$OUT/libmach_ipc.a" \
     "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
@@ -270,7 +295,9 @@ fi
     -Wl,-alias,_strchr,_index \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003','__pthread_rwlock_rdlock' \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003','__pthread_rwlock_wrlock' \
-    -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003','__pthread_rwlock_unlock'
+    -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003','__pthread_rwlock_unlock' \
+    -Wl,-alias,'_mmap$UNIX2003',_mmap \
+    -Wl,-alias,'_munmap$UNIX2003',_munmap
 echo "wrote getty.macho"
 
 otool -l getty.macho | grep -q LC_LOAD_DYLIB && \
