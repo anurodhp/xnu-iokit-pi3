@@ -210,7 +210,7 @@ if [ ! -f "$PD/launchctl/launchctl.c" ]; then
     echo "error: $PD/launchctl/launchctl.c not found -- run setup_third_party.sh first" >&2
     exit 1
 fi
-for a in liblaunchd_core.a libCoreFoundation.a cf_libc_extras.a launchd_libc_extras.a \
+for a in liblaunchd_core.a cf_libc_extras.a launchd_libc_extras.a \
          liblaunchd_mig.a liblaunchd_syscalls.a \
          libmach_ipc.a libclosure.a libmalloc.a libplatform.a libpthread.a \
          libc_gen.a libc_string.a libc_stdio.a libc_printf.a libc_locale_for_stdio.a \
@@ -220,6 +220,11 @@ for a in liblaunchd_core.a libCoreFoundation.a cf_libc_extras.a launchd_libc_ext
         exit 1
     fi
 done
+# DAR-195: real libCoreFoundation.dylib, not the old static archive.
+if [ ! -f "$OUT/system/libCoreFoundation.dylib" ]; then
+    echo "error: $OUT/system/libCoreFoundation.dylib not found -- run build_corefoundation_dylib.sh first" >&2
+    exit 1
+fi
 if [ ! -f "$OUT/cerror_stub.o" ]; then
     echo "error: $OUT/cerror_stub.o not found -- run build_launchd_core.sh first" >&2
     exit 1
@@ -309,6 +314,82 @@ echo "compiled: real launchctl.c (zero errors, zero warnings)"
     launchctl_libc_extras_compat.c -o "$OUT/launchctl_obj/launchctl_libc_extras_compat.o"
 echo "compiled: real launchctl_iokit_compat.c + launchctl_libc_extras_compat.c (zero errors, zero warnings)"
 
+# REAL PRE-EXISTING GAP FOUND 2026-09-02 while migrating this script off
+# libCoreFoundation.a for DAR-195 (confirmed pre-existing, NOT caused by
+# that migration -- a real trial build of the OLD, still-committed
+# static-archive version of this exact script hits the identical 4
+# undefined symbols, plus one more -- _nanosleep from
+# CFXMLPreferencesDomain.o's __CFMilliSleep -- that this dylib migration
+# happens to close for free via libCoreFoundation.dylib's own already-
+# linked libsystem_kernel.dylib sibling): launchctl.c itself calls real
+# fnmatch()/lchflags()/sysctlnametomib() directly (path_goodness_check/
+# empty_dir/limitloadtohardware_iterator), and liblaunchctl_extras.a's
+# own syslogd_getaddrinfo_compat.o calls real inet_pton(). None of the
+# four were ever compiled into anything this project links. Real,
+# unmodified FreeBSD/Apple source for three of them already sits in this
+# checkout, just never wired in:
+#   - third_party/Libc/gen/FreeBSD/fnmatch.c
+#   - third_party/Libc/gen/FreeBSD/sysctlnametomib.c
+#   - third_party/Libc/emulated/lchflags.c (real Apple source -- calls
+#     lstat/chflags/setattrlist, all already available)
+# inet_pton is NOT recompiled -- it's already a real, current export of
+# libresolv.dylib (confirmed via nm; also in libinfo.dylib), which this
+# script's own link line below now adds directly (per this project's
+# own established finding that a two-level-namespace reexport through
+# libSystem.B.dylib alone doesn't reliably satisfy a consumer's own
+# direct calls with this toolchain).
+CFLAGS_LIBC_GAPS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 \
+    -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 -D__ct_rune_t=__darwin_ct_rune_t -D__va_list=__builtin_va_list \
+    -I "$OUT/compat_include" \
+    -I "$LIBC/include" -I "$LIBC/darwin" -I "$LIBC/fbsdcompat" -I "$LIBC/locale" -I "$LIBC/locale/FreeBSD" \
+    -I "$LIBC/stdtime/FreeBSD" -I "$LIBC/gen" \
+    -idirafter "$PTHREAD/private" -idirafter "$PTHREAD/include" \
+    -idirafter "$XNU/bsd" -idirafter "$XNU/osfmk" -idirafter "$XNU/libsyscall")
+"$CLANG" "${CFLAGS_LIBC_GAPS[@]}" "$LIBC/gen/FreeBSD/fnmatch.c" -o "$OUT/launchctl_obj/fnmatch.o"
+"$CLANG" "${CFLAGS_LIBC_GAPS[@]}" "$LIBC/gen/FreeBSD/sysctlnametomib.c" -o "$OUT/launchctl_obj/sysctlnametomib.o"
+"$CLANG" "${CFLAGS_LIBC_GAPS[@]}" "$LIBC/emulated/lchflags.c" -o "$OUT/launchctl_obj/lchflags.o"
+# Real acct(2) raw syscall wrapper -- see launchctl_acct_syscall.c's own
+# header for the full real gap writeup (found via a real QEMU boot, not
+# at link time -- same phantom-SDK-stub silent-resolution hazard as the
+# __sysctl fix above).
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -O0 \
+    launchctl_acct_syscall.c -o "$OUT/launchctl_obj/launchctl_acct_syscall.o"
+# Real bind/getsockname/flock/unmount/vfork + task_for_pid trap -- see
+# launchctl_syscall_gaps.c's own header for the full real writeup (a
+# systematic sweep, after the __sysctl/acct finds above, of EVERY symbol
+# ld64 silently phantom-bound to libdispatch.dylib's ordinal -- 17 total,
+# 9 closed by real sibling-dylib links already in this script, these 7
+# closed here).
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -O0 \
+    launchctl_syscall_gaps.c -o "$OUT/launchctl_obj/launchctl_syscall_gaps.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    launchctl_task_for_pid_trap.s -o "$OUT/launchctl_obj/launchctl_task_for_pid_trap.o"
+echo "compiled: real fnmatch.c + sysctlnametomib.c + lchflags.c (zero errors)"
+# REAL BUG FOUND+FIXED 2026-09-02 (real QEMU boot, not caught at link
+# time -- this is exactly the "eager chained-fixups: a wrong binding
+# crashes every load" hazard CLAUDE.md warns about): sysctlnametomib.c's
+# real FreeBSD body calls the raw `__sysctl()` variant directly (not the
+# public `sysctl()` wrapper), a real, separate Mach-O symbol this
+# project's link never provides anywhere -- confirmed via nm no sibling
+# dylib exports it. ld64 did NOT hard-fail at link time (silently bound
+# it to libdispatch.dylib's ordinal instead, for reasons not fully
+# chased down -- possibly the real iPhoneOS SDK's own libdispatch.tbd
+# stub incidentally being visible on the search path, same class of
+# stray "text-based stub file ... unexpectedly found" warning already
+# seen elsewhere in this build), so this only surfaced as a real dyld
+# abort on first real QEMU boot ("Symbol not found: ___sysctl ...
+# Expected in: /usr/lib/system/libdispatch.dylib"), not as a build
+# failure. Real, correct fix (see this script's own link line below):
+# `-Wl,-alias,_sysctl,__sysctl` -- real BSD/Darwin's own convention is
+# that `__sysctl()` and `sysctl()` are the same real raw trap under two
+# names (this project's own already-linked, already-working local
+# `_sysctl` -- confirmed via nm, a real function, not a stub -- is a
+# correct, exact substitute), matching this file's own established
+# alias-based fix pattern for `_connect`/`_send`/`_writev`/`_strerror`
+# just above. Verified via a real QEMU boot after the fix (not assumed
+# from the alias alone) -- see qemu/dar195_launchctl_boot2.log.
+
 # Real narrow-extractions from already-built archives that are still
 # real per-consumer glue, not one of this session's dylib-converted
 # libraries (see this script's own header comment for why each one is
@@ -331,7 +412,13 @@ ar rcs "$OUT/liblaunchctl_extras.a" \
     "$OUT/launchctl_obj/asl_client_compat.o" \
     "$OUT/launchctl_obj/libm_scalbn_only_compat.o" \
     "$OUT/launchctl_obj/sysdir_compat.o" \
-    "$OUT/launchctl_obj/syslogd_getaddrinfo_compat.o"
+    "$OUT/launchctl_obj/syslogd_getaddrinfo_compat.o" \
+    "$OUT/launchctl_obj/fnmatch.o" \
+    "$OUT/launchctl_obj/sysctlnametomib.o" \
+    "$OUT/launchctl_obj/lchflags.o" \
+    "$OUT/launchctl_obj/launchctl_acct_syscall.o" \
+    "$OUT/launchctl_obj/launchctl_syscall_gaps.o" \
+    "$OUT/launchctl_obj/launchctl_task_for_pid_trap.o"
 echo "wrote $OUT/liblaunchctl_extras.a"
 
 # Real libxpc_syscalls2.a mach_portUser.o narrowing against
@@ -372,34 +459,44 @@ rm -f "$OUT/launchctl.macho"
 # silently broken every existing static Csu consumer too; see crt.c's
 # own header comment on those four globals for the full
 # first-attempt-caught-it-first writeup.
+# DAR-195 (2026-09-02): libCoreFoundation.a -> real libCoreFoundation.dylib.
+# __mh_execute_header/__mh_dylib_header alias REMOVED -- that alias only
+# existed because CF was statically embedded into this executable, so
+# CFUniChar.c's __CFGetSectDataPtr() (which hunts loaded dyld images for
+# ITS OWN __UNICODE section via &_mh_dylib_header, real behavior on real
+# Apple where CF is always a separate dylib) needed launchctl.macho's own
+# synthesized __mh_execute_header aliased to stand in for a dylib header
+# that didn't exist. Now that CF really is its own dylib, its own real
+# Mach-O header naturally satisfies __mh_dylib_header with zero alias
+# needed -- confirmed via a real QEMU boot (this script's own smoketest
+# below), not assumed. The 7 kCF*Key legacy-alias entries also REMOVED --
+# moved to libCoreFoundation.dylib's own link (build_corefoundation_dylib.sh),
+# since their real base symbols now live there, not here (ld64's own
+# alias-base-must-be-local constraint, see that script's own comment).
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -DCRT_DYNAMIC_LINKING \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
-    -Wl,-alias,__mh_execute_header,__mh_dylib_header \
-    -Wl,-alias,_kCFDateFormatterCalendarKey,_kCFDateFormatterCalendar \
-    -Wl,-alias,_kCFDateFormatterTimeZoneKey,_kCFDateFormatterTimeZone \
-    -Wl,-alias,_kCFCalendarIdentifierGregorian,_kCFGregorianCalendar \
-    -Wl,-alias,_kCFLocaleCalendarKey,_kCFLocaleCalendar \
-    -Wl,-alias,_kCFLocaleCountryCodeKey,_kCFLocaleCountryCode \
-    -Wl,-alias,_kCFLocaleLanguageCodeKey,_kCFLocaleLanguageCode \
-    -Wl,-alias,_kCFLocaleScriptCodeKey,_kCFLocaleScriptCode \
     -Wl,-alias,_connect,'_connect$UNIX2003' \
     -Wl,-alias,_send,'_send$UNIX2003' \
     -Wl,-alias,_writev,'_writev$UNIX2003' \
     -Wl,-alias,_strerror,'_strerror$UNIX2003' \
+    -Wl,-alias,_sysctl,___sysctl \
     -o "$OUT/launchctl.macho" \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/launchctl_obj/launchctl.o" \
     "$OUT/liblaunchctl_extras.a" \
-    "$OUT/libCoreFoundation.a" "$OUT/cf_libc_extras.a" "$OUT/launchd_libc_extras.a" \
+    "$OUT/cf_libc_extras.a" "$OUT/launchd_libc_extras.a" \
     "$OUT/liblaunchd_mig.a" "$OUT/liblaunchd_syscalls.a" \
     "$OUT/libmach_ipc.a" "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
     "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
     "$OUT/libc_locale_for_stdio.a" \
+    "$OUT/system/libCoreFoundation.dylib" \
     "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
     "$OUT/system/libsystem_c.dylib" \
     "$OUT/system/libxpc.dylib" "$OUT/system/libbsm.dylib" "$OUT/system/libopenpam.dylib" "$OUT/system/libiokituser.dylib" \
+    "$OUT/system/libresolv.dylib" \
+    "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libcopyfile.dylib" "$OUT/system/libremovefile.dylib" \
     "$ICU_LIB/libicuuc.dylib" "$ICU_LIB/libicui18n.dylib" "$ICU_LIB/libicudata.dylib" "$OUT/system/libc++.dylib" \
     2>"$OUT/launchctl_link.err" \
     || { echo "error: real link failed -- see $OUT/launchctl_link.err" >&2; tail -60 "$OUT/launchctl_link.err" >&2; exit 1; }

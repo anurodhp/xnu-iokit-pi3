@@ -276,6 +276,43 @@ LD_FOR_NARROW="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
     "$EXTRACT/nsgetenviron_raw.o" -o "$EXTRACT/nsgetenviron.o"
 rm -f "$EXTRACT/nsgetenviron_raw.o"
 
+# DAR-153 (2026-09-02): real, working getenv() -- this dylib's ONLY
+# other getenv() definition is libc_locale_for_stdio.a's
+# libc_locale_env_stubs.o, whose `__attribute__((weak)) getenv()`
+# unconditionally `return 0` (written for a pre-dyld, no-envp target;
+# see that file's own header comment). Real Apple's setenv.c (compiled
+# above into this exact dylib) DOES carry a real, correct getenv() body,
+# but it's `__private_extern__` in real Apple source -- confirmed via
+# `dyld_info -exports libsystem_c.dylib` showing `_getenv [weak-def]` at
+# libc_locale_env_stubs.o's address, NOT setenv.c's -- and this project
+# already has the "-Wl,-exported_symbol does not un-hide a private
+# extern" lesson on record (___ldpart_free_extra, this same script).
+# Real, concrete, QEMU-confirmed consequence: since the always-NULL weak
+# stub is the one symbol table entry that wins the dylib's public export
+# slot, EVERY process on this port calling the real, dylib-bound
+# getenv() -- not just launchd/syslogd -- always got NULL regardless of
+# what was actually in its real environ (DAR-153 investigation: launchd
+# genuinely appended LAUNCHD_TRUSTED_FD_ENV to the real, now-correctly-
+# unified `environ` -- see build_launchd.sh's own -DCRT_DYNAMIC_LINKING
+# fix -- but syslogd's real getenv(LAUNCHD_TRUSTED_FD_ENV) call still
+# read back NULL).
+#
+# Fix: same narrowing technique as _NSGetEnviron immediately above, same
+# source file. simple_cmds_getenv_compat.c's own getenv() is a real,
+# correct, already-in-tree POSIX getenv(3) reading the real `environ`
+# global (not fabricated for this fix) -- extracting it here as a
+# separate, genuinely STRONG (non-weak) `_getenv` object makes ld64
+# prefer it over libc_locale_env_stubs.o's weak stub for the exported
+# symbol, exactly the override mechanism that stub's own header comment
+# already documented as the intended design (same precedent as
+# pthread_tsd_shim.c's default-stub-overridden-by-strong-definition
+# pattern) -- it just never had a real strong getenv() in this dylib's
+# own link to do the overriding until now.
+"$CLANG" $SIGLIST_CFLAGS simple_cmds_getenv_compat.c -o "$EXTRACT/getenv_real_raw.o"
+"$LD_FOR_NARROW" -r -arch arm64 -exported_symbol _getenv \
+    "$EXTRACT/getenv_real_raw.o" -o "$EXTRACT/getenv_real.o"
+rm -f "$EXTRACT/getenv_real_raw.o"
+
 "$CLANG" $SIGLIST_CFLAGS "$LIBC/gen/FreeBSD/siglist.c" -o "$EXTRACT/siglist.o"
 "$CLANG" $SIGLIST_CFLAGS "$LIBC/gen/FreeBSD/vis.c" -o "$EXTRACT/vis.o"
 

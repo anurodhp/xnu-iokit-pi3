@@ -485,7 +485,29 @@ ar r "$OUT/libpthread_no_dup_pthread_create.a" "$OUT/pthread_main_thread_bootstr
 # independently-compiled copies -- arguably a real correctness fix, not
 # just a link-error workaround.
 rm -f "$OUT/launchd.macho"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
+# -DCRT_DYNAMIC_LINKING (DAR-153, 2026-09-02): launchd.macho is a real,
+# genuinely dynamically-linked executable (libdispatch/libdyld/libSystem.B/
+# libsystem_pthread/libsystem_c/libxpc/... dylibs below), but this flag was
+# missing here even though the identical DAR-161 fix was already applied to
+# build_launchctl.sh. Without it, Csu/crt.c's own NXArgc/NXArgv/environ/
+# __progname become LOCAL storage in launchd.macho instead of extern
+# references to the real, canonical copies libdyld.dylib's libdyldGlue.o
+# exports -- confirmed via `nm -m launchd.macho` showing `(__DATA,__common)
+# external _environ` (a local definition) rather than an import/bind. Real,
+# concrete consequence found via QEMU boot-test: job_start()'s child calls
+# the real, dylib-bound setenv(LAUNCHD_TRUSTED_FD_ENV, ...) (correctly
+# resolves "(from libsystem_c)", writes into libsystem_c.dylib's OWN
+# internal environ storage), but job_start_child()'s final
+# posix_spawn(..., environ) reads launchd.macho's OWN separate local
+# `environ` global (this file's plain identifier reference) -- which
+# setenv() never touched. The result: every checkin-requesting child
+# (e.g. syslogd, DAR-153) is exec'd with an environment that never
+# contains LAUNCHD_TRUSTED_FD_ENV, so its own launch_msg(LAUNCH_KEY_CHECKIN)
+# always returns NULL and it exit(1)s immediately, respawns, repeats.
+# Unifying `environ` onto the one real dyld-owned copy (this flag) makes
+# setenv() and posix_spawn(...,environ) agree, same fix shape as
+# build_launchctl.sh's own DAR-161 remediation.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -DCRT_DYNAMIC_LINKING \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -Wl,-u,__current_pid \

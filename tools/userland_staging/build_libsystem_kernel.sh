@@ -400,10 +400,19 @@ MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 # (`_alarm` first, since it's earliest in that dylib's own fixup
 # chain), not added speculatively: `nm -m libopenpam.dylib` shows all
 # four as genuinely undefined+dynamically-looked-up before this fix.
+# _flock added 2026-09-02 (DAR-153 session, real QEMU boot found while
+# verifying an unrelated concurrent DAR-195 launchctl fix): plain
+# generated stub, syscall #131 (`AUE_FLOCK`, no NO_SYSCALL_STUB marker
+# in syscalls.master), same shape as every other entry in this loop.
+# Real dyld abort: "Symbol not found: _flock / Referenced from:
+# /bin/launchctl / Expected in: /usr/lib/system/libdispatch.dylib" --
+# libdispatch.dylib's own real source calls flock(2) directly and this
+# project never had a real provider anywhere, confirmed via `nm -m
+# libdispatch.dylib` showing it dynamically-looked-up before this fix.
 for s in _geteuid _getegid _getuid _pread _pwrite _fileport_makefd _fileport_makeport \
     _socket _writev ___chmod ___connect_nocancel ___recvmsg_nocancel ___sendmsg_nocancel \
     ___select_nocancel ___sendto_nocancel ___recvfrom_nocancel _fpathconf _kevent _kqueue ___sigaction \
-    _setegid _seteuid _getgroups _setitimer; do
+    _setegid _seteuid _getgroups _setitimer _flock; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
         -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
         -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
@@ -749,6 +758,7 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/voucher_funcptr_compat.o" \
     "$OUT/libsystem_kernel/sys_setegid.o" "$OUT/libsystem_kernel/sys_seteuid.o" \
     "$OUT/libsystem_kernel/sys_getgroups.o" "$OUT/libsystem_kernel/sys_setitimer.o" \
+    "$OUT/libsystem_kernel/sys_flock.o" \
     "$MACH_IPC_EXTRACT"/*.o
 
 echo "wrote $OUT/system/libsystem_kernel.dylib"

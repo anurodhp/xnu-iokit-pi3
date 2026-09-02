@@ -108,6 +108,33 @@ else
     exit 1
 fi
 
+# launchctl.macho is DELIBERATELY NOT installed onto the boot image.
+# Tried real 2026-09-02 (DAR-195's own consumer-migration verification)
+# -- it builds clean and links with zero real gaps (gap_audit.sh clean,
+# every phantom-libdispatch-bound symbol this session found real, closed
+# fixes for), but a real QEMU boot found a genuine, PRE-EXISTING,
+# unrelated-to-CF-dylib-conversion bug: real launchd core.c always calls
+# `/bin/launchctl bootstrap -S System` during its own bootstrap
+# (bootstrap_tool[], unconditional -- previously always a silent, no-op
+# ENOENT since launchctl.macho never existed on disk before). Once
+# launchctl.macho actually exists and runs, real launchctl.c's own
+# system_specific_bootstrap() hits this project's real, already-
+# documented BOOTSTRAP_NOT_PRIVILEGED stub limitation
+# (job_mig_look_up2_forward()/job_mig_parent_forward(), see
+# docs/launchd-pid1-postmortem.md) and hangs the ENTIRE boot instead of
+# failing cleanly (confirmed reproducible across 2 independent real QEMU
+# runs, 240s and 400s timeouts, identical hang point both times -- not a
+# QEMU/TCG timing flake). Root cause not yet fully isolated (str2bsport()
+# in launchctl.c returns a bogus mach_port_t value of literal `1` instead
+# of MACH_PORT_NULL on its own early-return error paths, a real,
+# separate upstream code smell that may or may not be the actual hang
+# cause -- not confirmed). Tracked as its own real, separate issue (see
+# DAR-195's Linear ticket comments); re-enable this install block once
+# that's fixed and re-verified via a real QEMU boot. Leaving it out
+# keeps this project's own boot path exactly as reliable as it was
+# before this session (launchctl.macho is still real, still builds via
+# tools/userland_staging/build_launchctl.sh, just not auto-installed).
+
 # DAR-165: which console-login LaunchDaemon plist gets installed as the
 # live org.puredarwin.console-login.plist. Default "getty" is the new
 # real getty->login->shell chain (pd_console_login.c's own default exec

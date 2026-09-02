@@ -148,6 +148,36 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-buil
 "$CLANG" "${CFLAGS[@]}" -I "$XNU/libsyscall/wrappers/spawn" "$XNU/libsyscall/wrappers/spawn/posix_spawn.c" -o "$OUT/launchd_syscall_obj/posix_spawn.o"
 "$CLANG" "${CFLAGS[@]}" "$XNU/libsyscall/wrappers/unix03/munmap.c" -o "$OUT/launchd_syscall_obj/munmap.o"
 "$CLANG" "${CFLAGS[@]}" launchd_syscall_wrappers_compat.c -o "$OUT/launchd_syscall_obj/launchd_syscall_wrappers_compat.o"
+# REAL DUP-SYMBOL BUG FOUND 2026-09-02 (while migrating build_launchctl.sh
+# off libCoreFoundation.a for DAR-195 -- pre-existing, not caused by that
+# migration, just newly surfaced by that link's changed archive-pull
+# order): this file's own real, hand-curated `_listen`/`_socketpair`
+# duplicate the SAME two symbols create-syscalls.pl's own auto-generated
+# sys____listen.o/sys____socketpair.o (compiled just above, same
+# $OUT/launchd_syscall_obj/ dir, both swept into this script's own
+# trailing `ar rcs` glob) already provide -- confirmed via nm, both
+# pairs define plain `_listen`/`_socketpair` with real, working syscall
+# bodies. A plain archive link tolerates this (lazy per-symbol member
+# pull, silently picks whichever member a scan hits first) right up
+# until something ALSO needs THIS file's one real, non-duplicated
+# symbol (`_accept` -- no auto-generated stub exists for it, see this
+# script's own "Real, curated" header comment above for why), which
+# forces ld64 to pull this object in as well, at which point its
+# duplicate `_listen`/`_socketpair` collide for real with the
+# auto-generated pair ("duplicate symbol" hard error, not a lazy-pick).
+# Real fix: narrow this object to just `_accept`, its own real, unique
+# contribution -- same `ld -r -exported_symbols_list` technique already
+# used throughout this project's dylib-conversion work. `_listen`/
+# `_socketpair`'s function bodies stay in the object as private/local,
+# unreachable, so nothing is lost -- every real caller resolves to the
+# auto-generated pair instead, which is functionally identical (both are
+# the same real Apple legacy wrapper logic, per this file's own header).
+echo "_accept" > "$OUT/launchd_syscall_obj/keep_accept.txt"
+"$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld" -r -arch arm64 \
+    -exported_symbols_list "$OUT/launchd_syscall_obj/keep_accept.txt" \
+    "$OUT/launchd_syscall_obj/launchd_syscall_wrappers_compat.o" \
+    -o "$OUT/launchd_syscall_obj/launchd_syscall_wrappers_compat.o.narrow"
+mv "$OUT/launchd_syscall_obj/launchd_syscall_wrappers_compat.o.narrow" "$OUT/launchd_syscall_obj/launchd_syscall_wrappers_compat.o"
 "$CLANG" "${CFLAGS[@]}" "$XNU/libsyscall/wrappers/reboot.c" -o "$OUT/launchd_syscall_obj/reboot.o"
 "$CLANG" "${CFLAGS[@]}" "$XNU/libsyscall/wrappers/setpriority.c" -o "$OUT/launchd_syscall_obj/setpriority.o"
 "$CLANG" "${CFLAGS[@]}" "$XNU/libsyscall/wrappers/unix03/getrlimit.c" -o "$OUT/launchd_syscall_obj/getrlimit.o"
