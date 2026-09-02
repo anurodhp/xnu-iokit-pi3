@@ -492,6 +492,17 @@ else
     echo "= tools/userland_staging/libinfo_smoketest.macho not built -- run tools/userland_staging/build_libinfo.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/libc_build/cf_dylib_smoketest.macho ]; then
+    mkdir -p "$MNT/bin"
+    cp tools/userland_staging/libc_build/cf_dylib_smoketest.macho "$MNT/bin/cf_dylib_smoketest"
+    chmod 755 "$MNT/bin/cf_dylib_smoketest"
+    echo "+ wrote $(wc -c < tools/userland_staging/libc_build/cf_dylib_smoketest.macho) bytes to $MNT/bin/cf_dylib_smoketest"
+    echo "  (real libCoreFoundation.dylib constructor/init-order proof -- DAR-195,"
+    echo "  see tools/userland_staging/cf_dylib_smoketest.c; needs /usr/lib/libCoreFoundation.dylib)"
+else
+    echo "= tools/userland_staging/libc_build/cf_dylib_smoketest.macho not built -- run tools/userland_staging/build_corefoundation_dylib_test.sh first if wanted, skipping"
+fi
+
 # Real Phase 4 step 3 "remaining commands" tiers (docs/roadmap.md) --
 # each build_*_cmds.sh script writes one <name>.macho per real command
 # it built; every one of them lands in /bin, matching real BSD/macOS
