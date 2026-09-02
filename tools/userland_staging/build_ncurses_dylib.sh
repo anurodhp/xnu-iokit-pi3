@@ -116,6 +116,29 @@ fi
 # archive independently defines them.
 rm -f "$EXTRACT"/______third_party_Libc_stdlib_FreeBSD_atoi_c.o \
       "$EXTRACT"/______third_party_Libc_stdlib_FreeBSD_abs_c.o
+# Libc_sys_sigaction.o / libplatform_sigaction.o REMOVED entirely
+# 2026-09-02 (DAR-194, dylib-vs-dylib duplicate-symbol regression from
+# DAR-164's fix in fdc375d). fdc375d gave `_sigaction`/
+# `__sigaction_nobind`/`___platform_sigaction` a real canonical home in
+# libsystem_c.dylib and `___sigaction`/`__sigtramp` a real canonical
+# home in libsystem_kernel.dylib -- both already linked siblings below
+# -- but left this dylib's own pre-existing, independently-compiled
+# copies of the same real sources in place, so 5 symbols shipped with
+# two live definitions each (dup_symbol_audit.sh FAIL).
+#
+# Removal (not narrowing) is correct for these two specific objects:
+# confirmed via `nm -m` that they define NOTHING else at all --
+# Libc_sys_sigaction.o defines exactly `_sigaction` + `__sigaction_nobind`
+# (and references `___platform_sigaction`), libplatform_sigaction.o
+# defines exactly `___platform_sigaction` (and references `___sigaction`
+# + `__sigtramp`). The entire real wrapper chain sigaction() ->
+# __platform_sigaction() -> __sigaction()/__sigtramp is self-contained
+# inside these two objects plus ncurses_extra_syscalls.o (narrowed
+# below), and this archive's ONE real consumer is lib_tstp.o's genuine
+# undefined reference to plain `_sigaction` -- which now resolves
+# externally to the real libsystem_c.dylib sibling, same real Apple
+# source, same shape as the atoi/abs removal just above.
+rm -f "$EXTRACT/Libc_sys_sigaction.o" "$EXTRACT/libplatform_sigaction.o"
 # ncurses_extra_syscalls.o narrowed 2026-08-30 (static-linking cleanup,
 # dylib-vs-dylib duplicate-symbol pass): this project-authored compat
 # file's own `_gettimeofday`/`_pthread_testcancel`/`_read`/
@@ -159,12 +182,23 @@ rm -f "$EXTRACT"/______third_party_Libc_stdlib_FreeBSD_atoi_c.o \
 # `getpgrp()`/`read()`/`select()` neighbors are the only other real
 # consumers inside it and none of them reference these three, so
 # narrowing is a pure export-visibility change, not a functional one.
+#
+# `___sigaction`/`__sigtramp` (also in this same object) added to this
+# narrowing list 2026-09-02 (DAR-194): real canonical owner is
+# libsystem_kernel.dylib (fdc375d, already a linked sibling below).
+# NARROWED rather than removed because this object also holds the real
+# getpgrp()/read()/select()/etc. neighbors above; after
+# libplatform_sigaction.o's removal (see its comment near the top of
+# this script) nothing left in this archive references either name at
+# all -- confirmed via `nm -m` across every extracted object -- so this
+# is a pure export-visibility change with no remaining in-dylib caller.
 XCODE12_LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
 "$XCODE12_LD" -r -arch arm64 -keep_private_externs \
     -unexported_symbol _gettimeofday -unexported_symbol _pthread_testcancel \
     -unexported_symbol _read -unexported_symbol _sigprocmask -unexported_symbol _select \
     -unexported_symbol _access -unexported_symbol _mkdir -unexported_symbol _strstr \
     -unexported_symbol _fpathconf -unexported_symbol _sleep \
+    -unexported_symbol ___sigaction -unexported_symbol __sigtramp \
     -unexported_symbol ___darwin_check_fd_set_overflow \
     "$EXTRACT/ncurses_extra_syscalls.o" -o "$EXTRACT/ncurses_extra_syscalls.o.narrowed"
 mv -f "$EXTRACT/ncurses_extra_syscalls.o.narrowed" "$EXTRACT/ncurses_extra_syscalls.o"

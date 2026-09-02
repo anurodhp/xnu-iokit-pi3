@@ -231,6 +231,38 @@ rm -f "$EXTRACT/select_wrap.o" "$EXTRACT/xpc_syscall_wrappers_compat.o" "$EXTRAC
 rm -f "$EXTRACT/sys____connect_nocancel.o" "$EXTRACT/sys____recvmsg_nocancel.o" \
       "$EXTRACT/sys____select_nocancel.o" "$EXTRACT/sys____sendmsg_nocancel.o"
 
+# libproc.o's `_proc_pidinfo` NARROWED 2026-09-02 (DAR-194, dylib-vs-
+# dylib duplicate-symbol regression from DAR-164's fix in fdc375d).
+# fdc375d gave `proc_pidinfo()` a real canonical home in
+# libsystem_kernel.dylib (build_libsystem_kernel.sh's own
+# proc_pidinfo_compat.o, from ps_libproc_syscall.c) -- which is also
+# real Apple's own home for it, libsyscall's libproc -- but this dylib's
+# pre-existing libproc.o kept exporting its own second copy, so both
+# shipped simultaneously to every process loading both (launchd.macho
+# and syslogd.macho both do).
+#
+# NARROWED, not removed: libproc.o is real Apple libproc source
+# defining ~40 other real `proc_*` entry points (proc_name/proc_pidpath/
+# proc_listpids/...), many of which call proc_pidinfo() DIRECTLY from
+# inside this same object -- a same-object call, so it needs the local
+# definition to stay present. `nm -m` confirms no OTHER extracted object
+# in this dylib references `_proc_pidinfo` at all, so demoting just this
+# one name to local removes the duplicate export without changing any
+# real call target. Same `ld -r -keep_private_externs
+# -unexported_symbol` technique as build_ncurses_dylib.sh's own
+# mach_ipc_clock_init.o/ncurses_extra_syscalls.o narrowings.
+#
+# proc_pidinfo() is a stateless `__proc_info` syscall wrapper (no
+# globals, confirmed via nm -m: libproc.o's only __DATA symbols are the
+# four unrelated *_boost_assertion_token words), so the transitional
+# two-copies-of-the-code state carries no divergent-state risk of the
+# kind this audit exists to catch.
+XCODE12_LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+"$XCODE12_LD" -r -arch arm64 -keep_private_externs \
+    -unexported_symbol _proc_pidinfo \
+    "$EXTRACT/libproc.o" -o "$EXTRACT/libproc.o.narrowed"
+mv -f "$EXTRACT/libproc.o.narrowed" "$EXTRACT/libproc.o"
+
 # Members dropped 2026-08-29 (static-linking cleanup, Phase 1a). Every
 # one of these was a second copy of something a sibling dylib already on
 # this link line now owns, so every process loading libxpc.dylib next to
