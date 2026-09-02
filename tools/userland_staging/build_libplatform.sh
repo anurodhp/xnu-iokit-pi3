@@ -84,14 +84,18 @@
 #   - os_unfair_lock/os_once's notion of "current thread" (TSD slot
 #     __TSD_MACH_THREAD_SELF) was never populated on this target (no real
 #     pthread_start() to do it) - would read 0 == OS_LOCK_NO_OWNER and
-#     silently corrupt lock semantics. Bootstrapped for real from a real,
-#     different, also-non-zero-per-thread value (thread_selfid(), not
-#     mach_thread_self()'s own Mach trap - avoids a second, unnecessary
-#     Mach-trap-ABI investigation for a value used only for equality
-#     comparison, never dereferenced as an actual port - see
-#     libplatform_thread_self.c's own header comment for the full
-#     reasoning, this is a documented deliberate substitution, not a
-#     guess).
+#     silently corrupt lock semantics. Bootstrapped for real in
+#     libplatform_thread_self.c. That file originally substituted a
+#     truncated thread_selfid() for real mach_thread_self(), on the
+#     premise that any non-zero per-thread value works since the value is
+#     only ever compared, never dereferenced as a port. REVISED
+#     2026-09-01 (DAR-153): that premise was wrong. lock.c:435 defines
+#     OS_ULOCK_OWNER(value) as `value | OS_ULOCK_NOWAITERS_BIT`, so the
+#     owner value must be ODD, which real Mach port names always are and
+#     a thread id is only half the time. Now uses the real
+#     mach_thread_self trap (-27), matching real
+#     _pthread_main_thread_init() - see that file's own header for the
+#     full writeup.
 set -e
 cd "$(dirname "$0")"
 
@@ -204,7 +208,19 @@ echo "wrote $OUT/libplatform.a"
 "$CLANG" $CFLAGS libplatform_smoketest.c -o "$OUT/libplatform_smoketest.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     cerror_stub.c -o "$OUT/cerror_stub.o"
+# -U _pthread_main_thread_bootstrap: real, honest expression of the
+# weak_import third_party/Csu's crt.c gained 2026-09-01 (commit 5697d90,
+# DAR-164 -- crt.c now bootstraps pthread TSD before the
+# __mod_init_func loop, for any consumer that provides that symbol).
+# weak_import is a dylib-binding concept, so in a fully `-static` link
+# ld64 rejects it outright unless the symbol is either really defined or
+# explicitly declared undefined here -- and this smoketest deliberately
+# does NOT link libpthread.a (it exercises libplatform.a standalone, and
+# libplatform_smoketest.c calls libplatform_thread_self_bootstrap()
+# itself). crt.c's own `if (pthread_main_thread_bootstrap)` null guard is
+# what makes leaving it unresolved correct rather than merely tolerated.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
+    -Wl,-U,_pthread_main_thread_bootstrap \
     -o libplatform_smoketest.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/libplatform_smoketest.o" \
@@ -215,7 +231,11 @@ otool -l libplatform_smoketest.macho | grep -q LC_LOAD_DYLIB && \
     echo "WARNING: LC_LOAD_DYLIB present -- no longer dyld-free" >&2
 otool -l libplatform_smoketest.macho | grep -q LC_UNIXTHREAD || \
     echo "WARNING: no LC_UNIXTHREAD -- kernel exec won't know where to start" >&2
-if nm -u libplatform_smoketest.macho | grep -q .; then
+# _pthread_main_thread_bootstrap is the ONE deliberately-unresolved
+# symbol here (crt.c's optional weak_import hook, -U'd above) -- filtered
+# out so this check keeps flagging real, unintended gaps instead of
+# always firing. Its GOT slot is a real zero and crt.c null-guards it.
+if nm -u libplatform_smoketest.macho | grep -v '^_pthread_main_thread_bootstrap$' | grep -q .; then
     echo "WARNING: undefined symbols present:" >&2
-    nm -u libplatform_smoketest.macho >&2
+    nm -u libplatform_smoketest.macho | grep -v '^_pthread_main_thread_bootstrap$' >&2
 fi

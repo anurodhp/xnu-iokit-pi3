@@ -14,23 +14,35 @@
  * themselves as already the owner).
  *
  * Real Darwin's value here comes from a Mach trap (mach_thread_self,
- * kernel_trap(-27)) returning a real mach port name. This project
- * substitutes a different, ALSO real and ALSO non-zero-for-any-live-
- * thread value instead: thread_selfid() (BSD syscall 372, NO_SYSCALL_STUB
- * - real number cross-checked against
- * third_party/xnu-7195/bsd/kern/syscalls.master), truncated to the low
- * 32 bits to fit mach_port_name_t's width. This is a deliberate,
- * documented substitution, not a guess: os_unfair_lock/os_once never
- * dereference this value as an actual Mach port (no msg send, no
- * deallocate) - they only ever compare it for equality against "am I the
- * current owner", so any real, stable, non-zero, unique-per-thread value
- * satisfies the real algorithm's correctness requirement. thread_selfid()
- * needed no new Mach-trap ABI investigation (it's a plain BSD syscall,
- * same carry-flag convention as every other raw syscall in this project),
- * unlike mach_thread_self's Mach-trap ABI (see libplatform_mach_traps.s
- * for the two Mach traps this build DID need to add - thread_switch and
- * mach_timebase_info_trap, only used by lock.c's OSSpinLock/handoff-lock
- * legacy paths, not by os_unfair_lock/os_once).
+ * kernel_trap(-27)) returning a real mach port name.
+ *
+ * SUBSTITUTION REMOVED 2026-09-01 (DAR-153). This file used to store a
+ * truncated thread_selfid() (BSD syscall 372) instead, on the stated
+ * premise that "os_unfair_lock/os_once never dereference this value as
+ * an actual Mach port ... so any real, stable, non-zero,
+ * unique-per-thread value satisfies the real algorithm's correctness
+ * requirement". That premise was WRONG, and provably so from real
+ * libplatform source: lock.c:435 defines
+ * `OS_ULOCK_OWNER(value) ((value) | OS_ULOCK_NOWAITERS_BIT)` -- bit 0 of
+ * the lock word is the has-waiters flag, and the owner comparison
+ * re-sets it before comparing against this slot. So the value must be
+ * ODD, not merely non-zero. Real Mach port names always are (XNU's
+ * ipc_entry_new_rollpoint() seeds the generation at IE_BITS_GEN_MASK +
+ * IE_BITS_GEN_ONE and ipc_entry_new_gen() steps by IE_BITS_GEN_ONE, so a
+ * name's low byte is always 3 mod 4 -- osfmk/ipc/ipc_entry.h:135-175);
+ * a thread id is even half the time, which would make
+ * os_unfair_lock_assert_owner() fire __LIBPLATFORM_CLIENT_CRASH__ on a
+ * lock this thread really does hold. That exact crash (as a bare
+ * `brk #1`/SIGTRAP out of Libnotify's _notify_lib_init_locked()) is what
+ * DAR-153 root-caused, via the sibling zero-valued case -- see
+ * dyld_tsd_entry_trampoline.s's own header for the full writeup.
+ *
+ * Now uses the real trap, matching real _pthread_main_thread_init()
+ * (libpthread/src/pthread.c:1853). thread_self_trap is Mach trap -27,
+ * the same raw trap libmalloc_vm_traps.s already exports and real
+ * mach_legacy.c's mach_thread_self() wraps; inlined here rather than
+ * called, so this file keeps its existing zero-undefined-symbol
+ * property (libplatform.a has consumers that do not link libmalloc.a).
  *
  * Call libplatform_thread_self_bootstrap() exactly once, after
  * pthread_tsd_shim_bootstrap() (TPIDRRO_EL0 must already be live) and
@@ -41,32 +53,32 @@ typedef unsigned long size_t;
 
 #include "../../third_party/xnu-7195/libsyscall/os/tsd.h"
 
-static inline long syscall0(long num) {
+/* Mach trap -27, real mach_thread_self()'s underlying trap. Mach traps
+ * use x16 = negative trap number and return in x0; unlike a BSD syscall
+ * there is no carry-flag error convention to check. */
+static unsigned int real_mach_thread_self(void) {
     register long x0 asm("x0");
-    register long x16 asm("x16") = num;
-    long is_error;
-    asm volatile("svc #0x80\n"
-                 "cset %1, cs"
-                 : "=r"(x0), "=r"(is_error)
-                 : "r"(x16)
-                 : "memory", "cc");
-    (void)is_error; /* thread_selfid() cannot fail per its real contract */
-    return x0;
-}
-
-/* #372 AUE_NULL - real number, cross-checked against syscalls.master
- * (see this file's header comment). */
-static unsigned long long real_thread_selfid(void) {
-    return (unsigned long long)syscall0(372);
+    register long x16 asm("x16") = -27;
+    asm volatile("svc #0x80" : "=r"(x0) : "r"(x16) : "memory", "cc",
+	    /* Mach traps preserve callee-saved registers only; x1-x15/x17 are
+	     * caller-saved and the kernel's trap return makes no promise about
+	     * them. Declared explicitly so this stays correct if these files
+	     * are ever built above -O0 (today they are -O0, and a real
+	     * disassembly confirms everything spills across the svc -- this is
+	     * defensive, not a fix for a live bug). x16 is an input operand
+	     * and x18 is platform-reserved, so neither may be listed. */
+	    "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9",
+	    "x10", "x11", "x12", "x13", "x14", "x15", "x17");
+    return (unsigned int)x0;
 }
 
 int libplatform_thread_self_bootstrap(void) {
-    unsigned int self32 = (unsigned int)real_thread_selfid();
+    unsigned int self32 = real_mach_thread_self();
     if (self32 == 0) {
-        /* Real thread IDs are allocated starting well above zero and
-         * never recycle to zero for a live kernel - if this ever
-         * triggers it means thread_selfid() itself failed silently,
-         * not a value we can safely treat as OS_LOCK_NO_OWNER. */
+        /* MACH_PORT_NULL. A live thread always has a real name for
+         * itself, so this can only mean the trap failed - and 0 is
+         * exactly OS_LOCK_NO_OWNER, the one value that must never be
+         * stored here (see this file's header). */
         return 0;
     }
     _os_tsd_set_direct(__TSD_MACH_THREAD_SELF, (void *)(unsigned long)self32);

@@ -56,17 +56,15 @@
 #     script, which belongs to this migration's later Stage B, not this
 #     single-library conversion. Deferred here instead of a partial,
 #     broken pull-in.
-#   - initgroups: real source DOES exist in this project
-#     (launchd_passwd_compat.o, liblaunchd_syscalls.a) -- but it's a much
-#     larger real dependency chain than the other additions above
-#     (li_getpwuid/li_gr_at/li_gr_entry_count/li_gr_load/li_pw_load, a
-#     real flat-file passwd/group database loader this project wrote for
-#     launchd specifically), not a small, self-contained addition.
-#     Deferred rather than pulled in wholesale for openpam's sake;
-#     docs/backlog.md item d6's "no dedicated wrapper source anywhere in
-#     this project's pinned repos" note is now stale for initgroups
-#     specifically (a real, custom, project-local implementation DOES
-#     exist) -- worth a real followup to reconcile, not attempted here.
+#   - initgroups: NO LONGER DEFERRED (2026-09-01, DAR-153) -- real
+#     source (launchd_passwd_compat.o's initgroups(), same real flat-file
+#     passwd/group database loader this project wrote for launchd) is
+#     now compiled fresh into this dylib, narrow-exported to just
+#     `_initgroups` (getpwuid_r() from that same file stays private,
+#     see the compile step's own comment below). Found as a real,
+#     genuine next abort site on a real QEMU boot once alarm/setegid/
+#     seteuid/getgroups (earlier in this dylib's own fixup chain) were
+#     closed -- not spun up speculatively.
 #   - connect$UNIX2003/send$UNIX2003/writev$UNIX2003: same real,
 #     project-wide BSD socket syscall gap build_libresolv_dylib.sh's own
 #     header already documents (docs/backlog.md item d7's CFSocket.c
@@ -293,6 +291,46 @@ CFLAGS_OPENPAM="$CFLAGS -I $OPENPAM/include -I $OPENPAM/lib -DLIB_MAJ=2 -D_GNU_S
 rm -f "$EXTRACT/openpam_dynamic_compat.o"
 "$CLANG" $CFLAGS_OPENPAM openpam_dynamic_compat.c -o "$EXTRACT/openpam_dynamic_compat.o"
 
+# _initgroups real fix (2026-09-01, DAR-153 syslogd boot investigation):
+# was `-Wl,-U` deferred below with NO real provider anywhere in the
+# process (confirmed via a real dyld abort on a real QEMU boot --
+# "symbol not found in flat namespace '_initgroups'" -- once the
+# alarm/setegid/seteuid/getgroups gap ahead of it in this dylib's own
+# fixup chain was closed, see build_libsystem_kernel.sh's/
+# build_libc_gen.sh's own updated comments for that earlier gap). Real
+# source already exists in this project: launchd_passwd_compat.c's
+# initgroups() (real BSD getgrouplist()-then-setgroups(2) algorithm,
+# written for third_party/PureDarwin's launchd core.c, see that file's
+# own header) -- reused here, not reinvented. Recompiled fresh (not
+# reusing build_launchd_syscalls.sh's already-built .o) so this dylib's
+# own CFLAGS/include path apply, matching every other file in this
+# script. Narrowed to export ONLY `_initgroups` via `ld -r
+# -exported_symbol` (same real technique build_libsystem_kernel.sh's
+# own mach_port_set_attributes.o already uses) rather than also
+# exporting this file's own getpwuid_r() -- that symbol isn't needed by
+# this dylib's one real consumer (syslogd.macho) and real Apple doesn't
+# put initgroups()/getpwuid_r() in the same library either, so keeping
+# getpwuid_r private-extern here avoids this dylib becoming an
+# unintended second public owner of it later.
+"$CLANG" $CFLAGS -I ../libinfo_custom \
+    launchd_passwd_compat.c -o "$OUT/libopenpam_dylib/launchd_passwd_compat_raw.o"
+"$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld" -r -arch arm64 \
+    -exported_symbol _initgroups \
+    "$OUT/libopenpam_dylib/launchd_passwd_compat_raw.o" \
+    -o "$EXTRACT/launchd_passwd_compat_narrow.o"
+rm -f "$OUT/libopenpam_dylib/launchd_passwd_compat_raw.o"
+# libinfo_custom.c: initgroups()'s own real li_pw_load()/li_gr_load()/
+# li_getpwuid()/li_gr_entry_count()/li_gr_at() dependency (flat-file
+# /etc/master.passwd,/etc/group reader, see that file's own header).
+# Compiled fresh here too, same "narrowest real fix" discipline -- no
+# other currently-built binary that also links libopenpam.dylib
+# privately compiles this file into itself (confirmed: syslogd.macho,
+# this dylib's one real consumer, is a plain dyld-linked executable with
+# no static compat objects of its own), so there is no duplicate-
+# static-copy risk from adding a real (non-narrowed) copy here.
+"$CLANG" $CFLAGS -I ../libinfo_custom \
+    ../libinfo_custom/libinfo_custom.c -o "$EXTRACT/libinfo_custom.o"
+
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libopenpam.dylib"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
@@ -301,7 +339,7 @@ rm -f "$OUT/system/libopenpam.dylib"
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -Wl,-U,_alarm -Wl,-U,_NXArgv -Wl,-U,_setegid -Wl,-U,_seteuid -Wl,-U,_getgroups \
-    -Wl,-U,_initgroups -Wl,-U,_sigaction \
+    -Wl,-U,_sigaction \
     -Wl,-U,___ldpart_free_extra -Wl,-U,___part_load_locale \
     -Wl,-U,'_connect$UNIX2003' -Wl,-U,'_send$UNIX2003' -Wl,-U,'_writev$UNIX2003' \
     -o "$OUT/system/libopenpam.dylib" \

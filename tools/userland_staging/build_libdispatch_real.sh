@@ -222,6 +222,43 @@ echo "mig: protocol.defs regenerated cleanly"
 CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 -DOS_OBJECT_USE_OBJC=0 \
     -DOS_VOUCHER_ACTIVITY_SPI=0 -DOS_FIREHOSE_SPI=0 \
+    `# libdispatch_init() real-caller investigation, 2026-09-01 (DAR-153,` \
+    `# syslogd runtime SIGTRAP investigation) -- real root cause found` \
+    `# and fixed, NOT via this CFLAGS block (kept as a comment so the` \
+    `# trail isn't lost). _dispatch_alloc_try_create_heap() (src/` \
+    `# allocator.c) crashed with a real, deterministic` \
+    `# DISPATCH_CLIENT_CRASH(KERN_INVALID_ARGUMENT) on every syslogd` \
+    `# boot -- root-caused via a real kprintf + raw write(2) probe (both` \
+    `# reverted after use) to MAGAZINES_PER_HEAP (NUM_CPU) reading back` \
+    `# 0, because _dispatch_hw_config (the BSS global` \
+    `# dispatch_hw_config() reads) is only ever written by` \
+    `# _dispatch_hw_config_init(), itself only ever called from` \
+    `# queue.c's libdispatch_init() -- which was never being called at` \
+    `# all on this target. Real Apple relies on Libsystem's own real,` \
+    `# modular libSystem_initializer() to call libdispatch_init()` \
+    `# directly as part of coordinated libSystem bootstrap; this` \
+    `# project's libSystem.B.dylib is the pre-dyld flattened static` \
+    `# libc/pthread/malloc stack (CLAUDE.md's "Static-vs-dylib` \
+    `# architecture debt"), not a real libSystem_initializer.` \
+    `# FIRST ATTEMPT (real, but proven wrong by testing): src/init.c's` \
+    `# own USE_LIBDISPATCH_INIT_CONSTRUCTOR knob makes _libdispatch_init` \
+    `# a plain __attribute__((constructor)) -- real Apple's own` \
+    `# documented escape hatch for platforms with no libSystem_initializer` \
+    `# (e.g. swift-corelibs-libdispatch on Linux). Tried it here; a` \
+    `# temporary write(2) probe inside _libdispatch_init (reverted after` \
+    `# use) proved it NEVER fires on this target -- this project's real` \
+    `# dyld (DyldAPIs.cpp's runAllInitializersForMain()) deliberately` \
+    `# marks every loaded image whose install_name starts with` \
+    `# "/usr/lib/system/lib" (matches /usr/lib/system/libdispatch.dylib)` \
+    `# as already-inited WITHOUT running its constructors, real Apple` \
+    `# behavior that assumes libSystem_initializer already handled them` \
+    `# -- exactly the mechanism this target lacks, so the constructor` \
+    `# never runs either way. REAL FIX: src/allocator.c's own` \
+    `# _dispatch_continuation_alloc_init() (guarded by the` \
+    `# already-existing _dispatch_continuation_alloc_init_pred` \
+    `# dispatch_once -- real Apple's own lazy "first continuation` \
+    `# allocation" hook) now calls libdispatch_init() once before doing` \
+    `# anything else -- see that function's own updated comment.` \
     -D__API_UNAVAILABLE_PLATFORM_bridgeos=ios,unavailable \
     -D__API_AVAILABLE_PLATFORM_bridgeos\(x\)=ios,introduced=x \
     -DSPI_AVAILABLE\(...\)= -D__SPI_AVAILABLE\(...\)= \

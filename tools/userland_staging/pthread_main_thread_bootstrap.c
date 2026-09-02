@@ -76,6 +76,46 @@ main_thread_init_signature(pthread_t thread)
 
 extern int pthread_tsd_shim_bootstrap_with_base(void *tsd_base); /* pthread_tsd_platform_bootstrap.c */
 
+/* Real mach_thread_self(), for __TSD_MACH_THREAD_SELF (slot 3) -- see
+ * the call sites below and dyld_tsd_entry_trampoline.s's own header for
+ * the full DAR-153 root-cause writeup (short version: slot 3 read back
+ * 0 == OS_LOCK_NO_OWNER for every process on this port, which made every
+ * os_unfair_lock acquire a silent no-op and made
+ * os_unfair_lock_assert_owner() fire a bare `brk #1`, because
+ * libplatform's OS_ULOCK_OWNER() is `value | OS_ULOCK_NOWAITERS_BIT`
+ * and therefore requires an ODD owner value -- an invariant real Mach
+ * port names satisfy by construction, see XNU's
+ * ipc_entry_new_rollpoint()).
+ *
+ * Real Apple's own _pthread_main_thread_init() (libpthread/src/
+ * pthread.c:1853) does literally `_pthread_tsd_slot(p, MACH_THREAD_SELF)
+ * = mach_thread_self();` -- this is that line, for this project's
+ * equivalent bootstrap. The trap is inlined rather than calling
+ * libmalloc_vm_traps.s's already-exported _thread_self_trap on purpose:
+ * libpthread.a has ~70 static consumers (build_simple_cmds.sh et al)
+ * and only some of them also link libmalloc.a, so taking a new
+ * cross-archive undefined symbol here would break their links for no
+ * real gain. Real Apple body is a one-liner around the same raw trap
+ * (libsyscall/mach/mach_legacy.c: "return thread_self_trap();"), trap
+ * number -27, same value libmalloc_vm_traps.s uses. */
+static unsigned int
+mach_thread_self_trap_inline(void)
+{
+	register long x0 asm("x0");
+	register long x16 asm("x16") = -27;
+	asm volatile("svc #0x80" : "=r"(x0) : "r"(x16) : "memory", "cc",
+	    /* Mach traps preserve callee-saved registers only; x1-x15/x17 are
+	     * caller-saved and the kernel's trap return makes no promise about
+	     * them. Declared explicitly so this stays correct if these files
+	     * are ever built above -O0 (today they are -O0, and a real
+	     * disassembly confirms everything spills across the svc -- this is
+	     * defensive, not a fix for a live bug). x16 is an input operand
+	     * and x18 is platform-reserved, so neither may be listed. */
+	    "x1", "x2", "x3", "x4", "x5", "x6", "x7", "x8", "x9",
+	    "x10", "x11", "x12", "x13", "x14", "x15", "x17");
+	return (unsigned int)x0;
+}
+
 /* Tiny helper split out only to keep pthread_main_thread_bootstrap()'s
  * control flow linear; not a real Apple function, just avoids an
  * inline strlcpy dependency this file doesn't otherwise need. */
@@ -222,6 +262,23 @@ pthread_main_thread_bootstrap(void)
 		kstrlcpy_main_thread_name();
 
 		main_thread_init_signature(&_main_thread);
+
+		/* Real _pthread_main_thread_init()'s own MACH_THREAD_SELF slot
+		 * install (pthread.c:1853) -- see mach_thread_self_trap_inline()
+		 * above for why this slot being 0 was a real, crashing bug
+		 * (DAR-153), and why the value has to be a real Mach port name
+		 * rather than any non-zero substitute. Kept inside the `done`
+		 * guard, matching real Apple's own once-per-process placement:
+		 * mach_thread_self() takes a send-right reference each call, and
+		 * this function is deliberately called twice per static binary
+		 * (crt.c's pre-__mod_init_func hook plus each *_main_wrapper.c's
+		 * own explicit call, see this function's header). The forked
+		 * child's own refresh of this same slot is a separate real path
+		 * that already exists -- libsystem_pthread_atfork_compat.c's
+		 * _pthread_main_thread_postfork_init(), DAR-163. */
+		_main_thread.tsd[_PTHREAD_TSD_SLOT_MACH_THREAD_SELF] =
+				(void *)(uintptr_t)mach_thread_self_trap_inline();
+
 		done = 1;
 	}
 
@@ -499,6 +556,18 @@ _pthread_create_trampoline(void *raw_ctx)
 
 	pthread_tsd_shim_bootstrap_with_base(&th->tsd[0]);
 	th->tsd[_PTHREAD_TSD_SLOT_ERRNO] = &th->err_no;
+	/* Real _pthread_start()'s own line (pthread.c:2094,
+	 * `_pthread_tsd_slot(self, MACH_THREAD_SELF) = kport;`). This
+	 * closes the "kport is received but discarded" gap this file's own
+	 * _real_pthread_start_abi() header flags: that shim genuinely can't
+	 * hand the kernel-supplied kport down to here (it calls through
+	 * `fun(arg)` with no channel for it), but the trap returns the exact
+	 * same real port name for the calling thread, so re-reading it here
+	 * is equivalent, not a substitute. Without it every thread this
+	 * process creates would carry owner==0 and hit the same DAR-153
+	 * os_unfair_lock/dispatch_once breakage the main thread did. */
+	th->tsd[_PTHREAD_TSD_SLOT_MACH_THREAD_SELF] =
+			(void *)(uintptr_t)mach_thread_self_trap_inline();
 
 	void *(*start_routine)(void *) = ctx->start_routine;
 	void *arg = ctx->arg;

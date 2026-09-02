@@ -209,9 +209,16 @@ fi
 #     build_libdispatch_dylib.sh's own comment, which excluded it for the
 #     same reason) -- its _mach_port_extract_right/_insert_right/_unguard
 #     stand-ins are superseded, and this dylib already defers all three
-#     via -Wl,-U below. Its fourth symbol, _voucher_mach_msg_set, is
-#     genuinely libdispatch's on real Apple too, so it gets the same
-#     deferral rather than another stand-in here.
+#     via -Wl,-U below. Its fourth symbol, _voucher_mach_msg_set, used
+#     to get the same deferral on the stated premise that it "is
+#     genuinely libdispatch's on real Apple too" -- WRONG, corrected
+#     2026-09-01 (DAR-153). Real Apple's libsystem_kernel.dylib has its
+#     OWN real definition (libsyscall/wrappers/_libc_funcptr.c), inert
+#     until libdispatch installs a voucher table; deferring it here made
+#     every MIG stub in this dylib call libdispatch's real one directly
+#     and caused a real recursive-dispatch_once crash. Now compiled in
+#     below from real Apple source -- see
+#     libsystem_kernel_voucher_funcptr_compat.c's own header.
 if [ ! -f "$OUT/libmach_ipc.a" ]; then
     echo "error: $OUT/libmach_ipc.a not found -- run build_libmach_ipc.sh first" >&2
     exit 1
@@ -381,9 +388,22 @@ MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 # being libsystem_kernel.dylib/libsystem_c.dylib -- real Apple's actual
 # home for a plain raw syscall wrapper. See build_copyfile_dylib.sh's
 # and build_ncurses_dylib.sh's own updated comments for their halves.
+# _setegid/_seteuid/_getgroups/_setitimer added 2026-09-01 (DAR-153,
+# syslogd boot investigation): each a plain generated stub, no
+# NO_SYSCALL_STUB marker in syscalls.master (#182/#183/#79/#83) --
+# same shape as _geteuid/_getegid/_getuid already in this loop.
+# libopenpam.dylib's own `-Wl,-U` deferrals for setegid/seteuid/
+# getgroups (build_openpam_dylib.sh, "real, confirmed genuinely absent
+# from every archive in this checkout" at the time) and
+# build_libc_gen.sh's new alarm.c (needs real setitimer()) are the real
+# callers driving these -- found one dyld abort at a time
+# (`_alarm` first, since it's earliest in that dylib's own fixup
+# chain), not added speculatively: `nm -m libopenpam.dylib` shows all
+# four as genuinely undefined+dynamically-looked-up before this fix.
 for s in _geteuid _getegid _getuid _pread _pwrite _fileport_makefd _fileport_makeport \
     _socket _writev ___chmod ___connect_nocancel ___recvmsg_nocancel ___sendmsg_nocancel \
-    ___select_nocancel ___sendto_nocancel _fpathconf _kevent _kqueue ___sigaction; do
+    ___select_nocancel ___sendto_nocancel _fpathconf _kevent _kqueue ___sigaction \
+    _setegid _seteuid _getgroups _setitimer; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
         -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
         -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
@@ -433,6 +453,22 @@ done
 # dylib exports it for real.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
     ps_libproc_syscall.c -o "$OUT/libsystem_kernel/proc_pidinfo_compat.o"
+
+# voucher_mach_msg_set()/clear()/adopt()/revert() + __libkernel_voucher_
+# init(): real Apple libsyscall source (libsyscall/wrappers/
+# _libc_funcptr.c), real canonical home is exactly this dylib. Added
+# 2026-09-01 (DAR-153) -- this dylib previously deferred
+# _voucher_mach_msg_set via -Wl,-U on the stated premise that it "is
+# genuinely libdispatch's on real Apple too". That premise was wrong and
+# it caused a real, deterministic recursive-dispatch_once SIGTRAP in
+# syslogd; see libsystem_kernel_voucher_funcptr_compat.c's own header
+# for the full root-cause trace and why real Apple's table indirection
+# (inert until libdispatch installs a voucher table, which this build's
+# libdispatch never does) is the thing that was missing.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" \
+    libsystem_kernel_voucher_funcptr_compat.c \
+    -o "$OUT/libsystem_kernel/voucher_funcptr_compat.o"
 
 # DAR-124/DAR-11 (libresolv.dylib), 2026-08-31 sweep continuation:
 # _kevent/_kqueue added above (plain generated stubs, syscalls.master
@@ -600,7 +636,6 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     -Wl,-not_for_dyld_shared_cache \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
-    -Wl,-U,_voucher_mach_msg_set \
     `# mach_ipc_clock_init.o (from libmach_ipc.a, above) calls abort(),` \
     `# memcpy() and pthread_tsd_shim_bootstrap(). All three really live` \
     `# in libsystem_c.dylib/libsystem_pthread.dylib, both of which link` \
@@ -627,6 +662,16 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     `# left creating these aliases.` \
     -Wl,-alias,_chmod,'_chmod$UNIX2003' -Wl,-alias,_connect,'_connect$UNIX2003' \
     -Wl,-alias,_recvmsg,'_recvmsg$UNIX2003' -Wl,-alias,_writev,'_writev$UNIX2003' \
+    `# _send$UNIX2003 added 2026-09-01 (DAR-153, syslogd boot` \
+    `# investigation): real gap found via a real QEMU boot -- oldsyslog.c` \
+    `# (openpam's own real syslog(3) fallback, __DARWIN_UNIX03=1 asm-labels` \
+    `# its plain send() call to this versioned symbol) had it` \
+    `# "dynamically looked up" with zero real provider anywhere in the` \
+    `# process, same shape as connect/writev above. Base (sendto_wrap.o's` \
+    `# own send(), compiled earlier in this same script/link -- see` \
+    `# libsystem_kernel_sendto_compat.c) is genuinely local to this` \
+    `# link, same nonlocal-base requirement as every other alias here.` \
+    -Wl,-alias,_send,'_send$UNIX2003' \
     `# _nanosleep$UNIX2003 added 2026-08-31 ("needs a new home" batch):` \
     `# real Apple genuinely exports both the plain and $UNIX2003 names` \
     `# from libsystem_kernel.dylib (the SDK's own <time.h> __DARWIN_ALIAS_C` \
@@ -685,6 +730,9 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/mach_portUser.o" "$OUT/libsystem_kernel/mach_port_set_attributes.o" \
     "$OUT/libsystem_kernel/sys___sigaction.o" "$OUT/libsystem_kernel/sigtramp_compat.o" \
     "$OUT/libsystem_kernel/proc_pidinfo_compat.o" \
+    "$OUT/libsystem_kernel/voucher_funcptr_compat.o" \
+    "$OUT/libsystem_kernel/sys_setegid.o" "$OUT/libsystem_kernel/sys_seteuid.o" \
+    "$OUT/libsystem_kernel/sys_getgroups.o" "$OUT/libsystem_kernel/sys_setitimer.o" \
     "$MACH_IPC_EXTRACT"/*.o
 
 echo "wrote $OUT/system/libsystem_kernel.dylib"

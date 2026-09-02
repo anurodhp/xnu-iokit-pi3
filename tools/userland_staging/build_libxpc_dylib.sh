@@ -333,6 +333,21 @@ rm -f "$OUT/system/libxpc.dylib"
     -o "$OUT/system/libxpc.dylib" \
     "$EXTRACT"/*.o \
     -Wl,-force_load,"$OUT/liblaunchd_mig.a" \
+    `# libsystem_kernel.dylib listed FIRST here as well as in its original` \
+    `# position below (a duplicate -l is harmless -- ld emits one` \
+    `# LC_LOAD_DYLIB either way). Real reason (DAR-153, 2026-09-01): this` \
+    `# dylib force_loads liblaunchd_mig.a, whose real mig-generated vproc` \
+    `# client stubs each emit real Apple's own weak_import null-guarded` \
+    `# voucher_mach_msg_set() call before its mach_msg() send.` \
+    `# Two-level namespace binds that to the FIRST sibling on the link line` \
+    `# that exports it -- which was libdispatch.dylib, i.e. libdispatch's` \
+    `# REAL voucher implementation rather than libsystem_kernel.dylib's` \
+    `# real Apple table-indirected (and by default inert) one. That` \
+    `# mis-binding is what produced a real recursive-dispatch_once SIGTRAP` \
+    `# on the bootstrap_look_up2() path; see` \
+    `# libsystem_kernel_voucher_funcptr_compat.c's own header for the full` \
+    `# symbolicated trace and why libsystem_kernel is the real owner.` \
+    "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/system/libdispatch.dylib" "$OUT/system/libsystem_blocks.dylib" \
     "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_malloc.dylib" \
     "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_kernel.dylib" \

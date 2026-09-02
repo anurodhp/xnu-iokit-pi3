@@ -55,11 +55,64 @@ __dyld_start_tsd_bootstrap:
     mov     x16, #0x80000000        // PLATFORM_SYSCALL_TRAP_NO (matches
                                      // tsd_bootstrap.c/pthread_tsd_shim.c)
     svc     #0x80
+// __TSD_MACH_THREAD_SELF (slot 3, offset 0x18) -- real gap closed
+// 2026-09-01 (DAR-153, syslogd runtime SIGTRAP). This block is the TSD
+// every dyld-launched process's MAIN THREAD keeps for its whole life:
+// nothing later re-points TPIDRRO_EL0 (a dynamically-linked executable's
+// crt.c only calls pthread_main_thread_bootstrap() through a
+// weak_import, and neither launchd.macho nor syslogd.macho actually
+// binds it -- confirmed with `nm -m`, not assumed). Slot 3 was never
+// written by anyone, so it read back 0 for every such process, and 0 is
+// exactly OS_LOCK_NO_OWNER. That is not a benign zero:
+//
+//   * libplatform's os_unfair_lock stores the caller's slot-3 value as
+//     the lock owner, so every acquire was cmpxchg(0 -> 0) on an
+//     already-"unowned" word -- i.e. EVERY os_unfair_lock in every
+//     dynamically-linked process on this port silently locked nothing.
+//   * os_unfair_lock_assert_owner() compares OS_ULOCK_OWNER(value),
+//     which is `value | OS_ULOCK_NOWAITERS_BIT` (lock.c:435), against
+//     that same slot -- (0|1) != 0, so it fired
+//     __LIBPLATFORM_CLIENT_CRASH__ (a bare `brk #1`). That is the real
+//     SIGTRAP DAR-153 chased: Libnotify's _notify_lib_init_locked()
+//     (notify_client.c:889) is this port's first code to actually assert
+//     lock ownership, so syslogd was the first process to notice.
+//   * libdispatch's own once-gates read the same slot
+//     (_dispatch_tid_self() -> _dispatch_thread_port() -> slot 3), and
+//     DLOCK_ONCE_UNLOCKED is also 0, so every dispatch_once() body
+//     re-ran on every call instead of once.
+//
+// The `| NOWAITERS_BIT` above is why any substitute value must be ODD,
+// not merely non-zero: real Mach port names always are. XNU's
+// ipc_entry_new_rollpoint() seeds the generation at
+// IE_BITS_GEN_MASK + IE_BITS_GEN_ONE (osfmk/ipc/ipc_entry.h:157) and
+// ipc_entry_new_gen() steps it by IE_BITS_GEN_ONE, so a name's low byte
+// is always 3 mod 4 -- bit 0 set, always. That invariant is precisely
+// what lets libplatform reuse bit 0 as the has-waiters flag. So use the
+// real port name, exactly like real _pthread_main_thread_init()
+// (libpthread/src/pthread.c:1853) does, rather than any substitute:
+// tools/userland_staging/libplatform_thread_self.c's truncated
+// thread_selfid() stand-in is EVEN half the time and would have
+// reproduced this same crash nondeterministically.
+//
+// thread_self_trap is Mach trap -27 (same raw trap
+// libmalloc_vm_traps.s already exports for DAR-163's fork-child
+// postinit, and the same one real mach_legacy.c's mach_thread_self()
+// wraps). Inlined here rather than called: this trampoline runs before
+// any relocation/binding, so it must not depend on a symbol.
+    mov     x16, #-27               // thread_self_trap
+    svc     #0x80
+    mov     w0, w0                  // real port name is 32-bit; zero the
+                                     // top half so the slot holds exactly
+                                     // what _os_tsd_get_direct() returns
+    adrp    x1, _g_dyld_tsd_bootstrap_block@PAGE
+    add     x1, x1, _g_dyld_tsd_bootstrap_block@PAGEOFF
+    str     x0, [x1, #24]           // __TSD_MACH_THREAD_SELF == slot 3
     b       __dyld_start
 
 // Header (matches pthread_tsd_shim.c's TSD_HEADER_SIZE) + a generous
-// slot area -- dyld itself only ever indexes __TSD_MIG_REPLY (slot 2),
-// but this block must be large enough that a stray direct-TSD read from
+// slot area -- dyld itself only ever indexes __TSD_MIG_REPLY (slot 2)
+// and, as of the fix above, __TSD_MACH_THREAD_SELF (slot 3), but this
+// block must be large enough that a stray direct-TSD read from
 // any other reserved slot index Libsyscall might touch during dyld's own
 // early bootstrap (e.g. errno, if any linked object still reads it via
 // direct TSD this early) lands in real zeroed memory, not past the end

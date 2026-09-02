@@ -135,9 +135,17 @@ mkdir -p "$OUT/libsystem_pthread/extracted"
 # __kernelrpc_mach_voucher_extract_attr_recipe) -- confirmed via nm per
 # member, not assumed. Their own two remaining externs (_mig_strncpy,
 # _voucher_mach_msg_set) are deliberately left undefined here rather
-# than adding another private copy: _voucher_mach_msg_set really is
-# libdispatch's symbol on real Apple too, and duplicating the MIG
-# runtime is the exact bug this pass exists to remove.
+# than adding another private copy -- and duplicating the MIG runtime is
+# the exact bug this pass exists to remove. NOTE (DAR-153, 2026-09-01):
+# the original wording here also claimed "_voucher_mach_msg_set really
+# is libdispatch's symbol on real Apple too". That is wrong. Real
+# Apple's libsystem_kernel.dylib exports its OWN real
+# voucher_mach_msg_set (libsyscall/wrappers/_libc_funcptr.c), which just
+# indirects through a function-pointer table that stays empty unless
+# libdispatch installs it -- and mig stubs bind to THAT, never to
+# libdispatch's. That symbol now really exists in this project's
+# libsystem_kernel.dylib, and this dylib binds to it; see the link step
+# below.
 if [ ! -f "$OUT/libpthread_qos.a" ]; then
     echo "error: $OUT/libpthread_qos.a not found -- run build_libpthread_qos.sh first" >&2
     exit 1
@@ -252,7 +260,20 @@ rm -f "$OUT/system/libsystem_pthread.dylib"
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',__pthread_rwlock_rdlock \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',__pthread_rwlock_wrlock \
     -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',__pthread_rwlock_unlock \
-    -Wl,-U,_mig_strncpy -Wl,-U,_voucher_mach_msg_set \
+    `# _voucher_mach_msg_set is NO LONGER deferred (DAR-153, 2026-09-01).` \
+    `# This dylib carries its own real mig-generated host_get_special_port/` \
+    `# host_privUser/mach_voucherUser client stubs, each of which emits real` \
+    `# Apple's own weak_import \`if (voucher_mach_msg_set != NULL)\`` \
+    `# guard before its mach_msg() send. Left undefined, that bound` \
+    `# straight through to libdispatch.dylib's REAL voucher_mach_msg_set(),` \
+    `# skipping the _libkernel_voucher_functions table indirection real` \
+    `# Apple relies on -- a real, deterministic recursive-dispatch_once` \
+    `# SIGTRAP in syslogd (see` \
+    `# libsystem_kernel_voucher_funcptr_compat.c's own header for the full` \
+    `# symbolicated trace). libsystem_kernel.dylib, linked as a real` \
+    `# sibling below, now owns the real Apple definition, so these stubs` \
+    `# bind two-level against it exactly as they do on real Apple.` \
+    -Wl,-U,_mig_strncpy \
     -o "$OUT/system/libsystem_pthread.dylib" \
     $(for m in $MEMBERS; do echo "$OUT/libsystem_pthread/extracted/$m"; done) \
     "$OUT/libsystem_pthread/sched_yield_trap.o" "$OUT/libsystem_pthread/sched_yield.o" \

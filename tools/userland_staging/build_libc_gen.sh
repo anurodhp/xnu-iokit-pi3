@@ -142,6 +142,26 @@ $LIBC/gen/FreeBSD/termios.c
 $LIBC/gen/FreeBSD/ttyname.c
 $LIBC/gen/devname.c
 "
+# alarm.c added 2026-09-01 (DAR-153, syslogd boot investigation): real,
+# unmodified FreeBSD alarm(3) (Berkeley 1993, unchanged upstream --
+# setitimer(ITIMER_REAL, ...) wrapper, no real deps beyond that one
+# syscall). Real gap found via a real dyld abort:
+# "symbol not found in flat namespace '_alarm'" on syslogd.macho's boot
+# -- root cause was libopenpam.dylib's own `-Wl,-U,_alarm` deferral
+# (build_openpam_dylib.sh, added when this project's libc build had no
+# real alarm() anywhere at all, confirmed via a project-wide `nm -g`
+# sweep at the time). Real canonical home is libsystem_c.dylib (real
+# Apple ships alarm() there, not libsystem_kernel.dylib -- it's a libc
+# wrapper around a raw syscall, same split as sigaction()/nanosleep()
+# elsewhere in this build). build_libsystem_c.sh's `ar x libc_gen.a`
+# extraction step picks this up automatically once compiled in here.
+# Needs `setitimer()` (build_libsystem_kernel.sh's own curated syscall
+# list, same PR) as a real two-level-namespace dependency -- libc_gen.a's
+# own smoketest link doesn't exercise alarm() specifically, but a full
+# QEMU boot of syslogd.macho does.
+GEN_FILES="$GEN_FILES
+$LIBC/gen/FreeBSD/alarm.c
+"
 # isatty.c deliberately NOT pulled in here (unlike termios.c/ttyname.c
 # above) -- it would collide with libc_stdio_process_shims.c's own real
 # isatty() (tools/userland_staging/build_libc_stdio.sh), which has to
