@@ -368,6 +368,17 @@ public:
 	virtual IOReturn doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 block, UInt64 nblks,
 	                                   IOStorageAttributes *attributes,
 	                                   IOStorageCompletion *completion) APPLE_KEXT_OVERRIDE;
+
+	// Not one of the 13 pure-virtuals above - IOBlockStorageDevice::doSynchronize()
+	// has a real default body (see IOBlockStorageDevice.cpp) that falls back to
+	// the deprecated doSynchronizeCache(), whose own default returns
+	// kIOReturnUnsupported. Left un-overridden, every HFS journal transaction
+	// commit's DKIOCSYNCHRONIZE (bsd/hfs/hfs_journal.c write_journal_header())
+	// hit that default and logged "jnl: ... flushing fs disk buffer returned
+	// 0x2d" (ENOTSUP) on every commit. See doSynchronize()'s own comment in the
+	// .cpp for why returning success here is the real fix, not a suppression.
+	virtual IOReturn doSynchronize(UInt64 block, UInt64 nblks,
+	                                IOStorageSynchronizeOptions options = 0) APPLE_KEXT_OVERRIDE;
 };
 
 #endif /* _BCM2837_SDHCI_H */

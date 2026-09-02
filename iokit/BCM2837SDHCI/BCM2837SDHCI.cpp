@@ -1070,3 +1070,42 @@ BCM2837SDHCI::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 block, UInt64 
 	    ok ? transferSize : 0);
 	return kIOReturnSuccess;
 }
+
+IOReturn
+BCM2837SDHCI::doSynchronize(UInt64 /*block*/, UInt64 /*nblks*/,
+    IOStorageSynchronizeOptions /*options*/)
+{
+	// Real root cause of the "jnl: b(14, 2): flushing fs disk buffer
+	// returned 0x2d" console spam seen on every HFS journal transaction
+	// commit: IOBlockStorageDevice::doSynchronize()'s real Apple default
+	// body (iokit/Storage/IOBlockStorageDevice.cpp) falls back to the
+	// deprecated doSynchronizeCache(), whose own default returns
+	// kIOReturnUnsupported (-> ENOTSUP -> 0x2d) when a subclass doesn't
+	// override either one - which this driver never did, since neither is
+	// one of IOBlockStorageDevice's 13 *pure*-virtual methods this class
+	// otherwise implements in full.
+	//
+	// The correct fix is to report success here, not to silence
+	// hfs_journal.c's print - by the time DKIOCSYNCHRONIZE reaches this
+	// driver there is genuinely nothing left to flush:
+	//   - writeBlocksPIO() (above) blocks this calling thread on
+	//     waitForIntStatus32(kIntTransferDone, ...) - the SDHCI
+	//     controller's TRANSFER_COMPLETE status, which per the SD
+	//     Physical Layer spec is only asserted once the card has driven
+	//     DAT0 busy through to completion of its internal program
+	//     operation. doAsyncReadWrite() doesn't return (and thus this
+	//     driver doesn't consider a write done) until that has already
+	//     happened - i.e. writes are already durable on the card before
+	//     the journal's next DKIOCSYNCHRONIZE could even be issued.
+	//   - There is no software write-back cache anywhere in this driver's
+	//     PIO path (no bounce-then-defer, no queueing) for a barrier/flush
+	//     to drain.
+	//   - Standard SD (unlike eMMC, which defines CMD6 CACHE_CTRL plus
+	//     CMD44/45 FLUSH_CACHE for cards that opt into an internal write
+	//     cache) has no generalized cache-flush command in the base
+	//     Physical Layer spec at all, so there's no real hardware command
+	//     this driver could issue even if it wanted to go further.
+	// Acknowledging the barrier as satisfied is therefore the real,
+	// correct answer for this device, not a lie dressed up as one.
+	return kIOReturnSuccess;
+}
