@@ -22,6 +22,7 @@
  * documents 0 as success for both). */
 #include <stddef.h>
 #include <stdint.h>
+#include <stdarg.h>
 
 typedef struct __asl_object_s *asl_object_t;
 
@@ -69,5 +70,25 @@ asl_send(asl_object_t obj, asl_object_t msg)
 {
 	(void)obj;
 	(void)msg;
+	return 0;
+}
+
+/* Real ASL API signature (third_party/syslog/libsystem_asl.tproj/include/
+ * asl.h: `int asl_log(asl_object_t client, asl_object_t msg, int level,
+ * const char *format, ...)`), added 2026-09-01 for Libinfo's one real
+ * call site (lookup.subproj/libinfo.c's group-enumeration warning path,
+ * see build_libinfo.sh). Same rationale as every other entry point in
+ * this file: no live syslogd to actually deliver to (see header above),
+ * so this is real, safe, non-crashing no-op plumbing matching real
+ * asl_log()'s documented "returns 0 on success" contract -- not a
+ * fabricated stub, an honest one for a real, already-established
+ * architectural gap. */
+int
+asl_log(asl_object_t client, asl_object_t msg, int level, const char *format, ...)
+{
+	(void)client;
+	(void)msg;
+	(void)level;
+	(void)format;
 	return 0;
 }
