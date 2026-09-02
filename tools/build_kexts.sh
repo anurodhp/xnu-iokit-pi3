@@ -36,7 +36,7 @@ fi
 OUT_DIR="${1:-build/kexts}"
 mkdir -p "$OUT_DIR"
 
-KEXTS=(BCM2837InterruptController BCM2837SDHCI SMSC9514Ethernet BCM2837DWC2)
+KEXTS=(BCM2837InterruptController BCM2837SDHCI SMSC9514Ethernet BCM2837DWC2 BCM2837Mailbox)
 
 # Compiles every .cpp in each driver directory, not just <dir>/<dir>.cpp:
 # BCM2837DWC2 is split across several translation units (controller,

@@ -12,6 +12,7 @@ compat/decls.h
 -Ithird_party/_sdk_shim
 -Igenerated
 -Iiokit/SMSC9514Ethernet
+-Iiokit/BCM2837Mailbox
 -Ithird_party/xnu-7195/pexpert
 -Ithird_party/xnu-7195/iokit
 -Ithird_party/xnu-7195/libkern

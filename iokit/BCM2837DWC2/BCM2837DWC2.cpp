@@ -7,6 +7,7 @@
 
 #include "BCM2837DWC2.h"
 #include "SMSC9514USBTransport.h"
+#include "BCM2837Mailbox.h"
 
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/IOPlatformExpert.h>
@@ -1085,6 +1086,24 @@ BCM2837DWC2::start(IOService *provider)
 	// since "controller up, enumeration failed" and "controller dead" have
 	// completely different causes.
 	enumerateBus();
+
+	/*
+	 * Resolve (and log) the board's real Ethernet identity from the
+	 * VideoCore mailbox, ahead of the Ethernet block below.
+	 *
+	 * SMSC9514Ethernet::start() is the actual consumer - the LAN9514 on a
+	 * Pi has no EEPROM, so the firmware's answer is the only real MAC
+	 * address that exists for this board (DAR-144). But that start() is
+	 * unreachable in QEMU for the reason the next comment spells out
+	 * (findEthernetFunction() never matches a generic usb-net), so
+	 * priming here is what gives the mailbox path a real, exercised,
+	 * boot-log-visible run in emulation instead of leaving it
+	 * real-hardware-only code. The result is cached, so that later call
+	 * costs nothing and cannot produce a second, racing mailbox
+	 * transaction. Failure is not fatal: SMSC9514Ethernet has its own
+	 * last-resort fallback.
+	 */
+	BCM2837Mailbox::primeBoardIdentity();
 
 	/*
 	 * BRING-UP SCAFFOLDING, not the final wiring.

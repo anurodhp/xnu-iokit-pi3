@@ -1,0 +1,444 @@
+#include "BCM2837Mailbox.h"
+
+#include <IOKit/IODeviceMemory.h>
+#include <IOKit/IOBufferMemoryDescriptor.h>
+#include <libkern/OSAtomic.h>
+
+/*
+ * Mailbox register block.
+ *
+ * Physical base 0x3f00b880, length 0x40. Cross-checked three ways rather
+ * than taken from memory:
+ *   - devicetrees/rpi3.dts's "mbox" node: reg = <0xb880 0 0x40 0>, under
+ *     "arm-io" whose ranges translate child 0 -> parent 0x3f000000
+ *     (rpi3-realhw.dts #includes rpi3.dts, so real hardware has the same
+ *     node - it is not a QEMU-only fiction);
+ *   - pexpert/arm/pe_init.c's bcm2837_video_init(), which resolves that
+ *     exact node and drives the same registers;
+ *   - third_party/qemu-zhuowei's hw/arm/bcm2835_peripherals.c maps the
+ *     mailbox at ARMCTRL_0_SBM_OFFSET (ARM_OFFSET 0xB000 + 0x800 =
+ *     0xB800) and hw/misc/bcm2835_mbox.c masks the offset to 0xff, so
+ *     MAIL0_READ 0x80 / MAIL0_STATUS 0x98 / MAIL1_WRITE 0xa0 /
+ *     MAIL1_STATUS 0xb8 land at 0xb880 + {0x00, 0x18, 0x20, 0x38}.
+ *
+ * Mapped directly by physical address, not through the published "mbox"
+ * IOPlatformDevice nub: this class is a plain helper with no IOService
+ * provider to call mapDeviceMemoryWithIndex() on, and BCM2837SDHCI::
+ * pinmuxSDSlot() already sets the precedent for reaching a
+ * non-provider register block this way.
+ */
+enum {
+	kMailboxPhysBase = 0x3f00b880,
+	kMailboxRegLength = 0x40,
+
+	kRegRead        = 0x00 / sizeof(uint32_t), // MAIL0_RD  (VC -> ARM)
+	kRegStatus      = 0x18 / sizeof(uint32_t), // MAIL0_STA
+	kRegWrite       = 0x20 / sizeof(uint32_t), // MAIL1_WRT (ARM -> VC)
+	kRegWriteStatus = 0x38 / sizeof(uint32_t), // MAIL1_STA
+
+	kStatusFull  = 1U << 31,
+	kStatusEmpty = 1U << 30,
+
+	kChannelProperty = 8,
+};
+
+enum {
+	kTagGetBoardMAC    = 0x00010003,
+	kTagGetBoardSerial = 0x00010004,
+	kTagEnd            = 0x00000000,
+
+	kCodeRequest       = 0x00000000,
+	kCodeResponseOK    = 0x80000000,
+};
+
+/*
+ * Flat uint32_t message layout, exactly as the wire protocol lays it out
+ * (buf[0] = total size in bytes, buf[1] = request/response code, then a
+ * run of {tag, value_buffer_size, req/resp_code, ...value words...}
+ * records, terminated by a lone zero tag). Written as explicit word
+ * indices rather than a C struct so the offsets are unambiguous - same
+ * approach pe_init.c's bcm2837_video_init() takes, for the same reason.
+ *
+ * Sized to 16 words / 64 bytes with three zero words of tail padding
+ * after the end tag. That padding is load-bearing, not cosmetic: the
+ * firmware (and QEMU's emulation of it, hw/misc/bcm2835_property.c)
+ * walks records only while `record_offset + 8 <= buffer_start +
+ * total_size`, so a total_size trimmed exactly to the end tag would stop
+ * the walk *before* the end tag is ever read.
+ */
+enum {
+	kMsgIdxSize = 0,
+	kMsgIdxCode = 1,
+
+	kMsgIdxMacTag = 2, kMsgIdxMacBufSize = 3, kMsgIdxMacRespCode = 4,
+	kMsgIdxMacWord0 = 5, kMsgIdxMacWord1 = 6,
+
+	kMsgIdxSerialTag = 7, kMsgIdxSerialBufSize = 8, kMsgIdxSerialRespCode = 9,
+	kMsgIdxSerialLo = 10, kMsgIdxSerialHi = 11,
+
+	kMsgIdxEnd = 12,
+
+	kMsgWords = 16,
+};
+
+#define kMsgBytes (kMsgWords * (uint32_t)sizeof(uint32_t))
+#define kMacByteOffset (kMsgIdxMacWord0 * sizeof(uint32_t))
+
+/*
+ * The VideoCore sees ARM DRAM through four 1GB aliases of its own bus
+ * (0x00000000/0x40000000/0x80000000/0xc0000000), differing only in how
+ * the GPU's own L1/L2 caches treat the access; 0xc0000000 is the
+ * uncached one. Handing the firmware a plain ARM physical address (i.e.
+ * the 0x00000000 alias) asks it to read our buffer through its L2, which
+ * has no coherency with anything the CPU did. Every real client of this
+ * interface - Linux's drivers/firmware/raspberrypi.c, u-boot, the
+ * bare-metal reference code - uses the 0xc0000000 alias, and so does
+ * this project's own BCM2837DWC2 for its DWC2 descriptor buffer
+ * (kBCM2837BusAddressBase). QEMU aliases all four onto the same RAM
+ * (hw/arm/bcm2835_peripherals.c's ram_alias[4] loop), so this is correct
+ * in emulation too, just not observable there.
+ *
+ * pexpert/arm/pe_init.c's bcm2837_mbox_call() passes the raw physical
+ * address instead and compensates with explicit CleanPoC_DcacheRegion()/
+ * FlushPoC_DcacheRegion() around the call. That is a different, also
+ * valid arrangement; it is not reused here because those cache-
+ * maintenance routines are osfmk-internal and not reachable from a
+ * standalone-compilable IOKit source (tools/build_kexts.sh), and because
+ * the write-combine buffer mapping below removes the need for them.
+ */
+#define kBusAddressBase 0xc0000000ULL
+
+/* Bounded, in microseconds - never spin forever waiting on the GPU. */
+enum {
+	kMailboxTimeoutUS = 100000, // 100ms
+};
+
+static IOLock * volatile sLock = NULL;
+static volatile uint32_t *sRegs = NULL;
+
+static bool sQueried = false;
+static bool sHaveFirmwareMAC = false;
+static uint8_t sFirmwareMAC[6];
+static bool sHaveSerial = false;
+static uint64_t sSerial = 0;
+
+static IOLock *
+mailboxLock(void)
+{
+	if (sLock == NULL) {
+		IOLock *fresh = IOLockAlloc();
+		if (fresh == NULL) {
+			return NULL;
+		}
+		if (!OSCompareAndSwapPtr(NULL, fresh, (void * volatile *)&sLock)) {
+			IOLockFree(fresh);
+		}
+	}
+	return sLock;
+}
+
+/*
+ * Maps the mailbox register block once and caches it.
+ *
+ * Deliberately never unmapped, for the same reason BCM2837SDHCI::
+ * pinmuxSDSlot() never releases its GPIO mapping: tearing down a bare
+ * IODeviceMemory::withRange()+map() with no IOService provider behind it
+ * takes a confirmed crash in IOMemoryMap::free() ->
+ * memoryReferenceFree() -> Mach IPC in this kernel-only environment. It
+ * is 64 bytes, mapped at most once per boot.
+ */
+static volatile uint32_t *
+mailboxRegs(void)
+{
+	if (sRegs != NULL) {
+		return sRegs;
+	}
+
+	IODeviceMemory *devMem =
+	    IODeviceMemory::withRange(kMailboxPhysBase, kMailboxRegLength);
+	if (devMem == NULL) {
+		IOLog("BCM2837Mailbox: IODeviceMemory::withRange failed\n");
+		return NULL;
+	}
+	IOMemoryMap *map = devMem->map();
+	devMem->release();
+	if (map == NULL) {
+		IOLog("BCM2837Mailbox: map() failed\n");
+		return NULL;
+	}
+
+	sRegs = (volatile uint32_t *)map->getVirtualAddress();
+	return sRegs;
+}
+
+/*
+ * Submits one already-populated property message and blocks (bounded)
+ * until the GPU replies into the same buffer.
+ *
+ * msgBusAddr must be 16-byte aligned: the low four bits of the value
+ * written to MAIL1 are the channel number, not address bits.
+ */
+static bool
+mailboxCall(volatile uint32_t *regs, uint32_t *msg, uint64_t msgBusAddr)
+{
+	if ((msgBusAddr & 0xF) != 0) {
+		IOLog("BCM2837Mailbox: message buffer not 16-byte aligned (%#llx)\n",
+		    msgBusAddr);
+		return false;
+	}
+
+	/*
+	 * The message buffer is Normal Non-Cacheable memory and the mailbox
+	 * registers are Device memory; ARM64 does not order accesses to the
+	 * two against each other, so without this the MAIL1 write could be
+	 * observed by the GPU before the message words it refers to are. Same
+	 * reasoning as BCM2837DWC2's descriptor/doorbell barriers.
+	 */
+	__asm__ volatile ("dsb sy" ::: "memory");
+
+	uint32_t waited = 0;
+	while (regs[kRegWriteStatus] & kStatusFull) {
+		if (++waited > kMailboxTimeoutUS) {
+			IOLog("BCM2837Mailbox: timed out waiting for MAIL1 space\n");
+			return false;
+		}
+		IODelay(1);
+	}
+
+	regs[kRegWrite] = (uint32_t)(msgBusAddr & ~0xFULL) | kChannelProperty;
+
+	waited = 0;
+	for (;;) {
+		while (regs[kRegStatus] & kStatusEmpty) {
+			if (++waited > kMailboxTimeoutUS) {
+				IOLog("BCM2837Mailbox: timed out waiting for GPU reply\n");
+				return false;
+			}
+			IODelay(1);
+		}
+		uint32_t reply = regs[kRegRead];
+		if ((reply & 0xF) == kChannelProperty) {
+			break;
+		}
+		/*
+		 * Some other channel's message. Nothing in this kernel produces
+		 * one (pe_init.c's framebuffer call uses this same channel and
+		 * has long since drained its own reply), but draining rather
+		 * than aborting is the safe response either way.
+		 */
+	}
+
+	/* Reply words were written by the GPU, not by this CPU - order the
+	 * register read that announced them ahead of reading them. */
+	__asm__ volatile ("dsb sy" ::: "memory");
+
+	if (msg[kMsgIdxCode] != kCodeResponseOK) {
+		IOLog("BCM2837Mailbox: firmware returned code %#x (expected %#x)\n",
+		    msg[kMsgIdxCode], kCodeResponseOK);
+		return false;
+	}
+	return true;
+}
+
+/*
+ * Runs the one board-identity query, at most once per boot, and caches
+ * the results. Caller must hold the lock.
+ */
+static void
+queryBoardIdentityLocked(void)
+{
+	if (sQueried) {
+		return;
+	}
+	sQueried = true; // one attempt per boot, success or not
+
+	volatile uint32_t *regs = mailboxRegs();
+	if (regs == NULL) {
+		return;
+	}
+
+	/*
+	 * Physically contiguous, 16-byte aligned, within the low 1GB the
+	 * 0xc0000000 bus alias can reach, and mapped write-combine (real
+	 * ARM64 Normal Non-Cacheable) rather than kIOMapInhibitCache - the
+	 * same choice, for the same recorded reason, as BCM2837DWC2::
+	 * initDMABuffer(): kIOMapInhibitCache maps Device-nGnRnE, which
+	 * faults on any unaligned multi-byte access, and this buffer is
+	 * read/written with byte-granular accesses (the MAC bytes below).
+	 * kIOMemoryMapperNone keeps any IOMapper out of the way so
+	 * getPhysicalSegment() returns a true physical address.
+	 */
+	IOBufferMemoryDescriptor *buf =
+	    IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+		kernel_task,
+		kIODirectionInOut | kIOMemoryPhysicallyContiguous |
+		kIOMapWriteCombineCache | kIOMemoryMapperNone,
+		kMsgBytes,
+		0x3FFFFFFFULL & ~0xFULL);
+	if (buf == NULL) {
+		IOLog("BCM2837Mailbox: message buffer allocation failed\n");
+		return;
+	}
+	if (buf->prepare() != kIOReturnSuccess) {
+		IOLog("BCM2837Mailbox: message buffer prepare() failed\n");
+		buf->release();
+		return;
+	}
+
+	IOByteCount segLen = 0;
+	IOPhysicalAddress phys = buf->getPhysicalSegment(0, &segLen, 0);
+	if (phys == 0 || segLen < kMsgBytes || (phys & 0xF) != 0) {
+		IOLog("BCM2837Mailbox: message buffer unusable (phys=%#llx seglen=%llu)\n",
+		    (uint64_t)phys, (uint64_t)segLen);
+		buf->complete();
+		buf->release();
+		return;
+	}
+
+	uint32_t *m = (uint32_t *)buf->getBytesNoCopy();
+	bzero(m, kMsgBytes);
+
+	m[kMsgIdxSize] = kMsgBytes;
+	m[kMsgIdxCode] = kCodeRequest;
+
+	m[kMsgIdxMacTag] = kTagGetBoardMAC;
+	m[kMsgIdxMacBufSize] = 8; // 6 real bytes, padded to a word multiple
+	m[kMsgIdxMacRespCode] = 0;
+
+	m[kMsgIdxSerialTag] = kTagGetBoardSerial;
+	m[kMsgIdxSerialBufSize] = 8;
+	m[kMsgIdxSerialRespCode] = 0;
+
+	m[kMsgIdxEnd] = kTagEnd;
+
+	if (mailboxCall(regs, m, kBusAddressBase | (uint64_t)phys)) {
+		/*
+		 * Per-tag response word: bit 31 set marks it as a response, the
+		 * low bits are the byte length the firmware actually wrote.
+		 */
+		if ((m[kMsgIdxMacRespCode] & 0x80000000U) != 0 &&
+		    (m[kMsgIdxMacRespCode] & 0x7FFFFFFFU) >= 6) {
+			/*
+			 * The six MAC bytes are written as raw bytes in wire order
+			 * (QEMU: dma_memory_write() of macaddr.a; real firmware does
+			 * the same), NOT as byte-swapped words - so read them as
+			 * bytes, with no endian conversion.
+			 */
+			const uint8_t *macBytes = (const uint8_t *)m + kMacByteOffset;
+			bool allZero = true, allFF = true;
+			for (int i = 0; i < 6; i++) {
+				if (macBytes[i] != 0x00) {
+					allZero = false;
+				}
+				if (macBytes[i] != 0xFF) {
+					allFF = false;
+				}
+			}
+			// Reject the same three "obviously not a station address"
+			// shapes SMSC9514Ethernet::start() already rejects for the
+			// EEPROM path: all-zero, all-FF, or the multicast bit set.
+			if (!allZero && !allFF && (macBytes[0] & 0x01) == 0) {
+				for (int i = 0; i < 6; i++) {
+					sFirmwareMAC[i] = macBytes[i];
+				}
+				sHaveFirmwareMAC = true;
+			}
+		}
+
+		uint64_t serial = ((uint64_t)m[kMsgIdxSerialHi] << 32) |
+		    (uint64_t)m[kMsgIdxSerialLo];
+		if ((m[kMsgIdxSerialRespCode] & 0x80000000U) != 0 && serial != 0) {
+			sSerial = serial;
+			sHaveSerial = true;
+		}
+	}
+
+	buf->complete();
+	buf->release();
+}
+
+bool
+BCM2837Mailbox::getBoardSerial(uint64_t *outSerial)
+{
+	IOLock *lock = mailboxLock();
+	if (lock == NULL) {
+		return false;
+	}
+	IOLockLock(lock);
+	queryBoardIdentityLocked();
+	bool have = sHaveSerial;
+	uint64_t serial = sSerial;
+	IOLockUnlock(lock);
+
+	if (have && outSerial != NULL) {
+		*outSerial = serial;
+	}
+	return have;
+}
+
+bool
+BCM2837Mailbox::getBoardMACAddress(uint8_t outMAC[6])
+{
+	IOLock *lock = mailboxLock();
+	if (lock == NULL) {
+		return false;
+	}
+	IOLockLock(lock);
+	queryBoardIdentityLocked();
+	bool haveMAC = sHaveFirmwareMAC;
+	bool haveSerial = sHaveSerial;
+	uint8_t mac[6];
+	for (int i = 0; i < 6; i++) {
+		mac[i] = sFirmwareMAC[i];
+	}
+	uint64_t serial = sSerial;
+	IOLockUnlock(lock);
+
+	if (haveMAC) {
+		for (int i = 0; i < 6; i++) {
+			outMAC[i] = mac[i];
+		}
+		return true;
+	}
+
+	if (haveSerial) {
+		// Raspberry Pi Foundation convention: OUI b8:27:eb followed by
+		// the low three bytes of the board serial, most-significant
+		// byte first - the same derivation the Foundation's own
+		// firmware/u-boot performs.
+		outMAC[0] = 0xb8;
+		outMAC[1] = 0x27;
+		outMAC[2] = 0xeb;
+		outMAC[3] = (uint8_t)((serial >> 16) & 0xFF);
+		outMAC[4] = (uint8_t)((serial >> 8) & 0xFF);
+		outMAC[5] = (uint8_t)(serial & 0xFF);
+		return true;
+	}
+
+	return false;
+}
+
+void
+BCM2837Mailbox::primeBoardIdentity(void)
+{
+	uint64_t serial = 0;
+	bool haveSerial = BCM2837Mailbox::getBoardSerial(&serial);
+
+	uint8_t mac[6];
+	bool haveMAC = BCM2837Mailbox::getBoardMACAddress(mac);
+
+	if (haveSerial) {
+		IOLog("BCM2837Mailbox: board serial 0x%016llx\n", serial);
+	} else {
+		IOLog("BCM2837Mailbox: no board serial from firmware (QEMU's "
+		      "bcm2835_property.c has tag 0x00010004 unimplemented)\n");
+	}
+
+	if (haveMAC) {
+		IOLog("BCM2837Mailbox: board MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
+		    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+	} else {
+		IOLog("BCM2837Mailbox: no board MAC available from the VideoCore "
+		      "mailbox\n");
+	}
+}

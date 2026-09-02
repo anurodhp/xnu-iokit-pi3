@@ -1,4 +1,5 @@
 #include "SMSC9514Ethernet.h"
+#include "BCM2837Mailbox.h"
 
 #include <IOKit/IOLib.h>
 #include <IOKit/IOTimerEventSource.h>
@@ -366,9 +367,14 @@ SMSC9514Ethernet::start(IOService *provider)
 	 * expected board configuration, not a bug. Also reject a read that
 	 * "succeeds" but comes back looking uninitialized: all-zero, all-FF,
 	 * or with the multicast bit set are not values any EEPROM would
-	 * legitimately contain for a station address. Falls back to the
-	 * previous locally-administered placeholder only when the EEPROM
-	 * genuinely isn't usable.
+	 * legitimately contain for a station address.
+	 *
+	 * When the EEPROM genuinely isn't usable - i.e. on essentially every
+	 * real Pi - the next source is the VideoCore firmware over the
+	 * mailbox property channel (BCM2837Mailbox), which is where the
+	 * Foundation's own boot chain gets this board's b8:27:eb:xx:xx:xx
+	 * address from. The locally-administered placeholder is now only the
+	 * third and last resort, reached when neither works.
 	 */
 	uint8_t eeprom[6];
 	bool haveEepromMac = readEEPROM(kEepromMacOffset, eeprom, sizeof(eeprom));
@@ -395,9 +401,33 @@ SMSC9514Ethernet::start(IOService *provider)
 		      "%02x:%02x:%02x:%02x:%02x:%02x\n",
 		    fMACAddress.bytes[0], fMACAddress.bytes[1], fMACAddress.bytes[2],
 		    fMACAddress.bytes[3], fMACAddress.bytes[4], fMACAddress.bytes[5]);
+	} else if (BCM2837Mailbox::getBoardMACAddress(fMACAddress.bytes)) {
+		/*
+		 * No EEPROM, which is the normal Raspberry Pi configuration -
+		 * so ask the VideoCore firmware the way the Foundation's own
+		 * firmware/u-boot/Linux stack does (property tag 0x00010003,
+		 * "get board MAC address"; BCM2837Mailbox falls back to
+		 * deriving b8:27:eb + the low three bytes of the board serial
+		 * if the firmware only answers tag 0x00010004). This is a real
+		 * per-board address, not a constant - see DAR-144 for why the
+		 * old unconditional placeholder was a real bug and not just
+		 * cosmetic.
+		 */
+		IOLog("SMSC9514Ethernet: MAC address from VideoCore mailbox: "
+		      "%02x:%02x:%02x:%02x:%02x:%02x\n",
+		    fMACAddress.bytes[0], fMACAddress.bytes[1], fMACAddress.bytes[2],
+		    fMACAddress.bytes[3], fMACAddress.bytes[4], fMACAddress.bytes[5]);
 	} else {
-		IOLog("SMSC9514Ethernet: no usable EEPROM MAC (this chip has none "
-		      "populated on most Pi boards) - using a locally-administered "
+		/*
+		 * Last resort only: no EEPROM AND no usable answer from the
+		 * VideoCore (mailbox timeout, or firmware that implements
+		 * neither tag). Still better than refusing to start - an
+		 * interface with a colliding address is more useful than no
+		 * interface - but it is a real, logged degradation, not a
+		 * normal outcome.
+		 */
+		IOLog("SMSC9514Ethernet: no usable EEPROM MAC and no VideoCore "
+		      "mailbox answer - falling back to a locally-administered "
 		      "placeholder, every board will present the same address\n");
 		fMACAddress.bytes[0] = 0x02;
 		fMACAddress.bytes[1] = 0x00;
