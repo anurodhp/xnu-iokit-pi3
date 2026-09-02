@@ -402,7 +402,7 @@ MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 # four as genuinely undefined+dynamically-looked-up before this fix.
 for s in _geteuid _getegid _getuid _pread _pwrite _fileport_makefd _fileport_makeport \
     _socket _writev ___chmod ___connect_nocancel ___recvmsg_nocancel ___sendmsg_nocancel \
-    ___select_nocancel ___sendto_nocancel _fpathconf _kevent _kqueue ___sigaction \
+    ___select_nocancel ___sendto_nocancel ___recvfrom_nocancel _fpathconf _kevent _kqueue ___sigaction \
     _setegid _seteuid _getgroups _setitimer; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
         -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
@@ -559,6 +559,11 @@ done
     -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" -I "$OUT/compat_include" \
     -I "$OUT/malloc_mig" \
     libsystem_kernel_sendto_compat.c -o "$OUT/libsystem_kernel/sendto_wrap.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+    -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" -I "$OUT/compat_include" \
+    -I "$OUT/malloc_mig" \
+    libsystem_kernel_recvfrom_compat.c -o "$OUT/libsystem_kernel/recvfrom_wrap.o"
 
 # Real gap found+fixed 2026-08-28 booting launchd as PID 1 with real
 # libdispatch.dylib loaded alongside it: real mach_msg()/mach_msg_trap()
@@ -672,6 +677,15 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     `# libsystem_kernel_sendto_compat.c) is genuinely local to this` \
     `# link, same nonlocal-base requirement as every other alias here.` \
     -Wl,-alias,_send,'_send$UNIX2003' \
+    `# _recv$UNIX2003 added 2026-09-02 (DAR-181, real gap found via a` \
+    `# real QEMU boot): Libinfo/lookup.subproj/si_compare.c's real` \
+    `# RFC6724 source-address probe calls plain recv(), which` \
+    `# __DARWIN_UNIX03=1 asm-labels to this versioned symbol, same shape` \
+    `# as _send$UNIX2003 just above. Base (recvfrom_wrap.o's own recv(),` \
+    `# compiled earlier in this same script/link -- see` \
+    `# libsystem_kernel_recvfrom_compat.c) is genuinely local to this` \
+    `# link, same nonlocal-base requirement as every other alias here.` \
+    -Wl,-alias,_recv,'_recv$UNIX2003' \
     `# _nanosleep$UNIX2003 added 2026-08-31 ("needs a new home" batch):` \
     `# real Apple genuinely exports both the plain and $UNIX2003 names` \
     `# from libsystem_kernel.dylib (the SDK's own <time.h> __DARWIN_ALIAS_C` \
@@ -717,11 +731,13 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/sys___chmod.o" "$OUT/libsystem_kernel/sys___connect_nocancel.o" \
     "$OUT/libsystem_kernel/sys___recvmsg_nocancel.o" "$OUT/libsystem_kernel/sys___sendmsg_nocancel.o" \
     "$OUT/libsystem_kernel/sys___select_nocancel.o" "$OUT/libsystem_kernel/sys___sendto_nocancel.o" \
+    "$OUT/libsystem_kernel/sys___recvfrom_nocancel.o" \
     "$OUT/libsystem_kernel/sys_fpathconf.o" "$OUT/libsystem_kernel/nanosleep_compat.o" \
     "$OUT/libsystem_kernel/sys_kevent.o" "$OUT/libsystem_kernel/sys_kqueue.o" \
     "$OUT/libsystem_kernel/pipe_trap.o" "$OUT/libsystem_kernel/pipe_forwarder.o" \
     "$OUT/libsystem_kernel/chmod_wrap.o" "$OUT/libsystem_kernel/xpc_syscall_wrappers_compat.o" \
     "$OUT/libsystem_kernel/select_wrap.o" "$OUT/libsystem_kernel/sendto_wrap.o" \
+    "$OUT/libsystem_kernel/recvfrom_wrap.o" \
     "$OUT/libsystem_kernel/mach_semaphore_traps.o" "$OUT/libsystem_kernel/semaphore_wrap.o" \
     "$OUT/libsystem_kernel/mach_error_string.o" "$OUT/libsystem_kernel/mach_error_string_minimal_compat.o" \
     "$OUT/libsystem_kernel/mach_port_gap_closures2.o" "$OUT/libsystem_kernel/mach_port_gap_closures2_traps.o" \

@@ -82,3 +82,20 @@ _os_log_error_impl(void *dso, os_log_t log, os_log_type_t type,
 	(void)buf;
 	(void)size;
 }
+
+/* Real Libinfo/lookup.subproj/si_compare.c (DAR-181's real addrinfo
+ * sort/RFC6724 gap, si_getaddrinfo.c's own real si_destination_compare()
+ * dependency) is the first real caller of the 4th os_log severity this
+ * project's libc/CoreFoundation/libxpc callers never needed -- same
+ * honest no-op as the three above. */
+void
+_os_log_fault_impl(void *dso, os_log_t log, os_log_type_t type,
+		    const char *format, uint8_t *buf, uint32_t size)
+{
+	(void)dso;
+	(void)log;
+	(void)type;
+	(void)format;
+	(void)buf;
+	(void)size;
+}

@@ -352,3 +352,25 @@ int _select(int nfds, void *readfds, void *writefds, void *exceptfds, void *time
     return (int)syscall5(SYS_select, nfds, (long)readfds, (long)writefds, (long)exceptfds,
                           (long)timeout);
 }
+
+/* #243 AUE_INITGROUPS, NO_SYSCALL_STUB (bsd/kern/syscalls.master:346) --
+ * `int initgroups(u_int gidsetsize, gid_t *gidset, int gmuid)`. Real
+ * Apple Libinfo/lookup.subproj/libinfo.c's public initgroups() wrapper
+ * calls this private double-underscore raw trap directly (found via a
+ * real QEMU boot: libinfo.dylib aborted at dyld load with "symbol not
+ * found in flat namespace '___initgroups'" -- this project's dyld does
+ * only eager chained-fixups binding, so any unresolved bind fails at
+ * load time for every consumer, not just callers that reach the code
+ * path). This is a genuinely separate symbol from openpam's own
+ * single-underscore _initgroups() (build_openpam_dylib.sh,
+ * launchd_passwd_compat.o's getgrouplist()-then-setgroups(2) userspace
+ * algorithm, narrow-exported for DAR-153's login/su call sites) -- that
+ * one is the real public libc wrapper other callers use; this one is
+ * the raw kernel trap Libinfo's OWN internal wrapper needs underneath
+ * it, matching real macOS having both a native initgroups(2) syscall
+ * and callers that instead go through getgrouplist()/setgroups(2). */
+#define SYS_initgroups 243
+
+int __initgroups(unsigned int gidsetsize, int *gidset, int gmuid) {
+    return (int)syscall3(SYS_initgroups, gidsetsize, (long)gidset, gmuid);
+}

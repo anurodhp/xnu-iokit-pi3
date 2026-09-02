@@ -175,14 +175,25 @@
 #     other real ASL entry point already, just not this one. Real
 #     signature match against third_party/syslog/libsystem_asl.tproj/
 #     include/asl.h, not guessed.
-#   - ___initgroups: real BSD syscall (syscalls.master #243,
-#     NO_SYSCALL_STUB -- needs a hand raw trap, not a generated stub).
-#     DAR-153 (a different, actively in-flight session as of this build)
-#     is concurrently landing a real `_initgroups` in
-#     launchd_passwd_compat.o/build_openpam_dylib.sh -- deferred via
-#     `-Wl,-U` here rather than duplicating that work; once DAR-153
-#     commits, relink this dylib against that real implementation instead
-#     of deferring.
+#   - ___initgroups: NO LONGER DEFERRED (2026-09-02, DAR-181 smoketest
+#     verification). This is the raw double-underscore BSD syscall #243
+#     trap (syscalls.master NO_SYSCALL_STUB) that real Apple
+#     Libinfo/lookup.subproj/libinfo.c's public initgroups() wrapper
+#     calls directly underneath itself -- a genuinely different symbol
+#     from openpam's own single-underscore _initgroups() (DAR-153's
+#     getgrouplist()-then-setgroups(2) userspace algorithm for
+#     login/su). Linking libopenpam.dylib here would NOT have resolved
+#     this (wrong symbol) and would have introduced a real duplicate-
+#     symbol shadow, since libinfo.dylib already locally defines its
+#     own _initgroups -- same bug class as DAR-18/19/20. Real fix: added
+#     __initgroups() as a hand raw trap to libc_gen_syscalls.c (already
+#     linked into libsystem_c.dylib, already one of this dylib's link
+#     deps), same shape as every other NO_SYSCALL_STUB wrapper there.
+#     Found via a real QEMU boot: the smoketest aborted at dyld load
+#     with "symbol not found in flat namespace '___initgroups'" -- this
+#     project's dyld does only eager chained-fixups binding, so a stale
+#     deferral past its own documented "once DAR-153 commits" condition
+#     fails every load, not just the code path that needs it.
 set -e
 cd "$(dirname "$0")"
 
@@ -269,7 +280,7 @@ compile_one() {
 }
 
 echo "compiling real Libinfo si_module framework + public API (files-only mode, see header above)..."
-for f in si_data.c thread_data.c kvbuf.c ils.c si_module.c cache_module.c search_module.c file_module.c getnameinfo_link.c libinfo.c; do
+for f in si_data.c thread_data.c kvbuf.c ils.c si_module.c cache_module.c search_module.c file_module.c getnameinfo_link.c libinfo.c si_getaddrinfo.c si_compare.c; do
     compile_one "$LIBINFO/lookup.subproj/$f"
 done
 compile_one "$LIBINFO/gen.subproj/ether_addr.c"
@@ -293,8 +304,6 @@ rm -f "$OUT/system/libinfo.dylib"
     -install_name /usr/lib/libinfo.dylib \
     -Wl,-not_for_dyld_shared_cache \
     -B"$NEWLD_BINDIR" -Wl,-fixup_chains \
-    -Wl,-U,___initgroups \
-    -Wl,-U,__gai_simple -Wl,-U,_si_addrinfo -Wl,-U,_si_ipnode_byname -Wl,-U,_si_list_to_addrinfo -Wl,-U,_si_nameinfo \
     -o "$OUT/system/libinfo.dylib" \
     "$OUT/libinfo_obj/"*.o \
     "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_malloc.dylib" \
