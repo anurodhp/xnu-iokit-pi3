@@ -29,14 +29,44 @@
  * shape as build_libiconv.sh bundling qsort.c/heapsort.c or
  * build_libpthread.sh bundling simple_cmds_mmap_compat.c directly into
  * its own archive.
+ *
+ * HIDDEN 2026-09-03 (DAR-6): the cycle above means this dylib can never
+ * link its real owner back, so the duplicate symbol itself can't go
+ * away -- but it never needed to be EXPORTED either, and leaving it
+ * exported was a real, live bug, not just audit noise. Confirmed via
+ * `xcrun dyld_info -fixups libc_build/system/libCoreFoundation.dylib`:
+ * CoreFoundation's own `_dlopen`/`_dlsym` (CFBundle_Executable.c/
+ * CFBundle_Main.c/CFBundle_Binary.c -- real CFBundle/CFPlugIn native-
+ * code loading) were bound to `libc++/_dlopen`, i.e. THIS always-NULL
+ * stub, purely because libc++.1.dylib appears earlier than libdyld.dylib
+ * on CoreFoundation's own link line (build_corefoundation_dylib.sh) and
+ * ld64 takes the first local definition it finds -- while libxml2.dylib
+ * and launchctl.macho, which happen to link in the other order, already
+ * correctly bind to `libdyld/_dlopen` (the real, working
+ * dyld-backed implementation). Marking these `hidden` removes them from
+ * this dylib's export trie entirely (confirmed via `dyld_info -exports`
+ * losing both entries), so ld64 skips straight past this local
+ * definition and finds the real one further down any consumer's link
+ * line -- while the one real internal caller (stdexcept.cpp's
+ * refstring.h, linked into this SAME dylib image) still resolves them
+ * directly, since hidden-visibility symbols remain fully callable within
+ * their own link unit, only losing cross-image export. Zero functional
+ * consumers lose access: libSystem.B.dylib's own umbrella re-export
+ * still reaches the real dlopen/dlsym transitively via
+ * libsystem_c.dylib's `LC_REEXPORT_DYLIB libdyld.dylib` (confirmed via
+ * `otool -l`), so nothing downstream needs a relink to keep working --
+ * only CoreFoundation, which silently picked up the wrong owner, gets a
+ * different (correct) answer.
  */
 
+__attribute__((visibility("hidden")))
 void *dlopen(const char *path, int mode) {
     (void)path;
     (void)mode;
     return (void *)0;
 }
 
+__attribute__((visibility("hidden")))
 void *dlsym(void *handle, const char *symbol) {
     (void)handle;
     (void)symbol;

@@ -6528,15 +6528,10 @@ B yes.macho _vwarnc
 B yes.macho _vwarnx
 B yes.macho _warnc
 B yes.macho _warnx
-D __dyld_find_unwind_sections
-D __dyld_register_func_for_remove_image
 D __xpc_runtime_is_app_sandboxed
 D _acos
 D _asin
 D _connect
-D _dladdr
-D _dlopen
-D _dlsym
 D _fabs
 D _fmod
 D _memcpy
