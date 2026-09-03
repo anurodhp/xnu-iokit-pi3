@@ -6545,5 +6545,4 @@ D _socket
 D _sqrt
 D _syslog
 D _trunc
-D _vproc_swap_integer
 D _writev

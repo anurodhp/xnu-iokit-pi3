@@ -263,6 +263,43 @@ XCODE12_LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
     "$EXTRACT/libproc.o" -o "$EXTRACT/libproc.o.narrowed"
 mv -f "$EXTRACT/libproc.o.narrowed" "$EXTRACT/libproc.o"
 
+# libvproc.o's `_vproc_swap_integer` NARROWED 2026-09-03 (DAR-8,
+# libdyld.dylib-vs-sibling-dylibs duplicate-symbol sweep). This dylib's
+# real libvproc.o (from third_party/PureDarwin's libvproc.c) is the
+# genuine, functional implementation -- a real MIG round-trip
+# (vproc_mig_swap_integer()) to bootstrap_port/launchd, now meaningful
+# since real launchd is real PID-1 on this port. libdyld.dylib's own
+# copy (libdyld_vproc_compat.c) is an honest, permanently-answers-"not
+# managed" stub, documented there as a real gap from before real
+# launchd existed -- exactly the __mach_errors-shaped trap (real data
+# vs. honest empty stub) this audit's own header warns about, so the
+# REAL implementation here is not the one to hide... except the only
+# live cross-image consumer found (`xcrun dyld_info -fixups` swept
+# across every shipped dylib/macho), launchctl.macho, is ALREADY built
+# and its `__got` bind names `libdyld` by image, not `libxpc` -- hiding
+# libdyld's copy instead would abort launchctl (and this ticket's own
+# required `launchctl list` boot-test command) with a dyld "Symbol not
+# found" load-time error, and relinking launchctl.macho is out of this
+# ticket's scope (owned by concurrent DAR-234-adjacent work). Narrowing
+# libxpc's copy instead is the zero-behavior-change side: no shipped
+# image currently binds to `libxpc/_vproc_swap_integer`, so nothing
+# regresses; only a FUTURE relink of launchctl (or any other real
+# libxpc consumer) toward the real MIG-backed implementation is now
+# deferred rather than silently foreclosed. See DAR-8's own Linear
+# comment for the follow-up-ticket recommendation to fix launchctl's
+# bind for real.
+#
+# NARROWED, not removed: liblaunch.o (also extracted into this same
+# dylib link) calls `_vproc_swap_integer` too (`nm -m`: real undefined
+# external reference) -- `-keep_private_externs` keeps libvproc.o's
+# definition linkable within this SAME final dylib link job, only
+# dropping it from libxpc.dylib's own export trie, so liblaunch.o's
+# reference still resolves correctly below.
+"$XCODE12_LD" -r -arch arm64 -keep_private_externs \
+    -unexported_symbol _vproc_swap_integer \
+    "$EXTRACT/libvproc.o" -o "$EXTRACT/libvproc.o.narrowed"
+mv -f "$EXTRACT/libvproc.o.narrowed" "$EXTRACT/libvproc.o"
+
 # Members dropped 2026-08-29 (static-linking cleanup, Phase 1a). Every
 # one of these was a second copy of something a sibling dylib already on
 # this link line now owns, so every process loading libxpc.dylib next to
