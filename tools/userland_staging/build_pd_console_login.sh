@@ -103,6 +103,27 @@ rm -f "$OUT/pd_console_login.macho"
     `# stdio state. Same "one owner per symbol" class as build_launchd.sh.` \
     "$OUT/cerror_stub.o" \
     "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
+    `# libsystem_pthread.dylib/libsystem_c.dylib listed EXPLICITLY rather` \
+    `# than left to libSystem.B.dylib's LC_REEXPORT_DYLIB of them, same` \
+    `# reexport-depth reasoning build_launchd.sh already applies to` \
+    `# libsystem_malloc.dylib/libremovefile.dylib/libsystem_kernel.dylib.` \
+    `# Added 2026-09-03 with the static-archive strip above: dropping` \
+    `# libpthread.a/libc_gen.a left _pthread_main_thread_bootstrap (real` \
+    `# export of libsystem_pthread.dylib, needed by Csu crt.c's` \
+    `# _crt_run_static_initializers) and __write (real export of` \
+    `# libsystem_c.dylib, needed by liblaunchd_syscalls.a's _execvPe)` \
+    `# unresolved. Both are genuine dylib exports -- confirmed via nm -gU` \
+    `# -- so the fix is naming their real owners here, NOT re-adding the` \
+    `# archives, which would reinstate the duplicate pthread/libc state` \
+    `# DAR-25 exists to remove.` \
+    `# libsystem_malloc.dylib for the same reason, and for a second one:` \
+    `# it is the real owner of ___memcpy_chk (the _FORTIFY_SOURCE helper` \
+    `# libxpc_syscalls.a's ___setenv_locked needs), confirmed via nm -gU.` \
+    `# Listing it also makes this binary's heap the one real` \
+    `# libsystem_malloc.dylib heap now that libmalloc.a is gone -- the` \
+    `# single-owner property DAR-162/DAR-131 are about.` \
+    "$OUT/system/libsystem_pthread.dylib" "$OUT/system/libsystem_c.dylib" \
+    "$OUT/system/libsystem_malloc.dylib" \
     2>"$OUT/pd_console_login_link.err" \
     || { echo "error: real link failed -- see $OUT/pd_console_login_link.err" >&2; tail -60 "$OUT/pd_console_login_link.err" >&2; exit 1; }
 
