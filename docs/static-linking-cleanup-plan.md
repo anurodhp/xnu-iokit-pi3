@@ -120,6 +120,36 @@ all three run before or entirely without dyld by design (CLAUDE.md's
 "must stay fully static" invariant), so a private static copy of libc in
 them is correct, not debt.
 
+**`bash.macho`, `login.macho` and `getty.macho` are excluded too**
+(added 2026-09-03, `dynamicfix` branch). They never appear in
+`dup_symbol_audit.sh` output — the audit only reports binaries that
+actually load a dylib, and these load none — so their absence from the
+offender table reads as "already clean" when the real reason is that
+they are fully static. All three link `-nostdlib -static -e start` and
+assert zero `LC_LOAD_DYLIB` in their own smoketest (`build_bash.sh:460`,
+`build_getty.sh:303`, `build_login.sh:344`); `build_login.sh:7` states
+the static shape explicitly. Stripping their archives would delete the
+only copy of libc, not a duplicate.
+
+They were misidentified as dedup targets on the `dynamicfix` branch by
+grepping archive names across `tools/userland_staging/build_*.sh` — the
+grep matched, the premise did not. **A binary is only a target if its
+final link BOTH loads `libSystem.B.dylib`/siblings AND statically links
+the same functionality.** Check the real link command:
+
+```
+grep -n -- '-static' tools/userland_staging/build_<name>.sh
+```
+
+The same grep-vs-reality trap runs the other way for
+`build_simple_cmds.sh`: it shows ~27 archive hits and looks like the
+single biggest target, but was fully converted on 2026-08-28 (see
+`LINK_COMMON`/`LINK_DYLIBS` and the long comment above them). Every one
+of those hits is a comment describing the historical state. Its
+remaining per-binary shadowing comes from `.o` gap-compat shims and this
+project's own BSD syscall wrappers, which are the only real provider —
+tracked as DAR-196 (Done), not as archive debt.
+
 **The baseline currently on disk was taken at the START of the session
 (924 / 9523).** It has not been refreshed since, deliberately — refresh
 it only after a real boot test passes, so a bad refactor can't be locked

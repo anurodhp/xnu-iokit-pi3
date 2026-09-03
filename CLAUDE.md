@@ -101,10 +101,27 @@ tools/build_kexts.sh [outdir]    # compile iokit/*/*.cpp standalone (default: bu
   `build_libsystem.sh`/`build_dylib_smoketest.sh` DO produce real
   `.dylib`s on purpose. New work should prefer real per-library dylibs
   over new static archives going forward (see `docs/daemon-roadmap.md`'s
-  "Static-vs-dylib architecture debt" section) — the "must stay fully
-  static" invariant now applies specifically to `tools/pwtool/build.py`
-  (real reason: it runs before/without dyld by design), not to every
-  script in this directory.
+  "Static-vs-dylib architecture debt" section) — but the "must stay fully
+  static" invariant is NOT limited to `tools/pwtool/build.py`. **Four
+  shipped binaries are deliberately, fully static and must stay that way:
+  `tools/pwtool/build.py` (runs before/without dyld by design),
+  `build_bash.sh`, `build_login.sh` and `build_getty.sh`.** All four link
+  `-nostdlib -static -e start` and each asserts zero `LC_LOAD_DYLIB` +
+  a real `LC_UNIXTHREAD` in its own smoketest — that check is the
+  invariant, not a leftover. Verify with `grep -n -- '-static' <script>`
+  before assuming any binary here is dynamic.
+  **Corollary for static-linking cleanup work:** a script is only a
+  dedup target if its final link BOTH loads `libSystem.B.dylib`/sibling
+  dylibs AND links the same functionality statically. Stripping archives
+  from the four above removes the *only* copy of libc, not a duplicate —
+  it is not the same change at all. Grepping for archive names is not
+  sufficient to identify targets: `build_bash.sh`/`build_login.sh`/
+  `build_getty.sh` were misidentified as targets exactly that way
+  (2026-09-03, `dynamicfix` branch), and `build_simple_cmds.sh` reads as
+  a target by grep while actually having been fully converted on
+  2026-08-28 — all of its archive hits are comments describing the
+  historical state. Confirm against the real link command, not a grep
+  count.
   **`build_libc_regex.sh` is the reference template for porting one more
   Apple library** (real per-file compile loop reporting gaps, real `ar`
   archive step, real dependency check against already-built `.a` files,
