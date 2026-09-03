@@ -90,13 +90,71 @@ extern int pthread_main_thread_bootstrap(void);
  * error message -- root-caused via a real multi-layer dyld/libc++abi/
  * libpthread instrumentation pass, see docs/backlog.md item d10). */
 
-/* TEMP DIAGNOSTIC: bisecting a silent exit(1)/signal-0 death with zero
- * console output anywhere, when launchd.macho (full real dep graph:
- * libdispatch/ICU/libc++) boots as PID 1. A minimal test binary linking
- * only libdyld.dylib+libSystem.B.dylib reaches main() fine (this ctor
- * runs), so mach_init()/_dyld_initializer() work in that configuration --
- * these probes bisect whether they still complete cleanly once the full
- * dep graph is present. Remove once root-caused. */
+/* Real gap found+fixed 2026-09-02 (DAR-217), root-causing syslogd's
+ * exit(1) loop: NOTHING in this project ever initialized the process's
+ * `bootstrap_port` global, so every dyld-loaded process reached main()
+ * with bootstrap_port == MACH_PORT_NULL and every bootstrap_*() call in
+ * it failed MACH_SEND_INVALID_DEST (0x10000003). Concretely, syslogd's
+ * launch_config() (third_party/syslog/syslogd.tproj/syslogd.c) does a
+ * real launchd check-in whose LAUNCH_JOBKEY_MACHSERVICES leg runs
+ * libxpc.dylib's launch_mach_checkin_service() ->
+ * bootstrap_check_in(bootstrap_port, "com.apple.system.logger", &p);
+ * with bootstrap_port == 0 that returns MACH_SEND_INVALID_DEST, the
+ * service's launch_data_t keeps its default 0 machport,
+ * global.server_port stays 0, and the next mach_port_move_member() on
+ * port 0 fails -> exit(1) -> launchd respawn loop. Confirmed by a real
+ * QEMU boot with a temporary diagnostic in launch_mach_checkin_service:
+ *   "bootstrap_check_in(bp=0x0, com.apple.system.logger) -> kr=0x10000003"
+ *
+ * The kernel side was never the problem: launchd's runtime_fork()
+ * (PureDarwin launchd/runtime.c) really does launchd_set_bport(
+ * j->mgr->jm_port) before fork(), XNU's exec path really does preserve
+ * task->itk_bootstrap across execve (bsd/kern/kern_exec.c only calls
+ * ipc_task_reset() on a sugid exec, and ipc_task_reset() does not touch
+ * itk_bootstrap at all), and launchd's own forked child really does
+ * call libxpc's bootstrap_init() before job_start_child() -- but that
+ * child then execs, and the FRESH image has a fresh, zeroed
+ * bootstrap_port that nothing ever fills in again.
+ *
+ * On real macOS this is libSystem.dylib's job: libSystem_initializer()
+ * calls _libxpc_initializer(), which reads TASK_BOOTSTRAP_PORT into
+ * bootstrap_port (the same two lines libxpc's own bootstrap_init(),
+ * PureDarwin libxpc/libbootstrap.c, still implements verbatim). This
+ * project's libSystem.B.dylib does not link libxpc.dylib, and a
+ * constructor placed inside libxpc.dylib itself would never run at all
+ * (see this file's own pthread_main_thread_bootstrap() writeup above:
+ * dyld-940's runAllInitializersForMain() treats every
+ * "/usr/lib/system/lib*" image as already-initialized), so the real
+ * equivalent is to do it here, inline, in the one constructor that is
+ * confirmed to run -- writing the ONE real bootstrap_port, the
+ * libsystem_kernel.dylib copy that libxpc.dylib's own <bind> resolves
+ * to (verified: `dyld_info -fixups libxpc.dylib` shows
+ * "bind libsystem_kernel/_bootstrap_port").
+ *
+ * Deliberately NOT a copy of bootstrap_init()'s abort()-on-failure: PID
+ * 1 (launchd) legitimately has no bootstrap port -- task_get_special_port
+ * succeeds and hands back MACH_PORT_NULL there -- and launchd's own
+ * launchd.c/core.c already handle bootstrap_port == 0 as the "I am the
+ * root bootstrap" case. A hard failure here is a real error but not one
+ * worth killing every process over, so it just leaves the port null,
+ * exactly as before this fix.
+ *
+ * Deliberately NOT placed in libsyscall's own mach_init_doit() (where
+ * the bootstrap_port global actually lives, and where Apple's much older
+ * Libc mach_init_ports() really did do this): mach_init_doit() runs
+ * before pthread_main_thread_bootstrap() installs TPIDRRO_EL0, and
+ * task_get_special_port() is a real MIG call whose mig_get_reply_port()
+ * reads the direct TSD slot -- it would fault. mach_init_doit() is also
+ * what _mach_fork_child() calls, and adding a MIG round-trip to the
+ * fork-child path is exactly the hazard
+ * libsystem_pthread_atfork_compat.c already documents. */
+typedef unsigned int __iokit_mach_port_t;   /* mach_port_t */
+extern __iokit_mach_port_t bootstrap_port;  /* libsystem_kernel.dylib */
+extern __iokit_mach_port_t task_self_trap(void);
+extern int task_get_special_port(__iokit_mach_port_t task, int which_port,
+                                 __iokit_mach_port_t *special_port);
+#define __IOKIT_TASK_BOOTSTRAP_PORT 4   /* osfmk/mach/task_special_ports.h */
+
 __attribute__((constructor))
 static void libsystem_call_dyld_initializer(void) {
     /* Order matters: mach_init() must run before _dyld_initializer(),
@@ -107,4 +165,11 @@ static void libsystem_call_dyld_initializer(void) {
     mach_init();
     pthread_main_thread_bootstrap();
     _dyld_initializer();
+
+    /* Last: needs mach_init()'s mach_task_self_/_task_reply_port AND
+     * pthread_main_thread_bootstrap()'s TSD base already installed,
+     * because this is a real MIG round-trip to the task port. */
+    (void)task_get_special_port(task_self_trap(),
+                                __IOKIT_TASK_BOOTSTRAP_PORT,
+                                &bootstrap_port);
 }

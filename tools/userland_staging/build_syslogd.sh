@@ -85,9 +85,21 @@ if [ ! -d "$SYSLOG/syslogd.tproj" ]; then
     echo "error: $SYSLOG/syslogd.tproj not found -- run setup_third_party.sh first" >&2
     exit 1
 fi
-for a in liblaunchd_mig liblaunchd_syscalls libmach_ipc libmalloc libplatform libpthread libc_gen libc_string libc_stdio libc_printf libc_locale_for_stdio; do
+for a in liblaunchd_mig liblaunchd_syscalls libmach_ipc libplatform libc_gen libc_string libc_stdio libc_printf libc_locale_for_stdio; do
     if [ ! -f "$OUT/$a.a" ]; then
         echo "error: $OUT/$a.a not found -- run build_${a}.sh first" >&2
+        exit 1
+    fi
+done
+# libmalloc.a and libpthread.a are NOT in the list above any more
+# (DAR-217, 2026-09-02) -- see the link step's own "libmalloc.a REMOVED
+# FROM THIS LINK" and "libpthread.a AND cerror_stub.o REMOVED FROM THIS
+# LINK" comments for the real, QEMU-diagnosed bugs those two removals
+# fix. build_libmalloc.sh is still a real prerequisite of this script
+# though, for the one loose object still linked out of its output.
+for o in chk_fail.o; do
+    if [ ! -f "$OUT/$o" ]; then
+        echo "error: $OUT/$o not found -- run build_libmalloc.sh first" >&2
         exit 1
     fi
 done
@@ -102,7 +114,12 @@ done
 # `-Wl,-reexport_library` members of libSystem.B.dylib (build_libsystem.sh),
 # already linked below, so syslogd reaches them through the umbrella with
 # no direct link needed.
-for d in libdispatch libdyld libSystem.B libsystem_pthread libsystem_notify libxpc libopenpam libncurses; do
+# Every dylib below is listed EXPLICITLY on the link line (see the link
+# step's own comments for why reaching them through libSystem.B.dylib's
+# LC_REEXPORT_DYLIB is not enough for ld64 in this project's sysroot), so
+# every one of them is a real, fail-fast prerequisite.
+for d in libdispatch libdyld libSystem.B libsystem_kernel libsystem_pthread libsystem_malloc \
+         libsystem_c libcopyfile libresolv libsystem_notify libxpc libopenpam libncurses; do
     if [ ! -f "$OUT/system/$d.dylib" ]; then
         echo "error: $OUT/system/$d.dylib not found -- run its build_*.sh first" >&2
         exit 1
@@ -280,6 +297,145 @@ echo "wrote $OUT/syslogd_libc_extras.a"
 # but keeps this consistent with build_launchd_core.sh's own "prove the
 # whole archive's real content links clean standalone" precedent for a
 # freshly-built archive.
+#
+# libmalloc.a REMOVED FROM THIS LINK ENTIRELY 2026-09-02 (DAR-217), same
+# "remove, don't reconcile" fix (and same reasoning) build_launchd.sh
+# already applied to its own link on 2026-08-31 -- read that script's own
+# "libmalloc.a REMOVED FROM THIS LINK ENTIRELY" comment first; this one
+# only records what was different here. syslogd.macho is a real DYNAMIC
+# executable that already loads the real libsystem_malloc.dylib
+# transitively (via libSystem.B.dylib's own LC_REEXPORT_DYLIB) while ALSO
+# statically linking libmalloc.a -- the exact "two heaps + duplicate mach
+# state" bug class. Two real, concrete failures this removal fixes, both
+# found by `nm -m`/`otool -tV` on the pre-fix binary while root-causing
+# DAR-217, not speculatively:
+#
+#   1. libmalloc.a's mach_init.o (a verbatim copy of xnu-7195's
+#      libsyscall/mach/mach_init.c, built into that archive back when
+#      there was no libsystem_kernel.dylib) gave syslogd.macho its OWN
+#      __DATA,__common _mach_task_self_ / _bootstrap_port / _NDR_record /
+#      _vm_page_* / _vm_kernel_page_*, shadowing libsystem_kernel.dylib's.
+#      Nothing ever initialized them: the local mach_init() was in the
+#      binary but unreferenced (syslogd's only real constructor is
+#      libc_locale's ___xlocale_init_constructor -- confirmed by dumping
+#      __TEXT,__init_offsets), and the mach_init() that DOES run, from
+#      libSystem.B.dylib's own real constructor, writes the
+#      libsystem_kernel.dylib copy. Real symptom: launch_config()
+#      (third_party/syslog/syslogd.tproj/syslogd.c) loads
+#      _mach_task_self_ via a direct `adrp/add` of the LOCAL copy
+#      (verified in the disassembly), so its
+#      mach_port_allocate(mach_task_self(), ...) ran with task == 0 and
+#      returned MACH_SEND_INVALID_DEST -> exit(1) -> launchd respawn loop.
+#   2. `_malloc`/`_free`/`_calloc`/`_realloc` (plus the whole
+#      malloc-zone/_simple_* family, ~55 symbols) were duplicated between
+#      this binary and libsystem_malloc.dylib -- and syslogd genuinely
+#      frees cross-heap: launch_config() calls launch_data_free() on a
+#      launch_data_t that libxpc.dylib allocated from libsystem_malloc's
+#      zone. Same DAR-131 class as launchd's own fixed copy.
+#
+# Fix, exactly as in build_launchd.sh: drop the archive, link the real
+# libsystem_malloc.dylib directly as a sibling (ld64 cannot resolve a
+# reexport-only symbol by install-name alone in this project's sysroot --
+# see build_launchd.sh for why), and relink the one genuinely
+# per-image member back in from its already-built standalone object:
+# $OUT/chk_fail.o (___chk_fail_overflow/___chk_overlap/
+# ___chk_assert_no_overlap/___chk_fail_overlap -- `.private_extern`-by-
+# construction helpers that per docs/static-linking-cleanup-plan.md
+# legitimately belong in every image carrying `_chk` members). Unlike
+# launchd, this link needed NO sys_getpid.o/__current_pid rescue: syslogd
+# links no raw __fork trap, so nothing here depends on __current_pid
+# being same-image-addressable, and plain _getpid resolves through
+# libsystem_malloc.dylib. Verified after the relink with the same `nm -m`
+# duplicate audit: _bootstrap_port/_mach_task_self_/_NDR_record/
+# _vm_page_*/_malloc/_free are all gone from syslogd.macho's own defined
+# set, and `dyld_info -fixups` now shows _mach_task_self_ as a real
+# cross-image bind (through libdispatch.dylib's own real
+# LC_REEXPORT_DYLIB of libsystem_kernel.dylib, i.e. the single
+# process-wide copy). Known remaining, PRE-EXISTING duplicates left
+# alone here because they are a different, non-blocking scope: _errno
+# (cerror_stub.o), __os_alloc_once_table (syslogd_alloc_once_compat.o),
+# __mach_errors (also duplicated in launchd.macho today).
+#
+# ORDER MATTERS on the dylib list below, and getting it wrong is silent
+# at link time: libsystem_malloc.dylib is listed BEFORE libdispatch.dylib
+# on purpose. ld64 resolves an undefined symbol against the transitive
+# LC_LOAD_DYLIB closure of each listed dylib in order and then records
+# the bind against the dylib it was LISTED under -- but real dyld only
+# follows LC_REEXPORT_DYLIB when resolving that bind. libdispatch.dylib
+# plain-links (does NOT reexport) libsystem_malloc.dylib, so with
+# libdispatch first, `___assert_rtn` -- a real export of
+# libsystem_malloc.dylib and of nothing else in this project -- was
+# recorded as `bind libdispatch/___assert_rtn`, linked clean, and then
+# died at real dyld load time:
+#   dyld[7]: Symbol not found: ___assert_rtn
+#     Referenced from: /usr/sbin/syslogd
+#     Expected in: /usr/lib/system/libdispatch.dylib
+# (real QEMU boot, 2026-09-02, running /usr/sbin/syslogd by hand from the
+# root shell -- as a launchd job the same abort was invisible, showing up
+# only as an EXC_CORPSE_NOTIFY line on the console). This became reachable
+# only once libmalloc.a stopped supplying ___assert_rtn statically. The
+# bind-target audit at the bottom of this script now catches this class
+# at build time instead.
+
+# libpthread.a AND cerror_stub.o REMOVED FROM THIS LINK, and
+# libc_locale_for_stdio.a replaced by a syslogd-local copy with its two
+# pthread-TSD-shim members dropped -- 2026-09-02 (DAR-217), the exact
+# same three removals build_launchd.sh already made on 2026-08-30 for the
+# exact same reason. Read docs/launchd-pid1-postmortem.md's "Bug A"
+# (TSD-base clobber) and "Bug B" (dual pthread_create) plus that script's
+# own comments before touching this; only what is different for syslogd
+# is recorded here.
+#
+# Pre-fix `nm -m` on syslogd.macho showed it defining SIXTY-FOUR symbols
+# that libsystem_pthread.dylib also exports -- not helpers, the entire
+# threading core: _pthread_create, _pthread_self, _pthread_getspecific/
+# _setspecific, _pthread_key_create, _pthread_once, the whole
+# _pthread_mutex_*/_pthread_rwlock_* family, the raw ___bsdthread_create/
+# ___bsdthread_register/___bsdthread_terminate traps, every ___psynch_*
+# trap, and the shared state they hang off (__main_thread,
+# ___is_threaded). launchd.macho, by contrast, duplicates 30 symbols with
+# that dylib and NONE of them are threading-core (only MIG host_* stubs
+# and pthread_attr_* helpers) -- syslogd was simply never swept.
+#
+# That is two complete, independently-initialized pthread runtimes in one
+# process: separate TSD key tables, separate ___bsdthread_register()
+# registrations racing to be the one the kernel trusts, separate
+# __main_thread. It stayed invisible for as long as syslogd died in
+# launch_config() before ever becoming multi-threaded. Once DAR-217's
+# bootstrap-port fix let the real launchd check-in succeed, syslogd
+# reached init_modules() -- which creates real dispatch sources and real
+# libdispatch worker threads (klog_in/bsd_in/udp_in) -- and started dying
+# with a bare "EXC_CORPSE_NOTIFY ... for pid N" at a DIFFERENT point on
+# every boot (twice mid-notify_register_dispatch, once between two of
+# them), the signature of an asynchronous crash on a worker thread rather
+# than a deterministic bug on the main one. Confirmed by a real
+# instrumented boot that ruled out libnotify's own error paths first:
+# every notify_* call really does fail cleanly
+# (bootstrap_look_up2 -> 0x44e BOOTSTRAP_UNKNOWN_SERVICE, there being no
+# notifyd, then NOTIFY_STATUS_SERVER_NOT_FOUND) and returns normally.
+#
+# Fix is the same "remove, don't reconcile" as launchd's: let
+# libsystem_pthread.dylib be the one pthread runtime in the process.
+if [ ! -f "$OUT/libc_locale_for_stdio.a" ]; then
+    echo "error: $OUT/libc_locale_for_stdio.a not found -- run build_libc_stdio.sh first" >&2
+    exit 1
+fi
+# Derived syslogd-local copy: the shared archive itself stays untouched
+# because other, still-fully-static consumers (build_simple_cmds.sh,
+# pd_console_login.macho, the smoketests) genuinely still need their own
+# private TSD shim. Own filename so this script and build_launchd.sh
+# never race over one output file.
+rm -f "$OUT/libc_locale_for_stdio_syslogd.a"
+cp "$OUT/libc_locale_for_stdio.a" "$OUT/libc_locale_for_stdio_syslogd.a"
+ar d "$OUT/libc_locale_for_stdio_syslogd.a" pthread_tsd_shim.o
+ar d "$OUT/libc_locale_for_stdio_syslogd.a" pthread_tsd_shim_libc_bootstrap.o
+# ...and this archive's own private copy of cerror_stub.o, for the same
+# reason build_launchd.sh drops it: dropping only the loose
+# $OUT/cerror_stub.o below would still leave ___error/_errno defined
+# locally out of this archive, i.e. syslogd's static half and every
+# sibling dylib would keep writing two different errno slots.
+ar d "$OUT/libc_locale_for_stdio_syslogd.a" cerror_stub.o
+
 rm -f syslogd.macho
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
     -B"$NEWLD_BINDIR" \
@@ -302,11 +458,25 @@ rm -f syslogd.macho
     "$OUT/syslogd_libc_extras.a" \
     "$OUT/libc_regex.a" \
     "$OUT/liblaunchd_mig.a" \
-    "$OUT/libmach_ipc.a" "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
-    "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
-    "$OUT/libc_locale_for_stdio.a" \
-    "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
+    "$OUT/libmach_ipc.a" "$OUT/libclosure.a" "$OUT/chk_fail.o" "$OUT/libplatform.a" \
+    "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
+    "$OUT/libc_locale_for_stdio_syslogd.a" \
+    "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
+    "$OUT/system/libsystem_malloc.dylib" \
+    `# libsystem_c.dylib/libcopyfile.dylib listed EXPLICITLY (not left to` \
+    `# libSystem.B.dylib's LC_REEXPORT_DYLIB of them) for the same reason` \
+    `# build_launchd.sh already lists libsystem_c.dylib/libremovefile.dylib` \
+    `# explicitly -- see its own ___chkstk_darwin comment: ld64 cannot` \
+    `# follow a reexport by install-name alone here, because` \
+    `# /usr/lib/system/libsystem_c.dylib does not exist in this project's` \
+    `# on-disk sysroot, only at this project's own build output path. Real` \
+    `# symptom without them, once libpthread.a/cerror_stub.o stopped` \
+    `# supplying them transitively: _read/_mkdir (libsystem_c) and` \
+    `# _fchown/_symlink (libcopyfile) and _gethostname/_inet_ntop/_inet_pton` \
+    `# (libresolv) undefined at link.` \
+    "$OUT/system/libsystem_c.dylib" "$OUT/system/libcopyfile.dylib" "$OUT/system/libresolv.dylib" \
+    "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     "$OUT/system/libsystem_notify.dylib" "$OUT/system/libxpc.dylib" \
     "$OUT/system/libopenpam.dylib" "$OUT/system/libncurses.dylib" \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
@@ -331,4 +501,16 @@ if [ -n "$real_gaps" ]; then
     echo "WARNING: real undefined symbols present (no sibling dylib resolves these):" >&2
     echo "$real_gaps" >&2
 fi
+
+# ...and `nm -m`'s "(from libdispatch)" annotation is NOT sufficient
+# either: it repeats ld64's own recorded bind target without checking
+# that real dyld can actually find the symbol there. bind_target_audit.sh
+# (DAR-217, written after exactly that false "clean" on this binary --
+# see the link step's own "ORDER MATTERS" comment) re-checks every
+# two-level bind against the target dylib's real LC_REEXPORT_DYLIB
+# closure, which is the only thing dyld searches.
+./bind_target_audit.sh syslogd.macho || {
+    echo "error: syslogd.macho has an unresolvable two-level bind -- it would abort at dyld load" >&2
+    exit 1
+}
 echo "wrote syslogd.macho"

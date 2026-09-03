@@ -248,6 +248,25 @@ drifted before.
   (resolution is per-process, so a per-image-only check gives false
   "clean" results). Fix is always to rebuild the reporting image — never
   to re-weaken the provider, which is what DAR-153 had to undo.
+- **A clean link and a clean `nm -m` do NOT prove a two-level bind will
+  resolve — run `tools/userland_staging/bind_target_audit.sh <image>`.**
+  ld64 resolves an undefined symbol through the transitive
+  `LC_LOAD_DYLIB` closure of each dylib on the link line, then records
+  the bind against whichever dylib was *listed*; real dyld-940 then
+  searches only that image and what it `LC_REEXPORT_DYLIB`s. So a symbol
+  reached at link time *through* a dylib that merely plain-links its real
+  owner links clean and aborts at load. Real case (DAR-217):
+  libdispatch.dylib plain-links libsystem_malloc.dylib, syslogd.macho
+  listed libdispatch first, and `___assert_rtn` became
+  `bind libdispatch/___assert_rtn` → `dyld: Symbol not found:
+  ___assert_rtn, Expected in: /usr/lib/system/libdispatch.dylib`. As a
+  launchd job that abort is nearly invisible — the console shows only
+  `Failed to send exception EXC_CORPSE_NOTIFY. error code: 5 for pid N`,
+  with no symbol and no image name; it took running the binary by hand
+  from the root shell to see the real message. Fix is always to list the
+  real owning dylib EARLIER on the link line, never to bolt a re-export
+  onto an unrelated dylib. `build_syslogd.sh` runs this audit as a hard
+  gate at the end of its link; new dynamic-executable builds should too.
 - **Adversarial review before commit**: run an adversarial review on
   large/significant changes *before* committing, not after — post-hoc
   reviews in this project's history have caught real bugs (a false-positive
