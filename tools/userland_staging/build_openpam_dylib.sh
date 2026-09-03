@@ -241,6 +241,88 @@ rm -f "$EXTRACT"/time.o "$EXTRACT"/gettimeofday.o \
 # static archive (dyld.macho's build, and libopenpam.a's own smoketest)
 # still needs its own local copy.
 rm -f "$EXTRACT"/openpam_syscalls_compat.o
+
+# `_shutdown`/`_send`/`_writev`/`_netsettime`/`_settimeofday`
+# UNREFERENCED-DUPLICATE FIX (2026-09-03, DAR-7 continuation). cat_socket_stub.o
+# and date_compat.o above (pulled in wholesale by the `ar x` because
+# oldsyslog.o genuinely needs their `_socket`/`__NSGetArgv`) also carry
+# `_shutdown` and `_send`/`_writev`/`_netsettime`/`_settimeofday`/
+# `_pututxline` respectively -- confirmed via a real `nm -gu` sweep across
+# EVERY object in this dylib's own extract dir that none of these symbols
+# is referenced by anything here (oldsyslog.o only ever calls the
+# $UNIX2003-suffixed `connect`/`send`/`writev`, the real, project-wide
+# flat-namespace gap this file's own -Wl,-U lines already defer, and per
+# this file's OWN header, genuinely unreachable dead code -- openlog()'s
+# real logic bails out before ever reaching send/writev). Narrow each
+# object to just the symbol(s) actually needed (same `ld -r
+# -exported_symbol` technique this file already uses below for
+# launchd_passwd_compat_narrow.o) rather than editing cat_socket_stub.c/
+# date_compat.c themselves -- both are also compiled directly into
+# cat.macho/date.macho (build_simple_cmds.sh), out of this ticket's scope.
+# Real, measured result: 2 of the 5 duplicates this ticket's re-audit found
+# (`_send`/`_writev` vs libsystem_kernel.dylib) are now gone.
+#
+# `_connect` and `_socket` (cat_socket_stub.o) BOTH stay exported --
+# `_socket` is genuinely load-bearing (see below); `_connect` turned out to
+# be a REAL LIVE DEPENDENCY, found the expensive way (a real QEMU boot,
+# not by inspection): `launchctl.macho` (build_launchctl.sh, a script this
+# ticket is explicitly told not to touch) already links libopenpam.dylib
+# ahead of libsystem_kernel.dylib on ITS OWN link line, so ld64 baked an
+# ordinal-specific two-level bind of `_connect` -> libopenpam.dylib
+# straight into launchctl.macho at ITS link time -- an accidental
+# dependency, but a real one. First narrowing pass here hid `_connect` too
+# (only `_socket` looked load-bearing from inspection); a real QEMU boot
+# +login test caught it immediately: `dyld[12]: Symbol not found: _connect
+# / Referenced from: /usr/bin/launchctl / Expected in: /usr/lib/
+# libopenpam.dylib`, hard-aborting the very first `launchctl list` in the
+# shell. `tools/userland_staging/bind_target_audit.sh` confirms it as the
+# only other real UNRESOLVABLE bind this pass created (plus
+# `_pututxline`, see date_compat.o below) -- nothing else in the project
+# needs the now-hidden `_send`/`_writev`/`_shutdown`/`_netsettime`/
+# `_settimeofday`. Same precedent as DAR-229's `_initgroups` call: when a
+# real, already-shipped consumer's OWN link depends on a duplicate symbol
+# staying put, keep the copy that's actually relied upon rather than force
+# a break in a binary this ticket isn't scoped to relink. `_connect`
+# remains a real, counted duplicate vs. libsystem_kernel.dylib -- not
+# fixed by this pass, left for whichever session next touches
+# build_launchctl.sh's own link order (reorder libsystem_kernel.dylib
+# ahead of libopenpam.dylib there, the standard bind_target_audit.sh fix)
+# to actually close.
+#
+# `_socket` (cat_socket_stub.o) is a REAL, deliberate duplicate --
+# genuinely load-bearing, NOT safe to consolidate: oldsyslog.o calls plain
+# `socket()` then, only on success, `connect$UNIX2003()` -- and
+# `connect$UNIX2003` has no real provider anywhere in this project yet
+# (this file's own header, docs/backlog.md item d7). Swapping in
+# libsystem_kernel.dylib's real `_socket` would make that first call
+# succeed for real (this project's launchd DOES bind a real
+# `/var/run/syslog` AF_UNIX SOCK_DGRAM socket via com.apple.syslogd.plist's
+# own Sockets key / socketgroup_setup_one(), confirmed via
+# inject_into_sd_image.sh's own comment -- so this isn't even
+# hypothetical), walking straight into the genuinely-unresolved
+# `connect$UNIX2003` flat-namespace bind on first use -- a real dyld abort
+# on first syslog() call, not a safe dedup. Left exactly as-is, same
+# permanent-exception class as `_syslog` above (also investigated and
+# deliberately not consolidated).
+#
+# `_pututxline` (date_compat.o) ALSO stays exported -- same real-live-
+# dependency discovery as `_connect` above, this time from
+# `syslogd.macho` (build_syslogd.sh, also out of this ticket's scope):
+# bind_target_audit.sh flagged `libopenpam/_pututxline (not exported...)`
+# as UNRESOLVABLE the moment this pass's first narrowing pass hid it.
+# Not a real duplicate-symbol count fix either way (`_pututxline` was
+# never in the `--summary` dylib-vs-dylib duplicate list -- no other
+# shipped dylib defines it), just an accidental single-owner export
+# syslogd.macho already depends on; safest to leave it exactly as
+# syslogd.macho's own link already expects.
+NARROW_LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+"$NARROW_LD" -r -arch arm64 -exported_symbol _socket -exported_symbol _connect \
+    "$EXTRACT/cat_socket_stub.o" -o "$EXTRACT/cat_socket_stub_narrow.o"
+mv -f "$EXTRACT/cat_socket_stub_narrow.o" "$EXTRACT/cat_socket_stub.o"
+"$NARROW_LD" -r -arch arm64 -exported_symbol __NSGetArgv -exported_symbol _pututxline \
+    "$EXTRACT/date_compat.o" -o "$EXTRACT/date_compat_narrow.o"
+mv -f "$EXTRACT/date_compat_narrow.o" "$EXTRACT/date_compat.o"
+
 (cd "$EXTRACT" && ar x "../../libc_locale.a" table.o none.o)
 # See narrow_rune_locale.sh's own header (static-linking cleanup, Phase
 # 1d, 2026-08-30): demotes the 4 public rune-locale globals table.o/
