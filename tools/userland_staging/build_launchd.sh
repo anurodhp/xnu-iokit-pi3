@@ -69,7 +69,7 @@ fi
 OUT="libc_build"
 ICU_LIB="icu_build/target/lib"
 
-for a in liblaunchd_core.a libCoreFoundation.a cf_libc_extras.a launchd_libc_extras.a \
+for a in liblaunchd_core.a cf_libc_extras.a launchd_libc_extras.a \
          liblaunchd_mig.a liblaunchd_syscalls.a \
          libmach_ipc.a libclosure.a libmalloc.a libplatform.a libpthread.a \
          libc_gen.a libc_string.a libc_stdio.a libc_printf.a libc_locale_for_stdio.a; do
@@ -78,6 +78,12 @@ for a in liblaunchd_core.a libCoreFoundation.a cf_libc_extras.a launchd_libc_ext
         exit 1
     fi
 done
+# DAR-195: real libCoreFoundation.dylib, not the old static archive --
+# same migration already applied to build_launchctl.sh.
+if [ ! -f "$OUT/system/libCoreFoundation.dylib" ]; then
+    echo "error: $OUT/system/libCoreFoundation.dylib not found -- run build_corefoundation_dylib.sh first" >&2
+    exit 1
+fi
 
 # Staleness guard (DAR-200, 2026-09-02) -- see this script's own header
 # comment for the wasted boot cycle that motivated it. This script never
@@ -583,10 +589,41 @@ cp "$OUT/liblaunchd_mig.a" "$OUT/liblaunchd_mig_no_dup.a"
 # _vproc_mig_*/_job_mig_* symbol family as needing a real per-symbol
 # check, not a blanket strip -- this is that check's answer. Do NOT
 # re-strip these.
+# isthreaded_compat.o kept (NOT stripped) 2026-09-03, real QEMU regression
+# found while migrating this script to libCoreFoundation.dylib for DAR-195:
+# DAR-23's dedup pass (commit 897df1f, same day) removed it as "provably
+# redundant" purely because its one visible symbol, __isthreaded, is
+# already a real export of libsystem_c.dylib -- but that symbol-name match
+# is NOT the reason this object is on the link line. Per
+# docs/launchd-pid1-postmortem.md's Bug D, isthreaded_compat.o carries a
+# real image constructor that calls the real, otherwise-unreferenced
+# __atexit_init() (__private_extern__, so only a same-image object can
+# reach it) -- deliberately placed in the file that defines __isthreaded
+# so ld64's archive-member-pull pulls the constructor in exactly when
+# atexit.o also gets pulled, and never otherwise. Without it,
+# atexit_register()'s own `struct atexit *p = __atexit; assert(p);` fires
+# on a NULL __atexit, and this port's assert()/abort() is a bare
+# kill(getpid(), SIGABRT) with no real signal delivery -- so instead of
+# dying, the process spins forever with zero console output (confirmed via
+# a real QEMU-monitor register probe: PC pegged oscillating between
+# _lck_mtx_lock/_lck_mtx_unlock, real CPU-bound spin, not a blocked wait).
+# DAR-23's own strip was a real, silently-broken regression: launchd's own
+# atexit(ipc_clean_up) call in ipc_server_init() was unreachable in that
+# same commit's own boot test too (the undefined _bind gap this same
+# DAR-195 session's launchd_socket_syscall_gaps.o now closes, see this
+# script's own link line below, meant ipc_server_init() itself couldn't
+# even link, let alone run, until now) -- so DAR-23 never actually
+# exercised this code path. "Correctness fix in one place makes a
+# long-latent bug reachable in another", same lesson the postmortem
+# itself already names. Confirmed via a real QEMU boot after re-adding
+# it: launchd reaches pd-console-login/login again. Do NOT re-strip this
+# member on symbol-name-redundancy grounds; libsystem_c.dylib exporting
+# __isthreaded is real but incidental -- see feedback memory
+# "reexport name-match isn't proof" for the general form of this trap.
 rm -f "$OUT/liblaunchd_syscalls_no_dup.a"
 cp "$OUT/liblaunchd_syscalls.a" "$OUT/liblaunchd_syscalls_no_dup.a"
 ar d "$OUT/liblaunchd_syscalls_no_dup.a" \
-    isthreaded_compat.o siglist.o sys____munmap.o sys__dup.o \
+    siglist.o sys____munmap.o sys__dup.o \
     sys__kevent.o sys__mkdirat.o uuid_pack.o
 
 rm -f "$OUT/launchd_libc_extras_no_dup.a"
@@ -632,6 +669,17 @@ cp "$OUT/cf_libc_extras.a" "$OUT/cf_libc_extras_no_dup.a"
 ar d "$OUT/cf_libc_extras_no_dup.a" \
     geteuid.o getuid.o
 
+# DAR-195: real bind() gap surfaced by the libCoreFoundation.a ->
+# libCoreFoundation.dylib migration above -- see
+# launchd_socket_syscall_gaps.c's own header for the full real writeup
+# (same class of find as launchctl_syscall_gaps.c's own bind()/
+# getsockname() gap, closed the same way: build_corefoundation_dylib.sh
+# narrowed cf_socket_syscalls.o's bind() out on the belief
+# libsystem_kernel.dylib already exports it, which is false for bind()
+# specifically -- confirmed via nm -gU).
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -O0 \
+    launchd_socket_syscall_gaps.c -o "$OUT/launchd_socket_syscall_gaps.o"
+
 rm -f "$OUT/launchd.macho"
 # -DCRT_DYNAMIC_LINKING (DAR-153, 2026-09-02): launchd.macho is a real,
 # genuinely dynamically-linked executable (libdispatch/libdyld/libSystem.B/
@@ -655,22 +703,29 @@ rm -f "$OUT/launchd.macho"
 # Unifying `environ` onto the one real dyld-owned copy (this flag) makes
 # setenv() and posix_spawn(...,environ) agree, same fix shape as
 # build_launchctl.sh's own DAR-161 remediation.
+# DAR-195 (2026-09-03): libCoreFoundation.a -> real libCoreFoundation.dylib,
+# same migration already applied to build_launchctl.sh (f8b82ce).
+# __mh_execute_header/__mh_dylib_header alias REMOVED -- that alias only
+# existed because CF was statically embedded into this executable, so
+# CFUniChar.c's __CFGetSectDataPtr() (which hunts loaded dyld images for
+# ITS OWN __UNICODE section via &_mh_dylib_header, real behavior on real
+# Apple where CF is always a separate dylib) needed launchd.macho's own
+# synthesized __mh_execute_header aliased to stand in for a dylib header
+# that didn't exist. Now that CF really is its own dylib, its own real
+# Mach-O header naturally satisfies __mh_dylib_header with zero alias
+# needed. The 7 kCF*Key legacy-alias entries also REMOVED -- their real
+# base symbols now live in libCoreFoundation.dylib's own link
+# (build_corefoundation_dylib.sh), not here (ld64's own alias-base-must-
+# be-local constraint, see that script's own comment).
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -DCRT_DYNAMIC_LINKING \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -Wl,-u,__current_pid \
-    -Wl,-alias,__mh_execute_header,__mh_dylib_header \
-    -Wl,-alias,_kCFDateFormatterCalendarKey,_kCFDateFormatterCalendar \
-    -Wl,-alias,_kCFDateFormatterTimeZoneKey,_kCFDateFormatterTimeZone \
-    -Wl,-alias,_kCFCalendarIdentifierGregorian,_kCFGregorianCalendar \
-    -Wl,-alias,_kCFLocaleCalendarKey,_kCFLocaleCalendar \
-    -Wl,-alias,_kCFLocaleCountryCodeKey,_kCFLocaleCountryCode \
-    -Wl,-alias,_kCFLocaleLanguageCodeKey,_kCFLocaleLanguageCode \
-    -Wl,-alias,_kCFLocaleScriptCodeKey,_kCFLocaleScriptCode \
     -o "$OUT/launchd.macho" \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     -Wl,-force_load,"$OUT/liblaunchd_core.a" \
-    "$OUT/libCoreFoundation.a" "$OUT/cf_libc_extras_no_dup.a" "$OUT/launchd_libc_extras_no_dup.a" \
+    "$OUT/launchd_socket_syscall_gaps.o" \
+    "$OUT/cf_libc_extras_no_dup.a" "$OUT/launchd_libc_extras_no_dup.a" \
     "$OUT/liblaunchd_mig_no_dup.a" "$OUT/liblaunchd_syscalls_no_dup.a" \
     "$OUT/libmach_ipc_no_dead_stubs.a" "$OUT/mach_port_gap_closures2.o" "$OUT/mach_port_gap_closures2_traps.o" \
     "$OUT/mach_ipc_dead_stubs_voucher_only.o" \
@@ -721,6 +776,7 @@ rm -f "$OUT/launchd.macho"
     `# an external import. This link succeeds today with 0 undefined` \
     `# symbols from that cause -- do not re-add libc_locale_for_stdio*.a.` \
     "$OUT/system/libsystem_kernel.dylib" \
+    "$OUT/system/libCoreFoundation.dylib" \
     "$OUT/system/libxpc.dylib" "$OUT/system/libbsm.dylib" \
     "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
