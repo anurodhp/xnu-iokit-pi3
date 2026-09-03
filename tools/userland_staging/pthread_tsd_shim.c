@@ -157,10 +157,43 @@ int pthread_tsd_shim_bootstrap(void) {
 
 /* ---- pthread_key_create/setspecific/getspecific/key_init_np/once,
  * real names, same adapted algorithm as tsd_bootstrap.c (see that file
- * for the full real-vs-simplified breakdown - identical here: faithful
- * to third_party/libpthread/src/pthread_tsd.c's constants/logic, real
- * os_unfair_lock omitted because this target is provably single-threaded
- * so there is no concurrent access to protect against). ---------------- */
+ * for the full real-vs-simplified breakdown - faithful to
+ * third_party/libpthread/src/pthread_tsd.c's constants/logic).
+ *
+ * REAL BUG FOUND AND FIXED 2026-09-03 (DAR-227): this section used to
+ * omit all synchronization, on the stated grounds that "this target is
+ * provably single-threaded so there is no concurrent access to protect
+ * against". That premise died on 2026-08-20 (Phase 7.5 step 1) when
+ * bsdthread_create(2) stopped returning ENOTSUP and real pthread_create()
+ * started spawning real kernel threads; DAR-222 then crashed on
+ * libdispatch's real manager thread in a process (syslogd) simultaneously
+ * running its main thread and dispatch worker threads.
+ *
+ * These were not theoretical races confined to a smoketest. The five
+ * public functions below are __attribute__((weak)) so real
+ * libsystem_pthread.dylib overrides them wherever both are linked -- but
+ * libsystem_malloc.dylib links ONLY this file, and re-exports the
+ * FreeBSD-compat aliases at the bottom of this file as STRONG symbols
+ * (__pthread_key_create/__pthread_setspecific/__pthread_getspecific/
+ * __pthread_once, confirmed via `nm -gU`). libsystem_c.dylib's real Libc
+ * consumers (ttyname.c, strsignal.c, localtime.c) bind to them there --
+ * `nm -m libsystem_c.dylib` really shows
+ * "(undefined) external __pthread_key_create (from libsystem_malloc)" --
+ * so this unlocked code ran on every thread of every process on this
+ * stack, over libsystem_malloc's own private g_key_destructors table.
+ *
+ * Fix uses C11/GCC atomic builtins rather than real os_unfair_lock ON
+ * PURPOSE, and this is load-bearing, not a shortcut: libplatform's
+ * os_unfair_lock resolves its owner identity through
+ * _os_lock_owner_get_self() -> _pthread_getspecific_direct(TSD slot 3),
+ * i.e. through the very TSD block this file is responsible for
+ * bootstrapping. Taking an os_unfair_lock here would be a circular
+ * dependency, and worse, a SILENT one: before the TSD block is populated
+ * the owner reads back as 0 == OS_LOCK_NO_OWNER, so the lock's cmpxchg
+ * 0->0 trivially "succeeds" for every caller at once and the lock
+ * degrades to a no-op with no abort and no diagnostic. Compiler atomics
+ * lower to bare LDXR/STXR here, depend on nothing, and are correct
+ * before any bootstrap has run. ------------------------------------- */
 
 #define TSD_RESERVED_MAX  9
 #define TSD_FIRST         (TSD_RESERVED_MAX + 1) /* 10 */
@@ -249,8 +282,16 @@ int pthread_key_create(unsigned long *key, void (*destructor)(void *)) {
     for (unsigned long k = TSD_DYNAMIC_START; k < TSD_DYNAMIC_END; k++) {
         unsigned long *ptr = &g_key_destructors[k];
         unsigned long value = ~(unsigned long)destructor;
-        if (*ptr == 0) {
-            *ptr = value;
+        /* DAR-227: was a plain `if (*ptr == 0) { *ptr = value; }` --
+         * two threads reading 0 from the same slot both claimed it and
+         * both returned the SAME key, silently aliasing two unrelated
+         * subsystems' TSD. Real pthread_tsd.c claims its slot with
+         * os_atomic_cmpxchg for exactly this reason; same contract here.
+         * On failure the CAS reloads `expected`, so we simply move on to
+         * the next slot -- no retry loop on the same index is needed. */
+        unsigned long expected = 0;
+        if (__atomic_compare_exchange_n(ptr, &expected, value, 0 /* strong */,
+                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
             *key = k;
             return 0;
         }
@@ -269,7 +310,13 @@ int pthread_key_init_np(int key, void (*destructor)(void *)) {
     if (key < TSD_FIRST || key >= TSD_DYNAMIC_START) {
         return 22 /* EINVAL */;
     }
-    g_key_destructors[key] = ~(unsigned long)destructor;
+    /* DAR-227: release store, not a plain store. `key` here is a
+     * compile-time-constant reserved slot so there is no claim race to
+     * lose, but pthread_setspecific() below reads this same word with an
+     * acquire load to decide whether the key is live -- the pairing is
+     * what makes that decision well-defined across threads. */
+    __atomic_store_n(&g_key_destructors[key], ~(unsigned long)destructor,
+                     __ATOMIC_RELEASE);
     return 0;
 }
 
@@ -279,15 +326,24 @@ int pthread_setspecific(unsigned long key, const void *value) {
     if (key < TSD_FIRST || key >= TSD_DYNAMIC_END) {
         return 22 /* EINVAL */;
     }
-    int created = (g_key_destructors[key] != 0);
+    /* DAR-227: acquire load pairs with the release stores in
+     * pthread_key_create()/pthread_key_init_np() above, so a key observed
+     * live here is guaranteed to have been fully published first. */
+    int created = (__atomic_load_n(&g_key_destructors[key], __ATOMIC_ACQUIRE) != 0);
     if (key < TSD_DYNAMIC_START || created) {
+        /* The TSD slot write itself needs no atomic: TPIDRRO_EL0 is
+         * per-thread by construction, so slot storage is never shared. */
         _os_tsd_set_direct(key, (void *)value);
         if (key < TSD_DYNAMIC_START) {
             /* Matches real pthread_tsd.c: mark "claimed, no destructor",
              * not "never claimed" - see tsd_bootstrap.c's own self-review
              * note for why this specific value (all-ones, not zero)
-             * matters. */
-            g_key_destructors[key] = ~0UL;
+             * matters. DAR-227: this IS shared (the destructor table is
+             * process-wide), so it is a release store. Two threads racing
+             * to claim the same reserved key both write the identical
+             * ~0UL, so the CAS/plain-store distinction is immaterial --
+             * only the publication ordering matters. */
+            __atomic_store_n(&g_key_destructors[key], ~0UL, __ATOMIC_RELEASE);
         }
         return 0;
     }
@@ -314,9 +370,19 @@ void *pthread_getspecific(unsigned long key) {
  * already in this project's 109-file Libc set:
  * third_party/Libc/string/FreeBSD/strsignal.c's `thr_once(&sig_init_once,
  * sig_keycreate)` - was silently never initializing its TSD key.
- * Single-threaded target: no race to guard against between the check and
- * the call, so no lock is needed for correctness (same reasoning as this
- * file's other omissions), only the real sentinel value matters. */
+ *
+ * SECOND REAL BUG, FIXED 2026-09-03 (DAR-227): the check and the set were
+ * separate, unsynchronized operations, justified by "single-threaded
+ * target: no race to guard against between the check and the call". Once
+ * real threads existed that was a textbook double-init race, AND the
+ * ordering was inverted from what the once contract requires -- the flag
+ * was published BEFORE init_routine() ran, so a second thread arriving
+ * mid-initialization saw "done" and proceeded to use state the first
+ * thread had not finished building yet. That is precisely the failure
+ * shape DAR-222 hit in libnotify's dispatch_once(notify_server_port).
+ * "Run exactly once, and don't return until it HAS run" is the entire
+ * contract of this primitive; a plain flag cannot express the second
+ * half. Real algorithm below, mirroring libplatform's own _os_once gate. */
 struct pthread_once_shim {
     long sig;
     char opaque[8];
@@ -330,15 +396,51 @@ struct pthread_once_shim {
  * once_t without the macro (sig=0) both differ from this "done" value
  * and so both run init_routine() on their first call. */
 #define PTHREAD_ONCE_SIG_DONE 1
+/* DAR-227: third state, "some thread is running init_routine() right
+ * now". Must be distinct from both DONE and every plausible "not yet
+ * run" value (0 and 0x30B1BCBA), same reasoning as DONE's choice above. */
+#define PTHREAD_ONCE_SIG_INPROGRESS 2
 
 __attribute__((weak))
 int pthread_once(void *once_control, void (*init_routine)(void)) {
     struct pthread_once_shim *once = (struct pthread_once_shim *)once_control;
-    if (once->sig != PTHREAD_ONCE_SIG_DONE) {
-        once->sig = PTHREAD_ONCE_SIG_DONE;
-        init_routine();
+    for (;;) {
+        long v = __atomic_load_n(&once->sig, __ATOMIC_ACQUIRE);
+        if (v == PTHREAD_ONCE_SIG_DONE) {
+            /* Acquire above pairs with the release store made by the
+             * winner AFTER init_routine() returned, so everything that
+             * routine published is visible to us before we return. */
+            return 0;
+        }
+        if (v == PTHREAD_ONCE_SIG_INPROGRESS) {
+            /* Another thread is initializing. Real libplatform parks on
+             * __ulock_wait here; this file deliberately depends on
+             * nothing (see the section header comment on why it cannot
+             * reach for libplatform), so it spins with the ARM `yield`
+             * hint instead. Correct but not power-optimal: `yield` is a
+             * hint to the CPU, and the kernel's preemption timer still
+             * runs, so the initializing thread is guaranteed to be
+             * scheduled and finish even on this single-core-scheduled
+             * target (architecture.md: secondary cores are parked). */
+            __asm__ __volatile__("yield" ::: "memory");
+            continue;
+        }
+        /* v is some "not yet run" value (0 or PTHREAD_ONCE_INIT's
+         * 0x30B1BCBA). Try to become the initializer. */
+        long expected = v;
+        if (__atomic_compare_exchange_n(&once->sig, &expected,
+                                        PTHREAD_ONCE_SIG_INPROGRESS,
+                                        0 /* strong */,
+                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            init_routine();
+            /* Release: publish DONE only after every write made by
+             * init_routine() is visible to whoever observes DONE. */
+            __atomic_store_n(&once->sig, (long)PTHREAD_ONCE_SIG_DONE,
+                             __ATOMIC_RELEASE);
+            return 0;
+        }
+        /* Lost the CAS -- reload and re-dispatch on the new state. */
     }
-    return 0;
 }
 
 /* Real Apple private aliases (third_party/Libc/fbsdcompat/reentrant.h maps

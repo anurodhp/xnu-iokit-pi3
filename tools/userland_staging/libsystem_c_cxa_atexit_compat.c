@@ -10,9 +10,26 @@
  * own separate dylib (this migration's own step 5), it needs a real
  * provider for this symbol reachable via its libsystem_c.dylib
  * dependency, not a copy privately bundled inside libdyld.dylib only.
- * Single-threaded-safe (same "no lock needed, this target is provably
- * single-threaded" reasoning already used throughout this project's
- * pthread_tsd_shim.c), not a stand-in for missing logic. */
+ *
+ * REAL BUG FOUND AND FIXED 2026-09-03 (DAR-227): this table used to be
+ * updated with plain, unsynchronized reads/writes on the stated grounds
+ * that this target is "provably single-threaded" -- the same premise
+ * pthread_tsd_shim.c's own DAR-227 fix already found and refuted (dead
+ * since 2026-08-20, Phase 7.5). This table is process-wide and every
+ * translation unit's static initializers can call __cxa_atexit during
+ * real concurrent dyld/libinit activity, so two threads racing here used
+ * to both read the same g_cxa_atexit_count, both write the SAME slot,
+ * and both increment the count -- one registered destructor silently
+ * overwritten, the count off by one from the entries actually stored.
+ *
+ * Fixed with C11/GCC atomic builtins, not os_unfair_lock, on purpose and
+ * for the same reason as pthread_tsd_shim.c: __cxa_atexit can run before
+ * this process's TSD block is bootstrapped (global C++ constructors run
+ * very early), and os_unfair_lock's owner identity resolves through a
+ * TSD slot pthread_tsd_shim.c itself provides -- so taking a real lock
+ * here risks the identical silent-no-op circular dependency documented
+ * there. atomic_fetch_add gives each caller a uniquely-owned slot index
+ * with no lock at all. */
 #define CXA_ATEXIT_MAX 64
 struct cxa_atexit_entry {
     void (*func)(void *);
@@ -24,22 +41,40 @@ static struct cxa_atexit_entry g_cxa_atexit_table[CXA_ATEXIT_MAX];
 static int g_cxa_atexit_count = 0;
 
 int __cxa_atexit(void (*func)(void *), void *arg, void *dso) {
-    if (g_cxa_atexit_count >= CXA_ATEXIT_MAX) {
+    /* Each caller gets a unique index -- no two threads can ever claim
+     * the same slot, so the writes below need no synchronization with
+     * each other, only a release fence before publishing "used". */
+    int i = __atomic_fetch_add(&g_cxa_atexit_count, 1, __ATOMIC_RELAXED);
+    if (i >= CXA_ATEXIT_MAX) {
         return -1;
     }
-    g_cxa_atexit_table[g_cxa_atexit_count].func = func;
-    g_cxa_atexit_table[g_cxa_atexit_count].arg = arg;
-    g_cxa_atexit_table[g_cxa_atexit_count].dso = dso;
-    g_cxa_atexit_table[g_cxa_atexit_count].used = 1;
-    g_cxa_atexit_count++;
+    g_cxa_atexit_table[i].func = func;
+    g_cxa_atexit_table[i].arg = arg;
+    g_cxa_atexit_table[i].dso = dso;
+    /* Release: __cxa_finalize's acquire load of `used` is guaranteed to
+     * see func/arg/dso fully written first. */
+    __atomic_store_n(&g_cxa_atexit_table[i].used, 1, __ATOMIC_RELEASE);
     return 0;
 }
 
 void __cxa_finalize(void *dso) {
-    for (int i = g_cxa_atexit_count - 1; i >= 0; i--) {
-        if (g_cxa_atexit_table[i].used && (dso == 0 || g_cxa_atexit_table[i].dso == dso)) {
-            g_cxa_atexit_table[i].used = 0;
-            g_cxa_atexit_table[i].func(g_cxa_atexit_table[i].arg);
+    /* Acquire: see every slot published by a fetch_add that happened
+     * before this load, per the release-store pairing above. */
+    int count = __atomic_load_n(&g_cxa_atexit_count, __ATOMIC_ACQUIRE);
+    if (count > CXA_ATEXIT_MAX) {
+        count = CXA_ATEXIT_MAX;
+    }
+    for (int i = count - 1; i >= 0; i--) {
+        int expected = 1;
+        if (g_cxa_atexit_table[i].dso == dso || dso == 0) {
+            /* CAS-claim the entry so two concurrent __cxa_finalize calls
+             * (e.g. one per unloading DSO) can never both run the same
+             * destructor. Acquire on success: func/arg are stable by the
+             * time we read them below, per the store's own release. */
+            if (__atomic_compare_exchange_n(&g_cxa_atexit_table[i].used, &expected, 0,
+                                            0 /* strong */, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+                g_cxa_atexit_table[i].func(g_cxa_atexit_table[i].arg);
+            }
         }
     }
 }

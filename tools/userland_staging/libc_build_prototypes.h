@@ -67,13 +67,52 @@ int _fcntl(int fd, int cmd, ...);
 /* freopen.c/_flock_stub.c also assume FLOCKFILE(fp)/FUNLOCKFILE(fp)
  * macros exist (real Apple's own private stdio header pair, absent from
  * this checkout -- confirmed via grep across third_party/Libc, same
- * class of gap as the underscore-prefixed prototypes above). Real,
- * documented semantics: real BSD stdio's own locking wrappers, safe to
- * call unconditionally (flockfile()/funlockfile() are real no-ops on a
- * single-threaded FILE*, already declared in stdio.h). */
+ * class of gap as the underscore-prefixed prototypes above).
+ *
+ * REAL BUG FOUND AND FIXED 2026-09-03 (DAR-227), in two layers:
+ *
+ * 1. This macro used to call the PUBLIC flockfile()/funlockfile()
+ *    (real Apple's own real names, weak-aliased in _flock_stub.c via
+ *    `__weak_reference(_flockfile, flockfile)` to the real
+ *    underscore-prefixed _flockfile()/_funlockfile()). That alias never
+ *    actually worked on this toolchain/target: `nm` on the real compiled
+ *    _flock_stub.o shows ONLY `__flockfile`/`__flockfile_debug_stub`
+ *    defined -- no `_flockfile`/`_funlockfile` weak alias symbol at all
+ *    -- so this macro's expansion was an undefined reference the whole
+ *    time. It was never caught because compat_include/
+ *    stdio_flockfile_compat.h's OLD unconditional no-op force-included
+ *    right after this header and silently redefined FLOCKFILE/
+ *    FUNLOCKFILE out from under it before any real link ever exercised
+ *    this version -- fixing that shadow (also DAR-227) is what finally
+ *    surfaced this real, separate, previously-untested bug via an actual
+ *    `ld` undefined-symbol error (confirmed by building, not guessed).
+ *    Fixed here by calling the real, strong, underscore-prefixed names
+ *    directly instead of depending on the broken weak alias.
+ * 2. The comment used to also claim flockfile()/funlockfile() "are real
+ *    no-ops on a single-threaded FILE*" -- true only while
+ *    bsdthread_create(2) still returned ENOTSUP (pre-2026-08-20). The
+ *    real _flockfile()/_funlockfile() lock/unlock each FILE's real,
+ *    PTHREAD_RECURSIVE_MUTEX_INITIALIZER-backed `_fl_mutex` (findfp.c,
+ *    local.h) using real, working libpthread now -- gated below on
+ *    `__isthreaded` (libc_gen_shims.c, DAR-227) as a fast-path skip
+ *    before any second thread exists, matching real Apple's own
+ *    documented optimization, not calling them unconditionally as
+ *    fake no-ops. */
 #ifndef FLOCKFILE
-#define FLOCKFILE(fp) flockfile(fp)
-#define FUNLOCKFILE(fp) funlockfile(fp)
+extern int __isthreaded;
+/* Real Apple `FILE` is exactly `typedef struct __sFILE { ... } FILE;`
+ * (third_party/Libc/include/_stdio.h:127) - this incomplete forward
+ * declaration is structurally identical to that tag for a pointer
+ * parameter, so this prototype matches _flock_stub.c's own real
+ * `_flockfile(FILE *fp)`/`_funlockfile(FILE *fp)` definitions exactly
+ * (confirmed by actually compiling _flock_stub.c against this
+ * declaration, not guessed) - an earlier `void *fp` version here
+ * genuinely conflicted and broke _flock_stub.c's own compile. */
+struct __sFILE;
+extern void _flockfile(struct __sFILE *fp);
+extern void _funlockfile(struct __sFILE *fp);
+#define FLOCKFILE(fp) do { if (__isthreaded) _flockfile(fp); } while (0)
+#define FUNLOCKFILE(fp) do { if (__isthreaded) _funlockfile(fp); } while (0)
 #endif
 /* Real Libc/gen/FreeBSD/usleep.c/sleep.c call this private name with
  * zero prototype in scope in this checkout too -- same gap, real

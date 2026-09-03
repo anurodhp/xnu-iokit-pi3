@@ -601,6 +601,10 @@ pthread_create(pthread_t _Nullable *_Nonnull restrict thread,
 {
 	extern void *mmap(void *addr, size_t len, int prot, int flags, int fildes, long off);
 	extern int __is_threaded;
+	/* DAR-227: real Apple pthread_create() flips both this and
+	 * __isthreaded (libc_gen_shims.c) on real success -- see that
+	 * file's own header for the full trail. */
+	extern int __isthreaded;
 
 	(void)attr;
 	if (thread) {
@@ -697,6 +701,7 @@ pthread_create(pthread_t _Nullable *_Nonnull restrict thread,
 	}
 
 	__is_threaded = 1;
+	__isthreaded = 1;
 	if (thread) {
 		*thread = child_thread;
 	}
