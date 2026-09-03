@@ -127,9 +127,27 @@ EOF
 #   OWN from-scratch reproduction of these two globals (compiled by 5
 #   leaf dylibs' build scripts, each deliberately keeping its own
 #   independent copy) must NOT also get this macro.
+# -DCOLLATE_STATE_EXPORTED=1: real fix for DAR-234 (static-linking
+#   cleanup, 2026-09-03), same shape as XLOCALE_STATE_EXPORTED just
+#   above. This loop is the ONE compile of real Apple's actual
+#   collate.c -- widens __collate_collating_symbol/__collate_equiv_class
+#   from real Apple's own __private_extern__ to default visibility, only
+#   here, only for this one canonical definition (which ends up in
+#   libsystem_c.dylib via libc_locale_for_stdio.a). See collate.c's own
+#   comment on the `#ifdef COLLATE_STATE_EXPORTED` block: build_launchctl.sh's
+#   liblaunchctl_extras.a compiles real Apple fnmatch.c into a SEPARATE
+#   image from this one (unlike real macOS, where fnmatch.c and
+#   collate.c are both part of the same libsystem_c.dylib), so fnmatch.o's
+#   real, direct calls to these two need a real cross-image dylib export,
+#   not real Apple's own same-image private-extern bind. Unlike the
+#   xlocale pair, no second project-authored file redefines these two
+#   symbols anywhere, so there's no equivalent duplicate-export risk from
+#   a second producer -- still macro-gated rather than widened
+#   unconditionally, for the same auditability precedent.
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness \
     -DXLOCALE_STATE_EXPORTED=1 \
+    -DCOLLATE_STATE_EXPORTED=1 \
     -include libc_build_prototypes.h \
     -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
     -DVARIANT_STATIC -DVARIANT_CANCELABLE -DVARIANT_DARWINEXTSN -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \
