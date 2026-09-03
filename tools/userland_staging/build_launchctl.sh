@@ -501,6 +501,26 @@ rm -f "$OUT/launchctl.macho"
     "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
     "$OUT/system/libsystem_c.dylib" \
+    `# libsystem_malloc.dylib/libsystem_platform.dylib listed EXPLICITLY,` \
+    `# same reexport-depth reasoning build_launchd.sh applies to its own` \
+    `# sibling dylibs. Added 2026-09-03 with the archive strip above:` \
+    `# libsystem_malloc.dylib is the real owner of __exit, __current_pid,` \
+    `# ___memcpy_chk, ___memset_chk and __mal_semwait_sleep (all confirmed` \
+    `# via nm -gU), which libmalloc.a had been the only supplier of here` \
+    `# purely because this dylib was never named on the link line.` \
+    "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_platform.dylib" \
+    `#` \
+    `# KNOWN-BROKEN as of 2026-09-03: two symbols remain undefined,` \
+    `# ___collate_collating_symbol and ___collate_equiv_class (both from` \
+    `# liblaunchctl_extras.a's fnmatch.o _rangematch). Unlike every other` \
+    `# gap this sweep exposed, these are NOT a case of the owning dylib` \
+    `# going unnamed -- they are genuinely exported by NO dylib in the` \
+    `# stack (checked with nm -gU across all of libc_build/system). They` \
+    `# are real libc_locale collate internals that only ever existed in` \
+    `# the static archive. Closing this means giving libsystem_c.dylib a` \
+    `# real export for them (build_libsystem_c.sh), which per DAR-201` \
+    `# requires weak_def_audit.sh plus relinking every dependent image --` \
+    `# deliberately not bundled into this change. Tracked in DAR-234.` \
     "$OUT/system/libxpc.dylib" "$OUT/system/libbsm.dylib" "$OUT/system/libopenpam.dylib" "$OUT/system/libiokituser.dylib" \
     "$OUT/system/libresolv.dylib" \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libcopyfile.dylib" "$OUT/system/libremovefile.dylib" \

@@ -609,12 +609,35 @@ rm -f "$OUT/launchd.macho"
     `# build_libsystem_c.sh, which this link already loads. Carrying them` \
     `# statically here gave launchd private duplicate stdio FILE tables and` \
     `# locale state alongside libsystem_c.dylib's own.` \
+    `#` \
+    `# KNOWN-BROKEN as of 2026-09-03 -- this link does NOT currently` \
+    `# succeed, and the remaining failure is NOT an undefined symbol:` \
+    `#   ld: fixup error (kind=arm64_adrp_lo12) at '___glob'+0x34 from` \
+    `#   liblaunchd_syscalls.a[13](glob.o), target '___locale_key' does` \
+    `#   not have address` \
+    `# ___locale_key IS a real export of libsystem_c.dylib (nm -gU shows` \
+    `# it as data, 'D'), which this link already names. The problem is` \
+    `# that glob.o was compiled assuming static linkage and emits a` \
+    `# DIRECT adrp/add pair for it; a datum imported from a dylib has to` \
+    `# be reached GOT-indirect, so the relocation cannot be satisfied at` \
+    `# any link order. Fixing it means recompiling liblaunchd_syscalls.a` \
+    `# (build_launchd_syscalls.sh) so glob.o treats ___locale_key as an` \
+    `# external import -- not re-adding libc_locale_for_stdio*.a, which` \
+    `# would reinstate the duplicate locale state. Tracked in DAR-234.` \
     "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/system/libxpc.dylib" "$OUT/system/libbsm.dylib" \
     "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
     "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libremovefile.dylib" \
     "$OUT/system/libsystem_c.dylib" \
+    `# libsystem_platform.dylib listed EXPLICITLY, same reexport-depth` \
+    `# reasoning as libsystem_malloc.dylib/libremovefile.dylib above.` \
+    `# Added 2026-09-03 with the libplatform.a removal: it is the real` \
+    `# owner of _mach_absolute_time/_mach_timebase_info (confirmed via` \
+    `# nm -gU), which liblaunchd_core.a's runtime.o and CoreFoundation's` \
+    `# CFDate.o/CFRunLoop.o both need. The archive had been their only` \
+    `# supplier here purely because this dylib was never named.` \
+    "$OUT/system/libsystem_platform.dylib" \
     "$ICU_LIB/libicuuc.dylib" "$ICU_LIB/libicui18n.dylib" "$ICU_LIB/libicudata.dylib" "$OUT/system/libc++.dylib" \
     2>"$OUT/launchd_link.err" \
     || { echo "error: real link failed -- see $OUT/launchd_link.err" >&2; tail -60 "$OUT/launchd_link.err" >&2; exit 1; }
