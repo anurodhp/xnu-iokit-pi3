@@ -304,6 +304,30 @@ rm -f "$OUT/system/libinfo.dylib"
     -install_name /usr/lib/libinfo.dylib \
     -Wl,-not_for_dyld_shared_cache \
     -B"$NEWLD_BINDIR" -Wl,-fixup_chains \
+    -Wl,-unexported_symbol,_initgroups \
+    `# unexported 2026-09-03 (DAR-229, per-library dedup series). Real,` \
+    `# separate real initgroups() implementations exist in two dylibs:` \
+    `# this one's own (lookup.subproj/libinfo.c -- si_module lookup then` \
+    `# the real raw __initgroups kernel trap, genuinely the Apple-` \
+    `# canonical shape) and libopenpam.dylib's (getgrouplist()-then-` \
+    `# setgroups(2), DAR-153's userspace algorithm, already wired to` \
+    `# real login/su call sites). Confirmed via a full` \
+    `# 'xcrun dyld_info -fixups' sweep: ZERO images currently bind to` \
+    `# EITHER copy of plain _initgroups (nothing calls it through a` \
+    `# dylib symbol yet), so this is a clean, no-relink-required` \
+    `# narrow-export, not a behavior change for any real running` \
+    `# consumer today. Keeping openpam's copy exported (the established,` \
+    `# real-auth-path-relied-upon side) and narrow-exporting this` \
+    `# dylib's newer, not-yet-wired one is the conservative choice --` \
+    `# DAR-198 (migrate tools/libinfo_custom consumers to real` \
+    `# libinfo.dylib) is the tracked follow-up for deciding whether/how` \
+    `# login/su should eventually move to this dylib's real` \
+    `# si_module-backed version instead, one real consumer at a time` \
+    `# with its own QEMU verification, not a blind symbol-priority` \
+    `# pick here. Does NOT affect ___initgroups (double-underscore, the` \
+    `# raw syscall trap this dylib's own initgroups() calls internally --` \
+    `# a genuinely different symbol, already resolved to` \
+    `# libsystem_c.dylib's real trap, see this script's own header).` \
     -o "$OUT/system/libinfo.dylib" \
     "$OUT/libinfo_obj/"*.o \
     "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_malloc.dylib" \
@@ -356,14 +380,27 @@ echo "libinfo.dylib: every non-deferred external reference binds to a real, name
 # aren't built yet, matching every other tier's from-scratch-checkout
 # ordering convention.
 if [ -f "$OUT/system/libdyld.dylib" ] && [ -f "$OUT/system/libSystem.B.dylib" ]; then
+    # Real smoketest main compiled into its OWN subdirectory
+    # ($OUT/libinfo_obj/smoketest/, not $OUT/libinfo_obj/ itself) --
+    # fixed 2026-09-03 (DAR-229, per-library dedup series). Root cause of
+    # a real, confirmed bug: libinfo.dylib's own link above globs
+    # "$OUT/libinfo_obj/"*.o (non-recursive), which on a SECOND run of
+    # this script picked up the FIRST run's leftover
+    # libinfo_smoketest_main.o (nothing ever cleaned it, and this step
+    # necessarily runs after the dylib link above) -- a real smoketest
+    # main() ends up archived into the shipped dylib's own `_main`
+    # export. Confirmed via `nm -m`: libinfo.dylib exported `_main` from
+    # exactly this object. A subdirectory the dylib's own `*.o` glob
+    # can never match is a permanent fix, not a one-time cleanup.
+    mkdir -p "$OUT/libinfo_obj/smoketest"
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 -Wall \
-        libinfo_smoketest.c -o "$OUT/libinfo_obj/libinfo_smoketest_main.o" 2>"$OUT/libinfo_obj/libinfo_smoketest_main.err" \
-        && rm -f "$OUT/libinfo_obj/libinfo_smoketest_main.err"
+        libinfo_smoketest.c -o "$OUT/libinfo_obj/smoketest/libinfo_smoketest_main.o" 2>"$OUT/libinfo_obj/smoketest/libinfo_smoketest_main.err" \
+        && rm -f "$OUT/libinfo_obj/smoketest/libinfo_smoketest_main.err"
     rm -f libinfo_smoketest.macho
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -DCRT_DYNAMIC_LINKING \
         -B"$NEWLD_BINDIR" -Wl,-fixup_chains \
         -o libinfo_smoketest.macho \
-        "$CSU/start.s" "$CSU/crt.c" "$OUT/libinfo_obj/libinfo_smoketest_main.o" \
+        "$CSU/start.s" "$CSU/crt.c" "$OUT/libinfo_obj/smoketest/libinfo_smoketest_main.o" \
         "$OUT/system/libinfo.dylib" \
         "$OUT/system/libsystem_pthread.dylib" \
         "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \

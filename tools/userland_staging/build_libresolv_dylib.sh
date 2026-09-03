@@ -389,6 +389,34 @@ rm -f "$OUT/system/libresolv.dylib"
     `# dylib with none of those local copies would have hit "symbol not` \
     `# found in flat namespace '_pipe'" the instant it started, whether` \
     `# or not it ever called pipe() itself.` \
+    -Wl,-unexported_symbol,_endprotoent -Wl,-unexported_symbol,_endservent \
+    -Wl,-unexported_symbol,_getnameinfo -Wl,-unexported_symbol,_getprotobynumber \
+    -Wl,-unexported_symbol,_getprotoent -Wl,-unexported_symbol,_getservbyport \
+    -Wl,-unexported_symbol,_getservent -Wl,-unexported_symbol,_setprotoent \
+    -Wl,-unexported_symbol,_setservent \
+    `# unexported 2026-09-03 (DAR-229, per-library dedup series):` \
+    `# libresolv_netdb_compat.c's own copies (this script's header,` \
+    `# "CLOSED 2026-08-29" note above) are real, honest "no protocol/` \
+    `# service database" stand-ins -- getprotobynumber/getprotoent/` \
+    `# getservbyport/getservent always return NULL, setprotoent/` \
+    `# endprotoent/setservent/endservent are no-ops, getnameinfo always` \
+    `# returns EAI_FAIL. Real Apple libinfo.dylib (DAR-181) now exists` \
+    `# and genuinely implements all 9 of these for real via the same` \
+    `# si_module flat-file dispatch getpwnam/getgrnam use (confirmed:` \
+    `# lookup.subproj/libinfo.c defines real getservbyport/getservent/` \
+    `# setservent/endservent/getprotobynumber/getprotoent/setprotoent/` \
+    `# endprotoent/getnameinfo). Confirmed via a full` \
+    `# 'xcrun dyld_info -fixups' sweep of every shipped dylib/binary:` \
+    `# ZERO images currently bind to libresolv's copies of any of these` \
+    `# 9 symbols, so unexporting is a clean, no-relink-required removal` \
+    `# (nothing today depends on the honest-stub behavior) -- any future` \
+    `# real consumer that links both this dylib and libinfo.dylib now` \
+    `# gets the real implementation instead of an always-fails stand-in;` \
+    `# one that links only this dylib gets a real link-time undefined-` \
+    `# symbol error instead of a silent wrong-answer, matching this` \
+    `# project's fail-loud-at-build-time preference. Local definitions` \
+    `# stay (nothing else in this archive calls any of the 9), just` \
+    `# hidden from the export trie.` \
     -o "$OUT/system/libresolv.dylib" \
     "$EXTRACT"/*.o \
     "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_malloc.dylib" \

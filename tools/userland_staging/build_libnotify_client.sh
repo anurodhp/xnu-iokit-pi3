@@ -175,12 +175,27 @@ for a in libnotify libxpc liblaunchd_mig libxpc_syscalls libxpc_syscalls2 liblau
     [ -f "$OUT/$a.a" ] || NEED_OK=0
 done
 if [ "$NEED_OK" -eq 1 ]; then
+    # Smoketest main compiled into its OWN subdirectory
+    # ($OUT/notify_client_obj/smoketest/, not $OUT/notify_client_obj/
+    # itself) -- fixed 2026-09-03 (DAR-229, per-library dedup series).
+    # Root cause of a real, confirmed bug: this archive's own `ar rcs`
+    # above globs "$OUT"/notify_client_obj/*.o (non-recursive), which on
+    # a SECOND run of this script picked up the FIRST run's leftover
+    # libnotify_client_smoketest.o (nothing ever cleaned it, and this
+    # step necessarily runs after the archive step above) -- a real
+    # smoketest main() ends up archived into libnotify_client.a, which
+    # build_libsystem_notify.sh then `ar x`s wholesale into the shipped
+    # libsystem_notify.dylib, exporting `_main` from it. Confirmed via
+    # `nm -m`: libsystem_notify.dylib exported `_main` from exactly this
+    # object. A subdirectory the archive step's own `*.o` glob can never
+    # match is a permanent fix, not a one-time cleanup.
+    mkdir -p "$OUT/notify_client_obj/smoketest"
     rm -f libnotify_client_smoketest.macho
-    "$CLANG" "${CFLAGS[@]}" libnotify_client_smoketest.c -o "$OUT/notify_client_obj/libnotify_client_smoketest.o"
+    "$CLANG" "${CFLAGS[@]}" libnotify_client_smoketest.c -o "$OUT/notify_client_obj/smoketest/libnotify_client_smoketest.o"
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
         -o libnotify_client_smoketest.macho \
         ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
-        "$OUT/notify_client_obj/libnotify_client_smoketest.o" \
+        "$OUT/notify_client_obj/smoketest/libnotify_client_smoketest.o" \
         -Wl,-force_load,"$OUT/libnotify_client.a" \
         "$OUT/libnotify.a" \
         "$OUT/libxpc.a" "$OUT/liblaunchd_mig.a" \

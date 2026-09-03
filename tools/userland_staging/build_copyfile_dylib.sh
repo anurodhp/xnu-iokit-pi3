@@ -53,6 +53,33 @@
 #     header for the full trail: a real launchd boot-time failure,
 #     "symbol not found in flat namespace", surfaced this original
 #     `-Wl,-U` as wrong).
+#
+# _getpwnam/_getpwuid/_getgrnam/_getgrgid: unexported 2026-09-03 (DAR-229,
+# per-library dedup series). copyfile_syscalls.c's own copies (added for
+# acl_translate.c's ACL-text uid/gid<->name serialization, a feature this
+# target's HFS+ never exercises -- no real ACL storage) are honest
+# always-"not found" stand-ins (real reasoning: no directory service),
+# but they duplicate real Apple libinfo.dylib's actual flat-file-backed
+# implementation (DAR-181) under the SAME symbol names, and this dylib's
+# real `_statfs$INODE64` dependency on libinfo.dylib's own link (see
+# build_libinfo.sh's sibling-dylib list) rules out the reverse -- libinfo
+# already depends on libcopyfile, so libcopyfile can't depend back on
+# libinfo without a cycle. CONFIRMED LIVE BUG this fix closes: real
+# `xcrun dyld_info -fixups` on libCoreFoundation.dylib (which links
+# libcopyfile.dylib BEFORE libinfo.dylib) showed CF's `_getpwnam`/
+# `_getpwuid` references binding to THIS dylib's always-NULL stub, not
+# libinfo.dylib's real one, even though libinfo.dylib is linked right
+# there and exports the real symbol -- a silent, exactly-the-auth-path
+# regression the ticket predicted, not a hypothetical. Unexporting here
+# (same `-Wl,-unexported_symbol` technique already used for
+# _getcwd/_pread/_pwrite above) keeps the local definition for this
+# dylib's own internal acl_translate.c callers but removes it from the
+# export trie, forcing every OTHER image's bind (CoreFoundation's
+# included) to resolve to the real libinfo.dylib copy instead. Requires
+# relinking every already-built consumer with a stale
+# `bind libcopyfile/_getpwnam`-style fixup record (confirmed via a full
+# `xcrun dyld_info -fixups` sweep of every shipped dylib/binary: only
+# libCoreFoundation.dylib had one -- rebuilt as part of this same fix).
 set -e
 cd "$(dirname "$0")"
 
@@ -232,6 +259,8 @@ rm -f "$OUT/system/libcopyfile.dylib"
     -Wl,-unexported_symbol,_pread -Wl,-unexported_symbol,_pwrite \
     -Wl,-unexported_symbol,_getcwd \
     -Wl,-alias,_getattrlist,'_getattrlist$UNIX2003' -Wl,-alias,_statfs,'_statfs$INODE64' \
+    -Wl,-unexported_symbol,_getpwnam -Wl,-unexported_symbol,_getpwuid \
+    -Wl,-unexported_symbol,_getgrnam -Wl,-unexported_symbol,_getgrgid \
     -o "$OUT/system/libcopyfile.dylib" \
     "$EXTRACT"/*.o \
     "$OUT/system/libremovefile.dylib" \

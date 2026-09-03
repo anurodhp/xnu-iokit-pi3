@@ -356,11 +356,27 @@ echo "wrote $OUT/libdispatch_real.a ($(ls "$OUT"/dispatch_obj/*.o "$OUT"/dispatc
 # proves nothing: static linking only pulls in archive members actually
 # referenced transitively). Informational, not a hard failure -- see
 # this script's own "NOT DONE YET" note above for the real, expected gap.
-"$CLANG" "${CFLAGS[@]}" dispatch_trial_main.c -o "$OUT/dispatch_obj/dispatch_trial_main.o"
+#
+# Trial main compiled into its OWN subdirectory ($OUT/dispatch_obj/
+# trial/, not $OUT/dispatch_obj/ itself) -- fixed 2026-09-03 (DAR-229,
+# per-library dedup series). Root cause of a real, confirmed bug:
+# build_libdispatch_dylib.sh's own dylib link globs
+# "$OUT"/dispatch_obj/*.o directly (loose object files, not this
+# script's libdispatch_real.a), and since THIS script's real archive
+# step (just above) already ran before this trial main gets compiled,
+# libdispatch_real.a itself was always clean -- but dispatch_trial_main.o
+# stayed on disk in the same directory afterward, and the NEXT script
+# (build_libdispatch_dylib.sh, a separate later invocation) swept it up
+# wholesale into the shipped libdispatch.dylib's own `_main` export.
+# Confirmed via `nm -m`: libdispatch.dylib exported `_main` from exactly
+# this object. A subdirectory the dylib build's own `*.o` glob can never
+# match is a permanent fix, not a one-time cleanup.
+mkdir -p "$OUT/dispatch_obj/trial"
+"$CLANG" "${CFLAGS[@]}" dispatch_trial_main.c -o "$OUT/dispatch_obj/trial/dispatch_trial_main.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o "$OUT/dispatch_trial.macho" \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
-    "$OUT/dispatch_obj/dispatch_trial_main.o" \
+    "$OUT/dispatch_obj/trial/dispatch_trial_main.o" \
     "$OUT/libdispatch_real.a" \
     "$OUT/libmach_ipc.a" "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
     "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" \
