@@ -20,6 +20,28 @@
 # is real, load-bearing, and copied exactly from build_launchd_core.sh's
 # own real trial-link command (see that script + docs/daemon-roadmap.md
 # for the full per-symbol writeup of why each one is needed).
+#
+# THIS SCRIPT IS A LINK STEP ONLY -- IT COMPILES NONE OF LAUNCHD'S OWN
+# SOURCE (DAR-200, 2026-09-02). Every launchd .c file (launchd.c, core.c,
+# ipc.c, runtime.c, log.c, ...) is compiled by build_launchd_core.sh into
+# liblaunchd_core.a; this script only relinks that already-built archive.
+# So editing anything under
+# third_party/PureDarwin/src/Libraries/XPC/launchd/ and then running only
+# this script silently produces a launchd.macho WITHOUT the edit -- it
+# links cleanly, it is a valid binary, and it is simply stale. That cost a
+# real, wasted QEMU boot cycle during DAR-200: a temporary ipc.c
+# diagnostic printed nothing, which read exactly like "this code never
+# runs" rather than "this code was never compiled in". Always run
+# build_launchd_core.sh FIRST after any launchd source change:
+#
+#     tools/userland_staging/build_launchd_core.sh   # compiles the sources
+#     tools/userland_staging/build_launchd.sh        # links launchd.macho
+#
+# and when adding a diagnostic, confirm it actually landed
+# (`strings libc_build/launchd.macho | grep <marker>`) before trusting a
+# null result from a boot log -- same "validate the diagnostic channel in
+# the same boot" lesson as docs/launchd-pid1-postmortem.md's process
+# lesson 3, one layer earlier in the toolchain.
 set -e
 cd "$(dirname "$0")"
 
@@ -56,6 +78,28 @@ for a in liblaunchd_core.a libCoreFoundation.a cf_libc_extras.a launchd_libc_ext
         exit 1
     fi
 done
+
+# Staleness guard (DAR-200, 2026-09-02) -- see this script's own header
+# comment for the wasted boot cycle that motivated it. This script never
+# compiles launchd's own source, so a liblaunchd_core.a older than any
+# file under the launchd source tree means the launchd.macho about to be
+# produced would silently NOT contain the newest edit. Fail loudly here
+# rather than at 4 minutes per QEMU boot.
+LAUNCHD_SRC="../../third_party/PureDarwin/src/Libraries/XPC/launchd"
+if [ -d "$LAUNCHD_SRC" ]; then
+    NEWER=$(find "$LAUNCHD_SRC" \( -name '*.c' -o -name '*.h' -o -name '*.defs' \) \
+        -newer "$OUT/liblaunchd_core.a" -print 2>/dev/null | head -5)
+    if [ -n "$NEWER" ]; then
+        echo "error: launchd source is newer than $OUT/liblaunchd_core.a -- this script only LINKS," >&2
+        echo "       it never compiles launchd's own .c files, so the resulting launchd.macho would" >&2
+        echo "       silently be missing these changes:" >&2
+        echo "$NEWER" | sed 's/^/         /' >&2
+        echo "       Run tools/userland_staging/build_launchd_core.sh first, then re-run this." >&2
+        echo "       (Set LAUNCHD_ALLOW_STALE_CORE=1 to link anyway, e.g. for a deliberate bisect.)" >&2
+        [ "${LAUNCHD_ALLOW_STALE_CORE:-0}" = "1" ] || exit 1
+        echo "= LAUNCHD_ALLOW_STALE_CORE=1 set -- linking a knowingly stale liblaunchd_core.a anyway" >&2
+    fi
+fi
 # libsystem_malloc.dylib -- real, single-owner heap (DAR-131/DAR-162 fix,
 # see this script's own "libmalloc_no_mach_init.a REMOVED" comment below
 # for the full story). Needed as an EXPLICIT link input, not just reachable

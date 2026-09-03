@@ -203,6 +203,27 @@ All by real QEMU boot, not by clean link:
 
 ## Current state and next work
 
+> **Updated 2026-09-02 (DAR-200).** The "children still do not reach
+> `exec`" statement below is **stale** — it was accurate when this
+> document was written and is not any more. Current real state, from
+> `qemu/dar200_final_clean_boot.log`: launchd forks and really `exec`s
+> its daemon children (`syslogd`, `pd-console-login` → `/bin/getty`),
+> its kqueue dispatch works end to end (`kqueue_demand_loop()` →
+> `select()` on `mainkq` → `handle_kqueue()` MIG → `ipc_callback()` →
+> `ipc_readmsg2()`, proven by instrumented boot
+> `qemu/dar200_ipc_callback_probe2.log`), it processes syslogd's real
+> check-in, and the boot reaches a real getty `login:` prompt that
+> accepts `root`. The current wall is **DAR-202**: the check-in *reply*
+> contains the job's `MachServices` ports and `launch_data_pack()`
+> (`liblaunch.c:867`) `xpc_api_misuse()`es on them, aborting PID 1.
+> Two things that had to be fixed to get here are worth carrying
+> forward: **DAR-201** (stale `<weak-def-coalesce>` binds killed almost
+> every dynamic binary at dyld load — see
+> `tools/userland_staging/weak_def_audit.sh`), and the discovery that
+> **`build_launchd.sh` compiles none of launchd's own source** (that is
+> `build_launchd_core.sh`'s job — see CLAUDE.md; a diagnostic that never
+> got compiled in reads exactly like code that never ran).
+
 launchd as PID 1 boots, remounts `/` read-write, mounts devfs, brings up
 its IPC socket, loads `/Library/LaunchDaemons`, reaches
 `launchd_runtime()`, and forks daemon children that survive the whole

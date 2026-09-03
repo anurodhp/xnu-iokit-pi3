@@ -128,6 +128,26 @@ tools/build_kexts.sh [outdir]    # compile iokit/*/*.cpp standalone (default: bu
   context small — but have the orchestrating session make any *shared*
   file edits (`setup_third_party.sh`'s pins, in particular) itself first,
   so parallel agents never touch the same file.
+- **`build_launchd.sh` is a LINK step only — it compiles none of
+  launchd's own source.** Every launchd `.c` (`launchd.c`, `core.c`,
+  `ipc.c`, `runtime.c`, `log.c`, …) is compiled by
+  `build_launchd_core.sh` into `liblaunchd_core.a`; `build_launchd.sh`
+  only relinks that archive. Editing anything under
+  `third_party/PureDarwin/src/Libraries/XPC/launchd/` and running only
+  `build_launchd.sh` produces a clean, valid, **stale** `launchd.macho`
+  silently. Always:
+  ```
+  tools/userland_staging/build_launchd_core.sh   # compiles the sources
+  tools/userland_staging/build_launchd.sh        # links launchd.macho
+  ```
+  `build_launchd.sh` now fails fast when the source is newer than the
+  archive (override with `LAUNCHD_ALLOW_STALE_CORE=1` only for a
+  deliberate bisect). Found the hard way in DAR-200: a temporary `ipc.c`
+  diagnostic printed nothing, which read exactly like "this code never
+  runs" rather than "this code was never compiled in". When adding a
+  diagnostic to any binary here, confirm it actually landed
+  (`strings <binary> | grep <marker>`) before trusting a null result from
+  a boot log.
 
 ## Boot / test commands
 
@@ -211,6 +231,23 @@ drifted before.
   real port step is obvious. Written 2026-08-27 after closing 20 of a
   dylib's 30 real remaining-gap symbols in one pass and needing this
   exact triage by hand each time — don't re-derive it manually again.
+- **After changing whether any symbol is a weak vs. strong definition in
+  a shipped dylib, run `tools/userland_staging/weak_def_audit.sh`.** ld64
+  emits a `<weak-def-coalesce>` bind for any reference whose definition
+  was a *weak* definition at link time, and dyld-940 resolves those only
+  inside images carrying `MH_WEAK_DEFINES` — so flipping one dylib's
+  symbol from weak to strong instantly breaks **every already-built image
+  that still carries a coalesce bind for it**, with a clean `nm`, a clean
+  link, and no build error anywhere. Nothing here relinks automatically.
+  That really happened (DAR-201): `libsystem_c.dylib`'s `_getenv` went
+  strong, and 9 dylibs plus 31 commands started aborting at dyld load
+  with `weak-def symbol not found '_getenv'` — including, via
+  `libSystem.B` → `libresolv` → `libsystem_notify` → `libncurses`/
+  `libdispatch`, binaries that linked none of them directly. The audit
+  checks each image against its own transitive `LC_LOAD_DYLIB` closure
+  (resolution is per-process, so a per-image-only check gives false
+  "clean" results). Fix is always to rebuild the reporting image — never
+  to re-weaken the provider, which is what DAR-153 had to undo.
 - **Adversarial review before commit**: run an adversarial review on
   large/significant changes *before* committing, not after — post-hoc
   reviews in this project's history have caught real bugs (a false-positive
