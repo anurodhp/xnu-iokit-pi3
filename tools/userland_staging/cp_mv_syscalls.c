@@ -76,49 +76,55 @@ int lchown(const char *path, uid_t owner, gid_t group) {
     return (int)syscall3(SYS_lchown, (long)path, owner, group);
 }
 
-struct __sigaction;
+/* sigaction()/_sigaction_nobind() raw-syscall BODIES REMOVED from this
+ * file 2026-09-02 (DAR-196). The two raw-syscall bodies that used to
+ * live here (SYS_sigaction=46, no sa_tramp trampoline field filled in --
+ * an honest-passthrough shim, real kernel ABI mismatch and all, per this
+ * comment's old prior text) predate DAR-164/DAR-153 (fdc375d, 4bbd009),
+ * which gave `sigaction`/`_sigaction_nobind` a real canonical home in
+ * libsystem_c.dylib -- a real trampoline pairing down to
+ * libsystem_kernel.dylib's own `__sigaction`/`__sigtramp` (confirmed via
+ * `xcrun dyld_info -exports`), strictly more correct than this file's old
+ * no-sa_tramp raw trap. cp_mv_syscalls.c is a COMMON_EXTRA object linked
+ * into every build_simple_cmds.sh binary (not just cp/mv), so the old
+ * local copies shadowed the real dylib's copies in all ~70 of them --
+ * same fix shape as DAR-194's ncurses/libxpc sigaction narrowing, this
+ * file's own third pre-existing copy that DAR-194 explicitly scoped out.
+ *
+ * `_sigaction()` (mach-o symbol `__sigaction`, ONE more leading
+ * underscore than plain `sigaction`) stays, narrowed to a pure forwarder,
+ * not removed outright: real Libc/gen/FreeBSD/signal.c's `signal__()`
+ * calls this exact underscore-prefixed name directly (confirmed by
+ * reading that file), and a real, careful re-check via
+ * `xcrun dyld_info -exports` on both libsystem_c.dylib and
+ * libsystem_kernel.dylib shows NEITHER exports mach-o `__sigaction` --
+ * libsystem_c.dylib exports plain `_sigaction`/`__sigaction_nobind`
+ * (C names `sigaction`/`_sigaction_nobind`) and libsystem_kernel.dylib
+ * exports `___sigaction` (C name `__sigaction`, a DIFFERENT, doubly-
+ * underscored private symbol) -- a real, still-genuine gap, not a
+ * duplicate; dup_symbol_audit.sh never flagged it (correctly). A first
+ * pass at this fix removed all three functions including this one and
+ * broke the real link for gzip/diff/tar/less (`Undefined symbols: "
+ * __sigaction", referenced from: _signal__`) -- caught by this session's
+ * own real-rebuild step, not guessed past. Forwarding to the dylib's real
+ * public `sigaction()` (extern, resolved by libsystem_c.dylib at link
+ * time) instead of re-doing the raw syscall keeps this file's remaining
+ * gap minimal (one line) while still picking up the real, correct
+ * sa_tramp-aware implementation underneath.
+ *
+ * lchown/setattrlist/setpriority/fork/vfork/waitpid below are unrelated
+ * real syscalls this file still owns unchanged; only the sigaction family
+ * was newly-duplicated by the fdc375d/4bbd009 real exports. This file is
+ * also compiled by build_getty.sh/build_ping.sh (both out of DAR-196's
+ * build_simple_cmds.sh scope) -- neither currently ships a built .macho
+ * that reached DAR-196's dup_symbol_audit.sh binary scan (getty.macho
+ * predates this change and is unaffected until next rebuilt; ping.macho
+ * isn't built at all), so this change carries no risk to either today,
+ * and both pick up the same real fix for free next time they're
+ * rebuilt. */
 struct sigaction;
-
-/* Real kernel prototype (bsd/kern/syscalls.master #46) takes the kernel's
- * own `struct __sigaction *` for the new-action argument (a different,
- * larger layout than userland's `struct sigaction` -- it has an extra
- * sa_tramp trampoline-pointer field real libsystem_kernel.dylib's
- * private __sigaction_nobind/__sigaction machinery fills in before
- * trapping). This project has no signal-trampoline/sigreturn(2) support
- * built at all (bsd_pthread_stub.c already docs the broader "no real
- * pthread/signal-delivery subsystem" gap this project has scoped out) --
- * cp.c's only real call site (`signal(SIGINFO, siginfo)`, via
- * Libc/gen/FreeBSD/signal.c's real signal()->_sigaction path) is a
- * best-effort progress-on-SIGINFO handler this target's console can
- * never actually deliver (no real signal-delivery path exists), so an
- * honest passthrough that lets the real kernel syscall run and report
- * its real ABI mismatch/failure (rather than a fabricated success) is
- * the correct scope here -- SIGINFO handling was already a soft/optional
- * feature upstream (macOS-only convenience over ^T), not required for
- * cp's actual copy correctness. */
-int sigaction(int sig, const struct sigaction *nsv, struct sigaction *osv) {
-    return (int)syscall3(SYS_sigaction, sig, (long)nsv, (long)osv);
-}
-
-/* Real Libc/gen/FreeBSD/signal.c calls this exact underscore-prefixed
- * name directly (see that file's `extern int _sigaction(...)` "may or
- * may not be __DYNAMIC__-bound" real dual path) -- same real syscall,
- * both names route to it since this project has no separate legacy/
- * UNIX03-binding split to preserve. */
+extern int sigaction(int sig, const struct sigaction *nsv, struct sigaction *osv);
 int _sigaction(int sig, const struct sigaction *nsv, struct sigaction *osv) {
-    return sigaction(sig, nsv, osv);
-}
-
-/* Libc/gen/FreeBSD/signal.c's other real call site, only compiled under
- * `#if defined(__DYNAMIC__)` -- this project's arm64-apple-ios14.4
- * target compiles that branch (Mach-O static binaries still define
- * __DYNAMIC__, it's an ABI/object-format flag, not a "uses dyld" flag),
- * so both branches of signal__()'s dead `bind` runtime check need a
- * real symbol even though `bind` is always 1 here (signal() always
- * passes bind=1; only the unused, __DYNAMIC__-only _signal_nobind()
- * entry point would ever reach this). Same real syscall as sigaction --
- * no separate "legacy/unbound" behavior exists on this target. */
-int _sigaction_nobind(int sig, const struct sigaction *nsv, struct sigaction *osv) {
     return sigaction(sig, nsv, osv);
 }
 
