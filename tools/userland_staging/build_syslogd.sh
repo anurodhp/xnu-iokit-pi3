@@ -489,11 +489,16 @@ rm -f syslogd.macho
     "$OUT/syslogd_obj/syslogd_mach_port_compat.o" "$OUT/syslogd_obj/syslogd_mach_port_extra_trap.o" \
     "$OUT/syslogd_obj/error_codes.o" \
     "$OUT/syslogd_libc_extras.a" \
-    "$OUT/libc_regex.a" \
+    `# libc_regex.a/libc_gen.a/libc_string.a/libc_stdio.a/libc_printf.a/` \
+    `# libc_locale_for_stdio_syslogd.a REMOVED 2026-09-03 (dynamicfix` \
+    `# sweep): build_libsystem_c.sh merges every one of these archives` \
+    `# into libsystem_c.dylib, which this link already lists explicitly a` \
+    `# few lines down. Keeping them here gave syslogd a private duplicate` \
+    `# stdio FILE table, locale state and regex compiler alongside the` \
+    `# dylib's -- the static half of the same split DAR-217/DAR-222 already` \
+    `# closed for the locking and Blocks runtimes.` \
     "$OUT/liblaunchd_mig.a" \
     "$OUT/libmach_ipc.a" "$OUT/chk_fail.o" \
-    "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
-    "$OUT/libc_locale_for_stdio_syslogd.a" \
     "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_blocks.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
