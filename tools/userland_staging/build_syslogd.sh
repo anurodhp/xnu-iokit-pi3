@@ -513,8 +513,17 @@ rm -f syslogd.macho
     `# symptom without them, once libpthread.a/cerror_stub.o stopped` \
     `# supplying them transitively: _read/_mkdir (libsystem_c) and` \
     `# _fchown/_symlink (libcopyfile) and _gethostname/_inet_ntop/_inet_pton` \
-    `# (libresolv) undefined at link.` \
+    `# (libresolv) undefined at link. libremovefile.dylib ADDED to this` \
+    `# same explicit list 2026-09-03 (DAR-24): the comment above already` \
+    `# named it as following the same rule but it was missing from the` \
+    `# actual list -- real symptom once syslogd_misc_libc_compat.c's own` \
+    `# local rename()/setiopolicy_np() were removed as DAR-24 duplicates` \
+    `# of libremovefile.dylib's real copies: "_rename"/"_setiopolicy_np"` \
+    `# undefined at link, despite libSystem.B.dylib's real` \
+    `# LC_REEXPORT_DYLIB of libremovefile.dylib, same install-name-only` \
+    `# reexport-resolution gap as libsystem_c.dylib/libcopyfile.dylib.` \
     "$OUT/system/libsystem_c.dylib" "$OUT/system/libcopyfile.dylib" "$OUT/system/libresolv.dylib" \
+    "$OUT/system/libremovefile.dylib" \
     "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     "$OUT/system/libsystem_notify.dylib" "$OUT/system/libxpc.dylib" \
     "$OUT/system/libopenpam.dylib" "$OUT/system/libncurses.dylib" \
