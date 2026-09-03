@@ -487,9 +487,16 @@ rm -f "$OUT/launchctl.macho"
     "$OUT/liblaunchctl_extras.a" \
     "$OUT/cf_libc_extras.a" "$OUT/launchd_libc_extras.a" \
     "$OUT/liblaunchd_mig.a" "$OUT/liblaunchd_syscalls.a" \
-    "$OUT/libmach_ipc.a" "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
-    "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
-    "$OUT/libc_locale_for_stdio.a" \
+    `# libclosure.a/libmalloc.a/libplatform.a/libpthread.a/libc_gen.a/` \
+    `# libc_string.a/libc_stdio.a/libc_printf.a/libc_locale_for_stdio.a` \
+    `# REMOVED 2026-09-03 (dynamicfix sweep): every one of them is merged` \
+    `# wholesale into a dylib this link already loads (libsystem_c.dylib,` \
+    `# libsystem_pthread.dylib, libsystem_malloc/_platform/_blocks via` \
+    `# libSystem.B.dylib's reexport chain). Linking them statically here` \
+    `# gave launchctl a private duplicate malloc heap, pthread runtime and` \
+    `# stdio/locale state -- the same "one owner per symbol" class as the` \
+    `# removals already documented in build_launchd.sh.` \
+    "$OUT/libmach_ipc.a" "$OUT/cerror_stub.o" \
     "$OUT/system/libCoreFoundation.dylib" \
     "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
