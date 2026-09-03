@@ -554,7 +554,35 @@ echo "compiled: real curated fork()/wait4()"
 # --- real exec.c/signal.c/waitpid.c/atexit.c/glob.c + their real
 # private-name/global compat shims (see this script's header comment
 # for the full real-fix writeup for each) ---------------------------
+#
+# -DXLOCALE_STATE_EXPORTED=1 (DAR-234, 2026-09-03, dynamicfix sweep):
+# real gap found relinking build_launchd.sh after this project's static
+# archives were stripped from launchd.macho -- `ld: fixup error
+# (kind=arm64_adrp_lo12) at '___glob'+0x34 from
+# liblaunchd_syscalls.a[13](glob.o), target '___locale_key' does not
+# have address`. Root cause: glob.c's own real __current_locale() inline
+# (xlocale_private.h) references __locale_key, and this compile never
+# defined XLOCALE_STATE_EXPORTED -- so the compiler saw __locale_key's
+# declaration at HIDDEN visibility (xlocale_private.h's real-Apple-
+# matching default) and emitted a DIRECT (same-image) adrp/add pair
+# instead of a GOT-indirect load, per the exact codegen mechanism
+# docs/static-linking-cleanup-plan.md's "continuation 9" xlocale writeup
+# already documents for strtoull.c/build_llvm_libcxx.sh. Once launchd's
+# own static libc archives were dropped in favor of the real
+# libsystem_c.dylib sibling (which owns the real, canonical
+# __locale_key), that direct addressing became a dangling same-image
+# reference -- there is no way to satisfy an `adrp`/`add` pair against a
+# symbol that isn't in this image at all. Same fix as strtoull.c's own:
+# this compile needs XLOCALE_STATE_EXPORTED too so glob.o's REFERENCE
+# (not a definition -- glob.c never defines __locale_key) sees default
+# visibility and gets GOT-indirect codegen, which real dyld correctly
+# binds cross-image to libsystem_c.dylib's real, already-exported copy.
+# Confirmed harmless for every other file compiled with this same
+# CFLAGS_LAUNCHD_LIBC array: exec.c/signal.c/waitpid.c/atexit.c/
+# private_names_compat.c/isthreaded_compat.c none include
+# xlocale_private.h (grep-confirmed), so the macro is a no-op for them.
 CFLAGS_LAUNCHD_LIBC=("${CFLAGS_LIBC[@]}" -D__LIBC__=1 \
+    -DXLOCALE_STATE_EXPORTED=1 \
     -D'__weak_reference(sym,alias)=' \
     -include launchd_syscall_compat_headers/private_names_decls.h \
     -include launchd_syscall_compat_headers/isthreaded_compat.h \
