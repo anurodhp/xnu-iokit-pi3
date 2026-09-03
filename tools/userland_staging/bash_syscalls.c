@@ -148,8 +148,46 @@ void endpwent(void) {}
  * project's own tools/init_binary/init.c already found and documented
  * (arm64 XNU's raw fork() returns the child's pid in x0 to BOTH parent
  * and child; x1 is the only real parent/child discriminator, 0=parent,
- * 1=child) -- reused verbatim here rather than fighting Libc's fork.c. */
+ * 1=child) -- reused verbatim here rather than fighting Libc's fork.c.
+ *
+ * DAR-220: the raw trap is NOT the whole of real Apple's own fork
+ * wrapper. third_party/xnu-7195/libsyscall/custom/__fork.s's arm64 path
+ * does one more thing in the child before returning:
+ *
+ *     // Child
+ *     MI_GET_ADDRESS(x9, __current_pid)  // Get address of cached "current pid"
+ *     mov  w0, #0
+ *     str  w0, [x9]                      // Clear cached current pid
+ *
+ * because ___getpid (custom/__getpid.s, linked into this binary -- check
+ * with `nm -m bash.macho | grep __current_pid`) is a CACHING getpid: it
+ * returns the process-wide `__current_pid` global whenever it is > 0 and
+ * only falls through to the real SYS_getpid trap when it is 0. The child
+ * of fork() inherits the parent's cached value, so unless the fork
+ * wrapper itself zeroes it, getpid() in the child keeps returning the
+ * PARENT's pid forever.
+ *
+ * Real, real-hardware-observed symptom that found this (DAR-220): every
+ * command typed at the login shell printed
+ *     -sh: child setpgid (6 to 6): No such process
+ * where 6 was the SHELL's pid, identical for every command rather than
+ * incrementing per child. That is jobs.c:1748's `setpgid (mypid,
+ * pipeline_pgrp)` in the freshly-forked child, with mypid = the stale
+ * cached parent pid. bsd/kern/kern_prot.c's setpgid() only returns ESRCH
+ * on the `uap->pid != curp->p_pid` branch (`proc_find() == 0 ||
+ * !inferior()`) -- a real self-setpgid can never produce ESRCH -- so the
+ * error itself was proof getpid() had returned someone else's pid.
+ *
+ * Not merely cosmetic: bash's child then has pipeline_pgrp == the
+ * shell's own pid == shell_pgrp, which sends it down make_child()'s
+ * "this is a command-substitution child" branch -- ignore_tty_job_signals()
+ * (SIGTSTP/SIGTTIN/SIGTTOU set to SIG_IGN, inherited across exec, so
+ * ^Z could not suspend a foreground job) plus a skipped
+ * give_terminal_to(). */
 pid_t fork(void) {
+    /* asm label, not name mangling: this is the very same `__current_pid`
+     * datum ___getpid.s defines and caches into. */
+    extern volatile int bash_cached_current_pid asm("__current_pid");
     register long x0 asm("x0") = 0;
     register long x1 asm("x1") = 0;
     register long x16 asm("x16") = 2; /* SYS_fork, see syscalls.master */
@@ -160,7 +198,11 @@ pid_t fork(void) {
                  : "r"(x16)
                  : "memory", "cc");
     if (is_error) return (pid_t)cerror_nocancel((int)x0);
-    return (pid_t)(x1 ? 0 : x0); /* child (x1==1) sees pid 0, real fork() contract */
+    if (x1) { /* child (x1==1) */
+        bash_cached_current_pid = 0; /* real __fork.s's own child-side step */
+        return (pid_t)0;             /* real fork() contract */
+    }
+    return (pid_t)x0;
 }
 
 /* pipe(2): real macOS ABI returns BOTH fds via x0/x1 registers directly

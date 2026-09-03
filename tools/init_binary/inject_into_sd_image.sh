@@ -68,7 +68,33 @@ cleanup() {
 }
 trap cleanup EXIT
 
-diskutil mount "$SLICE"
+# A LEAKED QEMU still holding this image open makes hdiutil attach it
+# read-only ("Media Read-Only: Yes"), and diskutil then reports the far
+# less obvious "Volume on diskNs2 failed to mount" -- not the read-only
+# mount the block below handles, an outright mount failure, which `set -e`
+# turns into an abort before a single byte is copied. The boot test that
+# follows then silently re-tests the STALE image, the exact wasted-cycle
+# failure the read-only comment below describes, reached through a
+# different door (hit for real 2026-09-03 during DAR-220: an earlier
+# session's QEMU was still alive and `hdiutil attach -readwrite` failed
+# with "Resource temporarily unavailable"; fsck_hfs reported the volume
+# clean and changed nothing, because the journal was never the problem).
+# Diagnose it explicitly rather than letting the mount failure speak,
+# since the two causes need opposite fixes.
+if diskutil info "$DISK" | grep -qE 'Media Read-Only: +Yes'; then
+    echo "error: $DISK attached READ-ONLY -- something else still has $SD_IMAGE open" >&2
+    echo "       (almost always a leaked qemu-system-aarch64 from an earlier boot test;" >&2
+    echo "        confirm with: lsof $SD_IMAGE   then kill that pid and re-run)" >&2
+    lsof "$SD_IMAGE" >&2 || true
+    exit 1
+fi
+# A genuinely dirty journal (guest panic mid-write) can also refuse to
+# mount outright; fsck_hfs replays it and the retry succeeds.
+if ! diskutil mount "$SLICE"; then
+    echo "= $SLICE would not mount (dirty journal from a killed/panicked guest) -- running fsck_hfs"
+    fsck_hfs -fy "/dev/r${SLICE#/dev/}" || true
+    diskutil mount "$SLICE"
+fi
 MNT=$(diskutil info "$SLICE" | awk -F': +' '/Mount Point/{print $2}')
 if [ -z "$MNT" ]; then
     echo "error: could not determine mount point for $SLICE" >&2
