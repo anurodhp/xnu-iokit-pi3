@@ -95,9 +95,13 @@ rm -f "$OUT/pd_console_login.macho"
     "$OUT/pd_console_login.o" \
     "$OUT/liblaunchd_syscalls.a" "$OUT/libxpc_syscalls.a" \
     "$OUT/cf_libc_extras.a" \
-    "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
-    "$OUT/libc_locale_for_stdio.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
-    "$OUT/libpthread.a" \
+    `# libc_gen.a/libc_string.a/libc_stdio.a/libc_printf.a/` \
+    `# libc_locale_for_stdio.a/libmalloc.a/libplatform.a/libpthread.a` \
+    `# REMOVED 2026-09-03 (dynamicfix sweep): all of them are merged into` \
+    `# dylibs reached through the libSystem.B.dylib this link already` \
+    `# loads, so the static copies were private duplicate malloc/pthread/` \
+    `# stdio state. Same "one owner per symbol" class as build_launchd.sh.` \
+    "$OUT/cerror_stub.o" \
     "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     2>"$OUT/pd_console_login_link.err" \
     || { echo "error: real link failed -- see $OUT/pd_console_login_link.err" >&2; tail -60 "$OUT/pd_console_login_link.err" >&2; exit 1; }
