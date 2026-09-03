@@ -182,6 +182,31 @@ fi
 # keeps this project's own boot path exactly as reliable as it was
 # before this session (launchctl.macho is still real, still builds via
 # tools/userland_staging/build_launchctl.sh, just not auto-installed).
+#
+# DAR-234 (2026-09-03, dynamicfix sweep): launchctl.macho now links
+# clean (zero undefined symbols, zero fixup errors -- the collate/glob
+# gaps above are real, closed fixes) and passes bind_target_audit.sh,
+# but the real, separate BOOTSTRAP_NOT_PRIVILEGED hang documented just
+# above is STILL unfixed and out of scope for this session. Installing
+# it at the exact path core.c hardcodes (`/bin/launchctl`, see
+# bootstrap_tool[] in launchd's core.c) would still reproduce that same
+# boot hang. Installed here at `/usr/bin/launchctl` instead -- a
+# genuinely different absolute path core.c's own hardcoded string never
+# matches, so launchd's own unconditional bootstrap call still silently
+# ENOENTs exactly as before (safe, unchanged boot behavior) -- while
+# still putting a real, runnable launchctl.macho on the image for manual
+# invocation from an interactive shell (e.g. `/usr/bin/launchctl list`),
+# so this session's real link fixes get a real QEMU-boot verification
+# without reintroducing the known hang. Re-home to `/bin/launchctl` once
+# the BOOTSTRAP_NOT_PRIVILEGED gap is actually closed.
+if [ -f tools/userland_staging/libc_build/launchctl.macho ]; then
+    mkdir -p "$MNT/usr/bin"
+    cp tools/userland_staging/libc_build/launchctl.macho "$MNT/usr/bin/launchctl"
+    chmod 755 "$MNT/usr/bin/launchctl"
+    echo "+ wrote $(wc -c < tools/userland_staging/libc_build/launchctl.macho) bytes to $MNT/usr/bin/launchctl"
+    echo "  (real, dynamically-linked launchctl -- DAR-234; deliberately NOT"
+    echo "  at /bin/launchctl, see this script's own comment above)"
+fi
 
 # DAR-165: which console-login LaunchDaemon plist gets installed as the
 # live org.puredarwin.console-login.plist. Default "getty" is the new
