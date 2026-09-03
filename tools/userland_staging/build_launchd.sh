@@ -418,6 +418,25 @@ fi
 # before relying on it, not assumed).
 ar d "$OUT/libmach_ipc_no_dead_stubs.a" mach_msg_real.o
 
+# DAR-23 dedup pass (2026-09-03): the rest of libmach_ipc.a's MIG
+# client-stub members (task.defs/mach_host.defs/clock.defs-generated
+# code, plus a couple of small trap/strncpy helpers) are pure
+# duplicates of libsystem_kernel.dylib's own real, identical exports --
+# unlike mach_ipc_dead_stubs.o/mach_msg_real.o above, these were never
+# behaviorally wrong, just redundant. Verified member-by-member: every
+# symbol each of these 7 members defines is present in launchd.macho's
+# OWN real loaded-dylib transitive closure (dup_symbol_audit.sh's
+# per-binary computation, which follows actual LC_LOAD_DYLIB/
+# LC_REEXPORT_DYLIB edges -- NOT just "some dylib somewhere under
+# libc_build/system", which would wrongly credit dylibs launchd never
+# loads at all, e.g. libCoreFoundation.dylib/libncurses.dylib). Leaving
+# them in costs nothing at runtime (ld64 just picks one definition) but
+# keeps this binary carrying private copies of MIG glue for no reason,
+# same shadowing class as DAR-131/DAR-162.
+ar d "$OUT/libmach_ipc_no_dead_stubs.a" \
+    clockUser.o mach_host_self_real.o mach_hostUser.o \
+    mach_ipc_clock_init.o mach_ipc_traps.o mig_strncpy.o taskUser.o
+
 # Real gap found+fixed 2026-08-29, launchd bug #6's actual root cause:
 # pthread_main_thread_bootstrap.o (pthread_create/_real_pthread_start_abi/
 # the `_pthread_create.registered` bsdthread_register-once gate) was ALSO
@@ -528,6 +547,91 @@ ar r "$OUT/libpthread_no_dup_pthread_create.a" "$OUT/pthread_main_thread_bootstr
 # leaving fork()'s pid cache and getpid()'s answer split across two
 # independently-compiled copies -- arguably a real correctness fix, not
 # just a link-error workaround.
+
+# DAR-23 dedup pass (2026-09-03), continued: same member-by-member
+# verification as the libmach_ipc_no_dead_stubs.a trim above, applied to
+# the other four plain archives on this link line. Each member below
+# defines ONLY symbols already present in launchd.macho's own real
+# loaded-dylib transitive closure -- confirmed via dup_symbol_audit.sh's
+# per-binary computation, not a blanket per-directory nm scan (that
+# over-broad version wrongly "found" e.g. _getsectbynamefromheader_64
+# covered via libCoreFoundation.dylib, a dylib this binary never loads --
+# false positive, left alone). Members NOT listed here (most of each
+# archive, e.g. liblaunchd_syscalls.a's fork/exec/chdir/chown family)
+# have no dylib provider at all yet and must stay; removing a whole
+# archive wholesale was tried and fails with ~150 undefined symbols, the
+# same "no dylib provider at all" shape DAR-234 already catalogued --
+# this pass only removes the provably-redundant slice, per member, not
+# per archive.
+rm -f "$OUT/liblaunchd_mig_no_dup.a"
+cp "$OUT/liblaunchd_mig.a" "$OUT/liblaunchd_mig_no_dup.a"
+# domain_user.o/internal_user.o/job_forward_user.o/job_replyUser.o/
+# job_user.o kept (NOT stripped) 2026-09-03, real QEMU regression found:
+# these are launchd's OWN vproc/job.defs-generated MIG CLIENT stubs --
+# real IPC protocol code, not inert data/wrapper functions like the other
+# members stripped below. They matched "covered by loaded-dylib closure"
+# only because libxpc.dylib bundles its own same-named legacy vproc_mig
+# client stubs (real Apple compat shim) reachable via reexport -- but
+# libxpc.dylib's copy talks the GENERIC macOS vproc/job MIG wire format,
+# not necessarily byte-identical to whatever job.defs/vproc.defs revision
+# this project's OWN liblaunchd_core.a MIG SERVER side (job_mig_server.c
+# et al) actually implements. Stripping these 5 members and relying on
+# libxpc.dylib's copy stalled launchd's own boot dead right after
+# "remounted / read-write" -- consistent with a client/server MIG
+# protocol mismatch (message sent, server never replies, no crash, no
+# error, just a hang). DAR-234 itself already flagged this exact
+# _vproc_mig_*/_job_mig_* symbol family as needing a real per-symbol
+# check, not a blanket strip -- this is that check's answer. Do NOT
+# re-strip these.
+rm -f "$OUT/liblaunchd_syscalls_no_dup.a"
+cp "$OUT/liblaunchd_syscalls.a" "$OUT/liblaunchd_syscalls_no_dup.a"
+ar d "$OUT/liblaunchd_syscalls_no_dup.a" \
+    isthreaded_compat.o siglist.o sys____munmap.o sys__dup.o \
+    sys__kevent.o sys__mkdirat.o uuid_pack.o
+
+rm -f "$OUT/launchd_libc_extras_no_dup.a"
+cp "$OUT/launchd_libc_extras.a" "$OUT/launchd_libc_extras_no_dup.a"
+# getifaddrs.o kept (NOT stripped) 2026-09-03, real QEMU regression found:
+# see cf_libc_extras.a's copyfile_syscalls.o comment below -- same "same
+# name, wrong dylib" trap, this time via libSystem.B.dylib's reexport of
+# libresolv.dylib, which also happens to define real, local (non-reexport)
+# _getifaddrs/_freeifaddrs/_gethostname.
+ar d "$OUT/launchd_libc_extras_no_dup.a" \
+    copy.o fstatat64.o heapsort.o Libc_sys_sigaction.o \
+    libplatform_sigaction.o libresolv_getentropy_syscall.o \
+    ls_fenv_compat.o qsort.o removefile_syscalls.o
+
+rm -f "$OUT/cf_libc_extras_no_dup.a"
+cp "$OUT/cf_libc_extras.a" "$OUT/cf_libc_extras_no_dup.a"
+# copyfile_syscalls.o/gethostname.o kept (NOT stripped) 2026-09-03: a
+# first attempt stripped both, believing them pure duplicates of
+# libcopyfile.dylib/libresolv.dylib (both real, reachable only via
+# libSystem.B.dylib's own LC_REEXPORT_DYLIB, per this file's established
+# "list the real owner explicitly" pattern) -- confirmed via
+# `dyld_info -exports` that libcopyfile.dylib genuinely, locally (not
+# `[re-export]`) defines _getpwnam/_getgrnam/_getpwuid/_syslog too, same
+# as libresolv.dylib genuinely defines _gethostname/_getifaddrs/
+# _freeifaddrs. The link succeeded, but a real QEMU boot-test then
+# stalled launchd's own boot dead right after "remounted / read-write",
+# never reaching job spawn -- copyfile_syscalls.o is this project's OWN
+# real getpwnam/getgrnam/getpwuid/syslog implementation (a thin wrapper
+# over libinfo_custom.o's own `_li_getpwnam` family, this project's
+# real flat-file /etc/master.passwd reader per docs/
+# multiuser-userland-plan.md), NOT a duplicate of whatever
+# libcopyfile.dylib/libresolv.dylib's own build accidentally bundled
+# under the same symbol names (same "same name, different and untested
+# code" trap as the cf_socket_syscalls.o finding logged elsewhere this
+# session -- libCoreFoundation.a's own private socket syscalls, never
+# swept). "Same symbol name reachable via reexport" is NOT sufficient
+# evidence of a safe duplicate; only dylibs in this project's
+# already-vetted CORE stack (libsystem_kernel/libsystem_c/
+# libsystem_pthread/libsystem_platform/libsystem_malloc/libdispatch/
+# libdyld) get this treatment without a real boot-test confirming it.
+# Do NOT re-strip these, and do NOT re-add libresolv.dylib/
+# libcopyfile.dylib to this link purely to satisfy them.
+ar d "$OUT/cf_libc_extras_no_dup.a" \
+    geteuid.o getuid.o
+
 rm -f "$OUT/launchd.macho"
 # -DCRT_DYNAMIC_LINKING (DAR-153, 2026-09-02): launchd.macho is a real,
 # genuinely dynamically-linked executable (libdispatch/libdyld/libSystem.B/
@@ -566,8 +670,8 @@ rm -f "$OUT/launchd.macho"
     -o "$OUT/launchd.macho" \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     -Wl,-force_load,"$OUT/liblaunchd_core.a" \
-    "$OUT/libCoreFoundation.a" "$OUT/cf_libc_extras.a" "$OUT/launchd_libc_extras.a" \
-    "$OUT/liblaunchd_mig.a" "$OUT/liblaunchd_syscalls.a" \
+    "$OUT/libCoreFoundation.a" "$OUT/cf_libc_extras_no_dup.a" "$OUT/launchd_libc_extras_no_dup.a" \
+    "$OUT/liblaunchd_mig_no_dup.a" "$OUT/liblaunchd_syscalls_no_dup.a" \
     "$OUT/libmach_ipc_no_dead_stubs.a" "$OUT/mach_port_gap_closures2.o" "$OUT/mach_port_gap_closures2_traps.o" \
     "$OUT/mach_ipc_dead_stubs_voucher_only.o" \
     `# libclosure.a/libplatform.a REMOVED 2026-09-03 (dynamicfix sweep):` \
@@ -610,26 +714,31 @@ rm -f "$OUT/launchd.macho"
     `# statically here gave launchd private duplicate stdio FILE tables and` \
     `# locale state alongside libsystem_c.dylib's own.` \
     `#` \
-    `# KNOWN-BROKEN as of 2026-09-03 -- this link does NOT currently` \
-    `# succeed, and the remaining failure is NOT an undefined symbol:` \
-    `#   ld: fixup error (kind=arm64_adrp_lo12) at '___glob'+0x34 from` \
-    `#   liblaunchd_syscalls.a[13](glob.o), target '___locale_key' does` \
-    `#   not have address` \
-    `# ___locale_key IS a real export of libsystem_c.dylib (nm -gU shows` \
-    `# it as data, 'D'), which this link already names. The problem is` \
-    `# that glob.o was compiled assuming static linkage and emits a` \
-    `# DIRECT adrp/add pair for it; a datum imported from a dylib has to` \
-    `# be reached GOT-indirect, so the relocation cannot be satisfied at` \
-    `# any link order. Fixing it means recompiling liblaunchd_syscalls.a` \
-    `# (build_launchd_syscalls.sh) so glob.o treats ___locale_key as an` \
-    `# external import -- not re-adding libc_locale_for_stdio*.a, which` \
-    `# would reinstate the duplicate locale state. Tracked in DAR-234.` \
+    `# The glob.o/___locale_key fixup error this comment used to describe` \
+    `# (arm64_adrp_lo12 relocation failure, ___locale_key not GOT-indirect)` \
+    `# was fixed for real 2026-09-03 (DAR-234, commit 9748500) by` \
+    `# recompiling liblaunchd_syscalls.a's glob.o to treat ___locale_key as` \
+    `# an external import. This link succeeds today with 0 undefined` \
+    `# symbols from that cause -- do not re-add libc_locale_for_stdio*.a.` \
     "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/system/libxpc.dylib" "$OUT/system/libbsm.dylib" \
     "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
     "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libremovefile.dylib" \
     "$OUT/system/libsystem_c.dylib" \
+    `# libresolv.dylib/libcopyfile.dylib deliberately NOT added here` \
+    `# (tried 2026-09-03, reverted): they do genuinely, locally export` \
+    `# _gethostname/_getifaddrs/_freeifaddrs and` \
+    `# _getgrnam/_getpwnam/_getpwuid/_syslog respectively, but a real QEMU` \
+    `# boot-test showed those are NOT the same code as this project's own` \
+    `# real implementations (cf_libc_extras.a's copyfile_syscalls.o,` \
+    `# launchd_libc_extras.a's getifaddrs.o/gethostname.o) -- linking` \
+    `# these dylibs in stalled launchd's boot dead right after "remounted` \
+    `# / read-write". See those archives' own "kept (NOT stripped)"` \
+    `# comments above for the real story. Same symbol name reachable via` \
+    `# a dylib's reexport chain is NOT sufficient evidence of a safe` \
+    `# duplicate for anything outside this project's already-vetted core` \
+    `# dylib stack.` \
     `# libsystem_platform.dylib listed EXPLICITLY, same reexport-depth` \
     `# reasoning as libsystem_malloc.dylib/libremovefile.dylib above.` \
     `# Added 2026-09-03 with the libplatform.a removal: it is the real` \
