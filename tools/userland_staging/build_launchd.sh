@@ -680,6 +680,64 @@ ar d "$OUT/cf_libc_extras_no_dup.a" \
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -O0 \
     launchd_socket_syscall_gaps.c -o "$OUT/launchd_socket_syscall_gaps.o"
 
+# DAR-23 dedup pass, continued (2026-09-03 second session): liblaunchd_
+# core.a itself (force_load'ed below -- every member is pulled in
+# unconditionally, so a duplicate here is not academic) carries three
+# whole objects that are provably, member-for-member redundant with a
+# dylib this binary already loads -- confirmed the same way as every
+# other strip in this file: every external symbol each object defines
+# was checked against `xcrun dyld_info -exports` on the real owning
+# dylib (a genuine local address, never a `[re-export]` line) before
+# being removed, not just `nm` name-matching.
+#
+# - mach_portUser.o (39 __kernelrpc_mach_port_*/task_set_port_space
+#   symbols): build_launchd_core.sh's own header already documents this
+#   is a real `mig` regen of xnu-7195's own osfmk/mach/mach_port.defs --
+#   and build_libsystem_kernel.sh does the IDENTICAL regen (same real
+#   .defs file, same mig invocation) to build libsystem_kernel.dylib's
+#   own copy (see that script's "Real mig regen of osfmk/mach/
+#   mach_port.defs" comment). Both sides of this MIG conversation are
+#   generated from the same source against the same real kernel, unlike
+#   the vproc_mig/job_mig family this same pass already found and
+#   reverted -- there the SERVER (this project's own liblaunchd_core.a)
+#   could differ from libxpc.dylib's bundled legacy CLIENT compat shim;
+#   here the SERVER is the real XNU-7195 kernel itself for both copies.
+#   All 39 symbols confirmed present as real, local (non-reexport)
+#   exports of libsystem_kernel.dylib via `dyld_info -exports` before
+#   stripping.
+# - host_privUser.o (23 _host_*/_kmod_*/_kext_request/_vm_wire/
+#   _vm_allocate_cpm/_mach_vm_wire/_thread_wire symbols): same real mig
+#   regen of xnu-7195's own osfmk/mach/host_priv.defs. build_libpthread_
+#   qos.sh's own header explains it tried reusing THIS EXACT liblaunchd_
+#   core.a object directly and rejected it only for a build-flag
+#   mismatch (___chkstk_darwin/stack-protector), not a protocol
+#   difference -- it regenerates the identical .defs file itself instead
+#   and that object ships whole inside libsystem_pthread.dylib (pulled
+#   in for libpthread_qos_compat.o's own two voucher MIG calls). All 23
+#   symbols confirmed present as real, local exports of
+#   libsystem_pthread.dylib via `dyld_info -exports`.
+# - thread_get_special_reply_port_trap.o (1 symbol,
+#   _thread_get_special_reply_port): build_libsystem_kernel.sh's own
+#   header already flags this exact duplicate by name ("reused verbatim
+#   from tools/userland_staging/thread_get_special_reply_port_trap.o ...
+#   left alone this round -- launchd.macho defining it locally is
+#   harmless, already-tracked Phase 2b binary-shadowing debt") -- same
+#   literal .s file compiled twice. Confirmed present as a real, local
+#   export of libsystem_kernel.dylib.
+#
+# launchd_mach_port_compat.o was investigated too and left ALONE: only 2
+# of its 5 symbols (_mach_port_request_notification/_set_attributes)
+# have a real dylib provider (confirmed via the same dyld_info check);
+# _mach_port_get_set_status/_move_member/_set_mscount do not, so
+# stripping the whole object breaks the link. Narrowing just the 2 would
+# need the same `ld -r -exported_symbol`/`-unexported_symbol` treatment
+# already used elsewhere in this file -- left as a follow-up, not done
+# in this pass.
+rm -f "$OUT/liblaunchd_core_no_dup.a"
+cp "$OUT/liblaunchd_core.a" "$OUT/liblaunchd_core_no_dup.a"
+ar d "$OUT/liblaunchd_core_no_dup.a" \
+    mach_portUser.o host_privUser.o thread_get_special_reply_port_trap.o
+
 rm -f "$OUT/launchd.macho"
 # -DCRT_DYNAMIC_LINKING (DAR-153, 2026-09-02): launchd.macho is a real,
 # genuinely dynamically-linked executable (libdispatch/libdyld/libSystem.B/
@@ -723,7 +781,7 @@ rm -f "$OUT/launchd.macho"
     -Wl,-u,__current_pid \
     -o "$OUT/launchd.macho" \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
-    -Wl,-force_load,"$OUT/liblaunchd_core.a" \
+    -Wl,-force_load,"$OUT/liblaunchd_core_no_dup.a" \
     "$OUT/launchd_socket_syscall_gaps.o" \
     "$OUT/cf_libc_extras_no_dup.a" "$OUT/launchd_libc_extras_no_dup.a" \
     "$OUT/liblaunchd_mig_no_dup.a" "$OUT/liblaunchd_syscalls_no_dup.a" \
