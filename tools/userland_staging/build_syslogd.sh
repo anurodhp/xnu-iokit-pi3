@@ -85,7 +85,7 @@ if [ ! -d "$SYSLOG/syslogd.tproj" ]; then
     echo "error: $SYSLOG/syslogd.tproj not found -- run setup_third_party.sh first" >&2
     exit 1
 fi
-for a in liblaunchd_mig liblaunchd_syscalls libmach_ipc libplatform libc_gen libc_string libc_stdio libc_printf libc_locale_for_stdio; do
+for a in liblaunchd_mig liblaunchd_syscalls libmach_ipc libc_gen libc_string libc_stdio libc_printf libc_locale_for_stdio; do
     if [ ! -f "$OUT/$a.a" ]; then
         echo "error: $OUT/$a.a not found -- run build_${a}.sh first" >&2
         exit 1
@@ -119,6 +119,7 @@ done
 # LC_REEXPORT_DYLIB is not enough for ld64 in this project's sysroot), so
 # every one of them is a real, fail-fast prerequisite.
 for d in libdispatch libdyld libSystem.B libsystem_kernel libsystem_pthread libsystem_malloc \
+         libsystem_platform libsystem_blocks \
          libsystem_c libcopyfile libresolv libsystem_notify libxpc libopenpam libncurses; do
     if [ ! -f "$OUT/system/$d.dylib" ]; then
         echo "error: $OUT/system/$d.dylib not found -- run its build_*.sh first" >&2
@@ -416,6 +417,25 @@ echo "wrote $OUT/syslogd_libc_extras.a"
 #
 # Fix is the same "remove, don't reconcile" as launchd's: let
 # libsystem_pthread.dylib be the one pthread runtime in the process.
+#
+# libplatform.a AND libclosure.a REMOVED for the same reason, same pass:
+# the post-pthread-fix duplicate audit still showed syslogd.macho locally
+# defining ONE HUNDRED AND SIX symbols that libsystem_platform.dylib also
+# exports -- the entire locking/atomics runtime, not leaf helpers:
+# _os_unfair_lock_lock/_unlock/_trylock, _os_unfair_lock_assert_owner,
+# the _os_unfair_lock_{corruption,recursive,unowned}_abort primitives,
+# __os_once and its three __os_once_gate_*_abort primitives, the raw
+# ___ulock_wait/___ulock_wake traps, _os_lock_* in every flavour, and the
+# whole OSAtomic* family -- plus NINETEEN more that libsystem_blocks.dylib
+# exports, including the DATA symbols __NSConcreteStackBlock/
+# __NSConcreteGlobalBlock/__NSConcreteMallocBlock the compiler emits into
+# every Block literal's isa field. Two locking runtimes and two Blocks
+# runtimes in one process is the same hazard as two pthread runtimes,
+# and the remaining crash under investigation (DAR-222) is at exactly
+# such a primitive -- dispatch_once() on a token inside libnotify's
+# os_alloc_once'd globals, guarded by an os_unfair_lock. Same removal
+# shape; both replacement dylibs were already being loaded transitively
+# via libSystem.B.dylib's own reexports, they just were not winning.
 if [ ! -f "$OUT/libc_locale_for_stdio.a" ]; then
     echo "error: $OUT/libc_locale_for_stdio.a not found -- run build_libc_stdio.sh first" >&2
     exit 1
@@ -452,16 +472,30 @@ rm -f syslogd.macho
     "$OUT/syslogd_obj/asl_string.o" "$OUT/syslogd_obj/asl_util.o" \
     "$OUT/syslogd_obj/syslogd_dbserver_compat.o" "$OUT/syslogd_obj/syslogd_getaddrinfo_compat.o" \
     "$OUT/syslogd_obj/syslogd_oslog_compat.o" "$OUT/syslogd_obj/syslogd_remote_stub.o" \
-    "$OUT/syslogd_obj/syslogd_alloc_once_compat.o" "$OUT/syslogd_obj/syslogd_misc_libc_compat.o" \
+    `# syslogd_alloc_once_compat.o REMOVED 2026-09-03 (DAR-217 follow-up):` \
+    `# it was written when PureDarwin's notify_client.c was compiled` \
+    `# STATICALLY into this binary and libplatform's real alloc_once.c` \
+    `# would not build here (it needs os/atomic_private.h, genuinely absent` \
+    `# from the pinned libplatform). notify is a real dylib now, and with` \
+    `# libplatform.a gone from this link the real owners are already loaded:` \
+    `# __os_alloc_once is a real export of libsystem_platform.dylib and` \
+    `# __os_alloc_once_table of libsystem_kernel.dylib -- the same pair` \
+    `# libsystem_notify.dylib's own _notify_globals() binds to. Keeping the` \
+    `# compat copy meant syslogd's static half and libsystem_notify.dylib` \
+    `# each had their own os_alloc_once table, i.e. two homes for the same` \
+    `# keyed singleton. The file itself stays in the tree for any` \
+    `# still-fully-static consumer.` \
+    "$OUT/syslogd_obj/syslogd_misc_libc_compat.o" \
     "$OUT/syslogd_obj/syslogd_mach_port_compat.o" "$OUT/syslogd_obj/syslogd_mach_port_extra_trap.o" \
     "$OUT/syslogd_obj/error_codes.o" \
     "$OUT/syslogd_libc_extras.a" \
     "$OUT/libc_regex.a" \
     "$OUT/liblaunchd_mig.a" \
-    "$OUT/libmach_ipc.a" "$OUT/libclosure.a" "$OUT/chk_fail.o" "$OUT/libplatform.a" \
+    "$OUT/libmach_ipc.a" "$OUT/chk_fail.o" \
     "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
     "$OUT/libc_locale_for_stdio_syslogd.a" \
     "$OUT/system/libsystem_kernel.dylib" \
+    "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_blocks.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
     "$OUT/system/libsystem_malloc.dylib" \
     `# libsystem_c.dylib/libcopyfile.dylib listed EXPLICITLY (not left to` \
