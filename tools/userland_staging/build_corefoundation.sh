@@ -125,21 +125,6 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     exit 1
 fi
 
-# Real, verified fix (2026-08-28, see docs/backlog.md item d9 for the
-# full trail and tools/userland_staging/build_simple_cmds.sh's own
-# NEWLD_BINDIR header comment for the isolated repro this is based on):
-# Xcode 12's own bundled ld64-609 has a real internal crash under
-# -Wl,-fixup_chains that a much newer ld does not. Compiling still uses
-# Xcode 12's clang/SDK above (untouched -- that vintage match is a
-# separate, still-load-bearing invariant); only the final link step's
-# linker binary changes, via clang's -B override.
-DAILY_XCODE="$(xcode-select -p 2>/dev/null)"
-NEWLD_BINDIR="$DAILY_XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin"
-if [ ! -x "$NEWLD_BINDIR/ld" ]; then
-    echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE) -- run 'xcode-select -p' to check, see docs/backlog.md item d9" >&2
-    exit 1
-fi
-
 CF="../../third_party/swift-corelibs-foundation/CoreFoundation"
 XNU="../../third_party/xnu-7195"
 DISPATCH="../../third_party/libdispatch"
@@ -469,99 +454,26 @@ rm -f "$OUT/libCoreFoundation.a"
 ar rcs "$OUT/libCoreFoundation.a" "$OUT"/cf_obj/*.o
 echo "wrote $OUT/libCoreFoundation.a ($(ls "$OUT"/cf_obj/*.o | wc -l | tr -d ' ') objects)"
 
-# Real, informational trial link: prove this archive's own real content
-# links against this project's existing curated stack (libdispatch as a
-# real per-library .dylib per this project's 2026-08-25 dylib-first
-# directive, everything else still the pre-existing static archives).
-# -force_load again, same "empty reference list proves nothing" reason
-# as build_launchd_core.sh's own trial link.
-cat > "$OUT/cf_trial_main.c" <<'EOF'
-#include <CoreFoundation/CFArray.h>
-int main(void) {
-    CFArrayRef a = CFArrayCreate(0, 0, 0, 0);
-    return (int)CFArrayGetCount(a);
-}
-EOF
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -O0 \
-    -I "$OUT/cf_headers" -idirafter "$XNU/libkern" -o "$OUT/cf_trial_main.o" "$OUT/cf_trial_main.c"
-
-# libm.a stays static here on purpose (2026-08-29 cleanup pass): -static
-# means ld64 cannot pull symbols from any real dylib at all --
-# libsystem_m.dylib exists now, but this specific link can only ever use
-# libm.a, same structural reason libmach_ipc.a/libclosure.a/libmalloc.a/
-# libplatform.a/libpthread.a/libc_gen.a/etc below also stay static here.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
-    -o "$OUT/cf_trial.macho" \
-    ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
-    -Wl,-force_load,"$OUT/libCoreFoundation.a" \
-    "$OUT/cf_trial_main.o" \
-    "$OUT/libm.a" \
-    "$OUT/system/libdispatch.dylib" \
-    "$ICU_LIB/libicuuc.dylib" "$ICU_LIB/libicui18n.dylib" "$ICU_LIB/libicudata.dylib" "$OUT/system/libc++.dylib" \
-    "$OUT/system/libxml2.dylib" \
-    "$OUT/libmach_ipc.a" "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/libplatform.a" \
-    "$OUT/libpthread.a" "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
-    "$OUT/libc_locale_for_stdio.a" \
-    2>"$OUT/cf_trial_link.err" \
-    && echo "real STATIC trial link: 0 undefined symbols -- fully closed" \
-    || { n=$(grep -c 'Undefined symbol' "$OUT/cf_trial_link.err" || true); echo "real STATIC trial link found $n undefined symbol group(s) -- NOTE some of these (dispatch_*/os_log_*/__os_alloc_once* etc) are a link-mode artifact, not real gaps, see the dynamic trial link below and docs/backlog.md item d7:"; grep '^  "' "$OUT/cf_trial_link.err" | sed 's/,.*//' | sort -u; }
-
-# Real, informational DYNAMIC trial link -- real ld64 cannot pull
-# symbols from a real MH_DYLIB (libdispatch.dylib) into a fully static
-# link at all, which made the static trial link above over-report
-# dispatch_*/os_log_*/__os_alloc_once* etc as gaps when they're actually
-# fine (found+documented 2026-08-26, docs/backlog.md item d7). Same real
-# recipe build_dyld_test_exec.sh already established: drop `-static`
-# (keep `-nostdlib`), link plain dylibs on the command line, real
-# `-Wl,-fixup_chains` (this project's pinned dyld-940 needs chained
-# fixups, not the older bind-opcode format). Also links the same curated
-# static libc_string/libc_gen/libc_stdio/libc_printf/libc_locale_for_stdio
-# archives the static trial link above already used (real, zero-
-# pollution, already-proven-complete for these).
-#
-# UPDATED 2026-08-29 (static-linking cleanup pass): the small
-# cf_libc_extras.a of hand-selected copyfile_syscalls.o/getuid.o/
-# geteuid.o/gethostname.o/date_compat.o objects this trial link used to
-# `ar x` out of libcopyfile.a/libremovefile.a/libresolv.a/libopenpam.a
-# is GONE -- those 4 archives are now real per-library dylibs (this
-# session's own static-to-dylib migration), each already verified (`nm
-# -gU`) to export every one of those same symbols for real
-# (getpwnam/getpwuid/getuid -> libcopyfile.dylib, geteuid ->
-# libremovefile.dylib, gethostname -> libresolv.dylib, writev/
-# netsettime/pututxline/__NSGetArgv/send/asctime/localtime/mktime/
-# settimeofday/time -> libopenpam.dylib). Linked directly below (not
-# just via libSystem.B.dylib's own reexport of libresolv/libcopyfile/
-# libremovefile -- per this project's own d9 finding, reexport-only
-# resolution through the umbrella doesn't reliably satisfy a
-# consumer's own DIRECT calls with this toolchain, each real sub-dylib a
-# consumer's own compiled code calls into still needs a direct link
-# input too). Extracting a private static copy of these same objects
-# here instead would reintroduce exactly the duplicate-process-global-
-# state risk this whole migration pass exists to close (same class as
-# libresolv's own real mutable `_res` struct -- see
-# build_libresolv_dylib.sh's header). localtime.o/libproc.o/strtoul.o
-# (real homes of localtime_r/proc_pidinfo/strtoul_l) were separately
-# tried and reverted (2026-08-27, before this update): each pulls its
-# own deep, not-locally-satisfied dependency chain that a real trial
-# link confirmed is a net LOSS -- more new gaps introduced than symbols
-# closed. Left as real, documented remaining gaps instead of chasing
-# diminishing returns. This is the accurate gap count going forward --
-# prefer this trial link's output over the static link's above.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
-    -B"$NEWLD_BINDIR" \
-    -Wl,-fixup_chains \
-    -o "$OUT/cf_trial_dyn.macho" \
-    ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
-    "$OUT/cf_trial_main.o" \
-    "$OUT/libCoreFoundation.a" \
-    "$OUT/system/libsystem_m.dylib" \
-    "$OUT/system/libresolv.dylib" "$OUT/system/libcopyfile.dylib" "$OUT/system/libremovefile.dylib" \
-    "$OUT/system/libopenpam.dylib" \
-    "$OUT/libc_string.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" "$OUT/libc_locale_for_stdio.a" \
-    "$OUT/system/libdispatch.dylib" \
-    "$ICU_LIB/libicuuc.dylib" "$ICU_LIB/libicui18n.dylib" "$ICU_LIB/libicudata.dylib" "$OUT/system/libc++.dylib" \
-    "$OUT/system/libxml2.dylib" \
-    "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
-    2>"$OUT/cf_trial_dyn.err" \
-    && echo "real DYNAMIC trial link: 0 undefined symbols -- fully closed" \
-    || { n=$(grep -c 'Undefined symbol' "$OUT/cf_trial_dyn.err" || true); echo "real DYNAMIC trial link found $n undefined symbol group(s) -- the accurate current gap count:"; grep '^  "' "$OUT/cf_trial_dyn.err" | sed 's/,.*//' | sort -u; }
+# DAR-195 (2026-09-03): the STATIC and DYNAMIC -force_load trial links
+# that used to live here (linking libCoreFoundation.a whole into a
+# throwaway cf_trial.macho/cf_trial_dyn.macho to print an undefined-
+# symbol gap count) are REMOVED, not just moved -- they were this
+# script's own real remaining static-archive "consumer" per DAR-195's
+# own 6-item list, and closing that list is the point of this ticket.
+# They did real, useful work during CF's active porting phase
+# (2026-08-26/27, gap count 183->109 etc, see docs/backlog.md item d7)
+# but that job is superseded now by two real, better checks:
+#   - build_corefoundation_dylib.sh's own duplicate-symbol pre-audit
+#     (checks every member object against the real sibling-dylib union
+#     before linking, not just "does *a* link close")
+#   - build_corefoundation_dylib_test.sh's cf_dylib_smoketest.macho,
+#     which links against the real, already-built libCoreFoundation.dylib
+#     (not this archive) and is real-QEMU-boot-verified, exercising
+#     __CFInitialize's own constructor at real dyld load time -- a
+#     strictly stronger proof than "an -force_load link closes".
+# Re-adding an -force_load trial link here would just reintroduce the
+# exact static-consumer this ticket exists to remove: this script's own
+# job ends at producing libCoreFoundation.a as raw material for
+# build_corefoundation_dylib.sh's `ar x` extraction step, never linking
+# it whole into any executable of its own. See Linear DAR-195.
+echo "libCoreFoundation.a: DAR-195 -- no longer test-linked here, see build_corefoundation_dylib.sh / build_corefoundation_dylib_test.sh for real link verification"

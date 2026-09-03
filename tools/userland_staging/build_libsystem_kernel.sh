@@ -341,10 +341,15 @@ mkdir -p "$OUT/libsystem_kernel/mach_port_mig"
 #
 # Deliberately NOT done by appending the wrapper to
 # cf_mach_port_syscalls.c: that file is shared with
-# build_corefoundation.sh, whose libCoreFoundation.a is linked into
-# launchd.macho alongside liblaunchd_core.a's launchd_mach_port_compat.o
-# -- which defines mach_port_set_attributes too. Adding it there would
-# turn a dylib duplicate into a hard link error one layer up.
+# build_corefoundation.sh (libCoreFoundation.a's own source), and
+# liblaunchd_core.a's launchd_mach_port_compat.o also defines
+# mach_port_set_attributes. Post-DAR-195, libCoreFoundation.dylib no
+# longer statically embeds into launchd.macho -- but liblaunchd_core.a
+# still links directly into launchd.macho, so the same real
+# duplicate-symbol collision would still occur if this wrapper were
+# added to the shared cf_mach_port_syscalls.c file instead of narrowed
+# here. Adding it there would turn a dylib duplicate into a hard link
+# error one layer up.
 "$CLANG" "${CFLAGS_MACH_PORT[@]}" -I "$OUT/libsystem_kernel/mach_port_mig" \
     mach_port_wrappers_real.c -o "$OUT/libsystem_kernel/mach_port_wrappers_raw.o"
 "$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld" -r -arch arm64 \
