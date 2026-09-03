@@ -702,6 +702,16 @@ echo "+ ensured $MNT/var/run exists (real bind(2) target dir for AF_UNIX"
 echo "  Sockets -- DAR-153, launchd's real socketgroup_setup_one() needs the"
 echo "  parent directory to exist before bind(\"/var/run/syslog\") can succeed)"
 
+# DAR-222: real syslogd (third_party/syslog/syslogd.tproj/daemon.h)
+# hardcodes _PATH_SYSLOGD_LOG "/var/log/syslogd.log" and bsd_out's real
+# ASL store path is also under /var/log -- this is not the cause of
+# syslogd's dispatch_once() crash (that's memory corruption, unrelated),
+# but it's a real, separate gap the ticket also flags: even
+# once syslogd stays up, bsd_out has nowhere to write without this.
+mkdir -p "$MNT/var/log/asl/Logs"
+echo "+ ensured $MNT/var/log/asl/Logs exists (real syslogd.tproj/daemon.h"
+echo "  _PATH_SYSLOGD_LOG target + real asl.conf.osx's aslmanager Logs dir)"
+
 # Real timezone database (Phase 4.6, docs/roadmap.md) -- real, unmodified
 # Apple-shipped TZif2 binary zoneinfo files, copied directly from this
 # host Mac's own /usr/share/zoneinfo/{UTC,GMT} (real Apple/IANA data,
