@@ -17,18 +17,9 @@ __kernelrpc_mach_port_move_member_trap:
     svc #0x80
     ret
 
-// Real trap -25 (third_party/xnu-7195/osfmk/kern/syscall_sw.c:
-//   /* 25 */ MACH_TRAP(_kernelrpc_mach_port_destruct_trap, 4, 5, munge_wwwl))
-// Already exists as one of 7 traps bundled together in this project's
-// own mach_port_traps.s, but that file's OTHER 6 traps (allocate/
-// insert_member/extract_member/construct/get_attributes/type) would
-// duplicate-conflict with copies already linked elsewhere (e.g.
-// libxpc_syscalls.a's own __kernelrpc_mach_port_allocate_trap, found by
-// this pass's own trial link) -- compiling that whole file isn't
-// possible here. Real, narrow duplicate: just the one trap this pass
-// actually needs.
-.globl __kernelrpc_mach_port_destruct_trap
-__kernelrpc_mach_port_destruct_trap:
-    mov x16, #-25
-    svc #0x80
-    ret
+// __kernelrpc_mach_port_destruct_trap (trap -25) REMOVED 2026-09-03
+// (DAR-24): libsystem_kernel.dylib now really exports it (confirmed via
+// dyld_info -exports, not guessed) -- syslogd.macho already loads that
+// dylib, so the reference binds there instead of shadowing it. See
+// syslogd_mach_port_compat.c's own updated comment for the C-level half
+// of this same removal.
