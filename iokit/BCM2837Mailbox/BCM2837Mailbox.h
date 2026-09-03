@@ -13,12 +13,24 @@
  * ONLY behind that interface - there is no register, no fuse, and no
  * devicetree property this kernel can read instead.
  *
- * This class exists for exactly one such piece today: the board's real
- * Ethernet MAC address, needed by SMSC9514Ethernet (see DAR-144 /
- * docs/historic/backlog.md P2 item 8 - the LAN9514 on a Raspberry Pi has
- * no EEPROM populated, so the chip cannot tell the driver its own
- * address, and hardcoding one means every board on a segment presents
- * the identical MAC).
+ * Two such pieces exist today:
+ *
+ *   - the board's real Ethernet MAC address, needed by SMSC9514Ethernet
+ *     (see DAR-144 / docs/historic/backlog.md P2 item 8 - the LAN9514 on
+ *     a Raspberry Pi has no EEPROM populated, so the chip cannot tell the
+ *     driver its own address, and hardcoding one means every board on a
+ *     segment presents the identical MAC);
+ *
+ *   - the EMMC/SDHCI controller's base clock frequency, needed by
+ *     BCM2837SDHCI to compute a real SD clock divisor (DAR-103). That
+ *     controller is `missing_caps` (Linux sdhci-iproc's bcm2835_data),
+ *     so its CAPABILITIES register's base-clock field is explicitly
+ *     untrustworthy, and the real rate is whatever VideoCore firmware
+ *     programmed at boot - it varies by board and by config.txt's
+ *     core_freq. Linux solves this the same way: bcm2835's sdhci DT node
+ *     carries `clocks = <&clocks BCM2835_CLOCK_EMMC>`, and that clock
+ *     provider (drivers/clk/bcm/clk-raspberrypi.c) is a client of this
+ *     same mailbox interface, tag 0x00030002.
  *
  * There is already a real property-channel implementation in this kernel
  * - pexpert/arm/pe_init.c's bcm2837_mbox_call()/bcm2837_video_init(),
@@ -51,6 +63,38 @@
 
 class BCM2837Mailbox {
 public:
+	/*
+	 * Clock IDs for getClockRateHz(), as defined by the Raspberry Pi
+	 * firmware mailbox property interface. Only the one this kernel
+	 * actually asks for is listed; the numbering was read out of
+	 * third_party/qemu-zhuowei's hw/misc/bcm2835_property.c (the
+	 * "case 1: EMMC" arm of tag 0x00030002's clock-id switch), which
+	 * matches Linux's RPI_FIRMWARE_EMMC_CLK_ID.
+	 */
+	enum {
+		kClockIdEMMC = 1,
+	};
+
+	/*
+	 * The firmware-programmed rate, in Hz, of one of the VideoCore's
+	 * clocks (property tag 0x00030002, "get clock rate").
+	 *
+	 * Returns false if the mailbox call fails or the firmware answers
+	 * with 0 - which is the real, documented "this clock is not
+	 * configured / not known" answer, not a rate. On false, *outHz is
+	 * untouched and the caller MUST fall back to whatever it does when it
+	 * has no idea what the clock is; there is deliberately no
+	 * "reasonable default" invented here, because a wrong-but-plausible
+	 * base clock is exactly what produces an unsafe SD clock divisor
+	 * (DAR-103).
+	 *
+	 * Not cached: unlike the board identity above, this is a per-clock-id
+	 * query and callers ask for it once at start() anyway. The mailbox
+	 * lock is still held across the call, so it cannot race the identity
+	 * query or another caller.
+	 */
+	static bool getClockRateHz(uint32_t clockId, uint32_t *outHz);
+
 	/*
 	 * The VideoCore's 64-bit per-board serial number (property tag
 	 * 0x00010004). Returns false if the mailbox call fails or the

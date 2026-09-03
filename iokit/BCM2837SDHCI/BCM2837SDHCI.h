@@ -23,7 +23,16 @@
  *   - missing_caps=true: the CAPABILITIES register (0x40) can't be
  *     trusted on this SoC; capabilities below are hardcoded to a
  *     conservative default-speed / 3.3V / no-DMA profile instead of
- *     being read from hardware.
+ *     being read from hardware. That includes its base-clock field,
+ *     which is why the real base clock is asked of the VideoCore
+ *     firmware over the mailbox property channel instead
+ *     (BCM2837Mailbox::getClockRateHz(kClockIdEMMC), DAR-103) - the same
+ *     source Linux uses on this SoC, where the sdhci DT node's
+ *     `clocks = <&clocks BCM2835_CLOCK_EMMC>` provider is itself a
+ *     mailbox client. HOST_VERSION (0xFE) *is* read from hardware, since
+ *     it selects which of the two SDHCI clock-divider encodings applies
+ *     and guessing that wrong programs a completely different rate. See
+ *     setClock()/calcDivider().
  *   - SDHCI_QUIRK_NO_HISPD_BIT / SDHCI_QUIRK2_PRESET_VALUE_BROKEN: no
  *     high-speed or UHS preset support attempted - default-speed
  *     (~25MHz/CMD-mode) clock only.
@@ -103,6 +112,20 @@
  *     just a safety net, not the only mechanism that was ever working).
  *   - Card-insertion/removal interrupts (SDHCI_INT_CARD_INSERT/REMOVE) are
  *     unimplemented - reportMediaState() never reports a changed state.
+ *   - **Bus width is still 1-bit.** kRegHostControl is never written, so
+ *     the 4-bit data bus every SD card supports goes unused and every
+ *     transfer moves 1 bit per clock instead of 4. Deliberately left
+ *     alone by DAR-103, which fixed only the clock: widening the bus is
+ *     not a host-side register write, it is a real ACMD6 (SET_BUS_WIDTH)
+ *     negotiation with the card - the card's SCR must first be read
+ *     (ACMD51) to confirm it supports 4-bit, ACMD6 sent, and only then
+ *     may HOST_CONTROL's DATA_WIDTH bit be set; setting the host bit
+ *     without the card having switched puts the two ends in different
+ *     bus widths, which is data corruption rather than a clean failure.
+ *     That is a self-contained follow-on, not a TODO hidden inside the
+ *     clock work.
+ *   - High speed (>25MHz, CMD6 function switch) is likewise not
+ *     attempted; the clock stops at SD default speed (25MHz).
  *   - Voltage/power sequencing (SDHCI_POWER_CONTROL) uses the standard
  *     3.3V value; BCM2837_BRINGUP-era pexpert may not have working power
  *     rail control for the SD slot at all yet (separate, deeper hardware
@@ -111,6 +134,8 @@
 
 #ifndef _BCM2837_SDHCI_H
 #define _BCM2837_SDHCI_H
+
+#include "BCM2837SDHCIDivider.h"
 
 #include <IOKit/storage/IOBlockStorageDevice.h>
 #include <IOKit/IOMemoryDescriptor.h>
@@ -175,6 +200,23 @@ private:
 	uint64_t fBlockCount;     // total addressable 512-byte blocks
 	uint32_t fBlockSize;      // always 512 for the block-storage-visible geometry
 
+	// Clock state (DAR-103). fBaseClockHz is the controller's real base
+	// clock as reported by the VideoCore firmware over the mailbox
+	// property channel (BCM2837Mailbox::getClockRateHz(kClockIdEMMC)) -
+	// NOT read from CAPABILITIES, whose base-clock field is explicitly
+	// untrustworthy on this SoC (missing_caps, see header). Zero means
+	// "the firmware did not tell us", which is a real, expected case
+	// (e.g. a board/firmware that doesn't answer the tag) and makes
+	// setClock() take its always-conservative fallback path instead of
+	// computing a divisor from a value it does not have.
+	// fSpecVersion is HOST_VERSION's spec field, which selects the
+	// divider encoding. fCurrentClockHz is the rate setClock() last
+	// actually programmed (0 while on the fallback path, where the true
+	// rate is unknown by construction).
+	uint32_t fBaseClockHz;
+	uint16_t fSpecVersion;
+	uint32_t fCurrentClockHz;
+
 	// Register offsets (drivers/mmc/host/sdhci.h in Linux). Access widths
 	// (8/16/32-bit) match what Linux's sdhci_readb/w/l use for each -
 	// getting these wrong is a classic source of adjacent-register
@@ -198,6 +240,27 @@ private:
 		kRegIntEnable       = 0x34, // 32-bit
 		kRegSignalEnable    = 0x38, // 32-bit
 		kRegCapabilities    = 0x40, // 32-bit (untrustworthy on this SoC - missing_caps)
+		kRegHostVersion     = 0xFE, // 16-bit ([7:0] spec version, [15:8] vendor)
+	};
+
+	// HOST_VERSION's spec-version field values live in
+	// BCM2837SDHCIDivider.h (kBCM2837SDHCISpecVer100/200/300), next to
+	// the divider math they select between.
+
+	// The two SD clock rates this driver ever asks for.
+	enum {
+		// SD Physical Layer spec, card identification mode: 100-400kHz.
+		// setClock() always lands at or below the target, and the divider
+		// step sizes involved keep it well above 100kHz for any plausible
+		// base clock, so both ends of that range are respected.
+		kIdentificationClockHz = 400000,
+
+		// SD default speed: up to 25MHz, which every card supports after
+		// identification with no CMD6 function switch and no bus-width
+		// change. High speed (50MHz) is deliberately NOT attempted - it
+		// needs a real CMD6 negotiation this driver does not implement,
+		// and this SoC carries SDHCI_QUIRK_NO_HISPD_BIT anyway.
+		kDefaultSpeedClockHz = 25000000,
 	};
 
 	// SDHCI_PRESENT_STATE bits we actually use.
@@ -326,7 +389,42 @@ private:
 	void     resetCmdLine(void);
 	void     resetDatLine(void);
 
+	// Programs the SD clock to the highest rate that is <= targetHz and
+	// that this controller's divider can actually express. Requires
+	// fBaseClockHz/fSpecVersion to have been established first
+	// (readClockConfig()); without a real base clock it falls back to the
+	// pre-DAR-103 behaviour of writing the largest 8-bit divisor value,
+	// which is slow but never faster than intended. Never programs a rate
+	// above targetHz - if no divisor can achieve that, it takes the
+	// fallback rather than the closest-anyway value.
 	bool     setClock(uint32_t targetHz);
+
+	// Pure function: given a real base clock, a target rate, and the
+	// controller's SDHCI spec version, produces the CLOCK_CONTROL divider
+	// field for the fastest expressible rate <= targetHz, or false if no
+	// divider can get down to targetHz. Static and side-effect-free so it
+	// can be reasoned about (and, if it ever matters, unit-tested) in
+	// isolation from any hardware - see its own comment in the .cpp for
+	// the two divider encodings and why the choice between them is
+	// load-bearing.
+	static bool calcDivider(uint32_t baseHz, uint32_t targetHz,
+	                         uint16_t specVersion, uint16_t *outClkField,
+	                         uint32_t *outActualHz);
+
+	// Reads HOST_VERSION and asks the VideoCore firmware for the EMMC
+	// base clock, once, at start(). Both are inputs to setClock()'s
+	// divisor math; both failing is survivable (setClock() falls back).
+	void     readClockConfig(void);
+
+	// Post-identification clock raise (DAR-103). Runs once at start()
+	// after cardIdentify(), and only if a real base clock is known.
+	// Reads a reference block at the identification clock, raises the
+	// clock to default-speed, then re-reads the same block and compares -
+	// a real end-to-end data-path check at the new rate, on whatever
+	// board this is actually running on, rather than trusting the divisor
+	// math alone. Any failure or mismatch reverts to the identification
+	// clock and leaves it there.
+	bool     tryRaiseDataPhaseClock(void);
 	bool     cardIdentify(void); // CMD0/8/ACMD41/CMD2/CMD3/CMD7/CMD9-derived geometry, CMD16 block length
 	bool     readBlocksPIO(uint64_t startBlock, uint32_t nblks, void *buf);
 	bool     writeBlocksPIO(uint64_t startBlock, uint32_t nblks, const void *buf);

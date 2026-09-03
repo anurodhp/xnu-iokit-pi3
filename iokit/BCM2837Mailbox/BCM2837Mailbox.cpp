@@ -45,6 +45,7 @@ enum {
 enum {
 	kTagGetBoardMAC    = 0x00010003,
 	kTagGetBoardSerial = 0x00010004,
+	kTagGetClockRate   = 0x00030002,
 	kTagEnd            = 0x00000000,
 
 	kCodeRequest       = 0x00000000,
@@ -79,6 +80,19 @@ enum {
 	kMsgIdxEnd = 12,
 
 	kMsgWords = 16,
+};
+
+/*
+ * Single-tag message layout, used by the clock-rate query. Same framing
+ * rules as the two-tag identity message above; the end tag sits at word 5
+ * and the remaining words are the same load-bearing tail padding (the
+ * firmware's record walk needs total_size to extend at least 8 bytes past
+ * the end tag's own offset).
+ */
+enum {
+	kOneIdxTag = 2, kOneIdxBufSize = 3, kOneIdxRespCode = 4,
+	kOneIdxWord0 = 5, kOneIdxWord1 = 6,
+	kOneIdxEnd = 7,
 };
 
 #define kMsgBytes (kMsgWords * (uint32_t)sizeof(uint32_t))
@@ -241,6 +255,85 @@ mailboxCall(volatile uint32_t *regs, uint32_t *msg, uint64_t msgBusAddr)
 }
 
 /*
+ * One property-message buffer: the descriptor, its CPU-side words, and
+ * the VideoCore bus address to hand the firmware. Shared by every query
+ * below rather than open-coded per query - the allocation constraints are
+ * subtle enough (see msgBufAlloc()) that having two copies of them would
+ * be a real hazard, not just duplication.
+ */
+struct MailboxMsgBuf {
+	IOBufferMemoryDescriptor *desc;
+	uint32_t *words;
+	uint64_t busAddr;
+};
+
+/*
+ * Physically contiguous, 16-byte aligned, within the low 1GB the
+ * 0xc0000000 bus alias can reach, and mapped write-combine (real ARM64
+ * Normal Non-Cacheable) rather than kIOMapInhibitCache - the same choice,
+ * for the same recorded reason, as BCM2837DWC2::initDMABuffer():
+ * kIOMapInhibitCache maps Device-nGnRnE, which faults on any unaligned
+ * multi-byte access, and this buffer is read/written with byte-granular
+ * accesses (the MAC bytes below). kIOMemoryMapperNone keeps any IOMapper
+ * out of the way so getPhysicalSegment() returns a true physical address.
+ *
+ * On success the buffer is zeroed and the caller only has to fill in its
+ * own tag records.
+ */
+static bool
+msgBufAlloc(struct MailboxMsgBuf *out)
+{
+	out->desc = NULL;
+	out->words = NULL;
+	out->busAddr = 0;
+
+	IOBufferMemoryDescriptor *buf =
+	    IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
+		kernel_task,
+		kIODirectionInOut | kIOMemoryPhysicallyContiguous |
+		kIOMapWriteCombineCache | kIOMemoryMapperNone,
+		kMsgBytes,
+		0x3FFFFFFFULL & ~0xFULL);
+	if (buf == NULL) {
+		IOLog("BCM2837Mailbox: message buffer allocation failed\n");
+		return false;
+	}
+	if (buf->prepare() != kIOReturnSuccess) {
+		IOLog("BCM2837Mailbox: message buffer prepare() failed\n");
+		buf->release();
+		return false;
+	}
+
+	IOByteCount segLen = 0;
+	IOPhysicalAddress phys = buf->getPhysicalSegment(0, &segLen, 0);
+	if (phys == 0 || segLen < kMsgBytes || (phys & 0xF) != 0) {
+		IOLog("BCM2837Mailbox: message buffer unusable (phys=%#llx seglen=%llu)\n",
+		    (uint64_t)phys, (uint64_t)segLen);
+		buf->complete();
+		buf->release();
+		return false;
+	}
+
+	out->desc = buf;
+	out->words = (uint32_t *)buf->getBytesNoCopy();
+	out->busAddr = kBusAddressBase | (uint64_t)phys;
+	bzero(out->words, kMsgBytes);
+	return true;
+}
+
+static void
+msgBufFree(struct MailboxMsgBuf *b)
+{
+	if (b->desc != NULL) {
+		b->desc->complete();
+		b->desc->release();
+		b->desc = NULL;
+	}
+	b->words = NULL;
+	b->busAddr = 0;
+}
+
+/*
  * Runs the one board-identity query, at most once per boot, and caches
  * the results. Caller must hold the lock.
  */
@@ -257,46 +350,11 @@ queryBoardIdentityLocked(void)
 		return;
 	}
 
-	/*
-	 * Physically contiguous, 16-byte aligned, within the low 1GB the
-	 * 0xc0000000 bus alias can reach, and mapped write-combine (real
-	 * ARM64 Normal Non-Cacheable) rather than kIOMapInhibitCache - the
-	 * same choice, for the same recorded reason, as BCM2837DWC2::
-	 * initDMABuffer(): kIOMapInhibitCache maps Device-nGnRnE, which
-	 * faults on any unaligned multi-byte access, and this buffer is
-	 * read/written with byte-granular accesses (the MAC bytes below).
-	 * kIOMemoryMapperNone keeps any IOMapper out of the way so
-	 * getPhysicalSegment() returns a true physical address.
-	 */
-	IOBufferMemoryDescriptor *buf =
-	    IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
-		kernel_task,
-		kIODirectionInOut | kIOMemoryPhysicallyContiguous |
-		kIOMapWriteCombineCache | kIOMemoryMapperNone,
-		kMsgBytes,
-		0x3FFFFFFFULL & ~0xFULL);
-	if (buf == NULL) {
-		IOLog("BCM2837Mailbox: message buffer allocation failed\n");
+	struct MailboxMsgBuf buf;
+	if (!msgBufAlloc(&buf)) {
 		return;
 	}
-	if (buf->prepare() != kIOReturnSuccess) {
-		IOLog("BCM2837Mailbox: message buffer prepare() failed\n");
-		buf->release();
-		return;
-	}
-
-	IOByteCount segLen = 0;
-	IOPhysicalAddress phys = buf->getPhysicalSegment(0, &segLen, 0);
-	if (phys == 0 || segLen < kMsgBytes || (phys & 0xF) != 0) {
-		IOLog("BCM2837Mailbox: message buffer unusable (phys=%#llx seglen=%llu)\n",
-		    (uint64_t)phys, (uint64_t)segLen);
-		buf->complete();
-		buf->release();
-		return;
-	}
-
-	uint32_t *m = (uint32_t *)buf->getBytesNoCopy();
-	bzero(m, kMsgBytes);
+	uint32_t *m = buf.words;
 
 	m[kMsgIdxSize] = kMsgBytes;
 	m[kMsgIdxCode] = kCodeRequest;
@@ -311,7 +369,7 @@ queryBoardIdentityLocked(void)
 
 	m[kMsgIdxEnd] = kTagEnd;
 
-	if (mailboxCall(regs, m, kBusAddressBase | (uint64_t)phys)) {
+	if (mailboxCall(regs, m, buf.busAddr)) {
 		/*
 		 * Per-tag response word: bit 31 set marks it as a response, the
 		 * low bits are the byte length the firmware actually wrote.
@@ -353,8 +411,76 @@ queryBoardIdentityLocked(void)
 		}
 	}
 
-	buf->complete();
-	buf->release();
+	msgBufFree(&buf);
+}
+
+/*
+ * Runs one "get clock rate" query. Caller must hold the lock.
+ */
+static bool
+queryClockRateLocked(uint32_t clockId, uint32_t *outHz)
+{
+	volatile uint32_t *regs = mailboxRegs();
+	if (regs == NULL) {
+		return false;
+	}
+
+	struct MailboxMsgBuf buf;
+	if (!msgBufAlloc(&buf)) {
+		return false;
+	}
+	uint32_t *m = buf.words;
+
+	m[kMsgIdxSize] = kMsgBytes;
+	m[kMsgIdxCode] = kCodeRequest;
+
+	m[kOneIdxTag] = kTagGetClockRate;
+	// 8-byte value buffer: request is {clock id}, response is
+	// {clock id, rate in Hz}. Both firmware and QEMU read the id from
+	// value+12 (word 0) and write the rate to value+16 (word 1).
+	m[kOneIdxBufSize] = 8;
+	m[kOneIdxRespCode] = 0;
+	m[kOneIdxWord0] = clockId;
+	m[kOneIdxWord1] = 0;
+
+	m[kOneIdxEnd] = kTagEnd;
+
+	bool ok = false;
+	if (mailboxCall(regs, m, buf.busAddr)) {
+		uint32_t rate = m[kOneIdxWord1];
+		if ((m[kOneIdxRespCode] & 0x80000000U) != 0 &&
+		    (m[kOneIdxRespCode] & 0x7FFFFFFFU) >= 8 &&
+		    rate != 0) {
+			// A firmware that doesn't know this clock answers 0, which is
+			// "no rate", not "0 Hz" - treated as failure so the caller
+			// falls back rather than dividing by it.
+			*outHz = rate;
+			ok = true;
+		} else {
+			IOLog("BCM2837Mailbox: clock id %u: no usable rate "
+			      "(resp=%#x rate=%u)\n", clockId,
+			    m[kOneIdxRespCode], rate);
+		}
+	}
+
+	msgBufFree(&buf);
+	return ok;
+}
+
+bool
+BCM2837Mailbox::getClockRateHz(uint32_t clockId, uint32_t *outHz)
+{
+	if (outHz == NULL) {
+		return false;
+	}
+	IOLock *lock = mailboxLock();
+	if (lock == NULL) {
+		return false;
+	}
+	IOLockLock(lock);
+	bool ok = queryClockRateLocked(clockId, outHz);
+	IOLockUnlock(lock);
+	return ok;
 }
 
 bool

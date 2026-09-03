@@ -1,4 +1,5 @@
 #include "BCM2837SDHCI.h"
+#include "BCM2837Mailbox.h"
 
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IODeviceMemory.h>
@@ -37,6 +38,9 @@ BCM2837SDHCI::init(OSDictionary *properties)
 	fRCA = 0;
 	fBlockCount = 0;
 	fBlockSize = 512;
+	fBaseClockHz = 0;
+	fSpecVersion = 0;
+	fCurrentClockHz = 0;
 
 	fPendingIntStatus = 0;
 	fRealInterruptHits = 0;
@@ -454,21 +458,122 @@ BCM2837SDHCI::resetDatLine(void)
 	}
 }
 
+/*
+ * The divider math itself lives in BCM2837SDHCIDivider.h - see that file
+ * for the two encodings, the safety argument, and why it is a standalone
+ * pure function (tools/test_sdhci_divider.sh compiles the very same
+ * source into a host-side exhaustive test). This thin forwarder exists
+ * only so the rest of the driver can keep calling it as a class method.
+ */
+bool
+BCM2837SDHCI::calcDivider(uint32_t baseHz, uint32_t targetHz, uint16_t specVersion,
+    uint16_t *outClkField, uint32_t *outActualHz)
+{
+	return bcm2837SDHCICalcDivider(baseHz, targetHz, specVersion,
+	           outClkField, outActualHz);
+}
+
+void
+BCM2837SDHCI::readClockConfig(void)
+{
+	// HOST_VERSION's spec field is what decides the divider encoding
+	// calcDivider() must use. QEMU's model reports 0x2402 here
+	// (hw/sd/sdhci.c: version = (SDHC_HCVER_VENDOR << 8) | (spec - 1),
+	// and hw/arm/bcm2835_peripherals.c sets sd-spec-version=3), i.e.
+	// spec field 2 == SDHCI 3.00.
+	//
+	// 0xFE is the last 16-bit register in the mapped window - the "sdhci"
+	// DT node's reg length is 0x100 (devicetrees/rpi3.dts), so this reads
+	// the final two bytes of the mapping and nothing past it.
+	uint16_t hostVersion = readReg16(kRegHostVersion);
+	uint16_t specField = hostVersion & 0xFF;
+
+	// A register block that reads back all-ones (unmapped/powered-off) or
+	// reports a spec version that does not exist yields a spec field this
+	// driver cannot interpret. Since "unknown" would otherwise fall
+	// through to the >= 3.00 branch - the more permissive encoding, whose
+	// bit layout on an actually-2.00 controller is undefined - refuse the
+	// whole computed-divisor path in that case rather than pick an
+	// encoding by default. SDHCI 4.x reports 3 here and keeps the 3.00
+	// divider layout, so it is accepted.
+	if (specField > 3) {
+		IOLog("BCM2837SDHCI: HOST_VERSION=%#x has an uninterpretable spec "
+		      "field %u - falling back to the conservative fixed divisor\n",
+		    hostVersion, specField);
+		return;
+	}
+	fSpecVersion = specField;
+
+	// missing_caps=true on this SoC (Linux sdhci-iproc's bcm2835_data,
+	// see class header): CAPABILITIES' base-clock field is explicitly
+	// untrustworthy here, so the real rate comes from the only place that
+	// actually knows it - the VideoCore firmware that programmed it. This
+	// is the same source Linux uses on this SoC, via the DT clock
+	// provider in drivers/clk/bcm/clk-raspberrypi.c.
+	uint32_t hz = 0;
+	if (!BCM2837Mailbox::getClockRateHz(BCM2837Mailbox::kClockIdEMMC, &hz)) {
+		IOLog("BCM2837SDHCI: VideoCore mailbox did not report an EMMC base "
+		      "clock - falling back to the conservative fixed divisor "
+		      "(HOST_VERSION=%#x)\n", hostVersion);
+		return;
+	}
+
+	// Sanity range, not a default: this only ever *rejects* a value, it
+	// never invents one. Real SDHCI base clocks live in the low tens of
+	// MHz to a couple hundred MHz (the Pi's EMMC clock is commonly
+	// ~41-250MHz depending on core_freq; QEMU reports exactly 50MHz).
+	// Anything outside 1MHz..1GHz means the response was not a clock rate
+	// at all (a protocol/framing error, a firmware that answered a
+	// different tag), and dividing by it could produce an arbitrarily
+	// wrong - possibly far too fast - SD clock.
+	const uint32_t kMinPlausibleBaseHz = 1000000;
+	const uint32_t kMaxPlausibleBaseHz = 1000000000;
+	if (hz < kMinPlausibleBaseHz || hz > kMaxPlausibleBaseHz) {
+		IOLog("BCM2837SDHCI: firmware reported implausible EMMC base clock "
+		      "%u Hz - ignoring it and falling back to the conservative "
+		      "fixed divisor\n", hz);
+		return;
+	}
+
+	fBaseClockHz = hz;
+	IOLog("BCM2837SDHCI: HOST_VERSION=%#x (SDHCI spec field %u), EMMC base "
+	      "clock %u Hz from VideoCore firmware\n",
+	    hostVersion, fSpecVersion, fBaseClockHz);
+}
+
 bool
 BCM2837SDHCI::setClock(uint32_t targetHz)
 {
-	// missing_caps=true on this SoC (see header) - CAPABILITIES can't be
-	// trusted for the base clock frequency. Rather than guess a specific
-	// base clock value, use the maximum 8-bit divisor (SDCLK_FREQ_SEL,
-	// bits [15:8]) for the ~400kHz identification-phase clock, which is
-	// safe/conservative regardless of the true base clock on any plausible
-	// BCM2837 VPU clock rate. For "data phase" targetHz, this is a
-	// TODO - currently just reuses the same conservative divisor, which
-	// means transfers run slower than necessary but should stay correct.
-	writeReg16(kRegClockControl, 0x0000); // disable SD clock while reprogramming
-	(void)targetHz; // see comment above - not yet used to pick a tighter divisor
+	// Initialised to the conservative fallback divisor, not to 0: 0 is the
+	// divider field's "base clock, no division at all" encoding, i.e. the
+	// fastest rate the controller can produce. If some future edit ever
+	// leaves this unset on a path that reaches the register write, it
+	// should produce a too-slow clock, not a too-fast one.
+	uint16_t clkField = (uint16_t)(0xFFU << 8);
+	uint32_t actualHz = 0;
+	bool haveDivider = (fBaseClockHz != 0) &&
+	    calcDivider(fBaseClockHz, targetHz, fSpecVersion, &clkField, &actualHz);
 
-	uint16_t clk = (0xFFU << 8) | 0x01 /* internal clock enable */;
+	if (!haveDivider) {
+		// Pre-DAR-103 fallback, kept byte-for-byte: with no trustworthy
+		// base clock there is nothing to compute a divisor *from*, so use
+		// the largest value the 8-bit field can hold (SDCLK_FREQ_SEL,
+		// bits [15:8]). It is not a legal 8-bit-mode encoding (that mode
+		// wants exactly one bit set) and the resulting rate is genuinely
+		// unknown, but it is the slowest thing this driver has ever
+		// programmed and it is what every real boot to date has run on -
+		// so it stays the fallback rather than something new and
+		// untested. Deliberately NOT replaced by a guessed base clock:
+		// guessing high enough to be "fast" is how you program a
+		// data-phase clock the card cannot keep up with, which corrupts
+		// data instead of merely being slow.
+		clkField = (uint16_t)(0xFFU << 8);
+		actualHz = 0;
+	}
+
+	writeReg16(kRegClockControl, 0x0000); // disable SD clock while reprogramming
+
+	uint16_t clk = clkField | 0x01 /* internal clock enable */;
 	writeReg16(kRegClockControl, clk);
 
 	if (!pollUntil(^bool(void) { return (readReg16(kRegClockControl) & 0x02) != 0; }, 100000)) {
@@ -477,7 +582,151 @@ BCM2837SDHCI::setClock(uint32_t targetHz)
 	}
 
 	writeReg16(kRegClockControl, clk | 0x04 /* SD clock enable */);
+	fCurrentClockHz = actualHz;
+
+	// The SD clock was gated off across the reprogramming above. The SD
+	// Physical Layer spec requires at least 8 clock cycles of running
+	// clock, bus idle, before the host may issue a command after a clock
+	// stop/restart. This never mattered while setClock() was called
+	// exactly once at start() (start()'s own 74-clock power-up delay
+	// covered it by a wide margin), but tryRaiseDataPhaseClock() now calls
+	// it a second time with a real command following immediately. 200us is
+	// >= 8 clocks at any rate this driver can end up on, including the
+	// unknown-but-slow fallback divisor, and is paid at most twice per
+	// boot.
+	IODelay(200);
+
+	if (actualHz != 0) {
+		IOLog("BCM2837SDHCI: SD clock %u Hz (target %u Hz, base %u Hz, "
+		      "CLOCK_CONTROL divider field %#x)\n",
+		    actualHz, targetHz, fBaseClockHz, clkField);
+	} else {
+		IOLog("BCM2837SDHCI: SD clock left on the conservative fixed "
+		      "divisor (no trustworthy base clock; target was %u Hz)\n",
+		    targetHz);
+	}
 	return true;
+}
+
+bool
+BCM2837SDHCI::tryRaiseDataPhaseClock(void)
+{
+	// SD default speed: 0-25MHz, 3.3V, no CMD6 function switch and no bus
+	// widening involved. Every SD card is required to support it once
+	// identification has completed, so this needs no negotiation with the
+	// card - unlike high speed (>25MHz, CMD6) or 4-bit bus width (ACMD6),
+	// neither of which this driver does. Staying at default speed is also
+	// consistent with the SDHCI_QUIRK_NO_HISPD_BIT / preset-broken quirks
+	// this SoC carries (see class header).
+	const uint32_t kDefaultSpeedHz = kDefaultSpeedClockHz;
+
+	if (fBaseClockHz == 0) {
+		return false; // nothing to compute from - stay exactly where we were
+	}
+	if (!fCardPresent) {
+		return false;
+	}
+
+	uint16_t clkField = 0; // out param only; setClock() recomputes it
+	uint32_t candidateHz = 0;
+	if (!calcDivider(fBaseClockHz, kDefaultSpeedHz, fSpecVersion,
+	    &clkField, &candidateHz)) {
+		IOLog("BCM2837SDHCI: no divider reaches <=%u Hz from a %u Hz base - "
+		      "staying at the identification clock\n",
+		    kDefaultSpeedHz, fBaseClockHz);
+		return false;
+	}
+	if (candidateHz <= fCurrentClockHz) {
+		return false; // already there (or the base clock is just slow)
+	}
+
+	// Real end-to-end check rather than trusting the arithmetic alone: read
+	// a reference block at the known-good identification clock, raise the
+	// clock, then read the same block again and compare. On a board where
+	// the higher rate does not actually work (marginal signal integrity,
+	// a base clock the firmware reported but did not really program, a
+	// divider encoding this controller implements differently than its
+	// HOST_VERSION claims), this catches it at boot, on the real hardware,
+	// and backs out - instead of silently handing corrupt blocks to HFS.
+	// It cannot prove the absence of *intermittent* corruption; it does
+	// prove the data path works at all at the new rate.
+	//
+	// Block 0 is used because it always exists on a mounted card and is
+	// only ever read here, never written.
+	const uint32_t kRefBlock = 0;
+	uint8_t *before = (uint8_t *)IOMalloc(fBlockSize);
+	uint8_t *after = (uint8_t *)IOMalloc(fBlockSize);
+	if (before == NULL || after == NULL) {
+		if (before != NULL) {
+			IOFree(before, fBlockSize);
+		}
+		if (after != NULL) {
+			IOFree(after, fBlockSize);
+		}
+		return false;
+	}
+
+	bool raised = false;
+	bool touchedClock = false;
+	uint32_t slowHz = fCurrentClockHz;
+	bool refOK = readBlocksPIO(kRefBlock, 1, before);
+	bool clockOK = false;
+	if (refOK) {
+		// setClock() can fail *after* having already written
+		// CLOCK_CONTROL (it fails at the internal-clock-stable poll, with
+		// SD_CLOCK_EN not yet re-asserted), so once this call has been
+		// made at all the clock registers are dirty regardless of its
+		// result and must be reprogrammed rather than assumed untouched.
+		// Hence touchedClock being set before the call, not after it.
+		touchedClock = true;
+		clockOK = setClock(kDefaultSpeedHz);
+	}
+
+	if (!refOK) {
+		IOLog("BCM2837SDHCI: reference read at the identification clock "
+		      "failed - not raising the SD clock\n");
+	} else if (!clockOK) {
+		IOLog("BCM2837SDHCI: setClock(%u) failed - reverting to the "
+		      "identification clock\n", kDefaultSpeedHz);
+	} else if (!readBlocksPIO(kRefBlock, 1, after)) {
+		IOLog("BCM2837SDHCI: read-back at %u Hz FAILED - reverting to the "
+		      "identification clock\n", candidateHz);
+	} else if (memcmp(before, after, fBlockSize) != 0) {
+		IOLog("BCM2837SDHCI: read-back at %u Hz returned DIFFERENT data than "
+		      "at %u Hz - reverting to the identification clock\n",
+		    candidateHz, slowHz);
+	} else {
+		IOLog("BCM2837SDHCI: SD clock raised to %u Hz (default speed, 1-bit "
+		      "bus); block %u verified identical before and after\n",
+		    candidateHz, kRefBlock);
+		raised = true;
+	}
+
+	if (!raised && touchedClock) {
+		// Put the clock back exactly where cardIdentify() ran - including
+		// after a failed setClock(), which may have left CLOCK_CONTROL
+		// half-programmed with the SD clock gated off. If even this fails
+		// there is nothing further this driver can do about it, but the
+		// log above already says what happened.
+		if (!setClock(kIdentificationClockHz)) {
+			IOLog("BCM2837SDHCI: reverting to the identification clock also "
+			      "failed - the SD bus is in an unknown state\n");
+		}
+		// A failed read leaves the data path needing the SDHCI-spec
+		// recovery the read paths already perform; the clock change on top
+		// of it does not, but re-issuing CMD13 is a cheap way to confirm
+		// the card is still responsive at the restored clock and to leave
+		// a diagnosable log line if it is not.
+		uint32_t st[4];
+		if (fRCA != 0 && !sendCommand(13, fRCA << 16, kCmdRespShort, false, st)) {
+			IOLog("BCM2837SDHCI: card did not answer CMD13 after reverting "
+			      "the clock\n");
+		}
+	}
+
+	IOFree(before, fBlockSize);
+	IOFree(after, fBlockSize);
+	return raised;
 }
 
 bool
@@ -748,21 +997,52 @@ BCM2837SDHCI::start(IOService *provider)
 	// long before interrupts/scheduling pressure matter here.
 	IODelay(1000);
 
-	if (!setClock(400000)) {
+	// DAR-103: establish the controller's real base clock and divider
+	// encoding before the first setClock(), so that call can compute a
+	// real divisor instead of falling back to the fixed conservative one.
+	// Must come after resetHost() (which is a full SOFTWARE_RESET_ALL) so
+	// nothing this reads or programs is about to be reset out from under
+	// it, and before setClock() for the obvious reason.
+	readClockConfig();
+
+	if (!setClock(kIdentificationClockHz)) {
 		return false;
 	}
 	// >=74 SD clocks with CMD held high (the hardware idles CMD high
 	// automatically once the clock is running and nothing has been
-	// issued yet) before the first command. At the 400kHz identification
-	// clock this driver programs, 74 clocks is ~185us - round up
-	// generously since this cost is paid exactly once at boot.
-	IODelay(250);
+	// issued yet) before the first command. This used to be a flat 250us,
+	// derived from "74 clocks at 400kHz is ~185us, round up". That
+	// derivation only holds if the clock really is ~400kHz; setClock()
+	// guarantees <= its target, not == it, so a slower programmed rate
+	// makes 74 clocks take *longer* and could outrun a fixed 250us.
+	// Compute it from the rate actually programmed when that is known,
+	// doubled for margin, and never shorter than the old 250us. Bounded
+	// so an unexpectedly slow clock can't turn this into a long busy-wait.
+	uint32_t settleUs = 250;
+	if (fCurrentClockHz != 0) {
+		uint64_t us = (74ULL * 1000000ULL + fCurrentClockHz - 1) / fCurrentClockHz;
+		us *= 2;
+		if (us > 10000) {
+			us = 10000;
+		}
+		if (us > settleUs) {
+			settleUs = (uint32_t)us;
+		}
+	}
+	IODelay(settleUs);
 
 	if (!cardIdentify()) {
 		IOLog("BCM2837SDHCI: no card identified at start() - device will report no media\n");
 		// Not fatal: publish the nub anyway so it's visible in the
 		// registry / a card can be identified later. reportMediaState
 		// reflects fCardPresent honestly either way.
+	} else {
+		// DAR-103: identification is done, so the bus may leave the
+		// 400kHz identification clock for default speed. Self-verifying
+		// and self-reverting (see tryRaiseDataPhaseClock()); a false
+		// return just means the bus stays at the identification clock,
+		// which is exactly where every boot before this change ran.
+		tryRaiseDataPhaseClock();
 	}
 
 	registerService();
