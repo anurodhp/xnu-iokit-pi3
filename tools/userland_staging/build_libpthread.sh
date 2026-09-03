@@ -7,15 +7,35 @@
 # build_libmalloc.sh (see docs/roadmap.md Phase 4 for the running tier
 # breakdown).
 #
-# REAL CONSTRAINT THAT SHAPES THIS WHOLE SCRIPT (verified by reading
-# kernel source, not assumed): third_party/xnu-7195/bsd/kern/
+# REAL CONSTRAINT THAT ONCE SHAPED THIS WHOLE SCRIPT -- NOW PARTLY
+# STALE, READ THE CORRECTION BELOW BEFORE TRUSTING IT (verified by
+# reading kernel source, not assumed): third_party/xnu-7195/bsd/kern/
 # bsd_pthread_stub.c is this project's kernel-side pthread.kext stand-in
 # (real pthread.kext was never open-sourced by Apple, same situation as
 # launchd/opendirectoryd - see project memory). Its bsdthread_create/
-# bsdthread_register/psynch_* table entries all unconditionally return
-# ENOTSUP. So real pthread_create() can NEVER actually spawn a second
-# schedulable thread on this target, full stop - this is a kernel-level
-# fact, not a userland limitation this script works around. Given that:
+# bsdthread_register/psynch_* table entries all unconditionally returned
+# ENOTSUP when this script was written, so real pthread_create() could
+# never spawn a second schedulable thread on this target.
+#
+# CORRECTED 2026-09-03 (DAR-222): that stopped being true on 2026-08-20
+# (Phase 7.5 step 1, bsd/kern/bsd_pthread_workq.c's real
+# real_bsdthread_create) -- pthread_main_thread_bootstrap.c's own header
+# has carried that correction since 2026-08-24, but this script's
+# header did not, and the stale claim had a real consequence. Because
+# "no second thread can ever exist" made pthread.c's thread-creation
+# half look like dead code, nobody re-examined whether the hand-written
+# replacement in pthread_main_thread_bootstrap.c was complete once
+# threads became real. It was not: it never set the child's
+# stackaddr/stackbottom/freeaddr/freesize, four fields real Apple's
+# _pthread_struct_init() (pthread.c:898-901) sets, so
+# pthread_get_stackaddr_np() returned NULL on every created thread and
+# real libdispatch's _dispatch_clear_stack() bzero'd off the end of the
+# manager thread's stack. That crash cost a multi-session investigation
+# (Linear DAR-222). The header conflict below is still a real reason not
+# to compile pthread.c wholesale, but "it's dead code anyway" is NOT a
+# reason any more -- anything reimplemented from pthread.c here has to
+# be kept feature-complete against the real function it replaces.
+# Given that:
 #   - Everything genuinely single-thread-correct is built for real:
 #     pthread_mutex_t/pthread_cond_t/pthread_rwlock_t (real algorithms,
 #     running under their real DEFAULT policy - FIRSTFIT,
@@ -32,14 +52,16 @@
 #     (pthread_key_create/setspecific/getspecific/pthread_once), real
 #     pthread_atfork, real per-thread cwd (pthread_cwd.c).
 #   - pthread_create() itself is REAL code (not a fabricated stub): it
-#     performs the real bsdthread_create(2) syscall and returns the
-#     real kernel error (ENOTSUP) - real, honest, documented failure,
-#     not a fake success and not a hand-waved errno.
+#     performs the real bsdthread_create(2) syscall. It used to return
+#     the real kernel ENOTSUP; since 2026-08-20 it really does spawn a
+#     real, schedulable thread (see the correction above).
 #   - pthread.c itself (2587 lines) is NOT compiled here: it bundles
 #     three genuinely separate things - (1) main-thread bootstrap +
 #     signature scheme, (2) pthread_create's real stack/mach-vm
-#     allocation machinery (dead code here regardless of whether it
-#     compiles, per the kernel fact above), (3) trivial one-liners
+#     allocation machinery (this was called "dead code here regardless
+#     of whether it compiles" on the strength of the ENOTSUP claim
+#     above; that is no longer true, see the 2026-09-03 correction),
+#     (3) trivial one-liners
 #     (pthread_equal/pthread_main_np/pthread_main_thread_np/
 #     pthread_once). (2) also hits a REAL header conflict: this
 #     project's own MIG-regenerated libc_build/malloc_mig/mach_vm.h

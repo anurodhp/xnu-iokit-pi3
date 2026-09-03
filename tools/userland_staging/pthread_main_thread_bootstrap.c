@@ -632,6 +632,36 @@ pthread_create(pthread_t _Nullable *_Nonnull restrict thread,
 	ctx->arg = arg;
 	ctx->child_thread = child_thread;
 
+	/* Real stack-description fields, exactly the four real Apple
+	 * _pthread_struct_init() sets from its own (stackaddr, stacksize,
+	 * freeaddr, freesize) arguments (third_party/libpthread/src/
+	 * pthread.c:898-901). `stackaddr` is the HIGH end of the stack (real
+	 * Apple's own field comment: "base of the stack (page aligned)",
+	 * with `stackbottom = stackaddr - stacksize`), which is the same
+	 * value handed to __bsdthread_create() as the new thread's initial
+	 * sp below -- not a separate quantity that has to be derived.
+	 *
+	 * DAR-222: leaving these zero was a REAL crash, not cosmetic
+	 * bookkeeping. `struct pthread_s` comes from a fresh anonymous
+	 * mmap, so an unset `stackaddr` reads back as NULL, and
+	 * pthread_get_stackaddr_np() (this project's real
+	 * pthread_get_stackaddr_np_compat.c, a faithful `return
+	 * t->stackaddr;`) then returns NULL for every thread this function
+	 * creates. Real libdispatch's _dispatch_mgr_thread() opens with
+	 * _dispatch_clear_stack(2048) (third_party/libdispatch/src/
+	 * queue.c:6033), whose macro body (src/shims.h:270) is
+	 * `bzero(&a[1], (size_t)(pthread_get_stackaddr_np(pthread_self())
+	 * - (void *)&a[1]))` -- with a NULL stackaddr that length is
+	 * negative, so the bzero walks UP off the top of this stack
+	 * mapping and takes an unmapped write fault. Diagnosed from the
+	 * real faulting PC/FAR/registers via a temporary kernel probe in
+	 * exception_triage(): x2 (memset's length) was exactly
+	 * -(uintptr_t)&a[1], which pins a[0] to 0. */
+	child_thread->stackaddr = (void *)stack_top;
+	child_thread->stackbottom = (void *)((char *)stack_top - PTHREAD_CREATE_STACK_SIZE);
+	child_thread->freeaddr = stack_base;
+	child_thread->freesize = PTHREAD_CREATE_STACK_SIZE;
+
 	/* Real, one-time-per-process bsdthread_register() call -- lazy on
 	 * first pthread_create(), matching real Apple's own
 	 * _pthread_bsdthread_init() being called once early, not per-thread.

@@ -309,17 +309,25 @@ int os_fault_with_payload(unsigned int reason_namespace, unsigned long long reas
                           payload_size, (long)reason_string, (long)reason_flags);
 }
 
-/* Real gap: os_release(void*) (os/object.h's plain C entry point) has a
- * real sibling, os_retain(), already compiled into libdispatch_real.a
- * (confirmed via nm) -- but os_release itself wasn't pulled in by
- * build_libdispatch_real.sh's own file selection. The real underlying
- * primitive it forwards to, __os_object_release_internal, IS already
- * linked (same real object.c source both come from) -- small, honest,
- * real forwarder, not a different implementation. */
-extern void _os_object_release_internal(void *obj);
-void os_release(void *object) {
-    _os_object_release_internal(object);
-}
+/* REMOVED 2026-09-03 (DAR-222 / DAR-24). This used to be a local
+ * os_release() forwarder, added back when the note below was true:
+ *
+ *   "os_release(void*) (os/object.h's plain C entry point) has a real
+ *    sibling, os_retain(), already compiled into libdispatch_real.a
+ *    (confirmed via nm) -- but os_release itself wasn't pulled in by
+ *    build_libdispatch_real.sh's own file selection."
+ *
+ * That is stale: the real libdispatch.dylib syslogd now loads exports
+ * both `_os_retain` and `_os_release` (checked with `nm -m
+ * libc_build/system/libdispatch.dylib`). Keeping a local copy was a
+ * real DAR-24-class shadow of a symbol the process's own dylib already
+ * owns, and this particular copy was also WRONG: it forwarded to
+ * `_os_object_release_internal()` (libdispatch's INTERNAL refcount),
+ * whereas real `os_release()` is `_os_object_release()` -- the
+ * EXTERNAL/xref refcount, which is the one that runs
+ * _os_object_xref_dispose() when the last client reference goes away
+ * (third_party/libdispatch/src/object.c). Deleting it lets the
+ * reference bind to libdispatch.dylib's real implementation. */
 
 /* Real gap: this project's own libopenpam.a's localtime.o (the only
  * other real source of gmtime_r/mktime/timegm/ctime_r in this build)

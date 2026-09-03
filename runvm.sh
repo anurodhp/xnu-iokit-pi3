@@ -21,6 +21,16 @@
 # env vars to boot the older single-partition msdosfs image instead, e.g.:
 #   SD_IMAGE=qemu/fat32_test.dmg ROOT_DEV=disk0 ./runvm.sh
 #
+# EXTRA_BOOT_ARGS appends to the baked-in boot-args below, for kernel
+# debug switches that should NOT be on by default. Added 2026-09-03
+# (DAR-222) so `-user_fault_debug` -- osfmk/kern/exception.c's opt-in
+# report of every userland exception's real type/PC/FAR/ESR/backtrace,
+# the thing that finally located that crash -- is reachable from this
+# project's own scripts instead of needing a hand-edit here, e.g.:
+#   EXTRA_BOOT_ARGS=-user_fault_debug ./runvm.sh
+#   EXTRA_BOOT_ARGS=-user_fault_debug tools/boot_test.py --login ...
+# (tools/boot_test.py passes its environment straight through.)
+#
 # `cpu-factor=10`, added 2026-08-13: real ARM64 interrupt delivery landed
 # this same day (docs/roadmap.md Phase 3), which for the first time put
 # real sustained interrupt-driven I/O load (multiple sequential real SD
@@ -92,5 +102,5 @@ exec ./third_party/qemu-zhuowei/aarch64-softmmu/qemu-system-aarch64 -M raspi3 -m
   -dtb devicetrees/rpi3.dtb \
   -drive "file=$SD_IMAGE,if=sd,format=raw" \
   $USB_DEVICES \
-  -append "debug=0x8 kextlog=0xfff -noprogress -v -enable_kprintf_spam rd=$ROOT_DEV serial=3 cpu-factor=10" \
+  -append "debug=0x8 kextlog=0xfff -noprogress -v -enable_kprintf_spam rd=$ROOT_DEV serial=3 cpu-factor=10 $EXTRA_BOOT_ARGS" \
   -monitor unix:qemu/mon.sock,server,nowait
