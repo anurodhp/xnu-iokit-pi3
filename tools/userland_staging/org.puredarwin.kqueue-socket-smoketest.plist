@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+	DAR-200 diagnostic LaunchDaemon: runs /bin/kqueue_socket_smoketest once
+	at boot with both stdout and stderr on /dev/console, because this
+	project's boot currently never reaches a login prompt (DAR-200 itself),
+	so there is no shell to run it from by hand.
+
+	Deliberately NOT installed by default -- tools/init_binary/
+	inject_into_sd_image.sh only copies it when
+	KQUEUE_SOCKET_SMOKETEST=1 is set in the environment. It is a
+	diagnostic, not part of the real boot.
+
+	KeepAlive is absent on purpose: the test must run exactly once so its
+	output is unambiguous, and (per DAR-200) launchd currently never reaps
+	or respawns anything anyway.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>org.puredarwin.kqueue-socket-smoketest</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/kqueue_socket_smoketest</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/dev/console</string>
+	<key>StandardErrorPath</key>
+	<string>/dev/console</string>
+</dict>
+</plist>

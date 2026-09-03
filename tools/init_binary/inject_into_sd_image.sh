@@ -75,6 +75,28 @@ if [ -z "$MNT" ]; then
     exit 1
 fi
 
+# A guest panic (or any hard QEMU kill) leaves this HFS+ volume's journal
+# dirty, and macOS then mounts it READ-ONLY. Every copy below fails with
+# "Read-only file system", which is loud on its own but easy to miss when
+# this script runs inside a larger pipeline -- and the boot test that
+# follows then silently exercises a STALE image, which looks exactly like
+# "the fix didn't work" (hit for real 2026-09-02, DAR-200: a whole
+# 4-minute QEMU run wasted re-testing the previous image). fsck_hfs
+# replays/clears the journal and the remount comes back read-write; no
+# sudo needed for an hdiutil-attached image owned by this user.
+if mount | grep -qE "on ${MNT} .*read-only"; then
+    echo "= $MNT mounted read-only (dirty journal, almost certainly a prior guest panic) -- running fsck_hfs"
+    diskutil unmount "$SLICE" >/dev/null 2>&1 || true
+    fsck_hfs -fy "/dev/r${SLICE#/dev/}" || true
+    diskutil mount "$SLICE"
+    MNT=$(diskutil info "$SLICE" | awk -F': +' '/Mount Point/{print $2}')
+    if mount | grep -qE "on ${MNT} .*read-only"; then
+        echo "error: $MNT is still read-only after fsck_hfs -- refusing to write a stale image" >&2
+        exit 1
+    fi
+    echo "+ $MNT remounted read-write"
+fi
+
 if [ -f tools/userland_staging/libc_build/launchd.macho ]; then
     cp tools/userland_staging/libc_build/launchd.macho "$MNT/sbin/launchd"
     chmod 700 "$MNT/sbin/launchd"
@@ -506,6 +528,67 @@ if [ -f tools/userland_staging/libc_build/kqueue_smoketest.macho ]; then
     echo "  libdispatch prereq, see tools/userland_staging/kqueue_smoketest.c)"
 else
     echo "= tools/userland_staging/libc_build/kqueue_smoketest.macho not built -- run tools/userland_staging/build_kqueue_smoketest.sh first if wanted, skipping"
+fi
+
+# DAR-200: the real EVFILT_READ / EVFILT_PROC / select()-on-a-kqueue-fd
+# test (tools/userland_staging/kqueue_socket_smoketest.c, built by
+# build_kqueue_socket_smoketest.sh). Always installed as /bin/ if built;
+# its LaunchDaemon plist only when KQUEUE_SOCKET_SMOKETEST=1, since
+# there is currently no login prompt to run it from by hand (that being
+# DAR-200's own second symptom) but it is still a diagnostic, not part
+# of the real boot.
+if [ -f tools/userland_staging/libc_build/kqueue_socket_smoketest.macho ]; then
+    mkdir -p "$MNT/bin"
+    cp tools/userland_staging/libc_build/kqueue_socket_smoketest.macho "$MNT/bin/kqueue_socket_smoketest"
+    chmod 755 "$MNT/bin/kqueue_socket_smoketest"
+    echo "+ wrote $(wc -c < tools/userland_staging/libc_build/kqueue_socket_smoketest.macho) bytes to $MNT/bin/kqueue_socket_smoketest"
+    echo "  (real select()-on-a-kqueue-fd + EVFILT_READ/AF_UNIX + EVFILT_PROC"
+    echo "  test, DAR-200 -- see tools/userland_staging/kqueue_socket_smoketest.c)"
+    if [ "${KQUEUE_SOCKET_SMOKETEST:-0}" = "1" ]; then
+        mkdir -p "$MNT/Library/LaunchDaemons"
+        cp tools/userland_staging/org.puredarwin.kqueue-socket-smoketest.plist \
+            "$MNT/Library/LaunchDaemons/org.puredarwin.kqueue-socket-smoketest.plist"
+        chmod 644 "$MNT/Library/LaunchDaemons/org.puredarwin.kqueue-socket-smoketest.plist"
+        echo "+ wrote org.puredarwin.kqueue-socket-smoketest.plist to $MNT/Library/LaunchDaemons/ (KQUEUE_SOCKET_SMOKETEST=1)"
+    else
+        rm -f "$MNT/Library/LaunchDaemons/org.puredarwin.kqueue-socket-smoketest.plist"
+        echo "= org.puredarwin.kqueue-socket-smoketest.plist NOT installed (set KQUEUE_SOCKET_SMOKETEST=1 to run it at boot)"
+    fi
+else
+    echo "= tools/userland_staging/libc_build/kqueue_socket_smoketest.macho not built -- run tools/userland_staging/build_kqueue_socket_smoketest.sh first if wanted, skipping"
+fi
+
+# KQUEUE_SOCKET_SMOKETEST_AS_PID1=1: install the smoketest as the process
+# the kernel itself execs as PID 1, completely bypassing launchd.
+# bsd/kern/kern_exec.c's load_init_program() tries
+# /usr/appleinternal/sbin/launchd.development BEFORE /sbin/launchd
+# (visible on every boot log as two "load_init_program: attempting to
+# load ..." lines), so dropping a binary there replaces PID 1 without
+# touching /sbin/launchd at all -- fully reversible, and the real launchd
+# comes back the moment this is re-run without the variable. That is what
+# made the test decisive for DAR-200: it answers "does the KERNEL deliver
+# these events" with zero launchd machinery in the picture.
+#
+# Deliberately OUTSIDE the `if [ -f ...kqueue_socket_smoketest.macho ]`
+# block above: the removal half must run even when that binary has since
+# been deleted from libc_build/, otherwise a stale hijack file would sit
+# on the image forever, silently making every later boot run a smoketest
+# instead of real launchd -- exactly the "stale artifact hides the real
+# state" failure this repo's own postmortems keep hitting.
+if [ "${KQUEUE_SOCKET_SMOKETEST_AS_PID1:-0}" = "1" ]; then
+    if [ ! -f tools/userland_staging/libc_build/kqueue_socket_smoketest.macho ]; then
+        echo "error: KQUEUE_SOCKET_SMOKETEST_AS_PID1=1 but kqueue_socket_smoketest.macho is not built -- run tools/userland_staging/build_kqueue_socket_smoketest.sh first" >&2
+        exit 1
+    fi
+    mkdir -p "$MNT/usr/appleinternal/sbin"
+    cp tools/userland_staging/libc_build/kqueue_socket_smoketest.macho \
+        "$MNT/usr/appleinternal/sbin/launchd.development"
+    chmod 755 "$MNT/usr/appleinternal/sbin/launchd.development"
+    echo "+ installed kqueue_socket_smoketest as PID 1 at /usr/appleinternal/sbin/launchd.development (KQUEUE_SOCKET_SMOKETEST_AS_PID1=1)"
+    echo "  !! real launchd is NOT PID 1 in this image until this script is re-run without that variable"
+elif [ -f "$MNT/usr/appleinternal/sbin/launchd.development" ]; then
+    rm -f "$MNT/usr/appleinternal/sbin/launchd.development"
+    echo "= removed stale /usr/appleinternal/sbin/launchd.development -- real /sbin/launchd is PID 1 again"
 fi
 
 if [ -f tools/userland_staging/libinfo_smoketest.macho ]; then
