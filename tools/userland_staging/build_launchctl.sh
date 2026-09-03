@@ -338,9 +338,22 @@ echo "compiled: real launchctl_iokit_compat.c + launchctl_libc_extras_compat.c (
 # own established finding that a two-level-namespace reexport through
 # libSystem.B.dylib alone doesn't reliably satisfy a consumer's own
 # direct calls with this toolchain).
+# -DXLOCALE_STATE_EXPORTED=1 (DAR-234, 2026-09-03, dynamicfix sweep):
+# same real fix, same real mechanism as build_launchd_syscalls.sh's own
+# glob.o -- fnmatch.c also `#include`s xlocale_private.h (calls
+# __current_locale(), which reads __locale_key), and this compile never
+# defined the macro either, so the compiler saw __locale_key at HIDDEN
+# visibility and emitted a direct (same-image) adrp/add pair instead of
+# GOT-indirect. Real link failure hit: `ld: fixup error
+# (kind=arm64_adrp_lo12) at '_fnmatch'+0x2C from
+# liblaunchctl_extras.a[9](fnmatch.o), target '___locale_key' does not
+# have address`. Confirmed harmless for sysctlnametomib.c/lchflags.c,
+# the other two files sharing this CFLAGS array -- neither includes
+# xlocale_private.h (grep-confirmed).
 CFLAGS_LIBC_GAPS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 \
     -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 -D__ct_rune_t=__darwin_ct_rune_t -D__va_list=__builtin_va_list \
+    -DXLOCALE_STATE_EXPORTED=1 \
     -I "$OUT/compat_include" \
     -I "$LIBC/include" -I "$LIBC/darwin" -I "$LIBC/fbsdcompat" -I "$LIBC/locale" -I "$LIBC/locale/FreeBSD" \
     -I "$LIBC/stdtime/FreeBSD" -I "$LIBC/gen" \
@@ -443,6 +456,41 @@ echo "wrote $OUT/liblaunchctl_extras.a"
 # had never had the same fix applied, so this script was failing to
 # link at all (found when a rebuild of it deleted the stale
 # launchctl.macho left over from before CF grew those call sites).
+# Real gap found 2026-09-03 (DAR-234, dynamicfix sweep), same real bug
+# and same real fix as build_launchd.sh's own documented DAR-124
+# writeup: liblaunchd_syscalls.a's sys____fork.o directly ADRP-addresses
+# __current_pid (same-image, non-GOT-relative codegen -- real Apple's
+# own libsyscall/custom/__fork.s is meant to be compiled into the SAME
+# image as __getpid()'s own pid cache, see build_launchd.sh's own
+# comment for the full mechanism). The ONLY object in this link that
+# DEFINES __current_pid is liblaunchd_syscalls.a's own sys____getpid.o
+# -- but this script's own 2026-09-03 archive-strip pass (removing
+# libmalloc.a/libpthread.a/etc in favor of the real sibling dylibs)
+# added libsystem_malloc.dylib as an explicit link input, and that
+# dylib's own real `_getpid` export short-circuits ld64's archive-member
+# pull for `_getpid` before sys____getpid.o ever gets a chance -- so
+# __current_pid goes truly undefined, surfacing as `ld: fixup error
+# (kind=arm64_adrp_lo12) at '___fork'+0x18 ... target '__current_pid'
+# does not have address`. This was masked until now by the (now-fixed)
+# collate/glob undefined-symbol failures aborting the link earlier.
+# Real fix, self-contained (this script builds its own copy rather than
+# depending on build_launchd.sh having already run and left one behind):
+# narrow $OUT/sys_getpid.o (real Apple gen/BSD/getpid.c, built by
+# build_libmalloc.sh) via `ld -r -unexported_symbol` down to just the
+# real, needed __current_pid data symbol, demoting _getpid/___getpid to
+# private-extern so libsystem_malloc.dylib's own real _getpid still wins
+# for every actual getpid() call -- same narrowing precedent, same
+# output filename as build_launchd.sh's own (deterministic, identical
+# recipe; either script may (re)produce it).
+if [ ! -f "$OUT/sys_getpid.o" ]; then
+    echo "error: $OUT/sys_getpid.o not found -- run build_libmalloc.sh first" >&2
+    exit 1
+fi
+rm -f "$OUT/sys_getpid_current_pid_only.o"
+"$LD" -r -arch arm64 -keep_private_externs \
+    -unexported_symbol ___getpid -unexported_symbol _getpid \
+    "$OUT/sys_getpid.o" -o "$OUT/sys_getpid_current_pid_only.o"
+
 rm -f "$OUT/launchctl.macho"
 # -DCRT_DYNAMIC_LINKING (DAR-161, 2026-08-31): launchctl.macho is a real,
 # genuinely dynamically-linked executable (libdispatch/libdyld/
@@ -476,6 +524,7 @@ rm -f "$OUT/launchctl.macho"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -DCRT_DYNAMIC_LINKING \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
+    -Wl,-u,__current_pid \
     -Wl,-alias,_connect,'_connect$UNIX2003' \
     -Wl,-alias,_send,'_send$UNIX2003' \
     -Wl,-alias,_writev,'_writev$UNIX2003' \
@@ -484,6 +533,7 @@ rm -f "$OUT/launchctl.macho"
     -o "$OUT/launchctl.macho" \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/launchctl_obj/launchctl.o" \
+    "$OUT/sys_getpid_current_pid_only.o" \
     "$OUT/liblaunchctl_extras.a" \
     "$OUT/cf_libc_extras.a" "$OUT/launchd_libc_extras.a" \
     "$OUT/liblaunchd_mig.a" "$OUT/liblaunchd_syscalls.a" \
@@ -510,17 +560,23 @@ rm -f "$OUT/launchctl.macho"
     `# purely because this dylib was never named on the link line.` \
     "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_platform.dylib" \
     `#` \
-    `# KNOWN-BROKEN as of 2026-09-03: two symbols remain undefined,` \
-    `# ___collate_collating_symbol and ___collate_equiv_class (both from` \
-    `# liblaunchctl_extras.a's fnmatch.o _rangematch). Unlike every other` \
-    `# gap this sweep exposed, these are NOT a case of the owning dylib` \
-    `# going unnamed -- they are genuinely exported by NO dylib in the` \
-    `# stack (checked with nm -gU across all of libc_build/system). They` \
-    `# are real libc_locale collate internals that only ever existed in` \
-    `# the static archive. Closing this means giving libsystem_c.dylib a` \
-    `# real export for them (build_libsystem_c.sh), which per DAR-201` \
-    `# requires weak_def_audit.sh plus relinking every dependent image --` \
-    `# deliberately not bundled into this change. Tracked in DAR-234.` \
+    `# FIXED 2026-09-03 (DAR-234): ___collate_collating_symbol and` \
+    `# ___collate_equiv_class (both real, called by liblaunchctl_extras.a's` \
+    `# fnmatch.o _rangematch) used to be undefined here -- confirmed real:` \
+    `# genuinely exported by NO dylib in the stack, and real Apple source` \
+    `# marks both __private_extern__ in collate.c (grep(1) is the one` \
+    `# historical exception kept public -- see that file's own header` \
+    `# comment). On real macOS this is fine because fnmatch.c and collate.c` \
+    `# are compiled into the SAME image (libsystem_c.dylib); here fnmatch.c` \
+    `# is compiled separately into this archive, so the private-extern` \
+    `# bind can't cross the image boundary. Real fix: same macro-gated-` \
+    `# widening pattern as xlocale_private.h's own XLOCALE_STATE_EXPORTED` \
+    `# (see collate.c's own comment) -- build_libc_locale.sh now compiles` \
+    `# its one real Apple canonical collate.c with -DCOLLATE_STATE_EXPORTED=1,` \
+    `# so libsystem_c.dylib really exports both (confirmed via nm -gU).` \
+    `# weak_def_audit.sh run clean after the libsystem_c.dylib rebuild (this` \
+    `# is a private_extern->external widening, not a weak/strong flip, but` \
+    `# audited anyway per project convention).` \
     "$OUT/system/libxpc.dylib" "$OUT/system/libbsm.dylib" "$OUT/system/libopenpam.dylib" "$OUT/system/libiokituser.dylib" \
     "$OUT/system/libresolv.dylib" \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libcopyfile.dylib" "$OUT/system/libremovefile.dylib" \
