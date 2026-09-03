@@ -570,7 +570,13 @@ rm -f "$OUT/launchd.macho"
     "$OUT/liblaunchd_mig.a" "$OUT/liblaunchd_syscalls.a" \
     "$OUT/libmach_ipc_no_dead_stubs.a" "$OUT/mach_port_gap_closures2.o" "$OUT/mach_port_gap_closures2_traps.o" \
     "$OUT/mach_ipc_dead_stubs_voucher_only.o" \
-    "$OUT/libclosure.a" "$OUT/chk_fail.o" "$OUT/sys_getpid_current_pid_only.o" "$OUT/libplatform.a" \
+    `# libclosure.a/libplatform.a REMOVED 2026-09-03 (dynamicfix sweep):` \
+    `# same "one owner per symbol" rule as the libmalloc.a/libpthread.a` \
+    `# removals documented below -- the Blocks runtime and the platform` \
+    `# (os_unfair_lock/os_once) primitives are real exports of` \
+    `# libsystem_blocks.dylib/libsystem_platform.dylib, reached here via` \
+    `# libSystem.B.dylib's own reexport chain.` \
+    "$OUT/chk_fail.o" "$OUT/sys_getpid_current_pid_only.o" \
     `# libpthread_no_dup_pthread_create.a REMOVED 2026-08-30 (docs/` \
     `# daemon-roadmap.md Phase 6.8 continued item 1): launchd.macho must` \
     `# NOT carry its own static copy of the pthread implementation` \
@@ -597,8 +603,12 @@ rm -f "$OUT/launchd.macho"
     `# (verified via nm -m: _pthread_self/_pthread_mutex_lock now resolve` \
     `# "(from libsystem_pthread)") because libsystem_pthread.dylib really` \
     `# does export the whole surface this binary needs. Do NOT re-add it.` \
-    "$OUT/libc_gen.a" "$OUT/libc_string.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
-    "$OUT/libc_locale_for_stdio_no_tsd_shim.a" \
+    `# libc_gen.a/libc_string.a/libc_stdio.a/libc_printf.a/` \
+    `# libc_locale_for_stdio_no_tsd_shim.a REMOVED 2026-09-03 (dynamicfix` \
+    `# sweep): all five are merged wholesale into libsystem_c.dylib by` \
+    `# build_libsystem_c.sh, which this link already loads. Carrying them` \
+    `# statically here gave launchd private duplicate stdio FILE tables and` \
+    `# locale state alongside libsystem_c.dylib's own.` \
     "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/system/libxpc.dylib" "$OUT/system/libbsm.dylib" \
     "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
