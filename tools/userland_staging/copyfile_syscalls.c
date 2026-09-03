@@ -96,26 +96,33 @@ int getattrlist(const char *path, struct attrlist *alist, void *attributeBuffer,
 }
 
 /* open_dprotected_np(): INVESTIGATED 2026-08-31 (static-linking cleanup,
- * dylib-vs-dylib duplicate-symbol pass, continuation) and found real,
+ * dylib-vs-dylib duplicate-symbol pass, continuation), found real,
  * canonical home is libsystem_c.dylib's own libsystem_c_syscall_compat.c
  * (same real syscall #216, see that file's own comment), which
  * build_copyfile_dylib.sh already links as a sibling -- same shape as
- * the chmod() guard above. NOT guarded out here, unlike chmod(): a real
- * `xcrun dyld_info -fixups` sweep of every already-built .macho found
- * `ed.macho`/`mktemp.macho` (both part of the 76 build_simple_cmds.sh
- * commands, explicitly out of scope for a rebuild this pass -- see
- * docs/static-linking-cleanup-plan.md's own sweep rules) already carry
- * a real chained-fixups bind recorded specifically as
+ * the chmod() guard above. Left un-guarded at the time because a real
+ * `xcrun dyld_info -fixups` sweep found `ed.macho`/`mktemp.macho` (both
+ * part of the 76 build_simple_cmds.sh commands) already carried a real
+ * chained-fixups bind recorded specifically as
  * `libcopyfile/_open_dprotected_np` -- the same "consumer bakes in a
  * specific owning-dylib ordinal at ITS OWN link time" class of bug this
- * project has hit before (___error/libxpc, _uuid_unparse/libxpc).
- * Guarding this out would silently break both binaries' next load until
- * the full end-of-sweep build_simple_cmds.sh rebuild happens. Left as a
- * real, still-open, deliberately-deferred duplicate (not structural --
- * a real future fix, gated on that rebuild, not a permanent exception). */
+ * project has hit before (___error/libxpc, _uuid_unparse/libxpc) --
+ * guarding it out would have silently broken both binaries' next load
+ * until a full build_simple_cmds.sh rebuild happened.
+ *
+ * CLOSED 2026-09-03 (DAR-5, libsystem_c.dylib duplicate-symbol pass):
+ * guarded out the same way as chmod() above, immediately followed by a
+ * real, full build_simple_cmds.sh rebuild (all 76 commands relinked in
+ * the same pass -- see that script's own run log / the DAR-5 commit
+ * this landed in) so ed.macho/mktemp.macho pick up the real
+ * libsystem_c.dylib copy instead of going undefined. Verified via
+ * `xcrun dyld_info -fixups` on both post-rebuild: no more
+ * `libcopyfile/_open_dprotected_np` bind anywhere. */
+#ifndef LIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT
 int open_dprotected_np(const char *path, int flags, int pclass, int dpflags, int mode) {
     return (int)syscall5(SYS_open_dprotected_np, (long)path, flags, pclass, dpflags, mode);
 }
+#endif /* !LIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT */
 
 /* Real private raw syscalls chmodx_np.c/statx_np.c call directly (double-
  * underscore names, Apple's own real convention for the raw syscall

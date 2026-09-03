@@ -1659,7 +1659,7 @@ for spec in "${CMD_LIST[@]}"; do
             extra_libs="$OUT/system/libremovefile.dylib"
             common_read_compat=""
             ;;
-        sed|find)
+        sed)
             # sed needs libc_regex.a (Phase 4.6 item 3) for regcomp/
             # regexec/regerror, plus real -i (in-place edit) support:
             # main.c's mf_fgets() renames a real temp file over the
@@ -1672,6 +1672,33 @@ for spec in "${CMD_LIST[@]}"; do
             # libc_regex.a no longer needed here -- see grep's own updated
             # comment above (real TRE now via $LINK_DYLIBS).
             extra_libs="$OUT/system/libremovefile.dylib $OUT/system/libcopyfile.dylib"
+            common_read_compat=""
+            ;;
+        find)
+            # Same real libremovefile.a/libcopyfile.a needs as sed
+            # above (both used to be grouped in one `sed|find)` case;
+            # split 2026-09-03, DAR-5, once find's own needs diverged --
+            # see libinfo.dylib note just below).
+            #
+            # libinfo.dylib ADDED 2026-09-03 (DAR-5, libsystem_c.dylib
+            # duplicate-symbol pass, real regression found as a side
+            # effect of a full rebuild, not part of the dedup itself):
+            # find_function.o's real -group/-user predicates call
+            # getgrnam()/getpwnam() directly. Until today this resolved
+            # via libSystem.B.dylib's reexport of libcopyfile.dylib,
+            # which carried real Apple source but always-NULL ACL-text
+            # stand-ins for exactly these 4 symbols. DAR-229 (commit
+            # 31edb2a, same day) correctly `-Wl,-unexported_symbol`'d
+            # them off libcopyfile.dylib in favor of libinfo.dylib's
+            # real flat-file-backed implementation -- verified "0
+            # relink-breakage" there by sweeping already-built .machos'
+            # existing binds, not by a fresh from-source relink, so this
+            # specific gap (find.macho/tar.macho's find case is here;
+            # tar's is below) went undetected until this rebuild hit it
+            # for real as a link error. Same real fix in both places:
+            # add libinfo.dylib to the link so it resolves to the real
+            # implementation instead of going undefined.
+            extra_libs="$OUT/system/libremovefile.dylib $OUT/system/libcopyfile.dylib $OUT/system/libinfo.dylib"
             common_read_compat=""
             ;;
         df)
@@ -1784,7 +1811,13 @@ for spec in "${CMD_LIST[@]}"; do
             # ed's own real pipe(2) raw syscall too ($OUT/ed_pipe_trap.o,
             # reused verbatim from the ed tier); REMOVED 2026-09-02
             # (DAR-196), see the `ed)` case above for why.
-            extra_libs="$OUT/system/libremovefile.dylib $OUT/system/libcopyfile.dylib $OUT/simple_obj/sys__dup.o $OUT/simple_obj/sys__readlinkat.o $OUT/simple_obj/sys__poll.o"
+            #
+            # libinfo.dylib ADDED 2026-09-03 (DAR-5): tar_pwgr_r_compat.o's
+            # real getpwnam_r/getpwuid_r/getgrnam_r/getgrgid_r wrappers
+            # call the plain getpwnam()/getpwuid()/getgrnam()/getgrgid()
+            # forms, same real gap as the `find)` case above -- see its
+            # comment for the full DAR-229/DAR-5 trail, identical fix.
+            extra_libs="$OUT/system/libremovefile.dylib $OUT/system/libcopyfile.dylib $OUT/system/libinfo.dylib $OUT/simple_obj/sys__dup.o $OUT/simple_obj/sys__readlinkat.o $OUT/simple_obj/sys__poll.o"
             common_read_compat=""
             ;;
         less)

@@ -222,10 +222,20 @@ echo "compiling 1 real additional file (getcwd.c for __private_getcwd)..."
 # (real canonical home now libsystem_kernel.dylib, see that script's
 # own "BSD socket family" comment and copyfile_syscalls.c's own
 # comment) while keeping every other real symbol in this file
-# (fchmod()/getattrlist()/the mbr_*/getpwnam-family/syslog()/
-# open_dprotected_np() -- libsystem_kernel.dylib doesn't have real
-# copies of those (yet), so this dylib's own real implementations stay
-# the correct, only copies).
+# (fchmod()/getattrlist()/the mbr_*/getpwnam-family/syslog()) --
+# libsystem_kernel.dylib doesn't have real copies of those (yet), so
+# this dylib's own real implementations stay the correct, only copies.
+#
+# open_dprotected_np() ALSO now guarded out here (DAR-5, 2026-09-03):
+# real canonical home is libsystem_c.dylib's libsystem_c_syscall_
+# compat.c (same real syscall #216), which this dylib already links as
+# a sibling below -- copyfile_syscalls.c's own comment on the symbol
+# has the full trail, including why it was deliberately left un-guarded
+# from 2026-08-31 until this pass paired the guard with an immediate,
+# real, full build_simple_cmds.sh rebuild (not a separate, later step)
+# so ed.macho/mktemp.macho -- the two consumers that bound specifically
+# to `libcopyfile/_open_dprotected_np` -- never ship in a broken
+# intermediate state.
 "$CLANG" $CFLAGS -DLIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT=1 copyfile_syscalls.c -o "$EXTRACT/copyfile_syscalls.o"
 
 # Real fix for __global_locale/__locale_key, same exact recipe
