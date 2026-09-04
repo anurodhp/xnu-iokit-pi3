@@ -356,7 +356,7 @@ xnu-7195|git@github.com:anurodhp/xnu-pi3-macos11.git|bcm2837-bringup|
 xnu-latest|git@github.com:anurodhp/xnu-pi3-latest.git|main|
 qemu-zhuowei|git@github.com:anurodhp/qemu-xnu-arm.git|master|
 dtc-AppleDeviceTree|https://github.com/darwin-on-arm/dtc-AppleDeviceTree.git|master|dtc-AppleDeviceTree.patch
-u-boot|https://github.com/FlorentRevest/u-boot.git|master|u-boot.patch
+u-boot|git@github.com:anurodhp/u-boot.git|master||https://github.com/FlorentRevest/u-boot.git
 hfs|https://github.com/apple-oss-distributions/hfs.git|hfs-556.100.11|
 IOStorageFamily|https://github.com/apple-oss-distributions/IOStorageFamily.git|IOStorageFamily-260.40.5|
 IOUSBFamily|https://github.com/apple-oss-distributions/IOUSBFamily.git|IOUSBFamily-630.4.5|
@@ -412,7 +412,7 @@ configd|https://github.com/apple-oss-distributions/configd.git|configd-1109.60.2
 PowerManagement|https://github.com/apple-oss-distributions/PowerManagement.git|PowerManagement-1132.81.1|
 '
 
-echo "$REPOS" | while IFS='|' read -r name url ref patch; do
+echo "$REPOS" | while IFS='|' read -r name url ref patch upstream_url; do
     [ -z "$name" ] && continue
     dest="third_party/$name"
 
@@ -432,6 +432,15 @@ echo "$REPOS" | while IFS='|' read -r name url ref patch; do
     if [ -n "$patch" ]; then
         echo "+ applying third_party-patches/$patch to $name"
         git -C "$dest" am "../../third_party-patches/$patch"
+    fi
+
+    # Optional 5th field: real upstream URL for an owned-fork entry (see
+    # DAR-214/215/216's "stand up an owned fork" pattern) -- lets a
+    # future sync be `git fetch upstream <ref> && git push origin <ref>`
+    # with no local-work entanglement, same reasoning as the hand-written
+    # swift-corelibs-foundation/PureDarwin blocks below.
+    if [ -n "$upstream_url" ]; then
+        git -C "$dest" remote add upstream "$upstream_url"
     fi
 done
 
