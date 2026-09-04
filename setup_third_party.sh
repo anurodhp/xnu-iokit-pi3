@@ -466,11 +466,27 @@ fi
 # reference only -- this project's build_*.sh scripts hand-translate the
 # real per-target file lists/mig() invocations rather than running cmake
 # itself, same treatment every other Xcode-project-only source in this
-# project already gets). `next` is PureDarwin's own active-development
-# branch (`main` is frozen releases per their own README) -- no tag, HEAD
-# tracked directly, matching this project's llvm-project precedent for
-# "no meaningful tag to pin, track a specific real commit's tree instead."
-PUREDARWIN_REF="next"
+# project already gets). Originally tracked PureDarwin/PureDarwin's own
+# `next` branch directly (their active-development branch -- `main` is
+# frozen releases per their own README), no tag, matching this project's
+# llvm-project precedent for "no meaningful tag to pin, track a specific
+# real commit's tree instead."
+#
+# 2026-09-04 (DAR-215): cloned from this project's own fork
+# (git@github.com:anurodhp/PureDarwin.git, branch iokit-launchd-port)
+# instead of upstream + a `git am` patch-file step -- this is the
+# highest-churn repo in the whole gitrepo-tagged batch (launchd/XPC is
+# this project's most actively-edited source), and the patch-file
+# approach was already falling behind real local history (13 real local
+# commits vs. the patch file's 12, one -- DAR-219 -- not yet exported)
+# before this fix. Those commits now live as real committed history on
+# iokit-launchd-port. third_party-patches/PureDarwin.patch is no longer
+# read by this script -- kept in the tree only as a historical record.
+# The fork's own `next` branch is left as a clean, unmodified mirror of
+# real upstream's `next` for future syncing (`git fetch upstream next &&
+# git push origin next`) -- `upstream` remote added below for exactly
+# that.
+PUREDARWIN_REF="iokit-launchd-port"
 PUREDARWIN_DEST="third_party/PureDarwin"
 if [ -d "$PUREDARWIN_DEST" ]; then
     if [ "$FORCE" = "1" ]; then
@@ -482,14 +498,13 @@ if [ -d "$PUREDARWIN_DEST" ]; then
     fi
 fi
 if [ -n "$PUREDARWIN_DEST" ]; then
-    echo "+ sparse-cloning PureDarwin @ $PUREDARWIN_REF (src/Libraries/XPC, CrashReporterClient, cmake only)"
+    echo "+ sparse-cloning PureDarwin @ $PUREDARWIN_REF (own fork, src/Libraries/XPC, CrashReporterClient, cmake only)"
     git clone --filter=blob:none --no-checkout --depth 1 --branch "$PUREDARWIN_REF" \
-        https://github.com/PureDarwin/PureDarwin.git "$PUREDARWIN_DEST"
+        git@github.com:anurodhp/PureDarwin.git "$PUREDARWIN_DEST"
     git -C "$PUREDARWIN_DEST" sparse-checkout init --cone
     git -C "$PUREDARWIN_DEST" sparse-checkout set src/Libraries/XPC src/Libraries/CrashReporterClient cmake
     git -C "$PUREDARWIN_DEST" checkout "$PUREDARWIN_REF"
-    echo "+ applying third_party-patches/PureDarwin.patch to $PUREDARWIN_DEST"
-    git -C "$PUREDARWIN_DEST" am "../../third_party-patches/PureDarwin.patch"
+    git -C "$PUREDARWIN_DEST" remote add upstream https://github.com/PureDarwin/PureDarwin.git
 fi
 
 # CoreFoundation: real Apple source, but NOT from
@@ -503,12 +518,26 @@ fi
 # CoreFoundation/ subtree -- Apple's own cross-platform (Linux-buildable)
 # fork of the same real CF codebase, kept building without the full
 # macOS Objective-C runtime by design, which is exactly this project's
-# own real requirement too. Pinned to the closest real tag to macOS
-# 11.2 (Feb 2021): swift-5.4-DEVELOPMENT-SNAPSHOT-2021-02-12-a. Sparse-
-# checkout only CoreFoundation/ -- a plain clone would pull the much
-# larger Foundation/TestFoundation/Sources trees this project doesn't
-# need at all.
-SCF_REF="swift-5.4-DEVELOPMENT-SNAPSHOT-2021-02-12-a"
+# own real requirement too. Originally pinned to the closest real tag to
+# macOS 11.2 (Feb 2021): swift-5.4-DEVELOPMENT-SNAPSHOT-2021-02-12-a.
+#
+# 2026-09-04 (DAR-216): cloned from this project's own fork
+# (git@github.com:anurodhp/swift-corelibs-foundation.git, branch
+# corefoundation-port) instead of upstream + a `git am` patch-file step
+# -- the same real fixes (CFPriv.h/CFXMLInterface.c bool/Boolean
+# prototype conflicts, CFPreferences.c/CFXMLPreferencesDomain.c
+# TARGET_OS guard fixes) now live as real committed history on that
+# branch, built on top of the same tag above. third_party-patches/
+# swift-corelibs-foundation.patch is no longer read by this script --
+# kept in the tree only as a historical record of what corefoundation-
+# port's first 3 commits contain. The fork's own `main` branch is left
+# as a clean, unmodified mirror of real upstream for future syncing
+# (`git fetch upstream <ref> && git push origin <ref>`) -- `upstream`
+# remote added below for exactly that. Sparse-checkout only
+# CoreFoundation/ -- a plain clone would pull the much larger
+# Foundation/TestFoundation/Sources trees this project doesn't need at
+# all.
+SCF_REF="corefoundation-port"
 SCF_DEST="third_party/swift-corelibs-foundation"
 if [ -d "$SCF_DEST" ]; then
     if [ "$FORCE" = "1" ]; then
@@ -520,14 +549,13 @@ if [ -d "$SCF_DEST" ]; then
     fi
 fi
 if [ -n "$SCF_DEST" ]; then
-    echo "+ sparse-cloning swift-corelibs-foundation @ $SCF_REF (CoreFoundation/ only)"
+    echo "+ sparse-cloning swift-corelibs-foundation @ $SCF_REF (own fork, CoreFoundation/ only)"
     git clone --filter=blob:none --no-checkout --depth 1 --branch "$SCF_REF" \
-        https://github.com/apple/swift-corelibs-foundation.git "$SCF_DEST"
+        git@github.com:anurodhp/swift-corelibs-foundation.git "$SCF_DEST"
     git -C "$SCF_DEST" sparse-checkout init --cone
     git -C "$SCF_DEST" sparse-checkout set CoreFoundation
     git -C "$SCF_DEST" checkout "$SCF_REF"
-    echo "+ applying third_party-patches/swift-corelibs-foundation.patch to $SCF_DEST"
-    git -C "$SCF_DEST" am "../../third_party-patches/swift-corelibs-foundation.patch"
+    git -C "$SCF_DEST" remote add upstream https://github.com/apple/swift-corelibs-foundation.git
 fi
 
 # freebsd-src: real AES core + real MD5/SHA-384/512 bodies to close the
