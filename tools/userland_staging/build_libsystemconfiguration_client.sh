@@ -249,6 +249,21 @@ EOF
 # never receiving one from a real Apple binary), so a reasonable,
 # documented-as-not-exactly-Apple's value is an honest choice, same class
 # as sc_log_pack_compat.c's os_log_pack_s.olp_reserved padding.
+#
+# DAR-241 (2026-09-04): extended -- Plugins/dnsinfo/dnsinfo_server.c's and
+# Plugins/nwi/network_information_server.c's own real add_state_handler()
+# functions (read in full before extending, not guessed) need a THIRD
+# real call-site shape this header didn't cover yet: the
+# OS_STATE_DATA_CUSTOM variant, which also writes
+# osd_decoder.osdd_library/osdd_type (confirmed NOT a union with osd_data
+# -- both are written into the SAME struct instance) and declares its
+# received handle as `os_state_handle_t`, not the bare `uint32_t` the two
+# original callers (which both `(void)`-discard the return value) never
+# needed a name for. osdd_library/osdd_type sized to fit the real strings
+# these two new callers pass ("SystemConfiguration"/"dnsinfo"/"nwi") --
+# same "not exactly Apple's ABI, internally self-consistent, nothing
+# outside this project ever reads it" reasoning as the rest of this
+# struct.
 cat > "$OUT/compat_include/os/state_private.h" <<'EOF'
 #ifndef _OS_STATE_PRIVATE_H_COMPAT_
 #define _OS_STATE_PRIVATE_H_COMPAT_
@@ -259,15 +274,21 @@ cat > "$OUT/compat_include/os/state_private.h" <<'EOF'
 #define MAX_STATEDUMP_SIZE	(4 * 1024 * 1024)
 
 typedef void *os_state_hints_t;
+typedef uint64_t os_state_handle_t;
 
 enum {
 	OS_STATE_DATA_SERIALIZED_NSCF_OBJECT = 2,
+	OS_STATE_DATA_CUSTOM = 4,
 };
 
 struct os_state_data_s {
 	uint32_t	osd_type;
 	uint32_t	osd_data_size;
 	char		osd_title[64];
+	struct {
+		char	osdd_library[32];
+		char	osdd_type[32];
+	} osd_decoder;
 	uint8_t		osd_data[];
 };
 typedef struct os_state_data_s *os_state_data_t;
@@ -280,7 +301,7 @@ typedef os_state_data_t (^os_state_block_t)(os_state_hints_t hints);
 #ifdef __cplusplus
 extern "C" {
 #endif
-uint32_t os_state_add_handler(dispatch_queue_t q, os_state_block_t block);
+os_state_handle_t os_state_add_handler(dispatch_queue_t q, os_state_block_t block);
 #ifdef __cplusplus
 }
 #endif

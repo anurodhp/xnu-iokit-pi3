@@ -44,8 +44,12 @@ struct crashreporter_annotations_t gCRAnnotations = { 5 /* CRASHREPORTER_ANNOTAT
  * has no real os_state/statedump collector to register with at all, so
  * "accept the registration, never actually invoke the block" is the
  * real, honest, always-safe behavior (SCDOpen.c/SCPOpen.c's own real
- * callers both `(void)`-discard the return value already). */
-uint32_t os_state_add_handler(dispatch_queue_t q, os_state_block_t block) {
+ * callers both `(void)`-discard the return value already; DAR-241's
+ * dnsinfo_server.c/network_information_server.c callers store it in a
+ * real `os_state_handle_t`, hence the return type below matching that
+ * header's now-real typedef instead of the original placeholder
+ * `uint32_t` -- still always literal 0 either way). */
+os_state_handle_t os_state_add_handler(dispatch_queue_t q, os_state_block_t block) {
 	(void)q;
 	(void)block;
 	return 0;

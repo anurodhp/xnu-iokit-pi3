@@ -15,10 +15,30 @@
  * plugins, IPMonitor/QoSMarking moved to DAR-239) got the real, plain-C
  * InterfaceNamer/LinkConfiguration/KernelEventMonitor/PreferencesMonitor
  * source files themselves compiling clean (see build_configd_plugins.sh,
- * which produces libc_build/libconfigd_plugins.a) -- but found two real,
- * hard architectural walls at the LINK stage that mean these four cannot
- * be safely wired in here yet, and this file's stand-ins for all six
- * plugins are still the correct, honest, currently-linked state:
+ * which produces libc_build/libconfigd_plugins.a) but found two real,
+ * hard architectural walls at the LINK stage.
+ *
+ * DAR-241 (same day, follow-up) closed wall #2 for real: IPMonitor's
+ * ip_plugin.c (and 4 of its plain-C siblings -- proxy-configuration.c,
+ * dns-configuration.c, nat64-configuration.c, set-hostname.c; a 6th,
+ * smb-configuration.c, is deliberately excluded, real Apple's own
+ * `#if !TARGET_OS_IPHONE` gate -- see build_configd_plugins.sh's own
+ * comment) now compile+link clean into libconfigd_plugins.a alongside
+ * eventmon.c. build_configd.sh now links libconfigd_plugins.a as a
+ * whole archive AFTER this file's own object -- real ld64 archive
+ * member selection means only the members that resolve a symbol still
+ * outstanding at that point in the link get pulled in. Since this file
+ * no longer defines load_IPMonitor/prime_IPMonitor/
+ * load_KernelEventMonitor/prime_KernelEventMonitor (removed below),
+ * those four symbols are still outstanding when the linker reaches
+ * libconfigd_plugins.a, so it pulls in the REAL ip_plugin.o/eventmon.o
+ * (and their real object-file dependents) to satisfy them. This file's
+ * load_InterfaceNamer/load_LinkConfiguration/load_PreferencesMonitor/
+ * prime_PreferencesMonitor stand-ins are DELIBERATELY KEPT and still
+ * resolve those symbols FIRST (earlier on the link line, via this file's
+ * own inclusion in libconfigd.a) -- so libconfigd_plugins.a's own
+ * ifnamer.o/linkconfig.o/prefsmon.o members are never pulled in at all,
+ * correctly leaving wall #1 (below) exactly as unaddressed as before:
  *
  * 1. InterfaceNamer/ifnamer.c, LinkConfiguration/linkconfig.c, and
  *    PreferencesMonitor/prefsmon.c all genuinely, heavily call into the
@@ -38,31 +58,14 @@
  *    would move the crash from a caught link-time error to a real
  *    dyld-load-time abort of configd.tproj ITSELF the moment
  *    PreferencesMonitor's real load() runs, which would take the whole
- *    SCDynamicStore server down (everything else, including any future
- *    IPConfiguration bundle, depends on that server being up). Filed as
- *    its own real, precisely-scoped Linear issue rather than papered over.
- * 2. KernelEventMonitor/eventmon.c calls DIRECTLY (real C function calls,
- *    not SCDynamicStore) into real functions that only exist in
- *    IPMonitor's own ip_plugin.c (interfaceListAddInterface/Copy/Update,
- *    interface_update_ipv6/idle_state/link_issues/quality_metric,
- *    ipv4_interface_update/arp_collision/router_arp_alive/failure,
- *    ipv6_duplicated_address/router_expired, link_add/remove/
- *    update_status, nat64_prefix_request) -- confirmed at real link time.
- *    This is a real, new architectural finding: real Apple's six plugins
- *    are NOT cleanly separable via SCDynamicStore alone -- some are
- *    directly, statically coupled by C function call, which is exactly
- *    why real Apple links all six into one binary in the first place.
- *    These functions are reached from `_processEvent_Apple_Network` and
- *    `_update_interfaces`, i.e. on real, ordinary kernel network events
- *    (link up/down, address changes) -- not a rare/optional path, so
- *    again not safely `-Wl,-U`-deferrable. Also filed as its own Linear
- *    issue, cross-referencing DAR-239 since it also concerns IPMonitor's
- *    real scope/shape (ip_plugin.c itself is real plain C, unlike
- *    IPMonitor's five real ObjC "Agent" files -- a nuance DAR-239 should
- *    know about).
+ *    SCDynamicStore server down. This is DAR-240's own, separate,
+ *    precisely-scoped ticket -- not touched here.
  *
- * The six stand-ins below are real, minimal, functionally-honest
- * implementations of the exact real SCDynamicStoreBundleLoadFunction/
+ * QoSMarking (load_QoSMarking, no prime) remains a stand-in too --
+ * that's real ObjC, DAR-239's scope, untouched.
+ *
+ * The four remaining stand-ins below are real, minimal, functionally-
+ * honest implementations of the exact real SCDynamicStoreBundleLoadFunction/
  * SCDynamicStoreBundlePrimeFunction signatures (SCDPlugin.h) plugin_support.c
  * itself calls -- they log via the real SC_log()/os_log path that they were
  * never really loaded, then return, so configd.tproj's own real bundle
@@ -79,30 +82,16 @@
 	{ \
 		(void)bundle; \
 		(void)bundleVerbose; \
-		SC_log(LOG_NOTICE, "[" #name "] real plugin not yet ported (DAR-170/DAR-239 -- builtin stand-in)"); \
+		SC_log(LOG_NOTICE, "[" #name "] real plugin not yet ported (DAR-170/DAR-239/DAR-240 -- builtin stand-in)"); \
 	}
 
-NOT_YET_PORTED(IPMonitor)
 NOT_YET_PORTED(InterfaceNamer)
-NOT_YET_PORTED(KernelEventMonitor)
 NOT_YET_PORTED(LinkConfiguration)
 NOT_YET_PORTED(PreferencesMonitor)
 NOT_YET_PORTED(QoSMarking)
 
 void
-prime_IPMonitor(void)
-{
-	SC_log(LOG_NOTICE, "[IPMonitor] real plugin not yet ported (DAR-170/DAR-239 -- builtin stand-in)");
-}
-
-void
-prime_KernelEventMonitor(void)
-{
-	SC_log(LOG_NOTICE, "[KernelEventMonitor] real plugin not yet ported (DAR-170/DAR-239 -- builtin stand-in)");
-}
-
-void
 prime_PreferencesMonitor(void)
 {
-	SC_log(LOG_NOTICE, "[PreferencesMonitor] real plugin not yet ported (DAR-170/DAR-239 -- builtin stand-in)");
+	SC_log(LOG_NOTICE, "[PreferencesMonitor] real plugin not yet ported (DAR-170/DAR-240 -- builtin stand-in)");
 }

@@ -302,6 +302,10 @@ if [ ! -f "$OUT/chk_fail.o" ]; then
     echo "error: $OUT/chk_fail.o not found -- run build_libmalloc.sh first" >&2
     exit 1
 fi
+if [ ! -f "$OUT/libconfigd_plugins.a" ]; then
+    echo "error: $OUT/libconfigd_plugins.a not found -- run build_configd_plugins.sh first" >&2
+    exit 1
+fi
 
 rm -f configd.macho
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
@@ -310,6 +314,21 @@ rm -f configd.macho
     -o configd.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/libconfigd.a" \
+    `# DAR-241 (2026-09-04): whole-archive link, relying on real ld64` \
+    `# archive-member selection -- load_IPMonitor/prime_IPMonitor/` \
+    `# load_KernelEventMonitor/prime_KernelEventMonitor are still` \
+    `# unresolved at this point (configd_builtin_plugins_stub.c, already` \
+    `# processed via libconfigd.a above, no longer defines them), so the` \
+    `# linker pulls in the real ip_plugin.o/eventmon.o (and their real` \
+    `# object-file dependents) from this archive to satisfy them.` \
+    `# load_InterfaceNamer/load_LinkConfiguration/load_/prime_` \
+    `# PreferencesMonitor are ALREADY resolved by the stub by this point,` \
+    `# so this archive's own ifnamer.o/linkconfig.o/prefsmon.o members` \
+    `# are correctly never pulled in at all (DAR-240's separate` \
+    `# SCNetworkConfiguration-family blocker stays exactly as` \
+    `# unaddressed as before -- see configd_builtin_plugins_stub.c's own` \
+    `# header comment).` \
+    "$OUT/libconfigd_plugins.a" \
     "$SIMPLE_OBJ/sys__chown.o" "$SIMPLE_OBJ/sys__dup2.o" \
     "$SIMPLE_OBJ/sys__setgid.o" "$SIMPLE_OBJ/sys__setuid.o" "$SIMPLE_OBJ/sys__execve.o" \
     "$SIMPLE_OBJ/sys__chdir.o" \

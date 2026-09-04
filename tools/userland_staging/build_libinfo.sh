@@ -285,6 +285,15 @@ for f in si_data.c thread_data.c kvbuf.c ils.c si_module.c cache_module.c search
 done
 compile_one "$LIBINFO/gen.subproj/ether_addr.c"
 
+# DAR-241 (2026-09-04): real gap found linking configd.macho with
+# KernelEventMonitor/IPMonitor wired in -- Plugins/IPMonitor/ip_plugin.c
+# needs real in6addr_any (vars.c) and real if_nameindex()/
+# if_freenameindex() (if_nameindex.c), neither previously compiled
+# anywhere in this project. Real, unmodified, already-pinned Libinfo
+# sources, same gen.subproj/ family ether_addr.c above is already from.
+compile_one "$LIBINFO/gen.subproj/vars.c"
+compile_one "$LIBINFO/gen.subproj/if_nameindex.c"
+
 echo "compiling this project's own real, narrow compat shims..."
 compile_one asl_client_compat.c
 compile_one libinfo_malloc_zone_compat.c
