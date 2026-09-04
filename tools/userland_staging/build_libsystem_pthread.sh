@@ -274,6 +274,20 @@ rm -f "$OUT/system/libsystem_pthread.dylib"
     `# sibling below, now owns the real Apple definition, so these stubs` \
     `# bind two-level against it exactly as they do on real Apple.` \
     -Wl,-U,_mig_strncpy \
+    `# ___isthreaded: pre-existing gap found while rebuilding this dylib` \
+    `# for DAR-13 (unrelated to that ticket's memcpy/memset scope, fixed` \
+    `# here only because it blocked the required relink). pthread_create()` \
+    `# (pthread_main_thread_bootstrap.c, real Apple behavior -- flips` \
+    `# __isthreaded once a second thread actually spawns) now writes this` \
+    `# real global, whose one real owner is libc_gen.a's libc_gen_shims.o` \
+    `# (see that file's own header) -- now part of libsystem_c.dylib. This` \
+    `# dylib cannot link libsystem_c.dylib directly (real circular` \
+    `# dependency, see this file's own header comment: pthread is BELOW` \
+    `# libsystem_c.dylib), so same real "bottom of stack, defer to flat` \
+    `# namespace" pattern as _mig_strncpy above -- resolved at runtime` \
+    `# since libsystem_c.dylib is always loaded alongside via` \
+    `# libSystem.B.dylib.` \
+    -Wl,-U,___isthreaded \
     -o "$OUT/system/libsystem_pthread.dylib" \
     $(for m in $MEMBERS; do echo "$OUT/libsystem_pthread/extracted/$m"; done) \
     "$OUT/libsystem_pthread/sched_yield_trap.o" "$OUT/libsystem_pthread/sched_yield.o" \

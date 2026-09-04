@@ -124,6 +124,15 @@ rm -f "$OUT/pd_console_login.macho"
     `# single-owner property DAR-162/DAR-131 are about.` \
     "$OUT/system/libsystem_pthread.dylib" "$OUT/system/libsystem_c.dylib" \
     "$OUT/system/libsystem_malloc.dylib" \
+    `# libsystem_platform.dylib listed EXPLICITLY (DAR-13, 2026-09-04):` \
+    `# real single owner of _memcpy/_memset now (see` \
+    `# build_libsystem_platform.sh's own updated header). Was previously` \
+    `# absent from this link line -- worked before only because` \
+    `# libsystem_c.dylib's now-removed copy resolved it instead. Listing` \
+    `# the real owning dylib directly here avoids the exact transitive-` \
+    `# reexport DAR-217 class of bug (CLAUDE.md) rather than relying on` \
+    `# libSystem.B.dylib's reexport chain alone.` \
+    "$OUT/system/libsystem_platform.dylib" \
     2>"$OUT/pd_console_login_link.err" \
     || { echo "error: real link failed -- see $OUT/pd_console_login_link.err" >&2; tail -60 "$OUT/pd_console_login_link.err" >&2; exit 1; }
 

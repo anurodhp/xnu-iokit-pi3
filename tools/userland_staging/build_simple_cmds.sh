@@ -952,7 +952,23 @@ LINK_COMMON="$OUT/simple_obj/sys____getlogin.o \
 # libsystem_kernel.dylib's real mmap syscall -- keeping this project's
 # own copies alongside would just be a redundant, divergent
 # implementation of something now real upstream.
-LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libdyld.dylib $OUT/system/libSystem.B.dylib"
+# libsystem_platform.dylib ADDED 2026-09-04 (DAR-13, real-Apple-parity
+# fix): real single owner of _memcpy/_memset now (libsystem_c.dylib no
+# longer defines them, see build_libsystem_c.sh's own updated header).
+# This comment's own "clients need zero alias flags, libSystem.B.dylib
+# already reexports everything" claim turned out not to hold for real
+# LINK-TIME resolution here: a real trial link relying on libSystem.B.dylib's
+# LC_REEXPORT_DYLIB of libsystem_platform.dylib alone failed with
+# "_memcpy"/"_memset" undefined across all 76 commands (common_findfp.o's
+# _moreglue, common_collate.o, etc) -- the exact same real install-name-
+# vs-local-copy resolution hazard this project's own CLAUDE.md already
+# documents for build_libdyld.sh's libresolv.9.dylib case (ld64 resolving
+# an absolute /usr/lib/... install name against the HOST SDK's own real
+# stub instead of this project's local libc_build/system/ copy, rather
+# than a code bug in the reexport itself). Fix: list the real owning
+# dylib directly, same pattern every other consumer in this project
+# already uses for this exact reason.
+LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libsystem_platform.dylib $OUT/system/libdyld.dylib $OUT/system/libSystem.B.dylib"
 # libsystem_malloc.dylib: real per-command need for the private
 # ___pthread_setspecific/___pthread_getspecific/___pthread_once variants
 # (one leading underscore in C source) real libmalloc's own per-thread

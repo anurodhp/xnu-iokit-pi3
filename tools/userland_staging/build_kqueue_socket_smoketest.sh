@@ -70,6 +70,11 @@ rm -f "$OUT/kqueue_socket_smoketest.macho"
     "$OUT/kqueue_socket_smoketest_wrapper.o" "$OUT/kqueue_socket_smoketest.o" \
     "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_pthread.dylib" \
     "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_kernel.dylib" \
+    `# libsystem_platform.dylib listed EXPLICITLY (DAR-13, 2026-09-04):` \
+    `# real single owner of _memcpy/_memset now -- bind_target_audit.sh` \
+    `# flagged this smoketest as the one real UNRESOLVABLE bind` \
+    `# project-wide after the DAR-13 sweep.` \
+    "$OUT/system/libsystem_platform.dylib" \
     "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib"
 
 M="$OUT/kqueue_socket_smoketest.macho"

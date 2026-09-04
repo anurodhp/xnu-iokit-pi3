@@ -235,6 +235,17 @@ rm -f "$OUT/system/libxml2.dylib"
     "$OUT/system/libdispatch.dylib" \
     "$OUT/system/libsystem_m.dylib" \
     "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_malloc.dylib" \
+    `# libsystem_platform.dylib listed EXPLICITLY (DAR-13, 2026-09-04):` \
+    `# this dylib's own compiled code calls plain memcpy()/memset()` \
+    `# (real Apple's own real single owner, libsystem_platform.dylib) --` \
+    `# was previously missing from this link line entirely (unlike every` \
+    `# other sibling dylib in this project, which already lists it` \
+    `# directly). Before DAR-13, that silently worked because` \
+    `# libsystem_c.dylib's own (now-removed) copy resolved it instead;` \
+    `# listing the real owning dylib explicitly here avoids the exact` \
+    `# transitive-reexport DAR-217 class of bug (CLAUDE.md) rather than` \
+    `# relying on libSystem.B.dylib's reexport chain alone.` \
+    "$OUT/system/libsystem_platform.dylib" \
     "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     2>"$OUT/libxml2_dylib_link.err" \
     && echo "wrote $OUT/system/libxml2.dylib (0 undefined symbols)" \
