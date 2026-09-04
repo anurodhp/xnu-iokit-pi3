@@ -1879,6 +1879,26 @@ for spec in "${CMD_LIST[@]}"; do
             # current benefit).
             extra_libs="$OUT/system/libsystem_m.dylib"
             ;;
+        date)
+            # DAR-203 (2026-09-04): date_compat.c no longer carries its
+            # own local send()/writev() ENOSYS stubs (see that file's
+            # own updated header for the real investigation) -- date
+            # now needs libsystem_kernel.dylib's real, direct
+            # `_send$UNIX2003`/`_writev$UNIX2003` exports for real.
+            # Listed here directly (ahead of $LINK_DYLIBS's
+            # libsystem_c.dylib, which only plain-LOADs -- does not
+            # reexport -- libsystem_kernel.dylib) rather than relying
+            # on the transitive reexport through libSystem.B.dylib at
+            # the tail of $LINK_DYLIBS: same real "ld64 records the
+            # bind against whichever dylib on the link line reaches the
+            # symbol first, and real dyld only searches that image's
+            # own exports/reexports at load time" hazard CLAUDE.md's
+            # DAR-217 note documents, and the same fix this file's own
+            # libsystem_platform.dylib/libcopyfile.dylib/
+            # libremovefile.dylib LINK_DYLIBS comments already
+            # established -- list the real owning dylib directly.
+            extra_libs="$OUT/system/libsystem_kernel.dylib"
+            ;;
         ed)
             # libc_regex.a: re.c's real regcomp/regexec/regerror
             # (search/substitute addressing). $OUT/ed_setjmp_raw.o: this
@@ -2082,15 +2102,23 @@ for spec in "${CMD_LIST[@]}"; do
     case "$extra_objs" in
         *cat_socket_stub.o*) link_aliases="$link_aliases -Wl,-alias,_connect,_connect\$UNIX2003" ;;
     esac
-    # date's own date_compat.c (see its own header) already defines
-    # real, honest ENOSYS send()/writev() stubs for oldsyslog.c's
-    # vsyslog() path -- this alias pair is all that was actually
-    # missing (base symbols were always present; only cat's own
-    # cat_socket_stub.o case above ever added the alias flags, and cat
-    # doesn't need send/writev at all -- see above).
-    case "$name" in
-        date) link_aliases="$link_aliases -Wl,-alias,_send,_send\$UNIX2003 -Wl,-alias,_writev,_writev\$UNIX2003" ;;
-    esac
+    # date's own local ENOSYS send()/writev() stubs (and this alias
+    # pair) REMOVED 2026-09-04 (DAR-203): real investigation (see
+    # date_compat.c's own updated header) found writev(2) is dead code
+    # from date's actual call graph (both real oldsyslog.c call sites
+    # are gated on _sl_LogStat bits date.c never sets) and send(2),
+    # while genuinely reached from date's real -- non -j -- clock-set
+    # path, is always called with fd == -1 (cat_socket_stub.c's own
+    # socket() unconditionally ENOSYS's first), so libsystem_kernel
+    # .dylib's real send$UNIX2003 syscall wrapper just gets an honest
+    # real EBADF there instead -- same "always fails" outcome, no
+    # actual networking. date's own extra_libs case below now lists
+    # libsystem_kernel.dylib directly so both symbols resolve for real
+    # rather than relying on a transitive reexport through
+    # libsystem_c.dylib's plain (non-reexport) load of it -- same real
+    # bind-resolution hazard as this file's libsystem_platform.dylib/
+    # libcopyfile.dylib/libremovefile.dylib LINK_DYLIBS comments and
+    # CLAUDE.md's own DAR-217 note.
     case "$extra_objs" in
         *xargs_getrlimit_compat.o*) link_aliases="$link_aliases -Wl,-alias,_getrlimit,_getrlimit\$UNIX2003" ;;
     esac

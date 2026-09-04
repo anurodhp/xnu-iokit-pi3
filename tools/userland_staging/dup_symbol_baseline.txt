@@ -63,8 +63,6 @@ B date.macho _localtime_r
 B date.macho _mktime$UNIX2003
 B date.macho _offtime
 B date.macho _posix2time
-B date.macho _send
-B date.macho _send$UNIX2003
 B date.macho _socket
 B date.macho _strftime_l$UNIX2003
 B date.macho _strftime$UNIX2003
@@ -79,8 +77,6 @@ B date.macho _timeoff
 B date.macho _tzname
 B date.macho _tzset
 B date.macho _tzsetwall
-B date.macho _writev
-B date.macho _writev$UNIX2003
 B df.macho __err
 B df.macho __warn
 B diff.macho ___commpage_gettimeofday

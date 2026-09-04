@@ -131,32 +131,47 @@ _NSGetArgv(void)
 	return (char ***)&NXArgv;
 }
 
-/* Real vsyslog() (oldsyslog.c) sends the formatted log line via
- * send(2)/writev(2) over the AF_UNIX socket cat_socket_stub.c's real
- * socket()/connect() already honestly fail to create (ENOSYS -- no
- * syslogd, Phase 5.5, not built yet). Both call sites are only reached
- * AFTER a successful connect(), which never happens here (_sl_LogFile
- * stays -1, openlog()'s real logic already bails out before ever
- * calling send/writev) -- these two exist purely to satisfy the linker,
- * same "stub the symbol so it links, document why it can't fire"
- * pattern cat_socket_stub.c's own header comment already established
- * for socket/connect/shutdown. */
-#include <errno.h>
-
-long
-send(int fd, const void *buf, unsigned long len, int flags)
-{
-	(void)fd; (void)buf; (void)len; (void)flags;
-	errno = ENOSYS;
-	return -1;
-}
-
-struct iovec;
-
-long
-writev(int fd, const struct iovec *iov, int iovcnt)
-{
-	(void)fd; (void)iov; (void)iovcnt;
-	errno = ENOSYS;
-	return -1;
-}
+/* DAR-203 (2026-09-04): this file used to carry its own honest
+ * ENOSYS send()/writev() stubs here, aliased to _send$UNIX2003/
+ * _writev$UNIX2003 by build_simple_cmds.sh's date-only link_aliases
+ * case. Real investigation (not a blind relink, see DAR-203's own
+ * ticket writeup) found the previous header comment's claim above --
+ * "both call sites are only reached AFTER a successful connect()" --
+ * was only half right:
+ *
+ *   - writev(2) in vsyslog() (oldsyslog.c) has two call sites, both
+ *     gated on _sl_LogStat bits (LOG_PERROR / LOG_CONS) that date.c
+ *     never sets (date.c calls the bare syslog(LOG_AUTH|LOG_NOTICE,
+ *     "date set by %s", p) with no preceding openlog(), so
+ *     _sl_LogStat stays whatever vsyslog()'s own internal
+ *     openlog(_sl_LogTag, _sl_LogStat|LOG_NDELAY, 0) leaves it --
+ *     LOG_NDELAY only). Genuinely dead code from date's own call
+ *     graph, not merely "protected by a failing connect()".
+ *
+ *   - send(2) in vsyslog() is NOT gated on a successful connect() --
+ *     it's called unconditionally after the openlog() attempt. It
+ *     IS a live, reached call site (date.c's own setthetime(), the
+ *     real actually-set-the-clock path taken whenever `date` is
+ *     invoked without -j) -- but always with _sl_LogFile == -1,
+ *     because cat_socket_stub.c's own socket() unconditionally fails
+ *     with ENOSYS first (no syslogd, Phase 5.5, still not built;
+ *     cat_socket_stub.c itself is untouched by this ticket, shared
+ *     with cat -u). A real send(-1, ...) syscall is honestly rejected
+ *     by the kernel with EBADF before touching any networking code --
+ *     same "always fails, never actually talks to a socket" outcome
+ *     as the old local ENOSYS stub, just via the real dylib's real
+ *     syscall wrapper instead of a hand-written one.
+ *
+ * Conclusion: swapping to libsystem_kernel.dylib's real
+ * _send$UNIX2003/_writev$UNIX2003 changes date's runtime behavior not
+ * at all (writev: never called; send: always called with an invalid
+ * fd, always fails, just with a different real errno). Local stubs
+ * and their link_aliases case removed; date now links
+ * libsystem_kernel.dylib directly (see build_simple_cmds.sh's own
+ * date extra_libs case) so the two symbols resolve for real instead
+ * of relying on a transitive reexport, matching this project's own
+ * established bind-resolution precedent (CLAUDE.md's DAR-217 note;
+ * build_simple_cmds.sh's own libsystem_platform.dylib/libcopyfile
+ * .dylib/libremovefile.dylib comments above its LINK_DYLIBS
+ * definition document the same real reexport-vs-direct-link
+ * hazard). */
