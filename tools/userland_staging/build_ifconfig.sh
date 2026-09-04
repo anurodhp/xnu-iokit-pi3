@@ -102,6 +102,21 @@ for dep in libplatform.a libmalloc.a libpthread.a libclosure.a libc_gen.a libc_s
         exit 1
     fi
 done
+# DAR-246: libpthread.a's pthread_main_thread_bootstrap.o needs real
+# `mmap`/`munmap` (ifconfig_main_wrapper.c's pthread_main_thread_bootstrap()
+# call, same TSD-bootstrap gap every *_main_wrapper.c in this tier
+# documents -- see build_getty.sh/build_ps.sh's own identical comment).
+# Both are real, already-built, already-proven components: the raw
+# __mmap/__munmap syscall stubs from build_simple_cmds.sh, wrapped by
+# simple_cmds_mmap_compat.c's real mmap()/munmap() (real Apple
+# libsyscall/wrappers/unix03/{mmap,munmap}.c semantics, see that file's
+# own header comment) -- reused verbatim, not reinvented.
+for dep in sys____mmap.o sys____munmap.o; do
+    if [ ! -f "$OUT/simple_obj/$dep" ]; then
+        echo "error: $OUT/simple_obj/$dep not found -- run build_simple_cmds.sh first (shared raw syscall stub)" >&2
+        exit 1
+    fi
+done
 
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness \
@@ -146,6 +161,7 @@ for spec in \
     "ifconfig_resolver_compat.c:" \
     "ifconfig_syslog_compat.c:" \
     "ifconfig_strtod_compat.c:" \
+    "simple_cmds_mmap_compat.c:" \
     ; do
     f="${spec%%:*}"
     extra="${spec#*:}"
@@ -174,6 +190,7 @@ fi
     -o ifconfig.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/ifconfig_obj/*.o \
+    "$OUT/simple_obj/sys____mmap.o" "$OUT/simple_obj/sys____munmap.o" \
     "$OUT/libc_printf.a" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_string.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
@@ -198,7 +215,9 @@ fi
     -Wl,-alias,'_getopt$UNIX2003',_getopt \
     -Wl,-alias,_strerror,'_strerror$UNIX2003' \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
-    -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock
+    -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
+    -Wl,-alias,'_mmap$UNIX2003',_mmap \
+    -Wl,-alias,'_munmap$UNIX2003',_munmap
 echo "wrote ifconfig.macho"
 
 otool -l ifconfig.macho | grep -q LC_LOAD_DYLIB && \
