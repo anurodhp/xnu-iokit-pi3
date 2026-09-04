@@ -247,7 +247,9 @@ FILES="$CDT/configd.m $CDT/_SCD.c $CDT/configd_server.c $CDT/plugin_support.c \
     configd_builtin_plugins_stub.c \
     $LIBC/gen/FreeBSD/signal.c $LIBC/stdlib/FreeBSD/getopt.c $LIBC/stdlib/FreeBSD/getopt_long.c \
     configd_sigaction_compat.c \
-    configd_bsm_wrappers_compat.c"
+    configd_bsm_wrappers_compat.c \
+    configd_cfurl_filesize_compat.c \
+    configd_scnetworkconfig_setvalue_compat.c"
 
 ok=0
 fail=0
@@ -314,6 +316,16 @@ rm -f configd.macho
     "$LAUNCHD_SYSCALL_OBJ/sys__getppid.o" "$LAUNCHD_SYSCALL_OBJ/sys__setsid.o" \
     "$OUT/liblaunchd_mig.a" "$OUT/libmach_ipc.a" "$OUT/chk_fail.o" \
     "$OUT/bootp_dhcp_engine.a" \
+    `# Passed as a loose .o, NOT via libconfigd.a: nothing in configd's own` \
+    `# object graph calls CFURLCopyResourcePropertyForKey directly (it's only` \
+    `# ever reached via flat-namespace lookup from libSystemConfiguration.` \
+    `# dylib's own -Wl,-U-deferred reference), so ld64's normal` \
+    `# archive-member selection would never pull this object out of the` \
+    `# archive at all -- confirmed empirically (nm showed it silently` \
+    `# missing from a first real link attempt). A loose .o on the link line` \
+    `# is always included, unlike an archive member.` \
+    "$OUT/configd_obj/configd_cfurl_filesize_compat.o" \
+    "$OUT/configd_obj/configd_scnetworkconfig_setvalue_compat.o" \
     "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_blocks.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
