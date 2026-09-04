@@ -263,42 +263,40 @@ XCODE12_LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
     "$EXTRACT/libproc.o" -o "$EXTRACT/libproc.o.narrowed"
 mv -f "$EXTRACT/libproc.o.narrowed" "$EXTRACT/libproc.o"
 
-# libvproc.o's `_vproc_swap_integer` NARROWED 2026-09-03 (DAR-8,
-# libdyld.dylib-vs-sibling-dylibs duplicate-symbol sweep). This dylib's
+# libvproc.o's `_vproc_swap_integer` was NARROWED 2026-09-03 (DAR-8,
+# libdyld.dylib-vs-sibling-dylibs duplicate-symbol sweep) and is
+# RESTORED to a real export here 2026-09-04 (DAR-235). This dylib's
 # real libvproc.o (from third_party/PureDarwin's libvproc.c) is the
 # genuine, functional implementation -- a real MIG round-trip
 # (vproc_mig_swap_integer()) to bootstrap_port/launchd, now meaningful
 # since real launchd is real PID-1 on this port. libdyld.dylib's own
 # copy (libdyld_vproc_compat.c) is an honest, permanently-answers-"not
 # managed" stub, documented there as a real gap from before real
-# launchd existed -- exactly the __mach_errors-shaped trap (real data
-# vs. honest empty stub) this audit's own header warns about, so the
-# REAL implementation here is not the one to hide... except the only
-# live cross-image consumer found (`xcrun dyld_info -fixups` swept
-# across every shipped dylib/macho), launchctl.macho, is ALREADY built
-# and its `__got` bind names `libdyld` by image, not `libxpc` -- hiding
-# libdyld's copy instead would abort launchctl (and this ticket's own
-# required `launchctl list` boot-test command) with a dyld "Symbol not
-# found" load-time error, and relinking launchctl.macho is out of this
-# ticket's scope (owned by concurrent DAR-234-adjacent work). Narrowing
-# libxpc's copy instead is the zero-behavior-change side: no shipped
-# image currently binds to `libxpc/_vproc_swap_integer`, so nothing
-# regresses; only a FUTURE relink of launchctl (or any other real
-# libxpc consumer) toward the real MIG-backed implementation is now
-# deferred rather than silently foreclosed. See DAR-8's own Linear
-# comment for the follow-up-ticket recommendation to fix launchctl's
-# bind for real.
+# launchd existed. DAR-8 narrowed THIS copy (rather than libdyld's)
+# specifically because launchctl.macho, the only live cross-image
+# consumer, was already built and bound to `libdyld/_vproc_swap_integer`
+# -- unexporting libxpc's copy back then was a deliberate, documented,
+# temporary zero-behavior-change placeholder pending a real fix to
+# launchctl's own link line, filed as DAR-235 (see DAR-8's own Linear
+# comment). DAR-235 is that fix: launchctl.macho's link line now lists
+# libxpc.dylib ahead of libdyld.dylib (see build_launchctl.sh), so
+# restoring this export is required, not optional -- a plain reorder
+# alone cannot work while this symbol stays hidden, since ld64 cannot
+# bind to a non-exported (private_extern) symbol in another image
+# regardless of link order. Confirmed via a real nm -g diff immediately
+# before this change: libdyld.dylib and libxpc.dylib had ZERO exported
+# (T) symbols in common while this narrowing was in place, so restoring
+# this one export's visibility cannot silently flip any OTHER symbol's
+# bind target for any already-built consumer -- this is genuinely a
+# single-symbol, single-consumer change.
 #
-# NARROWED, not removed: liblaunch.o (also extracted into this same
-# dylib link) calls `_vproc_swap_integer` too (`nm -m`: real undefined
-# external reference) -- `-keep_private_externs` keeps libvproc.o's
-# definition linkable within this SAME final dylib link job, only
-# dropping it from libxpc.dylib's own export trie, so liblaunch.o's
-# reference still resolves correctly below.
-"$XCODE12_LD" -r -arch arm64 -keep_private_externs \
-    -unexported_symbol _vproc_swap_integer \
-    "$EXTRACT/libvproc.o" -o "$EXTRACT/libvproc.o.narrowed"
-mv -f "$EXTRACT/libvproc.o.narrowed" "$EXTRACT/libvproc.o"
+# liblaunch.o (also extracted into this same dylib link) calls
+# `_vproc_swap_integer` too (`nm -m`: real undefined external
+# reference) -- it already resolved correctly against libvproc.o's
+# definition within this same final dylib link job even while narrowed
+# (`-keep_private_externs` only drops an export-trie entry, not the
+# in-archive definition), so restoring the export changes nothing about
+# that same-dylib resolution.
 
 # Members dropped 2026-08-29 (static-linking cleanup, Phase 1a). Every
 # one of these was a second copy of something a sibling dylib already on

@@ -548,6 +548,18 @@ rm -f "$OUT/launchctl.macho"
     `# removals already documented in build_launchd.sh.` \
     "$OUT/libmach_ipc.a" "$OUT/cerror_stub.o" \
     "$OUT/system/libCoreFoundation.dylib" \
+    `# libxpc.dylib listed HERE, before libdyld.dylib, 2026-09-04 (DAR-235):` \
+    `# real fix for launchctl.macho binding _vproc_swap_integer to` \
+    `# libdyld.dylib's honest-but-fake "not managed" stub instead of` \
+    `# libxpc.dylib's real MIG round-trip to launchd -- same real ld64` \
+    `# behavior CLAUDE.md's own bind_target_audit.sh gotcha documents: an` \
+    `# undefined symbol resolves against the transitive closure of each` \
+    `# dylib on the link line IN ORDER, and the bind is recorded against` \
+    `# whichever dylib was listed first. libxpc.dylib's own real export was` \
+    `# restored the same day (see build_libxpc_dylib.sh's own updated` \
+    `# comment) -- DAR-8 had deliberately unexported it as a temporary` \
+    `# placeholder pending exactly this link-order fix.` \
+    "$OUT/system/libxpc.dylib" \
     "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
     "$OUT/system/libsystem_c.dylib" \
@@ -577,7 +589,8 @@ rm -f "$OUT/launchctl.macho"
     `# weak_def_audit.sh run clean after the libsystem_c.dylib rebuild (this` \
     `# is a private_extern->external widening, not a weak/strong flip, but` \
     `# audited anyway per project convention).` \
-    "$OUT/system/libxpc.dylib" "$OUT/system/libbsm.dylib" "$OUT/system/libopenpam.dylib" "$OUT/system/libiokituser.dylib" \
+    `# libxpc.dylib moved earlier on this link line, see the DAR-235 comment above.` \
+    "$OUT/system/libbsm.dylib" "$OUT/system/libopenpam.dylib" "$OUT/system/libiokituser.dylib" \
     "$OUT/system/libresolv.dylib" \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libcopyfile.dylib" "$OUT/system/libremovefile.dylib" \
     "$ICU_LIB/libicuuc.dylib" "$ICU_LIB/libicui18n.dylib" "$ICU_LIB/libicudata.dylib" "$OUT/system/libc++.dylib" \
