@@ -90,9 +90,21 @@ if [ ! -f "$OUT/system/libsystem_kernel.dylib" ] || [ ! -f "$OUT/system/libsyste
     exit 1
 fi
 
+# memcpy.o/memset.o REMOVED from MEMBERS 2026-09-04 (DAR-13, real-Apple-
+# parity fix): real Apple never defines plain _memcpy/_memset in
+# libsystem_malloc.dylib -- they're owned by exactly one dylib,
+# libsystem_platform.dylib (see that script's own updated header comment
+# for the full real-source trail). This dylib's own magazine allocator
+# source (vm.c's mvm_aslr_init, magazine_rack.c's rack_init, etc) still
+# calls plain memcpy()/memset() internally -- those now resolve
+# externally to the libsystem_platform.dylib sibling already linked
+# below (real, direct link, not just transitive), same real "one owner
+# per symbol" fix class as g_zone/mach_task_self_/errno. memcpy_chk.o/
+# memset_chk.o (the _FORTIFY_SOURCE __memcpy_chk/__memset_chk wrappers --
+# DIFFERENT symbols, out of this ticket's scope) are untouched.
 MEMBERS="bitarray.o magazine_large.o magazine_malloc.o magazine_medium.o magazine_rack.o \
     magazine_small.o magazine_tiny.o malloc_printf.o vm.o simple_string_io.o \
-    memcpy_chk.o memset_chk.o chk_fail.o memcpy.o memset.o \
+    memcpy_chk.o memset_chk.o chk_fail.o \
     libmalloc_sleep_shim.o pthread_tsd_shim.o \
     sys_getpid.o sys_mprotect.o sys_kill.o sys_write.o sys_madvise.o sys_kdebug_trace.o \
     sys_exit.o sys_semwait_signal.o"

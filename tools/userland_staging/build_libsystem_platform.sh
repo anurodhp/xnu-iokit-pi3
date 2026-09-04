@@ -82,8 +82,8 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
 ok=0
 skip=0
 for f in "$PLATFORM/src/os/lock.c" "$PLATFORM/src/os/atomic.c" "$PLATFORM/src/atomics/arm64/OSAtomic.c" \
-         "$PLATFORM/src/os/alloc_once.c" "$PLATFORM/src/string/generic/bzero.c" "$PLATFORM/src/string/generic/memset_pattern.c" \
-         "$PLATFORM/src/string/generic/memmove.c" "$PLATFORM/src/string/generic/strcmp.c" \
+         "$PLATFORM/src/os/alloc_once.c" "$PLATFORM/src/string/generic/memset_pattern.c" \
+         "$PLATFORM/src/string/generic/strcmp.c" \
          "$PLATFORM/src/string/generic/strlen.c" "$PLATFORM/src/string/generic/strchr.c"; do
     base=$(basename "$f" .c)
     out="$OUT/libsystem_platform/apple_platform/${base}.o"
@@ -96,6 +96,60 @@ for f in "$PLATFORM/src/os/lock.c" "$PLATFORM/src/os/atomic.c" "$PLATFORM/src/at
     fi
 done
 echo "apple_platform: $ok compiled, $skip skipped"
+
+# DAR-13 (2026-09-04): bzero.c/memmove.c compiled SEPARATELY from the
+# loop above, with real Apple's own -DVARIANT_STATIC=1 (see
+# third_party/libplatform/xcodeconfig/libplatform.xcconfig's real
+# GCC_PREPROCESSOR_DEFINITIONS_dyld/_static -- VARIANT_STATIC=1 is real
+# Apple's own macro for "also emit the public bcopy/memcpy/memmove/
+# memset/bzero wrapper names, not just the internal _platform_* ones").
+#
+# Real-Apple-parity fix, matching DAR-13's own investigation: on real
+# Darwin, _memcpy/_memset (the whole bcopy/memmove/bzero family) are
+# owned by exactly ONE dylib, libsystem_platform.dylib -- real hardware
+# gets there via hand-tuned per-arch assembly (arm64 NEON) that lives
+# under a DIFFERENT real Libplatform source layout than this project's
+# pinned libplatform-254.80.2 tag has (confirmed: no src/string/arm64/
+# directory exists anywhere in this checkout, only src/string/generic/ --
+# a real, pin-vintage gap, not fabricated). string.h's own
+# _PLATFORM_OPTIMIZED_MEMSET/_PLATFORM_OPTIMIZED_MEMMOVE are both
+# genuinely 0 in this tree, meaning the generic C bodies in bzero.c/
+# memmove.c ARE real Apple's own intended fallback definition for a
+# target with no optimized variant -- not a hand-rolled substitute. Real
+# Apple's own xcconfig sets VARIANT_STATIC=1 only for the "dyld"/"static"
+# build variants (not "normal", i.e. not the real shipping dylib) because
+# real hardware never needs the generic fallback's public names -- but
+# this checkout's arm64 target genuinely has no other source of a public
+# _memcpy/_memset at all, so invoking the same real ifdef branch here is
+# the honest, minimal, real-source-only way to get them, matching this
+# project's own already-established use of the exact same generic
+# _platform_memset/_platform_memmove bodies elsewhere (this file's own
+# unconditional compiles above, build_libmalloc.sh's platform_memmove.o).
+#
+# Previously (build_libsystem_malloc.sh's own now-corrected comment):
+# "there is NO real _platform_memset source anywhere in this checkout" --
+# that claim was WRONG, verified against source before writing this fix:
+# third_party/libplatform/src/string/generic/bzero.c has real,
+# unmodified _platform_memset (and has since before that comment was
+# written -- this file's OWN unconditional bzero.c/memmove.c compiles a
+# few lines above already produce __platform_memset/__platform_memmove
+# as real exports of this exact dylib; VARIANT_STATIC=1 below only adds
+# the PUBLIC bcopy/memcpy/memmove/memset/bzero/__bzero wrapper names on
+# top of the same already-compiled internal primitives).
+#
+# -Wl,-unexported_symbol below hides memmove/bzero/__bzero (also real,
+# unmodified exports this same VARIANT_STATIC=1 compile legitimately
+# produces) -- DAR-13's own scope is _memcpy/_memset only; libsystem_c.dylib
+# is today's real, undisputed owner of _memmove/_bzero/__bzero (extracted
+# from libc_string.a) and widening this dylib's public surface to those
+# three as well would open a NEW duplicate-symbol pair this ticket never
+# audited or scoped -- deliberately deferred rather than bundled in.
+PLATCFLAGS_VARIANT_STATIC="$CFLAGS -DVARIANT_STATIC=1"
+"$CLANG" $PLATCFLAGS_VARIANT_STATIC "$PLATFORM/src/string/generic/bzero.c" \
+    -o "$OUT/libsystem_platform/apple_platform/bzero.o"
+"$CLANG" $PLATCFLAGS_VARIANT_STATIC "$PLATFORM/src/string/generic/memmove.c" \
+    -o "$OUT/libsystem_platform/apple_platform/memmove.o"
+echo "apple_platform: bzero.o/memmove.o recompiled with -DVARIANT_STATIC=1 (real public memcpy/memset/memmove/bzero/__bzero wrappers, DAR-13)"
 
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c libplatform_mach_traps.s -o "$OUT/libsystem_platform/libplatform_mach_traps.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -DPRIVATE=1 \
@@ -124,6 +178,13 @@ rm -f "$OUT/system/libsystem_platform.dylib"
     -Wl,-not_for_dyld_shared_cache \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
+    `# DAR-13: keep _memmove/_bzero/__bzero real, defined, LOCAL to this` \
+    `# dylib (bzero.c/memmove.c's own VARIANT_STATIC=1 compile above` \
+    `# produces them for real) but NOT publicly exported -- libsystem_c.dylib` \
+    `# stays their one real owner today; only _memcpy/_memset are this` \
+    `# ticket's real scope. See this file's own header comment above the` \
+    `# VARIANT_STATIC=1 compiles for the full rationale.` \
+    -Wl,-unexported_symbol,_memmove -Wl,-unexported_symbol,_bzero -Wl,-unexported_symbol,___bzero \
     -o "$OUT/system/libsystem_platform.dylib" \
     "$OUT/libsystem_platform/apple_platform"/*.o \
     "$OUT/libsystem_platform/libplatform_mach_traps.o" "$OUT/libsystem_platform/mach_absolute_time.o" \

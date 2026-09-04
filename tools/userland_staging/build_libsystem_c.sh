@@ -182,6 +182,23 @@ rm -f "$EXTRACT/cerror_stub.o"
 rm -f "$EXTRACT/__.SYMDEF"* "$EXTRACT/pthread_tsd_shim.o" \
     "$EXTRACT/machdep_ldisQ.o" "$EXTRACT/wcsftime.o" "$EXTRACT/vfwscanf.o" "$EXTRACT/vswscanf.o" \
     "$EXTRACT/wscanf.o" "$EXTRACT/vwscanf.o" "$EXTRACT/fwscanf.o" "$EXTRACT/swscanf.o"
+# memcpy.o/memset.o dropped 2026-09-04 (DAR-13, real-Apple-parity fix):
+# real Apple never defines plain _memcpy/_memset in libsystem_c.dylib --
+# it resolves through libSystem.B.dylib's umbrella reexport to
+# libsystem_platform.dylib's one real copy (see build_libsystem_platform.sh's
+# own updated header comment for the full real-source trail). Placed
+# AFTER both the libc_string.a AND libc_locale_for_stdio.a extractions
+# above (not right after the first `ar x`) because this script's own
+# header comment already documents that locale's own memcpy.o/memset.o
+# copies silently overwrite string's on disk (last-extracted-wins) --
+# removing right after the FIRST extraction would have left locale's
+# copy behind. Every other object in $EXTRACT that calls plain
+# memcpy()/memset() internally (compiler-generated struct copies,
+# stdio/regex/locale source, etc) now resolves externally to the
+# libsystem_platform.dylib sibling already linked below (real, direct
+# link, not just transitive) -- same real "one owner per symbol" fix
+# class as this dylib's own getenv/_NSGetEnviron narrowing above.
+rm -f "$EXTRACT/memcpy.o" "$EXTRACT/memset.o"
 # ldpart.o dropped 2026-09-01 (DAR-153/DAR-164): a real, newly-arrived
 # member of libc_locale_for_stdio.a (real Libc/locale/FreeBSD/ldpart.c,
 # __ldpart_free_extra + __part_load_locale) this dylib's own build was
