@@ -370,6 +370,7 @@ Libsystem|https://github.com/apple-oss-distributions/Libsystem.git|Libsystem-129
 libdispatch|https://github.com/apple-oss-distributions/libdispatch.git|libdispatch-1271.40.12|libdispatch.patch
 libclosure|https://github.com/apple-oss-distributions/libclosure.git|libclosure-78|
 libmalloc|https://github.com/apple-oss-distributions/libmalloc.git|libmalloc-317.40.8|
+objc4|https://github.com/apple-oss-distributions/objc4.git|objc4-818.2|
 libunwind|https://github.com/apple-oss-distributions/libunwind.git|libunwind-200.10|
 Libinfo|https://github.com/apple-oss-distributions/Libinfo.git|Libinfo-542.40.3|
 removefile|https://github.com/apple-oss-distributions/removefile.git|removefile-49.40.3|

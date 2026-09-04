@@ -336,11 +336,22 @@ scripting-language runtime as a goal in itself):
   `iodbc`, `libpcap` (only useful once `tcpdump` is wanted), `bzip2`,
   `zip` (zlib itself is already vendored via `third_party/u-boot`'s copy
   and working), `xar`, `hunspell`, `CrackLib`.
-- **Objective-C/C++ runtime support** (`objc4`, `libcppabi`,
-  `Libcpp_kext`, `libstdcxx`, `libstdcxx_SUPanWheat`) — no Objective-C
-  anywhere in this project; the C++ used by IOKit drivers already builds
-  and links today without these (confirmed — the kernel and kexts build
-  clean), so nothing currently depends on them.
+- **`objc4` — NOW PINNED** (2026-09-04, `objc4-818.2`, exact `macos-112`
+  manifest match, verified via `git rev-list` against the manifest's real
+  submodule commit `62b60ba0e56440e265ca576cc9f197e9af54c1bd`). This
+  entry's own prior text ("no Objective-C anywhere in this project... 
+  nothing currently depends on them") is now stale — DAR-170's real
+  `configd.tproj` port found two real Apple plugins genuinely written in
+  Objective-C (`IPMonitor`, `QoSMarking`), and the user decided to port a
+  real, minimal `objc4` runtime rather than stub or rewrite them, per this
+  project's standing "match real Apple even at a big delta" rule. First
+  real Objective-C consumer in this project's history.
+- **C++ runtime support** (`libcppabi`, `Libcpp_kext`, `libstdcxx`,
+  `libstdcxx_SUPanWheat`) — still correctly not needed: the C++ used by
+  IOKit drivers already builds and links today without these (confirmed
+  — the kernel and kexts build clean), and this project's real
+  `libc++`/`libc++abi` (via the pinned LLVM 11.1.0 source) already covers
+  userland C++ needs.
 - **Other package's own already-superseded internals**: `old_ncurses`
   (superseded by `ncurses` above), `OpenSSL098` (ancient vintage, and
   crypto work here is explicitly scoped through corecrypto/AES instead —
