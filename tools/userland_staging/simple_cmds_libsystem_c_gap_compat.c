@@ -1,51 +1,22 @@
 /* Real gaps confirmed absent from every dylib this project's Phase 6.5+
  * dynamic-link migration produces (build_simple_cmds.sh, 2026-08-28) --
  * checked via a real `nm -gU` sweep across libsystem_c/kernel/pthread/
- * malloc/platform.dylib before writing this, not guessed. abort()/
- * __assert_rtn()/reallocf() are real, standard libc entry points real
- * Apple's own Libc.xcodeproj ships; this project's libc_gen.a/libc_
- * stdio.a curated ports never included them (no earlier static-link
- * consumer needed them badly enough to surface the gap -- the dynamic
- * conversion's much broader real-source command set is the first real
- * consumer that does).
+ * malloc/platform.dylib before writing this, not guessed.
+ *
+ * abort()/__assert_rtn()/reallocf() REMOVED 2026-09-04 (DAR-196): this
+ * file's own "confirmed absent" claim above went stale -- `xcrun
+ * dyld_info -exports` on today's real libc_build/system/
+ * libsystem_malloc.dylib (already directly on every simple_cmds
+ * command's own link line via $LINK_DYLIBS, not merely reached through a
+ * reexport) shows real, genuine `_abort`/`___assert_rtn`/`_reallocf`
+ * exports. This was a straight upgrade, not just dedup: this file's own
+ * abort() was a silent `kill(SIGABRT)` + spin loop and __assert_rtn()
+ * silently discarded func/file/line/expr and called that -- neither
+ * printed any diagnostic. The real dylib's versions do real, standard
+ * libc things (assert failures actually report what failed). Confirmed
+ * via a real QEMU boot exercising several commands that hit this path.
  */
 #include <sys/types.h>
-
-extern int getpid(void);
-extern int kill(int pid, int sig);
-#define SIGABRT 6
-
-void
-abort(void)
-{
-	kill(getpid(), SIGABRT);
-	for (;;) {
-		__asm__ volatile("" ::: "memory");
-	}
-}
-
-void
-__assert_rtn(const char *func, const char *file, int line, const char *expr)
-{
-	(void)func;
-	(void)file;
-	(void)line;
-	(void)expr;
-	abort();
-}
-
-extern void *realloc(void *ptr, size_t size);
-extern void free(void *ptr);
-
-void *
-reallocf(void *ptr, size_t size)
-{
-	void *r = realloc(ptr, size);
-	if (!r && size != 0) {
-		free(ptr);
-	}
-	return r;
-}
 
 /* flockfile()/funlockfile(): real per-FILE* mutual-exclusion guard
  * against concurrent access from other threads. This tier's commands

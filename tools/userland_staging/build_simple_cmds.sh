@@ -615,13 +615,38 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
 # two; harmless to always link both (unused-but-linked, same tolerance
 # this project's other tiers already take with e.g. libclosure/libmalloc
 # stand-ins -- confirmed no duplicate-symbol conflicts, zero of these
-# tier-1 sources define their own err/getopt). Neither is duplicated:
-# `_err`/`_warn`/`_getopt`/`_optarg`/`_optind`/`_opterr`/`_optreset` are
-# genuinely absent from every LINK_DYLIBS sibling (confirmed via nm -gUj,
-# 2026-08-30 static-linking cleanup audit) -- this project's own
+# tier-1 sources define their own err/getopt). getopt.c's own exports
+# (`_getopt`/`_optarg`/`_optind`/`_opterr`/`_optreset`) really are still
+# genuinely absent from every LINK_DYLIBS sibling (re-confirmed via
+# `xcrun dyld_info -exports`, 2026-09-04, DAR-196) -- this project's own
 # libsystem_kernel.dylib is a narrow Mach/VM-focused port, not a full
-# syscalls.master surface, and libsystem_c.dylib never picked up
-# getopt/err at all. These stay for real.
+# syscalls.master surface, and libsystem_c.dylib never picked up getopt
+# at all. getopt.c stays fully linked, unnarrowed, for real.
+#
+# err.c is a DIFFERENT story now (DAR-196, 2026-09-04): the
+# 2026-08-30 audit this comment used to cite is stale -- libsystem_c.dylib
+# now genuinely exports 13 of err.c's 15 public symbols for real
+# (`_errc`/`_errx`/`_verr`/`_verrc`/`_verrx`/`_vwarn`/`_vwarnc`/`_vwarnx`/
+# `_warnc`/`_warnx`/`_err_set_exit`/`_err_set_exit_b`/`_err_set_file`,
+# confirmed via `xcrun dyld_info -exports`), so common_err.o now gets the
+# same private-extern-preserving narrow treatment as common_findfp.o
+# below (see that block's own comment) rather than linking wholesale.
+# The other 2 (`__err`/`__warn`, i.e. C `_err()`/`_warn()`) stay fully
+# exported on purpose: real Apple's own err.c makes public `err()`/
+# `warn()` a `__weak_reference(_err, err)`/`__weak_reference(_warn, warn)`
+# alias of these two -- that macro is a no-op under this project's
+# freestanding build, so `link_aliases` below (`-Wl,-alias,__err,_err
+# -Wl,-alias,__warn,_warn`) synthesizes the same public names by hand,
+# and a `-Wl,-alias` base must stay a real, locally-defined (not
+# necessarily externally-VISIBLE, but definitely present) symbol in the
+# same link -- see this project's own "-Wl,-alias nonlocal-base bug"
+# finding. Genuinely no state-consistency risk from splitting these two
+# families across two owners: a real sweep of every simple_cmds source
+# file confirmed nothing here ever calls `err_set_exit()`/
+# `err_set_file()` (the only two entry points whose behavior a caller
+# could observe diverge between "this object's local `_e_err_file`/
+# `_e_err_exit`" and "the dylib's own copy") -- chmod_acl.c only
+# *mentions* err_set_exit() in a comment, never calls it.
 #
 # table.c/none.c added 2026-08-28 alongside the NEWLD_BINDIR fix above --
 # real third_party/Libc/locale/FreeBSD/table.c (_DefaultRuneXLocale, the
@@ -723,6 +748,10 @@ done
 # COMMON_EXTRA's own comment on findfp.c above. __sfprelease (private
 # extern) and anything else findfp.c defines survive untouched via
 # -keep_private_externs, same mechanism narrow_rune_locale.sh uses.
+# _f_prealloc ADDED 2026-09-04 (DAR-196): a 10th fully-public findfp.c
+# symbol, missed in the original 2026-08-30 pass -- real, genuine
+# libsystem_c.dylib export (confirmed via `xcrun dyld_info -exports`),
+# same narrowing treatment as the other 9.
 FINDFP_OBJ="$OUT/simple_obj/common_findfp.o"
 if [ -f "$FINDFP_OBJ" ]; then
     XCODE12_LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
@@ -731,9 +760,59 @@ if [ -f "$FINDFP_OBJ" ]; then
         -unexported_symbol ___sglue -unexported_symbol ___sdidinit \
         -unexported_symbol __cleanup -unexported_symbol ___sinit \
         -unexported_symbol ___stdinp -unexported_symbol ___stdoutp \
-        -unexported_symbol ___stderrp \
+        -unexported_symbol ___stderrp -unexported_symbol _f_prealloc \
         "$FINDFP_OBJ" -o "$FINDFP_OBJ.narrowed"
     mv -f "$FINDFP_OBJ.narrowed" "$FINDFP_OBJ"
+fi
+
+# Narrow common_err.o's 13 fully-public, state-free err(3) family
+# symbols the same way (DAR-196, 2026-09-04) -- see COMMON_EXTRA's own
+# updated comment on err.c above for the full rationale (real libsystem_c
+# .dylib exports, real sweep confirming no simple_cmds source calls the
+# two state-setter entry points this could otherwise make inconsistent).
+# __err/__warn are DELIBERATELY excluded from this list -- they must
+# stay a real, present (if no longer externally-visible-to-other-images)
+# local definition for link_aliases' `-Wl,-alias,__err,_err`/
+# `-Wl,-alias,__warn,_warn` below to have a base to alias, since real
+# `err()`/`warn()` are not real dylib exports here (this project's own
+# libsystem_c.dylib build never picked up the bare, unversioned names --
+# only their `_`-prefixed FreeBSD internals and the rest of the v*/*c/*x
+# family).
+COMMON_ERR_OBJ="$OUT/simple_obj/common_err.o"
+if [ -f "$COMMON_ERR_OBJ" ]; then
+    XCODE12_LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+    "$XCODE12_LD" -r -arch arm64 -keep_private_externs \
+        -unexported_symbol _err_set_exit -unexported_symbol _err_set_exit_b \
+        -unexported_symbol _err_set_file \
+        -unexported_symbol _errc -unexported_symbol _errx \
+        -unexported_symbol _verr -unexported_symbol _verrc -unexported_symbol _verrx \
+        -unexported_symbol _vwarn -unexported_symbol _vwarnc -unexported_symbol _vwarnx \
+        -unexported_symbol _warnc -unexported_symbol _warnx \
+        "$COMMON_ERR_OBJ" -o "$COMMON_ERR_OBJ.narrowed"
+    mv -f "$COMMON_ERR_OBJ.narrowed" "$COMMON_ERR_OBJ"
+fi
+
+# Narrow common_collate.o's 4 fully-public collate(3) lookup symbols the
+# same way (DAR-196, 2026-09-04) -- real, genuine libsystem_c.dylib
+# exports (confirmed via `xcrun dyld_info -exports`). The 3 symbols
+# diff's du_fnmatch_libc_wrapper.c actually needs from this file
+# (`___collate_collating_symbol`/`___collate_equiv_class`/
+# `___collate_range_cmp`, see COMMON_EXTRA's own comment above) are
+# UNAFFECTED: the first two are already `__private_extern__` in real
+# FreeBSD collate.c (confirmed via `nm -m`, survive via
+# -keep_private_externs same as __sfprelease), and the third is
+# genuinely local-only (no dylib defines it at all) so was never a
+# candidate for narrowing in the first place.
+COMMON_COLLATE_OBJ="$OUT/simple_obj/common_collate.o"
+if [ -f "$COMMON_COLLATE_OBJ" ]; then
+    XCODE12_LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+    "$XCODE12_LD" -r -arch arm64 -keep_private_externs \
+        -unexported_symbol ___collate_equiv_match \
+        -unexported_symbol ___collate_load_error \
+        -unexported_symbol ___collate_lookup \
+        -unexported_symbol ___collate_lookup_l \
+        "$COMMON_COLLATE_OBJ" -o "$COMMON_COLLATE_OBJ.narrowed"
+    mv -f "$COMMON_COLLATE_OBJ.narrowed" "$COMMON_COLLATE_OBJ"
 fi
 
 # Real, unmodified find(1) getdate.y (third_party/shell_cmds/find/
@@ -903,17 +982,39 @@ fi
 # build_libdispatch_dylib.sh/build_libnotify_client.sh/build_libxpc*.sh/
 # build_syslogd.sh reference these exact paths directly and are out of
 # DAR-196's scope (build_simple_cmds.sh's own ~70 binaries only).
+#
+# sys____chmod.o/sys__fstatat64.o/sys__ftruncate.o/sys__mkdir.o/
+# sys__mkdirat.o/sys__access.o/sys__getuid.o/sys__getegid.o/
+# sys__geteuid.o/sys__sigprocmask.o/sys__getentropy.o REMOVED from this
+# list 2026-09-04 (DAR-196, same pattern as the kevent/kqueue/getgroups
+# batch above): `xcrun dyld_info -exports` confirms libsystem_kernel
+# .dylib/libsystem_c.dylib -- BOTH already directly on every command's
+# own link line via $LINK_DYLIBS, not merely reached through a sibling's
+# reexport -- genuinely, directly export `___chmod`/`_fstatat`/
+# `_fstatat64`/`_ftruncate`/`_mkdir`/`_mkdirat`/`_access`/`_getuid`/
+# `_getegid`/`_geteuid`/`_sigprocmask` for real. Same straight
+# same-code swap, not a behavior change; verified via `dup_symbol_audit.sh
+# --summary` (all 11 dropped out of the per-binary shadow list) and a
+# real QEMU boot. `_pread`/`_pwrite`/`_readlink`/`_symlink`/`_chflags`/
+# `_statfs` are DELIBERATELY NOT included in this pass -- their real
+# owners (libcopyfile.dylib/libremovefile.dylib) are reached only
+# transitively, via libSystem.B.dylib's LC_REEXPORT_DYLIB of those two,
+# not a direct $LINK_DYLIBS entry, and `_pread`/`_pwrite` are additionally
+# the alias BASE for link_aliases' `-Wl,-alias,_pread,_pread$UNIX2003`/
+# `-Wl,-alias,_pwrite,_pwrite$UNIX2003` below -- real, but needs its own
+# dedicated verification pass (bind_target_audit.sh + a real boot
+# exercising the exact commands that call these), not bundled into this
+# already-large batch. Left as this ticket's next real step.
 LINK_COMMON="$OUT/simple_obj/sys____getlogin.o \
-    $OUT/simple_obj/sys__ftruncate.o \
-    $OUT/simple_obj/sys__mkdir.o $OUT/simple_obj/sys__utimes.o $OUT/simple_obj/sys____chmod.o $OUT/simple_obj/sys__sigprocmask.o \
-    $OUT/simple_obj/sys__fchmodat.o $OUT/simple_obj/sys__fstatat64.o $OUT/simple_obj/sys__mkdirat.o $OUT/simple_obj/sys__umask.o \
-    $OUT/simple_obj/sys__access.o $OUT/simple_obj/sys__getuid.o $OUT/simple_obj/sys__execve.o \
+    $OUT/simple_obj/sys__utimes.o \
+    $OUT/simple_obj/sys__fchmodat.o $OUT/simple_obj/sys__umask.o \
+    $OUT/simple_obj/sys__execve.o \
     $OUT/simple_obj/sys__link.o $OUT/simple_obj/sys__symlink.o \
-    $OUT/simple_obj/sys__getegid.o $OUT/simple_obj/sys__geteuid.o $OUT/simple_obj/sys__getgid.o \
+    $OUT/simple_obj/sys__getgid.o \
     $OUT/simple_obj/sys__chflags.o $OUT/simple_obj/sys__chown.o $OUT/simple_obj/sys__mknod.o \
     $OUT/simple_obj/sys__mkfifo.o $OUT/simple_obj/sys__futimes.o $OUT/simple_obj/sys__readlink.o \
     $OUT/simple_obj/sys__pread.o $OUT/simple_obj/sys__pwrite.o \
-    $OUT/simple_obj/sys__pathconf.o $OUT/simple_obj/sys__faccessat.o $OUT/simple_obj/sys__getentropy.o \
+    $OUT/simple_obj/sys__pathconf.o $OUT/simple_obj/sys__faccessat.o \
     $OUT/simple_obj/sys__dup2.o $OUT/simple_obj/sys__getpriority.o \
     $OUT/simple_obj/sys__chroot.o $OUT/simple_obj/sys__setgroups.o $OUT/simple_obj/sys__setgid.o $OUT/simple_obj/sys__setuid.o \
     $OUT/simple_obj/sys__chdir.o $OUT/simple_obj/statfs64_compat.o"
@@ -1967,7 +2068,21 @@ for spec in "${CMD_LIST[@]}"; do
     # version") and always emits LC_MAIN instead of LC_UNIXTHREAD --
     # matching build_dyld_test_exec.sh's own already-QEMU-verified
     # dyld_test_exec.macho exactly, not a new or untested code shape.
+    #
+    # -DCRT_DYNAMIC_LINKING ADDED 2026-09-04 (DAR-196): every one of
+    # these ~76 commands is a real, genuinely dynamically-linked
+    # executable (LC_LOAD_DYLINKER + real LC_LOAD_DYLIB below), exactly
+    # the case DAR-161 already built this macro for (see
+    # build_launchctl.sh/build_launchd.sh/build_pd_console_login.sh/
+    # build_dyld_test_exec.sh for the same, already-QEMU-verified
+    # pattern) -- without it, Csu/crt.c's own NXArgc/NXArgv/environ/
+    # __progname local storage silently shadowed the real, canonical
+    # copies libdyld.dylib's libdyldGlue.o exports (confirmed real
+    # exports via `xcrun dyld_info -exports`, all 4 directly on
+    # $LINK_DYLIBS already). This was simply never applied to this
+    # script's own link line before now.
     if ! "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
+        -DCRT_DYNAMIC_LINKING \
         -B"$NEWLD_BINDIR" \
         -Wl,-fixup_chains \
         -o "${name}.macho" \
