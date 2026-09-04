@@ -355,7 +355,7 @@ REPOS='
 xnu-7195|git@github.com:anurodhp/xnu-pi3-macos11.git|bcm2837-bringup|
 xnu-latest|git@github.com:anurodhp/xnu-pi3-latest.git|main|
 qemu-zhuowei|git@github.com:anurodhp/qemu-xnu-arm.git|master|
-dtc-AppleDeviceTree|https://github.com/darwin-on-arm/dtc-AppleDeviceTree.git|master|dtc-AppleDeviceTree.patch
+dtc-AppleDeviceTree|git@github.com:anurodhp/dtc-appledevicetree.git|master||https://github.com/darwin-on-arm/dtc-AppleDeviceTree.git
 u-boot|git@github.com:anurodhp/u-boot.git|master||https://github.com/FlorentRevest/u-boot.git
 hfs|https://github.com/apple-oss-distributions/hfs.git|hfs-556.100.11|
 IOStorageFamily|https://github.com/apple-oss-distributions/IOStorageFamily.git|IOStorageFamily-260.40.5|
