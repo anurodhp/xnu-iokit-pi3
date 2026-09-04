@@ -939,6 +939,7 @@ B du.macho _getegid
 B du.macho _getentropy
 B du.macho _geteuid
 B du.macho _getuid
+B du.macho _ilogb
 B du.macho _mkdir
 B du.macho _mkdirat
 B du.macho _NXArgc
@@ -2873,6 +2874,7 @@ B mktemp.macho _getegid
 B mktemp.macho _getentropy
 B mktemp.macho _geteuid
 B mktemp.macho _getuid
+B mktemp.macho _ilogb
 B mktemp.macho _mkdir
 B mktemp.macho _mkdirat
 B mktemp.macho _mkdtemp
@@ -3698,6 +3700,7 @@ B seq.macho _getegid
 B seq.macho _getentropy
 B seq.macho _geteuid
 B seq.macho _getuid
+B seq.macho _ilogb
 B seq.macho _mkdir
 B seq.macho _mkdirat
 B seq.macho _NXArgc
@@ -4838,18 +4841,9 @@ B yes.macho _vwarnx
 B yes.macho _warnc
 B yes.macho _warnx
 D __xpc_runtime_is_app_sandboxed
-D _acos
-D _asin
 D _connect
-D _fabs
-D _fmod
-D _modf
-D _pow
-D _scalbn
 D _socket
-D _sqrt
 D _syslog
-D _trunc
 D _voucher_mach_msg_adopt
 D _voucher_mach_msg_clear
 D _voucher_mach_msg_revert

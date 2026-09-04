@@ -365,76 +365,50 @@ rm -f "$EXTRACT/getenv_real_raw.o"
 "$CLANG" $SIGLIST_CFLAGS libsystem_c_gap_compat.c -o "$EXTRACT/libsystem_c_gap_compat.o"
 "$CLANG" $SIGLIST_CFLAGS os_log_compat.c -o "$EXTRACT/os_log_compat.o"
 
-# Real gap: ICU's own dylibs also reference acos/asin/fabs/sqrt/trunc/
-# fmod/modf, expected from libSystem. Real, already-built Apple/FreeBSD
-# Libm objects (build_libm.sh) -- extracted rather than re-compiled,
-# same real selective-extraction pattern this script already uses for
-# libncurses.a/libremovefile.a elsewhere in this project. pow/scalbn
-# also come along for free (same source objects bundle them, see
-# libm_freebsd_fallback.o) -- harmless, this is a separate dylib image
-# from launchd.macho's own already-extracted libm_scalbn_only_compat.o,
-# no duplicate-symbol conflict is possible across separate Mach-O images.
+# DAR-16, 2026-09-04: acos/asin/fabs/fmod/modf/pow/scalbn/sqrt/trunc are
+# NO LONGER extracted here. Real Apple layering (confirmed via the
+# pinned apple-oss-distributions/Libsystem-1292.60.1 `requiredlibs`,
+# commit 8db6779): libsystem_m.dylib is these 9 symbols' one real owner,
+# and libsystem_m.dylib itself links libsystem_c.dylib as a sibling --
+# so libsystem_c CANNOT own them too without being a real, live
+# duplicate (confirmed single-source: both dylibs used to extract the
+# exact same 5 libm.a objects -- acos_freeBSD.o/asin_freeBSD.o/
+# libm_freebsd_fallback.o/sqrt.o/fmod.o -- byte-for-byte, not two
+# independent implementations).
 #
-# CONSOLIDATION ONTO libsystem_m.dylib INVESTIGATED AND REVERTED
-# 2026-08-31 (static-linking cleanup, DAR-160/DAR-16) -- real, hard
-# finding, not a style choice, kept here so the next session doesn't
-# re-attempt the same fix blind:
+# CONSOLIDATION ONTO libsystem_m.dylib ATTEMPTED, REVERTED 2026-08-31,
+# RETRIED AND CLOSED 2026-09-04 -- the 2026-08-31 attempt found a real,
+# severe blocker: reexporting libsystem_m.dylib through libSystem.B.dylib
+# makes it a REQUIRED load dependency of every process, and this
+# project's dyld does only eager chained-fixups binding, so
+# libsystem_m.dylib's own real, pre-existing `-Wl,-U` flat-namespace
+# deferrals (`__muldc3`/`__mulsc3` + 13 unported float-precision
+# entries) became boot-blocking -- PID 1 panicked, "symbol not found in
+# flat namespace '__muldc3'". That prerequisite is what DAR-124 (also
+# 2026-08-31/2026-09-01) closed for a different reason (a dup-symbol
+# sweep on libsystem_m.dylib itself): `complex.o`/`scalblnf.o`, the
+# ONLY two objects needing those 15 deferred symbols, were confirmed to
+# have zero real callers anywhere in this project and dropped from
+# build_libm_dylib.sh's own link. Verified fresh before retrying this
+# fix: `xcrun dyld_info -fixups libc_build/system/libsystem_m.dylib |
+# grep -c flat-namespace` -> 0. With that prerequisite genuinely gone,
+# the reexport (`build_libsystem.sh`) no longer panics -- real QEMU
+# boot test PASS, see that commit's own message for the log path.
 #
-# libsystem_m.dylib (build_libm_dylib.sh) already extracts these exact
-# same 5 libm.a objects -- a real, live 9-symbol duplicate, confirmed
-# single-source (not two independent implementations). The "textbook"
-# fix is real Apple's own layering: make libsystem_m.dylib the single
-# owner, reexported through libSystem.B.dylib the same way
-# libresolv/libcopyfile/libremovefile already are (docs/historic/
-# backlog.md item d12's own proposal). Tried it for real:
-# `build_libsystem.sh` gained `-Wl,-reexport_library,libsystem_m.dylib`,
-# this script dropped its own 5-object extraction, and the 2 symbols
-# this dylib's own code genuinely calls internally (libsystem_c_gap_
-# compat.o's atan() calls asin()/sqrt(), see that file's header) were
-# deferred via `-Wl,-U`. Confirmed NO circular BUILD dependency first
-# (`otool -L` on libsystem_m.dylib: links libsystem_c.dylib, not the
-# reverse; does not link libSystem.B.dylib back) -- but a real QEMU
-# boot test found a different, more severe real problem: reexporting
-# libsystem_m.dylib through the umbrella makes it a REQUIRED load
-# dependency of every single process (every launched process must link
-# libSystem.B.dylib, dyldMain.cpp's own hardcoded check), and this
-# project's dyld does ONLY eager chained-fixups binding (no lazy PLT
-# stubs) -- so EVERY bind in libsystem_m.dylib's own fixup chain must
-# resolve at load time, including its own real, pre-existing `-Wl,-U`
-# deferrals (see build_libm_dylib.sh's own header: `__muldc3`/
-# `__mulsc3`, real compiler-rt complex-multiply intrinsics never ported
-# anywhere in this checkout, plus 13 unported float-precision Libm
-# entry points -- `asinhf`/`atan2f`/`copysign`/`expf`/`expm1f`/`fabsf`/
-# `hypot`/`hypotf`/`log1pf`/`logf`/`scalbnf`/`sinf`/`tanf`). Real
-# result: PID 1 (`launchd.macho`, which directly loads
-# `libicuuc.66.dylib`/`libicui18n.66.dylib` -- ICU IS on this project's
-# real boot-critical path, not merely optional) panicked --
-# `pid 1 exited -- exit reason ... symbol not found in flat namespace
-# '__muldc3'`. Not a regression this session introduced into a working
-# path -- the gap already existed, dormant, in libsystem_m.dylib's own
-# `-Wl,-U` list -- but the reexport is what turns "a gap in an
-# optionally-linked sibling" into "a boot-blocking landmine for every
-# process." REVERTED (both this file's extraction and the
-# `build_libsystem.sh` reexport). Real fix requires ONE of: (a) porting
-# the missing compiler-rt intrinsics plus the 13 float-precision
-# entries for real (a substantial, separately-scoped Libm-completeness
-# task -- build_libm_dylib.sh's own header already flags this as
-# out of scope for that script), or (b) relinking ICU's own target
-# dylibs directly against libsystem_m.dylib (matching build_libxml2.sh's
-# already-working direct link) instead of resolving via the umbrella --
-# investigated as an alternative but not completed this session: ICU's
-# autoconf/gmake build bakes LDFLAGS into its generated Makefiles at
-# configure time, so a plain rebuild does not pick up a link-line change
-# without forcing a real relink (stale target mtimes), and ICU is not
-# currently exercised by any real QEMU boot test on its own, so that
-# path's own correctness would need its own dedicated verification
-# pass -- out of scope for this batch. Neither attempted further;
-# tracked on DAR-160/DAR-16, left open with this finding recorded.
+# This dylib's own 2 internal callers of asin()/sqrt()
+# (libsystem_c_gap_compat.o's atan(x) == asin(x / sqrt(1+x*x)), see that
+# file's own header) cannot link libsystem_m.dylib directly -- that
+# would be the real circular BUILD dependency this project's own layering
+# forbids (libsystem_m links libsystem_c, not the reverse). Deferred via
+# `-Wl,-U` below instead: safe specifically because libsystem_m.dylib is
+# now unconditionally co-loaded with this dylib (both reexported through
+# the same libSystem.B.dylib umbrella every process links), so the flat-
+# namespace bind always finds a real provider at load time -- unlike the
+# `__muldc3` case above, this is not a dormant, unprovided gap.
 if [ ! -f "$OUT/libm.a" ]; then
     echo "error: $OUT/libm.a not found -- run build_libm.sh first" >&2
     exit 1
 fi
-(cd "$EXTRACT" && ar x "../../libm.a" acos_freeBSD.o asin_freeBSD.o libm_freebsd_fallback.o sqrt.o fmod.o)
 
 # Real gap: ICU also references qsort, expected from libSystem. Real
 # Apple source (qsort_b.c) already built once for libremovefile.a
@@ -699,6 +673,14 @@ rm -f "$OUT/system/libsystem_c.dylib"
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -Wl,-U,___progname \
+    `# DAR-16: asin/sqrt no longer local to this dylib (real owner is` \
+    `# now libsystem_m.dylib, see the extraction-removal comment above);` \
+    `# libsystem_c_gap_compat.o's atan() still calls both internally.` \
+    `# Deferred flat-namespace, resolved at real load time by` \
+    `# libsystem_m.dylib -- always co-loaded via the libSystem.B.dylib` \
+    `# umbrella, not a dormant gap.` \
+    -Wl,-U,_asin \
+    -Wl,-U,_sqrt \
     `# __ldpart_free_extra: ldpart.o's own real definition is` \
     `# __private_extern__ (real Apple source), which -Wl,-exported_symbol` \
     `# does NOT reverse (tried first, real confirmed-via-dyld_info` \
