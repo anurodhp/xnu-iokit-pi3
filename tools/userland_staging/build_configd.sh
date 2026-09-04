@@ -334,8 +334,34 @@ rm -f configd.macho
     "$OUT/system/libremovefile.dylib" \
     "$OUT/system/libCoreFoundation.dylib" \
     "$OUT/system/libSystemConfiguration.dylib" \
-    "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" \
-    "$OUT/system/libsystem_notify.dylib" "$OUT/system/libxpc.dylib" \
+    `# libxpc.dylib listed HERE, before libdyld.dylib, 2026-09-04 (DAR-242):`\
+    `# real fix for configd.tproj:main() binding _vproc_swap_integer to`\
+    `# libdyld.dylib's honest-but-fake "always not managed" stub`\
+    `# (libdyld_vproc_compat.c) instead of libxpc.dylib's real MIG`\
+    `# round-trip to launchd (libvproc.o, vproc_mig_swap_integer() to`\
+    `# bootstrap_port) -- same real ld64 two-level-namespace behavior`\
+    `# CLAUDE.md's bind_target_audit.sh gotcha documents: an undefined`\
+    `# symbol resolves against the transitive LC_LOAD_DYLIB closure of`\
+    `# each dylib on the link line IN ORDER, and the bind is recorded`\
+    `# against whichever dylib was listed first. Confirmed via a real`\
+    `# QEMU boot: configd.m's real, unmodified main() reads`\
+    `# VPROC_GSK_IS_MANAGED as 0 even when launchd really spawned it as`\
+    `# a real com.apple.configd LaunchDaemon, takes the fork_child()`\
+    `# self-daemonize path meant only for standalone/non-launchd`\
+    `# invocation, and the forked child SIGSEGVs -- exactly the exit-70`\
+    `# status launchctl list showed. Exact same bug class and exact`\
+    `# same fix shape as launchctl.macho's own DAR-235 fix earlier`\
+    `# today (see build_launchctl.sh's own comment at its libxpc.dylib`\
+    `# link line) -- libxpc.dylib's real _vproc_swap_integer export was`\
+    `# already restored for that fix, this is a second, independent`\
+    `# consumer that needed the same link-order correction. Verified`\
+    `# via a real dyld_info -fixups diff: before this change,`\
+    `# configd.macho showed "bind libdyld/_vproc_swap_integer"; after,`\
+    `# it shows "bind libxpc/_vproc_swap_integer", matching`\
+    `# launchctl.macho's already-correct bind.`\
+    "$OUT/system/libdispatch.dylib" "$OUT/system/libxpc.dylib" \
+    "$OUT/system/libdyld.dylib" \
+    "$OUT/system/libsystem_notify.dylib" \
     "$OUT/system/libopenpam.dylib" "$OUT/system/libinfo.dylib" "$OUT/system/libsystem_m.dylib" \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
     -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
