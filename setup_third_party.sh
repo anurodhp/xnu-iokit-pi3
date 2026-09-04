@@ -374,7 +374,7 @@ libunwind|https://github.com/apple-oss-distributions/libunwind.git|libunwind-200
 Libinfo|https://github.com/apple-oss-distributions/Libinfo.git|Libinfo-542.40.3|
 removefile|https://github.com/apple-oss-distributions/removefile.git|removefile-49.40.3|
 copyfile|https://github.com/apple-oss-distributions/copyfile.git|copyfile-173.40.2|
-Csu|https://github.com/apple-oss-distributions/Csu.git|Csu-88|Csu.patch
+Csu|git@github.com:anurodhp/Csu.git|bcm2837-bringup||https://github.com/apple-oss-distributions/Csu.git
 bash|https://github.com/apple-oss-distributions/bash.git|bash-123.40.1|bash.patch
 shell_cmds|https://github.com/apple-oss-distributions/shell_cmds.git|shell_cmds-216.60.1|
 file_cmds|https://github.com/apple-oss-distributions/file_cmds.git|file_cmds-321.40.3|
