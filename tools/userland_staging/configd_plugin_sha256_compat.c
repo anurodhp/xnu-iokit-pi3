@@ -28,8 +28,9 @@
  * decision applied to SHA-256: a plain, standard, textbook FIPS 180-4
  * implementation, not corecrypto's actual object code, but a real,
  * correct SHA-256 -- verified against the standard's own published
- * test vectors below (this file's own smoketest, not build-script-run,
- * see the #ifdef SHA256_COMPAT_SELFTEST block).
+ * test vectors via the real, checked-in #ifdef SHA256_COMPAT_SELFTEST
+ * block at the bottom of this file (not build-script-run; compile with
+ * -DSHA256_COMPAT_SELFTEST and run directly to reproduce).
  *
  * CC_SHA256_CTX's real field layout (count[2]/hash[8]/wbuf[16], see
  * third_party/CommonCrypto/include/CommonDigest.h) is treated as fully
@@ -225,3 +226,82 @@ CC_SHA256_Final(unsigned char *md, CC_SHA256_CTX *c)
 
 	return 1;
 }
+
+#ifdef SHA256_COMPAT_SELFTEST
+/* Real FIPS 180-4 published test vectors (empty string, "abc", the
+ * standard's own two-block message, and the 1,000,000-'a' extended
+ * vector), plus a byte-at-a-time streaming run of "abc" to exercise
+ * CC_SHA256_Update()'s partial-block bookkeeping. Reproduce with:
+ *   clang -DSHA256_COMPAT_SELFTEST -o /tmp/sha256_selftest \
+ *       configd_plugin_sha256_compat.c && /tmp/sha256_selftest
+ * All five must print PASS. Verified 2026-09-04 against these exact
+ * expected digests before this block was checked in. */
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+static int
+check(const char *label, const unsigned char *md, const char *expected_hex)
+{
+	char got[65];
+	int i;
+	for (i = 0; i < 32; i++) {
+		sprintf(got + i * 2, "%02x", md[i]);
+	}
+	got[64] = '\0';
+	int ok = strcmp(got, expected_hex) == 0;
+	printf("%-14s %s  got=%s\n", label, ok ? "PASS" : "FAIL", got);
+	return ok;
+}
+
+int
+main(void)
+{
+	unsigned char md[32];
+	CC_SHA256_CTX c;
+	int all_ok = 1;
+
+	CC_SHA256_Init(&c);
+	CC_SHA256_Update(&c, "", 0);
+	CC_SHA256_Final(md, &c);
+	all_ok &= check("empty", md,
+	    "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+
+	CC_SHA256_Init(&c);
+	CC_SHA256_Update(&c, "abc", 3);
+	CC_SHA256_Final(md, &c);
+	all_ok &= check("abc", md,
+	    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+
+	{
+		const char *msg2 =
+		    "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+		CC_SHA256_Init(&c);
+		CC_SHA256_Update(&c, msg2, (CC_LONG)strlen(msg2));
+		CC_SHA256_Final(md, &c);
+		all_ok &= check("two-block", md,
+		    "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1");
+	}
+
+	CC_SHA256_Init(&c);
+	CC_SHA256_Update(&c, "a", 1);
+	CC_SHA256_Update(&c, "b", 1);
+	CC_SHA256_Update(&c, "c", 1);
+	CC_SHA256_Final(md, &c);
+	all_ok &= check("abc-streamed", md,
+	    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+
+	{
+		char *big = malloc(1000000);
+		memset(big, 'a', 1000000);
+		CC_SHA256_Init(&c);
+		CC_SHA256_Update(&c, big, 1000000);
+		CC_SHA256_Final(md, &c);
+		free(big);
+		all_ok &= check("million-a", md,
+		    "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
+	}
+
+	return all_ok ? 0 : 1;
+}
+#endif /* SHA256_COMPAT_SELFTEST */
