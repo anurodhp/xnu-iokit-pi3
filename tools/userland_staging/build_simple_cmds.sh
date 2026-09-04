@@ -500,6 +500,65 @@ for dep in libcopyfile libremovefile; do
     fi
 done
 
+# DAR-204 (2026-09-04): sleep/tail's real MIG client stubs (clockUser.o/
+# mach_hostUser.o/taskUser.o, via $OUT/libmach_ipc.a -- see the sleep|tail
+# case below) each carry real Apple's own generated
+# `if (voucher_mach_msg_set != NULL) voucher_mach_msg_set(&InP->Head);`
+# guard before every mach_msg() send, so voucher_mach_msg_set is a real,
+# LIVE call site here (unlike DAR-203's dead writev() case) -- called on
+# every host_get_clock_service()/semaphore_create()/clock_get_time() a
+# sleep(1)/tail -f poll makes. It currently resolves to
+# mach_ipc_dead_stubs.o's local, honest `return FALSE` stand-in (this
+# project has no real Mach voucher subsystem -- see that file's own
+# header).
+#
+# Investigation (full detail in the DAR-204 Linear comment): the "real"
+# dylib alternative, libsystem_kernel.dylib's own voucher_mach_msg_set
+# (DAR-153's funcptr-indirection copy), is ALSO provably inert in this
+# project's current state -- DAR-14's audit confirmed libdispatch.dylib
+# here builds the EMPTY `_voucher_init(void) {}` variant, which never
+# calls `__libkernel_voucher_init()`, so libsystem_kernel.dylib's own
+# `_libkernel_voucher_functions` table never leaves its all-NULL default
+# and its voucher_mach_msg_set() always returns 0/FALSE too -- relinking
+# changes nothing observable, same "behaviorally unchanged" bar DAR-203
+# used for date's fix.
+#
+# Narrowed here (same `ld -r -exported_symbol` scoping trick build_
+# launchd.sh's own 2026-08-28 postmortem already established for this
+# EXACT object file, just inverted): keep mach_port_insert_right/
+# extract_right/unguard's existing local definitions exported/untouched
+# (a similar-shaped duplicate, but out of THIS ticket's scope -- DAR-196
+# owns that), hide only _voucher_mach_msg_set so it can no longer satisfy
+# the MIG stubs' reference locally, forcing it to bind externally.
+#
+# Safe here specifically, NOT a blind copy of launchd's own choice to
+# KEEP its local stub: launchd.macho AND launchctl.macho both link
+# libdispatch.dylib DIRECTLY (confirmed via `otool -L`) and real,
+# documented history (build_launchd.sh's own 2026-08-28 comment) shows
+# removing their local stub really did resolve externally to
+# libdispatch.dylib's OWN separate, considerably more complex voucher
+# implementation instead of libsystem_kernel.dylib's, causing a real
+# silent exit(1). sleep.macho/tail.macho's full transitive dylib closure
+# ($LINK_DYLIBS: libsystem_c/libsystem_pthread/libsystem_malloc/
+# libsystem_platform/libdyld/libcopyfile/libremovefile/libSystem.B, plus
+# every one of THEIR OWN dependencies, recursively) contains
+# libdispatch.dylib NOWHERE at all (confirmed via `otool -L` on all 8,
+# recursively, not assumed) -- libsystem_kernel.dylib is the only
+# possible resolution target for these two binaries.
+if [ ! -f "$OUT/mach_ipc_dead_stubs.o" ]; then
+    echo "error: $OUT/mach_ipc_dead_stubs.o not found -- run build_libmach_ipc.sh first" >&2
+    exit 1
+fi
+"$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld" -r -arch arm64 \
+    -exported_symbol _mach_port_insert_right \
+    -exported_symbol _mach_port_extract_right \
+    -exported_symbol _mach_port_unguard \
+    "$OUT/mach_ipc_dead_stubs.o" -o "$OUT/mach_ipc_dead_stubs_no_voucher.o"
+rm -f "$OUT/libmach_ipc_no_voucher_for_simple_cmds.a"
+cp "$OUT/libmach_ipc.a" "$OUT/libmach_ipc_no_voucher_for_simple_cmds.a"
+ar d "$OUT/libmach_ipc_no_voucher_for_simple_cmds.a" mach_ipc_dead_stubs.o
+ar r "$OUT/libmach_ipc_no_voucher_for_simple_cmds.a" "$OUT/mach_ipc_dead_stubs_no_voucher.o"
+
 # Real FreeBSD strstr.c, fetched fresh each run -- same reproducible
 # curl-at-build-time pattern build_libc_string.sh already established
 # for functions Apple's own checkout doesn't vendor open source for
@@ -2044,7 +2103,44 @@ for spec in "${CMD_LIST[@]}"; do
             # semaphore_create + clock_get_time + __semwait_signal Mach
             # IPC -- see build_mach_ipc.sh for the full real chain this
             # links (this project's first-ever mach_msg()-trap exercise).
-            extra_libs="$OUT/libmach_ipc.a"
+            #
+            # DAR-204 (2026-09-04): $OUT/libmach_ipc.a swapped for the
+            # narrowed $OUT/libmach_ipc_no_voucher_for_simple_cmds.a built
+            # above -- mach_port_insert_right/extract_right/unguard stay
+            # exactly as before (out of scope), voucher_mach_msg_set no
+            # longer resolves to mach_ipc_dead_stubs.o's local honest-FALSE
+            # stand-in.
+            #
+            # ORDER MATTERS, found the hard way: the narrowed archive is
+            # listed FIRST, libsystem_kernel.dylib SECOND -- NOT the
+            # reverse. clock_get_time/host_get_clock_service/
+            # semaphore_create are real, live, USING_VOUCHERS-gated MIG
+            # routines this project's own clockUser.o/mach_hostUser.o/
+            # taskUser.o provide (Phase 4.6 item 5's own QEMU-verified
+            # real Mach IPC exercise) -- libsystem_kernel.dylib ALSO now
+            # exports all three of those names for real (DAR-14's own MIG
+            # regen work). Listing the dylib first (tried initially) let
+            # ld64 claim ALL THREE from the dylib instead of this
+            # project's own local MIG stubs the instant it was encountered
+            # first on the link line -- a real, much bigger behavior
+            # change than DAR-204 asked for, caught via a before/after
+            # `nm`/`dyld_info -fixups` diff showing _clock_get_time flip
+            # from a local T symbol to an external bind. Listing the
+            # archive first preserves local resolution for all 3 exactly
+            # as before; only voucher_mach_msg_set (hidden, non-external,
+            # in the narrowed object) falls through past the archive to
+            # libsystem_kernel.dylib. Still listed directly here (ahead of
+            # $LINK_DYLIBS's libsystem_c.dylib, which only plain-loads --
+            # does not reexport -- libsystem_kernel.dylib), same real
+            # "ld64 records the bind against whichever dylib on the link
+            # line reaches the symbol first" DAR-217 hazard as date's own
+            # entry above; libsystem_kernel.dylib is confirmed the only
+            # dylib in these two binaries' full transitive closure that
+            # exports voucher_mach_msg_set at all (see this loop's own
+            # pre-build comment for why libdispatch.dylib -- the OTHER
+            # real owner, and the one launchd.macho/launchctl.macho must
+            # keep their own local stub to avoid -- is unreachable here).
+            extra_libs="$OUT/libmach_ipc_no_voucher_for_simple_cmds.a $OUT/system/libsystem_kernel.dylib"
             ;;
         md5)
             # Real md5.c's MDTimeTrial() (-t flag) calls getrusage(2)

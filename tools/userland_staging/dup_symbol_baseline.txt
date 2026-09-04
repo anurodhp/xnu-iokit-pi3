@@ -1060,7 +1060,6 @@ B sleep.macho _task_unregister_dyld_image_infos
 B sleep.macho _task_zone_info
 B sleep.macho _thread_create
 B sleep.macho _thread_create_running
-B sleep.macho _voucher_mach_msg_set
 B stat.macho ___commpage_gettimeofday
 B stat.macho ___gettimeofday
 B stat.macho __err
@@ -1216,7 +1215,6 @@ B tail.macho _task_unregister_dyld_image_infos
 B tail.macho _task_zone_info
 B tail.macho _thread_create
 B tail.macho _thread_create_running
-B tail.macho _voucher_mach_msg_set
 B tar.macho __err
 B tar.macho __warn
 B tar.macho _arc4random
