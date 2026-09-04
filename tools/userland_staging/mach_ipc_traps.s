@@ -64,3 +64,19 @@ _mach_msg_overwrite_trap:
     mov x16, #-32
     svc #0x80
     ret
+
+// task_for_pid: trap -45 (kernel_trap(task_for_pid,-45,3), osfmk/mach/
+// syscall_sw.h) -- added 2026-09-04 for DAR-143 (real `ps` CPU%/RSS/
+// VSZ/thread columns, via real adv_cmds/ps/tasks.c's get_task_info()).
+// Real 3-arg signature (target_tport, pid, *t) fits directly in x0-x2;
+// same trivial 3-instruction shape as every other trap in this file --
+// confirmed real and already wired into this exact kernel fork's trap
+// table (osfmk/kern/syscall_sw.c line 150: `MACH_TRAP(task_for_pid, 3,
+// 3, munge_www)`), so no kernel change needed, pure userland wiring.
+.text
+.align 2
+.globl _task_for_pid
+_task_for_pid:
+    mov x16, #-45
+    svc #0x80
+    ret

@@ -18,15 +18,27 @@
 # PID-1 work, so this sysctl path was expected to work without any kernel
 # change, and QEMU-testing below confirms it does).
 #
-# real tasks.c (get_task_info(): task_for_pid/task_info/task_threads/
-# thread_info, real mach_msg()-based MIG RPC) is DELIBERATELY NOT
-# compiled -- this project has never built real Mach IPC message passing
-# (same documented gap as libmalloc_vm_mig_stubs.c's _kernelrpc_mach_vm_*
-# stand-ins). ps_task_info_stub.c reproduces real tasks.c's own designed
-# failure-degradation path instead (see that file's header comment) --
-# PID/PPID/UID/TTY/STAT/COMMAND/ARGS all print real, correct data (sourced
-# from the real sysctl above); CPU%/RSS/VSZ/thread-state columns print
-# real, honest zeros rather than fabricated numbers.
+# DAR-143 (2026-09-04): real tasks.c (get_task_info(): task_for_pid/
+# task_info/task_threads/thread_info, real mach_msg()-based MIG RPC) IS
+# NOW compiled -- ps_task_info_stub.c's honest-zeros degradation path is
+# retired (git-removed, not just unused) now that real userland Mach IPC
+# for the task/thread subsystem exists (build_libmach_ipc.sh, extended
+# for this ticket: task_for_pid is a raw trap -45; task_info/task_threads
+# were already mig-regenerated+archived into libmach_ipc.a by that
+# script's original Phase 4.6 item 5 pass, just unused until now;
+# thread_info needed a new thread_act.defs mig regen, added by this
+# ticket). CPU%/RSS/VSZ/thread-state columns now come from real, live
+# kernel data via real Mach IPC -- see tasks.c's own real get_task_info()
+# body, completely unmodified. ps_mach_task_self_decl.h is the one real
+# compat shim tasks.c itself needs (see that file's own header comment:
+# the mach_task_self() MACRO, not the raw global this project's other
+# Mach-IPC code already uses, is shadowed by XNU's own osfmk/mach/mach.h
+# beating the SDK's user-facing copy under this script's -I ordering).
+#
+# Real privilege model (task_for_pid_posix_check(), bsd/vm/vm_unix.c,
+# unmodified): passes unconditionally for root, same-uid otherwise --
+# this project's userland runs single-user as root today, so every
+# process ps lists is queryable; no restriction actually bites here.
 #
 # ps_passwd_compat.c wires real getpwnam/getpwuid/user_from_uid/
 # group_from_gid to Phase 5's real tools/libinfo_custom/ flat-file
@@ -77,9 +89,23 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     exit 1
 fi
 
-for dep in libplatform.a libmalloc.a libpthread.a libclosure.a libc_gen.a libc_stdio.a libc_printf.a; do
+for dep in libplatform.a libmalloc.a libpthread.a libclosure.a libc_gen.a libc_stdio.a libc_printf.a libmach_ipc.a; do
     if [ ! -f "$OUT/$dep" ]; then
-        echo "error: $OUT/$dep not found -- run its build_*.sh first" >&2
+        echo "error: $OUT/$dep not found -- run its build_*.sh first (libmach_ipc.a needs build_libmach_ipc.sh, DAR-143)" >&2
+        exit 1
+    fi
+done
+# Shared raw mmap/munmap syscall stubs (build_simple_cmds.sh) --
+# libpthread.a's pthread_main_thread_bootstrap.o (real crt.c now calls
+# pthread_main_thread_bootstrap() unconditionally, DAR-153/164) needs a
+# real mmap()/munmap() for its thread-stack allocation; same real gap
+# build_getty.sh hit and fixed for DAR-165, never previously applied to
+# this script -- confirmed via a real link attempt, not guessed (ps.macho
+# didn't actually exist on disk before DAR-143: this script had never
+# successfully linked since DAR-153/164 landed).
+for dep in sys____mmap.o sys____munmap.o; do
+    if [ ! -f "$OUT/simple_obj/$dep" ]; then
+        echo "error: $OUT/simple_obj/$dep not found -- run build_simple_cmds.sh first (shared raw syscall stub)" >&2
         exit 1
     fi
 done
@@ -128,6 +154,7 @@ $LIBC/stdlib/FreeBSD/atoi.c
 $LIBC/stdlib/FreeBSD/strtoul.c
 $LIBC/sys/gettimeofday.c
 $LIBC/gen/get_compat.c
+simple_cmds_mmap_compat.c
 "
 # localtime.c/strftime.c deliberately NOT pulled from real Apple source
 # here -- see ps_time_compat.c's own header comment for why (real tzcode
@@ -136,7 +163,7 @@ $LIBC/gen/get_compat.c
 
 ok=0
 skip=0
-for spec in "$PS/ps.c:-Dmain=ps_cmd_real_main" "$PS/print.c:" "$PS/keyword.c:" "$PS/fmt.c:" "$PS/nlist.c:"; do
+for spec in "$PS/ps.c:-Dmain=ps_cmd_real_main" "$PS/print.c:" "$PS/keyword.c:" "$PS/fmt.c:" "$PS/nlist.c:" "$PS/tasks.c:-include ps_mach_task_self_decl.h"; do
     f="${spec%%:*}"
     extra="${spec#*:}"
     base=$(basename "$f" .c)
@@ -160,10 +187,9 @@ for f in $EXTRA_FILES; do
         echo "  skip: $base"
     fi
 done
-echo "ps (real Apple adv_cmds/ps): $ok compiled, $skip skipped (tasks.c deliberately not attempted -- real Mach IPC, see header comment)"
+echo "ps (real Apple adv_cmds/ps): $ok compiled, $skip skipped (tasks.c now real -- DAR-143, see header comment)"
 "$CLANG" $CFLAGS ps_main_wrapper.c -o "$OUT/ps_obj/ps_main_wrapper.o"
 
-"$CLANG" $CFLAGS ps_task_info_stub.c -o "$OUT/ps_obj/ps_task_info_stub.o"
 "$CLANG" $CFLAGS ps_passwd_compat.c -o "$OUT/ps_obj/ps_passwd_compat.o"
 "$CLANG" $CFLAGS ps_libproc_syscall.c -o "$OUT/ps_obj/ps_libproc_syscall.o"
 "$CLANG" $CFLAGS ps_extra_syscalls.c -o "$OUT/ps_obj/ps_extra_syscalls.o"
@@ -185,12 +211,16 @@ echo "ps (real Apple adv_cmds/ps): $ok compiled, $skip skipped (tasks.c delibera
     -o ps.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/ps_obj/*.o \
+    "$OUT/simple_obj/sys____mmap.o" "$OUT/simple_obj/sys____munmap.o" \
     "$OUT/libc_printf.a" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
     "$OUT/libpthread.a" \
     "$OUT/libclosure.a" \
+    "$OUT/libmach_ipc.a" \
     "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    -Wl,-alias,'_mmap$UNIX2003',_mmap \
+    -Wl,-alias,'_munmap$UNIX2003',_munmap \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
     -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \

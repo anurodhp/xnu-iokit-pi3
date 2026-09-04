@@ -97,6 +97,32 @@
 #     has no dyld/libSystem_initializer to call it exactly once
 #     automatically -- same "must be called explicitly" pattern as
 #     mach_init()/pthread_tsd_shim_bootstrap()).
+#
+# DAR-143 (2026-09-04) extended this script's original Phase 4.6 item 5
+# scope (clock/semaphore/nanosleep) to also cover the task/thread-info
+# MIG subsystem real `ps` needs for its CPU%/RSS/VSZ/thread columns
+# (replacing tools/userland_staging/ps_task_info_stub.c's honest-zeros
+# degradation path with real adv_cmds/ps/tasks.c). This is the natural
+# extension point rather than a new script: task.defs was ALREADY being
+# mig-regenerated + compiled + archived into libmach_ipc.a above for
+# task_info()/task_threads() (the other ~140 task.defs routines were
+# already dead weight per this file's own header above) -- it just had
+# no caller yet. The only 2 real, new pieces DAR-143 needed:
+#   - thread_act.defs mig regen (thread_info(), same "compile the full
+#     real file, most routines unused" tolerance as clock/mach_host/task)
+#   - task_for_pid(): a raw Mach TRAP (-45, kernel_trap(task_for_pid,-45,3)
+#     in osfmk/mach/syscall_sw.h), not a MIG routine -- confirmed real,
+#     unmodified, already wired into this exact kernel fork's trap table
+#     (osfmk/kern/syscall_sw.c line 150: `MACH_TRAP(task_for_pid, 3, 3,
+#     munge_www)`), so this is a pure userland wiring gap, not a kernel
+#     change. Real privilege check is xnu's stock task_for_pid_posix_check()
+#     (bsd/vm/vm_unix.c): passes unconditionally for root, which is this
+#     project's only real user today, so no restriction actually bites
+#     here -- confirmed by reading that function, not assumed.
+# task_info()/task_threads()/thread_info() all return real, live kernel
+# data for the calling process's own real process table entry -- no
+# fabrication, no kernel change, same "real, open Apple/XNU source not
+# yet built" character as every other routine in this file.
 set -e
 cd "$(dirname "$0")"
 
@@ -133,6 +159,7 @@ XNU_ABS="$(cd "$XNU" && pwd)"
 CLOCK_DEFS="$XNU_ABS/osfmk/mach/clock.defs"
 MACH_HOST_DEFS="$XNU_ABS/osfmk/mach/mach_host.defs"
 TASK_DEFS="$XNU_ABS/osfmk/mach/task.defs"
+THREAD_ACT_DEFS="$XNU_ABS/osfmk/mach/thread_act.defs"
 
 MIGOUT="$OUT/mach_ipc_mig"
 "$MIG" -arch arm64 \
@@ -147,7 +174,13 @@ MIGOUT="$OUT/mach_ipc_mig"
     -header "$MIGOUT/task.h" \
     -user "$MIGOUT/taskUser.c" -server "$MIGOUT/taskServer.c" -sheader "$MIGOUT/taskServer.h" \
     "$TASK_DEFS" >/dev/null
-echo "mig: regenerated clock.h/mach_host.h/task.h + *User.c from real xnu-7195 .defs"
+# thread_act.defs (DAR-143): same -I$XNU/osfmk requirement as mach_host/
+# task.defs (cross-directory #include resolution), confirmed by testing.
+"$MIG" -arch arm64 -I"$XNU_ABS/osfmk" \
+    -header "$MIGOUT/thread_act.h" \
+    -user "$MIGOUT/thread_actUser.c" -server "$MIGOUT/thread_actServer.c" -sheader "$MIGOUT/thread_actServer.h" \
+    "$THREAD_ACT_DEFS" >/dev/null
+echo "mig: regenerated clock.h/mach_host.h/task.h/thread_act.h + *User.c from real xnu-7195 .defs"
 
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
@@ -156,6 +189,7 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
 "$CLANG" $CFLAGS -I "$MIGOUT" "$MIGOUT/clockUser.c" -o "$OUT/mach_ipc_mig/clockUser.o"
 "$CLANG" $CFLAGS -I "$MIGOUT" "$MIGOUT/mach_hostUser.c" -o "$OUT/mach_ipc_mig/mach_hostUser.o"
 "$CLANG" $CFLAGS -I "$MIGOUT" "$MIGOUT/taskUser.c" -o "$OUT/mach_ipc_mig/taskUser.o"
+"$CLANG" $CFLAGS -I "$MIGOUT" "$MIGOUT/thread_actUser.c" -o "$OUT/mach_ipc_mig/thread_actUser.o"
 "$CLANG" $CFLAGS -include mach_msg_trap_decl.h mach_msg_real.c -o "$OUT/mach_msg_real.o"
 "$CLANG" $CFLAGS mach_ipc_dead_stubs.c -o "$OUT/mach_ipc_dead_stubs.o"
 "$CLANG" $CFLAGS -include mach_msg_trap_decl.h mach_host_self_real.c -o "$OUT/mach_host_self_real.o"
@@ -166,6 +200,7 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
 rm -f "$OUT/libmach_ipc.a"
 ar rcs "$OUT/libmach_ipc.a" \
     "$OUT/mach_ipc_mig/clockUser.o" "$OUT/mach_ipc_mig/mach_hostUser.o" "$OUT/mach_ipc_mig/taskUser.o" \
+    "$OUT/mach_ipc_mig/thread_actUser.o" \
     "$OUT/mach_msg_real.o" "$OUT/mach_ipc_dead_stubs.o" "$OUT/mach_host_self_real.o" \
     "$OUT/mig_strncpy.o" "$OUT/mach_ipc_traps.o" "$OUT/mach_ipc_clock_init.o"
 echo "wrote $OUT/libmach_ipc.a"
@@ -204,13 +239,40 @@ echo "wrote $OUT/libmach_ipc.a"
 # no real Mach voucher port for any of its 3 actual MIG routines to
 # attach one to -- same "not yet built" scope decision as
 # INET/INET6/networking, not a bug).
+#
+# "$OUT/pthread_tsd_shim_libc_bootstrap.o"/"$OUT/libpthread.a" below
+# (DAR-143, 2026-09-04): pre-existing gap found while re-running this
+# script for the first time since DAR-153/164's real crt.c changes
+# (commits 271450d/5697d90) made Csu/crt.c's process entry point call
+# `pthread_main_thread_bootstrap()` (weak_import) unconditionally before
+# __mod_init_func constructors run. Confirmed real, not caused by this
+# ticket's thread_act.defs/task_for_pid additions: ld64's static linker
+# does NOT leave an unresolved weak_import symbol alone the way dyld
+# would, so any `-static` Csu/crt.c consumer needs a real definition at
+# link time. Every other real static binary in this project already
+# carries libpthread.a for exactly this (see build_ps.sh/build_bash.sh/
+# build_getty.sh) -- this smoketest's own link line just predates that
+# requirement and had never been re-run since. Real fix, not a
+# workaround: same archives every other binary already links.
+# libc_gen.a + sys____mmap.o/sys____munmap.o (same DAR-143 finding):
+# pthread_main_thread_bootstrap.o's pthread_create() also needs real
+# `___isthreaded` (libc_gen.a's libc_gen_shims.o, a common/bss symbol --
+# confirmed via `nm`, not guessed) and real `mmap`/`munmap` for its
+# thread-stack allocation (same real gap build_getty.sh already fixed
+# for DAR-165 via sys____mmap.o/sys____munmap.o + the $UNIX2003 aliases
+# below).
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o mach_ipc_smoketest.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/mach_ipc_smoketest.o" "$OUT/mach_ipc_mig/nanosleep_pub_for_smoketest.o" \
+    "$OUT/simple_obj/sys____mmap.o" "$OUT/simple_obj/sys____munmap.o" \
     "$OUT/libmach_ipc.a" \
-    "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
+    "$OUT/libpthread.a" \
+    "$OUT/libclosure.a" "$OUT/libc_gen.a" "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
     "$OUT/libc_locale_for_stdio.a" "$OUT/libc_stdio.a" \
+    -Wl,-alias,'_mmap$UNIX2003',_mmap \
+    -Wl,-alias,'_munmap$UNIX2003',_munmap \
     -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
     -Wl,-alias,___kill,'_kill$UNIX2003' \
     -Wl,-alias,___kill,_kill \
