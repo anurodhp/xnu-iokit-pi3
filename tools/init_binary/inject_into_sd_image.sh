@@ -572,6 +572,25 @@ else
     echo "= tools/userland_staging/configd.macho not built -- run tools/userland_staging/build_configd.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/libc_build/libobjc.A.dylib ]; then
+    mkdir -p "$MNT/usr/lib" "$MNT/bin"
+    cp tools/userland_staging/libc_build/libobjc.A.dylib "$MNT/usr/lib/libobjc.A.dylib"
+    chmod 755 "$MNT/usr/lib/libobjc.A.dylib"
+    echo "+ wrote $(wc -c < tools/userland_staging/libc_build/libobjc.A.dylib) bytes to $MNT/usr/lib/libobjc.A.dylib"
+    echo "  (DAR-236 -- full real objc4 runtime, real Apple product name/path,"
+    echo "  tools/userland_staging/build_objc4.sh; not yet wired into"
+    echo "  configd.macho/IPMonitor.m/QoSMarking.m, that's DAR-170's job)"
+    if [ -f tools/userland_staging/objc4_smoketest.macho ]; then
+        cp tools/userland_staging/objc4_smoketest.macho "$MNT/bin/objc4_smoketest"
+        chmod 755 "$MNT/bin/objc4_smoketest"
+        echo "+ wrote $(wc -c < tools/userland_staging/objc4_smoketest.macho) bytes to $MNT/bin/objc4_smoketest"
+        echo "  (real minimal Objective-C smoketest -- one @interface/@implementation,"
+        echo "  real objc_msgSend dispatch, see tools/userland_staging/objc4_smoketest.m)"
+    fi
+else
+    echo "= tools/userland_staging/libc_build/libobjc.A.dylib not built -- run tools/userland_staging/build_objc4.sh first if wanted, skipping"
+fi
+
 if [ -f tools/userland_staging/libcxxabi_smoketest.macho ]; then
     mkdir -p "$MNT/bin"
     cp tools/userland_staging/libcxxabi_smoketest.macho "$MNT/bin/libcxxabi_smoketest"
