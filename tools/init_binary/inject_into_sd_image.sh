@@ -547,6 +547,31 @@ else
     echo "= tools/userland_staging/syslogd.macho not built -- run tools/userland_staging/build_syslogd.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/configd.macho ]; then
+    mkdir -p "$MNT/usr/libexec" "$MNT/Library/LaunchDaemons"
+    cp tools/userland_staging/configd.macho "$MNT/usr/libexec/configd"
+    chmod 755 "$MNT/usr/libexec/configd"
+    echo "+ wrote $(wc -c < tools/userland_staging/configd.macho) bytes to $MNT/usr/libexec/configd"
+    echo "  (DAR-170 Tier 1 step 3 -- real configd.tproj SCDynamicStore SERVER"
+    echo "  daemon, tools/userland_staging/build_configd.sh; real dynamic Mach-O,"
+    echo "  spawned by real launchd.macho via a LaunchDaemons plist, real Mach"
+    echo "  service com.apple.SystemConfiguration.configd. The six real"
+    echo "  builtin-linked plugin subsystems (IPMonitor/InterfaceNamer/"
+    echo "  KernelEventMonitor/LinkConfiguration/PreferencesMonitor/QoSMarking)"
+    echo "  are honest 'not yet ported' stand-ins this pass -- see"
+    echo "  configd_builtin_plugins_stub.c; real DHCP/IPConfiguration and real"
+    echo "  InterfaceNamer are the next real step, not done yet)"
+    cp "third_party/configd/configd.tproj/com.apple.configd.plist" \
+        "$MNT/Library/LaunchDaemons/com.apple.configd.plist"
+    chmod 644 "$MNT/Library/LaunchDaemons/com.apple.configd.plist"
+    echo "+ wrote com.apple.configd.plist to $MNT/Library/LaunchDaemons/"
+    echo "  (real, unmodified Apple plist -- MachServices/"
+    echo "  com.apple.SystemConfiguration.configd checkin, ProgramArguments"
+    echo "  /usr/libexec/configd, matches this script's real install path above)"
+else
+    echo "= tools/userland_staging/configd.macho not built -- run tools/userland_staging/build_configd.sh first if wanted, skipping"
+fi
+
 if [ -f tools/userland_staging/libcxxabi_smoketest.macho ]; then
     mkdir -p "$MNT/bin"
     cp tools/userland_staging/libcxxabi_smoketest.macho "$MNT/bin/libcxxabi_smoketest"
