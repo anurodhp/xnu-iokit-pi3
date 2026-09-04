@@ -965,6 +965,30 @@ if [ ! -f "$OUT/simple_obj/statfs64_compat.o" ]; then
     "$CLANG" $CFLAGS simple_cmds_statfs64_compat.c -o "$OUT/simple_obj/statfs64_compat.o"
 fi
 
+# Narrow statfs64_compat.o's `_statfs` (DAR-196, 2026-09-04): real,
+# genuine libcopyfile.dylib export -- confirmed via `xcrun dyld_info
+# -exports` it exports BOTH `_statfs` AND `_statfs$INODE64` directly
+# (build_copyfile_dylib.sh's own header confirms these are real,
+# genuine BSD raw-syscall wrappers local to libcopyfile's own archive,
+# exposed the same `-Wl,-alias` way this project's own link_aliases
+# below used to do it -- same shape, not a different implementation).
+# libcopyfile.dylib is reached from every command here transitively via
+# libSystem.B.dylib's real LC_REEXPORT_DYLIB of it, already on every
+# link line via $LINK_DYLIBS. `_getfsstat` stays local and public --
+# genuinely absent from every shipped dylib (confirmed via `xcrun
+# dyld_info -exports`), still this project's only real provider.
+# link_aliases' own `-Wl,-alias,_statfs,_statfs$INODE64` entry is
+# REMOVED alongside this (see below) -- no longer needed now that the
+# real dylib exports both names directly.
+STATFS64_OBJ="$OUT/simple_obj/statfs64_compat.o"
+if [ -f "$STATFS64_OBJ" ]; then
+    XCODE12_LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+    "$XCODE12_LD" -r -arch arm64 -keep_private_externs \
+        -unexported_symbol _statfs \
+        "$STATFS64_OBJ" -o "$STATFS64_OBJ.narrowed"
+    mv -f "$STATFS64_OBJ.narrowed" "$STATFS64_OBJ"
+fi
+
 # sys__kevent.o/sys__kqueue.o/sys__getgroups.o REMOVED from this list
 # 2026-09-02 (DAR-196): the header comment above this block ("every one
 # of these real syscalls is genuinely absent from [libsystem_kernel.dylib]")
@@ -995,25 +1019,33 @@ fi
 # `_getegid`/`_geteuid`/`_sigprocmask` for real. Same straight
 # same-code swap, not a behavior change; verified via `dup_symbol_audit.sh
 # --summary` (all 11 dropped out of the per-binary shadow list) and a
-# real QEMU boot. `_pread`/`_pwrite`/`_readlink`/`_symlink`/`_chflags`/
-# `_statfs` are DELIBERATELY NOT included in this pass -- their real
-# owners (libcopyfile.dylib/libremovefile.dylib) are reached only
-# transitively, via libSystem.B.dylib's LC_REEXPORT_DYLIB of those two,
-# not a direct $LINK_DYLIBS entry, and `_pread`/`_pwrite` are additionally
-# the alias BASE for link_aliases' `-Wl,-alias,_pread,_pread$UNIX2003`/
-# `-Wl,-alias,_pwrite,_pwrite$UNIX2003` below -- real, but needs its own
-# dedicated verification pass (bind_target_audit.sh + a real boot
-# exercising the exact commands that call these), not bundled into this
-# already-large batch. Left as this ticket's next real step.
+# real QEMU boot.
+#
+# sys__pread.o/sys__pwrite.o/sys__readlink.o/sys__symlink.o/
+# sys__chflags.o REMOVED from this list 2026-09-04 (DAR-196, second pass
+# same day): the previous pass deferred these because their real owners
+# (libcopyfile.dylib/libremovefile.dylib) are reached only transitively,
+# via libSystem.B.dylib's LC_REEXPORT_DYLIB, not a direct $LINK_DYLIBS
+# entry -- `bind_target_audit.sh` (written exactly for this reexport-vs-
+# plain-link distinction, see its own header) now confirms clean on a
+# real full run, and build_copyfile_dylib.sh's own header confirms
+# libcopyfile.dylib's `_pread`/`_pwrite`/`_statfs` (and, by the same
+# real-Apple-raw-syscall reasoning, `_readlink`/`_symlink`) are
+# themselves real, plain BSD raw-syscall wrappers local to that
+# archive -- same shape as this project's own sys__*.o objects, not a
+# different implementation. `_pread`/`_pwrite`'s local copies were also
+# link_aliases' alias BASE for `-Wl,-alias,_pread,_pread$UNIX2003`/
+# `-Wl,-alias,_pwrite,_pwrite$UNIX2003` -- REMOVED alongside these (see
+# below), since libcopyfile.dylib already exports `_pread$UNIX2003`/
+# `_pwrite$UNIX2003` directly, no local alias needed any more.
 LINK_COMMON="$OUT/simple_obj/sys____getlogin.o \
     $OUT/simple_obj/sys__utimes.o \
     $OUT/simple_obj/sys__fchmodat.o $OUT/simple_obj/sys__umask.o \
     $OUT/simple_obj/sys__execve.o \
-    $OUT/simple_obj/sys__link.o $OUT/simple_obj/sys__symlink.o \
+    $OUT/simple_obj/sys__link.o \
     $OUT/simple_obj/sys__getgid.o \
-    $OUT/simple_obj/sys__chflags.o $OUT/simple_obj/sys__chown.o $OUT/simple_obj/sys__mknod.o \
-    $OUT/simple_obj/sys__mkfifo.o $OUT/simple_obj/sys__futimes.o $OUT/simple_obj/sys__readlink.o \
-    $OUT/simple_obj/sys__pread.o $OUT/simple_obj/sys__pwrite.o \
+    $OUT/simple_obj/sys__chown.o $OUT/simple_obj/sys__mknod.o \
+    $OUT/simple_obj/sys__mkfifo.o $OUT/simple_obj/sys__futimes.o \
     $OUT/simple_obj/sys__pathconf.o $OUT/simple_obj/sys__faccessat.o \
     $OUT/simple_obj/sys__dup2.o $OUT/simple_obj/sys__getpriority.o \
     $OUT/simple_obj/sys__chroot.o $OUT/simple_obj/sys__setgroups.o $OUT/simple_obj/sys__setgid.o $OUT/simple_obj/sys__setuid.o \
@@ -1069,7 +1101,26 @@ LINK_COMMON="$OUT/simple_obj/sys____getlogin.o \
 # than a code bug in the reexport itself). Fix: list the real owning
 # dylib directly, same pattern every other consumer in this project
 # already uses for this exact reason.
-LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libsystem_platform.dylib $OUT/system/libdyld.dylib $OUT/system/libSystem.B.dylib"
+# libcopyfile.dylib/libremovefile.dylib ADDED 2026-09-04 (DAR-196, second
+# pass same day): same exact real install-name-vs-local-copy resolution
+# hazard as libsystem_platform.dylib just above, hit for real trying to
+# drop LINK_COMMON's local `_pread`/`_pwrite`/`_readlink`/`_symlink`/
+# `_chflags`/`_statfs` in favor of libcopyfile.dylib/libremovefile.dylib's
+# real exports (reached, in principle, transitively via libSystem.B
+# .dylib's own LC_REEXPORT_DYLIB of both): a real trial link of df (the
+# first command in CMD_LIST order that references `_statfs$INODE64`
+# without also already listing libcopyfile.dylib in its own per-command
+# extra_libs) failed with `_statfs$INODE64` undefined -- ld64 resolving
+# libSystem.B.dylib's reexport of `/usr/lib/system/libcopyfile.dylib`
+# against the HOST SDK's own real stub (which does not carry this
+# project-specific symbol) instead of this project's local
+# libc_build/system/ copy. Fix: list both real owning dylibs directly,
+# same pattern as libsystem_platform.dylib above. Harmless where a
+# handful of commands already list one or both again in their own
+# per-command extra_libs (chmod/chown/mv/cp/tar/ed/etc, for their own
+# unrelated needs like fchmod$UNIX2003/getattrlist) -- a dylib listed
+# twice on one link line is a real, ordinary no-op, not a conflict.
+LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libsystem_platform.dylib $OUT/system/libdyld.dylib $OUT/system/libcopyfile.dylib $OUT/system/libremovefile.dylib $OUT/system/libSystem.B.dylib"
 # libsystem_malloc.dylib: real per-command need for the private
 # ___pthread_setspecific/___pthread_getspecific/___pthread_once variants
 # (one leading underscore in C source) real libmalloc's own per-thread
@@ -1994,15 +2045,21 @@ for spec in "${CMD_LIST[@]}"; do
     # 60-entry universal LINK_ALIASES saga this replaced, so this does
     # not reproduce the real ld64-609 combined-complexity crash that
     # forced that mechanism to exist in the first place.
+    #
+    # _pread$UNIX2003/_pwrite$UNIX2003/_statfs$INODE64 aliases REMOVED
+    # 2026-09-04 (DAR-196, second pass): their bases (`_pread`/`_pwrite`/
+    # `_statfs`) are no longer locally defined here (see LINK_COMMON's
+    # own comment above) -- libcopyfile.dylib already exports all three
+    # `$UNIX2003`/`$INODE64` names directly, no local alias needed.
+    # `_getfsstat$INODE64` stays: `_getfsstat` is still genuinely local
+    # (statfs64_compat.o, narrowed to keep only `_statfs` hidden), and no
+    # shipped dylib exports either `_getfsstat` name.
     link_aliases="-Wl,-alias,__err,_err -Wl,-alias,__warn,_warn \
         -Wl,-alias,_lchown,_lchown\$UNIX2003 \
         -Wl,-alias,_setattrlist,_setattrlist\$UNIX2003 \
         -Wl,-alias,_waitpid,_waitpid\$UNIX2003 \
-        -Wl,-alias,_pread,_pread\$UNIX2003 \
-        -Wl,-alias,_pwrite,_pwrite\$UNIX2003 \
         -Wl,-alias,_confstr,_confstr\$UNIX2003 \
-        -Wl,-alias,_getfsstat,_getfsstat\$INODE64 \
-        -Wl,-alias,_statfs,_statfs\$INODE64"
+        -Wl,-alias,_getfsstat,_getfsstat\$INODE64"
     case "$extra_libs" in
         *libcopyfile.dylib*)
             link_aliases="$link_aliases -Wl,-alias,_fchmod,_fchmod\$UNIX2003 -Wl,-alias,_getattrlist,_getattrlist\$UNIX2003" ;;
