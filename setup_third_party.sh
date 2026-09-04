@@ -366,6 +366,7 @@ dyld|https://github.com/apple-oss-distributions/dyld.git|dyld-940|dyld.patch
 Libc|https://github.com/apple-oss-distributions/Libc.git|Libc-1439.40.11|Libc.patch
 libpthread|https://github.com/apple-oss-distributions/libpthread.git|libpthread-454.80.2|
 libplatform|https://github.com/apple-oss-distributions/libplatform.git|libplatform-254.80.2|
+Libsystem|https://github.com/apple-oss-distributions/Libsystem.git|Libsystem-1292.60.1|
 libdispatch|https://github.com/apple-oss-distributions/libdispatch.git|libdispatch-1271.40.12|libdispatch.patch
 libclosure|https://github.com/apple-oss-distributions/libclosure.git|libclosure-78|
 libmalloc|https://github.com/apple-oss-distributions/libmalloc.git|libmalloc-317.40.8|

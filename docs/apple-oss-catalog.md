@@ -355,11 +355,27 @@ scripting-language runtime as a goal in itself):
   project's `u-boot` already handles differently), `system_config`,
   `UserNotification`, `Libnotify` (real dependency is Mach IPC only per
   `docs/daemon-roadmap.md`'s own inventory — filed there, not here).
-- **`Libsystem`** — this is Apple's umbrella/glue project that just
-  aggregates the already-pinned `Libc`/`libpthread`/`libdispatch`/etc.
-  into one `.dylib`; not itself a separate source pull, and irrelevant
-  regardless since this project has no `dyld`/`.dylib` linking at all
-  (`docs/roadmap.md` Phase 6.5).
+- **`Libsystem`** — **NOW PINNED** (2026-09-04, `Libsystem-1292.60.1`,
+  exact `macos-112` manifest match, verified via `git describe`/
+  `git rev-list` against the manifest's real submodule commit
+  `6e8c085dc78e04189936840e9f666e889680099d`). This entry's own prior
+  text ("irrelevant, no dylib linking") was correct when written but is
+  now stale — real dyld/per-library `.dylib` linking has existed since
+  Phase 6.5 (2026-08-25), and this project's own duplicate-symbol dedup
+  work (the `DAR-*` per-dylib series, `tools/userland_staging/
+  dup_symbol_audit.sh`) needs a real, verifiable source for "which
+  sub-dylib owns which symbol" ownership questions rather than asserting
+  from general knowledge. Real finding from reading the pinned source:
+  Libsystem's own `requiredlibs` file confirms `system_m`/
+  `system_platform`/`compiler_rt` (among others) as separate,
+  independently-built sub-projects combined into one umbrella
+  `libSystem.B.dylib` — but Libsystem's own build (`xcodescripts/
+  linker_arguments.sh`) does NOT itself enforce a duplicate-export check;
+  it just gathers already-built dylibs. The real per-symbol ownership
+  authority is each sub-project's own source tree (e.g. `libplatform`,
+  already pinned as `libplatform-254.80.2`, for `memcpy`/`memset`), not
+  Libsystem itself — Libsystem is useful for confirming the umbrella's
+  real member list, not individual symbol assignments.
 
 ## Recommended next action
 
