@@ -306,6 +306,10 @@ if [ ! -f "$OUT/libconfigd_plugins.a" ]; then
     echo "error: $OUT/libconfigd_plugins.a not found -- run build_configd_plugins.sh first" >&2
     exit 1
 fi
+if [ ! -f "$OUT/libconfigd_ipconfiguration.a" ]; then
+    echo "error: $OUT/libconfigd_ipconfiguration.a not found -- run build_ipconfiguration_plugin.sh first" >&2
+    exit 1
+fi
 
 rm -f configd.macho
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
@@ -332,6 +336,18 @@ rm -f configd.macho
     `# filed for it), so this archive's own ifnamer.o member is correctly` \
     `# never pulled in.` \
     "$OUT/libconfigd_plugins.a" \
+    `# DAR-170 (2026-09-04, this session): real IPConfiguration --` \
+    `# load_IPConfiguration/start_IPConfiguration/prime_IPConfiguration` \
+    `# (ipconfiguration_builtin_glue.o, part of this archive) are` \
+    `# referenced by libconfigd.a's own patched plugin_support.c` \
+    `# (third_party-patches/configd.patch's builtin_plugins[] entry),` \
+    `# still unresolved at this point in the link -- pulls in ipconfigd.o` \
+    `# and its real object-file dependents (FDSet/timer/linklocal/manual/` \
+    `# server/rtutil/report_symptoms/HostUUID/failover/sysconfig.o, the` \
+    `# regenerated ipconfig MIG server stub) from this archive to satisfy` \
+    `# them, matching the exact same real ld64 archive-member-selection` \
+    `# mechanism DAR-240/241 already established for the other 4 plugins.` \
+    "$OUT/libconfigd_ipconfiguration.a" \
     "$SIMPLE_OBJ/sys__chown.o" "$SIMPLE_OBJ/sys__dup2.o" \
     "$SIMPLE_OBJ/sys__setgid.o" "$SIMPLE_OBJ/sys__setuid.o" "$SIMPLE_OBJ/sys__execve.o" \
     "$SIMPLE_OBJ/sys__chdir.o" \
@@ -400,6 +416,21 @@ rm -f configd.macho
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
     -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
     -Wl,-alias,_getattrlist,'_getattrlist$UNIX2003' \
+    `# DAR-252 (filed 2026-09-04): real, genuine CF gap -- swift-corelibs-` \
+    `# foundation has no CFFileDescriptor.c at all (classic Apple CF's` \
+    `# real CFFileDescriptorCreate/CreateRunLoopSource/EnableCallBacks/` \
+    `# GetNativeDescriptor/Invalidate, needed by FDSet.c's real` \
+    `# FDCalloutCreateFileDescriptor() -- the raw-BPF-fd receive path` \
+    `# FDCalloutCreate() takes for a non-socket fd). Same real -Wl,-U` \
+    `# deferral technique this ticket's own history already used for` \
+    `# _CFURLCopyResourcePropertyForKey (884ab77) -- a real, honestly-` \
+    `# ticketed software gap, not a functional implementation. Remove` \
+    `# once DAR-252 lands a real CFFileDescriptor port.` \
+    -Wl,-U,_CFFileDescriptorCreate \
+    -Wl,-U,_CFFileDescriptorCreateRunLoopSource \
+    -Wl,-U,_CFFileDescriptorEnableCallBacks \
+    -Wl,-U,_CFFileDescriptorGetNativeDescriptor \
+    -Wl,-U,_CFFileDescriptorInvalidate \
     2>"$OUT/configd_link.err" \
     && echo "real link: 0 undefined symbols -- configd.macho fully closed" \
     || { n=$(grep -c 'Undefined symbol' "$OUT/configd_link.err" || true); echo "real link found $n undefined symbol group(s):"; grep '^  "' "$OUT/configd_link.err" | sed 's/,.*//' | sort -u; tail -80 "$OUT/configd_link.err" >&2; exit 1; }

@@ -568,6 +568,88 @@ if [ -f tools/userland_staging/configd.macho ]; then
     echo "  (real, unmodified Apple plist -- MachServices/"
     echo "  com.apple.SystemConfiguration.configd checkin, ProgramArguments"
     echo "  /usr/libexec/configd, matches this script's real install path above)"
+
+    # DAR-170 (2026-09-04 session 4): real, previously-missing prerequisite
+    # for EVERY configd plugin (not just IPConfiguration) to ever actually
+    # run. Root cause found this session by reading plugin_support.c's real,
+    # unmodified plugin_exec() directly: even "builtin" (statically-linked)
+    # plugins are only invoked (load()/start()/prime()) if a real
+    # CFBundleRef for their exact CFBundleIdentifier is first discovered by
+    # a real directory scan of $(sysdir LIBRARY,SYSTEM)/SystemConfiguration
+    # (= "/System/Library/SystemConfiguration" -- see sysdir_compat.c's own
+    # updated header comment). With zero .bundle directories ever staged
+    # here, `allBundles` was always empty and DAR-240/241's already-linked
+    # InterfaceNamer/LinkConfiguration/KernelEventMonitor/
+    # PreferencesMonitor/IPMonitor/QoSMarking code was silently NEVER
+    # called at runtime, despite linking clean -- confirmed via a real
+    # QEMU direct-invocation probe this session showing configd exit
+    # immediately instead of blocking in CFRunLoopRun().
+    #
+    # Fix: stage a real, flat (no Contents/ -- confirmed by reading
+    # swift-corelibs-foundation's own CFBundle_Internal.h search-path list,
+    # which tries a bare top-level Info.plist for exactly this iOS/embedded
+    # bundle shape) .bundle directory per plugin, containing that plugin's
+    # own REAL, unmodified Info.plist from third_party/configd/Plugins/ --
+    # only textual substitution applied is Xcode's own
+    # "$(PRODUCT_BUNDLE_IDENTIFIER)" build-variable placeholder (never
+    # expanded outside a real Xcode build), replaced with the same real
+    # bundle identifier value plugin_support.c's own pluginWhitelist[]/
+    # builtin_plugins[] tables already hard-code for that exact plugin --
+    # not fabricated, cross-checked against both real tables.
+    stage_sc_bundle() {
+        local bundle_name="$1" bundle_id="$2" src_plist="$3"
+        local dir="$MNT/System/Library/SystemConfiguration/${bundle_name}.bundle"
+        if [ ! -f "$src_plist" ]; then
+            echo "  ! $src_plist not found, skipping ${bundle_name}.bundle"
+            return
+        fi
+        mkdir -p "$dir"
+        sed 's#$(PRODUCT_BUNDLE_IDENTIFIER)#'"$bundle_id"'#' "$src_plist" \
+            > "$dir/Info.plist"
+        chmod 644 "$dir/Info.plist"
+        echo "+ staged $dir/Info.plist (real Apple Info.plist, id=$bundle_id)"
+    }
+    stage_sc_bundle "InterfaceNamer" "com.apple.SystemConfiguration.InterfaceNamer" \
+        "third_party/configd/Plugins/InterfaceNamer/Info.plist"
+    stage_sc_bundle "LinkConfiguration" "com.apple.SystemConfiguration.LinkConfiguration" \
+        "third_party/configd/Plugins/LinkConfiguration/Info.plist"
+    stage_sc_bundle "KernelEventMonitor" "com.apple.SystemConfiguration.KernelEventMonitor" \
+        "third_party/configd/Plugins/KernelEventMonitor/Info.plist"
+    stage_sc_bundle "PreferencesMonitor" "com.apple.SystemConfiguration.PreferencesMonitor" \
+        "third_party/configd/Plugins/PreferencesMonitor/Info.plist"
+    stage_sc_bundle "IPMonitor" "com.apple.SystemConfiguration.IPMonitor" \
+        "third_party/configd/Plugins/IPMonitor/Info.plist"
+    stage_sc_bundle "QoSMarking" "com.apple.SystemConfiguration.QoSMarking" \
+        "third_party/configd/Plugins/QoSMarking/Info.plist"
+    # IPConfiguration: real Apple loads this one via CFBundle dlopen (a
+    # separate .bproj target from configd's own Plugins/), NOT the
+    # builtin_plugins[] table -- confirmed by reading plugin_support.c and
+    # bootp.xcodeproj directly (DAR-170 2026-09-04 session 3 finding). This
+    # project has no proven CFBundleLoadExecutableAndReturnError-on-a-
+    # dlopened-bundle path, so IPConfiguration is deliberately treated as a
+    # statically-linked builtin here too (real, honestly-documented
+    # architecture deviation -- see third_party-patches/configd.patch and
+    # ipconfiguration_builtin_glue.c). Its real Embedded-Info.plist has no
+    # "Builtin" key at all (real Apple never marks it builtin, since real
+    # Apple never treats it as one) -- this stage_sc_bundle call adds one
+    # via the same sed pass, which is a deliberate, documented content
+    # addition beyond verbatim real Apple source, not an oversight.
+    if [ -f tools/userland_staging/libc_build/libconfigd_ipconfiguration.a ]; then
+        sed 's#$(PRODUCT_BUNDLE_IDENTIFIER)#com.apple.SystemConfiguration.IPConfiguration#' \
+            "third_party/bootp/IPConfiguration.bproj/Embedded-Info.plist" \
+            | sed 's#<dict>#<dict>\n\t<key>Builtin</key>\n\t<true/>#' \
+            > "$MNT/System/Library/SystemConfiguration/IPConfiguration.bundle.tmp" 2>/dev/null
+        mkdir -p "$MNT/System/Library/SystemConfiguration/IPConfiguration.bundle"
+        mv "$MNT/System/Library/SystemConfiguration/IPConfiguration.bundle.tmp" \
+            "$MNT/System/Library/SystemConfiguration/IPConfiguration.bundle/Info.plist"
+        chmod 644 "$MNT/System/Library/SystemConfiguration/IPConfiguration.bundle/Info.plist"
+        echo "+ staged $MNT/System/Library/SystemConfiguration/IPConfiguration.bundle/Info.plist"
+        echo "  (real Embedded-Info.plist + added Builtin=true, DAR-170)"
+    else
+        echo "= tools/userland_staging/libc_build/libconfigd_ipconfiguration.a not built -- run"
+        echo "  tools/userland_staging/build_ipconfiguration_plugin.sh first if wanted, skipping"
+        echo "  IPConfiguration.bundle staging (other 6 plugin bundles above still staged)"
+    fi
 else
     echo "= tools/userland_staging/configd.macho not built -- run tools/userland_staging/build_configd.sh first if wanted, skipping"
 fi

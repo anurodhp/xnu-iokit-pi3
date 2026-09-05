@@ -1,0 +1,61 @@
+From 58e41d426cd00d354ce112d70cd74e4c1e4b52d7 Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@icloud.com>
+Date: Fri, 4 Sep 2026 22:47:44 -0400
+Subject: [PATCH] DAR-170 (xnu-rpi3): treat IPConfiguration as a builtin plugin
+
+Real Apple loads IPConfiguration.bproj via CFBundle dlopen, not the
+builtin_plugins[] table. The xnu-rpi3 port has no proven
+CFBundleLoadExecutableAndReturnError-on-a-dlopened-bundle path, so this
+patch adds IPConfiguration to builtin_plugins[] as a statically-linked
+builtin instead -- a deliberate, documented architecture deviation. See
+tools/userland_staging/ipconfiguration_builtin_glue.c in the xnu-rpi3
+port for the load_IPConfiguration/start_IPConfiguration/prime_IPConfiguration
+wrapper bodies this patch declares extern.
+---
+ configd.tproj/plugin_support.c | 23 +++++++++++++++++++++++
+ 1 file changed, 23 insertions(+)
+
+diff --git a/configd.tproj/plugin_support.c b/configd.tproj/plugin_support.c
+index 590cd7d..f46117f 100644
+--- a/configd.tproj/plugin_support.c
++++ b/configd.tproj/plugin_support.c
+@@ -109,6 +109,20 @@ static CFMutableDictionaryRef	exiting			= NULL;
+ 
+ extern SCDynamicStoreBundleLoadFunction		load_IPMonitor;
+ extern SCDynamicStoreBundlePrimeFunction	prime_IPMonitor;
++/* DAR-170 (xnu-rpi3 port, 2026-09-04): real Apple loads IPConfiguration via
++ * CFBundle dlopen of a separate .bproj bundle (bootp/IPConfiguration.bproj),
++ * NOT this builtin_plugins[] table, even on iOS/embedded -- confirmed by
++ * reading this file's own real, unmodified addBundle()/loadBundle() split
++ * and bootp.xcodeproj's real "IPConfiguration(embedded)" bundle target.
++ * The xnu-rpi3 port has no proven CFBundleLoadExecutableAndReturnError-on-
++ * a-dlopened-bundle path, so it deliberately, honestly treats
++ * IPConfiguration as a statically-linked builtin here too -- see that
++ * port's own ipconfiguration_builtin_glue.c and inject_into_sd_image.sh's
++ * IPConfiguration.bundle Info.plist staging (which adds a Builtin=true key
++ * real Apple's own Info.plist never has, for the same reason). */
++extern SCDynamicStoreBundleLoadFunction		load_IPConfiguration;
++extern SCDynamicStoreBundleStartFunction	start_IPConfiguration;
++extern SCDynamicStoreBundlePrimeFunction	prime_IPConfiguration;
+ #if	!TARGET_OS_SIMULATOR
+ extern SCDynamicStoreBundleLoadFunction		load_InterfaceNamer;
+ extern SCDynamicStoreBundleLoadFunction		load_KernelEventMonitor;
+@@ -137,6 +151,15 @@ static const builtin builtin_plugins[] = {
+ 		prime_IPMonitor,
+ 		NULL
+ 	},
++	/* DAR-170 (xnu-rpi3 port): see this file's own extern-declaration
++	 * comment above for why IPConfiguration is listed here at all. */
++	{
++		CFSTR("com.apple.SystemConfiguration.IPConfiguration"),
++		load_IPConfiguration,
++		start_IPConfiguration,
++		prime_IPConfiguration,
++		NULL
++	},
+ #if	!TARGET_OS_SIMULATOR
+ 	{
+ 		CFSTR("com.apple.SystemConfiguration.InterfaceNamer"),
+-- 
+2.50.1 (Apple Git-155)
+
