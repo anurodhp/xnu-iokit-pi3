@@ -27,50 +27,69 @@
  * eventmon.c. build_configd.sh now links libconfigd_plugins.a as a
  * whole archive AFTER this file's own object -- real ld64 archive
  * member selection means only the members that resolve a symbol still
- * outstanding at that point in the link get pulled in. Since this file
- * no longer defines load_IPMonitor/prime_IPMonitor/
- * load_KernelEventMonitor/prime_KernelEventMonitor (removed below),
- * those four symbols are still outstanding when the linker reaches
- * libconfigd_plugins.a, so it pulls in the REAL ip_plugin.o/eventmon.o
- * (and their real object-file dependents) to satisfy them. This file's
- * load_InterfaceNamer/load_LinkConfiguration/load_PreferencesMonitor/
- * prime_PreferencesMonitor stand-ins are DELIBERATELY KEPT and still
- * resolve those symbols FIRST (earlier on the link line, via this file's
- * own inclusion in libconfigd.a) -- so libconfigd_plugins.a's own
- * ifnamer.o/linkconfig.o/prefsmon.o members are never pulled in at all,
- * correctly leaving wall #1 (below) exactly as unaddressed as before:
+ * outstanding at that point in the link get pulled in.
  *
- * 1. InterfaceNamer/ifnamer.c, LinkConfiguration/linkconfig.c, and
- *    PreferencesMonitor/prefsmon.c all genuinely, heavily call into the
- *    real SCNetworkConfiguration/SCNetworkInterface/SCNetworkSet/
- *    SCBridgeInterface/SCVLANInterface family (SCNetworkSetCopyCurrent,
- *    SCNetworkServiceCopyAll, _SCNetworkInterfaceCreateCapabilities,
- *    _SCNetworkConfigurationUpgrade, etc) -- confirmed at real link time,
- *    not assumed. This is the SAME family build_libsystemconfiguration_
- *    client.sh's own session already deliberately excluded from
- *    libSystemConfiguration.dylib as "a separate, substantial real
- *    subsystem" -- a real port of its own (SCNetworkConfiguration.c,
- *    SCNetworkService.c, SCNetworkSet.c, SCBridgeInterface.c,
- *    SCVLANInterface.c, likely thousands of real lines), not a narrow fix.
- *    Critically, `_SCNetworkConfigurationUpgrade` is called DIRECTLY from
- *    `load_PreferencesMonitor()` itself -- i.e. at plugin load time, not a
- *    rare/optional code path -- so deferring these symbols via `-Wl,-U`
- *    would move the crash from a caught link-time error to a real
- *    dyld-load-time abort of configd.tproj ITSELF the moment
- *    PreferencesMonitor's real load() runs, which would take the whole
- *    SCDynamicStore server down. This is DAR-240's own, separate,
- *    precisely-scoped ticket -- not touched here.
+ * DAR-240 (same day, follow-up) closed wall #1 for real, mostly: the real
+ * SCNetworkConfiguration/SCNetworkSet/SCNetworkService/SCBridgeInterface/
+ * SCVLANInterface family InterfaceNamer/ifnamer.c, LinkConfiguration/
+ * linkconfig.c, and PreferencesMonitor/prefsmon.c all genuinely, heavily
+ * call into (SCNetworkSetCopyCurrent, SCNetworkServiceCopyAll,
+ * _SCNetworkInterfaceCreateCapabilities, _SCNetworkConfigurationUpgrade,
+ * etc -- DAR-240's own ~25 real symbols, confirmed at real link time) is
+ * now really ported into libSystemConfiguration.dylib
+ * (build_libsystemconfiguration_client.sh: SCNetworkConfigurationInternal.c,
+ * SCNetworkConfigurationPrivate.c, SCNetworkInterface.c, SCNetworkService.c,
+ * SCNetworkSet.c, SCNetworkProtocol.c, SCPreferencesPathKey.c,
+ * BridgeConfiguration.c, VLANConfiguration.c, LinkConfiguration.c -- real
+ * file-name corrections vs. DAR-240's own filed guesses, see that
+ * script's own FILES-list comment). `_SCNetworkConfigurationUpgrade`'s
+ * real, load-time-critical call from `load_PreferencesMonitor()` itself
+ * is now backed by a real, defined symbol
+ * (SCNetworkConfigurationPrivate.c), not deferred.
  *
- * QoSMarking (load_QoSMarking, no prime) remains a stand-in too --
- * that's real ObjC, DAR-239's scope, untouched.
+ * This file's load_LinkConfiguration/load_PreferencesMonitor/
+ * prime_PreferencesMonitor stand-ins are REMOVED (below) for the same
+ * real reason DAR-241 already removed load_IPMonitor/prime_IPMonitor/
+ * load_KernelEventMonitor/prime_KernelEventMonitor: with no earlier-on-
+ * the-link-line definition to shadow them, ld64's real archive-member
+ * selection now pulls in libconfigd_plugins.a's own real
+ * linkconfig.o/prefsmon.o (and their real object-file dependents) to
+ * satisfy those 3 symbols instead -- confirmed via a real, clean,
+ * 0-undefined-symbol link.
  *
- * The four remaining stand-ins below are real, minimal, functionally-
- * honest implementations of the exact real SCDynamicStoreBundleLoadFunction/
- * SCDynamicStoreBundlePrimeFunction signatures (SCDPlugin.h) plugin_support.c
- * itself calls -- they log via the real SC_log()/os_log path that they were
- * never really loaded, then return, so configd.tproj's own real bundle
- * bookkeeping (allBundles, exiting, etc) stays exactly as correct as it
- * would be for a real bundle whose load() function does nothing yet.
+ * load_InterfaceNamer stays a stand-in: DAR-240's real fix unblocked
+ * ifnamer.o's own SCNetworkConfiguration-family symbols, but real linking
+ * then surfaced a SEPARATE, genuinely distinct real wall -- ifnamer.c
+ * also calls the real, high-level IOKitLib.h API (IOServiceGetMatchingService,
+ * IORegistryEntryCreateCFProperty, IONotificationPortCreate, etc, ~28
+ * symbols) plus a real lockdown.h/haveLockdown() notification family (5
+ * symbols) neither of which any of DAR-240's other two plugins reference
+ * at all (confirmed: the real link's own undefined-symbol report cited
+ * ifnamer.o as the sole referencing object for every one of these). Real,
+ * already-known, pre-existing wall: this project's own
+ * build_iokituser.sh has documented since its own first pass that
+ * IOKitLib.c itself (the real userland IOKitLib.framework implementation
+ * these symbols come from) hard-depends on CoreFoundation/libdispatch/
+ * libxpc and could not be built at that time; CF/dispatch/xpc dylibs do
+ * exist now (this project's later work), but a real, timeboxed retest
+ * this session found IOKitLib.c still does NOT compile clean even with
+ * them available (hit a real missing-header gap + a real macro-expansion
+ * syntax error in dispatch/source_private.h within the first two
+ * iterations) -- a real, still-substantial, multi-gap port, not a quick
+ * follow-on fix, and NOT part of DAR-240's own SCNetworkConfiguration-
+ * family scope. Filed separately (see DAR-240's own Linear comment for
+ * the exact new ticket ID) rather than guessed at or worked around here.
+ *
+ * QoSMarking (load_QoSMarking, no prime) remains a stand-in -- that's
+ * real ObjC, DAR-239's scope, untouched.
+ *
+ * The two remaining stand-ins below are real, minimal, functionally-
+ * honest implementations of the exact real SCDynamicStoreBundleLoadFunction
+ * signature (SCDPlugin.h) plugin_support.c itself calls -- they log via
+ * the real SC_log()/os_log path that they were never really loaded, then
+ * return, so configd.tproj's own real bundle bookkeeping (allBundles,
+ * exiting, etc) stays exactly as correct as it would be for a real
+ * bundle whose load() function does nothing yet.
  */
 #include <CoreFoundation/CoreFoundation.h>
 #include <SystemConfiguration/SCDPlugin.h>
@@ -82,16 +101,8 @@
 	{ \
 		(void)bundle; \
 		(void)bundleVerbose; \
-		SC_log(LOG_NOTICE, "[" #name "] real plugin not yet ported (DAR-170/DAR-239/DAR-240 -- builtin stand-in)"); \
+		SC_log(LOG_NOTICE, "[" #name "] real plugin not yet ported (DAR-239/DAR-240 -- builtin stand-in)"); \
 	}
 
-NOT_YET_PORTED(InterfaceNamer)
-NOT_YET_PORTED(LinkConfiguration)
-NOT_YET_PORTED(PreferencesMonitor)
 NOT_YET_PORTED(QoSMarking)
-
-void
-prime_PreferencesMonitor(void)
-{
-	SC_log(LOG_NOTICE, "[PreferencesMonitor] real plugin not yet ported (DAR-170/DAR-240 -- builtin stand-in)");
-}
+NOT_YET_PORTED(InterfaceNamer)

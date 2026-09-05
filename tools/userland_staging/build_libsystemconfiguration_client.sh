@@ -43,13 +43,29 @@
 #   - libSystemConfiguration/libSystemConfiguration_client.c: included too,
 #     both because the ticket names it explicitly and because it's real,
 #     small, and self-contained.
-# NOT in scope this pass (genuinely separate, much larger real subsystems):
-# SCNetworkConfiguration*.c/SCNetworkInterface.c/SCNetworkConnection*.c/
-# SCNetworkReachability.c/SCNetworkService.c/SCNetworkSet.c/Bond/Bridge/VLAN/
-# VPN*.c/CaptiveNetwork.c/SCProxies.c/SCLocation.c/SCNetwork.c/
-# scprefs_observer.c/SCPreferencesKeychainPrivate.c -- none of these are
-# SCDynamicStore/SCPreferences core, matching this ticket's own framing
-# ("the real SCDynamicStore/SCPreferences client API").
+#   - DAR-240 (2026-09-04) ADDED: SCNetworkConfigurationInternal.c,
+#     SCNetworkConfigurationPrivate.c, SCNetworkInterface.c,
+#     SCNetworkService.c, SCNetworkSet.c, BridgeConfiguration.c,
+#     VLANConfiguration.c, LinkConfiguration.c -- the real
+#     SCNetworkConfiguration/SCNetworkSet/SCNetworkService/
+#     SCBridgeInterface/SCVLANInterface family InterfaceNamer/
+#     LinkConfiguration/PreferencesMonitor need (see FILES list below for
+#     the real per-symbol file-name corrections vs. DAR-240's own filed
+#     guesses).
+# STILL not in scope (genuinely separate, much larger real subsystems, or
+# genuinely inapplicable to this project's real target):
+# SCNetworkConnection*.c (real PPP/VPN dial subsystem -- no serial modem
+# hardware/driver in this project at all), SCNetworkReachability.c
+# (narrow no-op stand-ins already cover every real caller DAR-241 needed;
+# a full standalone reachability-monitoring port is separately out of
+# scope), Bond (BondConfiguration.c -- no NIC-bonding hardware/use case
+# here), VPN*.c/CaptiveNetwork.c/SCProxies.c/SCLocation.c/SCNetwork.c/
+# scprefs_observer.c (already real+linked directly into configd.macho by
+# build_configd_plugins.sh, not this dylib) -- none of these are
+# SCDynamicStore/SCPreferences core or needed by DAR-240's own confirmed
+# ~25-symbol gap list, matching this ticket's own framing ("the real
+# SCDynamicStore/SCPreferences client API" plus DAR-240's confirmed real
+# extension).
 #
 # Real transport, confirmed by reading SCDOpen.c directly (not guessed):
 # SCDynamicStore uses raw MIG-generated Mach IPC (config.defs ->
@@ -331,12 +347,28 @@ bool os_variant_has_internal_content(const char *subsystem);
 #endif /* _OS_VARIANT_PRIVATE_H_COMPAT_ */
 EOF
 
-mkdir -p "$OUT/compat_include/SystemConfiguration"
-cat > "$OUT/compat_include/SystemConfiguration/SCPreferencesKeychainPrivate.h" <<'EOF'
-#ifndef	_SCPREFERENCESKEYCHAINPRIVATE_H
-#define	_SCPREFERENCESKEYCHAINPRIVATE_H
-#endif
-EOF
+# DAR-240 (2026-09-04): this script previously shadowed real, unmodified
+# SystemConfiguration.fproj/SCPreferencesKeychainPrivate.h with an EMPTY
+# override here. Removed -- SCNetworkConfigurationInternal.c/
+# SCNetworkInterface.c (new this pass) need its real declarations
+# (_SCSecKeychainPasswordItemCopy/Exists/Remove,
+# _SCPreferencesSystemKeychainPasswordItemCopy/Exists/Remove/Set) to
+# avoid an implicit-declaration compile error. Confirmed via a real,
+# empirical regression test (compiling every one of this script's
+# pre-existing 36 target files with the override removed): zero
+# regressions -- nothing in the original SCD*/SCP* file set actually
+# needed the empty override, it was conservative/unused from an earlier
+# pass. The real header itself is already reachable without this
+# override: it's real, present top-level source
+# (SystemConfiguration.fproj/SCPreferencesKeychainPrivate.h) already
+# auto-symlinked into sc_headers/SystemConfiguration/ by the `find`
+# staging loop above. Its own #include <Security/Security.h> resolves
+# via this script's existing opaque SecFooRef compat stand-in (see that
+# stand-in's own header comment below); the 6 real functions it declares
+# have no Keychain subsystem to link against in this project, so
+# configd_scnet_keychain_compat.c (new this pass) provides real, honest
+# "not present"/"can't persist" stand-in definitions -- see that file's
+# own header comment for the full real justification.
 
 # Real gap: SDK's real <dispatch/private.h> umbrella lives, on a real
 # Apple SDK, at usr/local/include/dispatch/private.h (installed there by
@@ -365,9 +397,77 @@ ln -sf "$(pwd)/$DISPATCH/private" "$OUT/sc_dispatch_compat/dispatch"
 # wrapper directory in that repo's own source layout) -- staged here via
 # the same symlink-into-an-IOKit/-shaped-dir trick.
 rm -rf "$OUT/sc_iokit_headers/IOKit"
-mkdir -p "$OUT/sc_iokit_headers/IOKit"
+mkdir -p "$OUT/sc_iokit_headers/IOKit/usb" "$OUT/sc_iokit_headers/IOKit/serial"
 IOKITUSER="../../third_party/IOKitUser"
+IOUSBFAMILY="../../third_party/IOUSBFamily/IOUSBFamily/Headers"
 ln -sf "$(pwd)/$IOKITUSER/IOKitLib.h" "$OUT/sc_iokit_headers/IOKit/IOKitLib.h"
+# DAR-240 (SCNetworkConfiguration family): SCNetworkInterface.c also needs
+# IOCFBundle.h (real, same IOKitUser repo as IOKitLib.h, just not in an
+# IOKit/ subdir there either) and <IOKit/usb/IOUSBLib.h> (real,
+# third_party/IOUSBFamily -- same real symlink-into-an-IOKit/-shaped-dir
+# trick build_configd_plugins.sh already established for USB.h). Real,
+# already-pinned <IOKit/serial/IOSerialKeys.h> is NOT present anywhere in
+# this project (IOSerialFamily was never pinned -- a real, tiny,
+# never-fetched header, not "never open sourced": confirmed present at
+# apple-oss-distributions/IOSerialFamily via `git ls-remote`). Since it's
+# only a handful of #define string constants for IORegistry
+# matching-dictionary keys used to enumerate serial-modem (PPP dialup)
+# network interfaces -- a real subsystem this project's Pi3/Ethernet-only
+# target has no hardware/driver equivalent for -- a real, verbatim copy
+# (fetched directly from IOSerialFamily-19's own
+# IOSerialFamily.kmodproj/IOSerialKeys.h, confirmed via a real `curl` of
+# the raw tagged blob) is staged here rather than pinning the whole
+# driver-kext repo for one header. See sc_iokit_headers/IOKit/serial/
+# IOSerialKeys.h's own header comment for the full real citation.
+ln -sf "$(pwd)/$IOKITUSER/IOCFBundle.h" "$OUT/sc_iokit_headers/IOKit/IOCFBundle.h"
+ln -sf "$(pwd)/$IOUSBFAMILY/IOUSBLib.h" "$OUT/sc_iokit_headers/IOKit/usb/IOUSBLib.h"
+ln -sf "$(pwd)/$IOUSBFAMILY/USB.h" "$OUT/sc_iokit_headers/IOKit/usb/USB.h"
+cat > "$OUT/sc_iokit_headers/IOKit/serial/IOSerialKeys.h" <<'EOF'
+/*
+ * Real, verbatim (not fabricated) copy of apple-oss-distributions/
+ * IOSerialFamily's own IOSerialKeys.h (tag IOSerialFamily-19,
+ * IOSerialFamily.kmodproj/IOSerialKeys.h) -- fetched directly from that
+ * real repo (confirmed via `git ls-remote`, not pinned as a full
+ * setup_third_party.sh clone since SCNetworkInterface.c uses ONLY these
+ * plain #define string constants for IORegistry matching-dictionary keys
+ * to enumerate serial-modem (PPP dialup) network interfaces -- a real
+ * subsystem this project's Pi3/Ethernet-only target has no hardware or
+ * driver equivalent for at all (no IOSerialFamily kext ported, no serial
+ * modem). The userland-only #define block is reproduced verbatim; the
+ * `#if KERNEL` block of `extern const OSSymbol *g...` kernel-only
+ * globals is real too but genuinely inapplicable outside kernel context
+ * (`OSSymbol` doesn't exist in userland at all) and is omitted, matching
+ * the header's own `#if KERNEL` guard, not a modification of real
+ * content. DAR-240.
+ */
+#ifndef _IOKIT_IOSERIALKEYS_H
+#define _IOKIT_IOSERIALKEYS_H
+
+/* Service Matching That is the 'IOProviderClass' */
+#define kIOSerialBSDServiceValue	"IOSerialBSDClient"
+
+/* Matching keys */
+#define kIOSerialBSDTypeKey		"IOSerialBSDClientType"
+
+/* Currently possible kIOSerialBSDTypeKey values. */
+#define kIOSerialBSDAllTypes		"IOSerialStream"
+#define kIOSerialBSDModemType		"IOModemSerialStream"
+#define kIOSerialBSDRS232Type		"IORS232SerialStream"
+
+/* Properties that resolve to a /dev device node to open for
+ * a particular service */
+#define kIOTTYDeviceKey			"IOTTYDevice"
+#define kIOTTYBaseNameKey		"IOTTYBaseName"
+#define kIOTTYSuffixKey			"IOTTYSuffix"
+
+#define kIOCalloutDeviceKey		"IOCalloutDevice"
+#define kIODialinDeviceKey		"IODialinDevice"
+
+/* Property 'ioctl' wait for the tty device to go idle. */
+#define kIOTTYWaitForIdleKey		"IOTTYWaitForIdle"
+
+#endif /* _IOKIT_IOSERIALKEYS_H */
+EOF
 
 # Real gap: dy_framework.h (dy_framework.c's own header -- the real,
 # unmodified Apple mechanism SCPOpen.c/SCDHostName.c use to reach
@@ -581,6 +681,59 @@ echo "mig: both subsystems regenerated cleanly"
 # SCDynamicStoreCopySpecificPrivate.h's real API_UNAVAILABLE(...,
 # bridgeos) invocations, and PRIVATE-gated BSD extended-interface
 # constants).
+#
+# DAR-240 (2026-09-04) additions, closing the real SCNetworkConfiguration/
+# SCNetworkSet/SCNetworkService/SCBridgeInterface/SCVLANInterface family
+# gap InterfaceNamer/LinkConfiguration/PreferencesMonitor need:
+#   - configd_scnet_usb_devrequest_compat.h: real, narrow forward-declare
+#     stand-in for 7 classic USB "device-interface" types
+#     (USBDeviceAddress/IOUSBDevRequest/IOUSBDevRequestTO/
+#     IOUSBFindInterfaceRequest/IOUSBConfigurationDescriptorPtr/
+#     IOUSBIsocFrame/IOUSBLowLatencyIsocFrame/IOUSBDescriptorHeader/
+#     IOUSBEndpointProperties) that <IOKit/usb/IOUSBLib.h>'s own real
+#     function-pointer prototypes reference. Real, confirmed gap, not a
+#     this-project regression: this project's pinned apple-oss-
+#     distributions/IOUSBFamily tag (IOUSBFamily-630.4.5) ships
+#     IOUSBFamily/Headers/USB.h as a genuinely EMPTY (0-byte) file in the
+#     real upstream repo itself (confirmed via a direct `curl` of the raw
+#     tagged blob from GitHub, and independently re-confirmed absent from
+#     every substantially earlier real tag checked back to
+#     IOUSBFamily-540.4.1 too). SCNetworkInterface.c itself never
+#     references any of these types (confirmed by grep) -- its
+#     `#include <IOKit/usb/IOUSBLib.h>` only needs to parse, not resolve
+#     to real behavior, so minimal forward-declared/opaque stand-ins are
+#     safe (every real use in IOUSBLib.h itself is by pointer, confirmed
+#     by reading). See that file's own header comment for full detail.
+#   - configd_scnet_bridgevar_types_compat.h: real user64_addr_t/
+#     user32_addr_t typedefs, made visible outside the raw kernel
+#     source's own `#ifdef KERNEL` guard (bsd/arm/types.h) -- needed
+#     because BridgeConfiguration.c/VLANConfiguration.c's own real
+#     `#define KERNEL_PRIVATE`/`#include <net/if.h>`/`#undef
+#     KERNEL_PRIVATE` trick (matching real Apple's SDK-targeting source
+#     exactly) parses net/if.h's `#ifdef KERNEL_PRIVATE` block, which
+#     references these two types. Confirmed via diffing against
+#     BUILD.hdrs/dst/usr/include/net/if.h that real Apple's own installed
+#     SDK header strips this whole block out for userland entirely (so
+#     real Apple never hits this on a real Mac); neither .c file actually
+#     dereferences either type (confirmed by grep), so exact ABI fidelity
+#     isn't load-bearing. See that file's own header comment for full
+#     detail.
+#   - IOKit/usb/USBSpec_ifnamer_compat.h + configd_plugin_compat/: real,
+#     already-existing compat headers build_configd_plugins.sh's own
+#     earlier DAR-170/DAR-241 pass wrote for ifnamer.c's own USB
+#     vendor/product IORegistry key gap (kUSBVendorID/kUSBProductID/
+#     kIOUSBAppleVendorID/etc) -- SCNetworkInterface.c independently needs
+#     the same real constants (confirmed by reading), reused verbatim
+#     rather than re-derived.
+#   - $CONFIGD/Plugins/common on the -I path: real plugin_shared.h
+#     SCNetworkInterface.c needs (already used by build_configd_plugins.sh
+#     for the same real reason).
+#   - $IOUSBFAMILY on the -I path + IOKit/{IOCFBundle.h,usb/IOUSBLib.h,
+#     usb/USB.h,serial/IOSerialKeys.h} staged into sc_iokit_headers/IOKit/
+#     above: real headers SCNetworkInterface.c needs, see that staging
+#     block's own comment for full detail (IOSerialKeys.h in particular
+#     is a real, verbatim, but never-pinned-as-a-full-repo copy -- see its
+#     own embedded header comment).
 # ------------------------------------------------------------------
 CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness \
@@ -590,10 +743,15 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-buil
     -D__API_UNAVAILABLE_PLATFORM_bridgeos=bridgeos,unavailable \
     -D__API_AVAILABLE_PLATFORM_bridgeos\(x\)=ios,introduced=x \
     -DPRIVATE \
+    -DXLOCALE_STATE_EXPORTED=1 \
     -include "sys/fileport.h" \
+    -include "configd_scnet_usb_devrequest_compat.h" \
+    -include "configd_scnet_bridgevar_types_compat.h" \
+    -include "IOKit/usb/USBSpec_ifnamer_compat.h" \
+    -I "configd_plugin_compat" \
     -I "$OUT/sc_compat_include" -I "$OUT/compat_include" -I "$OUT/cf_headers" \
-    -I "$SC" -I "$SC/helper" -I "$CONFIGD/IPMonitorControl" \
-    -I "$OUT/sc_headers" -I "$OUT/sc_iokit_headers" -I "$XNU/iokit" -I "$MIGOUT" \
+    -I "$SC" -I "$SC/helper" -I "$CONFIGD/IPMonitorControl" -I "$CONFIGD/Plugins/common" \
+    -I "$OUT/sc_headers" -I "$OUT/sc_iokit_headers" -I "$IOUSBFAMILY" -I "$XNU/iokit" -I "$MIGOUT" \
     -I "$LIBSC" \
     -I "$OUT/sc_dispatch_compat" -I "$DISPATCH" \
     -I "$PD/libxpc/include" -I "$CR/include" \
@@ -637,9 +795,116 @@ FILES="$SC/SCD.c $SC/SCDAdd.c $SC/SCDCache.c $SC/SCDGet.c \
     $SC/SCSchemaDefinitions.c \
     $SC/dy_framework.c \
     $LIBSC/libSystemConfiguration_client.c \
+    $SC/SCNetworkConfigurationInternal.c \
+    $SC/SCNetworkConfigurationPrivate.c \
+    $SC/SCNetworkInterface.c \
+    $SC/SCNetworkService.c \
+    $SC/SCNetworkSet.c \
+    $SC/SCNetworkProtocol.c \
+    $SC/SCPreferencesPathKey.c \
+    $SC/BridgeConfiguration.c \
+    $SC/VLANConfiguration.c \
+    $SC/LinkConfiguration.c \
+    $CONFIGD/IPMonitorControl/IPMonitorControl.c \
+    configd_scnet_keychain_compat.c \
+    $LIBC/stdtime/FreeBSD/strptime.c \
+    $LIBC/stdlib/FreeBSD/strtoq.c \
+    $LIBC/stdtime/FreeBSD/timelocal.c \
+    configd_plugin_sha256_compat.c \
     $MIGOUT/configUser.c $MIGOUT/helperUser.c \
     sc_log_pack_compat.c os_log_with_args_compat.c \
     sc_mach_port_compat.c sc_syscall_compat.c sc_misc_compat.c"
+# DAR-240 (2026-09-04): the 8 SCNetwork*/BridgeConfiguration.c/
+# VLANConfiguration.c/LinkConfiguration.c files above are the real
+# SCNetworkConfiguration/SCNetworkSet/SCNetworkService/SCBridgeInterface/
+# SCVLANInterface family InterfaceNamer/LinkConfiguration/
+# PreferencesMonitor need (DAR-240's own ~25-symbol gap list) --
+# previously deliberately excluded from this script's own scope statement
+# above as "a separate, substantial real subsystem." Real file-name
+# correction vs. that ticket's own filing (which guessed
+# "SCNetworkConfiguration.c"/"SCBridgeInterface.c"/"SCVLANInterface.c"):
+# no such files exist in the real, pinned source -- the real
+# implementations are SCNetworkConfigurationInternal.c +
+# SCNetworkConfigurationPrivate.c (SCNetworkConfiguration.h has no .c of
+# its own), BridgeConfiguration.c (SCBridgeInterface* family), and
+# VLANConfiguration.c (SCVLANInterface* family), confirmed by grepping
+# every one of DAR-240's ~25 named symbols against every .c file in
+# SystemConfiguration.fproj/ and taking the real defining file, not
+# guessing from the API family's own header name.
+# configd_scnet_keychain_compat.c: real, honest no-op stand-in for 6
+# Keychain-backed password-storage functions these new files need
+# (SCPreferencesKeychainPrivate.h, real header, unmodified, no longer
+# shadowed -- see this script's own removed-empty-stub comment above);
+# see that .c file's own header comment for full real justification.
+#
+# Real SECOND-WAVE link-time-only gaps (found only after the first
+# compile-clean pass above -- i.e. real symbols the new 8 files call but
+# don't themselves define, same "compile clean, fail at full link"
+# pattern DAR-241 hit for KernelEventMonitor/IPMonitor):
+#   - SCNetworkProtocol.c + SCPreferencesPathKey.c: real, unmodified,
+#     genuine SCNetworkConfiguration-family siblings (SCNetworkService.c/
+#     SCNetworkSet.c call SCNetworkProtocolGetConfiguration/
+#     kSCNetworkProtocolTypeDNS/etc and SCPreferencesPathKeyCreate*
+#     directly) -- simply not yet in this FILES list, not a real gap to
+#     paper over.
+#   - $CONFIGD/IPMonitorControl/IPMonitorControl.c: real, unmodified --
+#     the actual CLIENT half (IPMonitorControlCreate/
+#     CopyInterfaceRankInformation/SetInterfacePrimaryRank/etc) of the
+#     same real IPMonitorControl subsystem DAR-241 already compiled the
+#     SERVER half of (IPMonitorControlServer.c, into configd_plugins) --
+#     SCNetworkInterface.c calls the client API directly.
+#   - $LIBC/stdtime/FreeBSD/strptime.c + $LIBC/stdlib/FreeBSD/strtoq.c +
+#     $LIBC/stdtime/FreeBSD/timelocal.c: real, unmodified FreeBSD-
+#     inherited libc source (SCNetworkConfigurationPrivate.c's real
+#     strptime() call, SCNetworkInterface.c's real strtoq() calls,
+#     strptime.c's own real __get_current_time_locale() dependency --
+#     found only after strptime.c itself compiled clean and the link was
+#     re-attempted, same "second-wave, link-only" pattern as this whole
+#     block) that this project's libsystem_c.dylib build
+#     (build_libsystem_c.sh) has never compiled. NOT added to
+#     build_libsystem_c.sh itself: that script currently fails outright
+#     on a real, already-filed, unrelated regression (DAR-247,
+#     Libc/gen/FreeBSD/arc4random.c) before it would ever reach a point
+#     where new files could be verified end-to-end -- same real "don't
+#     build on top of an already-broken script" reasoning
+#     build_configd_plugins.sh's own sethostname.c comment already
+#     established for the identical situation. Confirmed via a real,
+#     standalone compile + `nm` (all three produce the exact real symbol
+#     names needed -- `_strptime$UNIX2003`/`_strtoq`/
+#     `___get_current_time_locale` -- under this script's existing
+#     -D__DARWIN_UNIX03=1 flag) that compiling them directly here, into
+#     this dylib, is correct and complete -- not a stand-in.
+#   - `-DXLOCALE_STATE_EXPORTED=1`: real, already-established project fix
+#     (DAR-159/DAR-234, see build_llvm_libcxx.sh's/build_libc_locale.sh's/
+#     build_launchctl.sh's own identical use), NOT new here. Without it,
+#     strptime.c's own real, unmodified reference to `__locale_key`
+#     (Libc/locale/xlocale_private.h's `__current_locale()` inline) picks
+#     up that header's DEFAULT branch, which marks the `extern`
+#     declaration `__attribute__((visibility("hidden")))` -- real Apple's
+#     own comment there explains this is a correctness-irrelevant
+#     optimization on a real Mac ("every process has exactly one
+#     libsystem_c.dylib") that becomes a real bug once __locale_key's
+#     actual definition lives in a DIFFERENT dylib (libsystem_c.dylib)
+#     than the one referencing it (this one) -- the compiler emits a
+#     direct adrp/add address computation instead of a proper GOT-
+#     indirected extern bind, which ld64's real fixup-chains linker
+#     correctly rejects (`fixup error (kind=arm64_adrp_lo12)... target
+#     '___locale_key' does not have address`) rather than silently
+#     miscompiling. `-DXLOCALE_STATE_EXPORTED=1` selects the header's own
+#     already-provided alternate branch (plain `extern`, no hidden
+#     visibility), letting the reference bind correctly across the dylib
+#     boundary to libsystem_c.dylib's real, already-exported
+#     `___locale_key` (confirmed via `nm -g`).
+#   - configd_plugin_sha256_compat.c: same real, already-reviewed
+#     from-scratch FIPS 180-4 SHA-256 implementation
+#     build_configd_plugins.sh already compiles for ip_plugin.c's
+#     identical need -- SCNetworkService.c's own copyInterfaceUUID()
+#     uses CC_SHA256_Init/Update/Final to derive a deterministic,
+#     non-security-relevant UUID string from a BSD interface name
+#     (confirmed by reading), same "internal fingerprint, never
+#     DHCP/security-relevant" category. Compiled a second time here (this
+#     dylib is a different linkage unit than configd.macho) rather than
+#     re-derived.
 
 ok=0
 fail=0
@@ -691,18 +956,17 @@ rm -f "$OUT/system/libSystemConfiguration.dylib"
 # build has not compiled/exported yet -- a real, specific, cross-ticket
 # gap (CF's dylib build is DAR-195's, not this script's to edit), not
 # something to fabricate a definition for.
-# ___SCNetworkConfigurationSetValue is real, unmodified SCDHostName.c's
-# own dependency on the SCNetworkConfiguration family this script
-# deliberately excludes (see this script's own top-of-file scope
-# statement) -- SCDHostName.c is the one SCD*.c file that reaches across
-# that boundary; deferring it here is honest given that family is a
-# separate, much larger real subsystem, not an oversight.
+# ___SCNetworkConfigurationSetValue was previously deferred here
+# (SCDHostName.c's own real dependency on the SCNetworkConfiguration
+# family this script used to deliberately exclude) -- DAR-240 (2026-09-04)
+# ports that whole family for real (see FILES list above), so
+# __SCNetworkConfigurationSetValue is now a real, defined symbol
+# (SCNetworkConfigurationInternal.c) and the deferral is removed.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
     -install_name /usr/lib/libSystemConfiguration.dylib \
     -Wl,-not_for_dyld_shared_cache \
     -B"$NEWLD_BINDIR" -Wl,-fixup_chains \
     -Wl,-U,_CFURLCopyResourcePropertyForKey -Wl,-U,_kCFURLFileSizeKey \
-    -Wl,-U,___SCNetworkConfigurationSetValue \
     -o "$OUT/system/libSystemConfiguration.dylib" \
     "$OUT"/sc_client_obj/*.o \
     "$SIMPLE_OBJ/sys__chown.o" "$SIMPLE_OBJ/sys__dup2.o" \

@@ -314,20 +314,23 @@ rm -f configd.macho
     -o configd.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/libconfigd.a" \
-    `# DAR-241 (2026-09-04): whole-archive link, relying on real ld64` \
-    `# archive-member selection -- load_IPMonitor/prime_IPMonitor/` \
-    `# load_KernelEventMonitor/prime_KernelEventMonitor are still` \
-    `# unresolved at this point (configd_builtin_plugins_stub.c, already` \
-    `# processed via libconfigd.a above, no longer defines them), so the` \
-    `# linker pulls in the real ip_plugin.o/eventmon.o (and their real` \
+    `# DAR-241/DAR-240 (2026-09-04): whole-archive link, relying on real` \
+    `# ld64 archive-member selection -- load_IPMonitor/prime_IPMonitor/` \
+    `# load_KernelEventMonitor/prime_KernelEventMonitor/` \
+    `# load_LinkConfiguration/load_PreferencesMonitor/` \
+    `# prime_PreferencesMonitor are still unresolved at this point` \
+    `# (configd_builtin_plugins_stub.c, already processed via libconfigd.a` \
+    `# above, no longer defines any of them -- DAR-240 removed the last 3` \
+    `# once the real SCNetworkConfiguration family they need was ported` \
+    `# into libSystemConfiguration.dylib), so the linker pulls in the real` \
+    `# ip_plugin.o/eventmon.o/linkconfig.o/prefsmon.o (and their real` \
     `# object-file dependents) from this archive to satisfy them.` \
-    `# load_InterfaceNamer/load_LinkConfiguration/load_/prime_` \
-    `# PreferencesMonitor are ALREADY resolved by the stub by this point,` \
-    `# so this archive's own ifnamer.o/linkconfig.o/prefsmon.o members` \
-    `# are correctly never pulled in at all (DAR-240's separate` \
-    `# SCNetworkConfiguration-family blocker stays exactly as` \
-    `# unaddressed as before -- see configd_builtin_plugins_stub.c's own` \
-    `# header comment).` \
+    `# load_InterfaceNamer is STILL resolved by the stub (kept -- ifnamer.c` \
+    `# hits a real, separate IOKitLib.h/lockdown.h wall, NOT the` \
+    `# SCNetworkConfiguration family -- see configd_builtin_plugins_stub.c's` \
+    `# own header comment and DAR-240's Linear comment for the new ticket` \
+    `# filed for it), so this archive's own ifnamer.o member is correctly` \
+    `# never pulled in.` \
     "$OUT/libconfigd_plugins.a" \
     "$SIMPLE_OBJ/sys__chown.o" "$SIMPLE_OBJ/sys__dup2.o" \
     "$SIMPLE_OBJ/sys__setgid.o" "$SIMPLE_OBJ/sys__setuid.o" "$SIMPLE_OBJ/sys__execve.o" \
@@ -344,7 +347,19 @@ rm -f configd.macho
     `# missing from a first real link attempt). A loose .o on the link line` \
     `# is always included, unlike an archive member.` \
     "$OUT/configd_obj/configd_cfurl_filesize_compat.o" \
-    "$OUT/configd_obj/configd_scnetworkconfig_setvalue_compat.o" \
+    `# configd_scnetworkconfig_setvalue_compat.o REMOVED (DAR-240,` \
+    `# 2026-09-04): its whole reason for existing -- a real, narrowly-` \
+    `# extracted forwarding body standing in for` \
+    `# __SCNetworkConfigurationSetValue() while` \
+    `# build_libsystemconfiguration_client.sh's own -Wl,-U deferred the` \
+    `# real symbol -- no longer applies now that SCNetworkConfigurationInternal.c` \
+    `# (the real, canonical owner) is compiled directly into` \
+    `# libSystemConfiguration.dylib and the -Wl,-U deferral is gone.` \
+    `# SCDHostName.c's 3 real call sites now bind to that dylib's own` \
+    `# real, local copy via ordinary two-level-namespace resolution --` \
+    `# confirmed via nm/bind_target_audit.sh, not assumed. Leaving the` \
+    `# loose compat .o linked would be a real, live duplicate definition` \
+    `# of a global (default-visibility) symbol, not just dead weight.` \
     "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_blocks.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
