@@ -527,7 +527,8 @@ else
 fi
 
 if [ -f tools/userland_staging/syslogd.macho ]; then
-    mkdir -p "$MNT/usr/sbin" "$MNT/Library/LaunchDaemons"
+    mkdir -p "$MNT/usr/sbin" "$MNT/Library/LaunchDaemons" \
+        "$MNT/etc" "$MNT/usr/local/etc/asl"
     cp tools/userland_staging/syslogd.macho "$MNT/usr/sbin/syslogd"
     chmod 755 "$MNT/usr/sbin/syslogd"
     echo "+ wrote $(wc -c < tools/userland_staging/syslogd.macho) bytes to $MNT/usr/sbin/syslogd"
@@ -543,6 +544,19 @@ if [ -f tools/userland_staging/syslogd.macho ]; then
     echo "  (real, unmodified Apple plist, DAR-153; Sockets/BSDSystemLogger and"
     echo "  MachServices/com.apple.system.logger checkin both require the real"
     echo "  socketgroup_setup()/job_export()/launch_data_get_machport() fixes)"
+
+    # DAR-250: syslogd's real asl_out_module_init() loads its base rules
+    # from /etc/asl.conf and local modules from /usr/local/etc/asl/.  The
+    # image previously created /var/log but staged neither input, leaving
+    # a healthy daemon with no rule that writes system.log.  These are the
+    # matching upstream iOS-target base configuration and the upstream
+    # system.log module; the latter's own destination is /var/log/system.log.
+    cp "third_party/syslog/syslogd.tproj/asl.conf.ios" "$MNT/etc/asl.conf"
+    cp "third_party/syslog/syslogd.tproj/com.apple.system.log" \
+        "$MNT/usr/local/etc/asl/com.apple.system.log"
+    chmod 644 "$MNT/etc/asl.conf" "$MNT/usr/local/etc/asl/com.apple.system.log"
+    echo "+ wrote real syslogd ASL rules to /etc/asl.conf and /usr/local/etc/asl/"
+    echo "  (DAR-250; enables the real /var/log/system.log output rule)"
 else
     echo "= tools/userland_staging/syslogd.macho not built -- run tools/userland_staging/build_syslogd.sh first if wanted, skipping"
 fi
