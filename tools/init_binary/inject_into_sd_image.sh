@@ -544,6 +544,19 @@ if [ -f tools/userland_staging/syslogd.macho ]; then
     echo "  (real, unmodified Apple plist, DAR-153; Sockets/BSDSystemLogger and"
     echo "  MachServices/com.apple.system.logger checkin both require the real"
     echo "  socketgroup_setup()/job_export()/launch_data_get_machport() fixes)"
+    # DAR-257: separate from syslogd's own real _PATH_SYSLOGD_LOG
+    # (/var/log/syslogd.log, ASL-formatted, its own application output) --
+    # this captures raw stdio/stderr writes launchd's job would otherwise
+    # send to /dev/console, the same real gap notifyd's plist fix (DAR-167)
+    # and configd's (above) close, in case syslogd's own dispatch manager
+    # thread is the one that hits the DISPATCH_CLIENT_CRASH("Unexpected
+    # error from kevent") crash in a given non-deterministic boot.
+    /usr/libexec/PlistBuddy -c "Add :StandardOutPath string /var/log/syslogd_stderr.log" \
+        "$MNT/Library/LaunchDaemons/com.apple.syslogd.plist" 2>/dev/null
+    /usr/libexec/PlistBuddy -c "Add :StandardErrorPath string /var/log/syslogd_stderr.log" \
+        "$MNT/Library/LaunchDaemons/com.apple.syslogd.plist" 2>/dev/null
+    echo "+ added StandardOutPath/StandardErrorPath -> /var/log/syslogd_stderr.log"
+    echo "  to com.apple.syslogd.plist (DAR-257)"
 
     # DAR-250: syslogd's real asl_out_module_init() loads its base rules
     # from /etc/asl.conf and local modules from /usr/local/etc/asl/.  The
@@ -632,10 +645,25 @@ if [ -f tools/userland_staging/configd.macho ]; then
     cp "third_party/configd/configd.tproj/com.apple.configd.plist" \
         "$MNT/Library/LaunchDaemons/com.apple.configd.plist"
     chmod 644 "$MNT/Library/LaunchDaemons/com.apple.configd.plist"
+    # DAR-257: same real, standard launchd StandardOutPath/StandardErrorPath
+    # technique already applied to notifyd's plist above -- configd's own
+    # dispatch manager thread is suspected of hitting the same
+    # DISPATCH_CLIENT_CRASH("Unexpected error from kevent") crash class
+    # notifyd hits, non-deterministically depending on which daemon's
+    # manager thread gets there first in a given boot. Without this,
+    # configd's crash is invisible the same way notifyd's was before DAR-167
+    # added this for it.
+    mkdir -p "$MNT/var/log"
+    /usr/libexec/PlistBuddy -c "Add :StandardOutPath string /var/log/configd.log" \
+        "$MNT/Library/LaunchDaemons/com.apple.configd.plist" 2>/dev/null
+    /usr/libexec/PlistBuddy -c "Add :StandardErrorPath string /var/log/configd.log" \
+        "$MNT/Library/LaunchDaemons/com.apple.configd.plist" 2>/dev/null
     echo "+ wrote com.apple.configd.plist to $MNT/Library/LaunchDaemons/"
-    echo "  (real, unmodified Apple plist -- MachServices/"
-    echo "  com.apple.SystemConfiguration.configd checkin, ProgramArguments"
-    echo "  /usr/libexec/configd, matches this script's real install path above)"
+    echo "  (real, unmodified Apple plist plus this script's own added"
+    echo "  StandardOutPath/StandardErrorPath -> /var/log/configd.log (DAR-257) --"
+    echo "  MachServices/com.apple.SystemConfiguration.configd checkin,"
+    echo "  ProgramArguments /usr/libexec/configd, matches this script's real"
+    echo "  install path above)"
 
     # DAR-170 (2026-09-04 session 4): real, previously-missing prerequisite
     # for EVERY configd plugin (not just IPConfiguration) to ever actually
