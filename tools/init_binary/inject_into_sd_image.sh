@@ -562,7 +562,7 @@ else
 fi
 
 if [ -f tools/userland_staging/notifyd.macho ]; then
-    mkdir -p "$MNT/usr/sbin" "$MNT/Library/LaunchDaemons"
+    mkdir -p "$MNT/usr/sbin" "$MNT/Library/LaunchDaemons" "$MNT/var/log"
     cp tools/userland_staging/notifyd.macho "$MNT/usr/sbin/notifyd"
     chmod 755 "$MNT/usr/sbin/notifyd"
     echo "+ wrote $(wc -c < tools/userland_staging/notifyd.macho) bytes to $MNT/usr/sbin/notifyd"
@@ -574,14 +574,31 @@ if [ -f tools/userland_staging/notifyd.macho ]; then
     cp "third_party/PureDarwin/src/Libraries/XPC/notify/com.apple.notifyd.plist" \
         "$MNT/Library/LaunchDaemons/com.apple.notifyd.plist"
     chmod 644 "$MNT/Library/LaunchDaemons/com.apple.notifyd.plist"
+    # DAR-167 (2026-09-06): real launchd never wires an unconfigured job's
+    # stdio to /dev/console -- confirmed via a real QEMU boot showing
+    # zero output from notifyd's own dyld halt()/console() messages (which
+    # do real write(2, ..., fd=2) calls) even with -user_fault_debug
+    # active. StandardOutPath/StandardErrorPath are real, standard launchd
+    # plist keys (not a project invention); pointing them at a real file
+    # is the only way to see a launchd-spawned notifyd's own stderr at
+    # all, matching DAR-250's own real /var/log precedent for syslogd.
+    # This is a real, deliberate divergence from PureDarwin's own
+    # unmodified plist content (which is otherwise still installed as-is
+    # above) -- not a change to the vendored file itself.
+    /usr/libexec/PlistBuddy -c "Add :StandardOutPath string /var/log/notifyd.log" \
+        "$MNT/Library/LaunchDaemons/com.apple.notifyd.plist" 2>/dev/null
+    /usr/libexec/PlistBuddy -c "Add :StandardErrorPath string /var/log/notifyd.log" \
+        "$MNT/Library/LaunchDaemons/com.apple.notifyd.plist" 2>/dev/null
     echo "+ wrote com.apple.notifyd.plist to $MNT/Library/LaunchDaemons/"
-    echo "  (real, unmodified PureDarwin plist -- MachServices/"
-    echo "  com.apple.system.notification_center checkin, RunAtLoad, ProgramArguments"
-    echo "  /usr/sbin/notifyd, matches this script's real install path above;"
-    echo "  deliberately NOT real Apple's own fuller plist -- PublishesEvents/"
-    echo "  EnablePressuredExit/POSIXSpawnType are left out on purpose, since this"
-    echo "  project has no real XPC-events registrar for PublishesEvents to mean"
-    echo "  anything to launchd, see build_notifyd.sh's own header comment/DAR-268)"
+    echo "  (real, unmodified PureDarwin plist plus this script's own added"
+    echo "  StandardOutPath/StandardErrorPath -> /var/log/notifyd.log (DAR-167,"
+    echo "  see comment above) -- MachServices/com.apple.system.notification_center"
+    echo "  checkin, RunAtLoad, ProgramArguments /usr/sbin/notifyd, matches this"
+    echo "  script's real install path above; deliberately NOT real Apple's own"
+    echo "  fuller plist -- PublishesEvents/EnablePressuredExit/POSIXSpawnType are"
+    echo "  left out on purpose, since this project has no real XPC-events"
+    echo "  registrar for PublishesEvents to mean anything to launchd, see"
+    echo "  build_notifyd.sh's own header comment/DAR-268)"
 else
     echo "= tools/userland_staging/notifyd.macho not built -- run tools/userland_staging/build_notifyd.sh first if wanted, skipping"
 fi
