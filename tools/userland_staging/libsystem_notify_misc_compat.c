@@ -37,6 +37,17 @@
  * a fabrication); os_fault_with_payload() is diagnostic-only (crash-
  * report annotation, never expected to affect control flow) and is a
  * real no-op here.
+ *
+ * Real signature note (added when build_notifyd.sh started compiling
+ * this same file with a wider real-SDK header exposure than
+ * build_libsystem_notify.sh ever did, and hit a real "conflicting types
+ * for 'shm_open'" error against the SDK's own real <sys/mman.h>
+ * `int shm_open(const char *, int, ...)` declaration): shm_open()'s real
+ * POSIX/Darwin prototype is variadic (the mode argument only matters
+ * with O_CREAT), not a fixed 3-arg function -- fixed below to match the
+ * real declared prototype exactly, not just this file's own two real
+ * call sites (both of which do always pass exactly 3 arguments, so
+ * behavior here is unchanged).
  */
 struct real_timespec { long tv_sec; long tv_nsec; };
 
@@ -62,11 +73,16 @@ static inline long syscall3(long num, long a0, long a1, long a2) {
     return x0;
 }
 
-int shm_open(const char *name, int oflag, int mode) {
+int shm_open(const char *name, int oflag, ...) {
+    __builtin_va_list ap;
+    int mode = 0;
+    __builtin_va_start(ap, oflag);
+    mode = __builtin_va_arg(ap, int);
+    __builtin_va_end(ap);
     return (int)syscall3(266, (long)name, oflag, mode);
 }
 
-int creat(const char *path, int mode) {
+int creat(const char *path, mode_t mode) {
     return open(path, 0x0001 /* O_WRONLY */ | 0x0200 /* O_CREAT */ | 0x0400 /* O_TRUNC */, mode);
 }
 
@@ -77,15 +93,29 @@ int usleep(unsigned int useconds) {
     return nanosleep(&ts, 0);
 }
 
-void os_fault_with_payload(unsigned int reason_namespace, unsigned long long reason_code,
-    void *payload, unsigned int payload_size, const char *reason_string,
-    unsigned long long reason_flags) {
+/* Real signature: matches third_party/xnu-7195/BUILD.hdrs/dst/usr/local/
+ * include/os/reason_private.h's own real declaration exactly (uint32_t/
+ * uint64_t, not unsigned int/unsigned long long -- same underlying type
+ * on this LP64 arm64 target, but textually different types still
+ * produce a real "conflicting types" error against that real header,
+ * found compiling this file under build_notifyd.sh's wider real-SDK
+ * header exposure). __uint32_t/__uint64_t used here (not uint32_t/
+ * uint64_t) -- <stdint.h> is freestanding-safe (a real compiler-provided
+ * header, no SDK/sysroot dependency) so it's included here directly
+ * rather than relying on some other forced -include to have already
+ * exposed these names, unlike this file's other real Darwin-specific
+ * types (mode_t etc) which genuinely do depend on that. */
+#include <stdint.h>
+int os_fault_with_payload(uint32_t reason_namespace, uint64_t reason_code,
+    void *payload, uint32_t payload_size, const char *reason_string,
+    uint64_t reason_flags) {
 	(void)reason_namespace;
 	(void)reason_code;
 	(void)payload;
 	(void)payload_size;
 	(void)reason_string;
 	(void)reason_flags;
+	return 0;
 }
 
 int os_variant_has_internal_diagnostics(const char *subsystem) {

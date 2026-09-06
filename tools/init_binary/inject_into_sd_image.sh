@@ -561,6 +561,43 @@ else
     echo "= tools/userland_staging/syslogd.macho not built -- run tools/userland_staging/build_syslogd.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/notifyd.macho ]; then
+    mkdir -p "$MNT/usr/sbin" "$MNT/Library/LaunchDaemons"
+    cp tools/userland_staging/notifyd.macho "$MNT/usr/sbin/notifyd"
+    chmod 755 "$MNT/usr/sbin/notifyd"
+    echo "+ wrote $(wc -c < tools/userland_staging/notifyd.macho) bytes to $MNT/usr/sbin/notifyd"
+    echo "  (DAR-167 -- real notifyd.tproj source (apple-oss-distributions/Libnotify,"
+    echo "  via third_party/PureDarwin's own copy), tools/userland_staging/build_notifyd.sh --"
+    echo "  real dynamic Mach-O, checks in against real launchd's bootstrap namespace"
+    echo "  exactly like com.apple.SystemConfiguration.configd already does, see that"
+    echo "  script's own header comment for the full real citation)"
+    cp "third_party/PureDarwin/src/Libraries/XPC/notify/com.apple.notifyd.plist" \
+        "$MNT/Library/LaunchDaemons/com.apple.notifyd.plist"
+    chmod 644 "$MNT/Library/LaunchDaemons/com.apple.notifyd.plist"
+    echo "+ wrote com.apple.notifyd.plist to $MNT/Library/LaunchDaemons/"
+    echo "  (real, unmodified PureDarwin plist -- MachServices/"
+    echo "  com.apple.system.notification_center checkin, RunAtLoad, ProgramArguments"
+    echo "  /usr/sbin/notifyd, matches this script's real install path above;"
+    echo "  deliberately NOT real Apple's own fuller plist -- PublishesEvents/"
+    echo "  EnablePressuredExit/POSIXSpawnType are left out on purpose, since this"
+    echo "  project has no real XPC-events registrar for PublishesEvents to mean"
+    echo "  anything to launchd, see build_notifyd.sh's own header comment/DAR-268)"
+else
+    echo "= tools/userland_staging/notifyd.macho not built -- run tools/userland_staging/build_notifyd.sh first if wanted, skipping"
+fi
+
+if [ -f tools/userland_staging/libc_build/notifyd_roundtrip_smoketest.macho ]; then
+    mkdir -p "$MNT/usr/local/bin"
+    cp tools/userland_staging/libc_build/notifyd_roundtrip_smoketest.macho \
+        "$MNT/usr/local/bin/notifyd_roundtrip_smoketest"
+    chmod 755 "$MNT/usr/local/bin/notifyd_roundtrip_smoketest"
+    echo "+ wrote notifyd_roundtrip_smoketest to $MNT/usr/local/bin/"
+    echo "  (DAR-167 real end-to-end verification client, run by hand from the root"
+    echo "  shell post-boot -- tools/userland_staging/build_notifyd_smoketest.sh)"
+else
+    echo "= notifyd_roundtrip_smoketest.macho not built -- run tools/userland_staging/build_notifyd_smoketest.sh first if wanted, skipping"
+fi
+
 if [ -f tools/userland_staging/configd.macho ]; then
     mkdir -p "$MNT/usr/libexec" "$MNT/Library/LaunchDaemons"
     cp tools/userland_staging/configd.macho "$MNT/usr/libexec/configd"

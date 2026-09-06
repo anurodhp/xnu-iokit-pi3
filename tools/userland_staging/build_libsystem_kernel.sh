@@ -414,7 +414,25 @@ MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 # libdispatch.dylib's own real source calls flock(2) directly and this
 # project never had a real provider anywhere, confirmed via `nm -m
 # libdispatch.dylib` showing it dynamically-looked-up before this fix.
-for s in _geteuid _getegid _getuid _pread _pwrite _fileport_makefd _fileport_makeport \
+# _getgid added 2026-09-06 (DAR-167, notifyd boot investigation): plain
+# generated stub, syscall #47 (`AUE_GETGID`, no NO_SYSCALL_STUB marker in
+# syscalls.master), same shape as _geteuid/_getegid/_getuid already in
+# this loop -- a real oversight (those three were added, plain getgid()
+# never was) rather than a deliberate omission. libbsm.dylib's real
+# audit_token_to_pid()-adjacent path calls getgid() directly;
+# notifyd.macho links libbsm.dylib directly (build_notifyd.sh) and, since
+# this project's default -fixup_chains link mode resolves every bind
+# eagerly at process launch rather than lazily on first call, this
+# aborted every dynamic-executable launch that pulled in libbsm.dylib,
+# not just the callers that actually invoke it. Found the same way
+# DAR-153/DAR-163's own gaps above were: a real kernel-side
+# abort_with_payload() probe (bsd/kern/kern_exit.c's
+# abort_with_payload_internal(), gated behind -user_fault_debug) printing
+# dyld's own real "symbol not found in flat namespace '_getgid'" message,
+# since notifyd's stderr (where dyld's own halt()/console() output
+# really goes) is never wired to /dev/console for a launchd MachServices
+# job or a bare interactive-shell exec alike.
+for s in _geteuid _getegid _getuid _getgid _pread _pwrite _fileport_makefd _fileport_makeport \
     _socket _writev ___chmod ___connect_nocancel ___recvmsg_nocancel ___sendmsg_nocancel \
     ___select_nocancel ___sendto_nocancel ___recvfrom_nocancel _fpathconf _kevent _kqueue ___sigaction \
     _setegid _seteuid _getgroups _setitimer _flock; do
@@ -738,7 +756,7 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/cerror_stub.o" "$OUT/libsystem_kernel/os_alloc_once_table.o" \
     "$OUT/libsystem_kernel/mach_msg_real.o" "$OUT/libsystem_kernel/mach_ipc_traps.o" \
     "$OUT/libsystem_kernel/sys_geteuid.o" "$OUT/libsystem_kernel/sys_getegid.o" \
-    "$OUT/libsystem_kernel/sys_getuid.o" \
+    "$OUT/libsystem_kernel/sys_getuid.o" "$OUT/libsystem_kernel/sys_getgid.o" \
     "$OUT/libsystem_kernel/sys_pread.o" "$OUT/libsystem_kernel/sys_pwrite.o" \
     "$OUT/libsystem_kernel/sys_fileport_makefd.o" "$OUT/libsystem_kernel/sys_fileport_makeport.o" \
     "$OUT/libsystem_kernel/sys_socket.o" "$OUT/libsystem_kernel/sys_writev.o" \

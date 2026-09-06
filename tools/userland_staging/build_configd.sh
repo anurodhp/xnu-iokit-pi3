@@ -416,16 +416,56 @@ rm -f configd.macho
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
     -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
     -Wl,-alias,_getattrlist,'_getattrlist$UNIX2003' \
-    `# DAR-252 (filed 2026-09-04): real, genuine CF gap -- swift-corelibs-` \
-    `# foundation has no CFFileDescriptor.c at all (classic Apple CF's` \
-    `# real CFFileDescriptorCreate/CreateRunLoopSource/EnableCallBacks/` \
-    `# GetNativeDescriptor/Invalidate, needed by FDSet.c's real` \
-    `# FDCalloutCreateFileDescriptor() -- the raw-BPF-fd receive path` \
-    `# FDCalloutCreate() takes for a non-socket fd). Same real -Wl,-U` \
-    `# deferral technique this ticket's own history already used for` \
-    `# _CFURLCopyResourcePropertyForKey (884ab77) -- a real, honestly-` \
-    `# ticketed software gap, not a functional implementation. Remove` \
-    `# once DAR-252 lands a real CFFileDescriptor port.` \
+    `# DAR-252 (filed 2026-09-04, updated 2026-09-06): real, genuine CF gap` \
+    `# -- swift-corelibs-foundation has no CFFileDescriptor.c at all` \
+    `# (classic Apple CF's real CFFileDescriptorCreate/CreateRunLoopSource/` \
+    `# EnableCallBacks/GetNativeDescriptor/Invalidate, needed by FDSet.c's` \
+    `# real FDCalloutCreateFileDescriptor() -- the raw-BPF-fd receive path` \
+    `# FDCalloutCreate() takes for a non-socket fd) -- confirmed absent` \
+    `# from the real apple-oss-distributions/CF repo too (cloned CF-855.17` \
+    `# directly, zero hits for CFFileDescriptorGetTypeID/__CFFileDescriptor` \
+    `# anywhere in it), not just swift-corelibs-foundation's portable` \
+    `# subset. This is no longer a plain "-Wl,-U,_CFFileDescriptorCreate"` \
+    `# dynamic-lookup deferral (the shape _CFURLCopyResourcePropertyForKey` \
+    `# used in 884ab77) -- that technique assumed classic lazy dyld` \
+    `# binding, where a deferred symbol only resolves (and only can fail)` \
+    `# the first time FDCalloutCreate() actually takes the raw-fd branch.` \
+    `# This project's default -fixup_chains link mode resolves every bind` \
+    `# eagerly at process launch instead, so the plain deferral aborted` \
+    `# configd's dyld load unconditionally before main() ever ran -- found` \
+    `# via a real kernel-side abort_with_payload() reason-string probe` \
+    `# (bsd/kern/kern_exit.c, -user_fault_debug) reading dyld's own real` \
+    `# "symbol not found in flat namespace '_CFFileDescriptorCreate'" halt` \
+    `# message. Real fix: build_ipconfiguration_plugin.sh's own CFLAGS` \
+    `# now -include's configd_cffiledescriptor_weak_compat.h (that script` \
+    `# is what actually compiles FDSet.c -- NOT this one; a real gap-` \
+    `# fix-in-the-wrong-script mistake found and corrected within this` \
+    `# same pass, confirmed via nm -m on libconfigd_ipconfiguration.a's` \
+    `# own FDSet.o showing a plain "external" undefined reference, not` \
+    `# "weak external", until the -include moved to the right script).` \
+    `# That compat header shadows the real SDK's CFFileDescriptor.h and` \
+    `# re-declares these five real entry points` \
+    `# __attribute__((weak_import)) -- real dyld's chained-fixups format` \
+    `# has a distinct WEAK bind kind for exactly this case, which` \
+    `# resolves to NULL when missing rather than aborting, even under` \
+    `# eager -fixup_chains resolution. This still does not implement` \
+    `# CFFileDescriptor -- DAR-252's real port is still owed before` \
+    `# FDCalloutCreateFileDescriptor()'s raw-BPF-fd path can actually` \
+    `# work; calling any of these five once configd is running will now` \
+    `# null-deref through an unbound weak import instead, a real, far` \
+    `# narrower follow-on bug than the whole daemon being unable to boot.` \
+    `# The "-Wl,-U" flags below are STILL required alongside the` \
+    `# compat header's weak_import attribute, not replaced by it: ld64` \
+    `# itself needs "-Wl,-U" to know this symbol has no required` \
+    `# provider dylib at static-link time (real Loader.cpp's own` \
+    `# resolveSymbol() confirms the runtime behavior this depends on --` \
+    `# libOrdinal==BIND_SPECIAL_DYLIB_FLAT_LOOKUP's "not found" branch` \
+    `# checks weakImport and binds to NULL instead of erroring only in` \
+    `# that case); weak_import is what sets the per-bind weak flag ld64` \
+    `# then carries into the chained-fixup record. Confirmed empirically:` \
+    `# removing "-Wl,-U" here (keeping only the weak_import compat` \
+    `# header) reintroduces a hard link-time "Undefined symbols" error --` \
+    `# the two mechanisms are complementary, not either/or.` \
     -Wl,-U,_CFFileDescriptorCreate \
     -Wl,-U,_CFFileDescriptorCreateRunLoopSource \
     -Wl,-U,_CFFileDescriptorEnableCallBacks \
