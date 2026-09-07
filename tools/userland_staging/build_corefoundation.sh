@@ -237,6 +237,21 @@ done
 # defines build.py's own real build passes, just with an absolute path
 # (robust regardless of this script's cwd, unlike build.py's
 # cwd-relative one).
+#
+# DAR-253 correction (2026-09-06): these two objects' own `.incbin`
+# symbols (__CFCharacterSetBitmapData/__CFUniCharPropertyDatabase) are
+# NOT what CFUniChar.c's __CFUniCharLoadFile() actually reads on this
+# TARGET_OS_MAC build -- that macro forces USE_MACHO_SEGMENT=1
+# unconditionally (CFUniChar.c line ~44), which looks up real Mach-O
+# `__UNICODE,__csbitmaps`/`__properties`/`__data` segment/section names
+# instead (only the non-Darwin USE_RAW_SYMBOL path reads these two
+# objects' symbols). Left compiled here anyway -- harmless, real data,
+# just currently inert on this target -- rather than deleting, since
+# the real fix (creating the actual `__UNICODE` segment at link time,
+# matching swift-corelibs-foundation's own CMakeLists.txt Darwin
+# `-sectcreate` recipe) belongs at the FINAL dylib link, not here; see
+# build_corefoundation_dylib.sh's own header for the real root-cause
+# writeup and fix.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
     -I "$OUT/cf_headers" \
     -DCF_CHARACTERSET_BITMAP="\"$(cd "$CF" && pwd)/CharacterSets/CFCharacterSetBitmaps.bitmap\"" \

@@ -78,6 +78,7 @@ OUT="libc_build"
 EXTRACT="$OUT/libcorefoundation_dylib/extracted"
 rm -rf "$EXTRACT"
 mkdir -p "$EXTRACT"
+CF="../../third_party/swift-corelibs-foundation/CoreFoundation"
 
 XCODE12="/Applications/Xcode-12.app/Contents/Developer"
 CLANG="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
@@ -91,6 +92,52 @@ if [ ! -f "$OUT/libCoreFoundation.a" ]; then
     echo "error: $OUT/libCoreFoundation.a not found -- run build_corefoundation.sh first (this script reuses its already-built member objects)" >&2
     exit 1
 fi
+# DAR-253: real Unicode-decomposition bitmap/property/mapping data
+# files (checked into this fork already, see build_corefoundation.sh's
+# own comment above the now-dead CFCharacterSetData.S/
+# CFUniCharPropertyDatabase.S compiles it still does). CFUniChar.c
+# compiles with TARGET_OS_MAC=1, which sets USE_MACHO_SEGMENT=1
+# unconditionally (CFUniChar.c line ~44) -- on that path,
+# __CFUniCharLoadFile() NEVER reads the raw .incbin symbols those two
+# .S files provide; it calls __CFGetSectDataPtr("__UNICODE", ...),
+# which searches already-loaded Mach-O images for real segment/section
+# names (__UNICODE,__csbitmaps / __UNICODE,__properties /
+# __UNICODE,__data) via getsectbynamefromheader_64(). This project's
+# CF dylib link never created that segment, so every one of those
+# lookups silently returned a garbage/adjacent address instead of
+# NULL -- __CFUniCharLoadBitmapData() then read a bogus header off
+# that address and dereferenced a wild pointer following it. Real,
+# symbolicated crash (Linear DAR-253, two independent investigations):
+# CFStringGetFileSystemRepresentation -> CFUniCharDecomposeWithErrorLocation
+# -> __CFUniCharLoadDecompositionTable -> CFUniCharGetBitmapPtrForPlane,
+# and CFBundleCreateBundlesFromDirectory's own addBundle()/sortBundles()
+# path into the same loader. This crashed BOTH configd (bundle
+# discovery, DAR-170) and notifyd (CFURLCreateWithFileSystemPath,
+# DAR-167) -- any real CF path/string call that needs Unicode
+# decomposition data hit it.
+#
+# Real fix (real Apple/swift source, not custom): swift-corelibs-
+# foundation's OWN CMakeLists.txt (CoreFoundation/CMakeLists.txt,
+# the real Darwin platform link-options target) creates this exact
+# segment via `-sectcreate __UNICODE <section> <file>` linker flags
+# pointing directly at the same 3 real data files already checked into
+# this fork's CharacterSets/ dir -- no assembly needed at all. This
+# project's dylib link below never carried those flags (added as part
+# of the DAR-195 static-to-dylib conversion, which didn't carry this
+# forward from the old, never-actually-executed static-archive path).
+# Replicating that real recipe here, verbatim in spirit: little-endian
+# (__CF_BIG_ENDIAN__ is not defined on arm64) so __data uses
+# CFUnicodeData-L.mapping, matching MAPPING_TABLE_FILE's own
+# __CF_BIG_ENDIAN__-gated choice in CFUniChar.c.
+CF_UNICHAR_BITMAP_FILE_PATH="$(cd "$CF" && pwd)/CharacterSets/CFCharacterSetBitmaps.bitmap"
+CF_UNICHAR_PROPDB_FILE_PATH="$(cd "$CF" && pwd)/CharacterSets/CFUniCharPropertyDatabase.data"
+CF_UNICHAR_MAPPING_FILE_PATH="$(cd "$CF" && pwd)/CharacterSets/CFUnicodeData-L.mapping"
+for f in "$CF_UNICHAR_BITMAP_FILE_PATH" "$CF_UNICHAR_PROPDB_FILE_PATH" "$CF_UNICHAR_MAPPING_FILE_PATH"; do
+    if [ ! -f "$f" ]; then
+        echo "error: $f not found -- real Unicode data file missing from this swift-corelibs-foundation checkout" >&2
+        exit 1
+    fi
+done
 SIBLING_DYLIBS=(libsystem_c libsystem_malloc libsystem_platform libsystem_kernel libsystem_pthread \
     libsystem_notify libsystem_m libdispatch libc++ libxml2 libresolv libcopyfile libremovefile \
     libopenpam libdyld libxpc libinfo)
@@ -366,6 +413,10 @@ rm -f "$OUT/system/libCoreFoundation.dylib"
     -Wl,-not_for_dyld_shared_cache \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
+    -Wl,-sectcreate,__UNICODE,__csbitmaps,"$CF_UNICHAR_BITMAP_FILE_PATH" \
+    -Wl,-sectcreate,__UNICODE,__properties,"$CF_UNICHAR_PROPDB_FILE_PATH" \
+    -Wl,-sectcreate,__UNICODE,__data,"$CF_UNICHAR_MAPPING_FILE_PATH" \
+    -Wl,-segprot,__UNICODE,r,r \
     -Wl,-alias,_kCFDateFormatterCalendarKey,_kCFDateFormatterCalendar \
     -Wl,-alias,_kCFDateFormatterTimeZoneKey,_kCFDateFormatterTimeZone \
     -Wl,-alias,_kCFCalendarIdentifierGregorian,_kCFGregorianCalendar \
