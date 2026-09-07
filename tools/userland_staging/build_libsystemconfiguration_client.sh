@@ -194,55 +194,26 @@ ln -sf "$(pwd)/$XNU/libkern/libkern/OSTypes.h" "$OUT/sc_headers/libkern/OSTypes.
 # own header comment reasoning -- not re-derived, just re-emitted.
 rm -rf "$OUT/compat_include/os"
 mkdir -p "$OUT/compat_include/os"
-cat > "$OUT/compat_include/os/log_private.h" <<'EOF'
-#ifndef _OS_LOG_PRIVATE_H_COMPAT_
-#define _OS_LOG_PRIVATE_H_COMPAT_
-#include <stdint.h>
-#include <stddef.h>
-#include <os/log.h>
-
-struct os_log_pack_s {
-	uint64_t olp_continuous_time;
-	/* Real, more precise finding than build_bootp_dhcp_engine.sh's own
-	 * copy of this struct (whose target files never went this deep):
-	 * SCD.c's real __SC_log_send() print path dereferences
-	 * pack->olp_wall_time.tv_sec / .tv_nsec (both address-of'd, never
-	 * read by value) -- olp_wall_time is a real timespec-shaped struct,
-	 * not a plain uint64_t. Confirmed via this exact real compile
-	 * error, not guessed; only the two fields this one real call site
-	 * actually takes the address of are modeled. */
-	struct {
-		uint64_t tv_sec;
-		uint64_t tv_nsec;
-	} olp_wall_time;
-	uint8_t  olp_reserved[64];
-};
-typedef struct os_log_pack_s *os_log_pack_t;
-
-#define os_log_pack_decl(name, sz) \
-	struct os_log_pack_s name##_storage; \
-	os_log_pack_t name = &name##_storage; \
-	(void)(sz)
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-#include <stdarg.h>
-void   os_log_with_args(os_log_t log, os_log_type_t type, const char *format,
-                         va_list args, void *addr);
-size_t os_log_pack_size(const char *format, ...);
-void   os_log_pack_fill(os_log_pack_t pack, size_t size, int saved_errno,
-                         const char *format, ...);
-void   os_log_pack_send(os_log_pack_t pack, os_log_t log, os_log_type_t type);
-char  *os_log_pack_send_and_compose(os_log_pack_t pack, os_log_t log,
-                                     os_log_type_t type, char *buf, size_t buf_size);
-char  *os_log_pack_compose(os_log_pack_t pack, os_log_t log, os_log_type_t type,
-                            char *buf, size_t buf_size);
-#ifdef __cplusplus
+# os/log_private.h: installed from the ONE checked-in copy at
+# os_log_compat_headers/os/log_private.h, not written inline here.
+#
+# This used to be a `cat >` heredoc in this script AND a second,
+# independently-maintained heredoc in build_bootp_dhcp_engine.sh, both writing this exact
+# path, with neither script depending on the other and build_configd.sh
+# reusing the directory rather than regenerating it -- so whichever ran
+# last silently won. They diverged in two ways that both mattered (an
+# 8-byte struct layout skew that became a real out-of-bounds stack
+# write, and a declaration present in only one copy); see that header's
+# own comment for the full write-up (DAR-263).
+#
+# The `cmp` is the point: it makes a future divergence a build failure
+# here instead of a silent layout skew at runtime.
+mkdir -p "$OUT/compat_include/os"
+cp os_log_compat_headers/os/log_private.h "$OUT/compat_include/os/log_private.h"
+cmp -s os_log_compat_headers/os/log_private.h "$OUT/compat_include/os/log_private.h" || {
+    echo "error: failed to install os_log_compat_headers/os/log_private.h" >&2
+    exit 1
 }
-#endif
-#endif /* _OS_LOG_PRIVATE_H_COMPAT_ */
-EOF
 
 # Real gap, new this pass (not hit by the bootp/protocol-engine pass since
 # none of THOSE files touch state-dump reporting): <os/state_private.h> --

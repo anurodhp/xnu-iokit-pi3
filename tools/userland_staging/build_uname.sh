@@ -128,6 +128,7 @@ fi
     -Wl,-alias,__err,_err \
     -Wl,-alias,_fputs,'_fputs$UNIX2003' \
     -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
+    -Wl,-alias,'_mmap$UNIX2003',_mmap \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
     -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock
 echo "wrote uname.macho"

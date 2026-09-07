@@ -641,6 +641,34 @@ else
     echo "= tsd_vm_smoketest.macho not built -- run tools/userland_staging/build_tsd_vm_smoketest.sh first if wanted, skipping"
 fi
 
+for v in "" "_broken"; do
+    src="tools/userland_staging/libc_build/sigaction_tramp_smoketest${v}.macho"
+    if [ -f "$src" ]; then
+        mkdir -p "$MNT/usr/local/bin"
+        cp "$src" "$MNT/usr/local/bin/sigaction_tramp_smoketest${v}"
+        chmod 755 "$MNT/usr/local/bin/sigaction_tramp_smoketest${v}"
+        echo "+ wrote sigaction_tramp_smoketest${v} to $MNT/usr/local/bin/"
+    else
+        echo "= sigaction_tramp_smoketest${v}.macho not built -- run"
+        echo "  tools/userland_staging/build_sigaction_tramp_smoketest.sh first if wanted, skipping"
+    fi
+done
+# Both variants on purpose (DAR-262): the "_broken" one is linked against
+# sigaction_broken_shim_compat.c, a checked-in copy of the pre-fix
+# _sigaction body, so the real failing case is reproducible on the target
+# instead of only being argued from struct layouts. Nothing else on the
+# image links that shim -- see sigaction_broken_shim_compat.c's header.
+#
+# WARNING, found the hard way 2026-09-07: run the "_broken" one LAST, or
+# by hand. It does not fail cleanly -- the whole point of the bug is that
+# the kernel enters userspace at a garbage sa_tramp, so the process can
+# wedge instead of exiting, and it never returns to a shell prompt. Under
+# tools/boot_test.py that silently eats every remaining --cmd in the run:
+# a real 610s boot spent its whole window here and never got to the uname
+# or notifyd checks queued behind it. The FIXED variant
+# (sigaction_tramp_smoketest, no suffix) is the one to put in an
+# automated sequence; it exits 0 and is safe to chain.
+
 if [ -f tools/userland_staging/libc_build/mach_port_construct_smoketest.macho ]; then
     mkdir -p "$MNT/usr/local/bin"
     cp tools/userland_staging/libc_build/mach_port_construct_smoketest.macho \
@@ -684,6 +712,28 @@ if [ -f tools/userland_staging/configd.macho ]; then
     /usr/libexec/PlistBuddy -c "Add :StandardOutPath string /var/log/configd.log" \
         "$MNT/Library/LaunchDaemons/com.apple.configd.plist" 2>/dev/null
     /usr/libexec/PlistBuddy -c "Add :StandardErrorPath string /var/log/configd.log" \
+        "$MNT/Library/LaunchDaemons/com.apple.configd.plist" 2>/dev/null
+    # DAR-263/DAR-265: add configd's own real `-d` flag to ProgramArguments.
+    # Without it, configd is completely undiagnosable on this target and
+    # /var/log/configd.log stays EMPTY no matter what goes wrong -- every
+    # SC_log() in configd routes through os_log(3), and this project's
+    # os_log_compat.c is an honest no-op (_os_log_impl/_os_log_error_impl
+    # all `(void)` their arguments and return). So the StandardErrorPath
+    # above, added for DAR-257, was capturing a stream nothing ever wrote
+    # to. Both DAR-261 and DAR-265 had to be diagnosed from ps/exit codes
+    # alone because of this.
+    #
+    # `-d` is configd's own real, unmodified option (configd.m:314), and
+    # under launchd it changes ONLY the log destination: its `else` branch
+    # sets `_sc_log = kSCLogDestinationFile`, which __SC_log_enabled()/
+    # __SC_log_send() (SystemConfiguration.fproj/SCD.c:544/583) then honour
+    # by printing every level < LOG_INFO to stdout/stderr. It does NOT
+    # change the daemonize path -- that is `if (!forceForeground &&
+    # !is_launchd_job)` (configd.m:384), and is_launchd_job is already TRUE
+    # for a launchd-started configd (DAR-242), so the fork is skipped either
+    # way -- and init_fds() is likewise already skipped for a launchd job.
+    # Verified by reading configd.m directly, not assumed.
+    /usr/libexec/PlistBuddy -c "Add :ProgramArguments:1 string -d" \
         "$MNT/Library/LaunchDaemons/com.apple.configd.plist" 2>/dev/null
     echo "+ wrote com.apple.configd.plist to $MNT/Library/LaunchDaemons/"
     echo "  (real, unmodified Apple plist plus this script's own added"

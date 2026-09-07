@@ -352,7 +352,9 @@ rm -f configd.macho
     "$SIMPLE_OBJ/sys__setgid.o" "$SIMPLE_OBJ/sys__setuid.o" "$SIMPLE_OBJ/sys__execve.o" \
     "$SIMPLE_OBJ/sys__chdir.o" \
     "$LAUNCHD_SYSCALL_OBJ/sys__getppid.o" "$LAUNCHD_SYSCALL_OBJ/sys__setsid.o" \
-    "$OUT/liblaunchd_mig.a" "$OUT/libmach_ipc.a" "$OUT/chk_fail.o" \
+    "$OUT/liblaunchd_mig.a" \
+    "$OUT/system/libsystem_kernel.dylib" \
+    "$OUT/libmach_ipc.a" "$OUT/chk_fail.o" \
     "$OUT/bootp_dhcp_engine.a" \
     `# Passed as a loose .o, NOT via libconfigd.a: nothing in configd's own` \
     `# object graph calls CFURLCopyResourcePropertyForKey directly (it's only` \
@@ -486,6 +488,20 @@ fi
 
 ./bind_target_audit.sh configd.macho || {
     echo "error: configd.macho has an unresolvable two-level bind -- it would abort at dyld load" >&2
+    exit 1
+}
+
+# DAR-263: same hard gate build_notifyd.sh/build_launchctl.sh carry. See
+# the link-order comment above and dead_stub_audit.sh's own header.
+# configd is the one image where this was never merely hygiene: its
+# ___serverSessionCreate (session.c:200) calls mach_port_insert_right()
+# for EVERY SCDynamicStore client session and bails out returning NULL
+# when it fails, so the KERN_FAILURE stand-in broke session creation
+# process-wide -- which is what starves SCDynamicStoreCreate() in every
+# plugin's load(), DAR-265 included.
+./dead_stub_audit.sh configd.macho || {
+    echo "error: see the link-order comment above -- keep libsystem_kernel.dylib" >&2
+    echo "       ahead of libmach_ipc.a on configd.macho's link line (DAR-263)" >&2
     exit 1
 }
 echo "wrote configd.macho"

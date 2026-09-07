@@ -222,48 +222,26 @@ ln -sf "$(pwd)/$XNU/libkern/libkern/OSTypes.h" "$OUT/sc_headers/libkern/OSTypes.
 # for correctness here.
 rm -rf "$OUT/compat_include/os/log_private.h"
 mkdir -p "$OUT/compat_include/os"
-cat > "$OUT/compat_include/os/log_private.h" <<'EOF'
-#ifndef _OS_LOG_PRIVATE_H_COMPAT_
-#define _OS_LOG_PRIVATE_H_COMPAT_
-#include <stdint.h>
-#include <stddef.h>
-#include <os/log.h>
-
-struct os_log_pack_s {
-	uint64_t olp_continuous_time;
-	uint64_t olp_wall_time;
-	uint8_t  olp_reserved[64];
-};
-typedef struct os_log_pack_s *os_log_pack_t;
-
-/* Real Apple's version stack-allocates a size-byte pack buffer (a VLA --
- * SCPrivate.h's own SC_log() macro already brackets its use in a
- * "-Wvla" pragma-disable, confirming this). A single fixed-size struct
- * instance is a real, honest substitute here: size is always this
- * header's own os_log_pack_size() return value (sizeof(struct
- * os_log_pack_s)), and no real call site in this project's pinned
- * source is reachable at runtime (see file comment above). */
-#define os_log_pack_decl(name, sz) \
-	struct os_log_pack_s name##_storage; \
-	os_log_pack_t name = &name##_storage; \
-	(void)(sz)
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-size_t os_log_pack_size(const char *format, ...);
-void   os_log_pack_fill(os_log_pack_t pack, size_t size, int saved_errno,
-                         const char *format, ...);
-void   os_log_pack_send(os_log_pack_t pack, os_log_t log, os_log_type_t type);
-char  *os_log_pack_send_and_compose(os_log_pack_t pack, os_log_t log,
-                                     os_log_type_t type, char *buf, size_t buf_size);
-char  *os_log_pack_compose(os_log_pack_t pack, os_log_t log, os_log_type_t type,
-                            char *buf, size_t buf_size);
-#ifdef __cplusplus
+# os/log_private.h: installed from the ONE checked-in copy at
+# os_log_compat_headers/os/log_private.h, not written inline here.
+#
+# This used to be a `cat >` heredoc in this script AND a second,
+# independently-maintained heredoc in build_libsystemconfiguration_client.sh, both writing this exact
+# path, with neither script depending on the other and build_configd.sh
+# reusing the directory rather than regenerating it -- so whichever ran
+# last silently won. They diverged in two ways that both mattered (an
+# 8-byte struct layout skew that became a real out-of-bounds stack
+# write, and a declaration present in only one copy); see that header's
+# own comment for the full write-up (DAR-263).
+#
+# The `cmp` is the point: it makes a future divergence a build failure
+# here instead of a silent layout skew at runtime.
+mkdir -p "$OUT/compat_include/os"
+cp os_log_compat_headers/os/log_private.h "$OUT/compat_include/os/log_private.h"
+cmp -s os_log_compat_headers/os/log_private.h "$OUT/compat_include/os/log_private.h" || {
+    echo "error: failed to install os_log_compat_headers/os/log_private.h" >&2
+    exit 1
 }
-#endif
-#endif /* _OS_LOG_PRIVATE_H_COMPAT_ */
-EOF
 
 # Same real gap class, one header later in SCPrivate.h's own #include
 # block: <os/variant_private.h> is also never open-sourced (confirmed by
@@ -336,13 +314,43 @@ EOF
 # configd's real source. Confirmed by grep that none of this pass's 8
 # target files reference any Keychain-preferences symbol -- real, empty,
 # unused stand-in, not a stub of logic anything here calls.
-mkdir -p "$OUT/compat_include/SystemConfiguration"
-rm -f "$OUT/compat_include/SystemConfiguration/SCPreferencesKeychainPrivate.h"
-cat > "$OUT/compat_include/SystemConfiguration/SCPreferencesKeychainPrivate.h" <<'EOF'
+#
+# Written into a BOOTP-PRIVATE include dir, not the shared
+# $OUT/compat_include, 2026-09-07 (DAR-263). It used to live in
+# $OUT/compat_include/SystemConfiguration/, which
+# build_libsystemconfiguration_client.sh also compiles against -- and
+# because that script lists -I $OUT/compat_include BEFORE
+# -I $OUT/sc_headers, this empty override silently shadowed the REAL
+# SCPreferencesKeychainPrivate.h that its own DAR-240 work had
+# deliberately stopped overriding. The visible cost was two real objects
+# vanishing from libSystemConfiguration.a:
+#
+#   with this file in the shared dir: 59 compiled, 2 gaps
+#     SCNetworkConfigurationInternal.c -- implicit declaration of
+#       '_SCPreferencesSystemKeychainPasswordItemCopy'
+#     SCNetworkInterface.c -- implicit declaration of
+#       '_SCPreferencesSystemKeychainPasswordItemExists'
+#   with it scoped here:             61 compiled, 0 gaps
+#
+# Nothing in that script's own run wrote the file, so the breakage
+# appeared only after this script had ever run, and persisted until
+# someone deleted the file by hand -- a cross-script ordering hazard
+# with no ordering contract, exactly like os/log_private.h above.
+# Keeping it private means this script still gets its empty override
+# (which it genuinely needs -- SecKeychainRef is unavailable on this
+# SDK target, see the write-up above) without being able to affect any
+# sibling build.
+mkdir -p "$OUT/bootp_compat_include/SystemConfiguration"
+rm -f "$OUT/bootp_compat_include/SystemConfiguration/SCPreferencesKeychainPrivate.h"
+cat > "$OUT/bootp_compat_include/SystemConfiguration/SCPreferencesKeychainPrivate.h" <<'EOF'
 #ifndef	_SCPREFERENCESKEYCHAINPRIVATE_H
 #define	_SCPREFERENCESKEYCHAINPRIVATE_H
 #endif
 EOF
+# Belt and braces: if an older run of this script left the override in
+# the shared directory, remove it, so a tree that has ever built the old
+# way heals itself rather than silently keeping the 2-gap build.
+rm -f "$OUT/compat_include/SystemConfiguration/SCPreferencesKeychainPrivate.h"
 
 # Real IOKit header staging for dhcp.c (real, unmodified Apple source,
 # 2026-09-01 DAR-170 "no shortcuts" decision: port real configd/
@@ -412,6 +420,11 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
     -D__va_list=__builtin_va_list \
     -D__API_UNAVAILABLE_PLATFORM_bridgeos=bridgeos,unavailable \
     -DPRIVATE \
+    `# bootp_compat_include FIRST: this script's own private overrides` \
+    `# (SCPreferencesKeychainPrivate.h), deliberately not in the shared` \
+    `# compat_include where they would shadow headers for sibling` \
+    `# scripts -- see the DAR-263 write-up at that file's generation.` \
+    -I $OUT/bootp_compat_include \
     -I $OUT/compat_include -I $OUT/cf_headers \
     -I $BOOTP/bootplib -I $BOOTP/IPConfiguration.bproj \
     -I $OUT/sc_headers -I $OUT/iokit_headers -I $XNU/iokit \
