@@ -628,6 +628,19 @@ else
     echo "= notifyd_roundtrip_smoketest.macho not built -- run tools/userland_staging/build_notifyd_smoketest.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/libc_build/tsd_vm_smoketest.macho ]; then
+    mkdir -p "$MNT/usr/local/bin"
+    cp tools/userland_staging/libc_build/tsd_vm_smoketest.macho \
+        "$MNT/usr/local/bin/tsd_vm_smoketest"
+    chmod 755 "$MNT/usr/local/bin/tsd_vm_smoketest"
+    echo "+ wrote tsd_vm_smoketest to $MNT/usr/local/bin/"
+    echo "  (DAR-258 fresh-thread TSD hygiene + mmap(MAP_ANON) zero-fill check,"
+    echo "  run by hand from the root shell post-boot --"
+    echo "  tools/userland_staging/build_tsd_vm_smoketest.sh)"
+else
+    echo "= tsd_vm_smoketest.macho not built -- run tools/userland_staging/build_tsd_vm_smoketest.sh first if wanted, skipping"
+fi
+
 if [ -f tools/userland_staging/configd.macho ]; then
     mkdir -p "$MNT/usr/libexec" "$MNT/Library/LaunchDaemons"
     cp tools/userland_staging/configd.macho "$MNT/usr/libexec/configd"
