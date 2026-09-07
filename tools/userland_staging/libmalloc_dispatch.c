@@ -475,18 +475,68 @@ void abort(void) {
  * assert.h-driven callers expect (func/file/line/expr), writes it to
  * stderr (this target's real stand-in for the message real Apple's
  * would also ultimately funnel through malloc-independent stderr I/O),
- * then aborts -- same real "assertion failed -> terminate" contract. */
+ * then aborts -- same real "assertion failed -> terminate" contract.
+ *
+ * The line number is part of that real message, not decoration. Real
+ * Libc's own assert.c (third_party/Libc/gen/FreeBSD/assert.c:83)
+ * formats
+ *
+ *   "Assertion failed: (%s), function %s, file %s, line %d.\n"
+ *
+ * and this function used to drop the ", line %d" half with a bare
+ * `(void)line;`. That cost a real diagnosis (DAR-261): notifyd's
+ * __notify_generate_common_port (third_party/PureDarwin/src/Libraries/
+ * XPC/notify/notify_proc.c) has TWO back-to-back
+ * `assert(kstatus == KERN_SUCCESS)` calls -- one after
+ * mach_port_construct(), one after mach_port_insert_right() -- in the
+ * same function, with byte-identical expression text. With the line
+ * number dropped, the daemon's one-line log could not say which call
+ * failed, and the ticket had to guess (it guessed the first; a
+ * standalone smoketest of that exact call, tools/userland_staging/
+ * mach_port_construct_smoketest.c, then showed it passing). Any file
+ * with two identical assertions in one function has the same problem,
+ * so this is a general diagnostic gap, not a notifyd one.
+ *
+ * Decimal formatting is done by hand rather than via snprintf() for the
+ * same reason every other write() in this file is raw: __assert_rtn
+ * runs on the failure path of a malloc-adjacent library and must not
+ * re-enter stdio or the allocator. */
 static void mal_write_str(const char *s) {
     write(2, s, mal_strlen(s));
 }
+static void mal_write_int(int v) {
+    char buf[16];
+    int i = (int)sizeof(buf);
+    unsigned int u;
+
+    /* Negated in `long` so INT_MIN cannot overflow the negation -- no
+     * real __LINE__ is ever negative, but a raw `-v` on an int is
+     * undefined behavior at that one value and this is a crash-path
+     * function. */
+    if (v < 0) {
+        mal_write_str("-");
+        u = (unsigned int)(-(long)v);
+    } else {
+        u = (unsigned int)v;
+    }
+    if (u == 0) {
+        buf[--i] = '0';
+    }
+    while (u) {
+        buf[--i] = (char)('0' + (u % 10));
+        u /= 10;
+    }
+    write(2, buf + i, sizeof(buf) - (unsigned long)i);
+}
 void __assert_rtn(const char *func, const char *file, int line, const char *expr) {
-    (void)line;
     mal_write_str("Assertion failed: (");
     mal_write_str(expr ? expr : "?");
     mal_write_str("), function ");
     mal_write_str(func ? func : "?");
     mal_write_str(", file ");
     mal_write_str(file ? file : "?");
+    mal_write_str(", line ");
+    mal_write_int(line);
     mal_write_str(".\n");
     abort();
 }

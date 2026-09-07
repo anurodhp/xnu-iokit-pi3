@@ -641,6 +641,20 @@ else
     echo "= tsd_vm_smoketest.macho not built -- run tools/userland_staging/build_tsd_vm_smoketest.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/libc_build/mach_port_construct_smoketest.macho ]; then
+    mkdir -p "$MNT/usr/local/bin"
+    cp tools/userland_staging/libc_build/mach_port_construct_smoketest.macho \
+        "$MNT/usr/local/bin/mach_port_construct_smoketest"
+    chmod 755 "$MNT/usr/local/bin/mach_port_construct_smoketest"
+    echo "+ wrote mach_port_construct_smoketest to $MNT/usr/local/bin/"
+    echo "  (DAR-261 mach_port_construct/insert_right/MPO_QLIMIT probe plus the"
+    echo "  argv-driven abort() sub-modes abort-main/abort-assert/abort-thread/"
+    echo "  raw-kill, run by hand from the root shell post-boot --"
+    echo "  tools/userland_staging/build_mach_port_construct_smoketest.sh)"
+else
+    echo "= mach_port_construct_smoketest.macho not built -- run tools/userland_staging/build_mach_port_construct_smoketest.sh first if wanted, skipping"
+fi
+
 if [ -f tools/userland_staging/configd.macho ]; then
     mkdir -p "$MNT/usr/libexec" "$MNT/Library/LaunchDaemons"
     cp tools/userland_staging/configd.macho "$MNT/usr/libexec/configd"

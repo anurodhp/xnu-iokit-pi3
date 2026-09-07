@@ -493,6 +493,37 @@ if [ ! -f "$OUT/notify_mig_special_reply_port_trap.o" ] && [ ! -f "$OUT/notify_m
     exit 1
 fi
 
+# Link order, load-bearing (DAR-261): libsystem_kernel.dylib is listed
+# BEFORE libmach_ipc.a, not after. libmach_ipc.a contains
+# mach_ipc_dead_stubs.o, whose _mach_port_insert_right/
+# _mach_port_extract_right/_mach_port_unguard are narrowly-scoped
+# KERN_FAILURE stand-ins written only for mach_msg_destroy_port()'s
+# provably-unreachable reply-validation paths (see
+# mach_ipc_dead_stubs.c's own header). With the archive scanned first,
+# ld resolved notify_proc.o's REAL mach_port_insert_right() call out of
+# that archive -- because mach_msg_real.o, in the same archive, pulls
+# the symbol in -- and baked a `mov w0, #0x5` (KERN_FAILURE) body into
+# notifyd.macho, shadowing libsystem_kernel.dylib's real implementation
+# (mach_port_gap_closures2.c) which was never even consulted.
+#
+# The real symptom that cost: __notify_generate_common_port
+# (third_party/PureDarwin/src/Libraries/XPC/notify/notify_proc.c:1613)
+# does mach_port_insert_right(mach_task_self(), port, port,
+# MACH_MSG_TYPE_MAKE_SEND) and asserts on it, so every client's first
+# notify round trip aborted the daemon's handler and hung the client
+# forever. mach_ipc_dead_stubs.c's own header already warned about
+# exactly this ("this project's flat-namespace symbol search would
+# otherwise have bound syslogd's real dispatch/eventlink calls to those
+# fake KERN_FAILURE stand-ins"); the ordering here is what makes the
+# warning moot rather than prophetic.
+#
+# Everything else libmach_ipc.a supplies is also a real export of
+# libsystem_kernel.dylib (that dylib is built by `ar x`-ing this very
+# archive, minus mach_msg_real.o/mach_ipc_traps.o/mach_ipc_dead_stubs.o,
+# and compiling those same real sources itself -- see
+# build_libsystem_kernel.sh), so binding them to the dylib is also the
+# single-process-wide-copy outcome this project wants, not a side
+# effect. The archive stays on the line after it purely as a backstop.
 rm -f notifyd.macho
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
     -B"$NEWLD_BINDIR" \
@@ -501,8 +532,9 @@ rm -f notifyd.macho
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     -Wl,-force_load,"$OUT/libnotifyd.a" \
     "$OUT/notify_mig/notify_mig_special_reply_port_trap.o" \
-    "$OUT/liblaunchd_mig.a" "$OUT/libmach_ipc.a" "$OUT/chk_fail.o" \
+    "$OUT/liblaunchd_mig.a" \
     "$OUT/system/libsystem_kernel.dylib" \
+    "$OUT/libmach_ipc.a" "$OUT/chk_fail.o" \
     "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_blocks.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
     "$OUT/system/libsystem_malloc.dylib" \
@@ -540,6 +572,17 @@ fi
 
 ./bind_target_audit.sh notifyd.macho || {
     echo "error: notifyd.macho has an unresolvable two-level bind -- it would abort at dyld load" >&2
+    exit 1
+}
+
+# Hard gate for DAR-261's real regression shape (see the link-order
+# comment above, and dead_stub_audit.sh's own header for the full
+# mechanism). Checked against the built image rather than by inspecting
+# the link line, so a future reordering anywhere cannot reintroduce it
+# silently.
+./dead_stub_audit.sh notifyd.macho || {
+    echo "error: see the link-order comment above -- keep libsystem_kernel.dylib" >&2
+    echo "       ahead of libmach_ipc.a on notifyd.macho's link line (DAR-261)" >&2
     exit 1
 }
 echo "wrote notifyd.macho"

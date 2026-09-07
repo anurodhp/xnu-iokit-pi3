@@ -546,6 +546,39 @@ rm -f "$OUT/launchctl.macho"
     `# gave launchctl a private duplicate malloc heap, pthread runtime and` \
     `# stdio/locale state -- the same "one owner per symbol" class as the` \
     `# removals already documented in build_launchd.sh.` \
+    `# libsystem_kernel.dylib listed HERE, ahead of libmach_ipc.a,` \
+    `# 2026-09-07 (DAR-261). Two real, separate reasons:` \
+    `#` \
+    `# 1. That archive carries mach_ipc_dead_stubs.o, whose` \
+    `#    _mach_port_insert_right/_extract_right/_unguard are KERN_FAILURE` \
+    `#    stand-ins scoped only to mach_msg_destroy_port()'s unreachable` \
+    `#    reply-validation paths. Scanned before the dylib, ld baked them` \
+    `#    into launchctl.macho as the ONLY definition -- clean link, clean` \
+    `#    bind_target_audit.sh, real KERN_FAILURE at runtime. See` \
+    `#    build_notifyd.sh's link for the daemon-side assert this shape` \
+    `#    produced there.` \
+    `# 2. This script did not link at all at HEAD before this change:` \
+    `#    libmach_ipc.a's mach_ipc_traps.o and liblaunchctl_extras.a's` \
+    `#    launchctl_task_for_pid_trap.o both define _task_for_pid, and ld` \
+    `#    reported "duplicate symbol '_task_for_pid'".` \
+    `#` \
+    `#    Be precise about WHY this ordering fixes that, because the` \
+    `#    obvious explanation is wrong: _task_for_pid is NOT satisfied by` \
+    `#    libsystem_kernel.dylib here. liblaunchctl_extras.a is listed` \
+    `#    earlier still (above), so launchctl_task_for_pid_trap.o is what` \
+    `#    really supplies it. What changed is that mach_ipc_traps.o is no` \
+    `#    longer pulled out of libmach_ipc.a AT ALL -- the dylib now` \
+    `#    satisfies every OTHER trap that object defines before the` \
+    `#    archive is reached, so ld never has a reason to extract the` \
+    `#    member, and a member that is never extracted cannot collide.` \
+    `#` \
+    `#    That makes this fix real but conditional: one new undefined` \
+    `#    symbol that ONLY mach_ipc_traps.o defines would re-extract it` \
+    `#    and bring the duplicate-symbol error straight back. If that` \
+    `#    happens, the durable fix is to stop this script linking that` \
+    `#    archive for symbols the dylib already owns, not to re-order` \
+    `#    again.` \
+    "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/libmach_ipc.a" "$OUT/cerror_stub.o" \
     "$OUT/system/libCoreFoundation.dylib" \
     `# libxpc.dylib listed HERE, before libdyld.dylib, 2026-09-04 (DAR-235):` \
@@ -614,5 +647,16 @@ if nm "$OUT/launchctl.macho" 2>/dev/null | grep -q " t _list_cmd$"; then
 else
     echo "WARNING: _list_cmd not found -- launchctl.o may not have actually linked in" >&2
 fi
+# Same hard gate build_notifyd.sh carries (DAR-261) -- see the link-order
+# comment above and dead_stub_audit.sh's own header. Without it, a future
+# reordering silently re-bakes mach_ipc_dead_stubs.o's KERN_FAILURE
+# mach_port_insert_right/extract_right/unguard into this binary, and
+# nothing else in this script would notice.
+./dead_stub_audit.sh "$OUT/launchctl.macho" || {
+    echo "error: see the link-order comment above -- keep libsystem_kernel.dylib" >&2
+    echo "       ahead of libmach_ipc.a on launchctl.macho's link line (DAR-261)" >&2
+    exit 1
+}
+
 echo "linked against:"
 otool -L "$OUT/launchctl.macho" 2>/dev/null | tail -n +2

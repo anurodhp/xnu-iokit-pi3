@@ -184,6 +184,38 @@ CSU="../../third_party/Csu"
 OUT="libc_build"
 mkdir -p "$OUT/apple_malloc" "$OUT/malloc_mig/mach"
 
+# os/feature_private.h: the empty compat stand-in this script's own
+# header comment above already describes ("genuinely absent from every
+# checkout in this project ... only referenced by malloc.c/
+# pguard_malloc.c, both out of scope"). It is WRITTEN here rather than
+# merely assumed to exist -- found 2026-09-07 (DAR-261): the file had
+# been created by hand at some point and nothing in the repo recreated
+# it, so a `libc_build` that lost it made this script die with
+# "apple_malloc: 0 compiled, 9 skipped" followed by
+# `ar: libc_build/apple_malloc/*.o: No such file or directory`, i.e.
+# every real magazine allocator object silently missing rather than a
+# named error. That breaks this project's own "every built artifact
+# needs a reproducing script" rule (CLAUDE.md), and it blocked a
+# libsystem_malloc.dylib rebuild outright.
+#
+# compat_include/os/ is shared with build_libc_locale.sh (which writes
+# its own os/assumes.h stand-in there and is the reason that directory
+# exists at all); this only adds the one file that script does not own,
+# and never overwrites anything else in it.
+mkdir -p "$OUT/compat_include/os"
+cat > "$OUT/compat_include/os/feature_private.h" <<'EOF'
+/* Empty stand-in for Apple's os/feature_private.h -- see
+ * build_libmalloc.sh's own header comment for the real reasoning. The
+ * only symbol real libmalloc reaches for through this header is
+ * os_feature_enabled_simple(), referenced solely by malloc.c and
+ * pguard_malloc.c, neither of which is in this project's compiled set
+ * (confirmed by grep over third_party/libmalloc/src). Written by
+ * build_libmalloc.sh; do not edit here, it is regenerated on every run. */
+#ifndef _OS_FEATURE_PRIVATE_H_COMPAT_
+#define _OS_FEATURE_PRIVATE_H_COMPAT_
+#endif
+EOF
+
 XCODE12="/Applications/Xcode-12.app/Contents/Developer"
 CLANG="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
 SDK="$XCODE12/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
@@ -289,6 +321,21 @@ for f in magazine_tiny magazine_small magazine_medium magazine_large \
     fi
 done
 echo "apple_malloc: $ok compiled, $skip skipped"
+# Any skip is fatal, 2026-09-07 (DAR-261 review). All 9 of these are real
+# magazine-allocator core files with no optional members -- a partial
+# build produces a libmalloc.a that is missing a real allocator object
+# and STILL exits 0, because only the every-file-failed case trips the
+# `ar: libc_build/apple_malloc/*.o: No such file or directory` glob error
+# further down. That is exactly the silent-partial-success this project's
+# build scripts exist to prevent (CLAUDE.md's "every built artifact needs
+# a reproducing script"), and it is how the missing
+# compat_include/os/feature_private.h above went unnoticed.
+if [ "$skip" -ne 0 ]; then
+    echo "error: $skip of the 9 real magazine allocator sources failed to compile;" >&2
+    echo "       libmalloc.a would be silently incomplete. See" >&2
+    echo "       $OUT/apple_malloc/*.err for the real per-file errors." >&2
+    exit 1
+fi
 
 # Real mach_init.c/mach_vm.c/mig_reply_port.c/init_cpu_capabilities.c --
 # real Apple libsyscall/wrappers source, unmodified, same include set as
