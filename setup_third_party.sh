@@ -20,24 +20,37 @@
 #     `__DATA,__mod_init_func` constructor support for real ifconfig --
 #     see tools/userland_staging/build_ifconfig.sh) rather than left
 #     unresolved further.
-#   - Libc: unmodified Apple source except `Libc.patch` (2026-08-27),
-#     same "real local fix, no personal fork" reasoning as Csu.patch --
-#     `locale/xlocale.c`'s own `__xlocale_init()` (registers the real
-#     TSD key `__global_locale`/`__locale_key` need) is only ever called
-#     from real Apple's own `_libc_initializer()`, which this project has
-#     never ported. Without it `__locale_key` stays at its static -1
-#     sentinel forever, and `xlocale_private.h`'s `__current_locale()`
-#     (called by real `vsnprintf()`, among others) does an unchecked,
-#     out-of-bounds TSD lookup with that -1 on any non-simulator target
-#     -- a real SIGSEGV, found via a real QEMU crash the first time
-#     anything in this project called plain snprintf()/vsnprintf() at
-#     runtime (syslogd's write_boot_log(), Phase 6.7). The patch adds a
-#     same-translation-unit constructor calling the existing real
-#     `__xlocale_init()`, so it's linked in for free by any of this
-#     project's 39+ build scripts that pull in this object file.
-#   - dyld: unmodified Apple source except `dyld.patch` (2026-09-01,
-#     DAR-191), same "real local fix, no personal fork" reasoning as
-#     Csu.patch/Libc.patch -- `libdyld/libdyldGlue.cpp`'s real,
+#   - Libc: originally unmodified Apple source except `Libc.patch`
+#     (2026-08-27) -- `locale/xlocale.c`'s own `__xlocale_init()`
+#     (registers the real TSD key `__global_locale`/`__locale_key` need)
+#     is only ever called from real Apple's own `_libc_initializer()`,
+#     which this project has never ported. Without it `__locale_key`
+#     stays at its static -1 sentinel forever, and `xlocale_private.h`'s
+#     `__current_locale()` (called by real `vsnprintf()`, among others)
+#     does an unchecked, out-of-bounds TSD lookup with that -1 on any
+#     non-simulator target -- a real SIGSEGV, found via a real QEMU
+#     crash the first time anything in this project called plain
+#     snprintf()/vsnprintf() at runtime (syslogd's write_boot_log(),
+#     Phase 6.7). The patch added a same-translation-unit constructor
+#     calling the existing real `__xlocale_init()`, so it's linked in for
+#     free by any of this project's 39+ build scripts that pull in this
+#     object file.
+#
+#     2026-09-07 (DAR-206): cloned from this project's own fork
+#     (git@github.com:anurodhp/Libc.git, branch iokit-port) instead of
+#     upstream + a `git am` patch-file step -- the same real fix now
+#     lives as real committed history on that branch, plus a third
+#     commit (DAR-234) that was real, finished, already-reasoned-through
+#     work sitting uncommitted in the working tree at conversion time
+#     (`locale/FreeBSD/collate.c`/`locale/xlocale_private.h`, gating
+#     `__collate_collating_symbol`/`__collate_equiv_class`'s widened
+#     visibility behind a `COLLATE_STATE_EXPORTED` macro, same shape as
+#     the existing `XLOCALE_STATE_EXPORTED` gate) -- committed for real
+#     as part of this conversion rather than left to rot uncommitted.
+#     `third_party-patches/Libc.patch` is no longer read by this script
+#     -- kept in the tree only as a historical record.
+#   - dyld: originally unmodified Apple source except `dyld.patch`
+#     (2026-09-01, DAR-191) -- `libdyld/libdyldGlue.cpp`'s real,
 #     unmodified `_dyld_initializer()` unconditionally self-registers a
 #     `pthread_atfork()` triple for dyld's own dlopen lock. On this port
 #     the child-side handler never returns after `fork()` (root-caused
@@ -48,12 +61,39 @@
 #     own `#if BUILDING_DYLD` internals), which silently hung every one
 #     of launchd's forked daemon children forever (100% CPU, no panic,
 #     no corpse) before they ever reached `bootstrap_init()`. The patch
-#     skips that one `pthread_atfork()` call -- a second, previously-
+#     skipped that one `pthread_atfork()` call -- a second, previously-
 #     unknown instance of the exact hazard class already worked around
 #     for the OTHER, direct dyld atfork trio (see
 #     `tools/userland_staging/build_launchd_syscalls.sh`'s `fork_compat.c`,
 #     docs/backlog.md d13); that earlier fix didn't know about this
 #     separate, indirect registration path, so it kept firing regardless.
+#
+#     2026-09-07 (DAR-207): cloned from this project's own fork
+#     (git@github.com:anurodhp/dyld.git, branch iokit-port) instead of
+#     upstream + a `git am` patch-file step -- this is a real, non-
+#     trivial behavioral patch against dyld's own fork-safety internals,
+#     exactly the kind of change that benefits from a real fork's
+#     history/diffability rather than a bare patch file. The same fix
+#     now lives as real committed history on that branch, built on top
+#     of the `dyld-940` tag. `third_party-patches/dyld.patch` is no
+#     longer read by this script -- kept in the tree only as a
+#     historical record.
+#   - libdispatch: originally unmodified Apple source except
+#     `libdispatch.patch` (3 commits, starting with moving the
+#     `dispatch_pthread_root_queue_observer_hooks_s` typedef), applied
+#     via `git am` after cloning upstream `libdispatch-1271.40.12`. Real
+#     local history had already outgrown the patch file by the time of
+#     conversion -- 4 real commits (DAR-153/167/257/259, covering
+#     `libdispatch_init()` call-once ordering, a TSD-key race in the
+#     dispatch manager thread's startup, the manager thread's wlh TSD key
+#     initialization, and a real SIGSEGV in `_dispatch_source_invoke()`
+#     from an unadopted workloop wlh) vs. the patch file's 3. 2026-09-07
+#     (DAR-208): converted to cloning from this project's own fork
+#     (git@github.com:anurodhp/libdispatch.git, branch iokit-port)
+#     instead -- all 4 real fixes now live as real committed history on
+#     that branch. `third_party-patches/libdispatch.patch` is no longer
+#     read by this script -- kept in the tree only as a historical
+#     record.
 #   - hfs, IOStorageFamily, IOUSBFamily, IONetworkingFamily, msdosfs: unmodified Apple
 #     open-source reference sources, pinned to an exact tag, no patching.
 #     CORRECTED 2026-08-24: a full `distribution-macOS` `macos-112` manifest
@@ -93,7 +133,13 @@
 #     `distribution-macOS` is a real cross-project version manifest, one
 #     `git ls-tree macos-112 -- <name>` away from an exact matching tag for
 #     any other apple-oss-distributions repo Phase 4 ever needs -- prior
-#     project notes assumed no such manifest existed; it does.
+#     project notes assumed no such manifest existed; it does. `bash`
+#     itself gained real local fix commits on top of its `bash-123.40.1`
+#     tag (`smatch.c`'s `__collate_lookup` prototype-conflict fix, plus
+#     two real READLINE/HAVE_TERMCAP_H toggles), carried for a while as
+#     `bash.patch` applied via `git am` -- see the DAR-209 note further
+#     below for why that patch had already drifted and how it was
+#     converted to a real owned fork.
 #   - gnudiff/less/libarchive (Tier B command sweep, 2026-08-20): same
 #     `macos-112` manifest method, one wrinkle each --
 #     `git ls-tree macos-112 -- diffutils` has NO entry at all (real gap,
@@ -135,8 +181,18 @@
 #   - cron (Phase 5.5 item 3, 2026-08-22): same `macos-112` manifest
 #     method -- `git ls-tree macos-112 -- cron` == commit
 #     43ca0402cc51c9c81171c9ee1b92b28ed6148219 == tag `cron-40` (confirmed
-#     via `git ls-remote --tags`). Real, unmodified Apple `cron`/
-#     `crontab` source. `ntp` was investigated the same way and
+#     via `git ls-remote --tags`). Real Apple `cron`/`crontab` source,
+#     carrying real local fix commits on top of the tag (`do_command.c`
+#     dropping IOKit/CoreFoundation/vproc/launchd bootstrap glue this
+#     project has no equivalent for; a `pthread_once()`-based
+#     `COMPAT_MODE` init race and a broken `setlinebuf()` call, both real
+#     crashes) -- originally carried as `cron.patch` applied via `git am`
+#     after cloning upstream. 2026-09-07 (DAR-210): converted to cloning
+#     from this project's own fork (git@github.com:anurodhp/cron.git,
+#     branch iokit-port) instead -- the same fixes now live as real
+#     committed history on that branch. `third_party-patches/cron.patch`
+#     is no longer read by this script -- kept in the tree only as a
+#     historical record. `ntp` was investigated the same way and
 #     deliberately NOT pinned: `git ls-tree macos-112 -- ntp` has no entry
 #     at all (checked the full 232-entry manifest, not just this one
 #     lookup) -- real macOS 11.2 shipped no ntpd source at all, having
@@ -246,7 +302,15 @@ mkdir -p third_party
 #     `./runConfigureICU && make` hits an undefined-symbol link error for
 #     `AppleLanguageBreakFactory` without it. Not yet built for the
 #     target; this pin exists so the source is reproducible from a fresh
-#     clone while that build work proceeds.
+#     clone while that build work proceeds. The fix later grew to 3
+#     commits total (a matching `i18n/Makefile.in` build-list fix for
+#     `uameasureformat.cpp`, plus a `TARGET_OS_EMBEDDED` include guard),
+#     carried as `ICU.patch` applied via `git am` after cloning upstream.
+#     2026-09-07 (DAR-212): converted to cloning from this project's own
+#     fork (git@github.com:anurodhp/ICU.git, branch iokit-port) instead --
+#     the same 3 fixes now live as real committed history on that branch.
+#     `third_party-patches/ICU.patch` is no longer read by this script --
+#     kept in the tree only as a historical record.
 #   - libxml2 (CoreFoundation's CFXMLInterface.c, docs/backlog.md item
 #     d7's full-sweep pass): same `macos-112` manifest method --
 #     `git ls-tree macos-112 -- libxml2` == commit
@@ -327,6 +391,13 @@ mkdir -p third_party
 #     exclusions, real libbsm.a + a real, fully-static, zero-undefined-
 #     symbol smoketest.
 #
+#     2026-09-07 (DAR-211): converted to cloning from this project's own
+#     fork (git@github.com:anurodhp/bsm.git, branch iokit-port) instead
+#     of upstream + the `git am` patch-file step described above -- the
+#     same real fix now lives as real committed history on that branch.
+#     `third_party-patches/BSM.patch` is no longer read by this script --
+#     kept in the tree only as a historical record.
+#
 #   - Libm (2026-08-27): NOT manifest-verifiable the way every other pin
 #     above is -- checked `distribution-macOS`'s `release.json` at
 #     `macos-112` AND every other macOS tag back through `macos-1012`
@@ -363,12 +434,12 @@ IOUSBFamily|https://github.com/apple-oss-distributions/IOUSBFamily.git|IOUSBFami
 AppleUSBCDCDriver|https://github.com/apple-oss-distributions/AppleUSBCDCDriver.git|AppleUSBCDCDriver-4303.2.1|
 IONetworkingFamily|https://github.com/apple-oss-distributions/IONetworkingFamily.git|IONetworkingFamily-151.40.1|
 msdosfs|https://github.com/apple-oss-distributions/msdosfs.git|msdosfs-435.60.1|
-dyld|https://github.com/apple-oss-distributions/dyld.git|dyld-940|dyld.patch
-Libc|https://github.com/apple-oss-distributions/Libc.git|Libc-1439.40.11|Libc.patch
+dyld|git@github.com:anurodhp/dyld.git|iokit-port||https://github.com/apple-oss-distributions/dyld.git
+Libc|git@github.com:anurodhp/Libc.git|iokit-port||https://github.com/apple-oss-distributions/Libc.git
 libpthread|https://github.com/apple-oss-distributions/libpthread.git|libpthread-454.80.2|
 libplatform|https://github.com/apple-oss-distributions/libplatform.git|libplatform-254.80.2|
 Libsystem|https://github.com/apple-oss-distributions/Libsystem.git|Libsystem-1292.60.1|
-libdispatch|https://github.com/apple-oss-distributions/libdispatch.git|libdispatch-1271.40.12|libdispatch.patch
+libdispatch|git@github.com:anurodhp/libdispatch.git|iokit-port||https://github.com/apple-oss-distributions/libdispatch.git
 libclosure|https://github.com/apple-oss-distributions/libclosure.git|libclosure-78|
 libmalloc|https://github.com/apple-oss-distributions/libmalloc.git|libmalloc-317.40.8|
 objc4|https://github.com/apple-oss-distributions/objc4.git|objc4-818.2|
@@ -377,7 +448,7 @@ Libinfo|https://github.com/apple-oss-distributions/Libinfo.git|Libinfo-542.40.3|
 removefile|https://github.com/apple-oss-distributions/removefile.git|removefile-49.40.3|
 copyfile|https://github.com/apple-oss-distributions/copyfile.git|copyfile-173.40.2|
 Csu|git@github.com:anurodhp/Csu.git|bcm2837-bringup||https://github.com/apple-oss-distributions/Csu.git
-bash|https://github.com/apple-oss-distributions/bash.git|bash-123.40.1|bash.patch
+bash|git@github.com:anurodhp/bash.git|iokit-port||https://github.com/apple-oss-distributions/bash.git
 shell_cmds|https://github.com/apple-oss-distributions/shell_cmds.git|shell_cmds-216.60.1|
 file_cmds|https://github.com/apple-oss-distributions/file_cmds.git|file_cmds-321.40.3|
 text_cmds|https://github.com/apple-oss-distributions/text_cmds.git|text_cmds-106|
@@ -390,7 +461,7 @@ less|https://github.com/apple-oss-distributions/less.git|less-34|
 libarchive|https://github.com/apple-oss-distributions/libarchive.git|libarchive-83.40.4|
 CommonCrypto|https://github.com/apple-oss-distributions/CommonCrypto.git|CommonCrypto-60178.40.2|
 network_cmds|https://github.com/apple-oss-distributions/network_cmds.git|network_cmds-606.40.2|
-cron|https://github.com/apple-oss-distributions/cron.git|cron-40|cron.patch
+cron|git@github.com:anurodhp/cron.git|iokit-port||https://github.com/apple-oss-distributions/cron.git
 syslog|https://github.com/apple-oss-distributions/syslog.git|syslog-385|
 libutil|https://github.com/apple-oss-distributions/libutil.git|libutil-58.40.2|
 ncurses|https://github.com/apple-oss-distributions/ncurses.git|ncurses-57|
@@ -404,8 +475,8 @@ awk|https://github.com/apple-oss-distributions/awk.git|awk-27.40.1|
 IOKitTools|https://github.com/apple-oss-distributions/IOKitTools.git|IOKitTools-114.40.1|
 OpenSSH|https://github.com/apple-oss-distributions/OpenSSH.git|OpenSSH-240.40.1|
 Libnotify|https://github.com/apple-oss-distributions/Libnotify.git|Libnotify-279.40.4|
-BSM|https://github.com/apple-oss-distributions/BSM.git|bsm-13|BSM.patch
-ICU|https://github.com/apple-oss-distributions/ICU.git|ICU-66109|ICU.patch
+BSM|git@github.com:anurodhp/bsm.git|iokit-port||https://github.com/apple-oss-distributions/BSM.git
+ICU|git@github.com:anurodhp/ICU.git|iokit-port||https://github.com/apple-oss-distributions/ICU.git
 libxml2|https://github.com/apple-oss-distributions/libxml2.git|libxml2-34.9|
 cctools|https://github.com/apple-oss-distributions/cctools.git|cctools-973.0.1|
 Libm|https://github.com/apple-oss-distributions/Libm.git|Libm-2026|
