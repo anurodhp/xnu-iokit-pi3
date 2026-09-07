@@ -190,6 +190,13 @@ fi
 CFLAGS_INIT=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -O0)
 "$CLANG" "${CFLAGS_INIT[@]}" cf_compat_headers/cf_init_constructor.c -o "$EXTRACT/cf_init_constructor.o"
 
+# DAR-253: real _NSGetMachExecuteHeader() for this dylib specifically --
+# see cf_compat_headers/nsgetmachheader_compat.c's own header for the
+# full root-cause writeup (real NULL+0x10 crash inside cctools'
+# getsegbyname(), reached from CFBundleCreate()'s main-bundle
+# initialization the first time any bundle is created in a process).
+"$CLANG" "${CFLAGS_INIT[@]}" cf_compat_headers/nsgetmachheader_compat.c -o "$EXTRACT/nsgetmachheader_compat.o"
+
 # --- DROP: whole object fully superseded by a real sibling dylib -----
 #
 # cf_mach_port_syscalls.o / mach_port_traps.o (real __kernelrpc_mach_port_*
