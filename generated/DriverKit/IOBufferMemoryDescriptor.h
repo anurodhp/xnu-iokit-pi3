@@ -41,7 +41,7 @@
 
 #include <DriverKit/IOMemoryDescriptor.h>  /* .iig include */
 
-/* source class IOBufferMemoryDescriptor IOBufferMemoryDescriptor.iig:41-97 */
+/* source class IOBufferMemoryDescriptor IOBufferMemoryDescriptor.iig:41-96 */
 
 #if __DOCUMENTATION__
 #define KERNEL IIG_KERNEL
@@ -53,8 +53,7 @@
  * IOBufferMemoryDescriptor describes a memory buffer allocated in the callers address space.
  *
  * @discussion
- * To allocate memory for I/O or sharing, use IOBufferMemoryDescriptor::Create()
- * Methods in this class are used for memory that was supplied as a parameter.
+ * To allocate memory for I/O or sharing, use IOBufferMemoryDescriptor::Create().
  * IOBufferMemoryDescriptor can be handed to any API that expects an IOMemoryDescriptor.
  */
 
@@ -108,7 +107,7 @@ public:
 #undef KERNEL
 #else /* __DOCUMENTATION__ */
 
-/* generated class IOBufferMemoryDescriptor IOBufferMemoryDescriptor.iig:41-97 */
+/* generated class IOBufferMemoryDescriptor IOBufferMemoryDescriptor.iig:41-96 */
 
 #define IOBufferMemoryDescriptor_Create_ID            0xb78de684e17d5a4bULL
 #define IOBufferMemoryDescriptor_SetLength_ID            0xc115230c191a6a9aULL
@@ -250,6 +249,6 @@ public:
 
 #endif /* !__DOCUMENTATION__ */
 
-/* IOBufferMemoryDescriptor.iig:99- */
+/* IOBufferMemoryDescriptor.iig:98- */
 
 #endif /* ! _IOKIT_UIOBUFFERMEMORYDESCRIPTOR_H */

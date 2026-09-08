@@ -94,6 +94,18 @@
 #     that branch. `third_party-patches/libdispatch.patch` is no longer
 #     read by this script -- kept in the tree only as a historical
 #     record.
+#   - IOPCIFamily: added 2026-09-08 (DAR-244), headers only. There is no
+#     PCI bus on BCM2837 and this project will never have one -- the pin
+#     exists because IOUSBFamily's IOUSBControllerV3.h declares an
+#     `IOPCIDevice *_device` member and IOUSBController.cpp references
+#     IOPCIDevice in 8 places, so the header has to resolve for the
+#     family to compile at all. Unlike IOUSBFamily/Libm/BSM this one IS
+#     manifest-verified: `distribution-macOS` at `macos-112` pins
+#     IOPCIFamily at commit b6412a0416f0e9498dafb5d3ee7952e0b1248009,
+#     whose own commit message is "IOPCIFamily-428.80.2" -- that is the
+#     tag pinned here, resolved from the manifest rather than picked by
+#     recency. Checked for the IOUSBFamily-630.4.5 empty-file failure
+#     mode too; IOKit/pci's six headers are all real.
 #   - hfs, IOStorageFamily, IOUSBFamily, IONetworkingFamily, msdosfs: unmodified Apple
 #     open-source reference sources, pinned to an exact tag, no patching.
 #     CORRECTED 2026-08-24: a full `distribution-macOS` `macos-112` manifest
@@ -480,6 +492,7 @@ u-boot|git@github.com:anurodhp/u-boot.git|master||https://github.com/FlorentReve
 hfs|https://github.com/apple-oss-distributions/hfs.git|hfs-556.100.11|
 IOStorageFamily|https://github.com/apple-oss-distributions/IOStorageFamily.git|IOStorageFamily-260.40.5|
 IOUSBFamily|https://github.com/apple-oss-distributions/IOUSBFamily.git|IOUSBFamily-560.4.2|
+IOPCIFamily|https://github.com/apple-oss-distributions/IOPCIFamily.git|IOPCIFamily-428.80.2|
 AppleUSBCDCDriver|https://github.com/apple-oss-distributions/AppleUSBCDCDriver.git|AppleUSBCDCDriver-4303.2.1|
 IONetworkingFamily|https://github.com/apple-oss-distributions/IONetworkingFamily.git|IONetworkingFamily-151.40.1|
 msdosfs|https://github.com/apple-oss-distributions/msdosfs.git|msdosfs-435.60.1|

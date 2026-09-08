@@ -1,6 +1,6 @@
 /* iig(DriverKit-99) generated from IOService.iig */
 
-/* IOService.iig:1-59 */
+/* IOService.iig:1-60 */
 /*
  * Copyright (c) 2019-2019 Apple Inc. All rights reserved.
  *
@@ -43,6 +43,7 @@
 class IOMemoryDescriptor;
 class IOBufferMemoryDescriptor;
 class IOUserClient;
+class OSAction;
 
 typedef char IOServiceName[128];
 typedef char IOPropertyName[128];
@@ -60,7 +61,7 @@ enum {
 	kIOServicePowerCapabilityLow = 0x00010000,
 };
 
-/* source class IOService IOService.iig:60-248 */
+/* source class IOService IOService.iig:61-351 */
 
 #if __DOCUMENTATION__
 #define KERNEL IIG_KERNEL
@@ -250,13 +251,115 @@ public:
 	Create(
 		IOService          * provider,
 		const IOPropertyName propertiesKey,
-		IOService         ** result);
+		IOService         ** result) LOCAL;
+
+    /*!
+     * @brief       Start an IOService termination.
+     * @discussion  An IOService object created with Create() may be removed by calling Terminate().
+     *              The termination is asynchronous and will later call Stop() on the service.
+     * @param       options No options are currently defined, pass zero.
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+	virtual kern_return_t
+	Terminate(
+		uint64_t			 options);
+
+   /*!
+    * @brief       Obtain supportable properties describing the provider chain.
+    * @discussion  Obtain supportable properties describing the provider chain. This will be a subset of registry
+    *              properties the OS considers supportable.
+    *              The array is ordered with a dictionary of properties for each entry in the provider chain from this
+    *              service towards the root.
+    * @param       propertyKeys If only certain property values are need, they may be passed in this array.
+    * @param       properties Returned, retained array of dictionaries of properties or NULL. The caller should release
+    *              this array.
+    * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+    */
+	virtual kern_return_t
+	CopyProviderProperties(
+		OSArray  * propertyKeys,
+		OSArray ** properties);
+
+   /*!
+    * @brief       Reduce power saving modes in the system in order to provide decreased latency
+	*			   to hardware DMA requests.
+    * @discussion  When the system enters lower power states DMA access to memory may be affected.
+	*			   The best way by far to handle this is to change how you schedule your time-critical DMA operations in
+	*			   your driver such that an occasional delay will not affect the proper functioning of your device.
+	*			   However, if this is not possible, your driver can inform power management when a time-critical transfer
+	*			   begins and ends so that the system will not enter the lowest power states during that time. To do this,
+	*			   pass a value to requireMaxBusStall that informs power management of the maximum memory access latency in
+	*			   nanoseconds that can be tolerated by the driver. This value is hardware dependent and is related to the
+	*			   amount of buffering available in the hardware.
+	*			   Supported values are given by the kIOMaxBusStall* enum in IOTypes.h
+	*			   Pass the largest value possible that works for your device. This will minimize power
+	*			   consumption and maximize battery life by still allowing some level of CPU power management.
+    * @param       maxBusStall A value from the kIOMaxBusStall* enum in IOTypes.h
+    * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+    */
+	virtual kern_return_t
+	RequireMaxBusStall(
+		uint64_t maxBusStall);
+
+	/*! @function IOCreatePropertyMatchingDictionary
+	 *   @abstract Construct a matching dictionary for property matching.
+	 */
+	static OSDictionary *
+	CreatePropertyMatchingDictionary(const char * key, OSObjectPtr value, OSDictionary * matching) LOCALONLY;
+
+	/*! @function IOCreatePropertyMatchingDictionary
+	 *   @abstract Construct a matching dictionary for property matching.
+	 */
+	static OSDictionary *
+	CreatePropertyMatchingDictionary(const char * key, const char * stringValue, OSDictionary * matching) LOCALONLY;
+
+	/*! @function IOCreateKernelClassMatchingDictionary
+	 *   @abstract Construct a matching dictionary for kernel class matching.
+	 */
+	static OSDictionary *
+	CreateKernelClassMatchingDictionary(OSString * className, OSDictionary * matching) LOCALONLY;
+
+	/*! @function IOCreateKernelClassMatchingDictionary
+	 *   @abstract Construct a matching dictionary for kernel class matching.
+	 */
+	static OSDictionary *
+	CreateKernelClassMatchingDictionary(const char * className, OSDictionary * matching) LOCALONLY;
+
+	/*! @function IOCreateUserClassMatchingDictionary
+	 *   @abstract Construct a matching dictionary for user class matching.
+	 */
+	static OSDictionary *
+	CreateUserClassMatchingDictionary(OSString * className, OSDictionary * matching) LOCALONLY;
+
+	/*! @function IOCreateUserClassMatchingDictionary
+	 *   @abstract Construct a matching dictionary for user class matching.
+	 */
+	static OSDictionary *
+	CreateUserClassMatchingDictionary(const char * className, OSDictionary * matching) LOCALONLY;
+
+	/*! @function IOCreateNameMatchingDictionary
+	 *   @abstract Construct a matching dictionary for IOService name matching.
+	 */
+	static OSDictionary *
+	CreateNameMatchingDictionary(OSString * serviceName, OSDictionary * matching) LOCALONLY;
+
+	/*! @function IOCreateNameMatchingDictionary
+	 *   @abstract Construct a matching dictionary for IOService name matching.
+	 */
+	static OSDictionary *
+	CreateNameMatchingDictionary(const char * serviceName, OSDictionary * matching) LOCALONLY;
+
+
+private:
+	virtual void
+	Stop_async(
+		IOService          * provider) LOCAL;
 };
 
 #undef KERNEL
 #else /* __DOCUMENTATION__ */
 
-/* generated class IOService IOService.iig:60-248 */
+/* generated class IOService IOService.iig:61-351 */
 
 #define IOService_Start_ID            0xab6f76dde6d693f2ULL
 #define IOService_Stop_ID            0x98e715041c459fa5ULL
@@ -270,6 +373,10 @@ public:
 #define IOService_ChangePowerState_ID            0xdb75cfc3395484a0ULL
 #define IOService_NewUserClient_ID            0xf669efffcb89ed9cULL
 #define IOService_Create_ID            0xe1a46dbd68bbe09cULL
+#define IOService_Terminate_ID            0xf7a595d9927810c8ULL
+#define IOService_CopyProviderProperties_ID            0xc2a554959002c8e7ULL
+#define IOService_RequireMaxBusStall_ID            0xc21228652ff536afULL
+#define IOService_Stop_async_ID            0xa8c93137712a16a2ULL
 
 #define IOService_Start_Args \
         IOService * provider
@@ -320,6 +427,19 @@ public:
         IOService * provider, \
         const char * propertiesKey, \
         IOService ** result
+
+#define IOService_Terminate_Args \
+        uint64_t options
+
+#define IOService_CopyProviderProperties_Args \
+        OSArray * propertyKeys, \
+        OSArray ** properties
+
+#define IOService_RequireMaxBusStall_Args \
+        uint64_t maxBusStall
+
+#define IOService_Stop_async_Args \
+        IOService * provider
 
 #define IOService_Methods \
 \
@@ -396,6 +516,69 @@ public:\
         IOService ** result,\
         OSDispatchMethod supermethod = NULL);\
 \
+    kern_return_t\
+    Terminate(\
+        uint64_t options,\
+        OSDispatchMethod supermethod = NULL);\
+\
+    kern_return_t\
+    CopyProviderProperties(\
+        OSArray * propertyKeys,\
+        OSArray ** properties,\
+        OSDispatchMethod supermethod = NULL);\
+\
+    kern_return_t\
+    RequireMaxBusStall(\
+        uint64_t maxBusStall,\
+        OSDispatchMethod supermethod = NULL);\
+\
+    static OSDictionary *\
+    CreatePropertyMatchingDictionary(\
+        const char * key,\
+        OSObjectPtr value,\
+        OSDictionary * matching);\
+\
+    static OSDictionary *\
+    CreatePropertyMatchingDictionary(\
+        const char * key,\
+        const char * stringValue,\
+        OSDictionary * matching);\
+\
+    static OSDictionary *\
+    CreateKernelClassMatchingDictionary(\
+        OSString * className,\
+        OSDictionary * matching);\
+\
+    static OSDictionary *\
+    CreateKernelClassMatchingDictionary(\
+        const char * className,\
+        OSDictionary * matching);\
+\
+    static OSDictionary *\
+    CreateUserClassMatchingDictionary(\
+        OSString * className,\
+        OSDictionary * matching);\
+\
+    static OSDictionary *\
+    CreateUserClassMatchingDictionary(\
+        const char * className,\
+        OSDictionary * matching);\
+\
+    static OSDictionary *\
+    CreateNameMatchingDictionary(\
+        OSString * serviceName,\
+        OSDictionary * matching);\
+\
+    static OSDictionary *\
+    CreateNameMatchingDictionary(\
+        const char * serviceName,\
+        OSDictionary * matching);\
+\
+    void\
+    Stop_async(\
+        IOService * provider,\
+        OSDispatchMethod supermethod = NULL);\
+\
 \
 protected:\
     /* _Impl methods */\
@@ -414,6 +597,12 @@ protected:\
 \
     kern_return_t\
     SetPowerState_Impl(IOService_SetPowerState_Args);\
+\
+    kern_return_t\
+    Create_Impl(IOService_Create_Args);\
+\
+    void\
+    Stop_async_Impl(IOService_Stop_async_Args);\
 \
 \
 public:\
@@ -491,6 +680,30 @@ public:\
         OSMetaClassBase * target,\
         Create_Handler func);\
 \
+    typedef kern_return_t (*Terminate_Handler)(OSMetaClassBase * target, IOService_Terminate_Args);\
+    static kern_return_t\
+    Terminate_Invoke(const IORPC rpc,\
+        OSMetaClassBase * target,\
+        Terminate_Handler func);\
+\
+    typedef kern_return_t (*CopyProviderProperties_Handler)(OSMetaClassBase * target, IOService_CopyProviderProperties_Args);\
+    static kern_return_t\
+    CopyProviderProperties_Invoke(const IORPC rpc,\
+        OSMetaClassBase * target,\
+        CopyProviderProperties_Handler func);\
+\
+    typedef kern_return_t (*RequireMaxBusStall_Handler)(OSMetaClassBase * target, IOService_RequireMaxBusStall_Args);\
+    static kern_return_t\
+    RequireMaxBusStall_Invoke(const IORPC rpc,\
+        OSMetaClassBase * target,\
+        RequireMaxBusStall_Handler func);\
+\
+    typedef void (*Stop_async_Handler)(OSMetaClassBase * target, IOService_Stop_async_Args);\
+    static kern_return_t\
+    Stop_async_Invoke(const IORPC rpc,\
+        OSMetaClassBase * target,\
+        Stop_async_Handler func);\
+\
 
 
 #define IOService_KernelMethods \
@@ -523,7 +736,13 @@ protected:\
     NewUserClient_Impl(IOService_NewUserClient_Args);\
 \
     kern_return_t\
-    Create_Impl(IOService_Create_Args);\
+    Terminate_Impl(IOService_Terminate_Args);\
+\
+    kern_return_t\
+    CopyProviderProperties_Impl(IOService_CopyProviderProperties_Args);\
+\
+    kern_return_t\
+    RequireMaxBusStall_Impl(IOService_RequireMaxBusStall_Args);\
 \
 
 
@@ -595,6 +814,6 @@ public:
 
 #endif /* !__DOCUMENTATION__ */
 
-/* IOService.iig:250- */
+/* IOService.iig:353- */
 
 #endif /* ! _IOKIT_UIOSERVICE_H */

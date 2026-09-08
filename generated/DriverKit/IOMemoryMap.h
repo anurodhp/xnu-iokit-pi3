@@ -40,7 +40,7 @@
 
 #include <DriverKit/OSObject.h>  /* .iig include */
 
-struct IOMemoryMapPrivateState {
+struct _IOMemoryMapPrivateState {
 	uint64_t length;
 	uint64_t offset;
 	uint64_t options;
@@ -103,7 +103,7 @@ public:
 #define IOMemoryMap__CopyState_ID            0xfc92b3d7f2d48ec7ULL
 
 #define IOMemoryMap__CopyState_Args \
-        IOMemoryMapPrivateState * state
+        _IOMemoryMapPrivateState * state
 
 #define IOMemoryMap_Methods \
 \
@@ -117,7 +117,7 @@ public:\
 \
     kern_return_t\
     _CopyState(\
-        IOMemoryMapPrivateState * state,\
+        _IOMemoryMapPrivateState * state,\
         OSDispatchMethod supermethod = NULL);\
 \
     uint64_t\
