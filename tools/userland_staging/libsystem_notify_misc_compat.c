@@ -44,10 +44,18 @@
  * for 'shm_open'" error against the SDK's own real <sys/mman.h>
  * `int shm_open(const char *, int, ...)` declaration): shm_open()'s real
  * POSIX/Darwin prototype is variadic (the mode argument only matters
- * with O_CREAT), not a fixed 3-arg function -- fixed below to match the
- * real declared prototype exactly, not just this file's own two real
- * call sites (both of which do always pass exactly 3 arguments, so
- * behavior here is unchanged).
+ * with O_CREAT), not a fixed 3-arg function -- widened below to match
+ * the real declared prototype exactly.
+ *
+ * The mode `va_arg` is only consumed when O_CREAT is actually set
+ * (2026-09-08, code review): real POSIX/Darwin shm_open() only defines
+ * a mode argument's existence when O_CREAT is passed, and reading a
+ * va_arg the caller never supplied is real undefined behavior, not a
+ * theoretical one -- this file's own two current call sites always
+ * pass 3 arguments so it never fired here, but the widened prototype
+ * above makes a legal 2-arg O_RDONLY caller (real POSIX usage) a live
+ * trap for the next one. O_CREAT's real value, 0x0200, copied from
+ * this file's own creat() below rather than reinvented.
  */
 struct real_timespec { long tv_sec; long tv_nsec; };
 
@@ -74,11 +82,13 @@ static inline long syscall3(long num, long a0, long a1, long a2) {
 }
 
 int shm_open(const char *name, int oflag, ...) {
-    __builtin_va_list ap;
     int mode = 0;
-    __builtin_va_start(ap, oflag);
-    mode = __builtin_va_arg(ap, int);
-    __builtin_va_end(ap);
+    if (oflag & 0x0200 /* O_CREAT */) {
+        __builtin_va_list ap;
+        __builtin_va_start(ap, oflag);
+        mode = __builtin_va_arg(ap, int);
+        __builtin_va_end(ap);
+    }
     return (int)syscall3(266, (long)name, oflag, mode);
 }
 

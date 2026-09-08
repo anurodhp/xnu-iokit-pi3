@@ -200,16 +200,24 @@ ln -sf "$(pwd)/$XNU/libkern/libkern/OSTypes.h" "$OUT/sc_headers/libkern/OSTypes.
 # pinned iPhoneOS14.4 SDK (os_log_t/os_log_type_t/os_log_create/
 # os_log_type_enabled all come from there, untouched, already used by
 # build_corefoundation.sh). This project also has no os_log(3) delivery
-# daemon at all (see os_log_compat.c's own header comment) -- real,
-# unmodified configd source (SCD.c's __SC_log_enabled()) already checks
-# os_log_type_enabled() first, and this project's real
-# os_log_type_enabled() always returns false, so every real SC_log()/
-# os_log_pack_*() call site is unreachable at runtime regardless of what
-# this header declares. This only needs to let real, unmodified Apple
-# source PARSE (this pass) and eventually LINK (a future pass, once
-# sc_log_pack_compat.c is wired into a real link) -- it is NOT a
-# reimplementation of Apple's real, never-open-sourced, ABI-undocumented
-# firehose pack-buffer wire format.
+# daemon at all (see os_log_compat.c's own header comment).
+#
+# CORRECTED 2026-09-08 (code review): this comment used to claim
+# os_log_type_enabled() always returning false makes every real
+# SC_log()/os_log_pack_*() call site unreachable at runtime -- that is
+# false and was disproven the hard way (DAR-263/DAR-265, two real QEMU
+# boots of configd logging nothing before it was root-caused). Real,
+# unmodified SCD.c's __SC_log_enabled() only checks
+# os_log_type_enabled() FIRST; it then falls through to
+# `if (_sc_debug != kSCLogDestinationFile ...)` and returns true for
+# every level below LOG_INFO -- and configd's own real `-d` flag (now
+# in this project's own LaunchDaemons plist, added under DAR-263) sets
+# exactly that. These call sites are genuinely reached at runtime; see
+# sc_log_pack_compat.c's own header for the real fix that followed from
+# discovering this. This header only needs to let real, unmodified
+# Apple source PARSE and LINK -- it is NOT a reimplementation of
+# Apple's real, never-open-sourced, ABI-undocumented firehose pack-
+# buffer wire format.
 #
 # struct os_log_pack_s's two named members below (olp_continuous_time/
 # olp_wall_time) are the ONLY fields any real pinned source in this
@@ -234,12 +242,24 @@ mkdir -p "$OUT/compat_include/os"
 # write, and a declaration present in only one copy); see that header's
 # own comment for the full write-up (DAR-263).
 #
-# The `cmp` is the point: it makes a future divergence a build failure
-# here instead of a silent layout skew at runtime.
+# The real fix for DAR-263's divergence is structural, above this line:
+# there is now exactly ONE checked-in source (os_log_compat_headers/
+# os/log_private.h) instead of two independent heredocs, so a second
+# writer silently overwriting this path with different content is no
+# longer possible by construction -- not merely detected after the
+# fact. The `cmp` below is NOT that protection (corrected 2026-09-08,
+# code review: the comment here used to claim it "makes a future
+# divergence a build failure," which overclaims what a cmp run
+# immediately after its own cp can ever catch). Comparing the
+# destination to the exact file cp just copied it from can only ever
+# fail if cp itself silently failed to write a byte-identical copy
+# (a real, if narrow, thing worth catching honestly -- a full disk, a
+# permission/read-back oddity) -- it cannot see any OTHER script that
+# might write to this path, before or after this line runs.
 mkdir -p "$OUT/compat_include/os"
 cp os_log_compat_headers/os/log_private.h "$OUT/compat_include/os/log_private.h"
 cmp -s os_log_compat_headers/os/log_private.h "$OUT/compat_include/os/log_private.h" || {
-    echo "error: failed to install os_log_compat_headers/os/log_private.h" >&2
+    echo "error: cp did not produce a byte-identical copy of os_log_compat_headers/os/log_private.h" >&2
     exit 1
 }
 

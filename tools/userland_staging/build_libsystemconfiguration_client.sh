@@ -206,12 +206,24 @@ mkdir -p "$OUT/compat_include/os"
 # write, and a declaration present in only one copy); see that header's
 # own comment for the full write-up (DAR-263).
 #
-# The `cmp` is the point: it makes a future divergence a build failure
-# here instead of a silent layout skew at runtime.
+# The real fix for DAR-263's divergence is structural, above this line:
+# there is now exactly ONE checked-in source (os_log_compat_headers/
+# os/log_private.h) instead of two independent heredocs, so a second
+# writer silently overwriting this path with different content is no
+# longer possible by construction -- not merely detected after the
+# fact. The `cmp` below is NOT that protection (corrected 2026-09-08,
+# code review: the comment here used to claim it "makes a future
+# divergence a build failure," which overclaims what a cmp run
+# immediately after its own cp can ever catch). Comparing the
+# destination to the exact file cp just copied it from can only ever
+# fail if cp itself silently failed to write a byte-identical copy
+# (a real, if narrow, thing worth catching honestly -- a full disk, a
+# permission/read-back oddity) -- it cannot see any OTHER script that
+# might write to this path, before or after this line runs.
 mkdir -p "$OUT/compat_include/os"
 cp os_log_compat_headers/os/log_private.h "$OUT/compat_include/os/log_private.h"
 cmp -s os_log_compat_headers/os/log_private.h "$OUT/compat_include/os/log_private.h" || {
-    echo "error: failed to install os_log_compat_headers/os/log_private.h" >&2
+    echo "error: cp did not produce a byte-identical copy of os_log_compat_headers/os/log_private.h" >&2
     exit 1
 }
 

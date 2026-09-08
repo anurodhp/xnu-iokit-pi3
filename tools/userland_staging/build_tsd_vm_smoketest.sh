@@ -83,7 +83,15 @@ otool -l "$M" | grep -q "cmd LC_MAIN" || {
 }
 # Real two-level-bind gate (see CLAUDE.md / bind_target_audit.sh): a clean
 # link and a clean `nm -m` do NOT prove every bind resolves at load.
-if [ -x ./bind_target_audit.sh ]; then
-    ./bind_target_audit.sh "$M"
-fi
+# Hard-gated, not merely run-if-present (2026-09-08, code review): this
+# was the one sibling smoketest script in this family that only ran the
+# audit when present and never checked its exit status, so a real
+# unresolvable bind here would print "wrote ... real dynamic
+# executable" and exit 0 -- exactly the DAR-217-class silent-abort
+# CLAUDE.md documents this gate as existing to catch, in the one script
+# that wasn't actually enforcing it.
+./bind_target_audit.sh "$M" || {
+    echo "error: $M has an unresolvable two-level bind -- it would abort at dyld load" >&2
+    exit 1
+}
 echo "wrote $M ($(wc -c < "$M") bytes, real dynamic executable)"

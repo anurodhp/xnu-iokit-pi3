@@ -56,7 +56,17 @@ os_log_pack_size(const char *format, ...)
 /* Rewrite every `%@` to `%p` (see this file's header for why). Both
  * consume exactly one pointer argument, so the varargs walk stays in
  * step; only the rendering of that one argument changes. `%%` is
- * skipped so an escaped percent can't be mistaken for a conversion. */
+ * skipped so an escaped percent can't be mistaken for a conversion.
+ *
+ * A `%%`/`%@` pair is only ever written as a whole (2026-09-08, code
+ * review): the previous version re-checked buffer room only before the
+ * SECOND character of the pair, so a truncation landing exactly between
+ * them wrote a lone, dangling `%` as the last byte before the
+ * terminator -- a real conversion-start character with nothing after
+ * it, real undefined behavior once handed to vsnprintf(3) below. When
+ * a pair would not fully fit, this stops one character earlier instead
+ * of splitting it, matching the plain-character path's own existing
+ * "stop cleanly, still NUL-terminate" behavior. */
 static void
 sc_log_pack_sanitize_format(const char *in, char *out, size_t out_size)
 {
@@ -66,18 +76,12 @@ sc_log_pack_sanitize_format(const char *in, char *out, size_t out_size)
 		return;
 	}
 	while (in != NULL && *in != '\0' && i + 1 < out_size) {
-		if (in[0] == '%' && in[1] == '%') {
-			out[i++] = *in++;
-			if (i + 1 < out_size) {
-				out[i++] = *in++;
+		if (in[0] == '%' && (in[1] == '%' || in[1] == '@')) {
+			if (i + 2 >= out_size) {
+				break;
 			}
-			continue;
-		}
-		if (in[0] == '%' && in[1] == '@') {
 			out[i++] = '%';
-			if (i + 1 < out_size) {
-				out[i++] = 'p';
-			}
+			out[i++] = (in[1] == '%') ? '%' : 'p';
 			in += 2;
 			continue;
 		}

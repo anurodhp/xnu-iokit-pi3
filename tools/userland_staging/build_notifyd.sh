@@ -373,9 +373,19 @@ done
 compile_one "$MIGOUT/notify_ipcUser.c"
 compile_one "$MIGOUT/notify_ipcServer.c"
 compile_one "$MIGOUT/notifyServer.c"
-# UseSpecialReplyPort 1 support (notify_ipc.defs:38) -- same real,
+# UseSpecialReplyPort 1 support (notify_ipc.defs:38) -- the real,
 # already-curated helper pair build_libnotify.sh's own header comment
-# establishes; reused verbatim, not recompiled from a different source.
+# establishes. Only HALF of that pair is reused as-is: the raw trap
+# object (notify_mig_special_reply_port_trap.o) is linked directly from
+# build_libnotify.sh's own output further down this script. This C
+# source is freshly recompiled here into a notifyd-private object
+# instead (corrected 2026-09-08, code review -- the comment here used to
+# claim both halves were "reused verbatim," which reads as object-level
+# reuse for this one too; it is the same real, unmodified source
+# recompiled, not a different implementation, but it is a real second
+# clang invocation each build, and the two compiled copies could
+# silently diverge if this script and build_libnotify.sh's own CFLAGS
+# for it were ever edited independently).
 compile_one "notify_mig_special_reply_port.c"
 
 # Real, small, per-image-safe compat objects -- each is a self-contained
