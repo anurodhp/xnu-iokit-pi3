@@ -174,9 +174,9 @@ SD_IMAGE=qemu/fat32_test.dmg ROOT_DEV=disk0 ./runvm.sh   # older single-partitio
 ```
 
 `runvm.sh` uses `third_party/qemu-zhuowei` (zhuowei's QEMU fork) —
-**never** substitute plain `qemu-system-aarch64` or `tools/direct_boot`;
-both lack qemu-zhuowei's secondary-core-parking patch and won't boot
-correctly. Key boot-args baked into the script: `serial=3` (required for
+**never** substitute plain `qemu-system-aarch64`; it lacks
+qemu-zhuowei's secondary-core-parking patch and won't boot correctly.
+Key boot-args baked into the script: `serial=3` (required for
 serial keyboard *input* to reach the shell, not just output),
 `cpu-factor=10` (scales XNU's `INTERRUPT_MASKED_DEBUG` watchdog timeout —
 QEMU/TCG's wall-clock jitter under host scheduling contention otherwise

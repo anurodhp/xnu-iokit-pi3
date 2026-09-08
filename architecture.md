@@ -31,8 +31,7 @@ bsd_init() -> load_init_program() -> execs real, dynamically-linked
 
 QEMU boots via `third_party/qemu-zhuowei` specifically (not stock
 `qemu-system-aarch64`) because it carries a local patch to park secondary
-cores the way real firmware does; `tools/direct_boot` is an older,
-less-reliable path kept for reference only. Real hardware follows the
+cores the way real firmware does. Real hardware follows the
 same kernel/DT artifacts through u-boot's `bootxnu`, but boot verification
 there is currently unconfirmed past kernel entry (no serial cable).
 

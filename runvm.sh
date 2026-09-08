@@ -2,8 +2,8 @@
 # Boots the current from-source xnu-7195 build (branch bcm2837-bringup) via
 # qemu-zhuowei's raspi3 loader - the proven boot-verification path (see
 # project memory "FROM-SOURCE BOOT MILESTONE REACHED"). Do NOT swap in plain
-# system qemu-system-aarch64 or tools/direct_boot - both lack qemu-zhuowei's
-# local secondary-core-parking patch and will not boot correctly.
+# system qemu-system-aarch64 - it lacks qemu-zhuowei's local
+# secondary-core-parking patch and will not boot correctly.
 #
 # Boots a real, permission-bearing HFS+ root off a genuine two-partition SD
 # card image (qemu/hfs_root_test.img: MBR partition 1 = FAT32 boot firmware,
