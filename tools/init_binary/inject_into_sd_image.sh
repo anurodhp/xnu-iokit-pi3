@@ -683,6 +683,20 @@ else
     echo "= mach_port_construct_smoketest.macho not built -- run tools/userland_staging/build_mach_port_construct_smoketest.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/libc_build/dispatch_machport_smoketest.macho ]; then
+    mkdir -p "$MNT/usr/local/bin"
+    cp tools/userland_staging/libc_build/dispatch_machport_smoketest.macho \
+        "$MNT/usr/local/bin/dispatch_machport_smoketest"
+    chmod 755 "$MNT/usr/local/bin/dispatch_machport_smoketest"
+    echo "+ wrote dispatch_machport_smoketest to $MNT/usr/local/bin/"
+    echo "  (DAR-266/DAR-268 EVFILT_MACHPORT dispatch-source probe, argv modes"
+    echo "  mt/proc/recv-create/recv-resume/recv-block/recv-deliver/notify/all,"
+    echo "  run by hand from the root shell post-boot --"
+    echo "  tools/userland_staging/build_dispatch_machport_smoketest.sh)"
+else
+    echo "= dispatch_machport_smoketest.macho not built -- run tools/userland_staging/build_dispatch_machport_smoketest.sh first if wanted, skipping"
+fi
+
 if [ -f tools/userland_staging/configd.macho ]; then
     mkdir -p "$MNT/usr/libexec" "$MNT/Library/LaunchDaemons"
     cp tools/userland_staging/configd.macho "$MNT/usr/libexec/configd"
