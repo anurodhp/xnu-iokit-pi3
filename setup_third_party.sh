@@ -421,6 +421,24 @@ mkdir -p third_party
 #     ported). See `docs/apple-oss-catalog.md` for the full real
 #     manifest-sweep/tag-date method.
 #
+#   - configd (2026-09-08): same real local fix as always -- DAR-170's
+#     `plugin_support.c` change treating IPConfiguration as a builtin
+#     plugin (this port has no proven CFBundle-dlopen-of-a-.bproj path,
+#     see that ticket) -- originally carried as `configd.patch` applied
+#     via `git am` after cloning upstream `configd-1109.60.2`. Converted
+#     to cloning from this project's own fork (git@github.com:anurodhp/
+#     configd.git, branch iokit-port) instead -- the fix now lives as a
+#     real committed history on that branch, one commit past the same
+#     pinned `configd-1109.60.2` tag. `third_party-patches/configd.patch`
+#     is no longer read by this script -- removed from the tree (unlike
+#     the historical-record patches above, nothing else in this repo
+#     documents it independently, e.g. no sdcard/README.md-style
+#     regeneration note, so keeping a dead copy around had no value).
+#     NOTE: the fork's own `main` branch is a plain, unrelated mirror of
+#     upstream (currently at `configd-1405.100.8`, far newer than the
+#     pinned tag, no patch applied) -- always clone `iokit-port`
+#     specifically, never `main`, for this repo.
+#
 # name | clone_url | ref (branch or tag) | patch file (optional, relative to third_party-patches/)
 REPOS='
 xnu-7195|git@github.com:anurodhp/xnu-pi3-macos11.git|bcm2837-bringup|
@@ -481,7 +499,7 @@ libxml2|https://github.com/apple-oss-distributions/libxml2.git|libxml2-34.9|
 cctools|https://github.com/apple-oss-distributions/cctools.git|cctools-973.0.1|
 Libm|https://github.com/apple-oss-distributions/Libm.git|Libm-2026|
 bootp|https://github.com/apple-oss-distributions/bootp.git|bootp-413.80.1|
-configd|https://github.com/apple-oss-distributions/configd.git|configd-1109.60.2|configd.patch
+configd|git@github.com:anurodhp/configd.git|iokit-port||https://github.com/apple-oss-distributions/configd.git
 PowerManagement|https://github.com/apple-oss-distributions/PowerManagement.git|PowerManagement-1132.81.1|
 '
 
