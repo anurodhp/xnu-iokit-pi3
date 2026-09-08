@@ -463,7 +463,22 @@ fi
     -I "$CCTOOLS/include" -I "$CCTOOLS" \
     "$CCTOOLS/libmacho/arch.c" -o "$OUT/cf_obj/cctools_arch.o"
 
-echo "compiled: $((${#FILES[@]} + 22)) real/compat CoreFoundation source files (zero errors)"
+# DAR-252: real, from-scratch CFFileDescriptor implementation --
+# CFFileDescriptor.c has never been open-sourced by Apple (confirmed
+# against apple-oss-distributions/CF's real tree, not just this fork's
+# swift-corelibs-foundation), but the real public API/header IS shipped
+# in every real SDK, so this is a real implementation of a real,
+# documented contract, not a guess -- see the file's own header comment
+# for the full writeup (modeled on this exact codebase's own real
+# CFSocket.c manager-thread mechanism). Compiled with the same CFLAGS
+# as every real CF file above so it shares CFRuntime/CFInternal
+# internals, but lives in this project's own tree (not the vendored
+# fork) since there is no real Apple source to port -- same convention
+# as configd_plugin_sha256_compat.c and friends.
+"$CLANG" "${CFLAGS[@]}" "cf_filedescriptor_compat.c" \
+    -o "$OUT/cf_obj/cf_filedescriptor_compat.o"
+
+echo "compiled: $((${#FILES[@]} + 23)) real/compat CoreFoundation source files (zero errors)"
 
 rm -f "$OUT/libCoreFoundation.a"
 ar rcs "$OUT/libCoreFoundation.a" "$OUT"/cf_obj/*.o

@@ -192,48 +192,26 @@
 #   GetNativeDescriptor/Invalidate (FDSet.c's real
 #   FDCalloutCreateFileDescriptor(), the non-socket/raw-BPF-fd receive
 #   path FDCalloutCreate() takes via a real fstat()+S_ISSOCK check):
-#   genuinely never implemented anywhere in this project's pinned CF
-#   (swift-corelibs-foundation has NO CFFileDescriptor.c file at all,
-#   confirmed via `find`) -- and confirmed absent (2026-09-06) from real
-#   apple-oss-distributions/CF too (cloned CF-855.17 directly and grepped
-#   for CFFileDescriptorGetTypeID/__CFFileDescriptor, zero hits anywhere
-#   in that checkout either; not just this project's own portable
-#   substitute). NOT a narrow stub (a real no-op here would silently
-#   break real DHCP-reply reception on whatever code path actually needs
-#   the raw-fd branch). Filed as DAR-252.
-#
-#   UPDATE 2026-09-06: this file's own `-include
-#   configd_cffiledescriptor_weak_compat.h` above (added this session)
-#   re-declares these 5 real entry points __attribute__((weak_import)),
-#   shadowing the real SDK's CFFileDescriptor.h the same way every other
-#   -include compat header here does. This is required ALONGSIDE
-#   build_configd.sh's own "-Wl,-U,_CFFileDescriptorCreate" et al link
-#   flags, not instead of them: this project's default -fixup_chains
-#   link mode resolves every bind eagerly at process launch, so a plain
-#   "-Wl,-U" deferral (which used to only matter the first time
-#   FDCalloutCreate() actually took the raw-fd branch, under classic
-#   lazy dyld binding) now aborts configd's dyld load unconditionally,
-#   before main() ever runs -- found via a real kernel-side
-#   abort_with_payload() reason-string probe (bsd/kern/kern_exit.c,
-#   -user_fault_debug) reading dyld's own real "symbol not found in flat
-#   namespace '_CFFileDescriptorCreate'" halt message. The weak_import
-#   attribute is what makes real dyld's flat-lookup resolution (real
-#   Loader.cpp's own resolveSymbol(), BIND_SPECIAL_DYLIB_FLAT_LOOKUP's
-#   "not found" branch) bind to NULL instead of erroring -- confirmed
-#   empirically, not assumed: removing "-Wl,-U" while keeping only this
-#   -include reintroduces a hard link-time "Undefined symbols" error, so
-#   both mechanisms are genuinely required together, see
-#   build_configd.sh's own updated comment for the fuller writeup. Still
-#   does NOT implement CFFileDescriptor -- DAR-252's real port is still
-#   owed before FDCalloutCreateFileDescriptor()'s raw-BPF-fd path can
-#   actually work; calling any of these five once configd is running
-#   will now null-deref through an unbound weak import instead, a real,
-#   far narrower follow-on bug than the whole daemon being unable to
-#   boot at all. Whether real DHCP lease negotiation over Ethernet
-#   actually reaches this path (vs. staying on FDCalloutCreate()'s real,
-#   already-working CFSocket branch for a genuine UDP socket fd) is
-#   exactly what DAR-170's own QEMU verification needs to determine
-#   next.
+#   RESOLVED (DAR-252, 2026-09-08). A real, from-scratch
+#   CFFileDescriptor implementation now lives in
+#   tools/userland_staging/cf_filedescriptor_compat.c (compiled into
+#   libCoreFoundation.a/.dylib by build_corefoundation.sh -- see that
+#   file's own header for the full writeup: CFFileDescriptor.c has
+#   never been open-sourced by Apple on any release, confirmed against
+#   both swift-corelibs-foundation and the real apple-oss-distributions/
+#   CF tree, so this is "last resort custom" against a real, known
+#   public contract, not a guess). The weak-import shadow header this
+#   file used to -include (configd_cffiledescriptor_weak_compat.h) is
+#   gone -- these 5 symbols are now real, strong, defined exports of
+#   libCoreFoundation.dylib (confirmed via `nm -m`), so FDSet.c now
+#   compiles against the real, unmodified SDK CFFileDescriptor.h like
+#   everything else. Whether real DHCP lease negotiation actually
+#   reaches FDCalloutCreateFileDescriptor()'s raw-BPF-fd branch (vs.
+#   staying on FDCalloutCreate()'s CFSocket branch for a genuine UDP
+#   socket fd) is still what DAR-170's own QEMU verification needs to
+#   determine -- this ticket only guarantees the symbols resolve and
+#   the real implementation behind them is correct, not that the path
+#   has been exercised end-to-end yet.
 set -e
 cd "$(dirname "$0")"
 
@@ -299,7 +277,6 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-buil
     -DPRIVATE \
     -include "sys/fileport.h" \
     -include "dhcp_iopm_gap_compat.h" \
-    -include "configd_cffiledescriptor_weak_compat.h" \
     -I "$BOOTPLIB" -I "$BOOTP" -I "$IPCONFIGLIB" \
     -I "ipconfig_compat" -I "cf_compat_headers" -I "configd_compat_include" -I "$MIGOUT" \
     -I "configd_plugin_compat" \
