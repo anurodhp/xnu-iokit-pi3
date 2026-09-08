@@ -185,11 +185,20 @@ tags ever (`91`, `93`, `93.200.2`) and `macos-112` does not list it — so
 Both were checked for the `IOUSBFamily-630.4.5` empty-file failure mode
 before being trusted. All six `IOKit/pci` headers and all six
 `IOSerialFamily.kmodproj` headers are real, non-empty files. That check
-is now a permanent guard rather than a one-off: `tools/setup_sdk_shim.sh`
-fails loudly if any `<IOKit/usb/>` header it links resolves to a
-zero-byte file, and `tools/build_iousbfamily.sh` refuses to run at all if
-`IOUSBController.cpp` is empty — because a wrong pin there does not fail
-the build, it silently compiles nothing.
+is now a permanent guard rather than a one-off, and it covers **every**
+arm of the shim — `network`, `storage`, `usb`, `pci` and `serial`:
+`tools/setup_sdk_shim.sh` fails loudly if any header it links resolves
+to a zero-byte file, and `tools/build_iousbfamily.sh` refuses to run at
+all if `IOUSBController.cpp` is empty — because a wrong pin there does
+not fail the build, it silently compiles nothing.
+
+Worth stating plainly, since it is the whole reason the guard is a `-s`
+test and not an existence test: **an empty header is strictly worse than
+a missing one.** The symlink resolves, the file exists, the `#include`
+succeeds, and everything the header should have declared is simply
+absent — so the failure surfaces hundreds of lines later as unrelated
+"unknown type name" errors, or not at all. `link_headers`' existence
+check cannot see it.
 
 Note for the DAR-243 work specifically: `AppleUSBCDCDriver-4303.2.1`
 (pinned separately, and complete — no empty files) still `#include`s the

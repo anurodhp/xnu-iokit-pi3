@@ -61,6 +61,19 @@ mkdir -p "$OUT"
 IMPL_SCRATCH="$(mktemp -d)"
 trap 'rm -rf "$IMPL_SCRATCH"' EXIT
 
+# Prune first: a header whose .iig disappeared upstream would otherwise
+# stay checked in and on the include path forever, and this script's
+# "regenerating produces byte-identical output, so `git status` after a
+# run is a real check" claim would quietly stop holding for that file.
+for existing in "$OUT"/*.h; do
+	[ -e "$existing" ] || continue
+	base="$(basename "$existing" .h)"
+	if [ ! -f "$SRC/$base.iig" ]; then
+		echo "+ pruning $existing (no $base.iig in $SRC)"
+		rm -f "$existing"
+	fi
+done
+
 generated=0
 for def in "$SRC"/*.iig; do
 	[ -e "$def" ] || continue

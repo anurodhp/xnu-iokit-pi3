@@ -103,25 +103,45 @@ mkdir -p "$OUT_DIR" "$SRC_DIR"
 # "RE error: illegal byte sequence" and makes grep treat the file as
 # binary and silently match nothing.
 # ---------------------------------------------------------------------
+# Wipe both the staged sources and any previously-built objects. Without
+# the OUT_DIR wipe the success summary at the bottom lists stale .o files
+# from earlier runs next to the current ones, so a source dropped from
+# FILES still appears under the "N/N objects built" banner.
 rm -rf "$SRC_DIR"
+find "$OUT_DIR" -maxdepth 1 -name '*.o' -delete 2>/dev/null || true
 mkdir -p "$SRC_DIR"
 cp "$CDC/AppleUSBCDC/Classes/AppleUSBCDC.cpp" "$SRC_DIR/"
 cp "$CDC/AppleUSBCDCECM/ControlDriver/Classes/AppleUSBCDCECMControl.cpp" "$SRC_DIR/"
 cp "$CDC/AppleUSBCDCECM/DataDriver/Classes/AppleUSBCDCECMData.cpp" "$SRC_DIR/"
+cp "$CDC/Common/MsgTrace.c" "$SRC_DIR/"
 # linkup.h is included by the Data driver from its own Headers dir; the
 # staged copy has to shadow the pristine one on the include path.
 mkdir -p "$SRC_DIR/include"
 cp "$CDC/AppleUSBCDCECM/DataDriver/Headers/linkup.h" "$SRC_DIR/include/"
 
+# The ONLY thing that needs changing is the `char *period` local: it is
+# assigned from strchr(), which returns const char* when its argument is
+# const char*. `kextname` is already `const char *` in the pristine
+# header (parameter list, line ~40) and must NOT be rewritten -- doing so
+# produced `const const char *kextname` and a duplicate-'const' warning.
+# Assert on the real target, and re-check afterwards that it applied,
+# rather than on something that is true either way.
 FIXFILE="$SRC_DIR/include/linkup.h"
-if ! LC_ALL=C grep -q 'char \*kextname' "$FIXFILE"; then
-	echo "error: expected 'char *kextname' in linkup.h and did not find it." >&2
-	echo "       The pin changed; re-check whether the fix is still needed." >&2
+if ! LC_ALL=C grep -q 'char \*period;' "$FIXFILE"; then
+	echo "error: expected 'char *period;' in linkup.h and did not find it." >&2
+	echo "       The pin changed; re-check whether the fix is still needed" >&2
+	echo "       before deleting this block." >&2
 	exit 1
 fi
-LC_ALL=C sed -i '' \
-	's|char \*kextname|const char *kextname|g; s|char \*period|const char *period|g' \
-	"$FIXFILE"
+LC_ALL=C sed -i '' 's|	char \*period;|	const char *period;|' "$FIXFILE"
+if LC_ALL=C grep -q '	char \*period;' "$FIXFILE"; then
+	echo "error: the linkup.h const fix did not apply" >&2
+	exit 1
+fi
+if LC_ALL=C grep -q 'const const' "$FIXFILE"; then
+	echo "error: linkup.h fix produced a duplicate 'const'" >&2
+	exit 1
+fi
 
 CFLAGS=(
 	-isysroot "$SDK" -arch arm64 -fapple-kext -mkernel
@@ -154,6 +174,32 @@ FILES=(
 	AppleUSBCDCECMData.cpp
 )
 
+# MsgTrace.c is built separately because it is C, not C++, and that is
+# load-bearing rather than incidental. AppleUSBCDCCommon.h:507 declares
+# cdc_LogToMessageTracer() inside an `extern "C"` block, so the C++
+# callers emit an undefined `_cdc_LogToMessageTracer` with no mangling;
+# only a C compile of MsgTrace.c defines that exact symbol.
+#
+# It cannot go through compile_flags.txt: that recipe is C++ (-std=gnu++14)
+# and force-includes compat/decls.h, which contains a real `extern "C" {`
+# block and does not parse as C at all. So the flags below are the same
+# -D/-I set spelled out for C, plus -D_STRINGS_H_ by hand -- that is the
+# one thing compat/decls.h does that a C compile still needs. Without it
+# the SDK's usr/include/strings.h gets pulled in (via a quoted include
+# from string.h that no -I list can intercept) and its userspace
+# ffs/ffsll/fls/flsll signatures collide head-on with the kernel's
+# unsigned ones in bsd/libkern/libkern.h. Same reasoning as decls.h's own
+# header comment; see it for why an -Icompat override cannot work.
+#
+# This file was missed on the first pass (2026-09-08) and the omission
+# went unnoticed because it does not break the compile -- it breaks the
+# eventual link, which nothing runs yet. Caught by an adversarial review
+# reading `nm -u` rather than trusting the build's own exit status, which
+# is exactly the check the commit message had claimed to have done.
+C_FILES=(
+	MsgTrace.c
+)
+
 ./tools/setup_sdk_shim.sh >/dev/null
 if [ ! -f generated/libkern/version.h ]; then
 	./tools/generate_libkern_version.sh >/dev/null
@@ -177,11 +223,102 @@ for f in "${FILES[@]}"; do
 	fi
 done
 
+CLANGC="$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+for f in "${C_FILES[@]}"; do
+	obj="$OUT_DIR/${f%.c}.o"
+	echo "=== compiling $f (as C) ==="
+	if "$CLANGC" -isysroot "$SDK" -arch arm64 -mkernel \
+		-x c -std=gnu11 \
+		-D_STRINGS_H_ \
+		-DKERNEL -DKERNEL_PRIVATE -DXNU_KERNEL_PRIVATE -DPRIVATE \
+		-DAPPLE_KEXT_LEGACY_ABI=0 -DARM64_BOARD_CONFIG_BCM2837 \
+		-D__PRIVATE_SPI__ \
+		-Icompat -Ithird_party/_sdk_shim -Igenerated \
+		-Ithird_party/xnu-7195/pexpert -Ithird_party/xnu-7195/iokit \
+		-Ithird_party/xnu-7195/libkern -Ithird_party/xnu-7195/osfmk \
+		-Ithird_party/xnu-7195/bsd \
+		-Ithird_party/xnu-7195/EXTERNAL_HEADERS -Ithird_party/xnu-7195 \
+		-I"$CDC/Common" \
+		"${QUIET_WARNINGS[@]}" \
+		-c "$SRC_DIR/$f" -o "$obj"; then
+		built=$((built + 1))
+	else
+		failed+=("$f")
+	fi
+done
+
 echo
 if [ ${#failed[@]} -ne 0 ]; then
 	echo "=== FAILED (${#failed[@]}): ${failed[*]} ===" >&2
 	exit 1
 fi
 
-echo "=== AppleUSBCDCECM: $built/${#FILES[@]} objects built into $OUT_DIR/ ==="
+# Hard gate, not a nicety: the whole point of building these objects is
+# that they eventually link into the kernel, and the one class of bug
+# that a successful compile cannot catch is a missing translation unit.
+# Everything the CDC drivers reference must resolve either inside this
+# object set or against IOKit/IONetworkingFamily/IOUSBFamily, which the
+# kernel will provide. Anything else is a real gap and must be listed
+# here deliberately.
+#
+# _kmod_info is the one known, deliberate exception: linkup.h's
+# KMOD_INFO_NAME refers to the kmod_info struct that only exists for a
+# driver loaded as a .kext bundle, and this project compiles drivers
+# directly into the kernel with no kext-bundle pipeline at all. It needs
+# a real answer at the vendoring milestone (most likely an explicit
+# kmod_info definition, as any statically-linked-in kext has), not a stub.
+#
+# Method: undefined-across-the-set MINUS defined-across-the-set, so a
+# symbol one object needs and another object provides does not register.
+# That subtraction is the part that matters -- it is exactly what would
+# have caught the missing MsgTrace.c the first time round.
+#
+# C++-mangled symbols (__Z...) are dropped wholesale: those are IOKit,
+# IONetworkingFamily and IOUSBFamily methods, all of which the kernel
+# will provide. What is left is plain C, which is short enough to eyeball.
+KNOWN_UNRESOLVED='^_kmod_info$'
+# NOTE on the nm invocation, learned the hard way while writing this:
+# plain `nm` CANNOT be used here. This script exports DEVELOPER_DIR
+# pointing at Xcode 12, and /usr/bin/nm is an xcrun shim that resolves
+# through `xcodebuild -find nm` -- which crashes on this host, the exact
+# breakage tools/build_kexts.sh's header documents ("xcodebuild/xcrun
+# machinery cannot run at all on this host... crashes trying to load a
+# plugin that links against CoreChart.framework"). With stderr discarded
+# that produces an EMPTY symbol list, which reads exactly like "nothing
+# unresolved" and turns this whole gate into a no-op that always passes.
+# The same commands work perfectly when run by hand, where DEVELOPER_DIR
+# is unset -- so it fails only inside the script, which is the worst
+# possible shape for a check like this.
+#
+# Invoke the toolchain binary directly, exactly as this script already
+# does for clang/clang++, keep stderr visible, and assert the result is
+# non-empty.
+NMBIN="$DEVELOPER_DIR/Toolchains/XcodeDefault.xctoolchain/usr/bin/nm"
+_nm_tmp="$(mktemp -d)"
+"$NMBIN" -g "$OUT_DIR"/*.o \
+	| LC_ALL=C awk 'NF==3 && $2 != "U" {print $3}' \
+	| LC_ALL=C sort -u > "$_nm_tmp/defined"
+"$NMBIN" -g "$OUT_DIR"/*.o \
+	| LC_ALL=C awk 'NF==2 && $1 == "U" {print $2}' \
+	| LC_ALL=C sort -u > "$_nm_tmp/undefined"
+if [ ! -s "$_nm_tmp/undefined" ]; then
+	echo "error: nm produced no undefined symbols at all for $OUT_DIR/*.o," >&2
+	echo "       which cannot be right -- the symbol gate is not working." >&2
+	rm -rf "$_nm_tmp"
+	exit 1
+fi
+# `|| true` is required, not defensive: under `set -e` a grep that matches
+# nothing (the good case here) exits 1 and would abort the script.
+unexpected=$(LC_ALL=C comm -23 "$_nm_tmp/undefined" "$_nm_tmp/defined" \
+	| LC_ALL=C grep -vE '^__?Z' \
+	| LC_ALL=C grep -vE '^___stack_chk' \
+	| LC_ALL=C grep -vE "$KNOWN_UNRESOLVED" || true)
+rm -rf "$_nm_tmp"
+if [ -n "$unexpected" ]; then
+	echo "note: plain-C symbols this object set does not define; each must be" >&2
+	echo "      provided by the kernel at the vendoring milestone:" >&2
+	echo "$unexpected" | sed 's/^/  /' >&2
+fi
+
+echo "=== AppleUSBCDCECM: $built/$(( ${#FILES[@]} + ${#C_FILES[@]} )) objects built into $OUT_DIR/ ==="
 ls -la "$OUT_DIR"/*.o | awk '{printf "  %-10s %s\n", $5, $9}'

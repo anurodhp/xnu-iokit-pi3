@@ -46,9 +46,26 @@ for r in IONetworkingFamily IOStorageFamily IOUSBFamily IOPCIFamily IOSerialFami
 	fi
 done
 
-rm -rf "$SHIM"
-mkdir -p "$SHIM/IOKit/network" "$SHIM/IOKit/storage" "$SHIM/IOKit/usb" \
-	"$SHIM/IOKit/pci" "$SHIM/IOKit/serial"
+# Build into a scratch directory and swap it into place only once every
+# header has been verified, rather than deleting the live tree up front.
+#
+# Two real reasons, both found in review rather than in theory:
+#  1. link_headers exits under `set -e` on the first missing header. If
+#     the live tree had already been deleted, a bad re-pin would leave NO
+#     shim at all, and the next kext compile would bury this script's one
+#     clear error message under hundreds of missing-<IOKit/...> errors.
+#  2. CLAUDE.md actively encourages running per-library build scripts as
+#     parallel background subagents, and tools/build_iousbfamily.sh and
+#     tools/build_appleusbcdc.sh both call this script. Two concurrent
+#     runs deleting and repopulating one shared tree would pull headers
+#     out from under an in-flight compile. A `mv` of a completed tree is
+#     as close to atomic as this gets; the loser of a race replaces a
+#     complete tree with an identical complete tree.
+SHIM_NEW="${SHIM}.new.$$"
+rm -rf "$SHIM_NEW"
+trap 'rm -rf "$SHIM_NEW"' EXIT
+mkdir -p "$SHIM_NEW/IOKit/network" "$SHIM_NEW/IOKit/storage" \
+	"$SHIM_NEW/IOKit/usb" "$SHIM_NEW/IOKit/pci" "$SHIM_NEW/IOKit/serial"
 
 # Two hand-written compatibility headers sit at the top of the tree and
 # are NOT generated from any upstream source. They used to exist only
@@ -59,7 +76,7 @@ for h in mach_version_skew_compat.h verify_only_IOBlockStorageDevice_stub.h; do
 		echo "error: compat/sdk_shim/$h missing" >&2
 		exit 1
 	fi
-	ln -sfn "$REPO_ROOT/compat/sdk_shim/$h" "$SHIM/$h"
+	ln -sfn "$REPO_ROOT/compat/sdk_shim/$h" "$SHIM_NEW/$h"
 done
 
 link_headers() {
@@ -72,7 +89,7 @@ link_headers() {
 			echo "error: expected header $src/$h not found (wrong pin?)" >&2
 			exit 1
 		fi
-		ln -sfn "$REPO_ROOT/$src/$h" "$SHIM/IOKit/$sub/$h"
+		ln -sfn "$REPO_ROOT/$src/$h" "$SHIM_NEW/IOKit/$sub/$h"
 	done
 }
 
@@ -191,21 +208,47 @@ link_headers serial third_party/IOSerialFamily/IOSerialFamily.kmodproj \
 	IOSerialStreamSync.h \
 	ioss.h
 
+# Zero-byte guard, over EVERY arm rather than just IOKit/usb.
+#
+# The failure mode it exists for was found in IOUSBFamily (tag 630.4.5
+# publishes ten .cpp files and eight headers as literal zero-byte files
+# upstream -- see docs/apple-oss-catalog.md's 2026-09-08 addendum), but
+# nothing makes that unique to IOUSBFamily, and an empty header is far
+# worse than a missing one: `-s` is the only check that catches it, since
+# the symlink resolves, the file exists, and the #include succeeds
+# silently, leaving whatever the header should have declared simply
+# absent. The existence check in link_headers cannot see it at all.
+#
+# Scoped to headers only. Directories are checked, not assumed, so adding
+# an arm above without adding it here fails loudly.
 empty=0
-for h in "$SHIM"/IOKit/usb/*.h; do
-	if [ ! -s "$h" ]; then
-		echo "error: $(basename "$h") resolves to a ZERO-BYTE file" >&2
-		empty=1
+for arm in network storage usb pci serial; do
+	if [ ! -d "$SHIM_NEW/IOKit/$arm" ]; then
+		echo "error: expected arm IOKit/$arm was never created" >&2
+		exit 1
 	fi
+	for h in "$SHIM_NEW/IOKit/$arm"/*.h; do
+		if [ ! -s "$h" ]; then
+			echo "error: IOKit/$arm/$(basename "$h") resolves to a ZERO-BYTE file" >&2
+			empty=1
+		fi
+	done
 done
 if [ "$empty" = "1" ]; then
 	cat >&2 <<'EOF'
-error: third_party/IOUSBFamily appears to be pinned to IOUSBFamily-630.4.5
-       (or another tag that publishes empty source). Re-pin to
-       IOUSBFamily-560.4.2 -- see docs/apple-oss-catalog.md.
+error: at least one pinned family publishes empty source at its current
+       tag. The known case is IOUSBFamily-630.4.5 -- re-pin to
+       IOUSBFamily-560.4.2. See docs/apple-oss-catalog.md's 2026-09-08
+       addendum for the full list and how it was verified upstream.
 EOF
 	exit 1
 fi
+
+# Everything verified: swap the completed tree into place. Clearing the
+# trap first so a failure after this point cannot delete the live tree.
+trap - EXIT
+rm -rf "$SHIM"
+mv "$SHIM_NEW" "$SHIM"
 
 echo "=== third_party/_sdk_shim regenerated ==="
 echo "  IOKit/network: $(ls "$SHIM/IOKit/network" | wc -l | tr -d ' ') headers"

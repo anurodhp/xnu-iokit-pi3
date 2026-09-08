@@ -50,6 +50,7 @@ if [ ! -x "$CLANGXX" ]; then
 fi
 
 FAMILY="third_party/IOUSBFamily"
+XNU_DK_DIR="third_party/xnu-7195/iokit/DriverKit"
 if [ ! -d "$FAMILY/IOUSBFamily/Classes" ]; then
 	echo "error: $FAMILY not cloned - run ./setup_third_party.sh" >&2
 	exit 1
@@ -69,6 +70,11 @@ fi
 OUT_DIR="${1:-build/iousbfamily}"
 SRC_DIR="$OUT_DIR/src"
 mkdir -p "$OUT_DIR" "$SRC_DIR"
+
+# Drop objects from previous runs. Without this the success summary at
+# the bottom lists stale .o files alongside the current ones, so a source
+# removed from FILES still shows up under the "N/N objects built" banner.
+find "$OUT_DIR" -maxdepth 1 -name '*.o' -delete 2>/dev/null || true
 
 # ---------------------------------------------------------------------
 # Staged source copy + the one known source fix.
@@ -183,18 +189,47 @@ FILES=(
 	IOUSBHubDevice.cpp
 	IOUSBHubPolicyMaker.cpp
 )
-# AppleUSBDiagnostics.cpp is deliberately absent: it is an IOService that
-# publishes USB debug counters to userspace via a property dictionary,
-# has no consumer in this kernel, and pulls in nothing the rest of the
-# family needs.
+# FILES is the complete contents of IOUSBFamily-560.4.2's Classes/
+# directory -- all 19 .cpp files, nothing excluded. (An earlier version
+# of this comment claimed AppleUSBDiagnostics.cpp was "deliberately
+# absent"; that file exists in 630.4.5 but not in this pin, so the
+# rationale described a file that is not there. Removed rather than
+# reworded.) The check below keeps the list honest instead of relying on
+# a comment: if the pin ever grows or loses a source file, this fails
+# rather than silently compiling a subset.
+_expected="$(cd "$FAMILY/IOUSBFamily/Classes" && ls *.cpp | LC_ALL=C sort | tr '\n' ' ')"
+_listed="$(printf '%s\n' "${FILES[@]}" | LC_ALL=C sort | tr '\n' ' ')"
+if [ "$_expected" != "$_listed" ]; then
+	echo "error: FILES does not match $FAMILY/IOUSBFamily/Classes/*.cpp" >&2
+	echo "  on disk : $_expected" >&2
+	echo "  in FILES: $_listed" >&2
+	echo "  Update FILES deliberately (and say why, if excluding one)." >&2
+	exit 1
+fi
 
 # Make sure the generated/derived header trees this needs actually exist
 # and are current. Both are idempotent and fast.
+#
+# Freshness, not just existence. An existence check reuses a stale
+# checked-in header forever after an .iig or a pin moves -- the same
+# staleness class build_launchd.sh's mtime guard exists to catch, and
+# the same one CLAUDE.md calls out as producing "a clean, valid, stale"
+# artifact silently.
 ./tools/setup_sdk_shim.sh >/dev/null
-if [ ! -f generated/DriverKit/IODMACommand.h ]; then
+
+_newer_than() {
+	# _newer_than <target> <dir> <glob> -- true if any source is newer
+	[ ! -f "$1" ] && return 0
+	[ -n "$(find "$2" -name "$3" -newer "$1" -print -quit 2>/dev/null)" ]
+}
+if _newer_than generated/DriverKit/IODMACommand.h \
+		"$XNU_DK_DIR" '*.iig'; then
+	echo "=== DriverKit headers stale or missing, regenerating ==="
 	./tools/generate_driverkit_headers.sh >/dev/null
 fi
-if [ ! -f generated/libkern/version.h ]; then
+if [ ! -f generated/libkern/version.h ] || \
+   [ third_party/xnu-7195/config/MasterVersion -nt generated/libkern/version.h ]; then
+	echo "=== libkern/version.h stale or missing, regenerating ==="
 	./tools/generate_libkern_version.sh >/dev/null
 fi
 

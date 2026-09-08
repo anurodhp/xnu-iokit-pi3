@@ -31,9 +31,34 @@
 #endif
 
 #include <sys/types.h>
+/*
+ * extern "C" is load-bearing, added 2026-09-08 (DAR-244). Without it
+ * these get C++ language linkage and every object compiled through this
+ * header carries mangled undefineds -- `nm -u` showed real
+ * `__Z5bzeroPvm` / `__Z5bcopyPKvPvm` / `__Z4bcmpPKvS0_m` references,
+ * which can never resolve against the kernel's real C `_bzero`/`_bcopy`/
+ * `_bcmp`.
+ *
+ * This was harmless for as long as build_kexts.sh's output was only ever
+ * a syntax check that nothing linked -- xnu's own build never force-
+ * includes this file, so drivers compiled INTO the kernel picked up
+ * bsd/libkern/libkern.h's correct C declarations instead and were fine.
+ * It stops being harmless the moment any object produced with these
+ * flags is linked for real, which is exactly where the IOUSBFamily/
+ * AppleUSBCDCECM work is heading. Fixing it now rather than debugging
+ * four impossible-looking missing symbols at the link milestone.
+ *
+ * It is also the reason a mismatched second declaration of `bcmp`
+ * elsewhere in a translation unit reports as "declaration of 'bcmp' has
+ * a different language linkage" rather than a plain conflicting-types
+ * error, and why `bzero` can appear ambiguous with two overloads
+ * visible: C++ linkage here permits overloading, C linkage does not.
+ */
+extern "C" {
 extern void bzero(void *, size_t);
 extern void bcopy(const void *, void *, size_t);
 extern int  bcmp(const void *, const void *, size_t);
+}
 
 /*
  * bsd/sys/kdebug_kernel.h's KERNEL_DEBUG_CONSTANT* macros reference

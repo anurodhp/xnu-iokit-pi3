@@ -33,6 +33,18 @@ if [ ! -x "$CLANGXX" ]; then
 	exit 1
 fi
 
+# third_party/_sdk_shim supplies every <IOKit/network/...>,
+# <IOKit/storage/...>, <IOKit/usb/...> and <IOKit/pci/...> include these
+# sources use, and it is gitignored -- so on a genuinely fresh clone it
+# does not exist and every compile below fails with hundreds of missing-
+# header errors. Regenerating it here (idempotent, ~instant) is what
+# makes `git clone` + `setup_third_party.sh` + this script actually work
+# end to end, which is the whole point of that script existing.
+#
+# This also covers build_everything.sh's step 3/6, which calls this
+# script and would otherwise fail on a fresh clone for the same reason.
+"$REPO_ROOT/tools/setup_sdk_shim.sh" >/dev/null
+
 OUT_DIR="${1:-build/kexts}"
 mkdir -p "$OUT_DIR"
 
