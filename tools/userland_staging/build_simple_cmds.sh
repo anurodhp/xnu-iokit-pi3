@@ -2301,6 +2301,27 @@ for spec in "${CMD_LIST[@]}"; do
 
     echo "  ok: $name.macho ($(wc -c < "${name}.macho") bytes)"
     built=$((built + 1))
+
+    # DAR-263 report-only gate, sleep/tail only: these two are the only
+    # commands in this loop that link libmach_ipc_no_voucher_for_simple_cmds.a
+    # (see this loop's own DAR-204 case-statement comment above), and so
+    # the only ones that can carry mach_ipc_dead_stubs.o's KERN_FAILURE
+    # stand-ins at all. Confirmed (2026-09-07) reachable only from
+    # mach_msg_destroy_port()/mach_msg_destroy() -- the provably-dead
+    # path they were written for -- so this is informational, not a
+    # build failure.
+    #
+    # Deliberately NOT the reorder fix that closed DAR-261 for notifyd/
+    # configd/launchctl: DAR-204's own comment above documents that
+    # listing libsystem_kernel.dylib ahead of this narrowed archive for
+    # sleep/tail causes a DIFFERENT, confirmed, worse regression --
+    # clock_get_time/host_get_clock_service/semaphore_create silently
+    # resolve to the dylib instead of this project's own local MIG stubs
+    # the instant the dylib is listed first. The current order is
+    # correct and must not change for this reason alone.
+    if { [ "$name" = "sleep" ] || [ "$name" = "tail" ]; } && [ -x ./dead_stub_audit.sh ]; then
+        ./dead_stub_audit.sh "${name}.macho"
+    fi
 done
 
 echo "build_simple_cmds: $built built, $failed failed"

@@ -298,6 +298,75 @@ for f in $EXTRA_FILES; do
         cat "$OUT/login_obj/${base}.err" >&2
     fi
 done
+
+# Real gap found 2026-09-07 re-verifying this script from a clean run:
+# oldsyslog.c's vsyslog() calls send()/writev() directly, and nothing on
+# this link line ever defined either -- a real, reproducible link
+# failure ("Undefined symbols ... _send$UNIX2003 / _writev$UNIX2003,
+# referenced from _vsyslog in oldsyslog.o"), not something this fix
+# introduces. The -Wl,-alias entries for both, further down this
+# script's own link command, have been expecting these base symbols to
+# exist since before this fix and were silently never satisfied.
+#
+# _writev needs no wrapper: it is a plain generated stub (real Apple
+# name, no NO_SYSCALL_STUB marker in syscalls.master) -- already built
+# as libsystem_kernel/sys_writev.o by build_libsystem_kernel.sh, reused
+# directly on this script's own link line below.
+#
+# _send is different: real bsd/kern/syscalls.master marks syscall #101
+# `{ old send }` -- an obsolete/removed raw syscall, not a real trap.
+# Real Apple implements the public send() as a Libc-level wrapper over
+# sendto(): third_party/Libc/net/FreeBSD/send.c (real, unmodified
+# 4.4BSD-derived source, already pinned in this tree) does exactly that
+# -- `return __sendto_nocancel(s, msg, len, flags, NULL, 0);` when
+# VARIANT_CANCELABLE is not defined, which is the raw trap
+# build_libsystem_kernel.sh's own loop already generates as
+# libsystem_kernel/sys___sendto_nocancel.o. Compiled separately from
+# this script's shared $CFLAGS specifically to NOT define
+# VARIANT_CANCELABLE (which the rest of this script's compile does, for
+# every OTHER real gen source) -- with it defined, send.c calls the
+# cancelable __sendto instead, which this project has never generated a
+# raw trap for.
+#
+# NOT reused from libc_build/openpam_obj/date_compat.o (which also
+# defines _send/_writev): that object is a STALE build artifact --
+# date_compat.c's CURRENT, checked-in source removed both functions
+# under DAR-203 ("date now links libsystem_kernel.dylib directly"), and
+# its compiled .o simply predates that fix. Reusing it here would have
+# silently reintroduced the exact class of dead-stub shadowing this
+# session's own DAR-261/DAR-263 work fixed elsewhere -- confirmed by
+# reading date_compat.c's own current header before use, not assumed.
+if [ ! -f "$OUT/libsystem_kernel/sys_writev.o" ] || [ ! -f "$OUT/libsystem_kernel/sys___sendto_nocancel.o" ]; then
+    echo "error: $OUT/libsystem_kernel/sys_writev.o / sys___sendto_nocancel.o not found -- run build_libsystem_kernel.sh first" >&2
+    exit 1
+fi
+# Staleness guard, generalized from build_launchd.sh's own (DAR-200) --
+# see staleness_check.sh's own header for the full why. These two are
+# real, pinned-upstream generated syscall stubs, so this rarely fires,
+# but the check is cheap and the failure mode it prevents (a silently
+# stale raw trap) is exactly the class of bug this session's own
+# DAR-249/DAR-263 work spent real time on.
+if [ -x ./staleness_check.sh ]; then
+    # Both sys_*.o objects checked (code review): they're normally
+    # regenerated together by the same build_libsystem_kernel.sh loop
+    # run, but nothing enforces that -- checking only one would miss
+    # the other going independently stale.
+    for f in sys_writev.o sys___sendto_nocancel.o; do
+        ./staleness_check.sh "$OUT/libsystem_kernel/$f" LOGIN_ALLOW_STALE_SYSCALLS \
+            "$XNU/bsd/kern" -name 'syscalls.master' || exit 1
+    done
+fi
+if "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+    -I "$LIBC/fbsdcompat" -I "$LIBC/include" -I "$LIBC/darwin" \
+    "$LIBC/net/FreeBSD/send.c" -o "$OUT/login_obj/send_real.o" 2>"$OUT/login_obj/send_real.err"; then
+    ok=$((ok + 1))
+    rm -f "$OUT/login_obj/send_real.err"
+else
+    skip=$((skip + 1))
+    echo "  skip: send_real"
+    cat "$OUT/login_obj/send_real.err" >&2
+fi
 echo "login (real Apple system_cmds/login.tproj): $ok compiled, $skip skipped"
 if [ "$skip" -ne 0 ]; then
     echo "error: login has real compile failures, not building login.macho" >&2
@@ -359,6 +428,14 @@ ar p "$OUT/launchd_libc_extras.a" ncurses_extra_syscalls.o > "$OUT/login_obj/log
     "$OUT/liblaunchd_syscalls.a" \
     "$OUT/libmach_ipc.a" \
     "$OUT/libc_regex.a" \
+    `# _writev/_send's raw-trap dependency -- real objects, see the` \
+    `# send_real.o compile step above for the full why. (send_real.o` \
+    `# itself is NOT listed here: it lives in $OUT/login_obj/ and the` \
+    `# "$OUT"/login_obj/*.o glob above already includes it -- listing` \
+    `# it again here was a real duplicate-symbol link error, caught` \
+    `# immediately by actually running this script, not assumed fixed.)` \
+    "$OUT/libsystem_kernel/sys_writev.o" \
+    "$OUT/libsystem_kernel/sys___sendto_nocancel.o" \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
     -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
@@ -410,4 +487,17 @@ otool -l login.macho | grep -q LC_UNIXTHREAD || \
 if nm -u login.macho | grep -q .; then
     echo "WARNING: undefined symbols present:" >&2
     nm -u login.macho >&2
+fi
+
+# DAR-263 report-only gate. login.macho links libmach_ipc.a and carries
+# mach_ipc_dead_stubs.o's mach_port_insert_right/extract_right/unguard
+# KERN_FAILURE stand-ins -- confirmed (2026-09-07) reachable ONLY from
+# mach_msg_destroy_port()/mach_msg_destroy(), the provably-unreachable
+# path they were written for, so this is informational, not a build
+# failure. It cannot be upgraded to a hard gate the way build_notifyd.sh
+# was: login.macho is REQUIRED to stay fully static (CLAUDE.md), so it
+# has no dylib to bind libsystem_kernel.dylib's real body from -- the
+# reorder fix that closed DAR-261 is categorically unavailable here.
+if [ -x ./dead_stub_audit.sh ]; then
+    ./dead_stub_audit.sh login.macho
 fi

@@ -254,3 +254,13 @@ if nm -u ps.macho | grep -q .; then
     echo "WARNING: undefined symbols present:" >&2
     nm -u ps.macho >&2
 fi
+
+# DAR-263 report-only gate. ps.macho is fully static (no LC_LOAD_DYLIB
+# at all) and carries mach_ipc_dead_stubs.o's KERN_FAILURE stand-ins,
+# confirmed (2026-09-07) reachable only from mach_msg_destroy_port()/
+# mach_msg_destroy() -- the provably-dead path they were written for.
+# Informational only: there is no dylib for a static binary to reorder
+# onto, and no live call site to fix.
+if [ -x ./dead_stub_audit.sh ]; then
+    ./dead_stub_audit.sh ps.macho
+fi

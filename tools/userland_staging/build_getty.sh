@@ -81,6 +81,94 @@ for dep in sys____mmap.o sys____munmap.o; do
     fi
 done
 
+# Real gaps found 2026-09-07 re-verifying this script from a clean run
+# -- both are reproducible link failures, not something this fix
+# introduces:
+#
+#   "_send$UNIX2003"/"_writev$UNIX2003", referenced from _vsyslog in
+#   oldsyslog.o -- same real gap as build_login.sh's own (see that
+#   script's send_real.o compile step for the full why: real
+#   Libc/net/FreeBSD/send.c + build_libsystem_kernel.sh's already-built
+#   sys_writev.o/sys___sendto_nocancel.o raw traps).
+#
+#   "_sigaction", referenced from __sigaction in cp_mv_syscalls.o --
+#   cp_mv_syscalls.c's own real _sigaction() (mach-o symbol __sigaction,
+#   see that file's own header) forwards to the public sigaction(), same
+#   real chain DAR-262 established: sigaction() -> __platform_sigaction()
+#   (sets sa_tramp = _sigtramp, real trampoline safety) -> the raw
+#   __sigaction trap. build_simple_cmds.sh's ~70 DYNAMIC binaries get all
+#   of this for free from libsystem_c.dylib/libsystem_kernel.dylib; getty
+#   is fully static (CLAUDE.md) and has never linked any of the three
+#   real objects that make up this chain outside a dylib. Extracted here
+#   from libncurses.a, same real technique build_libsystem_c.sh's own
+#   comment already documents for the identical pair of files ("ar x
+#   ../../libncurses.a Libc_sys_sigaction.o libplatform_sigaction.o").
+if [ ! -f "$OUT/libsystem_kernel/sys_writev.o" ] || [ ! -f "$OUT/libsystem_kernel/sys___sendto_nocancel.o" ] || \
+   [ ! -f "$OUT/libsystem_kernel/sys___sigaction.o" ]; then
+    echo "error: $OUT/libsystem_kernel/sys_writev.o / sys___sendto_nocancel.o / sys___sigaction.o not found -- run build_libsystem_kernel.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/libncurses.a" ]; then
+    echo "error: $OUT/libncurses.a not found -- run build_ncurses.sh first (this script reuses its already-built Libc_sys_sigaction.o/libplatform_sigaction.o members)" >&2
+    exit 1
+fi
+# Staleness guard, generalized from build_launchd.sh's own (DAR-200) --
+# see staleness_check.sh's own header for why this exists at all. This
+# script extracts real, compiled members OUT of libncurses.a rather than
+# compiling their real source itself, so a libncurses.a older than the
+# real Libc/libplatform source it was built from would silently hand
+# getty.macho a stale sigaction chain -- exactly the class of bug that
+# cost real effort tonight (openpam_obj/date_compat.o predating DAR-203's
+# real source fix, never recompiled, almost reused here by mistake).
+# Scoped to the EXACT two real sources these two extracted members are
+# compiled from, not the whole third_party/Libc or libplatform trees:
+# a directory-wide check false-positived immediately in testing (a
+# totally unrelated locale header touched 2026-08-31 tripped it, while
+# the sigaction sources it actually matters for hadn't changed since
+# 2026-08-13) -- broad enough to be useless (blocks on noise) is not
+# better than the gap this closes.
+if [ -x ./staleness_check.sh ]; then
+    ./staleness_check.sh "$OUT/libncurses.a" GETTY_ALLOW_STALE_NCURSES \
+        "$LIBC/sys" -name 'sigaction.c' || exit 1
+    if [ -d "../../third_party/libplatform/src/setjmp/generic" ]; then
+        ./staleness_check.sh "$OUT/libncurses.a" GETTY_ALLOW_STALE_NCURSES \
+            "../../third_party/libplatform/src/setjmp/generic" -name 'sigaction.c' -o -name 'sigtramp.c' || exit 1
+    fi
+fi
+if [ -x ./staleness_check.sh ]; then
+    # All three sys_*.o objects checked, not just sys_writev.o (code
+    # review): they're normally regenerated together by the same
+    # build_libsystem_kernel.sh loop run, but nothing enforces that --
+    # checking only one would miss the other two going independently
+    # stale (e.g. a partial rerun, or one copied in from elsewhere).
+    for f in sys_writev.o sys___sendto_nocancel.o sys___sigaction.o; do
+        ./staleness_check.sh "$OUT/libsystem_kernel/$f" GETTY_ALLOW_STALE_SYSCALLS \
+            "$XNU/bsd/kern" -name 'syscalls.master' || exit 1
+    done
+fi
+(cd "$OUT/getty_obj" && ar x ../libncurses.a Libc_sys_sigaction.o libplatform_sigaction.o)
+
+# __sigtramp: libplatform_sigaction.o (just extracted) needs it, and no
+# object linked here already defines it. The one real body this project
+# has already compiled is bundled inside libncurses.a's own
+# ncurses_extra_syscalls.o alongside ~15 unrelated syscall wrappers
+# (_read/_kill/_access/_chdir/_sigprocmask/_sleep/...) that DO collide
+# with getty's own simple_obj/ copies of several of those same names --
+# confirmed by nm before extracting, not assumed. `ld -r -exported_symbol`
+# narrows the object down to just __sigtramp (demoting everything else
+# in that TU to local/hidden, same real technique as
+# build_corefoundation.sh's own mach_vm_region extraction), leaving only
+# __sigtramp's own real dependencies as external references
+# (__mal_semwait_sleep/__read/__select/_cerror_nocancel/_strlen) --
+# confirmed every one of those already resolves from objects this
+# script already links (libmalloc.a/libc_gen.a/libc_locale_for_stdio.a/
+# cerror_stub.o) before adding this, not assumed.
+LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+(cd "$OUT/getty_obj" && ar p ../libncurses.a ncurses_extra_syscalls.o > ncurses_extra_syscalls_raw.o && \
+    "$LD" -r -arch arm64 -exported_symbol __sigtramp \
+        ncurses_extra_syscalls_raw.o -o sigtramp_only.o && \
+    rm -f ncurses_extra_syscalls_raw.o)
+
 # Same real flags as build_ps.sh (see that script's own CFLAGS comment)
 # -- same tier, same real gen/locale/stdtime -I set. -I $GETTY for
 # getty's own gettytab.h/extern.h/pathnames.h.
@@ -237,6 +325,30 @@ for f in $EXTRA_FILES; do
         cat "$OUT/getty_obj/${base}.err" >&2
     fi
 done
+
+# _send: real Libc/net/FreeBSD/send.c (real, unmodified 4.4BSD-derived
+# source), compiled separately from this script's shared $CFLAGS so it
+# does NOT see -DVARIANT_CANCELABLE -- with that defined, send.c calls
+# the cancelable __sendto, which this project has never generated a raw
+# trap for. Without it, send.c calls __sendto_nocancel, which
+# build_libsystem_kernel.sh's own loop already generates
+# (sys___sendto_nocancel.o, linked below). See build_login.sh's own copy
+# of this exact block for the full why -- same real gap, same real fix,
+# NOT reused from libc_build/openpam_obj/date_compat.o (a stale build
+# artifact predating DAR-203's removal of that file's own fake send/
+# writev stubs -- see build_login.sh's comment for the full story).
+if "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+    -I "$LIBC/fbsdcompat" -I "$LIBC/include" -I "$LIBC/darwin" \
+    "$LIBC/net/FreeBSD/send.c" -o "$OUT/getty_obj/send_real.o" 2>"$OUT/getty_obj/send_real.err"; then
+    ok=$((ok + 1))
+    rm -f "$OUT/getty_obj/send_real.err"
+else
+    skip=$((skip + 1))
+    echo "  skip: send_real"
+    cat "$OUT/getty_obj/send_real.err" >&2
+fi
+
 echo "getty (real Apple system_cmds/getty.tproj): $ok compiled, $skip skipped"
 if [ "$skip" -ne 0 ]; then
     echo "error: getty has real compile failures, not building getty.macho" >&2
@@ -266,6 +378,17 @@ fi
     "$OUT/libpthread.a" \
     "$OUT/libclosure.a" \
     "$OUT/libmach_ipc.a" \
+    `# _writev/_send raw traps -- real objects, see the send_real.o` \
+    `# compile step above for the full why. Neither send_real.o nor` \
+    `# the two ar-extracted sigaction objects are listed here: all` \
+    `# three live in $OUT/getty_obj/, and the "$OUT"/getty_obj/*.o` \
+    `# glob above already includes them -- listing them again here` \
+    `# was a real duplicate-symbol link error the first time (same` \
+    `# mistake as build_login.sh's own send_real.o, caught the same` \
+    `# way: by actually running this script).` \
+    "$OUT/libsystem_kernel/sys_writev.o" \
+    "$OUT/libsystem_kernel/sys___sendto_nocancel.o" \
+    "$OUT/libsystem_kernel/sys___sigaction.o" \
     "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
@@ -307,4 +430,14 @@ otool -l getty.macho | grep -q LC_UNIXTHREAD || \
 if nm -u getty.macho | grep -q .; then
     echo "WARNING: undefined symbols present:" >&2
     nm -u getty.macho >&2
+fi
+
+# DAR-263 report-only gate. Same reasoning as build_login.sh's own
+# comment: getty.macho carries mach_ipc_dead_stubs.o's stand-ins,
+# reachable only from the provably-dead mach_msg_destroy_port()/
+# mach_msg_destroy() path, and is REQUIRED to stay fully static
+# (CLAUDE.md) so the reorder fix that closed DAR-261 has no dylib to
+# target here. Informational only.
+if [ -x ./dead_stub_audit.sh ]; then
+    ./dead_stub_audit.sh getty.macho
 fi
