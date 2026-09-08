@@ -122,6 +122,37 @@
 #     `IOUSBFamily-630.4.5` also NOT touched -- confirmed no Big Sur-era
 #     tag exists in the manifest for it at all (checked, not assumed), so
 #     there is no better tag to move to.
+#     CORRECTED AGAIN 2026-09-08 (DAR-244): `IOUSBFamily-630.4.5` (the
+#     newest tag the repo has) publishes its ten most important source
+#     files as literal ZERO-BYTE files -- `IOUSBController.cpp`,
+#     `IOUSBControllerV2.cpp`, `IOUSBControllerV3.cpp`,
+#     `IOUSBControllerUserClient.cpp`, `IOUSBController_Errata.cpp`,
+#     `IOUSBDevice.cpp`, `IOUSBInterface.cpp`, `IOUSBPipeV2.cpp`,
+#     `IOUSBRootHubDevice.cpp`, `IOUSBWorkLoop.cpp`, plus headers
+#     `IOUSBController.h`, `IOUSBControllerV3.h`, `IOUSBControllerUserClient.h`,
+#     `IOUSBLog.h`, `IOUSBPriv.h`, `USB.h`, `IOUSBAppleIDs.h`,
+#     `IOUSBWorkLoop.h` and all three `AppleUSBHub/Classes/*.cpp`.
+#     Confirmed against real upstream, not just the local clone: the
+#     GitHub contents API for that ref reports size 0 for exactly those
+#     paths. The previous "pin the newest available real source" call
+#     was correct in spirit but landed on a tag with no source in it --
+#     "newest tag" and "newest tag that actually contains the code" are
+#     not the same thing, and nothing checked the difference because
+#     IOUSBFamily was never compiled by any build script (DAR-244).
+#     Re-pinned to `IOUSBFamily-560.4.2`, the next-newest tag, which has
+#     all of them for real (IOUSBController.cpp 170KB/4779 lines,
+#     IOUSBDevice.cpp 165KB/4771 lines, IOUSBInterface.cpp 82KB/2550
+#     lines, IOUSBControllerV3.cpp 86KB, IOUSBRootHubDevice.cpp 42KB,
+#     ... 24804 lines of real source across Classes/ total, zero empty
+#     files). Still outside the `macos-112` manifest -- the honest
+#     ceiling above is unchanged -- but this is the newest tag that is
+#     actually usable as source. Real consumer as of DAR-243/DAR-244:
+#     the IOUSBController/IOUSBDevice/IOUSBInterface/IOUSBPipe layer
+#     `AppleUSBCDCECM` needs. NOTE: `AppleUSBCDCDriver-4303.2.1` still
+#     `#include`s the legacy `<IOKit/usb/IOUSBDevice.h>`/`IOUSBPipe.h`/
+#     `IOUSBInterface.h`/`USB.h` family (checked in its own source, not
+#     assumed from the version number), so the legacy IOUSBFamily is the
+#     right partner for it, not the closed-source IOUSBHostFamily.
 #   - dyld/Libc/libpthread/.../Csu (Phase 4 libSystem+userland stack) and
 #     bash/shell_cmds/.../misc_cmds (Phase 4 real commands): unmodified
 #     Apple sources, pinned to the tags apple-oss-distributions'
@@ -448,7 +479,7 @@ dtc-AppleDeviceTree|git@github.com:anurodhp/dtc-appledevicetree.git|master||http
 u-boot|git@github.com:anurodhp/u-boot.git|master||https://github.com/FlorentRevest/u-boot.git
 hfs|https://github.com/apple-oss-distributions/hfs.git|hfs-556.100.11|
 IOStorageFamily|https://github.com/apple-oss-distributions/IOStorageFamily.git|IOStorageFamily-260.40.5|
-IOUSBFamily|https://github.com/apple-oss-distributions/IOUSBFamily.git|IOUSBFamily-630.4.5|
+IOUSBFamily|https://github.com/apple-oss-distributions/IOUSBFamily.git|IOUSBFamily-560.4.2|
 AppleUSBCDCDriver|https://github.com/apple-oss-distributions/AppleUSBCDCDriver.git|AppleUSBCDCDriver-4303.2.1|
 IONetworkingFamily|https://github.com/apple-oss-distributions/IONetworkingFamily.git|IONetworkingFamily-151.40.1|
 msdosfs|https://github.com/apple-oss-distributions/msdosfs.git|msdosfs-435.60.1|
