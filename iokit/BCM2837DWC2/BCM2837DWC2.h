@@ -249,6 +249,8 @@ enum {
 	kUSBReqGetDescriptor = 6,
 	kUSBReqGetConfiguration = 8,
 	kUSBReqSetConfiguration = 9,
+	kUSBReqGetInterface = 10,
+	kUSBReqSetInterface = 11,
 
 	kUSBDescDevice    = 1,
 	kUSBDescConfig    = 2,
@@ -446,6 +448,8 @@ struct DWC2USBDevice {
 // dereferenced from BCM2837DWC2.cpp, which does include their real headers.
 class SMSC9514USBTransport;
 class SMSC9514Ethernet;
+class DWC2CDCECMTransport;
+class CDCECMEthernet;
 class IONetworkStack;
 
 class BCM2837DWC2 : public IOService
@@ -498,6 +502,15 @@ private:
 	// on any board/boot where no SMSC part enumerated (every QEMU run).
 	SMSC9514USBTransport     *fEthernetTransport;
 	SMSC9514Ethernet         *fEthernetDriver;
+
+	// Same bring-up-scaffolding shape as the two above, for a real
+	// standard USB CDC-ECM Ethernet function instead of the SMSC-specific
+	// vendor protocol - see DWC2CDCECMTransport.h/CDCECMEthernet.h and the
+	// long comment at the call site in start(). NULL on any board/boot
+	// where no CDC-ECM-capable device enumerated (every real Pi 3, which
+	// has SMSC9514Ethernet above instead).
+	DWC2CDCECMTransport      *fCDCEthernetTransport;
+	CDCECMEthernet           *fCDCEthernetDriver;
 
 	// The one IONetworkStack instance this kernel ever creates - see the
 	// long comment at the call site in start(). Nothing else in this

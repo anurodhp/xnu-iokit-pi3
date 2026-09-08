@@ -7,6 +7,7 @@
 
 #include "BCM2837DWC2.h"
 #include "SMSC9514USBTransport.h"
+#include "DWC2CDCECMTransport.h"
 #include "BCM2837Mailbox.h"
 
 #include <IOKit/IODeviceMemory.h>
