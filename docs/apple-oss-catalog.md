@@ -164,6 +164,33 @@ lesson, one level down: there, a pin was present but never diffed
 against the manifest; here, a pin was diffed against the manifest but
 its *contents* were never opened.
 
+**Addendum 2026-09-08 (DAR-243/DAR-244) — two new header-only pins added
+alongside the IOUSBFamily fix.** Both exist purely so IOUSBFamily and
+AppleUSBCDCDriver *parse*; neither describes hardware this board has,
+and no source from either is compiled.
+
+| Repo | Pinned | Manifest says | Why |
+|---|---|---|---|
+| `IOPCIFamily` | `IOPCIFamily-428.80.2` | **matches** — `macos-112` pins commit `b6412a04…`, whose commit message is `IOPCIFamily-428.80.2` | `IOUSBControllerV3.h` declares an `IOPCIDevice *_device`; `IOUSBController.cpp` references `IOPCIDevice` in 8 places |
+| `IOSerialFamily` | `IOSerialFamily-93.200.2` | *(not in the manifest tree at all)* | `AppleUSBCDC.cpp` — the CDC master driver both ECM drivers depend on — includes `<IOKit/serial/IOSerialKeys.h>` and three siblings for its ACM path |
+
+`IOPCIFamily` is the better-behaved of the two: it is a real
+manifest-verified pin, resolved by reading `distribution-macOS`'s
+submodule commit and then that commit's own message, rather than by
+picking the newest tag. `IOSerialFamily` has the same "no manifest
+entry" ceiling as `IOUSBFamily`/`Libm`/`BSM` — its repo has only three
+tags ever (`91`, `93`, `93.200.2`) and `macos-112` does not list it — so
+`93.200.2` is simply the newest real tag, documented as such.
+
+Both were checked for the `IOUSBFamily-630.4.5` empty-file failure mode
+before being trusted. All six `IOKit/pci` headers and all six
+`IOSerialFamily.kmodproj` headers are real, non-empty files. That check
+is now a permanent guard rather than a one-off: `tools/setup_sdk_shim.sh`
+fails loudly if any `<IOKit/usb/>` header it links resolves to a
+zero-byte file, and `tools/build_iousbfamily.sh` refuses to run at all if
+`IOUSBController.cpp` is empty — because a wrong pin there does not fail
+the build, it silently compiles nothing.
+
 Note for the DAR-243 work specifically: `AppleUSBCDCDriver-4303.2.1`
 (pinned separately, and complete — no empty files) still `#include`s the
 legacy family (`<IOKit/usb/IOUSBDevice.h>`, `IOUSBPipe.h`,

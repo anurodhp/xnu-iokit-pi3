@@ -39,7 +39,7 @@ cd "$REPO_ROOT"
 
 SHIM="third_party/_sdk_shim"
 
-for r in IONetworkingFamily IOStorageFamily IOUSBFamily IOPCIFamily; do
+for r in IONetworkingFamily IOStorageFamily IOUSBFamily IOPCIFamily IOSerialFamily; do
 	if [ ! -d "third_party/$r" ]; then
 		echo "error: third_party/$r missing -- run ./setup_third_party.sh first" >&2
 		exit 1
@@ -48,7 +48,7 @@ done
 
 rm -rf "$SHIM"
 mkdir -p "$SHIM/IOKit/network" "$SHIM/IOKit/storage" "$SHIM/IOKit/usb" \
-	"$SHIM/IOKit/pci"
+	"$SHIM/IOKit/pci" "$SHIM/IOKit/serial"
 
 # Two hand-written compatibility headers sit at the top of the tree and
 # are NOT generated from any upstream source. They used to exist only
@@ -177,6 +177,20 @@ link_headers pci third_party/IOPCIFamily/IOKit/pci \
 	IOPCIFamilyDefinitions.h \
 	IOPCIPrivate.h
 
+# --- IOKit/serial --------------------------------------------------------
+# Header-only, and only for AppleUSBCDC.cpp -- the CDC master driver both
+# AppleUSBCDCECMControl and AppleUSBCDCECMData depend on, which includes
+# these for its ACM (modem/serial) sibling path. This project has no
+# serial-port devices; nothing here can execute. IOSerialFamily keeps
+# everything flat inside IOSerialFamily.kmodproj/.
+link_headers serial third_party/IOSerialFamily/IOSerialFamily.kmodproj \
+	IOModemSerialStreamSync.h \
+	IORS232SerialStreamSync.h \
+	IOSerialDriverSync.h \
+	IOSerialKeys.h \
+	IOSerialStreamSync.h \
+	ioss.h
+
 empty=0
 for h in "$SHIM"/IOKit/usb/*.h; do
 	if [ ! -s "$h" ]; then
@@ -198,3 +212,4 @@ echo "  IOKit/network: $(ls "$SHIM/IOKit/network" | wc -l | tr -d ' ') headers"
 echo "  IOKit/storage: $(ls "$SHIM/IOKit/storage" | wc -l | tr -d ' ') headers"
 echo "  IOKit/usb:     $(ls "$SHIM/IOKit/usb" | wc -l | tr -d ' ') headers"
 echo "  IOKit/pci:     $(ls "$SHIM/IOKit/pci" | wc -l | tr -d ' ') headers"
+echo "  IOKit/serial:  $(ls "$SHIM/IOKit/serial" | wc -l | tr -d ' ') headers"

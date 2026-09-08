@@ -106,6 +106,17 @@
 #     tag pinned here, resolved from the manifest rather than picked by
 #     recency. Checked for the IOUSBFamily-630.4.5 empty-file failure
 #     mode too; IOKit/pci's six headers are all real.
+#   - IOSerialFamily: added 2026-09-08 (DAR-243), headers only. There are
+#     no serial-port devices in this project's roadmap; the pin exists
+#     purely because `AppleUSBCDC.cpp` -- the CDC master driver that
+#     BOTH AppleUSBCDCECMControl and AppleUSBCDCECMData depend on --
+#     includes <IOKit/serial/IOSerialKeys.h>, IOSerialDriverSync.h,
+#     IOModemSerialStreamSync.h and IORS232SerialStreamSync.h for its
+#     ACM (modem/serial) sibling path. Same "no manifest entry" ceiling
+#     as IOUSBFamily/Libm/BSM: checked `distribution-macOS` at
+#     `macos-112` and IOSerialFamily is not listed there at all, so
+#     `IOSerialFamily-93.200.2` is simply the newest real tag (the repo
+#     has three: 91, 93, 93.200.2).
 #   - hfs, IOStorageFamily, IOUSBFamily, IONetworkingFamily, msdosfs: unmodified Apple
 #     open-source reference sources, pinned to an exact tag, no patching.
 #     CORRECTED 2026-08-24: a full `distribution-macOS` `macos-112` manifest
@@ -493,6 +504,7 @@ hfs|https://github.com/apple-oss-distributions/hfs.git|hfs-556.100.11|
 IOStorageFamily|https://github.com/apple-oss-distributions/IOStorageFamily.git|IOStorageFamily-260.40.5|
 IOUSBFamily|https://github.com/apple-oss-distributions/IOUSBFamily.git|IOUSBFamily-560.4.2|
 IOPCIFamily|https://github.com/apple-oss-distributions/IOPCIFamily.git|IOPCIFamily-428.80.2|
+IOSerialFamily|https://github.com/apple-oss-distributions/IOSerialFamily.git|IOSerialFamily-93.200.2|
 AppleUSBCDCDriver|https://github.com/apple-oss-distributions/AppleUSBCDCDriver.git|AppleUSBCDCDriver-4303.2.1|
 IONetworkingFamily|https://github.com/apple-oss-distributions/IONetworkingFamily.git|IONetworkingFamily-151.40.1|
 msdosfs|https://github.com/apple-oss-distributions/msdosfs.git|msdosfs-435.60.1|
