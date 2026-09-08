@@ -95,6 +95,40 @@
 #include <SystemConfiguration/SCDPlugin.h>
 #include <SystemConfiguration/SCPrivate.h>
 
+/* DAR-266 investigation note (reverted): an earlier version of this file
+ * forced real Apple SCD.c's own `_sc_debug` global on via a constructor, to
+ * get plugin_support.c's LOG_DEBUG-level "calling load()/start()/prime()
+ * for %@" trace to print. That trace is gated behind the SC_log() macro's
+ * own `if (__SC_log_enabled(...))` check (SCPrivate.h:497-514), which means
+ * the %@ argument expression -- CFBundleGetIdentifier(bundleInfo->bundle)
+ * in plugin_support.c, CFBundleGetIdentifier(bundle) in eventmon.c's own
+ * load_KernelEventMonitor() -- is normally never even EVALUATED (C's
+ * short-circuit if, not lazy varargs) when `_sc_debug` is FALSE, which it
+ * always is in real configd.m (no command-line flag there ever sets it;
+ * only scutil/scselect/dnsinfo_server.c/network_information_server.c/
+ * dns-configuration.c's own internal debug paths do, none of which run in
+ * configd's own startup).
+ *
+ * Forcing it on made THOSE calls execute for the first time ever on this
+ * port, and hit a real, separate, previously-unreached bug: eventmon.c:834's
+ * second CFBundleGetIdentifier(bundle) call (immediately after
+ * plugin_support.c's callLoadFunction already called it once successfully
+ * on the same bundle one line earlier, populating bundle->_infoDict for the
+ * first time via CFBundleGetInfoDictionary's _CFBundleRefreshInfo
+ * DictionaryAlreadyLocked() -> _CFBundleInfoPlistFixupInfoDictionary() path)
+ * crashes inside __CFLock(&bundle->_lock) -> pthread_mutex_lock() with the
+ * mutex pointer reading as a small near-NULL offset (0xd8, matching struct
+ * __CFBundle's real _lock field offset from a NULL base) -- consistent
+ * with the Info.plist fixup path corrupting the bundle object on its first,
+ * lazy-populate run. That bug is real (filed as a follow-up, see DAR-266's
+ * Linear comment) but is NOT DAR-266 itself: it is unreachable in every
+ * stock build (nothing else here ever sets `_sc_debug`), so forcing it on
+ * was actively counterproductive for finding DAR-266's real pc=0/lr=0
+ * fault -- it made configd crash EARLIER, on a different, CF-related bug,
+ * before ever reaching whatever DAR-266's real crash site is. Reverted;
+ * DAR-266's own investigation used CF-free fprintf(stderr, ...) markers
+ * (plugin_support.c) instead, which don't evaluate any new CF call. */
+
 #define NOT_YET_PORTED(name) \
 	void \
 	load_##name(CFBundleRef bundle, Boolean bundleVerbose) \
