@@ -259,5 +259,23 @@ if [ ${#failed[@]} -ne 0 ]; then
 	exit 1
 fi
 
+# compat/usb/BCM2837USBKernelGlue.cpp is kernel-only -- it is vendored
+# into iokit/USB/ by tools/vendor_usb_into_xnu.sh and compiled by the
+# real kernel build, so it is deliberately NOT in FILES above and never
+# becomes a .o here. Without this gate nothing in the repo would check it
+# short of a full ~20-minute kernel build, which is far too slow a loop
+# for a file whose whole job is to satisfy the linker.
+#
+# Syntax-only, because producing an object with these (Xcode 12) flags
+# would be misleading -- the kernel builds it with the live Xcode.
+echo "=== syntax-checking compat/usb/BCM2837USBKernelGlue.cpp ==="
+if ! "$CLANGXX" "${CFLAGS[@]}" \
+	$(grep -v '^-xc++$' compile_flags.txt) \
+	"${QUIET_WARNINGS[@]}" \
+	-fsyntax-only compat/usb/BCM2837USBKernelGlue.cpp; then
+	echo "error: BCM2837USBKernelGlue.cpp does not compile" >&2
+	exit 1
+fi
+
 echo "=== IOUSBFamily: $built/${#FILES[@]} objects built into $OUT_DIR/ ==="
 ls -la "$OUT_DIR"/*.o | awk '{printf "  %-10s %s\n", $5, $9}'

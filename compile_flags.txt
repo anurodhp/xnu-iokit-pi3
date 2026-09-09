@@ -1,5 +1,7 @@
 -xc++
 -std=gnu++14
+-isysroot
+/Applications/Xcode-12.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk
 -DKERNEL
 -DKERNEL_PRIVATE
 -DXNU_KERNEL_PRIVATE
