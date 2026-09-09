@@ -73,6 +73,27 @@
 # real, but NOT the SMSC9514-specific register protocol, which can only be
 # verified on real hardware. Set USB_DEVICES= (empty) to boot with a bare
 # root port and no devices attached.
+#
+# EXPECT en0's MAC to read 40:54:00:12:34:5X, NOT 52:54:00:12:34:5X. That is
+# QEMU's own quirk, not a bug in this port, and it has already cost one
+# investigation (DAR-278). qemu_macaddr_default_if_unset() hands usb-net
+# 52:54:00:12:34:5X, but hw/usb/dev-network.c's usb_net_realize() then builds
+# the CDC-ECM iMACAddress string descriptor with the first octet HARDCODED:
+#
+#     snprintf(s->usbstring_mac, sizeof(s->usbstring_mac),
+#              "%02x%02x%02x%02x%02x%02x",
+#              0x40,                      <-- literal, not macaddr.a[0]
+#              s->conf.macaddr.a[1], ... a[5]);
+#
+# so only octet 0 differs and the other five match - which reads exactly like
+# a first-byte corruption bug in the host controller's control-transfer data
+# stage. It is not. Measured on both sides in one boot (2026-09-09): QEMU put
+# 1a 03 34 00 30 00 35 00 34 00 30 00 30 00 31 00 32 00 33 00 34 00 35 00 37 00
+# ("405400123457" in UTF-16LE) on the wire, and the guest read it back byte
+# for byte. The RNDIS configuration reports the real 52:54:... via
+# OID_802_3_CURRENT_ADDRESS; only the CDC-ECM string is affected. Nothing
+# filters on it either - usbnet_receive() has no MAC filter and SLIRP learns
+# the guest's address from its ARP/DHCP traffic - so DHCP is unaffected.
 set -e
 cd "$(dirname "$0")"
 mkdir -p qemu
