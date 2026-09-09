@@ -22,12 +22,19 @@
 #     build/xnu-latest-build/out/. That copy was documented in CLAUDE.md as
 #     something no script did; now it does, so a "rebuilt" kernel cannot
 #     silently be the previous one.
+#   - tools/vendor_usb_into_xnu.sh's own header comment already claimed
+#     this script calls it; it didn't (DAR-277). Now it does, matching
+#     sync_iokit_drivers.sh's pattern: idempotent, so calling it every
+#     build costs nothing when the vendored copies are already committed
+#     and up to date, and it re-vendors instead of silently building a
+#     stale copy the next time IOUSBFamily/AppleUSBCDCDriver's pins move.
 set -ex
 cd "$(dirname "$0")/.."
 REPO_ROOT="$PWD"
 BUILD_ROOT="$PWD/build/xnu-latest-build"
 
 "$REPO_ROOT/tools/sync_iokit_drivers.sh"
+"$REPO_ROOT/tools/vendor_usb_into_xnu.sh"
 
 unset DEVELOPER_DIR
 export SDKROOT_RESOLVED="$BUILD_ROOT/sdk-7195-ios/iPhoneOS.sdk"
