@@ -102,6 +102,30 @@ makePersonality(const char *providerClass, const char *ioClass, const char *name
 	return dict;
 }
 
+/*
+ * Add one numeric match property (bInterfaceClass, bDeviceSubClass, ...).
+ *
+ * IOUSBDevice::matchPropertyTable()/IOUSBInterface::matchPropertyTable()
+ * compare these against the device's real descriptor fields, so the values
+ * have to be genuine descriptor values, not conveniences. Returns false so a
+ * caller can refuse to publish a half-built personality rather than one that
+ * silently matches more (or less) than intended.
+ */
+static bool
+addNumberProperty(OSDictionary *dict, const char *key, uint32_t value)
+{
+	if (dict == NULL) {
+		return false;
+	}
+	OSNumber *num = OSNumber::withNumber(value, 32);
+	if (num == NULL) {
+		return false;
+	}
+	bool ok = dict->setObject(key, num);
+	num->release();
+	return ok;
+}
+
 extern "C" void
 BCM2837RegisterBuiltinPersonalities(void)
 {
@@ -196,6 +220,70 @@ BCM2837RegisterBuiltinPersonalities(void)
 	// BCM2837CPU.h for the full chain.
 	OSDictionary *cpu0 = makePersonality("IOPlatformDevice", "BCM2837CPU", "cpu0", -1);
 
+	/*
+	 * --- Real Apple AppleUSBCDCDriver (CDC-ECM) personalities ---
+	 *
+	 * These match against the IOUSBDevice/IOUSBInterface nubs
+	 * BCM2837USBHostController now publishes (DAR-243). Before that
+	 * controller existed there was nothing of either class in the registry
+	 * and these three entries would have been permanently dead - which is
+	 * exactly why they were deliberately NOT added in the earlier vendoring
+	 * pass.
+	 *
+	 * Values are transcribed from Apple's own shipped plists in
+	 * third_party/AppleUSBCDCDriver/Plists/ (AppleUSBCDC-Info.plist's
+	 * "AppleUSBCDCDevice200", AppleUSBCDCECMControl-Info.plist, and
+	 * AppleUSBCDCECMData-Info.plist's "AppleUSBCDCECMData" - NOT its
+	 * "AppleUSBCDCECMData1" sibling, which wants bInterfaceSubClass 6).
+	 * They were independently cross-checked against QEMU's own
+	 * desc_iface_cdc[] in third_party/qemu-zhuowei/hw/usb/dev-network.c,
+	 * which builds the CDC control interface as class 2 / subclass 6 /
+	 * protocol 0 and the data interface as class 10 / subclass 0.
+	 *
+	 * This is additive, not a replacement for SMSC9514Ethernet: a real Pi 3
+	 * has a LAN9514, which is a vendor-specific (class 0xFF) device that
+	 * matches none of these, and is still hand-wired in
+	 * BCM2837DWC2::start(). The CDC path is what makes QEMU's usb-net
+	 * usable, which is what DAR-170 needs to verify DHCP end-to-end without
+	 * real hardware.
+	 */
+
+	// AppleUSBCDC is the master/common driver: it matches the DEVICE, picks
+	// the CDC configuration and calls SetConfiguration(), which is what
+	// causes the IOUSBInterface nubs the two drivers below match against to
+	// be published at all. Without it the interface personalities never get
+	// anything to match. IOProbeScore 10000 is Apple's own value.
+	OSDictionary *cdcDevice = makePersonality("IOUSBDevice", "AppleUSBCDC", NULL, 10000);
+	if (cdcDevice != NULL &&
+	    !(addNumberProperty(cdcDevice, "bDeviceClass", 2) &&
+	      addNumberProperty(cdcDevice, "bDeviceSubClass", 0) &&
+	      addNumberProperty(cdcDevice, "bDeviceProtocol", 0))) {
+		cdcDevice->release();
+		cdcDevice = NULL;
+	}
+
+	// CDC-ECM control interface: carries the interrupt endpoint that reports
+	// link state and the class requests that set the packet filter.
+	OSDictionary *cdcEcmControl = makePersonality("IOUSBInterface",
+	    "AppleUSBCDCECMControl", NULL, -1);
+	if (cdcEcmControl != NULL &&
+	    !(addNumberProperty(cdcEcmControl, "bInterfaceClass", 2) &&
+	      addNumberProperty(cdcEcmControl, "bInterfaceSubClass", 6))) {
+		cdcEcmControl->release();
+		cdcEcmControl = NULL;
+	}
+
+	// CDC-ECM data interface: the bulk IN/OUT pair, and the driver that
+	// actually publishes an IOEthernetInterface (i.e. en0).
+	OSDictionary *cdcEcmData = makePersonality("IOUSBInterface",
+	    "AppleUSBCDCECMData", NULL, -1);
+	if (cdcEcmData != NULL &&
+	    !(addNumberProperty(cdcEcmData, "bInterfaceClass", 10) &&
+	      addNumberProperty(cdcEcmData, "bInterfaceSubClass", 0))) {
+		cdcEcmData->release();
+		cdcEcmData = NULL;
+	}
+
 	if (root != NULL) {
 		personalities->setObject(root);
 		root->release();
@@ -240,6 +328,18 @@ BCM2837RegisterBuiltinPersonalities(void)
 	if (cpu0 != NULL) {
 		personalities->setObject(cpu0);
 		cpu0->release();
+	}
+	if (cdcDevice != NULL) {
+		personalities->setObject(cdcDevice);
+		cdcDevice->release();
+	}
+	if (cdcEcmControl != NULL) {
+		personalities->setObject(cdcEcmControl);
+		cdcEcmControl->release();
+	}
+	if (cdcEcmData != NULL) {
+		personalities->setObject(cdcEcmData);
+		cdcEcmData->release();
 	}
 
 	IOLog("BCM2837RegisterBuiltinPersonalities: built %u personalities, gIOCatalogue=%p\n",

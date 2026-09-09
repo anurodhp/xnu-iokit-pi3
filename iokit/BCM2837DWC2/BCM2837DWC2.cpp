@@ -8,6 +8,7 @@
 #include "BCM2837DWC2.h"
 #include "SMSC9514USBTransport.h"
 #include "BCM2837Mailbox.h"
+#include "BCM2837USBHostController.h"
 
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/IOPlatformExpert.h>
@@ -989,6 +990,133 @@ BCM2837DWC2::controlRequest(DWC2Endpoint *ep, uint8_t bmRequestType, uint8_t bRe
 	return controlTransfer(ep, &setup, data, actualLen);
 }
 
+#pragma mark - UIM primitives
+
+/*
+ * See the header for why this exists as a separate entry point rather than
+ * the UIM just calling transfer(). Same lock, same engine, caller-owned PID
+ * and NAK budget.
+ */
+IOReturn
+BCM2837DWC2::transferStage(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
+                           void *buffer, uint32_t len, uint32_t *actualLen,
+                           uint32_t timeoutMS)
+{
+	if (ep == NULL || pid == NULL || actualLen == NULL) {
+		return kIOReturnBadArgument;
+	}
+	// A zero-length transfer (a control status stage) still needs a real
+	// buffer pointer to hand the DMA engine, and doTransfer() will not read
+	// or write through it at length 0.
+	if (buffer == NULL) {
+		buffer = fDMAVirt;
+	}
+
+	IOLockLock(fTransferLock);
+	IOReturn ret = doTransferRetrying(ep, pid, isIn, buffer, len, actualLen, timeoutMS);
+	IOLockUnlock(fTransferLock);
+	return ret;
+}
+
+uint32_t
+BCM2837DWC2::frameNumber(void) const
+{
+	if (fRegBase == NULL) {
+		return 0;
+	}
+	return regRead(kDWC2_HFNUM) & kHFNUM_MAX_FRNUM;
+}
+
+uint32_t
+BCM2837DWC2::rootPortRegister(void) const
+{
+	if (fRegBase == NULL) {
+		return 0;
+	}
+	return regRead(kDWC2_HPRT0);
+}
+
+IOReturn
+BCM2837DWC2::rootPortFeature(uint16_t feature, bool set)
+{
+	if (fRegBase == NULL) {
+		return kIOReturnNotReady;
+	}
+
+	switch (feature) {
+	case kHubFeatPortPower:
+		if (set) {
+			return portPowerOn() ? kIOReturnSuccess : kIOReturnIOError;
+		}
+		portWriteHPRT0(kHPRT0_PRTPWR, 0);
+		return kIOReturnSuccess;
+
+	case kHubFeatPortReset:
+		// Only meaningful as a SET; the hub protocol has the hub clear
+		// PRTRST itself, which portReset() already does as part of its
+		// sequence.
+		if (!set) {
+			return kIOReturnSuccess;
+		}
+		return portReset() ? kIOReturnSuccess : kIOReturnIOError;
+
+	case kHubFeatPortEnable:
+		/*
+		 * HPRT0.PRTENA is write-1-to-CLEAR, which is exactly backwards from
+		 * how it reads, and is why portWriteHPRT0() masks it out of every
+		 * read-modify-write. A hub can only ever disable a port, never
+		 * enable one directly (USB 2.0 11.24.2.7.2) - the port becomes
+		 * enabled as a side effect of a reset - so SET is a no-op and CLEAR
+		 * writes the bit.
+		 */
+		if (set) {
+			return kIOReturnUnsupported;
+		}
+		regWrite(kDWC2_HPRT0,
+		    (regRead(kDWC2_HPRT0) & ~kHPRT0_W1C_MASK) | kHPRT0_PRTENA);
+		return kIOReturnSuccess;
+
+	// The change bits are write-1-to-clear status, so only CLEAR_FEATURE
+	// does anything; SET_FEATURE on them is not a legal hub request.
+	case kHubFeatCPortConnection:
+		if (set) {
+			return kIOReturnUnsupported;
+		}
+		regWrite(kDWC2_HPRT0,
+		    (regRead(kDWC2_HPRT0) & ~kHPRT0_W1C_MASK) | kHPRT0_PRTCONNDET);
+		return kIOReturnSuccess;
+
+	case kHubFeatCPortEnable:
+		if (set) {
+			return kIOReturnUnsupported;
+		}
+		regWrite(kDWC2_HPRT0,
+		    (regRead(kDWC2_HPRT0) & ~kHPRT0_W1C_MASK) | kHPRT0_PRTENCHNG);
+		return kIOReturnSuccess;
+
+	case kHubFeatCPortOverCurrent:
+		if (set) {
+			return kIOReturnUnsupported;
+		}
+		regWrite(kDWC2_HPRT0,
+		    (regRead(kDWC2_HPRT0) & ~kHPRT0_W1C_MASK) | kHPRT0_PRTOVRCURRCHNG);
+		return kIOReturnSuccess;
+
+	case kHubFeatCPortReset:
+		// DWC2 has no reset-change bit; portReset() is synchronous, so the
+		// change is already consumed by the time anyone could ask.
+		return kIOReturnSuccess;
+
+	default:
+		// Suspend and the indicator features are genuinely not implemented
+		// on this controller - it never suspends a port. Saying so beats
+		// silently reporting success for something that did not happen.
+		IOLog("BCM2837DWC2: root port feature %u (%s) not implemented\n",
+		    feature, set ? "set" : "clear");
+		return kIOReturnUnsupported;
+	}
+}
+
 #pragma mark - IOService
 
 bool
@@ -1106,6 +1234,82 @@ BCM2837DWC2::start(IOService *provider)
 	BCM2837Mailbox::primeBoardIdentity();
 
 	/*
+	 * The one IONetworkStack instance this kernel ever creates.
+	 *
+	 * This used to live inside the SMSC block below, which made it
+	 * real-hardware-only: under QEMU no SMSC part enumerates, so no stack was
+	 * ever created, so any IOEthernetInterface published by any other driver
+	 * could never reach BSD. That is no longer a hypothetical - the real
+	 * AppleUSBCDCECMData driver publishes exactly such an interface for
+	 * QEMU's usb-net once the IOUSBController below starts publishing nubs
+	 * (DAR-243). Nothing in this hand-built personality tree
+	 * (BCM2837Personalities.cpp) ever matches or starts an IONetworkStack,
+	 * and IOService::serviceMatching("IONetworkStack") only finds an
+	 * ALREADY-registered instance rather than creating one, so if this does
+	 * not run, IORegisterNetworkInterface() blocks forever in
+	 * waitForService().
+	 *
+	 * It must exist before any interface is published, hence here rather than
+	 * after the driver blocks below.
+	 */
+	IONetworkStack *stack = new IONetworkStack;
+	if (stack != NULL && stack->init() && stack->attach(this)) {
+		if (stack->start(this)) {
+			fNetworkStack = stack;
+		} else {
+			IOLog("BCM2837DWC2: IONetworkStack start() failed - no interface can reach BSD\n");
+			stack->detach(this);
+			stack->release();
+		}
+	} else {
+		IOLog("BCM2837DWC2: IONetworkStack init/attach failed - no interface can reach BSD\n");
+		if (stack != NULL) {
+			stack->release();
+		}
+	}
+
+	/*
+	 * On real macOS, naming an interface and attaching it to BSD is driven
+	 * from userspace by configd's InterfaceNamer opening a user client on
+	 * IONetworkStack. This port has no configd, so the kernel-side path has
+	 * to be triggered here instead.
+	 *
+	 * A publish notification rather than a direct call per driver, because
+	 * the interface this now has to catch is not created by anything on this
+	 * thread: AppleUSBCDCECMData publishes its IOEthernetInterface from
+	 * IOKit's own matching thread, some time after start() has returned. A
+	 * notification catches both that and SMSC9514Ethernet's, through one
+	 * code path, which is also why the SMSC block below no longer registers
+	 * its interface by hand.
+	 *
+	 * gIOPublishNotification at priority 0, and BOTH halves of that are
+	 * load-bearing rather than defaults.
+	 *
+	 * IONetworkStack registers its own handler for this same event on
+	 * gIOPublishNotification at priority 1000 (IONetworkStack.cpp:176-184),
+	 * and that handler is what moves an interface into
+	 * kInterfaceStatePublished and onto the stack's naming list.
+	 * IORegisterNetworkInterface() then refuses to name anything that is not
+	 * already in that state ("unable to name interface in state 0x0 as en0",
+	 * IONetworkStack.cpp:690). So this handler MUST run after the stack's.
+	 *
+	 * IOKit orders notification handlers of the SAME type by priority,
+	 * highest first (IONotifyOrdering, IOService.cpp:3472-3495), so priority
+	 * 0 here is deterministically after the stack's 1000. The first version
+	 * of this used gIOFirstPublishNotification, which is a different
+	 * notification type and therefore a different ordered list - no defined
+	 * ordering against the stack's handler at all. It lost the race on a real
+	 * boot, every time, with exactly the state-0x0 message above.
+	 */
+	fInterfaceNotifier = addMatchingNotification(gIOPublishNotification,
+	    serviceMatching("IONetworkInterface"), &BCM2837DWC2::interfacePublished,
+	    this, NULL, 0);
+	if (fInterfaceNotifier == NULL) {
+		IOLog("BCM2837DWC2: could not install IONetworkInterface notification - "
+		      "no interface will reach BSD\n");
+	}
+
+	/*
 	 * BRING-UP SCAFFOLDING, not the final wiring.
 	 *
 	 * This is an SMSC-specific call inside an otherwise chip-agnostic host
@@ -1148,63 +1352,26 @@ BCM2837DWC2::start(IOService *provider)
 					transport = NULL; // ownership moved to fEthernetTransport
 
 					/*
-					 * eth->start() above (attachInterface(), inside
+					 * eth->start() (attachInterface(), inside
 					 * SMSC9514Ethernet::start()) only creates the
 					 * IOEthernetInterface inside the IORegistry - it does
-					 * NOT make it visible to BSD/ifconfig. On real macOS
-					 * that last step is driven by a userspace daemon
-					 * (configd's InterfaceNamer) opening a user client on
-					 * IONetworkStack and naming the interface; this port
-					 * has no configd. Both halves are done here by hand
-					 * instead: construct the one IONetworkStack instance
-					 * this kernel will ever have (nothing in this
-					 * hand-built personality tree - BCM2837Personalities.cpp
-					 * - ever matches or starts one; IOService::
-					 * serviceMatching("IONetworkStack") only finds an
-					 * *already-registered* instance, it does not create
-					 * one), then call the same kernel-side naming path
-					 * IOKitBSDInit.cpp's IORegisterNetworkInterface()
-					 * already uses for the netboot-root-device case,
-					 * generalized here to run for any real interface, not
-					 * just that one. IONetworkStack::start() wires up an
-					 * addMatchingNotification for IONetworkInterface
-					 * publish events, which fires for interfaces already
-					 * registered (ours) as well as future ones, so
-					 * construction order relative to eth->start() does not
-					 * matter - but IORegisterNetworkInterface() itself
-					 * blocks in waitForService() until a matching
-					 * IONetworkStack exists, so this stack must be started
-					 * before that call, not after.
+					 * NOT make it visible to BSD/ifconfig. That second half
+					 * used to be done by an explicit
+					 * IORegisterNetworkInterface() call right here; it is now
+					 * done by the IONetworkInterface publish notification
+					 * installed above, which catches this interface and the
+					 * CDC-ECM one through the same code path.
+					 *
+					 * Registering explicitly as well is done deliberately
+					 * rather than relying on notification ordering: the
+					 * notification is asynchronous, and this is the real
+					 * hardware path that is already verified working. Both
+					 * routes funnel through registerInterfaceWithBSD(), which
+					 * is idempotent, so whichever runs second does nothing.
+					 * eth's fNetif is private for exactly this one caller -
+					 * see getEthernetInterface()'s header comment.
 					 */
-					IONetworkStack *stack = new IONetworkStack;
-					if (stack != NULL && stack->init() && stack->attach(this)) {
-						if (stack->start(this)) {
-							fNetworkStack = stack;
-							/*
-							 * IORegisterNetworkInterface()'s argument must be
-							 * the IONetworkInterface itself, not this
-							 * controller - IONetworkStack::setProperties()
-							 * resolves it back with
-							 * OSDynamicCast(IONetworkInterface, ...), which
-							 * fails (silently, just an error return) for a
-							 * controller object. eth's fNetif is private for
-							 * exactly this one caller - see
-							 * getEthernetInterface()'s header comment.
-							 */
-							if (!IORegisterNetworkInterface(eth->getEthernetInterface())) {
-								IOLog("BCM2837DWC2: IORegisterNetworkInterface failed - en0 will not appear\n");
-							}
-						} else {
-							IOLog("BCM2837DWC2: IONetworkStack start() failed - en0 will not appear\n");
-							stack->detach(this);
-							stack->release();
-						}
-					} else {
-						IOLog("BCM2837DWC2: IONetworkStack init/attach failed - en0 will not appear\n");
-						if (stack != NULL) {
-							stack->release();
-						}
-					}
+					registerInterfaceWithBSD(eth->getEthernetInterface());
 				} else {
 					IOLog("BCM2837DWC2: SMSC9514Ethernet start() failed\n");
 					eth->detach(this);
@@ -1222,7 +1389,164 @@ BCM2837DWC2::start(IOService *provider)
 		delete transport;
 	}
 
+	startUSBHostController();
+
 	registerService();
+	return true;
+}
+
+/*
+ * Stand up the real IOUSBFamily controller over this driver and publish an
+ * IOUSBDevice nub for every device enumerateBus() already found.
+ *
+ * Ordering matters in two ways that are easy to get wrong:
+ *
+ *  - This runs AFTER enumerateBus(), because the UIM reserves the USB
+ *    addresses that enumeration already assigned (so the root hub simulation
+ *    cannot be handed an address that aliases a real device) and builds its
+ *    endpoint state from that device table.
+ *
+ *  - It runs on the IOKit configuration thread, not the USB workloop.
+ *    IOUSBDevice::start() - reached from PublishEnumeratedDevice() via
+ *    CreateDevice() - issues SYNCHRONOUS device requests, and IOUSBFamily
+ *    explicitly refuses those from the workloop thread
+ *    (IOUSBController_Pipes.cpp:363-367, kIOUSBSyncRequestOnWLThread). The
+ *    queue engine servicing those requests runs on the workloop, so this
+ *    thread genuinely has to be a different one - which it is.
+ */
+void
+BCM2837DWC2::startUSBHostController(void)
+{
+	if (fNumDevices == 0) {
+		// Nothing enumerated - a controller with no devices to publish would
+		// still start cleanly, but there is nothing for it to do and saying
+		// so beats a silent no-op.
+		IOLog("BCM2837DWC2: no enumerated devices, not starting IOUSBController\n");
+		return;
+	}
+
+	/*
+	 * Give ourselves a registry location before starting the controller.
+	 *
+	 * This is not cosmetic - without it the boot panics. Every USB controller
+	 * IOUSBFamily was written for hangs off an IOPCIDevice, which always has a
+	 * location string ("1f,2" and the like), and
+	 * IOUSBController::CreateRootHubDevice() relies on that unconditionally:
+	 *
+	 *     (*rootHubDevice)->setLocation(provider->getLocation());
+	 *     (*rootHubDevice)->setLocation(provider->getLocation(), gIOUSBPlane);
+	 *
+	 * (IOUSBController.cpp:3743-3744). Neither call is NULL-guarded, unlike
+	 * the ParsePCILocation() call twenty lines above them, so a provider with
+	 * no location - which is what this driver is, being matched by name off
+	 * an IOPlatformDevice rather than by PCI address - reaches
+	 * OSSymbol::withCString(NULL) and takes a kernel data abort inside
+	 * OSSymbolPool::findSymbol(). Confirmed by resolving the real panic PC
+	 * against the unstripped kernel, not deduced from reading alone.
+	 *
+	 * "0" rather than a fake PCI-looking string: ParsePCILocation() parses it
+	 * to device 0, function 0, which yields USB bus number 0 - correct, since
+	 * this board has exactly one USB controller.
+	 */
+	setLocation("0");
+
+	BCM2837USBHostController *controller = new BCM2837USBHostController;
+	if (controller == NULL) {
+		IOLog("BCM2837DWC2: IOUSBController allocation failed\n");
+		return;
+	}
+
+	if (!controller->init(NULL) || !controller->attach(this)) {
+		IOLog("BCM2837DWC2: IOUSBController init/attach failed\n");
+		controller->release();
+		return;
+	}
+
+	if (!controller->start(this)) {
+		IOLog("BCM2837DWC2: IOUSBController start() failed - no USB nubs will "
+		      "be published\n");
+		controller->detach(this);
+		controller->release();
+		return;
+	}
+
+	fUSBController = controller;
+
+	/*
+	 * Publish a nub per enumerated device.
+	 *
+	 * Hubs are skipped on purpose. A published IOUSBDevice for a hub would be
+	 * matched by AppleUSBHub - if this kernel had it, which it does not - and
+	 * that driver's whole job is to enumerate downstream ports, which
+	 * BCM2837DWC2::enumerateBus() has already done. Publishing one would
+	 * either do nothing or set up a second, competing enumerator for the same
+	 * ports on a single-channel controller.
+	 */
+	uint32_t published = 0;
+	for (uint32_t i = 0; i < fNumDevices; i++) {
+		const DWC2USBDevice *dev = deviceAt(i);
+		if (dev == NULL || !dev->inUse) {
+			continue;
+		}
+		if (dev->deviceClass == 9 /* USB hub class */) {
+			IOLog("BCM2837DWC2: skipping hub at address %u (no hub driver "
+			      "vendored; enumerateBus already walked its ports)\n",
+			    dev->address);
+			continue;
+		}
+		if (fEthernetDriver != NULL &&
+		    SMSC9514USBTransport::findEthernetFunction(this) == dev) {
+			// Already hand-wired to SMSC9514Ethernet above. Publishing a nub
+			// for it too would let a second driver open the same endpoints on
+			// a controller that has exactly one hardware channel.
+			IOLog("BCM2837DWC2: address %u already claimed by SMSC9514Ethernet\n",
+			    dev->address);
+			continue;
+		}
+		if (fUSBController->PublishEnumeratedDevice(dev) == kIOReturnSuccess) {
+			published++;
+		}
+	}
+
+	IOLog("BCM2837DWC2: IOUSBController up, %u device nub(s) published\n", published);
+}
+
+/*
+ * Complete an interface's BSD registration, once. Idempotent by design:
+ * IONetworkStack::attachNetworkInterfaceToBSD() sets kIOBSDNameKey and then
+ * RE-REGISTERS the interface (IONetworkStack.cpp:824-826), which can re-fire
+ * the publish notification for an interface that is already fully attached.
+ * Without this guard that second pass would try to name the same interface
+ * twice.
+ */
+void
+BCM2837DWC2::registerInterfaceWithBSD(IOService *netif)
+{
+	if (netif == NULL) {
+		return;
+	}
+	// gIOBSDNameKey, not the kIOBSDNameKey string macro: that one lives in
+	// <IOKit/IOBSD.h>, while the OSSymbol is already declared by IOService.h
+	// and is what the property is actually keyed on.
+	if (netif->getProperty(gIOBSDNameKey) != NULL) {
+		return; // already named and attached
+	}
+	if (!IORegisterNetworkInterface(netif)) {
+		IOLog("BCM2837DWC2: IORegisterNetworkInterface failed - interface will "
+		      "not appear in ifconfig\n");
+	}
+}
+
+bool
+BCM2837DWC2::interfacePublished(void *target, void *ref, IOService *newService,
+                                IONotifier *notifier)
+{
+#pragma unused (ref, notifier)
+	BCM2837DWC2 *me = OSDynamicCast(BCM2837DWC2, (OSMetaClassBase *)target);
+	if (me == NULL || newService == NULL) {
+		return true;
+	}
+	me->registerInterfaceWithBSD(newService);
 	return true;
 }
 
@@ -1234,6 +1558,22 @@ BCM2837DWC2::stop(IOService *provider)
 	// this gone through normal matching (stop() then detach()) - there was
 	// no registerService()+match for it to begin with, so there is no
 	// automatic teardown for it either.
+	if (fInterfaceNotifier != NULL) {
+		fInterfaceNotifier->remove();
+		fInterfaceNotifier = NULL;
+	}
+
+	// Same reasoning as the Ethernet scaffolding below: attached and started
+	// by hand in start(), so it has no automatic teardown either. Stopped
+	// before the Ethernet driver because its UIM holds a pointer to this
+	// controller and its poll timer must stop touching the hardware first.
+	if (fUSBController != NULL) {
+		fUSBController->stop(this);
+		fUSBController->detach(this);
+		fUSBController->release();
+		fUSBController = NULL;
+	}
+
 	if (fEthernetDriver != NULL) {
 		fEthernetDriver->stop(this);
 		fEthernetDriver->detach(this);
