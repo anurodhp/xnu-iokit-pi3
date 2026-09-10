@@ -960,6 +960,36 @@ else
     echo "= tools/userland_staging/ipconfig.macho not built -- run tools/userland_staging/build_ipconfig.sh first if wanted, skipping"
 fi
 
+# DAR-283: real Apple scutil(8) -- the SCDynamicStore/SCPreferences
+# read-back tool (third_party/configd/scutil.tproj, real unmodified
+# source, tools/userland_staging/build_scutil.sh). Real Apple installs it
+# at /usr/sbin/scutil; same path here.
+#
+# This is the counterpart to ipconfig(8) above: ipconfig proves a real
+# DHCP lease arrived, scutil proves what configd's IPMonitor plugin then
+# PUBLISHED from it. /etc/resolv.conf is legitimately absent on this
+# target -- ip_plugin.c's flat-file write is `#if !TARGET_OS_IPHONE` and
+# this port is TARGET_OS_IPHONE=1 -- so the dynamic store is the only
+# real place the DNS configuration lives:
+#
+#   scutil --dns
+#   scutil <<< "show State:/Network/Global/DNS"
+#   scutil <<< "list State:/Network/.*"
+#
+# All three are non-interactive; scutil's interactive mode also works but
+# without line editing or history (libedit is not built -- see
+# tools/userland_staging/scutil_editline_compat.c).
+if [ -f tools/userland_staging/scutil.macho ]; then
+    mkdir -p "$MNT/usr/sbin"
+    cp tools/userland_staging/scutil.macho "$MNT/usr/sbin/scutil"
+    chmod 755 "$MNT/usr/sbin/scutil"
+    echo "+ wrote $(wc -c < tools/userland_staging/scutil.macho) bytes to $MNT/usr/sbin/scutil"
+    echo "  (DAR-283 -- real Apple scutil(8), tools/userland_staging/build_scutil.sh;"
+    echo "  real dynamic Mach-O talking the real config MIG subsystem to configd)"
+else
+    echo "= tools/userland_staging/scutil.macho not built -- run tools/userland_staging/build_scutil.sh first if wanted, skipping"
+fi
+
 if [ -f tools/userland_staging/libc_build/libobjc.A.dylib ]; then
     mkdir -p "$MNT/usr/lib" "$MNT/bin"
     cp tools/userland_staging/libc_build/libobjc.A.dylib "$MNT/usr/lib/libobjc.A.dylib"

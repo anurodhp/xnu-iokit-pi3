@@ -277,6 +277,26 @@
 #     build scripts (`tools/userland_staging/build_*.sh`) for these are
 #     being written incrementally, same as every prior entry in this
 #     file -- a pin here does not by itself mean a working build yet.
+#   - libedit (DAR-283, 2026-09-10): real Apple `scutil(8)` links
+#     `libedit.dylib` -- confirmed against configd's own
+#     `configd.xcodeproj/project.pbxproj`, whose `scutil-Embedded`
+#     PBXNativeTarget's Frameworks build phase lists exactly
+#     CoreFoundation.framework + SystemConfiguration.framework +
+#     libedit.dylib -- and `scutil.h` unconditionally `#include`s
+#     `<histedit.h>`, which the pinned Xcode-12 iPhoneOS SDK does not
+#     ship at all. Same `macos-112` manifest method as every pin above:
+#     `distribution-macOS`'s `release.json` at tag `macos-112` lists
+#     `{"project": "libedit", "tag": "libedit-55"}` (fetched and read
+#     directly, not guessed from the newest tag -- `libedit-57`,
+#     `libedit-62` and `libedit-65` all exist upstream and are all
+#     WRONG for Darwin 20.3).
+#     HONEST SCOPE NOTE: `tools/userland_staging/build_scutil.sh` uses
+#     this pin's real, unmodified `src/histedit.h` only -- the library
+#     itself (26 .c files / ~19k lines, an AWK `makelist` generated-
+#     header step, and a terminfo/wide-char dependency chain) is NOT
+#     built yet. See that script's own header and
+#     `scutil_editline_compat.c` for exactly what stands in for it and
+#     why that is a real, non-fabricated degradation path.
 #   - llvm-libcxx / llvm-libcxxabi (Phase 6.5 Phase C, 2026-08-25): dyld's
 #     C++ source needs a real libc++/libc++abi (`std::string`,
 #     `std::vector`, `<iostream>`, etc.) to compile at all, and neither is
@@ -539,6 +559,7 @@ cron|git@github.com:anurodhp/cron.git|iokit-port||https://github.com/apple-oss-d
 syslog|https://github.com/apple-oss-distributions/syslog.git|syslog-385|
 libutil|https://github.com/apple-oss-distributions/libutil.git|libutil-58.40.2|
 ncurses|https://github.com/apple-oss-distributions/ncurses.git|ncurses-57|
+libedit|https://github.com/apple-oss-distributions/libedit.git|libedit-55|
 libresolv|https://github.com/apple-oss-distributions/libresolv.git|libresolv-68|
 libiconv|https://github.com/apple-oss-distributions/libiconv.git|libiconv-59|
 OpenPAM|https://github.com/apple-oss-distributions/OpenPAM.git|OpenPAM-28.40.1|
