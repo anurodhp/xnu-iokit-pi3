@@ -249,6 +249,7 @@ FILES="$CDT/configd.m $CDT/_SCD.c $CDT/configd_server.c $CDT/plugin_support.c \
     configd_sigaction_compat.c \
     configd_bsm_wrappers_compat.c \
     configd_cfurl_filesize_compat.c \
+    configd_line_buffered_log_compat.c \
     configd_scnetworkconfig_setvalue_compat.c"
 
 ok=0
@@ -365,6 +366,21 @@ rm -f configd.macho
     `# missing from a first real link attempt). A loose .o on the link line` \
     `# is always included, unlike an archive member.` \
     "$OUT/configd_obj/configd_cfurl_filesize_compat.o" \
+    `# Same loose-.o reasoning as the line above, for a different reason:` \
+    `# configd_line_buffered_log_compat.c defines NO external symbol at all` \
+    `# (one static function, reachable only via __attribute__((constructor))),` \
+    `# so as an archive member there is nothing for ld64's member selection to` \
+    `# resolve and it is silently never pulled in. Verified the hard way: with` \
+    `# it only in libconfigd.a the .o built fine, yet configd.macho carried no` \
+    `# reference to _setvbuf at all (nm -m) -- proof the member was never` \
+    `# extracted (CLAUDE.md's "confirm the diagnostic actually landed" rule` \
+    `# catching a real silent no-op). As a loose .o the reference appears and` \
+    `# __TEXT,__init_offsets grows to 4 bytes = one registered initializer.` \
+    `# (Check __init_offsets, NOT __mod_init_func: under this project's` \
+    `# -fixup_chains links ld64 emits LC_INIT_FUNC_OFFSETS and leaves the old` \
+    `# __mod_init_func section present but size 0, which reads exactly like a` \
+    `# dropped constructor if you look at the wrong section.)` \
+    "$OUT/configd_obj/configd_line_buffered_log_compat.o" \
     `# configd_scnetworkconfig_setvalue_compat.o REMOVED (DAR-240,` \
     `# 2026-09-04): its whole reason for existing -- a real, narrowly-` \
     `# extracted forwarding body standing in for` \
