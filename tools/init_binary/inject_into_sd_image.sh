@@ -641,6 +641,21 @@ else
     echo "= tsd_vm_smoketest.macho not built -- run tools/userland_staging/build_tsd_vm_smoketest.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/libc_build/tlv_smoketest.macho ]; then
+    mkdir -p "$MNT/usr/local/bin"
+    cp tools/userland_staging/libc_build/tlv_smoketest.macho \
+        "$MNT/usr/local/bin/tlv_smoketest"
+    chmod 755 "$MNT/usr/local/bin/tlv_smoketest"
+    echo "+ wrote tlv_smoketest to $MNT/usr/local/bin/"
+    echo "  (DAR-279 real arm64 __thread / Thread-Local Variable check --"
+    echo "  initial-content copy, per-thread separation, persistence across"
+    echo "  another thread's use. Run by hand from the root shell post-boot;"
+    echo "  prints a single PASS/FAIL line. tools/userland_staging/"
+    echo "  build_tlv_smoketest.sh)"
+else
+    echo "= tlv_smoketest.macho not built -- run tools/userland_staging/build_tlv_smoketest.sh first if wanted, skipping"
+fi
+
 for v in "" "_broken"; do
     src="tools/userland_staging/libc_build/sigaction_tramp_smoketest${v}.macho"
     if [ -f "$src" ]; then
