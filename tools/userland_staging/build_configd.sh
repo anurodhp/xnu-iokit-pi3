@@ -520,4 +520,114 @@ fi
     echo "       ahead of libmach_ipc.a on configd.macho's link line (DAR-263)" >&2
     exit 1
 }
+
+# DAR-270: plugin/host symbol-collision gate.
+#
+# Real Apple ships every configd plugin as its own loadable .bundle, so a
+# plugin's PRIVATE_EXTERN helper can share a name with configd.tproj's own
+# PRIVATE_EXTERN helper and never collide -- separate Mach-O images. This
+# port links all of them statically into ONE configd.macho, which collapses
+# that boundary. When it collapses, ld64 resolves the plugin's call to
+# configd's definition, because configd's own objects are LOOSE objects on
+# the link line and satisfy the reference before the plugin ARCHIVE is even
+# scanned -- so the archive member that really defines it is never
+# extracted. Nothing errors: clean compile, clean link, clean nm.
+#
+# That exact accident cost DAR-270: IPConfiguration's prime()
+# (bootp/IPConfiguration.bproj/ipconfigd.c:9000) called configd.tproj's
+# server_init() instead of its own, so every configd startup ran
+# bootstrap_check_in("com.apple.SystemConfiguration.configd") a SECOND
+# time, got BOOTSTRAP_SERVICE_ACTIVE and exit(EX_UNAVAILABLE)'d -- an
+# infinite KeepAlive respawn loop (86 configd generations in one 5-minute
+# QEMU boot). Fixed by namespacing the plugin's copy in
+# build_ipconfiguration_plugin.sh (-Dserver_init=ipconfig_server_init).
+#
+# Gate every future collision the same way rather than rediscovering it
+# one respawn loop at a time: no name may be defined BOTH by configd's own
+# loose objects and by a statically-linked plugin archive.
+NM="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/nm"
+
+# `nm -g -m`, not plain `nm -g`: -g keeps this to symbols the linker can
+# actually resolve against (external AND private external -- the latter is
+# exactly what server_init was, so dropping it would miss the bug this
+# audit exists for), while -m adds the attribute column that lets the two
+# non-bugs below be excluded by attribute rather than by name. Plain -m
+# without -g would additionally list every file-local static and literal
+# label (l_.str.N, ltmp0, static helpers), none of which can collide.
+#
+# Two kinds of shared name are NOT this bug and must not trip it:
+#
+#  - "weak ... external" symbols. clang emits the block ABI's own
+#    ___copy_helper_block_*/___destroy_helper_block_* helpers as weak
+#    coalesced definitions in every TU that uses a block; they are
+#    identical by construction and are MEANT to collapse to one copy at
+#    link time. Filtered out by attribute, never by name, so a real
+#    strong collision that happens to be named like a helper still trips.
+#  - the allow-list below: real, deliberate, already-documented shadows.
+nm_defs() {
+    "$NM" -g -m "$@" 2>/dev/null \
+        | grep -v '(undefined)' \
+        | grep -v ' weak ' \
+        | awk '{print $NF}' | sort -u
+}
+
+# Deliberate, documented shadows -- keep this list short and justified.
+#
+#  _load_InterfaceNamer: configd_builtin_plugins_stub.c defines it on
+#  purpose, so ld64 correctly never extracts this archive's ifnamer.o.
+#  ifnamer.c hits a real, separate IOKitLib.h/lockdown.h wall (DAR-240),
+#  which is why the stub is still the live definition. See the link-order
+#  comment earlier in this file for the full write-up.
+collide_allow="_load_InterfaceNamer"
+
+# Every pair, not just host-vs-plugin. Archive-vs-archive is the SAME
+# silent shadow: if two plugin archives both define a name, ld64 extracts
+# whichever member it needed first and the other plugin's call binds to it,
+# with no duplicate-symbol error (the second member is simply never
+# extracted). configd's own loose objects are just the pair member that
+# always wins, which is why they were the visible half of DAR-270.
+nm_defs "$OUT"/configd_obj/*.o > "$OUT/.symaudit.configd_obj"
+audit_sets="$OUT/.symaudit.configd_obj:configd.tproj-objects"
+for arch in "$OUT/libconfigd_plugins.a" "$OUT/libconfigd_ipconfiguration.a"; do
+    [ -f "$arch" ] || continue
+    nm_defs "$arch" > "$OUT/.symaudit.$(basename "$arch")"
+    audit_sets="$audit_sets $OUT/.symaudit.$(basename "$arch"):$(basename "$arch")"
+done
+
+collide=""
+for a in $audit_sets; do
+    for b in $audit_sets; do
+        # Ordered pairs only, so each pair is reported once.
+        [ "$a" \< "$b" ] || continue
+        hits=$(comm -12 "${a%%:*}" "${b%%:*}" | grep -vxF "$collide_allow" || true)
+        if [ -n "$hits" ]; then
+            collide="$collide${a##*:} <-> ${b##*:}: $(echo "$hits" | tr '\n' ' ')
+"
+        fi
+    done
+done
+rm -f "$OUT"/.symaudit.*
+if [ -n "$collide" ]; then
+    echo "error: plugin/host symbol collision -- see the DAR-270 comment above." >&2
+    echo "       These names are defined by BOTH configd's own objects and a" >&2
+    echo "       statically-linked plugin archive, so the plugin's calls silently" >&2
+    echo "       bind to configd's copy and the archive member is never extracted:" >&2
+    printf '       %s\n' "$collide" >&2
+    echo "       Fix: namespace the PLUGIN's copy in its own build_*.sh CFLAGS" >&2
+    echo "       (-D<name>=<plugin>_<name>), never rename configd's." >&2
+    exit 1
+fi
+echo "plugin_symbol_audit: no name is defined by two of {configd.tproj objects, plugin archives} (DAR-270)"
+
+# DAR-270: and prove the positive side of the same fix -- IPConfiguration's
+# own real MIG server (bootp/IPConfiguration.bproj/server.c) is genuinely
+# in the image now. Before the fix its 15 _ipconfig_* MIG routines were all
+# silently absent, because ld64 never extracted server.o at all.
+if ! "$NM" configd.macho 2>/dev/null | grep -qw "_ipconfig_server_init"; then
+    echo "error: bootp/IPConfiguration.bproj/server.o was not linked into" >&2
+    echo "       configd.macho -- ipconfigd.c's prime() has nothing real to" >&2
+    echo "       call. See the DAR-270 comment above." >&2
+    exit 1
+fi
+echo "ipconfig_server_audit: real IPConfiguration MIG server linked (DAR-270)"
 echo "wrote configd.macho"
