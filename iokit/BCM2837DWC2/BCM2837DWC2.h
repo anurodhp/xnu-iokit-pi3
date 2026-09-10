@@ -531,6 +531,8 @@ private:
 
 	// Poll `offset` until (value & mask) == (set ? mask : 0), or timeout.
 	bool waitForBits(uint32_t offset, uint32_t mask, bool set, uint32_t timeoutMS);
+	// waitForBits() wants every bit in the mask; this one wants any of them.
+	bool waitForAnyBits(uint32_t offset, uint32_t mask, uint32_t timeoutMS);
 
 	// Core bring-up, ported from u-boot's dwc_otg_core_init/
 	// dwc_otg_core_host_init.
@@ -552,7 +554,12 @@ private:
 	// buffer or PID: doTransfer owns those and the multi-chunk loop.
 	IOReturn transferChunk(uint32_t xferLen, uint32_t *actualLen, uint32_t *hcintOut);
 
-	bool waitForChannelHalted(uint32_t chan, uint32_t timeoutMS, uint32_t *hcintOut);
+	// Wait for a halt OR an un-halted NAK, and force a still-enabled channel
+	// down. See the implementations for why a NAKed non-periodic channel does
+	// not halt itself, and why leaving one enabled silently wedges every
+	// other endpoint on this single-channel controller.
+	bool waitForChannelSettled(uint32_t chan, uint32_t timeoutMS, uint32_t *hcintOut);
+	void haltChannel(uint32_t chan, uint32_t *hcintOut);
 
 	void channelInit(DWC2Endpoint *ep, bool isIn, bool useSplit);
 

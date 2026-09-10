@@ -119,6 +119,39 @@ BCM2837DWC2::waitForBits(uint32_t offset, uint32_t mask, bool set, uint32_t time
 	return false;
 }
 
+/*
+ * waitForBits() waits for EVERY bit in the mask. This waits for ANY of them,
+ * which is what a status register carrying several mutually exclusive
+ * outcomes needs - HCINT in particular, where the caller has to know which of
+ * the possible answers arrived, not wait for all of them at once.
+ *
+ * Same spin-then-sleep shape as waitForBits: a microsecond-scale busy wait
+ * first, because most of these resolve immediately and a full IOSleep(1)
+ * would dominate; only then fall back to sleeping so a slow answer does not
+ * burn a CPU.
+ */
+bool
+BCM2837DWC2::waitForAnyBits(uint32_t offset, uint32_t mask, uint32_t timeoutMS)
+{
+	const uint32_t spinIterations = 1000; // 1000 x 1us
+
+	for (uint32_t i = 0; i < spinIterations; i++) {
+		if ((regRead(offset) & mask) != 0) {
+			return true;
+		}
+		IODelay(1);
+	}
+
+	for (uint32_t ms = 0; ms < timeoutMS; ms++) {
+		if ((regRead(offset) & mask) != 0) {
+			return true;
+		}
+		IOSleep(1);
+	}
+
+	return false;
+}
+
 #pragma mark - Core bring-up
 
 bool
@@ -561,19 +594,67 @@ BCM2837DWC2::channelInit(DWC2Endpoint *ep, bool isIn, bool useSplit)
 	}
 }
 
+/*
+ * Wait until the channel reports something worth acting on: it halted, or it
+ * NAKed without halting.
+ *
+ * A halt is the ordinary end of a transfer. The second case is specific to
+ * NON-PERIODIC (control/bulk) endpoints in buffer-DMA mode: a NAK does not
+ * halt the channel. The core leaves it enabled and re-issues the token by
+ * itself, raising only HCINT.NAK to say so. QEMU's dwc2 model implements the
+ * same behaviour, and says so in as many words - "for ctrl/bulk,
+ * automatically retry on NAK, but send the interrupt anyway"
+ * (third_party/qemu-zhuowei/hw/usb/hcd-dwc2.c). Periodic endpoints DO halt on
+ * a NAK, so they still come back through the CHHLTD path unchanged.
+ *
+ * Waiting for CHHLTD on a NAKed bulk IN therefore means waiting for the
+ * device to have data, which for an idle read is never. That is not merely
+ * slow: this driver runs every endpoint over ONE shared hardware channel, so
+ * a channel parked with CHENA still set blocks every other endpoint as well.
+ * Worse, it does so invisibly - re-arming a channel whose CHENA never dropped
+ * is not an enable edge, so the next endpoint's transfer is programmed into
+ * registers nothing ever acts on, while the controller keeps re-polling the
+ * previous endpoint. That is exactly how the CDC-ECM interrupt (link-status)
+ * endpoint came to be serviced by the UIM every tick without a single packet
+ * ever reaching the device (DAR-282).
+ */
 bool
-BCM2837DWC2::waitForChannelHalted(uint32_t chan, uint32_t timeoutMS, uint32_t *hcintOut)
+BCM2837DWC2::waitForChannelSettled(uint32_t chan, uint32_t timeoutMS, uint32_t *hcintOut)
 {
-	if (!waitForBits(hcOffset(chan, kDWC2_HCINT), kHCINT_CHHLTD, true, timeoutMS)) {
-		if (hcintOut != NULL) {
-			*hcintOut = regRead(hcOffset(chan, kDWC2_HCINT));
-		}
-		return false;
+	bool settled = waitForAnyBits(hcOffset(chan, kDWC2_HCINT),
+	    kHCINT_CHHLTD | kHCINT_NAK, timeoutMS);
+	if (hcintOut != NULL) {
+		*hcintOut = regRead(hcOffset(chan, kDWC2_HCINT));
+	}
+	return settled;
+}
+
+/*
+ * Force a still-enabled channel to halt and report what it ended up saying.
+ *
+ * The two-bit CHENA+CHDIS write is the silicon's documented way of aborting a
+ * channel, and is the same sequence hostInit() already uses to bring every
+ * channel to a known state at startup.
+ *
+ * HCINT is re-read *after* the halt completes, deliberately: a transfer can
+ * finish in the moment between deciding to abort it and the abort landing, and
+ * the caller must see that XFERCOMP rather than throw away data the device
+ * really did deliver.
+ */
+void
+BCM2837DWC2::haltChannel(uint32_t chan, uint32_t *hcintOut)
+{
+	if (regRead(hcOffset(chan, kDWC2_HCCHAR)) & kHCCHAR_CHEN) {
+		regModify(hcOffset(chan, kDWC2_HCCHAR), 0,
+		    kHCCHAR_CHEN | kHCCHAR_CHDIS);
+		// A forced halt is acknowledged within a frame or two on real
+		// silicon and immediately under emulation; this bound only exists
+		// so a wedged channel cannot hang the workloop.
+		waitForBits(hcOffset(chan, kDWC2_HCINT), kHCINT_CHHLTD, true, 50);
 	}
 	if (hcintOut != NULL) {
 		*hcintOut = regRead(hcOffset(chan, kDWC2_HCINT));
 	}
-	return true;
 }
 
 /*
@@ -588,13 +669,21 @@ BCM2837DWC2::transferChunk(uint32_t xferLen, uint32_t *actualLen, uint32_t *hcin
 	*actualLen = 0;
 
 	uint32_t hcint = 0;
-	if (!waitForChannelHalted(kDWC2Channel, 2000, &hcint)) {
+	if (!waitForChannelSettled(kDWC2Channel, 2000, &hcint)) {
 		IOLog("BCM2837DWC2: channel halt timeout (HCINT=%#x HCCHAR=%#x)\n",
 		    hcint, regRead(hcOffset(kDWC2Channel, kDWC2_HCCHAR)));
 		if (hcintOut != NULL) {
 			*hcintOut = hcint;
 		}
 		return kIOReturnTimeout;
+	}
+
+	if (!(hcint & kHCINT_CHHLTD)) {
+		// A NAK that did not halt the channel - see waitForChannelSettled.
+		// The channel has to be taken down before the next transfer can be
+		// armed on it, because only a real disabled->enabled edge starts
+		// one.
+		haltChannel(kDWC2Channel, &hcint);
 	}
 
 	if (hcintOut != NULL) {
