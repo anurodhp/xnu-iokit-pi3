@@ -644,6 +644,21 @@ else
     echo "= res_init_dnsinfo_smoketest.macho not built -- run tools/userland_staging/build_res_init_dnsinfo_smoketest.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/libedit_smoketest.macho ]; then
+    mkdir -p "$MNT/usr/local/bin"
+    cp tools/userland_staging/libedit_smoketest.macho \
+        "$MNT/usr/local/bin/libedit_smoketest"
+    chmod 755 "$MNT/usr/local/bin/libedit_smoketest"
+    echo "+ wrote libedit_smoketest to $MNT/usr/local/bin/"
+    echo "  (DAR-286: replays scutil.c's own real libedit setup sequence and"
+    echo "  reports which branch scutil would take -- keep the editor, or tear it"
+    echo "  down and fall back to fgets(). Also does a real el_gets() read from a"
+    echo "  real file. Run by hand from the root shell post-boot. Built by"
+    echo "  tools/userland_staging/build_libedit.sh)"
+else
+    echo "= libedit_smoketest.macho not built -- run tools/userland_staging/build_libedit.sh first if wanted, skipping"
+fi
+
 if [ -f tools/userland_staging/libc_build/tsd_vm_smoketest.macho ]; then
     mkdir -p "$MNT/usr/local/bin"
     cp tools/userland_staging/libc_build/tsd_vm_smoketest.macho \

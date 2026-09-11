@@ -152,12 +152,26 @@
 # with `nm -gU`); each client image genuinely needs its own copy, and
 # scutil's `--nwi` path (nwi/network_information.c) really calls it.
 #
-# STAND-INS (five files, each with its own full justification)
-# ============================================================
-#	scutil_editline_compat.c	libedit not built (real histedit.h
-#					IS used, from the libedit-55 pin);
-#					drives scutil's own real non-editing
-#					fgets() input path
+# LINE EDITING: REAL libedit, AS OF DAR-286
+# =========================================
+# scutil.h #includes <histedit.h> unconditionally and scutil.c's
+# interactive command loop really calls 9 libedit entry points. Until
+# 2026-09-11 those were satisfied by scutil_editline_compat.c, a no-op
+# stand-in that returned NULL/-1 so scutil took its OWN real,
+# Apple-authored teardown branch and fell back to fgets() -- real, but
+# with no arrow-key editing, no history and no ~/.editrc.
+#
+# DAR-286 built the real library (build_libedit.sh, real libedit-55
+# source at full Apple WIDECHAR parity), so that file is GONE and this
+# links real libedit.dylib -- exactly as real Apple does: configd.
+# xcodeproj's own `scutil-Embedded` target's Frameworks build phase is
+# CoreFoundation.framework + SystemConfiguration.framework +
+# libedit.dylib. The gate at the end of this script asserts scutil binds
+# _el_init to libedit and carries no private copy, so a silent revert to
+# a local stand-in fails the build.
+#
+# STAND-INS (four files, each with its own full justification)
+# ===========================================================
 #	scutil_nc_compat.c		`--nc` VPN family; NetworkExtension
 #					never open-sourced
 #	scutil_reachability_compat.c	`-r`; SCNetworkReachability.c needs
@@ -225,6 +239,14 @@ fi
 # prerequisite, not an optimisation.
 if [ ! -f "$LIBEDIT/src/histedit.h" ]; then
     echo "error: $LIBEDIT/src/histedit.h not found -- run setup_third_party.sh first" >&2
+    exit 1
+fi
+# DAR-286: real libedit.dylib behind that header. Named separately from
+# the generic dylib loop below on purpose -- gen_build_order.py only
+# reads the literal "run build_X.sh first" idiom, and the loop's generic
+# message does not use it.
+if [ ! -f "$OUT/system/libedit.dylib" ]; then
+    echo "error: $OUT/system/libedit.dylib not found -- run build_libedit.sh first" >&2
     exit 1
 fi
 for d in sc_headers sc_iokit_headers sc_dispatch_compat sc_compat_include compat_include cf_headers configd_plugin_iokit_headers; do
@@ -344,7 +366,6 @@ FILES="$SCUTIL/scutil.c \
     $LIBC/stdlib/FreeBSD/getopt.c \
     $LIBC/stdlib/FreeBSD/getopt_long.c \
     $LIBC/gen/FreeBSD/signal.c \
-    scutil_editline_compat.c \
     scutil_nc_compat.c \
     scutil_reachability_compat.c \
     scutil_migration_compat.c \
@@ -432,6 +453,15 @@ rm -f scutil.macho
     "$OUT/system/libdyld.dylib" \
     "$OUT/system/libsystem_notify.dylib" \
     "$OUT/system/libsystem_m.dylib" "$OUT/system/libresolv.dylib" \
+    `# DAR-286: real libedit, listed LAST on purpose. Its own transitive` \
+    `# LC_LOAD_DYLIB closure includes libncurses/libinfo/libcopyfile, so` \
+    `# listing it earlier would let ld64 resolve an unrelated libc symbol` \
+    `# THROUGH libedit and record "bind libedit/<sym>" -- which real` \
+    `# dyld-940 cannot resolve, since libedit plain-links those rather` \
+    `# than LC_REEXPORT_DYLIBing them (CLAUDE.md's bind_target_audit.sh` \
+    `# writeup; DAR-217 is the same bug one dylib over). Nothing else` \
+    `# here defines el_*/history_*, so last is both safe and correct.` \
+    "$OUT/system/libedit.dylib" \
     2>"$OUT/scutil_link.err" \
     && echo "real link: 0 undefined symbols -- scutil.macho fully closed" \
     || { echo "real link failed:"; grep '^  "' "$OUT/scutil_link.err" | sed 's/,.*//' | sort -u; tail -40 "$OUT/scutil_link.err" >&2; exit 1; }
@@ -471,6 +501,60 @@ if ! nm -m scutil.macho 2>/dev/null | grep "_dns_configuration_copy" | grep -q "
     nm -m scutil.macho | grep "_dns_configuration_copy" >&2
     exit 1
 fi
+
+# DAR-286 gate, same shape as the _dns_configuration_copy one above: the
+# 9 libedit entry points scutil calls must bind the real libedit.dylib
+# and must NOT be satisfied by a local definition. A reintroduced
+# scutil_editline_compat.c would link and run perfectly happily while
+# silently disabling line editing again -- that is exactly the state this
+# ticket removed, so it is checked rather than trusted.
+for s in _el_init _el_end _el_gets _el_set _el_get _el_source \
+         _history_init _history_end _history; do
+    if nm -gU scutil.macho 2>/dev/null | grep -qE "^[0-9a-f]+ T $s\$"; then
+        echo "error: scutil.macho DEFINES $s locally -- DAR-286 moved the real" >&2
+        echo "       implementation into libedit.dylib; a private copy shadows it" >&2
+        echo "       and puts scutil back on its no-editing fgets() fallback." >&2
+        exit 1
+    fi
+    if ! nm -m scutil.macho 2>/dev/null | grep -F "external $s (from " | grep -q "libedit"; then
+        echo "error: scutil.macho's $s does not bind libedit.dylib:" >&2
+        nm -m scutil.macho 2>/dev/null | grep -F "external $s (from " >&2
+        exit 1
+    fi
+done
+echo "real libedit: all 9 entry points bind /usr/lib/libedit.3.dylib"
+
+# DAR-286: libedit.dylib carries exactly ONE flat-namespace deferral,
+# _fork (see build_libedit.sh's header for the two real reasons it cannot
+# live inside a dylib here). An unresolved flat-namespace bind really
+# does abort dyld-940 at load -- a first attempt at this ticket deferred
+# six symbols and scutil died with
+#   dyld[10]: symbol not found in flat namespace '_execlp'
+# on a real boot. So this is checked rather than assumed: some image
+# scutil actually loads must really export _fork.
+# Matched by real LC_ID_DYLIB install_name, not by filename: several
+# dylibs here ship a versioned install_name whose basename is NOT their
+# built filename (libncurses.dylib -> /usr/lib/libncurses.5.4.dylib,
+# libresolv.dylib -> /usr/lib/libresolv.9.dylib), so a basename compare
+# would silently skip them and could report a false "no owner".
+SCUTIL_LOADS=$(otool -L scutil.macho | tail -n +2 | awk '{print $1}')
+FORK_OWNER=""
+for cand in "$OUT"/system/*.dylib; do
+    iname=$(otool -D "$cand" 2>/dev/null | tail -n +2)
+    [ -n "$iname" ] || continue
+    echo "$SCUTIL_LOADS" | grep -qxF "$iname" || continue
+    if nm -gU "$cand" 2>/dev/null | grep -qE "^[0-9a-f]+ T _fork\$"; then
+        FORK_OWNER="$iname"
+        break
+    fi
+done
+if [ -z "$FORK_OWNER" ]; then
+    echo "error: no dylib scutil.macho loads exports _fork, but libedit.dylib" >&2
+    echo "       defers it to the flat namespace -- scutil would abort at dyld" >&2
+    echo "       load with \"symbol not found in flat namespace '_fork'\"." >&2
+    exit 1
+fi
+echo "real libedit: its one _fork flat-namespace deferral resolves via $FORK_OWNER"
 
 # Hard gates, same as build_syslogd.sh/build_configd.sh/build_ipconfig.sh:
 # a clean link and a clean nm do NOT prove a two-level bind resolves at
