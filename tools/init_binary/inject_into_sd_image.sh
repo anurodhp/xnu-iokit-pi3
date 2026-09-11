@@ -641,6 +641,21 @@ else
     echo "= tsd_vm_smoketest.macho not built -- run tools/userland_staging/build_tsd_vm_smoketest.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/libc_build/tlv_smoketest.macho ]; then
+    mkdir -p "$MNT/usr/local/bin"
+    cp tools/userland_staging/libc_build/tlv_smoketest.macho \
+        "$MNT/usr/local/bin/tlv_smoketest"
+    chmod 755 "$MNT/usr/local/bin/tlv_smoketest"
+    echo "+ wrote tlv_smoketest to $MNT/usr/local/bin/"
+    echo "  (DAR-279 real arm64 __thread / Thread-Local Variable check --"
+    echo "  initial-content copy, per-thread separation, persistence across"
+    echo "  another thread's use. Run by hand from the root shell post-boot;"
+    echo "  prints a single PASS/FAIL line. tools/userland_staging/"
+    echo "  build_tlv_smoketest.sh)"
+else
+    echo "= tlv_smoketest.macho not built -- run tools/userland_staging/build_tlv_smoketest.sh first if wanted, skipping"
+fi
+
 for v in "" "_broken"; do
     src="tools/userland_staging/libc_build/sigaction_tramp_smoketest${v}.macho"
     if [ -f "$src" ]; then
@@ -822,9 +837,22 @@ if [ -f tools/userland_staging/configd.macho ]; then
     # via the same sed pass, which is a deliberate, documented content
     # addition beyond verbatim real Apple source, not an oversight.
     if [ -f tools/userland_staging/libc_build/libconfigd_ipconfiguration.a ]; then
+        # The awk pass anchors the Builtin insertion to the FIRST <dict> in
+        # the file -- the bundle's own root dict -- and nothing else. (awk,
+        # not `sed '0,/<dict>/'`: address 0 is a GNU extension that BSD/macOS
+        # sed silently ignores, producing zero substitutions -- verified.)
+        # Corrected 2026-09-09 (DAR-170): the previous unanchored
+        # `sed 's#<dict>#...#'` substitutes the first match on EVERY line, so
+        # it injected <key>Builtin</key> into all three <dict>s in this
+        # plist (3 hits, counted). Two of those are wrong: the plugin's own
+        # "IPConfiguration" settings dict (harmless but bogus) and its
+        # "MachServices" dict -- which, once the real update-mach-services
+        # merge below started running, published a nonexistent Mach service
+        # literally named "Builtin" into com.apple.configd.plist. Found by
+        # reading the merged plist back off the image, not from a failure.
         sed 's#$(PRODUCT_BUNDLE_IDENTIFIER)#com.apple.SystemConfiguration.IPConfiguration#' \
             "third_party/bootp/IPConfiguration.bproj/Embedded-Info.plist" \
-            | sed 's#<dict>#<dict>\n\t<key>Builtin</key>\n\t<true/>#' \
+            | awk '!done && /<dict>/ { sub(/<dict>/, "<dict>\n\t<key>Builtin</key>\n\t<true/>"); done=1 } { print }' \
             > "$MNT/System/Library/SystemConfiguration/IPConfiguration.bundle.tmp" 2>/dev/null
         mkdir -p "$MNT/System/Library/SystemConfiguration/IPConfiguration.bundle"
         mv "$MNT/System/Library/SystemConfiguration/IPConfiguration.bundle.tmp" \
@@ -837,8 +865,129 @@ if [ -f tools/userland_staging/configd.macho ]; then
         echo "  tools/userland_staging/build_ipconfiguration_plugin.sh first if wanted, skipping"
         echo "  IPConfiguration.bundle staging (other 6 plugin bundles above still staged)"
     fi
+
+    # DAR-170: real Apple's own "Update MachServices" build phase, replayed
+    # here. This is NOT an invention -- it is a faithful replay of
+    # third_party/configd/configd.tproj/update-mach-services, the real,
+    # unmodified Apple shell script configd.xcodeproj runs as a build phase
+    # ("Update MachServices", 3 targets reference it). Read that script; the
+    # loop below is the same two PlistBuddy calls it makes, against the same
+    # two paths, with the Xcode-only DSTROOT/SDKROOT/RC_EMBEDDEDPROJECT_DIR
+    # search roots collapsed to the one root that exists here.
+    #
+    # Why it matters, found by a real QEMU boot (2026-09-09): a configd
+    # plugin that needs its own Mach service declares it in its OWN bundle
+    # Info.plist, and this build phase is what merges those into the
+    # installed /System/Library/LaunchDaemons/com.apple.configd.plist. The
+    # checked-in source plist (configd.tproj/com.apple.configd.plist) lists
+    # only com.apple.SystemConfiguration.configd because the shipped one is
+    # GENERATED. IPConfiguration.bproj/Embedded-Info.plist really does carry
+    #
+    #     <key>MachServices</key>
+    #     <dict><key>com.apple.network.IPConfiguration</key><true/></dict>
+    #
+    # and ipconfigd.c's real server_init() (IPConfiguration.bproj/server.c:535)
+    # does bootstrap_check_in(bootstrap_port, IPCONFIG_SERVER) for exactly
+    # that name. Without the merge, launchd has never heard of the service,
+    # bootstrap_check_in fails, no MIG port is ever created, and the real
+    # ipconfig(8) client reports "ipconfig server not active" -- which is
+    # precisely what a real boot showed before this ran. Nothing was wrong
+    # with the plugin, the daemon, or the client; the generated half of the
+    # plist was simply never generated.
+    CONFIGD_LAUNCHD_PLIST="$MNT/Library/LaunchDaemons/com.apple.configd.plist"
+    if [ -f "$CONFIGD_LAUNCHD_PLIST" ]; then
+        merged_any=0
+        for plugin_dir in "$MNT"/System/Library/SystemConfiguration/*.bundle; do
+            [ -d "$plugin_dir" ] || continue
+            # Real script's own search order: Contents/Info.plist first (the
+            # macOS bundle shape), then a flat top-level Info.plist (the
+            # iOS/embedded shape this project stages).
+            plugin_plist=""
+            if [ -f "$plugin_dir/Contents/Info.plist" ]; then
+                plugin_plist="$plugin_dir/Contents/Info.plist"
+            elif [ -f "$plugin_dir/Info.plist" ]; then
+                plugin_plist="$plugin_dir/Info.plist"
+            fi
+            [ -n "$plugin_plist" ] || continue
+            tmp_ms="$(mktemp -t plugin_machservices)"
+            if /usr/libexec/PlistBuddy -c "Print :MachServices" -x "$plugin_plist" \
+                    > "$tmp_ms" 2>/dev/null; then
+                echo "+ merging \"MachServices\" from: $plugin_plist"
+                /usr/libexec/PlistBuddy -c "Merge $tmp_ms :MachServices" \
+                    "$CONFIGD_LAUNCHD_PLIST" 2>/dev/null
+                merged_any=1
+            fi
+            rm -f "$tmp_ms"
+        done
+        if [ "$merged_any" -eq 1 ]; then
+            # Real script converts at the end too (xml1 for macOS deployment
+            # targets, binary1 otherwise). xml1 here so the staged plist stays
+            # readable/diffable from the guest, and because this project's own
+            # launchd reads it either way.
+            /usr/bin/plutil -convert xml1 "$CONFIGD_LAUNCHD_PLIST" 2>/dev/null || true
+            echo "  (real Apple configd.tproj/update-mach-services build phase, replayed --"
+            echo "  without it bootstrap_check_in(com.apple.network.IPConfiguration) in"
+            echo "  IPConfiguration.bproj/server.c:535 fails and ipconfig(8) reports"
+            echo "  \"ipconfig server not active\")"
+            echo "+ com.apple.configd.plist MachServices now:"
+            /usr/libexec/PlistBuddy -c "Print :MachServices" "$CONFIGD_LAUNCHD_PLIST" 2>/dev/null \
+                | sed 's/^/    /'
+        fi
+    fi
 else
     echo "= tools/userland_staging/configd.macho not built -- run tools/userland_staging/build_configd.sh first if wanted, skipping"
+fi
+
+# DAR-170: real Apple ipconfig(8) -- the client half of IPConfiguration
+# (third_party/bootp/ipconfig.tproj/client.c, real unmodified source,
+# tools/userland_staging/build_ipconfig.sh). Real Apple installs it at
+# /usr/sbin/ipconfig; same path here. This is the only way to talk to the
+# real IPConfiguration plugin running inside configd -- `ipconfig set en0
+# DHCP` drives the real DHCP state machine directly through the real
+# ipconfig MIG subsystem (bootplib/ipconfig.defs -> server.c's
+# _ipconfig_set() -> ipconfigd.c's set_if()), with no SCPreferences /
+# SCDynamicStore configuration needed, and `ipconfig getpacket en0` prints
+# the real DHCP ACK back.
+if [ -f tools/userland_staging/ipconfig.macho ]; then
+    mkdir -p "$MNT/usr/sbin"
+    cp tools/userland_staging/ipconfig.macho "$MNT/usr/sbin/ipconfig"
+    chmod 755 "$MNT/usr/sbin/ipconfig"
+    echo "+ wrote $(wc -c < tools/userland_staging/ipconfig.macho) bytes to $MNT/usr/sbin/ipconfig"
+    echo "  (DAR-170 -- real Apple ipconfig(8), tools/userland_staging/build_ipconfig.sh;"
+    echo "  real dynamic Mach-O talking the real ipconfig MIG subsystem to the"
+    echo "  IPConfiguration plugin inside configd)"
+else
+    echo "= tools/userland_staging/ipconfig.macho not built -- run tools/userland_staging/build_ipconfig.sh first if wanted, skipping"
+fi
+
+# DAR-283: real Apple scutil(8) -- the SCDynamicStore/SCPreferences
+# read-back tool (third_party/configd/scutil.tproj, real unmodified
+# source, tools/userland_staging/build_scutil.sh). Real Apple installs it
+# at /usr/sbin/scutil; same path here.
+#
+# This is the counterpart to ipconfig(8) above: ipconfig proves a real
+# DHCP lease arrived, scutil proves what configd's IPMonitor plugin then
+# PUBLISHED from it. /etc/resolv.conf is legitimately absent on this
+# target -- ip_plugin.c's flat-file write is `#if !TARGET_OS_IPHONE` and
+# this port is TARGET_OS_IPHONE=1 -- so the dynamic store is the only
+# real place the DNS configuration lives:
+#
+#   scutil --dns
+#   scutil <<< "show State:/Network/Global/DNS"
+#   scutil <<< "list State:/Network/.*"
+#
+# All three are non-interactive; scutil's interactive mode also works but
+# without line editing or history (libedit is not built -- see
+# tools/userland_staging/scutil_editline_compat.c).
+if [ -f tools/userland_staging/scutil.macho ]; then
+    mkdir -p "$MNT/usr/sbin"
+    cp tools/userland_staging/scutil.macho "$MNT/usr/sbin/scutil"
+    chmod 755 "$MNT/usr/sbin/scutil"
+    echo "+ wrote $(wc -c < tools/userland_staging/scutil.macho) bytes to $MNT/usr/sbin/scutil"
+    echo "  (DAR-283 -- real Apple scutil(8), tools/userland_staging/build_scutil.sh;"
+    echo "  real dynamic Mach-O talking the real config MIG subsystem to configd)"
+else
+    echo "= tools/userland_staging/scutil.macho not built -- run tools/userland_staging/build_scutil.sh first if wanted, skipping"
 fi
 
 if [ -f tools/userland_staging/libc_build/libobjc.A.dylib ]; then

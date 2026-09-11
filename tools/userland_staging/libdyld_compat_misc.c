@@ -17,18 +17,28 @@ size_t malloc_size(const void *ptr) {
     return 0;
 }
 
-/* Real, documented gap: real arm64 Thread-Local Variable (__thread)
- * support (third_party/dyld/libdyld/threadLocalHelpers.s, real Apple
- * assembly implementing the TLV slow-path thunk). dyld_test_exec (and
- * every binary this project has built so far) declares zero __thread
- * variables, so this function's address is taken
- * (LibSystemHelpers::getTLVGetAddrFunc()) but never actually called --
- * real, structural absence of TLV support on this port, not faked logic
- * for a path anything currently exercises. */
-void *tlv_get_addr(void *thunk) {
-    (void)thunk;
-    return 0;
-}
+/* tlv_get_addr() REMOVED 2026-09-09 (DAR-279) -- real arm64
+ * Thread-Local Variable (__thread) support now comes from real Apple
+ * assembly, third_party/dyld/libdyld/threadLocalHelpers.s, assembled by
+ * build_libdyld.sh (see its comment for the mechanism).
+ *
+ * It used to live here as `return 0;`, on the documented reasoning that
+ * dyld_test_exec and every binary this project had built declared zero
+ * __thread variables, so LibSystemHelpers::getTLVGetAddrFunc() took its
+ * address but nothing ever called it. That reasoning was true when
+ * written and stopped being true silently. libSystemConfiguration.dylib
+ * carries a real __thread variable (configd's SCNetworkInterface.c:214
+ * `static __thread CFMutableDictionaryRef S_interface_cache`), and
+ * DAR-243 -- getting en0 to attach -- is what first made configd reach
+ * it: bootplib's S_build_interface_list() only calls
+ * S_interface_is_tethered() for an IFT_ETHER interface, and until en0
+ * existed there was none. From then on every configd launch dereferenced
+ * the 0 this returned and took EXC_BAD_ACCESS, which launchd's KeepAlive
+ * turned into an endless respawn loop.
+ *
+ * Worth keeping as a category: an honest stub for a genuinely unreached
+ * path is only as good as the claim that nothing reaches it, and nothing
+ * re-checks that claim when an unrelated subsystem lands. */
 
 /* NOTE (static-to-dylib migration step 5, docs/daemon-roadmap.md): this
  * file used to also carry __cxa_atexit/__cxa_finalize, a real, minimal

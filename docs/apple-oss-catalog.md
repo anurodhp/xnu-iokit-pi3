@@ -64,7 +64,7 @@ untouched (see below for why); everything else already matched.
 | `hfs` | `hfs-556.100.11` | `hfs-556.60.1` | pinned tag is **newer** than the manifest |
 | `IOStorageFamily` | `IOStorageFamily-218.1.4` | `IOStorageFamily-260.40.5` | pinned tag is **older** — real version drift |
 | `msdosfs` | `msdosfs-229.1.4` | `msdosfs-435.60.1` | pinned tag is **older** — real version drift |
-| `IOUSBFamily` | `IOUSBFamily-630.4.5` | *(not in the manifest tree at all)* | no Big Sur-era tag exists to compare against |
+| `IOUSBFamily` | `IOUSBFamily-560.4.2` *(was `630.4.5` until 2026-09-08)* | *(not in the manifest tree at all)* | no Big Sur-era tag exists to compare against; `630.4.5` re-pinned because it ships its core sources **empty** — see the 2026-09-08 addendum |
 
 Everything else (`dyld`, `Libc`, `libpthread`, `libplatform`,
 `libdispatch`, `libclosure`, `libmalloc`, `libunwind`, `Libinfo`,
@@ -105,6 +105,109 @@ Everything else (`dyld`, `Libc`, `libpthread`, `libplatform`,
   available source regardless, but it isn't and can't be manifest-
   verified the way the others are — this is an honest ceiling on the
   verification method itself, not a pin bug to fix.
+  **Superseded 2026-09-08 — it *was* a real pin bug after all, just not
+  a manifest one; see the addendum below.**
+
+**Addendum 2026-09-08 (DAR-244) — `IOUSBFamily-630.4.5` publishes its
+core sources as zero-byte files; re-pinned to `IOUSBFamily-560.4.2`.**
+Found while actually trying to compile IOUSBFamily for the first time
+(DAR-243/DAR-244's real `IOUSBController`/`IOUSBDevice`/`IOUSBInterface`/
+`IOUSBPipe` port, needed by `AppleUSBCDCECM`). At tag
+`IOUSBFamily-630.4.5` — the newest tag the repo has, and the one this
+file previously endorsed as "no better tag to move to" — the following
+are **literally 0 bytes**, in the real upstream repo and not just in
+this project's clone (verified independently via GitHub's contents API
+for that ref, which reports `"size": 0` for each):
+
+| Path | `630.4.5` | `560.4.2` |
+|---|---|---|
+| `IOUSBFamily/Classes/IOUSBController.cpp` | **0** | 170,433 |
+| `IOUSBFamily/Classes/IOUSBDevice.cpp` | **0** | 165,616 |
+| `IOUSBFamily/Classes/IOUSBInterface.cpp` | **0** | 82,276 |
+| `IOUSBFamily/Classes/IOUSBControllerV3.cpp` | **0** | 86,867 |
+| `IOUSBFamily/Classes/IOUSBControllerV2.cpp` | **0** | 64,521 |
+| `IOUSBFamily/Classes/IOUSBRootHubDevice.cpp` | **0** | 42,063 |
+| `IOUSBFamily/Classes/IOUSBPipeV2.cpp` | **0** | 33,848 |
+| `IOUSBFamily/Classes/IOUSBControllerUserClient.cpp` | **0** | 10,145 |
+| `IOUSBFamily/Classes/IOUSBController_Errata.cpp` | **0** | 12,703 |
+| `IOUSBFamily/Classes/IOUSBWorkLoop.cpp` | **0** | 3,481 |
+| `IOUSBFamily/Headers/USB.h` | **0** | 59,299 |
+| `IOUSBFamily/Headers/IOUSBController.h` | **0** | 54,433 |
+| `IOUSBFamily/Headers/IOUSBControllerV3.h` | **0** | 24,646 |
+| `IOUSBFamily/Headers/IOUSBLog.h` | **0** | 7,603 |
+| `IOUSBFamily/Headers/IOUSBControllerUserClient.h` | **0** | 2,915 |
+| `IOUSBFamily/Headers/IOUSBWorkLoop.h` | **0** | 2,007 |
+| `IOUSBFamily/Headers/IOUSBPriv.h` | **0** | 1,739 |
+| `IOUSBFamily/Headers/IOUSBAppleIDs.h` | **0** | 60 |
+| `AppleUSBHub/Classes/AppleUSBHub.cpp` | **0** | *(real)* |
+| `AppleUSBHub/Classes/AppleUSBHubPort.cpp` | **0** | *(real)* |
+| `AppleUSBHub/Classes/AppleUSBHSHubUserClient.cpp` | **0** | *(real)* |
+
+`560.4.2` (the next-newest tag; the repo has 51 tags total, newest first
+`630.4.5`, `560.4.2`, `555.4.4`, …) has **zero** empty files anywhere in
+`IOUSBFamily/Classes` or `IOUSBFamily/Headers` — 24,804 real lines of
+source across `Classes/` alone. So the correct pin for anyone who wants
+to *build* IOUSBFamily rather than skim its headers is `560.4.2`, and
+`setup_third_party.sh` now pins that.
+
+**The generalizable lesson**, worth more than the pin itself: "newest
+tag" and "newest tag that actually contains the source" are different
+things, and this project's own pin-audit method could not tell them
+apart, because it only ever compared *tag names* against the manifest.
+Nothing caught it for over a month because **nothing ever compiled
+IOUSBFamily** — DAR-244 confirms no build script referenced it; it was
+used only as reference headers, and the specific headers anyone happened
+to read (`IOUSBInterface.h`, `IOUSBDevice.h`, `USBSpec.h`) are among the
+ones that are *not* empty. A pin is only trustworthy to the depth
+something actually consumes it. Same shape as this file's own 2026-08-24
+lesson, one level down: there, a pin was present but never diffed
+against the manifest; here, a pin was diffed against the manifest but
+its *contents* were never opened.
+
+**Addendum 2026-09-08 (DAR-243/DAR-244) — two new header-only pins added
+alongside the IOUSBFamily fix.** Both exist purely so IOUSBFamily and
+AppleUSBCDCDriver *parse*; neither describes hardware this board has,
+and no source from either is compiled.
+
+| Repo | Pinned | Manifest says | Why |
+|---|---|---|---|
+| `IOPCIFamily` | `IOPCIFamily-428.80.2` | **matches** — `macos-112` pins commit `b6412a04…`, whose commit message is `IOPCIFamily-428.80.2` | `IOUSBControllerV3.h` declares an `IOPCIDevice *_device`; `IOUSBController.cpp` references `IOPCIDevice` in 8 places |
+| `IOSerialFamily` | `IOSerialFamily-93.200.2` | *(not in the manifest tree at all)* | `AppleUSBCDC.cpp` — the CDC master driver both ECM drivers depend on — includes `<IOKit/serial/IOSerialKeys.h>` and three siblings for its ACM path |
+
+`IOPCIFamily` is the better-behaved of the two: it is a real
+manifest-verified pin, resolved by reading `distribution-macOS`'s
+submodule commit and then that commit's own message, rather than by
+picking the newest tag. `IOSerialFamily` has the same "no manifest
+entry" ceiling as `IOUSBFamily`/`Libm`/`BSM` — its repo has only three
+tags ever (`91`, `93`, `93.200.2`) and `macos-112` does not list it — so
+`93.200.2` is simply the newest real tag, documented as such.
+
+Both were checked for the `IOUSBFamily-630.4.5` empty-file failure mode
+before being trusted. All six `IOKit/pci` headers and all six
+`IOSerialFamily.kmodproj` headers are real, non-empty files. That check
+is now a permanent guard rather than a one-off, and it covers **every**
+arm of the shim — `network`, `storage`, `usb`, `pci` and `serial`:
+`tools/setup_sdk_shim.sh` fails loudly if any header it links resolves
+to a zero-byte file, and `tools/build_iousbfamily.sh` refuses to run at
+all if `IOUSBController.cpp` is empty — because a wrong pin there does
+not fail the build, it silently compiles nothing.
+
+Worth stating plainly, since it is the whole reason the guard is a `-s`
+test and not an existence test: **an empty header is strictly worse than
+a missing one.** The symlink resolves, the file exists, the `#include`
+succeeds, and everything the header should have declared is simply
+absent — so the failure surfaces hundreds of lines later as unrelated
+"unknown type name" errors, or not at all. `link_headers`' existence
+check cannot see it.
+
+Note for the DAR-243 work specifically: `AppleUSBCDCDriver-4303.2.1`
+(pinned separately, and complete — no empty files) still `#include`s the
+legacy family (`<IOKit/usb/IOUSBDevice.h>`, `IOUSBPipe.h`,
+`IOUSBInterface.h`, `IOUSBNub.h`, `IOUSBBus.h`, `USB.h`) and contains
+zero references to `IOUSBHostFamily`/`IOUSBHostInterface`/`USBDriverKit`
+— checked in its own source rather than inferred from its version
+number. So legacy IOUSBFamily really is the right partner for it,
+despite `4303.2.1` being a much later-era tag.
 
 **Addendum 2026-08-27 — `Libm` pinned, same "no manifest entry" ceiling as
 `IOUSBFamily` but worse:** `setup_third_party.sh` now pins
@@ -398,8 +501,12 @@ starting Part 2's new-library work:
   (currently `556.100.11`, newer than the manifest's `556.60.1`) — not
   mechanical like the other two, needs a call on whether manifest
   fidelity or the newer maintenance tag matters more here.
-- **`IOUSBFamily` has no better tag to move to** — confirmed no Big
-  Sur-era manifest entry exists at all, nothing to fix.
+- ~~**`IOUSBFamily` has no better tag to move to** — confirmed no Big
+  Sur-era manifest entry exists at all, nothing to fix.~~ **Wrong, fixed
+  2026-09-08**: there was a better tag, just not a *newer* one.
+  `630.4.5` ships its ten core `.cpp`s and eight core headers as
+  zero-byte files upstream; re-pinned to `IOUSBFamily-560.4.2`, which is
+  complete. See the 2026-09-08 addendum above.
 - **Not yet done**: regenerating the legacy single-partition
   msdosfs-as-root test image (or an equivalent narrower test) to
   directly re-exercise msdosfs's own root-mount fixes at runtime, since

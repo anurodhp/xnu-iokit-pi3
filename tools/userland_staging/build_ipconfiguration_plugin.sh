@@ -275,6 +275,26 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-buil
     -D__API_UNAVAILABLE_PLATFORM_bridgeos=bridgeos,unavailable \
     -D__API_AVAILABLE_PLATFORM_bridgeos\(x\)=ios,introduced=x \
     -DPRIVATE \
+    `# DAR-270: namespace IPConfiguration's own server_init() away from` \
+    `# configd.tproj's identically-named one. On real Apple these two never` \
+    `# meet: IPConfiguration is a real loadable .bundle, so its` \
+    `# PRIVATE_EXTERN server_init() (IPConfiguration.bproj/server.c:535,` \
+    `# real MIG com.apple.network.IPConfiguration service) lives in a` \
+    `# separate Mach-O image from configd.tproj's PRIVATE_EXTERN` \
+    `# server_init() (configd.tproj/configd_server.c:122,` \
+    `# bootstrap_check_in(com.apple.SystemConfiguration.configd)). This port` \
+    `# links every plugin statically into one configd.macho, which collapses` \
+    `# that boundary -- and ld64 then resolved ipconfigd.c's prime() call to` \
+    `# configd's copy, because configd_obj/configd_server.o is a LOOSE object` \
+    `# on the link line and already satisfied _server_init before` \
+    `# libconfigd_ipconfiguration.a was even scanned, so this archive's own` \
+    `# server.o member was never extracted. Result: every configd startup ran` \
+    `# bootstrap_check_in() a SECOND time, got BOOTSTRAP_SERVICE_ACTIVE, and` \
+    `# exit(EX_UNAVAILABLE)'d -- an infinite KeepAlive respawn loop (86` \
+    `# generations in one 5-minute boot). Silent: clean compile, clean link,` \
+    `# clean nm. Renaming here keeps BOTH real Apple implementations, and` \
+    `# makes ld64 extract server.o for real (build_configd.sh asserts it).` \
+    -Dserver_init=ipconfig_server_init \
     -include "sys/fileport.h" \
     -include "dhcp_iopm_gap_compat.h" \
     -I "$BOOTPLIB" -I "$BOOTP" -I "$IPCONFIGLIB" \

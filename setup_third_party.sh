@@ -94,6 +94,29 @@
 #     that branch. `third_party-patches/libdispatch.patch` is no longer
 #     read by this script -- kept in the tree only as a historical
 #     record.
+#   - IOPCIFamily: added 2026-09-08 (DAR-244), headers only. There is no
+#     PCI bus on BCM2837 and this project will never have one -- the pin
+#     exists because IOUSBFamily's IOUSBControllerV3.h declares an
+#     `IOPCIDevice *_device` member and IOUSBController.cpp references
+#     IOPCIDevice in 8 places, so the header has to resolve for the
+#     family to compile at all. Unlike IOUSBFamily/Libm/BSM this one IS
+#     manifest-verified: `distribution-macOS` at `macos-112` pins
+#     IOPCIFamily at commit b6412a0416f0e9498dafb5d3ee7952e0b1248009,
+#     whose own commit message is "IOPCIFamily-428.80.2" -- that is the
+#     tag pinned here, resolved from the manifest rather than picked by
+#     recency. Checked for the IOUSBFamily-630.4.5 empty-file failure
+#     mode too; IOKit/pci's six headers are all real.
+#   - IOSerialFamily: added 2026-09-08 (DAR-243), headers only. There are
+#     no serial-port devices in this project's roadmap; the pin exists
+#     purely because `AppleUSBCDC.cpp` -- the CDC master driver that
+#     BOTH AppleUSBCDCECMControl and AppleUSBCDCECMData depend on --
+#     includes <IOKit/serial/IOSerialKeys.h>, IOSerialDriverSync.h,
+#     IOModemSerialStreamSync.h and IORS232SerialStreamSync.h for its
+#     ACM (modem/serial) sibling path. Same "no manifest entry" ceiling
+#     as IOUSBFamily/Libm/BSM: checked `distribution-macOS` at
+#     `macos-112` and IOSerialFamily is not listed there at all, so
+#     `IOSerialFamily-93.200.2` is simply the newest real tag (the repo
+#     has three: 91, 93, 93.200.2).
 #   - hfs, IOStorageFamily, IOUSBFamily, IONetworkingFamily, msdosfs: unmodified Apple
 #     open-source reference sources, pinned to an exact tag, no patching.
 #     CORRECTED 2026-08-24: a full `distribution-macOS` `macos-112` manifest
@@ -122,6 +145,37 @@
 #     `IOUSBFamily-630.4.5` also NOT touched -- confirmed no Big Sur-era
 #     tag exists in the manifest for it at all (checked, not assumed), so
 #     there is no better tag to move to.
+#     CORRECTED AGAIN 2026-09-08 (DAR-244): `IOUSBFamily-630.4.5` (the
+#     newest tag the repo has) publishes its ten most important source
+#     files as literal ZERO-BYTE files -- `IOUSBController.cpp`,
+#     `IOUSBControllerV2.cpp`, `IOUSBControllerV3.cpp`,
+#     `IOUSBControllerUserClient.cpp`, `IOUSBController_Errata.cpp`,
+#     `IOUSBDevice.cpp`, `IOUSBInterface.cpp`, `IOUSBPipeV2.cpp`,
+#     `IOUSBRootHubDevice.cpp`, `IOUSBWorkLoop.cpp`, plus headers
+#     `IOUSBController.h`, `IOUSBControllerV3.h`, `IOUSBControllerUserClient.h`,
+#     `IOUSBLog.h`, `IOUSBPriv.h`, `USB.h`, `IOUSBAppleIDs.h`,
+#     `IOUSBWorkLoop.h` and all three `AppleUSBHub/Classes/*.cpp`.
+#     Confirmed against real upstream, not just the local clone: the
+#     GitHub contents API for that ref reports size 0 for exactly those
+#     paths. The previous "pin the newest available real source" call
+#     was correct in spirit but landed on a tag with no source in it --
+#     "newest tag" and "newest tag that actually contains the code" are
+#     not the same thing, and nothing checked the difference because
+#     IOUSBFamily was never compiled by any build script (DAR-244).
+#     Re-pinned to `IOUSBFamily-560.4.2`, the next-newest tag, which has
+#     all of them for real (IOUSBController.cpp 170KB/4779 lines,
+#     IOUSBDevice.cpp 165KB/4771 lines, IOUSBInterface.cpp 82KB/2550
+#     lines, IOUSBControllerV3.cpp 86KB, IOUSBRootHubDevice.cpp 42KB,
+#     ... 24804 lines of real source across Classes/ total, zero empty
+#     files). Still outside the `macos-112` manifest -- the honest
+#     ceiling above is unchanged -- but this is the newest tag that is
+#     actually usable as source. Real consumer as of DAR-243/DAR-244:
+#     the IOUSBController/IOUSBDevice/IOUSBInterface/IOUSBPipe layer
+#     `AppleUSBCDCECM` needs. NOTE: `AppleUSBCDCDriver-4303.2.1` still
+#     `#include`s the legacy `<IOKit/usb/IOUSBDevice.h>`/`IOUSBPipe.h`/
+#     `IOUSBInterface.h`/`USB.h` family (checked in its own source, not
+#     assumed from the version number), so the legacy IOUSBFamily is the
+#     right partner for it, not the closed-source IOUSBHostFamily.
 #   - dyld/Libc/libpthread/.../Csu (Phase 4 libSystem+userland stack) and
 #     bash/shell_cmds/.../misc_cmds (Phase 4 real commands): unmodified
 #     Apple sources, pinned to the tags apple-oss-distributions'
@@ -223,6 +277,26 @@
 #     build scripts (`tools/userland_staging/build_*.sh`) for these are
 #     being written incrementally, same as every prior entry in this
 #     file -- a pin here does not by itself mean a working build yet.
+#   - libedit (DAR-283, 2026-09-10): real Apple `scutil(8)` links
+#     `libedit.dylib` -- confirmed against configd's own
+#     `configd.xcodeproj/project.pbxproj`, whose `scutil-Embedded`
+#     PBXNativeTarget's Frameworks build phase lists exactly
+#     CoreFoundation.framework + SystemConfiguration.framework +
+#     libedit.dylib -- and `scutil.h` unconditionally `#include`s
+#     `<histedit.h>`, which the pinned Xcode-12 iPhoneOS SDK does not
+#     ship at all. Same `macos-112` manifest method as every pin above:
+#     `distribution-macOS`'s `release.json` at tag `macos-112` lists
+#     `{"project": "libedit", "tag": "libedit-55"}` (fetched and read
+#     directly, not guessed from the newest tag -- `libedit-57`,
+#     `libedit-62` and `libedit-65` all exist upstream and are all
+#     WRONG for Darwin 20.3).
+#     HONEST SCOPE NOTE: `tools/userland_staging/build_scutil.sh` uses
+#     this pin's real, unmodified `src/histedit.h` only -- the library
+#     itself (26 .c files / ~19k lines, an AWK `makelist` generated-
+#     header step, and a terminfo/wide-char dependency chain) is NOT
+#     built yet. See that script's own header and
+#     `scutil_editline_compat.c` for exactly what stands in for it and
+#     why that is a real, non-fabricated degradation path.
 #   - llvm-libcxx / llvm-libcxxabi (Phase 6.5 Phase C, 2026-08-25): dyld's
 #     C++ source needs a real libc++/libc++abi (`std::string`,
 #     `std::vector`, `<iostream>`, etc.) to compile at all, and neither is
@@ -448,7 +522,9 @@ dtc-AppleDeviceTree|git@github.com:anurodhp/dtc-appledevicetree.git|master||http
 u-boot|git@github.com:anurodhp/u-boot.git|master||https://github.com/FlorentRevest/u-boot.git
 hfs|https://github.com/apple-oss-distributions/hfs.git|hfs-556.100.11|
 IOStorageFamily|https://github.com/apple-oss-distributions/IOStorageFamily.git|IOStorageFamily-260.40.5|
-IOUSBFamily|https://github.com/apple-oss-distributions/IOUSBFamily.git|IOUSBFamily-630.4.5|
+IOUSBFamily|https://github.com/apple-oss-distributions/IOUSBFamily.git|IOUSBFamily-560.4.2|
+IOPCIFamily|https://github.com/apple-oss-distributions/IOPCIFamily.git|IOPCIFamily-428.80.2|
+IOSerialFamily|https://github.com/apple-oss-distributions/IOSerialFamily.git|IOSerialFamily-93.200.2|
 AppleUSBCDCDriver|https://github.com/apple-oss-distributions/AppleUSBCDCDriver.git|AppleUSBCDCDriver-4303.2.1|
 IONetworkingFamily|https://github.com/apple-oss-distributions/IONetworkingFamily.git|IONetworkingFamily-151.40.1|
 msdosfs|https://github.com/apple-oss-distributions/msdosfs.git|msdosfs-435.60.1|
@@ -483,6 +559,7 @@ cron|git@github.com:anurodhp/cron.git|iokit-port||https://github.com/apple-oss-d
 syslog|https://github.com/apple-oss-distributions/syslog.git|syslog-385|
 libutil|https://github.com/apple-oss-distributions/libutil.git|libutil-58.40.2|
 ncurses|https://github.com/apple-oss-distributions/ncurses.git|ncurses-57|
+libedit|https://github.com/apple-oss-distributions/libedit.git|libedit-55|
 libresolv|https://github.com/apple-oss-distributions/libresolv.git|libresolv-68|
 libiconv|https://github.com/apple-oss-distributions/libiconv.git|libiconv-59|
 OpenPAM|https://github.com/apple-oss-distributions/OpenPAM.git|OpenPAM-28.40.1|

@@ -447,6 +447,7 @@ struct DWC2USBDevice {
 class SMSC9514USBTransport;
 class SMSC9514Ethernet;
 class IONetworkStack;
+class BCM2837USBHostController;
 
 class BCM2837DWC2 : public IOService
 {
@@ -507,6 +508,21 @@ private:
 	// waitForService(serviceMatching("IONetworkStack")).
 	IONetworkStack           *fNetworkStack;
 
+	/*
+	 * The real IOUSBFamily controller layered over this driver, and the
+	 * notification that completes BSD registration for any IONetworkInterface
+	 * published beneath it. Both NULL if the controller never came up - see
+	 * startUSBHostController(). Owned here: this class attach()/start()s the
+	 * controller by hand, so nothing else will ever tear it down.
+	 */
+	BCM2837USBHostController *fUSBController;
+	IONotifier               *fInterfaceNotifier;
+
+	void startUSBHostController(void);
+	void registerInterfaceWithBSD(IOService *netif);
+	static bool interfacePublished(void *target, void *ref, IOService *newService,
+	                               IONotifier *notifier);
+
 	// Register accessors. All DWC2 registers are 32-bit.
 	uint32_t regRead(uint32_t offset) const;
 	void     regWrite(uint32_t offset, uint32_t value);
@@ -515,6 +531,8 @@ private:
 
 	// Poll `offset` until (value & mask) == (set ? mask : 0), or timeout.
 	bool waitForBits(uint32_t offset, uint32_t mask, bool set, uint32_t timeoutMS);
+	// waitForBits() wants every bit in the mask; this one wants any of them.
+	bool waitForAnyBits(uint32_t offset, uint32_t mask, uint32_t timeoutMS);
 
 	// Core bring-up, ported from u-boot's dwc_otg_core_init/
 	// dwc_otg_core_host_init.
@@ -536,7 +554,12 @@ private:
 	// buffer or PID: doTransfer owns those and the multi-chunk loop.
 	IOReturn transferChunk(uint32_t xferLen, uint32_t *actualLen, uint32_t *hcintOut);
 
-	bool waitForChannelHalted(uint32_t chan, uint32_t timeoutMS, uint32_t *hcintOut);
+	// Wait for a halt OR an un-halted NAK, and force a still-enabled channel
+	// down. See the implementations for why a NAKed non-periodic channel does
+	// not halt itself, and why leaving one enabled silently wedges every
+	// other endpoint on this single-channel controller.
+	bool waitForChannelSettled(uint32_t chan, uint32_t timeoutMS, uint32_t *hcintOut);
+	void haltChannel(uint32_t chan, uint32_t *hcintOut);
 
 	void channelInit(DWC2Endpoint *ep, bool isIn, bool useSplit);
 
@@ -590,6 +613,57 @@ public:
 
 	uint8_t  rootPortSpeed(void) const { return fRootSpeed; }
 	bool     rootPortConnected(void) const { return fRootConnected; }
+
+	/*
+	 * --- Primitives for an IOUSBFamily UIM (BCM2837USBHostController) ---
+	 *
+	 * transfer()/controlTransfer() above are complete, blocking operations:
+	 * they own the data toggle and the SETUP/DATA/STATUS sequence, and they
+	 * retry NAKs internally for up to a second. That is the right shape for
+	 * this driver's own hand-wired consumers, and the wrong shape entirely
+	 * for a UIM, which must queue asynchronous work, drive control transfers
+	 * one stage at a time (IOUSBController::ControlTransaction issues SETUP,
+	 * DATA and STATUS as three separate UIMCreateControlTransfer calls), and
+	 * never block its workloop waiting out a NAK.
+	 *
+	 * transferStage() is that lower-level primitive: one bounded attempt on
+	 * one endpoint with a caller-owned PID. It is a thin public wrapper over
+	 * the existing private doTransferRetrying(), taking the same
+	 * fTransferLock, so there is exactly one path into the shared channel and
+	 * DMA buffer - not a second, parallel transfer engine.
+	 *
+	 * `pid` is in/out and caller-owned on purpose. A control stage drives it
+	 * with that stage's own value (SETUP, then DATA1); a bulk or interrupt
+	 * transfer passes &ep->toggle so the sequence bit persists across
+	 * transfers, which is what USB requires of a data endpoint.
+	 *
+	 * `timeoutMS` bounds the NAK-retry loop. A UIM passes 0 - one attempt,
+	 * then tell me - because it owns retrying itself and a NAK means "not
+	 * yet", not "failed". kIOReturnTimeout with *actualLen advanced means
+	 * partial progress: resume from there rather than restarting, or the
+	 * already-advanced data toggle will make the device silently drop the
+	 * re-sent packets as duplicates (see doTransferRetrying's own comment).
+	 */
+	IOReturn transferStage(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
+	                       void *buffer, uint32_t len, uint32_t *actualLen,
+	                       uint32_t timeoutMS);
+
+	// Current USB frame number, HFNUM.FRNUM (14 bits, wraps every 16384
+	// frames). The UIM extends this to 64 bits itself.
+	uint32_t frameNumber(void) const;
+
+	// Raw HPRT0, for the UIM's root-hub GET_PORT_STATUS simulation. Returned
+	// raw rather than pre-decoded because the caller has to translate DWC2's
+	// bit layout into the USB hub-class layout, and doing that translation in
+	// one place beside the hub constants is clearer than splitting it.
+	uint32_t rootPortRegister(void) const;
+
+	// SET_FEATURE / CLEAR_FEATURE on the root port, taking USB hub-class
+	// feature selectors (kUSBHubPortPowerFeature and friends). Routes to the
+	// same portPowerOn()/portReset()/portWriteHPRT0() helpers this driver
+	// already uses, so the UIM cannot drive HPRT0 in a way that diverges from
+	// the driver's own sequencing.
+	IOReturn rootPortFeature(uint16_t feature, bool set);
 
 	// --- Enumeration and hub protocol (BCM2837USBEnum.cpp) ---
 

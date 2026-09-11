@@ -1,6 +1,6 @@
 /* iig(DriverKit-99) generated from OSAction.iig */
 
-/* OSAction.iig:1-36 */
+/* OSAction.iig:1-38 */
 /*
  * Copyright (c) 2019-2019 Apple Inc. All rights reserved.
  *
@@ -36,8 +36,10 @@
 
 typedef void (^OSActionCancelHandler)(void);
 typedef void (^OSActionAbortedHandler)(void);
+struct OSActionWaitToken;
+class OSString;
 
-/* source class OSAction OSAction.iig:37-109 */
+/* source class OSAction OSAction.iig:39-170 */
 
 #if __DOCUMENTATION__
 #define KERNEL IIG_KERNEL
@@ -52,13 +54,22 @@ typedef void (^OSActionAbortedHandler)(void);
  * The callback is specified as a method and object pair.
  * State associated with the callback may be allocated and stored for the creator of the object.
  * Methods to allocate an OSAction instance are generated for each method defined in a class with
- * a TYPE attribute, so there should not be any need to directly call OSAction::Create().
+ * a TYPE attribute. The generated methods are named CreateAction{name of method with type attribute}
+ * and have the following declaration:
+ *
+ * kern_return_t CreateActionNameOfMethod(size_t referenceSize, OSAction **action);
+ *
+ * referenceSize refers to the size of additional state structure available to the creator of the OSAction
+ * with GetReference. If successful, the generated method returns kIOReturnSuccess and a created OSAction
+ * through the 'action' parameter with a +1 retain count to be released by the caller. See IOReturn.h for
+ * error codes.
  */
 
 class NATIVE KERNEL OSAction : public OSObject
 {
 public:
 
+#if DRIVERKIT_PRIVATE
     /*!
      * @brief       Create an instance of OSAction.
 	 * @discussion  Methods to allocate an OSAction instance are generated for each method defined in a class with
@@ -80,6 +91,16 @@ public:
 		uint64_t        msgid,
 		size_t          referenceSize,
 		OSAction     ** action) LOCAL;
+
+     static kern_return_t
+     CreateWithTypeName(
+          OSObject      * target,
+          uint64_t        targetmsgid,
+          uint64_t        msgid,
+          size_t          referenceSize,
+          OSString      * typeName,
+          OSAction     ** action) LOCAL;
+#endif
 
 	virtual void
 	free() override;
@@ -113,6 +134,46 @@ public:
 	kern_return_t
 	SetAbortedHandler(OSActionAbortedHandler handler) LOCALONLY;
 
+    /*!
+     * @brief       Mark this OSAction to be waited for later with Wait().
+     * @discussion  This call should be made before any possible invocation of the action.
+     *              An OSAction instance only supports one waiter and WillWait() will return an error if already called.
+     * @param       token Opaque value to be passed to a later call to Wait() and EndWait().
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+	kern_return_t
+	WillWait(OSActionWaitToken ** token) LOCALONLY;
+
+    /*!
+     * @brief       Discard the OSActionWaitToken for the action.
+     * @discussion  Free any resources needed to wait for the action allocated by WillWait().
+     *              There should be no outstanding invocations of the action when EndWait is called,
+     *              if necessary the action should be canceled before calling EndWait().
+     * @param       token Opaque value to be passed from an earlier call to WillWait().
+     * @return      kIOReturnSuccess on success. kIOReturnAborted if aborted or canceled.
+					kIOReturnTimeout if the deadline was passed. See IOReturn.h for error codes.
+     */
+	kern_return_t
+	EndWait(
+		OSActionWaitToken * token) LOCALONLY;
+
+    /*!
+     * @brief       Wait for the action to be invoked.
+     * @discussion  The current thread is blocked until the action invocation has completed, the action canceled
+					or aborted, or the deadline passed.
+     * @param       token Opaque value to be passed from an earlier call to WillWait().
+     * @param       options Pass one of the kIOTimerClock* options to specify the timebase for the
+     *              deadline.
+     * @param       deadline Pass the time the wait should timeout, or zero for no timeout.
+     * @return      kIOReturnSuccess on success. kIOReturnAborted if aborted or canceled.
+					kIOReturnTimeout if the deadline was passed. See IOReturn.h for error codes.
+     */
+	kern_return_t
+	Wait(
+		OSActionWaitToken * token,
+		uint64_t options,
+		uint64_t deadline) LOCALONLY;
+
 	virtual void
 	Aborted(void) LOCAL;
 };
@@ -120,9 +181,10 @@ public:
 #undef KERNEL
 #else /* __DOCUMENTATION__ */
 
-/* generated class OSAction OSAction.iig:37-109 */
+/* generated class OSAction OSAction.iig:39-170 */
 
 #define OSAction_Create_ID            0xaa1fc3ce85ce5497ULL
+#define OSAction_CreateWithTypeName_ID            0xa0c5b3ed5a8ea283ULL
 #define OSAction_Aborted_ID            0xbfb95094c657d68fULL
 
 #define OSAction_Create_Args \
@@ -130,6 +192,14 @@ public:
         uint64_t targetmsgid, \
         uint64_t msgid, \
         size_t referenceSize, \
+        OSAction ** action
+
+#define OSAction_CreateWithTypeName_Args \
+        OSObject * target, \
+        uint64_t targetmsgid, \
+        uint64_t msgid, \
+        size_t referenceSize, \
+        OSString * typeName, \
         OSAction ** action
 
 #define OSAction_Aborted_Args \
@@ -153,6 +223,15 @@ public:\
         size_t referenceSize,\
         OSAction ** action);\
 \
+    static kern_return_t\
+    CreateWithTypeName(\
+        OSObject * target,\
+        uint64_t targetmsgid,\
+        uint64_t msgid,\
+        size_t referenceSize,\
+        OSString * typeName,\
+        OSAction ** action);\
+\
     void *\
     GetReference(\
 );\
@@ -165,6 +244,20 @@ public:\
     SetAbortedHandler(\
         OSActionAbortedHandler handler);\
 \
+    kern_return_t\
+    WillWait(\
+        OSActionWaitToken ** token);\
+\
+    kern_return_t\
+    EndWait(\
+        OSActionWaitToken * token);\
+\
+    kern_return_t\
+    Wait(\
+        OSActionWaitToken * token,\
+        uint64_t options,\
+        uint64_t deadline);\
+\
     void\
     Aborted(\
         OSDispatchMethod supermethod = NULL);\
@@ -175,6 +268,9 @@ protected:\
 \
     static kern_return_t\
     Create_Call(OSAction_Create_Args);\
+\
+    static kern_return_t\
+    CreateWithTypeName_Call(OSAction_CreateWithTypeName_Args);\
 \
     void\
     Aborted_Impl(OSAction_Aborted_Args);\
@@ -187,6 +283,11 @@ public:\
     static kern_return_t\
     Create_Invoke(const IORPC rpc,\
         Create_Handler func);\
+\
+    typedef kern_return_t (*CreateWithTypeName_Handler)(OSAction_CreateWithTypeName_Args);\
+    static kern_return_t\
+    CreateWithTypeName_Invoke(const IORPC rpc,\
+        CreateWithTypeName_Handler func);\
 \
     typedef void (*Aborted_Handler)(OSMetaClassBase * targetOSAction_Aborted_Args);\
     static kern_return_t\
@@ -203,6 +304,9 @@ protected:\
 \
     static kern_return_t\
     Create_Impl(OSAction_Create_Args);\
+\
+    static kern_return_t\
+    CreateWithTypeName_Impl(OSAction_CreateWithTypeName_Args);\
 \
 
 
@@ -272,6 +376,6 @@ public:
 
 #endif /* !__DOCUMENTATION__ */
 
-/* OSAction.iig:111- */
+/* OSAction.iig:172- */
 
 #endif /* ! _IOKIT_OSACTION_H */

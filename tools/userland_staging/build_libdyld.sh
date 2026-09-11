@@ -24,13 +24,23 @@
 #     class) that dyld calls BACK into libSystem/libdyld for
 #     malloc/free/vm_allocate/pthread_key_create/os_unfair_lock/etc,
 #     since dyld itself only has its own minimal bump allocator early on.
+#   libdyld/threadLocalHelpers.s -- the real arm64 _tlv_get_addr fast
+#     path for __thread variables. Added 2026-09-09 (DAR-279, found via DAR-270): it used to
+#     be on the "deliberately not built" list below, on the reasoning
+#     that no binary here declared a __thread variable, with
+#     libdyld_compat_misc.c supplying a `return 0;` stand-in for the
+#     address-taken-but-never-called case. That reasoning expired --
+#     libSystemConfiguration.dylib carries a real one
+#     (SCNetworkInterface.c:214, `static __thread
+#     CFMutableDictionaryRef S_interface_cache`), and once en0 existed
+#     (DAR-243) configd reached it on every launch and died on a null
+#     read of the address the stand-in returned. See that ticket and
+#     libdyld_compat_misc.c's own history for the full trail.
 # Deliberately NOT built: dyld_process_info.cpp/
 # dyld_process_info_notify.cpp (external debugger/Instruments remote
 # process introspection -- no consumer on this target, and pulls in a
 # real separate remote-memory-read API surface this port doesn't need to
-# satisfy dyldMain.cpp's two structural checks), threadLocalHelpers.s
-# (real arm64 TLV/__thread support -- dyld_test_exec has no __thread
-# variables; add only if/when a real consumer needs one).
+# satisfy dyldMain.cpp's two structural checks).
 #
 # Real linking model, deliberately simplified from Apple's own (see
 # configs/libdyld.xcconfig): real macOS links libdyld.dylib -upward-
@@ -218,11 +228,60 @@ done
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     libdyld_vproc_compat.c -o "$OUT/libdyld/vproc_compat.o"
 
-# Real gap: __cxa_atexit/malloc_size/pthread-fork-child/TLV/mkdirat --
-# see libdyld_compat_misc.c's own per-function comments for the full
+# Real gap: __cxa_atexit/malloc_size/pthread-fork-child/mkdirat -- see
+# libdyld_compat_misc.c's own per-function comments for the full
 # real-vs-honest-stub breakdown of each.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     libdyld_compat_misc.c -o "$OUT/libdyld/compat_misc.o"
+
+# Real arm64 __thread / Thread-Local Variable support (DAR-279).
+#
+# threadLocalHelpers.s is real, unmodified Apple assembly. Its arm64
+# _tlv_get_addr is the fast path every __thread access in every image
+# funnels through: read the pthread key out of the TLV descriptor, index
+# this thread's TSD array straight off TPIDRRO_EL0, and return
+# allocation+offset -- falling back to _instantiateTLVs_thunk
+# (libdyldGlue.cpp, already built above) the first time a thread touches
+# that image's thread-locals.
+#
+# Nothing else here was missing: dyld's own TLV machinery is already
+# real and already runs (DyldRuntimeState.cpp's RuntimeState::initialize
+# walks every loaded image with hasThreadLocalVariables() and calls
+# setUpTLVs(), which allocates the pthread key and rewrites each
+# descriptor's thunk with libSystemHelpers->getTLVGetAddrFunc()).
+# getTLVGetAddrFunc() returns &::tlv_get_addr -- so before this file was
+# assembled in, that rewrite pointed every descriptor at
+# libdyld_compat_misc.c's `return 0;` stand-in, and dyld installed it
+# perfectly. That is exactly why the failure looked nothing like a
+# missing symbol: the link was clean, nm was clean, dyld's setup ran
+# correctly, and the only symptom was a userland null-pointer read one
+# instruction after the descriptor thunk returned.
+#
+# The header include is real Apple source too: threadLocalHelpers.s pulls
+# <System/machine/cpu_capabilities.h>, which on a real SDK is xnu's own
+# osfmk/machine/cpu_capabilities.h (plus the arm/ variant it chains to)
+# installed under usr/local/include/System. Xcode 12's iPhoneOS SDK does
+# not ship them, so stage them from the real xnu source this project
+# already has rather than hand-writing a stand-in. Only the x86_64 half
+# of the file actually reads anything out of them; the arm64 half needs
+# the include to resolve and nothing more.
+TLVHDR="$OUT/dyld_compat_tlv_hdrs"
+rm -rf "$TLVHDR"
+mkdir -p "$TLVHDR/System/machine" "$TLVHDR/System/arm"
+cp "$XNU/osfmk/machine/cpu_capabilities.h" "$TLVHDR/System/machine/cpu_capabilities.h"
+cp "$XNU/osfmk/arm/cpu_capabilities.h" "$TLVHDR/System/arm/cpu_capabilities.h"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -DPRIVATE=1 -I "$TLVHDR" \
+    "$DYLD/libdyld/threadLocalHelpers.s" -o "$OUT/libdyld/threadLocalHelpers.o"
+# Guard the one thing that would silently undo this: if _tlv_get_addr
+# ever stops being the real assembly (a stub sneaking back in, a
+# preprocessor branch excluding the arm64 block) the object still
+# assembles and still links. The real one is the ONLY version that reads
+# the thread pointer.
+otool -tV "$OUT/libdyld/threadLocalHelpers.o" | grep -q "TPIDRRO_EL0" || {
+    echo "error: _tlv_get_addr in threadLocalHelpers.o does not read TPIDRRO_EL0 --" >&2
+    echo "       the real arm64 fast path did not get assembled (DAR-279)" >&2
+    exit 1
+}
 
 # os/alloc_once.c, string/generic/bzero.c, string/generic/memset_pattern.c
 # used to be compiled here as loose private objects (real source, simply
@@ -277,6 +336,21 @@ rm -f "$OUT/system/libdyld.dylib"
     # real dylib out is correct, not a workaround (docs/backlog.md item
     # d9's NEWLD_BINDIR sweep, 2026-08-28).
     #
+    # -unexported_symbol,dyld_stub_binder: threadLocalHelpers.s also
+    # defines dyld_stub_binder (`b __dyld_missing_symbol_abort`) -- real
+    # dyld-940 keeps it only so binaries built for classic lazy binding
+    # still LINK; calling it aborts. Real Apple exports it from
+    # libdyld.dylib; this port deliberately does not, because this
+    # port's libdyld never has, and making it appear would convert a
+    # loud link-time "symbol dyld_stub_binder not found" (which
+    # build_libsystemconfiguration_client.sh has already hit for real
+    # and worked around) into a binary that links clean and aborts at
+    # first call. On a port with no lazy binding at all, the link-time
+    # error is the better failure. Hiding it is scoped to this one
+    # symbol and changes nothing about the TLV fix above; flip it
+    # deliberately if a real consumer ever needs Apple's exact export
+    # set.
+    #
     # fsync$UNIX2003/reallocarray$DARWIN_EXTSN aliases REMOVED 2026-08-29:
     # real bug -- their base (_fsync/_reallocarray) stopped being local
     # to THIS link once libcopyfile/libremovefile/libresolv switched from
@@ -292,9 +366,10 @@ rm -f "$OUT/system/libdyld.dylib"
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -o "$OUT/system/libdyld.dylib" \
+    -Wl,-unexported_symbol,dyld_stub_binder \
     "$OUT/libdyld/libdyldGlue.o" "$OUT/libdyld/LibSystemHelpers.o" \
     "$OUT/libdyld/cxa_finalize_ranges_compat.o" "$OUT/libdyld/vproc_compat.o" \
-    "$OUT/libdyld/compat_misc.o" \
+    "$OUT/libdyld/compat_misc.o" "$OUT/libdyld/threadLocalHelpers.o" \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_blocks.dylib" \
     "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" "$OUT/system/libsystem_c.dylib" \
     "$OUT/system/libc++.dylib" \
