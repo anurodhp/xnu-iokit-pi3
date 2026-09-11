@@ -1,4 +1,31 @@
-/* Real Apple dns_configuration_copy()/dns_configuration_free()/
+/* SCOPE NARROWED 2026-09-11 (DAR-285) -- READ THIS FIRST.
+ *
+ * This file is NO LONGER what libresolv.dylib ships. The real Apple
+ * client (configd/dnsinfo/dnsinfo_copy.c +
+ * libSystemConfiguration/libSystemConfiguration_client.c) is compiled
+ * into libresolv.dylib for real now, and build_libresolv_dylib.sh
+ * explicitly deletes this file's object from its extract dir. See that
+ * script's own DAR-285 header for the full writeup.
+ *
+ * It stays, and stays in libresolv.a, for the archive's remaining real
+ * consumers -- build_dyld_link.sh statically links libresolv.a into
+ * dyld.macho, and build_libresolv.sh's own smoketest links the archive
+ * standalone. dyld runs before any dylib exists and has no XPC
+ * connection, no dispatch queue and no bootstrap port, so for THAT
+ * consumer Apple's own "DNS configuration server not available" branch
+ * really is the only reachable one and this remains the honest answer.
+ * (It is also simply unreached there today: `nm dyld.macho` shows no
+ * _dns_configuration_copy at all, because nothing in dyld pulls
+ * res_init.o out of the archive.)
+ *
+ * Everything below is the original 2026-08-2x rationale, kept verbatim
+ * as the record of why it was written -- its "this project has no XPC,
+ * no launchd, no configd" premise is exactly what DAR-285 invalidated
+ * for the dylib.
+ *
+ * ------------------------------------------------------------------
+ *
+ * Real Apple dns_configuration_copy()/dns_configuration_free()/
  * dns_configuration_notify_key() (declared in this build's vendored real
  * dnsinfo.h -- see build_libresolv.sh's own compat_include heredoc,
  * fetched verbatim from apple-oss-distributions/configd tag

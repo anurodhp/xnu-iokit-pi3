@@ -73,6 +73,16 @@
 # reimplementing anything. Real, tiny (~65-line) compat file, not a
 # fabrication of resolver logic -- see its own header for full detail.
 #
+# SCOPE NARROWED 2026-09-11 (DAR-285): that stand-in is now ARCHIVE-ONLY.
+# libresolv.dylib carries the real Apple client instead
+# (build_libresolv_dylib.sh compiles configd/dnsinfo/dnsinfo_copy.c +
+# libSystemConfiguration_client.c and deletes this object from its
+# extract dir), because XPC/launchd/configd all really exist now. The
+# archive keeps the stand-in for its remaining real consumer,
+# build_dyld_link.sh's static dyld.macho link -- dyld runs before any
+# dylib exists and genuinely cannot do an XPC round trip. Do NOT "fix"
+# this file to match the dylib.
+#
 # Real transitive-dependency corrections (found via actual `ld` failures
 # while building this tier's smoketest below, not guessed preemptively):
 # res_init.c and res_send.c directly call real inet_ntop()/inet_pton()/

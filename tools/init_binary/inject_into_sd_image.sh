@@ -628,6 +628,22 @@ else
     echo "= notifyd_roundtrip_smoketest.macho not built -- run tools/userland_staging/build_notifyd_smoketest.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/libc_build/res_init_dnsinfo_smoketest.macho ]; then
+    mkdir -p "$MNT/usr/local/bin"
+    cp tools/userland_staging/libc_build/res_init_dnsinfo_smoketest.macho \
+        "$MNT/usr/local/bin/res_init_dnsinfo_smoketest"
+    chmod 755 "$MNT/usr/local/bin/res_init_dnsinfo_smoketest"
+    echo "+ wrote res_init_dnsinfo_smoketest to $MNT/usr/local/bin/"
+    echo "  (DAR-285: proves the STOCK libresolv path -- dns_configuration_copy()"
+    echo "  and res_init() -- really sees the DNS server configd publishes after a"
+    echo "  real DHCP lease. Run by hand from the root shell post-boot, AFTER"
+    echo "  'ipconfig set en0 DHCP' has completed; before a lease exists it"
+    echo "  correctly reports no configuration. Built by"
+    echo "  tools/userland_staging/build_res_init_dnsinfo_smoketest.sh)"
+else
+    echo "= res_init_dnsinfo_smoketest.macho not built -- run tools/userland_staging/build_res_init_dnsinfo_smoketest.sh first if wanted, skipping"
+fi
+
 if [ -f tools/userland_staging/libc_build/tsd_vm_smoketest.macho ]; then
     mkdir -p "$MNT/usr/local/bin"
     cp tools/userland_staging/libc_build/tsd_vm_smoketest.macho \

@@ -502,8 +502,19 @@ mkdir -p third_party
 #     via `git am` after cloning upstream `configd-1109.60.2`. Converted
 #     to cloning from this project's own fork (git@github.com:anurodhp/
 #     configd.git, branch iokit-port) instead -- the fix now lives as a
-#     real committed history on that branch, one commit past the same
-#     pinned `configd-1109.60.2` tag. `third_party-patches/configd.patch`
+#     real committed history on that branch, past the same pinned
+#     `configd-1109.60.2` tag. Two commits as of 2026-09-11: DAR-170's
+#     `plugin_support.c` change above, plus DAR-285's one-line
+#     `#ifndef my_log` guard around `dnsinfo/dnsinfo_internal.h`'s
+#     `<SystemConfiguration/SCPrivate.h>` include (that include exists
+#     only to supply SC_log, which is only used by the my_log fallback
+#     right below it -- guarding it lets libresolv.dylib compile the real
+#     `dnsinfo_copy.c` without depending on header trees staged by
+#     scripts that link libresolv, i.e. without a circular build-order
+#     dependency; every other includer is unaffected and still gets the
+#     real SC_log). Because this row pins a BRANCH, not a SHA, a fresh
+#     clone picks both up automatically -- there is no tag to bump here.
+#     `third_party-patches/configd.patch`
 #     is no longer read by this script -- removed from the tree (unlike
 #     the historical-record patches above, nothing else in this repo
 #     documents it independently, e.g. no sdcard/README.md-style

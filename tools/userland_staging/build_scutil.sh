@@ -73,13 +73,12 @@
 #	  every symbol. Compiling it separately produces 12 real duplicate-
 #	  symbol link errors -- found by a real trial link, and the reason
 #	  real Apple's own scutil target does not list it either.)
-#	dnsinfo/dnsinfo_copy.c				`scutil --dns`
 #	libSystemConfiguration/libSystemConfiguration_client.c
 #							the generic XPC
 #							connect-and-send helper
-#							dnsinfo_copy.c and
-#							network_information.c both
-#							call. Apple compiles all
+#							network_information.c
+#							(`scutil --nwi`) calls.
+#							Apple compiles all
 #							three into one dylib
 #							(libsystem_configuration);
 #							this project's
@@ -123,28 +122,35 @@
 #	xnu/libsyscall/mach/{mach_error,mach_error_string,fprintf_stderr,
 #	                     string}.c			real mach_error()
 #
-# WHY dnsinfo_copy.c IS LINKED IN DIRECTLY (and not taken from libresolv)
-# ======================================================================
-# libresolv.dylib does export _dns_configuration_copy, but that copy is
-# libresolv_dnsinfo_compat.c's stand-in, which unconditionally returns
-# NULL. That was correct and honest when it was written (2026-08-2x):
-# this project had no XPC, no launchd and no configd, so Apple's own
-# "DNS configuration server not available" branch was the only reachable
-# one. It is now STALE -- configd is resident, and the real dnsinfo XPC
-# SERVER half (dnsinfo/dnsinfo_server.c + dnsinfo_create.c +
-# dnsinfo_flatfile.c + libSystemConfiguration_server.c) is really linked
-# into configd.macho by build_configd_plugins.sh. Binding scutil's
-# `--dns` to the NULL stub would make this ticket's own verification
-# report a fabricated "no DNS configuration" every time.
+# WHERE `scutil --dns` GETS dns_configuration_copy() FROM
+# =======================================================
+# From libresolv.dylib, for real, as of DAR-285 (2026-09-11).
 #
-# So scutil compiles the real client, dnsinfo/dnsinfo_copy.c, into its
-# own image: an object file on the link line satisfies the reference
-# locally and no bind against libresolv is emitted at all (verified with
-# `nm -m scutil.macho | grep dns_configuration`). libresolv keeps its own
-# copy for its own res_init.c caller and is untouched -- deliberately, so
-# this ticket does not rebuild a dylib that sits underneath
-# libSystem.B.dylib and is boot-proven. Fixing libresolv for real is
-# filed separately.
+# HISTORY, because the shape of this link looks odd without it: DAR-283
+# originally compiled the real client, dnsinfo/dnsinfo_copy.c, into
+# scutil.macho itself. libresolv.dylib did export _dns_configuration_copy
+# back then, but that copy was libresolv_dnsinfo_compat.c's stand-in,
+# which unconditionally returned NULL -- honest when written (no XPC, no
+# launchd, no configd existed) and stale by the time configd was
+# resident. Binding `--dns` to it would have reported a fabricated "no
+# DNS configuration" every time, and rebuilding a dylib that sits
+# underneath libSystem.B.dylib was deliberately out of that ticket's
+# scope, so a private local copy was the right call then.
+#
+# DAR-285 put the real client into libresolv.dylib where it belongs (see
+# build_libresolv_dylib.sh's own header), so the private duplicate is
+# gone and scutil now binds _dns_configuration_copy to libresolv like any
+# other consumer -- exactly one real implementation in the system. The
+# gate further down asserts that direction, and would fail if this ever
+# silently reverted to a local copy.
+#
+# libSystemConfiguration_client.c is still compiled in locally, and that
+# is NOT the same situation: it is not a duplicate of anything reachable.
+# Every one of its entry points except the three _libSC_info_fork_*
+# atfork handlers is __private_extern__, so neither
+# libSystemConfiguration.dylib nor libresolv.dylib exports it (confirmed
+# with `nm -gU`); each client image genuinely needs its own copy, and
+# scutil's `--nwi` path (nwi/network_information.c) really calls it.
 #
 # STAND-INS (five files, each with its own full justification)
 # ============================================================
@@ -241,6 +247,17 @@ for d in libsystem_kernel libsystem_platform libsystem_blocks libsystem_pthread 
         exit 1
     fi
 done
+# Named explicitly, separately from the loop above, because as of DAR-285
+# this is a HARD prerequisite with a real ordering requirement, not just
+# "some dylib must exist": scutil no longer carries its own copy of
+# dnsinfo_copy.c, and the gate at the end of this script fails unless
+# _dns_configuration_copy really binds libresolv. gen_build_order.py only
+# reads the literal "run build_X.sh first" idiom, which the loop's own
+# generic message above does not use.
+if [ ! -f "$OUT/system/libresolv.dylib" ]; then
+    echo "error: $OUT/system/libresolv.dylib not found -- run build_libresolv_dylib.sh first" >&2
+    exit 1
+fi
 
 rm -rf "$OBJ"
 mkdir -p "$OBJ"
@@ -323,7 +340,6 @@ FILES="$SCUTIL/scutil.c \
     $SC/SCProxies.c \
     $SC/scprefs_observer.c \
     $CONFIGD/nwi/network_information.c \
-    $CONFIGD/dnsinfo/dnsinfo_copy.c \
     $CONFIGD/libSystemConfiguration/libSystemConfiguration_client.c \
     $LIBC/stdlib/FreeBSD/getopt.c \
     $LIBC/stdlib/FreeBSD/getopt_long.c \
@@ -430,13 +446,29 @@ if [ -n "$real_gaps" ]; then
     exit 1
 fi
 
-# Real check that the "--dns is not silently bound to libresolv's
-# always-NULL stand-in" reasoning in this script's header actually holds
-# in the produced binary, rather than only in the comment.
-if nm -m scutil.macho 2>/dev/null | grep -q "undefined.*_dns_configuration_copy"; then
-    echo "error: scutil.macho binds _dns_configuration_copy to a dylib --" >&2
-    echo "       expected the real dnsinfo_copy.c object to satisfy it locally." >&2
-    echo "       'scutil --dns' would report a fabricated empty DNS configuration." >&2
+# DAR-285 inverted this gate. It used to assert the OPPOSITE (that
+# _dns_configuration_copy was satisfied locally, never bound to a dylib),
+# because libresolv.dylib's copy was an always-NULL stand-in at the time.
+# libresolv now carries the real Apple dnsinfo XPC client, so the correct
+# invariant is that scutil binds to it and carries no private duplicate.
+# Both halves are checked: a local definition would silently shadow the
+# real one again, and no bind at all would mean the reference vanished.
+if nm -gU scutil.macho 2>/dev/null | grep -q " T _dns_configuration_copy\$"; then
+    echo "error: scutil.macho DEFINES _dns_configuration_copy locally -- DAR-285 moved" >&2
+    echo "       the real dnsinfo client into libresolv.dylib; a private copy here is" >&2
+    echo "       a duplicate that shadows it (and carries its own XPC connection state)." >&2
+    exit 1
+fi
+if ! nm -m scutil.macho 2>/dev/null | grep -q "undefined.*_dns_configuration_copy"; then
+    echo "error: scutil.macho has no _dns_configuration_copy reference at all --" >&2
+    echo "       'scutil --dns' cannot be reading the real DNS configuration." >&2
+    exit 1
+fi
+if ! nm -m scutil.macho 2>/dev/null | grep "_dns_configuration_copy" | grep -q "libresolv"; then
+    echo "error: scutil.macho's _dns_configuration_copy does not bind libresolv --" >&2
+    echo "       real dyld-940 searches only the listed image (see CLAUDE.md's" >&2
+    echo "       bind_target_audit.sh writeup); it would abort at load." >&2
+    nm -m scutil.macho | grep "_dns_configuration_copy" >&2
     exit 1
 fi
 
