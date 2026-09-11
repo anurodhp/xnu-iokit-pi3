@@ -1007,9 +1007,13 @@ fi
 #   scutil <<< "show State:/Network/Global/DNS"
 #   scutil <<< "list State:/Network/.*"
 #
-# All three are non-interactive; scutil's interactive mode also works but
-# without line editing or history (libedit is not built -- see
-# tools/userland_staging/scutil_editline_compat.c).
+# All three are non-interactive. scutil's interactive mode now has REAL
+# line editing and history too, as of DAR-286 (2026-09-11): real libedit
+# is built by tools/userland_staging/build_libedit.sh and installed above
+# at /usr/lib/libedit.3.dylib. The one thing still missing is a
+# terminfo/termcap database on this image, without which libedit falls
+# back to dumb-terminal settings and arrow keys do not move the cursor --
+# DAR-293, observable by running /usr/local/bin/libedit_smoketest.
 if [ -f tools/userland_staging/scutil.macho ]; then
     mkdir -p "$MNT/usr/sbin"
     cp tools/userland_staging/scutil.macho "$MNT/usr/sbin/scutil"
