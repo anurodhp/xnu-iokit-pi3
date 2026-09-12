@@ -103,7 +103,7 @@ PLATFORM="../../third_party/libplatform"
 PTHREAD="../../third_party/libpthread"
 XNU="../../third_party/xnu-7195"
 OUT="libc_build"
-mkdir -p "$OUT/apple_platform" "$OUT/compat_include/System/arm"
+mkdir -p "$OUT/apple_platform" "$OUT/compat_include/System/arm" "$OUT/compat_include/System/machine"
 
 XCODE12="/Applications/Xcode-12.app/Contents/Developer"
 CLANG="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
@@ -112,6 +112,27 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     echo "error: Xcode-12.app not found at $XCODE12 (see tools/build_kexts.sh for the same dependency)" >&2
     exit 1
 fi
+
+# Both System/machine/... and System/arm/... written here, not just
+# System/arm/. Found 2026-09-12 (DAR-301 follow-on): this script's own
+# comment said System/machine/cpu_capabilities.h was "established by
+# build_libc_locale.sh", true only when locale ran first. The project's
+# own documented tier order is now string -> platform -> locale (this
+# script's header comment above), so build_libplatform.sh needs this
+# compat header BEFORE build_libc_locale.sh would ever create it --
+# real, live build_everything.sh run hit exactly this: lock.c (this
+# script's own os_unfair_lock/os_once source) failed with
+# 'System/machine/cpu_capabilities.h' file not found. Writing both
+# copies here makes this script self-sufficient regardless of run
+# order; build_libc_locale.sh writing the identical content again
+# later is a harmless idempotent overwrite.
+cat > "$OUT/compat_include/System/machine/cpu_capabilities.h" <<'EOF'
+/* real content already exists at $XNU/osfmk/arm/cpu_capabilities.h - see
+ * that file's own -I flag below; this just forwards to it from the real
+ * installed-SDK-style path third_party/libpthread/private/pthread/
+ * tsd_private.h expects but this non-Xcode-project build never produces. */
+#include <arm/cpu_capabilities.h>
+EOF
 
 cat > "$OUT/compat_include/System/arm/cpu_capabilities.h" <<'EOF'
 /* Same real forwarding shim as System/machine/cpu_capabilities.h (see
