@@ -92,13 +92,30 @@ def main() -> int:
                 deps[name].add(match)
 
         for var, word_list, body in FOR_LOOP_RE.findall(text):
+            # Confirm this loop is a real prerequisite gate structurally --
+            # does its body actually check `$OUT/$var` (the existence test
+            # every one of these loops performs, e.g.
+            # `if [ ! -f "$OUT/$dep" ]`) -- rather than by matching one
+            # specific human-readable phrasing of the resulting error
+            # message. The docstring above already described the design
+            # intent this way ("whose body checks $OUT/$a.a"); the
+            # original implementation instead required the literal text
+            # `build_${var}.sh` to appear, which is only one of several
+            # real phrasings scripts here actually use. Found 2026-09-11
+            # chasing three different real phrasings in a row (the
+            # parameterized form, the generic "build_*.sh" wildcard, and
+            # finally free prose -- "run the libSystem tier build scripts
+            # first", no build_*.sh text at all) -- matching the
+            # structural existence-check instead of any wording is robust
+            # to all of them and to future phrasings nobody's written yet.
             loop_ref_re = re.compile(
-                r"build_(?:\$\{?" + re.escape(var) + r"\}?|\*)\.sh"
+                r"\$OUT/\$\{?" + re.escape(var) + r"\}?\b"
             )
             if not loop_ref_re.search(body):
                 continue
             for item in word_list.split():
                 item = item.strip("\"'")
+                item = item.rsplit("/", 1)[-1]  # drop a leading path, e.g. "system/"
                 # Strip a real archive/dylib/object suffix before judging
                 # whether this is a plain short-name token -- half of the
                 # 11 real scripts using this idiom write the loop's word
