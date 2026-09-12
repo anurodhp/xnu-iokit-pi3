@@ -1,64 +1,58 @@
-/* Real, honestly-documented compat stand-in for 5 classic USB
- * "device-interface" types (USBDeviceAddress, IOUSBDevRequest,
- * IOUSBDevRequestTO, IOUSBFindInterfaceRequest,
- * IOUSBConfigurationDescriptorPtr) that <IOKit/usb/IOUSBLib.h>'s own
- * real, unmodified function-pointer prototypes (IOUSBDeviceInterface's
- * GetDeviceAddress/GetConfigurationDescriptorPtr/DeviceRequest/
- * DeviceRequestTO/CreateInterfaceIterator members) reference.
+/* Forward declaration for the ONE classic USB "device-interface" type
+ * that <IOKit/usb/IOUSBLib.h>'s real, unmodified function-pointer
+ * prototypes reference and that this project's pinned IOUSBFamily
+ * headers genuinely do not define: IOUSBEndpointProperties, used by
+ * IOUSBInterfaceInterface's GetPipePropertiesV3/GetEndpointPropertiesV3
+ * members (and, identically, by IOUSBInterface.h's own
+ * GetEndpointPropertiesV3 declaration).
  *
- * Real, confirmed gap (not this project's regression): this project's
- * pinned apple-oss-distributions/IOUSBFamily tag (IOUSBFamily-630.4.5)
- * ships IOUSBFamily/Headers/USB.h as a genuinely EMPTY (0-byte) file --
- * confirmed via a direct `curl` of the raw tagged blob from GitHub
- * (https://raw.githubusercontent.com/apple-oss-distributions/
- * IOUSBFamily/IOUSBFamily-630.4.5/IOUSBFamily/Headers/USB.h, 0 bytes
- * downloaded), not a local clone artifact. These 5 types are ALSO absent
- * from every other header in the pinned repo (full grep, zero hits) and
- * from every substantially earlier real tag checked back to
- * IOUSBFamily-540.4.1 (which does have real USB.h content, just not
- * these types) -- real Apple appears to generate this content at build
- * time from a source this open-source snapshot doesn't include.
+ * HISTORY -- THIS FILE USED TO DECLARE NINE TYPES, AND THAT BROKE (DAR-287)
+ * =======================================================================
+ * Written for DAR-240, when this project pinned IOUSBFamily-630.4.5,
+ * whose IOUSBFamily/Headers/USB.h really is a 0-byte file in the real
+ * upstream repo (confirmed then by a direct `curl` of the raw tagged
+ * blob, not a local clone artifact). With USB.h empty, nine types
+ * IOUSBLib.h references had no definition anywhere, so this header
+ * forward-declared all nine.
  *
- * Real, load-bearing fact confirmed by reading SCNetworkInterface.c
- * directly (grep, not assumed): it never references ANY of these 5
- * types, nor any other IOUSBLib.h symbol -- its own
- * `#include <IOKit/usb/IOUSBLib.h>` is real but unreachable/dead for its
- * purposes, existing only so the (larger, mostly IOKit-registry-based,
- * not USB-device-interface-based) rest of the file's real logic compiles
- * as one translation unit. Since nothing anywhere in this build's target
- * files ever dereferences these 5 types, minimal forward-declared/opaque
- * stand-ins are safe and sufficient (every real use in IOUSBLib.h itself
- * is by pointer, confirmed by reading -- see GetDeviceAddress(...,
- * USBDeviceAddress *addr) etc). No real behavior anywhere in this
- * project depends on their layout. DAR-240.
+ * DAR-244 (2026-09-08, commit 8361d3d) re-pinned IOUSBFamily to
+ * IOUSBFamily-560.4.2 -- the next-newest tag, chosen precisely because
+ * its USB.h is NOT empty -- and nothing updated this header to match.
+ * Eight of the nine are now real, unmodified Apple definitions in that
+ * checkout (USB.h:206 USBDeviceAddress, :594
+ * IOUSBConfigurationDescriptorPtr, :900 IOUSBDevRequest, :928
+ * IOUSBDevRequestTO, :1075 IOUSBFindInterfaceRequest, :221
+ * IOUSBIsocFrame, :239 IOUSBLowLatencyIsocFrame, :498
+ * IOUSBDescriptorHeader), and one of them actively CONFLICTED: this file
+ * declared `typedef uint8_t USBDeviceAddress` (a guess, safe only while
+ * nothing defined it) against real Apple's `typedef UInt16
+ * USBDeviceAddress`, a hard clang error.
+ *
+ * The damage was silent and real: since this header is force-included
+ * (-include) by build_libsystemconfiguration_client.sh,
+ * SCNetworkInterface.c stopped compiling, which means
+ * libSystemConfiguration.dylib -- and therefore configd.macho /
+ * ipconfig.macho / scutil.macho -- could not be rebuilt from source at
+ * all. Nothing surfaced it because the already-built dylib kept working;
+ * it only appeared the next time someone actually re-ran the script
+ * (DAR-287, 2026-09-11), and a `git stash` re-run proved the breakage
+ * predated that ticket's own change rather than being caused by it.
+ *
+ * So: the eight redundant declarations are gone, and the real Apple
+ * definitions are used instead -- strictly more real Apple source, and
+ * no possibility of this file's guesses disagreeing with them again.
+ * IOUSBEndpointProperties stays because it is genuinely absent from
+ * every header in the pinned checkout (full grep: it appears only in
+ * IOUSBLib.h's and IOUSBInterface.h's own prototypes and doc comments,
+ * never in a definition). It is referenced only by pointer, and nothing
+ * in any file this project compiles ever dereferences it -- confirmed by
+ * grep, and unchanged from DAR-240's own finding that
+ * SCNetworkInterface.c references no IOUSBLib.h symbol whatsoever; its
+ * `#include <IOKit/usb/IOUSBLib.h>` only has to parse. So an opaque
+ * forward declaration is sufficient and no layout is invented.
  */
 #ifndef _CONFIGD_SCNET_USB_DEVREQUEST_COMPAT_H_
 #define _CONFIGD_SCNET_USB_DEVREQUEST_COMPAT_H_
-
-#include <stdint.h>
-
-typedef uint8_t USBDeviceAddress;
-
-struct IOUSBDevRequest;
-typedef struct IOUSBDevRequest IOUSBDevRequest;
-
-struct IOUSBDevRequestTO;
-typedef struct IOUSBDevRequestTO IOUSBDevRequestTO;
-
-struct IOUSBFindInterfaceRequest;
-typedef struct IOUSBFindInterfaceRequest IOUSBFindInterfaceRequest;
-
-struct IOUSBConfigurationDescriptor;
-typedef struct IOUSBConfigurationDescriptor *IOUSBConfigurationDescriptorPtr;
-
-struct IOUSBIsocFrame;
-typedef struct IOUSBIsocFrame IOUSBIsocFrame;
-
-struct IOUSBLowLatencyIsocFrame;
-typedef struct IOUSBLowLatencyIsocFrame IOUSBLowLatencyIsocFrame;
-
-struct IOUSBDescriptorHeader;
-typedef struct IOUSBDescriptorHeader IOUSBDescriptorHeader;
 
 struct IOUSBEndpointProperties;
 typedef struct IOUSBEndpointProperties IOUSBEndpointProperties;

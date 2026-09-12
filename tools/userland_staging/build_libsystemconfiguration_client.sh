@@ -192,8 +192,33 @@ ln -sf "$(pwd)/$XNU/libkern/libkern/OSTypes.h" "$OUT/sc_headers/libkern/OSTypes.
 # standalone (this project's "every artifact needs a reproducing script"
 # rule) regardless of build order. Content is identical to that script's
 # own header comment reasoning -- not re-derived, just re-emitted.
-rm -rf "$OUT/compat_include/os"
+# DAR-247 (2026-09-11): this used to be `rm -rf "$OUT/compat_include/os"`,
+# wiping the WHOLE shared directory rather than just the three files this
+# script actually owns. That is the real, confirmed root cause of DAR-247
+# ("gen/FreeBSD/arc4random.c no longer compiles: 'os/assumes.h' file not
+# found"), whose own filing guessed at Libc pin drift instead. Seven
+# headers are written into this one directory by five different scripts:
+# build_libc_locale.sh/build_libclosure.sh own os/assumes.h,
+# build_launchd_syscalls.sh/build_libnotify_client.sh/build_libpthread.sh
+# own os/alloc_once_private.h (+ feature_private.h, once_private.h), and
+# only log_private.h/state_private.h/variant_private.h belong to this
+# script. Deleting the directory took all seven, after which
+# build_libsystem_c.sh, build_libresolv.sh and build_corefoundation.sh
+# could no longer compile at all.
+#
+# Proven empirically, not reasoned about: in the state this script left
+# behind, build_libsystem_c.sh aborted on exactly that error; re-running
+# build_libc_locale.sh to restore assumes.h let it complete, and the
+# dylib it then produced was byte-identical in size (583584) and in its
+# export and undefined symbol sets to the already-shipped, boot-proven
+# one -- so nothing in Libc had drifted, the script had simply been
+# unable to run.
+#
+# build_bootp_dhcp_engine.sh already had the correct shape for this (it
+# removes its own two files by name, never the directory) -- matched here.
 mkdir -p "$OUT/compat_include/os"
+rm -f "$OUT/compat_include/os/log_private.h" "$OUT/compat_include/os/state_private.h" \
+      "$OUT/compat_include/os/variant_private.h"
 # os/log_private.h: installed from the ONE checked-in copy at
 # os_log_compat_headers/os/log_private.h, not written inline here.
 #
