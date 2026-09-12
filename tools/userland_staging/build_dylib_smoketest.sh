@@ -23,6 +23,18 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     exit 1
 fi
 
+# Real prerequisite, added 2026-09-12 (DAR-301): this script links
+# against "$OUT/system/libSystem.B.dylib" directly (see the real
+# LC_LOAD_DYLIB requirement explained below) but never declared that as
+# a checked dependency in either idiom gen_build_order.py recognizes --
+# it just let clang fail with a raw "no such file" error. Found because
+# a real, live build_everything.sh run scheduled this script at position
+# 5, 90 slots before build_libsystem.sh (the real builder) at 95.
+if [ ! -f "$OUT/system/libSystem.B.dylib" ]; then
+    echo "error: $OUT/system/libSystem.B.dylib not found -- run build_libsystem.sh first" >&2
+    exit 1
+fi
+
 # Real, verified fix (2026-08-28, see docs/backlog.md item d9 for the
 # full trail and tools/userland_staging/build_simple_cmds.sh's own
 # NEWLD_BINDIR header comment for the isolated repro this is based on):
