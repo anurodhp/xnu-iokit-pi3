@@ -73,13 +73,12 @@
 #	  every symbol. Compiling it separately produces 12 real duplicate-
 #	  symbol link errors -- found by a real trial link, and the reason
 #	  real Apple's own scutil target does not list it either.)
-#	dnsinfo/dnsinfo_copy.c				`scutil --dns`
 #	libSystemConfiguration/libSystemConfiguration_client.c
 #							the generic XPC
 #							connect-and-send helper
-#							dnsinfo_copy.c and
-#							network_information.c both
-#							call. Apple compiles all
+#							network_information.c
+#							(`scutil --nwi`) calls.
+#							Apple compiles all
 #							three into one dylib
 #							(libsystem_configuration);
 #							this project's
@@ -123,35 +122,56 @@
 #	xnu/libsyscall/mach/{mach_error,mach_error_string,fprintf_stderr,
 #	                     string}.c			real mach_error()
 #
-# WHY dnsinfo_copy.c IS LINKED IN DIRECTLY (and not taken from libresolv)
-# ======================================================================
-# libresolv.dylib does export _dns_configuration_copy, but that copy is
-# libresolv_dnsinfo_compat.c's stand-in, which unconditionally returns
-# NULL. That was correct and honest when it was written (2026-08-2x):
-# this project had no XPC, no launchd and no configd, so Apple's own
-# "DNS configuration server not available" branch was the only reachable
-# one. It is now STALE -- configd is resident, and the real dnsinfo XPC
-# SERVER half (dnsinfo/dnsinfo_server.c + dnsinfo_create.c +
-# dnsinfo_flatfile.c + libSystemConfiguration_server.c) is really linked
-# into configd.macho by build_configd_plugins.sh. Binding scutil's
-# `--dns` to the NULL stub would make this ticket's own verification
-# report a fabricated "no DNS configuration" every time.
+# WHERE `scutil --dns` GETS dns_configuration_copy() FROM
+# =======================================================
+# From libresolv.dylib, for real, as of DAR-285 (2026-09-11).
 #
-# So scutil compiles the real client, dnsinfo/dnsinfo_copy.c, into its
-# own image: an object file on the link line satisfies the reference
-# locally and no bind against libresolv is emitted at all (verified with
-# `nm -m scutil.macho | grep dns_configuration`). libresolv keeps its own
-# copy for its own res_init.c caller and is untouched -- deliberately, so
-# this ticket does not rebuild a dylib that sits underneath
-# libSystem.B.dylib and is boot-proven. Fixing libresolv for real is
-# filed separately.
+# HISTORY, because the shape of this link looks odd without it: DAR-283
+# originally compiled the real client, dnsinfo/dnsinfo_copy.c, into
+# scutil.macho itself. libresolv.dylib did export _dns_configuration_copy
+# back then, but that copy was libresolv_dnsinfo_compat.c's stand-in,
+# which unconditionally returned NULL -- honest when written (no XPC, no
+# launchd, no configd existed) and stale by the time configd was
+# resident. Binding `--dns` to it would have reported a fabricated "no
+# DNS configuration" every time, and rebuilding a dylib that sits
+# underneath libSystem.B.dylib was deliberately out of that ticket's
+# scope, so a private local copy was the right call then.
 #
-# STAND-INS (five files, each with its own full justification)
-# ============================================================
-#	scutil_editline_compat.c	libedit not built (real histedit.h
-#					IS used, from the libedit-55 pin);
-#					drives scutil's own real non-editing
-#					fgets() input path
+# DAR-285 put the real client into libresolv.dylib where it belongs (see
+# build_libresolv_dylib.sh's own header), so the private duplicate is
+# gone and scutil now binds _dns_configuration_copy to libresolv like any
+# other consumer -- exactly one real implementation in the system. The
+# gate further down asserts that direction, and would fail if this ever
+# silently reverted to a local copy.
+#
+# libSystemConfiguration_client.c is still compiled in locally, and that
+# is NOT the same situation: it is not a duplicate of anything reachable.
+# Every one of its entry points except the three _libSC_info_fork_*
+# atfork handlers is __private_extern__, so neither
+# libSystemConfiguration.dylib nor libresolv.dylib exports it (confirmed
+# with `nm -gU`); each client image genuinely needs its own copy, and
+# scutil's `--nwi` path (nwi/network_information.c) really calls it.
+#
+# LINE EDITING: REAL libedit, AS OF DAR-286
+# =========================================
+# scutil.h #includes <histedit.h> unconditionally and scutil.c's
+# interactive command loop really calls 9 libedit entry points. Until
+# 2026-09-11 those were satisfied by scutil_editline_compat.c, a no-op
+# stand-in that returned NULL/-1 so scutil took its OWN real,
+# Apple-authored teardown branch and fell back to fgets() -- real, but
+# with no arrow-key editing, no history and no ~/.editrc.
+#
+# DAR-286 built the real library (build_libedit.sh, real libedit-55
+# source at full Apple WIDECHAR parity), so that file is GONE and this
+# links real libedit.dylib -- exactly as real Apple does: configd.
+# xcodeproj's own `scutil-Embedded` target's Frameworks build phase is
+# CoreFoundation.framework + SystemConfiguration.framework +
+# libedit.dylib. The gate at the end of this script asserts scutil binds
+# _el_init to libedit and carries no private copy, so a silent revert to
+# a local stand-in fails the build.
+#
+# STAND-INS (four files, each with its own full justification)
+# ===========================================================
 #	scutil_nc_compat.c		`--nc` VPN family; NetworkExtension
 #					never open-sourced
 #	scutil_reachability_compat.c	`-r`; SCNetworkReachability.c needs
@@ -221,6 +241,14 @@ if [ ! -f "$LIBEDIT/src/histedit.h" ]; then
     echo "error: $LIBEDIT/src/histedit.h not found -- run setup_third_party.sh first" >&2
     exit 1
 fi
+# DAR-286: real libedit.dylib behind that header. Named separately from
+# the generic dylib loop below on purpose -- gen_build_order.py only
+# reads the literal "run build_X.sh first" idiom, and the loop's generic
+# message does not use it.
+if [ ! -f "$OUT/system/libedit.dylib" ]; then
+    echo "error: $OUT/system/libedit.dylib not found -- run build_libedit.sh first" >&2
+    exit 1
+fi
 for d in sc_headers sc_iokit_headers sc_dispatch_compat sc_compat_include compat_include cf_headers configd_plugin_iokit_headers; do
     if [ ! -d "$OUT/$d" ]; then
         echo "error: $OUT/$d not found -- run build_libsystemconfiguration_client.sh" >&2
@@ -241,6 +269,17 @@ for d in libsystem_kernel libsystem_platform libsystem_blocks libsystem_pthread 
         exit 1
     fi
 done
+# Named explicitly, separately from the loop above, because as of DAR-285
+# this is a HARD prerequisite with a real ordering requirement, not just
+# "some dylib must exist": scutil no longer carries its own copy of
+# dnsinfo_copy.c, and the gate at the end of this script fails unless
+# _dns_configuration_copy really binds libresolv. gen_build_order.py only
+# reads the literal "run build_X.sh first" idiom, which the loop's own
+# generic message above does not use.
+if [ ! -f "$OUT/system/libresolv.dylib" ]; then
+    echo "error: $OUT/system/libresolv.dylib not found -- run build_libresolv_dylib.sh first" >&2
+    exit 1
+fi
 
 rm -rf "$OBJ"
 mkdir -p "$OBJ"
@@ -323,12 +362,10 @@ FILES="$SCUTIL/scutil.c \
     $SC/SCProxies.c \
     $SC/scprefs_observer.c \
     $CONFIGD/nwi/network_information.c \
-    $CONFIGD/dnsinfo/dnsinfo_copy.c \
     $CONFIGD/libSystemConfiguration/libSystemConfiguration_client.c \
     $LIBC/stdlib/FreeBSD/getopt.c \
     $LIBC/stdlib/FreeBSD/getopt_long.c \
     $LIBC/gen/FreeBSD/signal.c \
-    scutil_editline_compat.c \
     scutil_nc_compat.c \
     scutil_reachability_compat.c \
     scutil_migration_compat.c \
@@ -416,6 +453,15 @@ rm -f scutil.macho
     "$OUT/system/libdyld.dylib" \
     "$OUT/system/libsystem_notify.dylib" \
     "$OUT/system/libsystem_m.dylib" "$OUT/system/libresolv.dylib" \
+    `# DAR-286: real libedit, listed LAST on purpose. Its own transitive` \
+    `# LC_LOAD_DYLIB closure includes libncurses/libinfo/libcopyfile, so` \
+    `# listing it earlier would let ld64 resolve an unrelated libc symbol` \
+    `# THROUGH libedit and record "bind libedit/<sym>" -- which real` \
+    `# dyld-940 cannot resolve, since libedit plain-links those rather` \
+    `# than LC_REEXPORT_DYLIBing them (CLAUDE.md's bind_target_audit.sh` \
+    `# writeup; DAR-217 is the same bug one dylib over). Nothing else` \
+    `# here defines el_*/history_*, so last is both safe and correct.` \
+    "$OUT/system/libedit.dylib" \
     2>"$OUT/scutil_link.err" \
     && echo "real link: 0 undefined symbols -- scutil.macho fully closed" \
     || { echo "real link failed:"; grep '^  "' "$OUT/scutil_link.err" | sed 's/,.*//' | sort -u; tail -40 "$OUT/scutil_link.err" >&2; exit 1; }
@@ -430,15 +476,85 @@ if [ -n "$real_gaps" ]; then
     exit 1
 fi
 
-# Real check that the "--dns is not silently bound to libresolv's
-# always-NULL stand-in" reasoning in this script's header actually holds
-# in the produced binary, rather than only in the comment.
-if nm -m scutil.macho 2>/dev/null | grep -q "undefined.*_dns_configuration_copy"; then
-    echo "error: scutil.macho binds _dns_configuration_copy to a dylib --" >&2
-    echo "       expected the real dnsinfo_copy.c object to satisfy it locally." >&2
-    echo "       'scutil --dns' would report a fabricated empty DNS configuration." >&2
+# DAR-285 inverted this gate. It used to assert the OPPOSITE (that
+# _dns_configuration_copy was satisfied locally, never bound to a dylib),
+# because libresolv.dylib's copy was an always-NULL stand-in at the time.
+# libresolv now carries the real Apple dnsinfo XPC client, so the correct
+# invariant is that scutil binds to it and carries no private duplicate.
+# Both halves are checked: a local definition would silently shadow the
+# real one again, and no bind at all would mean the reference vanished.
+if nm -gU scutil.macho 2>/dev/null | grep -q " T _dns_configuration_copy\$"; then
+    echo "error: scutil.macho DEFINES _dns_configuration_copy locally -- DAR-285 moved" >&2
+    echo "       the real dnsinfo client into libresolv.dylib; a private copy here is" >&2
+    echo "       a duplicate that shadows it (and carries its own XPC connection state)." >&2
     exit 1
 fi
+if ! nm -m scutil.macho 2>/dev/null | grep -q "undefined.*_dns_configuration_copy"; then
+    echo "error: scutil.macho has no _dns_configuration_copy reference at all --" >&2
+    echo "       'scutil --dns' cannot be reading the real DNS configuration." >&2
+    exit 1
+fi
+if ! nm -m scutil.macho 2>/dev/null | grep "_dns_configuration_copy" | grep -q "libresolv"; then
+    echo "error: scutil.macho's _dns_configuration_copy does not bind libresolv --" >&2
+    echo "       real dyld-940 searches only the listed image (see CLAUDE.md's" >&2
+    echo "       bind_target_audit.sh writeup); it would abort at load." >&2
+    nm -m scutil.macho | grep "_dns_configuration_copy" >&2
+    exit 1
+fi
+
+# DAR-286 gate, same shape as the _dns_configuration_copy one above: the
+# 9 libedit entry points scutil calls must bind the real libedit.dylib
+# and must NOT be satisfied by a local definition. A reintroduced
+# scutil_editline_compat.c would link and run perfectly happily while
+# silently disabling line editing again -- that is exactly the state this
+# ticket removed, so it is checked rather than trusted.
+for s in _el_init _el_end _el_gets _el_set _el_get _el_source \
+         _history_init _history_end _history; do
+    if nm -gU scutil.macho 2>/dev/null | grep -qE "^[0-9a-f]+ T $s\$"; then
+        echo "error: scutil.macho DEFINES $s locally -- DAR-286 moved the real" >&2
+        echo "       implementation into libedit.dylib; a private copy shadows it" >&2
+        echo "       and puts scutil back on its no-editing fgets() fallback." >&2
+        exit 1
+    fi
+    if ! nm -m scutil.macho 2>/dev/null | grep -F "external $s (from " | grep -q "libedit"; then
+        echo "error: scutil.macho's $s does not bind libedit.dylib:" >&2
+        nm -m scutil.macho 2>/dev/null | grep -F "external $s (from " >&2
+        exit 1
+    fi
+done
+echo "real libedit: all 9 entry points bind /usr/lib/libedit.3.dylib"
+
+# DAR-286: libedit.dylib carries exactly ONE flat-namespace deferral,
+# _fork (see build_libedit.sh's header for the two real reasons it cannot
+# live inside a dylib here). An unresolved flat-namespace bind really
+# does abort dyld-940 at load -- a first attempt at this ticket deferred
+# six symbols and scutil died with
+#   dyld[10]: symbol not found in flat namespace '_execlp'
+# on a real boot. So this is checked rather than assumed: some image
+# scutil actually loads must really export _fork.
+# Matched by real LC_ID_DYLIB install_name, not by filename: several
+# dylibs here ship a versioned install_name whose basename is NOT their
+# built filename (libncurses.dylib -> /usr/lib/libncurses.5.4.dylib,
+# libresolv.dylib -> /usr/lib/libresolv.9.dylib), so a basename compare
+# would silently skip them and could report a false "no owner".
+SCUTIL_LOADS=$(otool -L scutil.macho | tail -n +2 | awk '{print $1}')
+FORK_OWNER=""
+for cand in "$OUT"/system/*.dylib; do
+    iname=$(otool -D "$cand" 2>/dev/null | tail -n +2)
+    [ -n "$iname" ] || continue
+    echo "$SCUTIL_LOADS" | grep -qxF "$iname" || continue
+    if nm -gU "$cand" 2>/dev/null | grep -qE "^[0-9a-f]+ T _fork\$"; then
+        FORK_OWNER="$iname"
+        break
+    fi
+done
+if [ -z "$FORK_OWNER" ]; then
+    echo "error: no dylib scutil.macho loads exports _fork, but libedit.dylib" >&2
+    echo "       defers it to the flat namespace -- scutil would abort at dyld" >&2
+    echo "       load with \"symbol not found in flat namespace '_fork'\"." >&2
+    exit 1
+fi
+echo "real libedit: its one _fork flat-namespace deferral resolves via $FORK_OWNER"
 
 # Hard gates, same as build_syslogd.sh/build_configd.sh/build_ipconfig.sh:
 # a clean link and a clean nm do NOT prove a two-level bind resolves at

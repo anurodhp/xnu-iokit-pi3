@@ -628,6 +628,37 @@ else
     echo "= notifyd_roundtrip_smoketest.macho not built -- run tools/userland_staging/build_notifyd_smoketest.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/libc_build/res_init_dnsinfo_smoketest.macho ]; then
+    mkdir -p "$MNT/usr/local/bin"
+    cp tools/userland_staging/libc_build/res_init_dnsinfo_smoketest.macho \
+        "$MNT/usr/local/bin/res_init_dnsinfo_smoketest"
+    chmod 755 "$MNT/usr/local/bin/res_init_dnsinfo_smoketest"
+    echo "+ wrote res_init_dnsinfo_smoketest to $MNT/usr/local/bin/"
+    echo "  (DAR-285: proves the STOCK libresolv path -- dns_configuration_copy()"
+    echo "  and res_init() -- really sees the DNS server configd publishes after a"
+    echo "  real DHCP lease. Run by hand from the root shell post-boot, AFTER"
+    echo "  'ipconfig set en0 DHCP' has completed; before a lease exists it"
+    echo "  correctly reports no configuration. Built by"
+    echo "  tools/userland_staging/build_res_init_dnsinfo_smoketest.sh)"
+else
+    echo "= res_init_dnsinfo_smoketest.macho not built -- run tools/userland_staging/build_res_init_dnsinfo_smoketest.sh first if wanted, skipping"
+fi
+
+if [ -f tools/userland_staging/libedit_smoketest.macho ]; then
+    mkdir -p "$MNT/usr/local/bin"
+    cp tools/userland_staging/libedit_smoketest.macho \
+        "$MNT/usr/local/bin/libedit_smoketest"
+    chmod 755 "$MNT/usr/local/bin/libedit_smoketest"
+    echo "+ wrote libedit_smoketest to $MNT/usr/local/bin/"
+    echo "  (DAR-286: replays scutil.c's own real libedit setup sequence and"
+    echo "  reports which branch scutil would take -- keep the editor, or tear it"
+    echo "  down and fall back to fgets(). Also does a real el_gets() read from a"
+    echo "  real file. Run by hand from the root shell post-boot. Built by"
+    echo "  tools/userland_staging/build_libedit.sh)"
+else
+    echo "= libedit_smoketest.macho not built -- run tools/userland_staging/build_libedit.sh first if wanted, skipping"
+fi
+
 if [ -f tools/userland_staging/libc_build/tsd_vm_smoketest.macho ]; then
     mkdir -p "$MNT/usr/local/bin"
     cp tools/userland_staging/libc_build/tsd_vm_smoketest.macho \
@@ -976,9 +1007,13 @@ fi
 #   scutil <<< "show State:/Network/Global/DNS"
 #   scutil <<< "list State:/Network/.*"
 #
-# All three are non-interactive; scutil's interactive mode also works but
-# without line editing or history (libedit is not built -- see
-# tools/userland_staging/scutil_editline_compat.c).
+# All three are non-interactive. scutil's interactive mode now has REAL
+# line editing and history too, as of DAR-286 (2026-09-11): real libedit
+# is built by tools/userland_staging/build_libedit.sh and installed above
+# at /usr/lib/libedit.3.dylib. The one thing still missing is a
+# terminfo/termcap database on this image, without which libedit falls
+# back to dumb-terminal settings and arrow keys do not move the cursor --
+# DAR-293, observable by running /usr/local/bin/libedit_smoketest.
 if [ -f tools/userland_staging/scutil.macho ]; then
     mkdir -p "$MNT/usr/sbin"
     cp tools/userland_staging/scutil.macho "$MNT/usr/sbin/scutil"

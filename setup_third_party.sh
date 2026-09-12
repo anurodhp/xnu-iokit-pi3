@@ -290,13 +290,17 @@
 #     directly, not guessed from the newest tag -- `libedit-57`,
 #     `libedit-62` and `libedit-65` all exist upstream and are all
 #     WRONG for Darwin 20.3).
-#     HONEST SCOPE NOTE: `tools/userland_staging/build_scutil.sh` uses
-#     this pin's real, unmodified `src/histedit.h` only -- the library
-#     itself (26 .c files / ~19k lines, an AWK `makelist` generated-
-#     header step, and a terminfo/wide-char dependency chain) is NOT
-#     built yet. See that script's own header and
-#     `scutil_editline_compat.c` for exactly what stands in for it and
-#     why that is a real, non-fabricated degradation path.
+#     FULLY BUILT as of DAR-286 (2026-09-11). This used to carry a scope
+#     note saying only `src/histedit.h` was used and the library itself
+#     was not built; that is no longer true.
+#     `tools/userland_staging/build_libedit.sh` builds all 29 real source
+#     files at full Apple WIDECHAR parity into
+#     `libc_build/system/libedit.dylib` (install_name
+#     `/usr/lib/libedit.3.dylib`), regenerating the AWK `makelist`
+#     headers and asserting them byte-identical to Apple's own
+#     pre-generated `local/` copies, and `scutil.macho` links it for
+#     real. Read that script's header for the terminfo and
+#     no-canonical-owner-for-fork details.
 #   - llvm-libcxx / llvm-libcxxabi (Phase 6.5 Phase C, 2026-08-25): dyld's
 #     C++ source needs a real libc++/libc++abi (`std::string`,
 #     `std::vector`, `<iostream>`, etc.) to compile at all, and neither is
@@ -502,8 +506,19 @@ mkdir -p third_party
 #     via `git am` after cloning upstream `configd-1109.60.2`. Converted
 #     to cloning from this project's own fork (git@github.com:anurodhp/
 #     configd.git, branch iokit-port) instead -- the fix now lives as a
-#     real committed history on that branch, one commit past the same
-#     pinned `configd-1109.60.2` tag. `third_party-patches/configd.patch`
+#     real committed history on that branch, past the same pinned
+#     `configd-1109.60.2` tag. Two commits as of 2026-09-11: DAR-170's
+#     `plugin_support.c` change above, plus DAR-285's one-line
+#     `#ifndef my_log` guard around `dnsinfo/dnsinfo_internal.h`'s
+#     `<SystemConfiguration/SCPrivate.h>` include (that include exists
+#     only to supply SC_log, which is only used by the my_log fallback
+#     right below it -- guarding it lets libresolv.dylib compile the real
+#     `dnsinfo_copy.c` without depending on header trees staged by
+#     scripts that link libresolv, i.e. without a circular build-order
+#     dependency; every other includer is unaffected and still gets the
+#     real SC_log). Because this row pins a BRANCH, not a SHA, a fresh
+#     clone picks both up automatically -- there is no tag to bump here.
+#     `third_party-patches/configd.patch`
 #     is no longer read by this script -- removed from the tree (unlike
 #     the historical-record patches above, nothing else in this repo
 #     documents it independently, e.g. no sdcard/README.md-style

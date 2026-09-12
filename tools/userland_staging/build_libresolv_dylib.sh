@@ -128,6 +128,59 @@
 #     libnotify.dylib exists and is linked by whatever real consumer
 #     loads both (matches this project's own `_dyld_initializer`-style
 #     iterative -U-then-resolve-later precedent).
+#
+# ============================================================
+# DAR-285 (2026-09-11): REAL dns_configuration_copy(), not a stand-in
+# ============================================================
+# This dylib used to ship `libresolv_dnsinfo_compat.o` (extracted from
+# libresolv.a), whose dns_configuration_copy() unconditionally returned
+# NULL. That file was honest and correct for the world it was written in
+# -- its own header says "this project has no XPC, no launchd, no
+# configd" -- and Apple's own dns_configuration_copy() really does take
+# that same "DNS configuration server not available" branch when the
+# dnsinfo XPC service is unreachable. Every one of those premises is now
+# false: libxpc.dylib is real and a real XPC round trip really completes
+# (DAR-284), launchd is PID 1, configd is resident, and the real dnsinfo
+# XPC *server* half (dnsinfo_server.c + dnsinfo_create.c +
+# dnsinfo_flatfile.c + libSystemConfiguration_server.c) is really linked
+# into configd.macho by build_configd_plugins.sh.
+#
+# Why it mattered, not just tidiness: res_init.c's __res_vinit() is a
+# real caller --
+#     sc_dns = dns_configuration_copy();
+#     if (sc_dns == NULL) return res_vinit_from_file(statp, preinit, _PATH_RESCONF);
+# -- so every resolver init in every process linking this dylib fell
+# through to parsing /etc/resolv.conf, a file that legitimately does not
+# exist on this TARGET_OS_IPHONE target (ip_plugin.c's flat-file write is
+# `#if !TARGET_OS_IPHONE`; real Apple publishes DNS only to the dynamic
+# store here -- DAR-283 proved State:/Network/Global/DNS really carries
+# the lease's ServerAddresses). The published configuration was real and
+# libresolv could not see any of it.
+#
+# The two files compiled in below are the real, unmodified Apple client
+# half, the exact same pair build_scutil.sh already links successfully:
+#   configd/dnsinfo/dnsinfo_copy.c
+#   configd/libSystemConfiguration/libSystemConfiguration_client.c
+# DAR-283 had deliberately compiled them into scutil.macho itself rather
+# than rebuild a dylib sitting underneath libSystem.B.dylib mid-ticket;
+# that private duplicate is removed by this same ticket, so there is now
+# exactly one real implementation in the system, here.
+#
+# THREE NEW SIBLING DYLIBS (libsystem_blocks/libdispatch/libxpc) are
+# linked below as a result. That adds NO new image to any process: this
+# dylib already links libsystem_notify.dylib, which already links all
+# three (confirmed via otool -L, not assumed), so the transitive image
+# set of every process that loads libSystem.B.dylib is unchanged.
+#
+# SEQUENCING, and why this could not have been done before DAR-284:
+# libSystemConfiguration_client.c's libSC_send_message_with_reply_sync()
+# retries forever on XPC_ERROR_CONNECTION_INTERRUPTED. Before DAR-284 no
+# XPC message had ever completed a round trip on this port at all, so
+# swapping the stub for the real client would have turned a wrong-but-
+# fast NULL into a hang inside res_init() for every caller -- strictly
+# worse. DAR-284 made an unreachable service fail fast with
+# XPC_ERROR_CONNECTION_INVALID (which this loop breaks out of), which is
+# the actual precondition this change needed.
 set -e
 cd "$(dirname "$0")"
 
@@ -141,6 +194,10 @@ LIBC="../../third_party/Libc"
 LIBRESOLV="../../third_party/libresolv"
 PTHREAD="../../third_party/libpthread"
 XNU="../../third_party/xnu-7195"
+# DAR-285: the real dnsinfo XPC client half (see this script's header).
+CONFIGD="../../third_party/configd"
+DISPATCH="../../third_party/libdispatch"
+PD="../../third_party/PureDarwin/src/Libraries/XPC"
 
 XCODE12="/Applications/Xcode-12.app/Contents/Developer"
 CLANG="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
@@ -153,12 +210,39 @@ if [ ! -f "$OUT/libresolv.a" ]; then
     echo "error: $OUT/libresolv.a not found -- run build_libresolv.sh first (this script reuses its already-built member objects)" >&2
     exit 1
 fi
-for d in libsystem_c libsystem_malloc libsystem_platform libsystem_kernel libsystem_pthread; do
+for d in libsystem_c libsystem_malloc libsystem_platform libsystem_kernel libsystem_pthread \
+         libsystem_blocks; do
     if [ ! -f "$OUT/system/$d.dylib" ]; then
         echo "error: $OUT/system/$d.dylib not found -- run build_${d}.sh first" >&2
         exit 1
     fi
 done
+# DAR-285's real dnsinfo client needs these two as real siblings. Their
+# own build scripts are named build_libdispatch_dylib.sh /
+# build_libxpc_dylib.sh, so they can't go in the short-name loop above.
+if [ ! -f "$OUT/system/libdispatch.dylib" ]; then
+    echo "error: $OUT/system/libdispatch.dylib not found -- run build_libdispatch_dylib.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libxpc.dylib" ]; then
+    echo "error: $OUT/system/libxpc.dylib not found -- run build_libxpc_dylib.sh first" >&2
+    exit 1
+fi
+for f in "$CONFIGD/dnsinfo/dnsinfo_copy.c" \
+         "$CONFIGD/libSystemConfiguration/libSystemConfiguration_client.c"; do
+    if [ ! -f "$f" ]; then
+        echo "error: $f not found -- run setup_third_party.sh first (configd pinned 2026-09-01)" >&2
+        exit 1
+    fi
+done
+if [ ! -f "$PD/libxpc/include/xpc/xpc.h" ]; then
+    echo "error: $PD/libxpc/include/xpc/xpc.h not found -- run setup_third_party.sh first" >&2
+    exit 1
+fi
+if [ ! -d "$DISPATCH/private" ]; then
+    echo "error: $DISPATCH/private not found -- run setup_third_party.sh first" >&2
+    exit 1
+fi
 
 # Real, verified fix (2026-08-28, see docs/backlog.md item d9 for the
 # full trail): Xcode 12's own bundled ld64-609 has a real internal crash
@@ -230,6 +314,23 @@ rm -f "$EXTRACT/libresolv_arc4random_deps_compat.o"
 # presence, confirmed via a real trial link after removing atoi.o alone
 # (0 undefined symbols, no new fixup_chains error).
 rm -f "$EXTRACT/atoi.o"
+
+# libresolv_dnsinfo_compat.o REMOVED 2026-09-11 (DAR-285) -- replaced,
+# further down this script, by the real Apple dnsinfo XPC client
+# (configd/dnsinfo/dnsinfo_copy.c + libSystemConfiguration_client.c).
+# See this script's header for the full writeup.
+#
+# NOT removed from libresolv.a itself, and libresolv_dnsinfo_compat.c is
+# NOT deleted: build_dyld_link.sh statically links libresolv.a into
+# dyld.macho, and build_libresolv.sh's own smoketest links the archive
+# standalone. dyld runs before any dylib exists and cannot have an XPC
+# connection, a dispatch queue or a bootstrap port -- for THAT consumer
+# Apple's own "DNS configuration server not available" branch is still
+# the only reachable one, and the stand-in is still the honest answer.
+# (Confirmed today it is also simply unreached there: `nm dyld.macho`
+# shows no _dns_configuration_copy at all, because nothing in dyld pulls
+# res_init.o out of the archive.)
+rm -f "$EXTRACT/libresolv_dnsinfo_compat.o"
 
 # Same real CFLAGS recipe build_libresolv.sh's own header already
 # documents (USE__RES_9/PRIVATE and the dnsinfo.h compat_include it
@@ -340,6 +441,87 @@ fi
 ./narrow_rune_locale.sh "$EXTRACT"
 "$CLANG" $CFLAGS libc_locale_globals_compat.c -o "$EXTRACT/libc_locale_globals_compat.o"
 
+# ------------------------------------------------------------------
+# DAR-285: the real Apple dnsinfo XPC client, compiled in here.
+# ------------------------------------------------------------------
+# These two files get their OWN flag set, not $CFLAGS above: $CFLAGS is
+# libresolv's real freestanding libc recipe (-DUSE__RES_9/-DPRIVATE plus
+# ~15 Libc/xnu -I entries), which neither file needs, while both need the
+# real xpc/dispatch-private headers libresolv has never had on its path.
+# Same "one file needs a different, reduced flag set" precedent
+# build_scutil.sh already uses for xnu's libsyscall sources.
+#
+# Real header staging, one symlink: <dispatch/private.h> really lives at
+# $DISPATCH/private/private.h, i.e. NOT under a dispatch/ subdirectory of
+# its own. Staging a `dispatch` symlink that points at private/ makes
+# <dispatch/private.h> resolve, while <dispatch/dispatch.h> (which
+# private/ does not contain) still falls through to the real
+# $DISPATCH/dispatch/dispatch.h listed right after it. This is a private
+# copy of the exact same one-line staging step
+# build_libsystemconfiguration_client.sh does into $OUT/sc_dispatch_compat
+# -- deliberately NOT a dependency on that script's output, because
+# libSystemConfiguration.dylib links THIS dylib (otool -L), so depending
+# on it here would be a real, circular build-order dependency.
+rm -rf "$OUT/libresolv_dispatch_compat"
+mkdir -p "$OUT/libresolv_dispatch_compat"
+ln -sf "$(pwd)/$DISPATCH/private" "$OUT/libresolv_dispatch_compat/dispatch"
+
+# The include set here is deliberately tiny (4 -I entries). It is small
+# only because of the matching one-line guard this ticket added to our
+# configd fork's dnsinfo/dnsinfo_internal.h: that header #included
+# <SystemConfiguration/SCPrivate.h> unconditionally "for SC_log", even
+# though SC_log is used ONLY by its own `#ifndef my_log` fallback -- and
+# dnsinfo_copy.c defines my_log to os_log() before including it, so the
+# macro was never referenced. Without the guard this compile needed the
+# entire staged SystemConfiguration + CoreFoundation + IOKit header world
+# (confirmed: 67 generated headers, via clang -MD), every one of which is
+# produced by scripts that link this dylib. See that header's own comment.
+DNSINFO_CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin \
+    -fno-stack-protector -O0 -Wno-nullability-completeness \
+    -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 \
+    -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
+    -DVARIANT_STATIC -DVARIANT_CANCELABLE -DVARIANT_DARWINEXTSN \
+    -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \
+    -D__va_list=__builtin_va_list -DPRIVATE \
+    `# configd's real headers use bridgeos availability attributes the` \
+    `# pinned Xcode-12 iPhoneOS SDK does not know; same two -D remaps` \
+    `# build_scutil.sh/build_configd_plugins.sh already use.` \
+    -D__API_UNAVAILABLE_PLATFORM_bridgeos=bridgeos,unavailable \
+    "-D__API_AVAILABLE_PLATFORM_bridgeos(x)=ios,introduced=x" \
+    -I "$PD/libxpc/include" \
+    -I "$OUT/libresolv_dispatch_compat" -I "$DISPATCH" \
+    -I "$CONFIGD/dnsinfo" -I "$CONFIGD/libSystemConfiguration")
+
+echo "compiling the real Apple dnsinfo XPC client (dnsinfo_copy.c, libSystemConfiguration_client.c)..."
+"$CLANG" "${DNSINFO_CFLAGS[@]}" "$CONFIGD/dnsinfo/dnsinfo_copy.c" \
+    -o "$EXTRACT/dnsinfo_copy.o" 2>"$OUT/libresolv_dnsinfo_copy.err" || {
+    echo "error: dnsinfo_copy.c failed to compile:" >&2
+    grep -m5 'error:' "$OUT/libresolv_dnsinfo_copy.err" >&2
+    exit 1
+}
+"$CLANG" "${DNSINFO_CFLAGS[@]}" "$CONFIGD/libSystemConfiguration/libSystemConfiguration_client.c" \
+    -o "$EXTRACT/libSystemConfiguration_client.o" 2>"$OUT/libresolv_libSC_client.err" || {
+    echo "error: libSystemConfiguration_client.c failed to compile:" >&2
+    grep -m5 'error:' "$OUT/libresolv_libSC_client.err" >&2
+    exit 1
+}
+
+# Real gate, not cosmetic: prove the object that just got compiled really
+# is the XPC client and not something that optimised down to a constant
+# NULL. `_xpc_connection_send_message_with_reply_sync` is the one call
+# that actually performs the round trip to configd.
+nm -m "$EXTRACT/libSystemConfiguration_client.o" | \
+    grep -q "(undefined) external _xpc_connection_send_message_with_reply_sync" || {
+    echo "error: libSystemConfiguration_client.o has no xpc_connection_send_message_with_reply_sync" >&2
+    echo "       reference -- this is not the real XPC client." >&2
+    exit 1
+}
+nm -m "$EXTRACT/dnsinfo_copy.o" | grep -q "(undefined) external _libSC_send_message_with_reply_sync" || {
+    echo "error: dnsinfo_copy.o does not call libSC_send_message_with_reply_sync --" >&2
+    echo "       this is not the real dnsinfo client." >&2
+    exit 1
+}
+
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libresolv.dylib"
 # -not_for_dyld_shared_cache: see build_libsystem_malloc.sh's own header
@@ -417,12 +599,39 @@ rm -f "$OUT/system/libresolv.dylib"
     `# project's fail-loud-at-build-time preference. Local definitions` \
     `# stay (nothing else in this archive calls any of the 9), just` \
     `# hidden from the export trie.` \
+    -Wl,-unexported_symbol,__libSC_info_fork_prepare \
+    -Wl,-unexported_symbol,__libSC_info_fork_parent \
+    -Wl,-unexported_symbol,__libSC_info_fork_child \
+    `# unexported 2026-09-11 (DAR-285): libSystemConfiguration_client.c` \
+    `# marks all four of its real entry points __private_extern__ EXCEPT` \
+    `# these three pthread_atfork handlers, which real Apple ships as` \
+    `# exports of the single libsystem_configuration.dylib. This project's` \
+    `# libSystemConfiguration.dylib already exports them (nm -gU) and is` \
+    `# the one image that should; nothing in this project registers them` \
+    `# with libSystem at all yet (see build_launchd_syscalls.sh's atfork` \
+    `# writeup, which lists all three as "absent"), so exporting a second` \
+    `# copy from here would create a real duplicate-definition ambiguity` \
+    `# for zero benefit. The local definitions stay -- this dylib's own` \
+    `# copy of libSC_info_available() reads the same file's _available` \
+    `# static -- they are just hidden from the export trie, exactly as the` \
+    `# 9 libresolv_netdb_compat.c symbols above are.` \
     -o "$OUT/system/libresolv.dylib" \
     "$EXTRACT"/*.o \
     "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_malloc.dylib" \
     "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
     "$OUT/system/libsystem_notify.dylib" \
+    `# DAR-285: real siblings for the real dnsinfo XPC client compiled in` \
+    `# above. libsystem_blocks owns _NSConcreteGlobalBlock/StackBlock` \
+    `# (both files use blocks), libdispatch owns dispatch_sync/` \
+    `# dispatch_once/dispatch_queue_create/_dispatch_is_fork_of_` \
+    `# multithreaded_parent, libxpc owns the whole xpc_* surface -- each` \
+    `# confirmed by a real nm -gU sweep of every dylib in $OUT/system,` \
+    `# not assumed. All three are ALREADY in every process that loads` \
+    `# this dylib (libsystem_notify.dylib, linked right above, links all` \
+    `# three), so no process gains an image.` \
+    "$OUT/system/libsystem_blocks.dylib" \
+    "$OUT/system/libdispatch.dylib" "$OUT/system/libxpc.dylib" \
     2>"$OUT/libresolv_dylib_link.err" \
     && echo "wrote $OUT/system/libresolv.dylib" \
     || { echo "libresolv.dylib link found real undefined symbols:" >&2; grep '^  "' "$OUT/libresolv_dylib_link.err" | sed 's/,.*//' | sort -u >&2; exit 1; }
@@ -452,10 +661,42 @@ otool -hv "$OUT/system/libresolv.dylib" | grep -q " DYLIB " || {
 # bound to a real, named sibling dylib.
 echo "declared -Wl,-U deferrals (expect: <flat-namespace> bind target, resolved at real load time):"
 xcrun dyld_info -fixups "$OUT/system/libresolv.dylib" 2>/dev/null | grep '<flat-namespace>' | awk '{print "  " $NF}'
-UNEXPECTED=$(xcrun dyld_info -fixups "$OUT/system/libresolv.dylib" 2>/dev/null | grep -v -E '<flat-namespace>|<weak-def-coalesce>' | grep 'bind' | grep -v -E 'libsystem_c/|libsystem_malloc/|libsystem_platform/|libsystem_kernel/|libsystem_pthread/|libsystem_notify/' || true)
+UNEXPECTED=$(xcrun dyld_info -fixups "$OUT/system/libresolv.dylib" 2>/dev/null | grep -v -E '<flat-namespace>|<weak-def-coalesce>' | grep 'bind' | grep -v -E 'libsystem_c/|libsystem_malloc/|libsystem_platform/|libsystem_kernel/|libsystem_pthread/|libsystem_notify/|libsystem_blocks/|libdispatch/|libxpc/' || true)
 if [ -n "$UNEXPECTED" ]; then
-    echo "error: real, unexpected non-sibling bind targets found (not flat-namespace, not one of the 5 linked sibling dylibs):" >&2
+    echo "error: real, unexpected non-sibling bind targets found (not flat-namespace, not one of the 8 linked sibling dylibs):" >&2
     echo "$UNEXPECTED" >&2
     exit 1
 fi
 echo "libresolv.dylib: every non-deferred external reference binds to a real, named sibling dylib -- no unexpected/dangling references"
+
+# ------------------------------------------------------------------
+# DAR-285 gates: prove the shipped dylib really carries the real dnsinfo
+# XPC client, not the always-NULL stand-in it used to.
+# ------------------------------------------------------------------
+# A clean link proves nothing here: the stand-in linked just as cleanly
+# and exported the same three symbol names. These check behaviour-bearing
+# facts instead -- that the dylib really reaches libxpc's send-with-reply
+# call, and that the three dns_configuration_* entry points are still the
+# real exported surface.
+for s in _dns_configuration_copy _dns_configuration_free _dns_configuration_notify_key; do
+    nm -gU "$OUT/system/libresolv.dylib" | grep -q " T $s\$" || {
+        echo "error: libresolv.dylib no longer exports $s" >&2
+        exit 1
+    }
+done
+xcrun dyld_info -fixups "$OUT/system/libresolv.dylib" 2>/dev/null | \
+    grep -q 'libxpc/_xpc_connection_send_message_with_reply_sync' || {
+    echo "error: libresolv.dylib does not bind libxpc's" >&2
+    echo "       _xpc_connection_send_message_with_reply_sync -- dns_configuration_copy()" >&2
+    echo "       would still be a stand-in that never talks to configd (DAR-285)." >&2
+    exit 1
+}
+# The three libSC_info_fork_* handlers must stay OUT of the export trie
+# (see the -Wl,-unexported_symbol block above): libSystemConfiguration.dylib
+# is this system's single real exporter of them.
+if nm -gU "$OUT/system/libresolv.dylib" | grep -q "__libSC_info_fork_"; then
+    echo "error: libresolv.dylib exports __libSC_info_fork_* -- those belong to" >&2
+    echo "       libSystemConfiguration.dylib alone (DAR-285)." >&2
+    exit 1
+fi
+echo "libresolv.dylib: real dnsinfo XPC client present (binds libxpc send-with-reply), 3 dns_configuration_* exports intact"
