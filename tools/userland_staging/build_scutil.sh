@@ -105,20 +105,6 @@
 #							uses.
 #	Libc/stdlib/FreeBSD/getopt_long.c		real getopt_long(3)
 #	Libc/gen/FreeBSD/signal.c			real signal(3)
-#	Libc/uuid/uuidsrc/clear.c			real uuid_clear(3), which
-#							SCProxies.c calls. Its
-#							canonical home is
-#							libsystem_c.dylib (which
-#							already owns the rest of
-#							this family -- copy/parse/
-#							unparse/pack); clear.c is
-#							simply the one member that
-#							has never been compiled
-#							anywhere in this project.
-#							Compiled locally rather
-#							than rebuilding the dylib
-#							every other image sits on
-#							top of; filed separately.
 #	xnu/libsyscall/mach/{mach_error,mach_error_string,fprintf_stderr,
 #	                     string}.c			real mach_error()
 #
@@ -170,18 +156,43 @@
 # _el_init to libedit and carries no private copy, so a silent revert to
 # a local stand-in fails the build.
 #
-# STAND-INS (four files, each with its own full justification)
-# ===========================================================
+# `migrate` AND uuid_clear: REAL, AS OF DAR-287
+# =============================================
+# Two things this build used to carry privately now come from the dylibs
+# that own them, and neither is a stand-in any more.
+#
+# SCNetworkMigration.c (the `--net` `migrate` command, plus the
+# _SCNetworkConfigurationCheckValidity* family) is real, pinned Apple
+# source that compiles fine here but cannot LINK here: a real trial link
+# during DAR-283 found 20 undefined symbols, all __private_extern__
+# internals of libSystemConfiguration.dylib's own sibling files. That is
+# Apple's architecture, not a defect -- the file is private to the
+# framework it lives in. DAR-283 therefore shipped
+# scutil_migration_compat.c, whose two functions returned NULL/FALSE.
+# DAR-287 put the real file inside the dylib
+# (build_libsystemconfiguration_client.sh's FILES list), so that stand-in
+# is deleted and scutil binds the real implementations.
+#
+# uuid_clear(3) (SCProxies.c's only use of the uuid family) was compiled
+# here from Libc/uuid/uuidsrc/clear.c, because that one member of the
+# family had never been built anywhere in this project -- libsystem_c.dylib
+# already exported uuid_copy/uuid_pack/uuid_parse/uuid_unparse{,_lower,
+# _upper} and nothing else defined _uuid_clear at all. DAR-287 added it
+# to build_libsystem_c.sh, its real canonical home, so the private copy
+# is gone too.
+#
+# Both directions are asserted by gates at the end of this script, for
+# the same reason the _dns_configuration_copy and libedit gates exist: a
+# reintroduced local copy would link and run perfectly happily while
+# silently shadowing the real implementation.
+#
+# STAND-INS (three files, each with its own full justification)
+# ============================================================
 #	scutil_nc_compat.c		`--nc` VPN family; NetworkExtension
 #					never open-sourced
 #	scutil_reachability_compat.c	`-r`; SCNetworkReachability.c needs
 #					libnetwork's never-open-sourced
 #					<nw/private.h> types
-#	scutil_migration_compat.c	`--net`'s `migrate`;
-#					SCNetworkMigration.c compiles here but
-#					needs 20 __private_extern__ internals
-#					of libSystemConfiguration.dylib, i.e.
-#					it belongs inside that dylib
 #	scutil_misc_compat.c		one NetworkExtension AOVPN predicate
 #					(which BUYS the real SCProxies.c) +
 #					a _write$UNIX2003 name bridge
@@ -368,7 +379,6 @@ FILES="$SCUTIL/scutil.c \
     $LIBC/gen/FreeBSD/signal.c \
     scutil_nc_compat.c \
     scutil_reachability_compat.c \
-    scutil_migration_compat.c \
     scutil_misc_compat.c \
     configd_sigaction_compat.c \
     configd_plugin_log_scpreferences_compat.c \
@@ -387,19 +397,12 @@ for f in $FILES; do
     fi
 done
 
-# Libc's uuid family needs one extra define the rest of this build does
-# not: uuidP.h falls back to <uuid/uuid_types.h> (a header that exists in
-# no SDK or pin here) unless HAVE_STDINT_H is set. Given its own compile
-# step rather than adding -DHAVE_STDINT_H=1 to the shared CFLAGS above,
-# so it cannot change how any of the 35 configd/Libc sources compile.
-# Same define build_copyfile.sh already uses for this same family.
-if "$CLANG" "${CFLAGS[@]}" -DHAVE_STDINT_H=1 "$LIBC/uuid/uuidsrc/clear.c" -o "$OBJ/clear.o" 2>"$OBJ/clear.err"; then
-    ok=$((ok + 1))
-    rm -f "$OBJ/clear.err"
-else
-    fail=$((fail + 1))
-    echo "  gap: clear -- $(grep -m1 'error:' "$OBJ/clear.err")"
-fi
+# DAR-287 (2026-09-11): Libc/uuid/uuidsrc/clear.c used to be compiled
+# here, with its own -DHAVE_STDINT_H=1 step, because _uuid_clear (which
+# SCProxies.c really calls) existed nowhere in this project. It now lives
+# in libsystem_c.dylib, which already owned every other member of that
+# family, so the private copy is gone and scutil binds the real one. The
+# gate further down asserts that direction.
 
 # xnu's own libsyscall sources need a REDUCED flag set, not the one above
 # -- identical reasoning to build_ipconfig.sh's own MACH_CFLAGS block:
@@ -555,6 +558,41 @@ if [ -z "$FORK_OWNER" ]; then
     exit 1
 fi
 echo "real libedit: its one _fork flat-namespace deferral resolves via $FORK_OWNER"
+
+# DAR-287 gates, same shape as the two above. Both symbol families used
+# to be satisfied by a private local copy in this binary; each now has to
+# come from the dylib that owns it, and a silent revert to a local
+# definition has to fail the build rather than pass it.
+#
+#   _uuid_clear                            -> libsystem_c.dylib
+#   __SCNetworkConfigurationPerformMigration,
+#   __SCNetworkMigrationAreConfigurationsIdentical
+#                                          -> libSystemConfiguration.dylib
+# (two leading underscores: the C names are _SCNetworkConfiguration... --
+# already underscore-prefixed by Apple -- so the Mach-O symbols carry a
+# second one.)
+#
+# The libSystemConfiguration pair is checked by real name, not by the
+# stand-in's filename, because scutil_migration_compat.c defined exactly
+# these two and nothing else -- so "defined locally" is precisely the
+# failure state DAR-287 removed.
+check_owner() {
+    local sym="$1" owner="$2"
+    if nm -gU scutil.macho 2>/dev/null | grep -qE "^[0-9a-f]+ T ${sym}\$"; then
+        echo "error: scutil.macho DEFINES $sym locally -- DAR-287 moved the real" >&2
+        echo "       implementation into $owner; a private copy shadows it." >&2
+        exit 1
+    fi
+    if ! nm -m scutil.macho 2>/dev/null | grep -F "external $sym (from " | grep -q "$owner"; then
+        echo "error: scutil.macho's $sym does not bind $owner:" >&2
+        nm -m scutil.macho 2>/dev/null | grep -F "external $sym (from " >&2
+        exit 1
+    fi
+}
+check_owner _uuid_clear libsystem_c
+check_owner __SCNetworkConfigurationPerformMigration libSystemConfiguration
+check_owner __SCNetworkMigrationAreConfigurationsIdentical libSystemConfiguration
+echo "real uuid_clear + real SCNetworkMigration: all 3 bind their owning dylib"
 
 # Hard gates, same as build_syslogd.sh/build_configd.sh/build_ipconfig.sh:
 # a clean link and a clean nm do NOT prove a two-level bind resolves at

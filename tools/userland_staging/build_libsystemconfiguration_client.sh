@@ -809,6 +809,7 @@ FILES="$SC/SCD.c $SC/SCDAdd.c $SC/SCDCache.c $SC/SCDGet.c \
     $SC/SCNetworkService.c \
     $SC/SCNetworkSet.c \
     $SC/SCNetworkProtocol.c \
+    $SC/SCNetworkMigration.c \
     $SC/SCPreferencesPathKey.c \
     $SC/BridgeConfiguration.c \
     $SC/VLANConfiguration.c \
@@ -819,6 +820,7 @@ FILES="$SC/SCD.c $SC/SCDAdd.c $SC/SCDCache.c $SC/SCDGet.c \
     $LIBC/stdlib/FreeBSD/strtoq.c \
     $LIBC/stdtime/FreeBSD/timelocal.c \
     configd_plugin_sha256_compat.c \
+    sc_cfurl_reachable_compat.c \
     $MIGOUT/configUser.c $MIGOUT/helperUser.c \
     sc_log_pack_compat.c os_log_with_args_compat.c \
     sc_mach_port_compat.c sc_syscall_compat.c sc_misc_compat.c"
@@ -839,6 +841,35 @@ FILES="$SC/SCD.c $SC/SCDAdd.c $SC/SCDCache.c $SC/SCDGet.c \
 # every one of DAR-240's ~25 named symbols against every .c file in
 # SystemConfiguration.fproj/ and taking the real defining file, not
 # guessing from the API family's own header name.
+# DAR-287 (2026-09-11) ADDED: SCNetworkMigration.c -- real, unmodified,
+# pinned Apple source, and the file this dylib was always the right home
+# for. It implements _SCNetworkConfigurationPerformMigration /
+# _SCNetworkMigrationAreConfigurationsIdentical / the
+# _SCNetworkConfigurationCheckValidity* / CopyMigration*Paths family that
+# scutil's `--net` `migrate` command calls.
+#
+# DAR-283 could not link it into scutil.macho and correctly did not try
+# to force it: a real trial link there reported 20 undefined symbols, all
+# of them __private_extern__ internals of THIS dylib's own sibling files
+# (__SCNetworkInterfaceCreateCopy, __SCNetworkServiceCreate,
+# __SCPreferencesIsEmpty, __log_SCNetworkConfiguration, and so on) --
+# every one real, present and working in libSystemConfiguration.dylib,
+# just hidden, because Apple's own source marks them private to the
+# framework this file belongs to. That is the architecture working as
+# designed. Built here, all 20 resolve internally and none of them has to
+# be exported. scutil_migration_compat.c (the NULL/FALSE stand-in DAR-283
+# shipped in the meantime) is deleted, and build_scutil.sh now binds the
+# real functions out of this dylib.
+#
+# sc_cfurl_reachable_compat.c: the one symbol SCNetworkMigration.c needs
+# that nothing in this project defines -- real, public, declared-in-
+# CFURL.h CoreFoundation API with no C body anywhere in the pinned
+# swift-corelibs-foundation source. Deliberately compiled INTO this
+# dylib rather than deferred with a third `-Wl,-U` (which would make a
+# definition mandatory in every image that loads this dylib, the way
+# configd_cfurl_filesize_compat.c already is for the other two); see that
+# file's own header for the full reasoning and for why CoreFoundation
+# remains the real canonical home.
 # configd_scnet_keychain_compat.c: real, honest no-op stand-in for 6
 # Keychain-backed password-storage functions these new files need
 # (SCPreferencesKeychainPrivate.h, real header, unmodified, no longer
