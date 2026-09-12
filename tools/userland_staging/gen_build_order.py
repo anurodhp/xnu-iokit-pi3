@@ -76,6 +76,16 @@ def main() -> int:
 
     for name in scripts:
         text = (HERE / name).read_text(errors="replace")
+        # Join shell line-continuations (a trailing backslash-newline) into
+        # one logical line first, the same way the shell itself would --
+        # otherwise a `for dep in a b \<newline> c d; do` loop's word list
+        # is split across a real newline character, which FOR_LOOP_RE's
+        # word-list group deliberately excludes (it must stop before a
+        # bare newline so it doesn't swallow the next statement), so the
+        # whole loop silently fails to match at all. Found 2026-09-11:
+        # build_login.sh's real dependency loop wraps this way and was
+        # completely invisible to this script before this fix.
+        text = re.sub(r"\\\n", " ", text)
 
         for match in PREREQ_RE.findall(text):
             if match != name and match in script_set:
@@ -89,6 +99,18 @@ def main() -> int:
                 continue
             for item in word_list.split():
                 item = item.strip("\"'")
+                # Strip a real archive/dylib/object suffix before judging
+                # whether this is a plain short-name token -- half of the
+                # 11 real scripts using this idiom write the loop's word
+                # list as bare names (`libplatform`), the other half as
+                # the full file they check for (`libplatform.a`), and
+                # both are real, already-used conventions (found
+                # 2026-09-11 fixing build_cron.sh's silently-dropped
+                # dependency on build_libplatform.sh). Stripping is safe
+                # even for non-library items like `sys____mmap.o`: the
+                # resulting `build_sys____mmap.sh` candidate is simply
+                # absent from script_set and dropped below.
+                item = re.sub(r"\.(?:a|dylib|o)$", "", item)
                 if not re.fullmatch(r"[A-Za-z0-9_]+", item):
                     continue  # not a plain short-name token (e.g. a var/glob)
                 cand = f"build_{item}.sh"
