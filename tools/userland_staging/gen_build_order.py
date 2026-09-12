@@ -22,10 +22,18 @@ real examples of both):
      says "run build_<other-script>.sh first".
   2. A `for a in libc_locale libmalloc libplatform; do ... done` loop
      (used by ~30 scripts to check several short-name prerequisites at
-     once) whose body checks `$OUT/$a.a` and references `build_${a}.sh`
-     in its own error text -- here the dependency is on
-     `build_<item>.sh` for every item in the loop's word list, not on
-     any literal script name appearing in the source text.
+     once) whose body checks `$OUT/$a.a` and references either the
+     parameterized `build_${a}.sh` or the generic `build_*.sh` phrase
+     (both real, both in active use -- e.g. build_libc_regex.sh uses the
+     former, build_bash.sh/build_cron.sh/build_getty.sh/build_ifconfig.sh
+     /build_libc_stdio.sh/build_libnotify_client.sh/build_notifyd.sh/
+     build_ping.sh/build_login.sh/build_ps.sh/build_syslogd.sh use the
+     latter, confirmed 2026-09-11 after the ordering bug this caused --
+     `build_*.sh` reads fine to a human but silently failed to confirm
+     the loop as build-script-related, so all 11 scripts' real
+     word-list dependencies were being dropped) -- here the dependency
+     is on `build_<item>.sh` for every item in the loop's word list, not
+     on any literal script name appearing in the source text.
 
 Both are *directional* signals (the script names its own real
 prerequisite, not mutual chatter), unlike a bare mention of another
@@ -74,7 +82,9 @@ def main() -> int:
                 deps[name].add(match)
 
         for var, word_list, body in FOR_LOOP_RE.findall(text):
-            loop_ref_re = re.compile(r"build_\$\{?" + re.escape(var) + r"\}?\.sh")
+            loop_ref_re = re.compile(
+                r"build_(?:\$\{?" + re.escape(var) + r"\}?|\*)\.sh"
+            )
             if not loop_ref_re.search(body):
                 continue
             for item in word_list.split():
