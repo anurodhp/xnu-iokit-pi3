@@ -562,6 +562,25 @@ if [ ! -f "$OUT/libcopyfile.a" ]; then
     exit 1
 fi
 (cd "$EXTRACT" && ar x "../../libcopyfile.a" copy.o parse.o unparse.o pack.o)
+# uuid_clear: DAR-287 (2026-09-11) completes that same family. clear.c is
+# the one member nothing in this project had ever compiled anywhere --
+# libcopyfile.a does not build it, so there is no object to `ar x` above,
+# and `nm -gU` across every built dylib found _uuid_copy/_uuid_pack/
+# _uuid_parse/_uuid_unparse{,_lower,_upper} but no _uuid_clear at all.
+# SystemConfiguration.fproj/SCProxies.c really calls uuid_clear(3);
+# DAR-283 compiled clear.c privately into scutil.macho rather than
+# rebuilding this dylib, which is exactly the ownership debt DAR-287
+# closes -- the canonical home is right here, per this block's own
+# argument above.
+#
+# Given its own compile step, with one define the rest of this script
+# does not set: uuidP.h falls back to <uuid/uuid_types.h> (a header
+# present in no SDK or pin here) unless HAVE_STDINT_H is defined.
+# Confirmed still true against the real pinned header, not carried over
+# on faith. Same define build_copyfile.sh already passes for the rest of
+# this family; scoped to this one file so it cannot change how anything
+# else in this build compiles.
+"$CLANG" $SIGLIST_CFLAGS -DHAVE_STDINT_H=1 "$LIBC/uuid/uuidsrc/clear.c" -o "$EXTRACT/clear.o"
 
 # Real gap: ICU also references time, expected from libSystem. Real
 # Apple source (gen/FreeBSD/time.c) already compiled once for
