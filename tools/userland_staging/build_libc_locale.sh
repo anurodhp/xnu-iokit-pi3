@@ -263,7 +263,17 @@ echo "wrote $OUT/libc_locale.a"
 # printf -> malloc in written order and get every .a archive; re-running
 # this script (or just this smoketest step) after build_libmalloc.sh
 # relinks it against the real allocator.
-if [ -f "$OUT/libmalloc.a" ]; then
+#
+# libc_stdio.a is the SAME real cycle, just never guarded (found
+# 2026-09-13 via a live build_everything.sh run): the smoketest link
+# below also references "$OUT/libc_stdio.a" directly, and
+# build_libc_stdio.sh needs libc_locale.a (this script's own output) to
+# build in the first place -- so by the time build_libmalloc.a's guard
+# above is satisfied (libmalloc.a really does exist by then, since it
+# runs before this script), libc_stdio.a still doesn't. Same skip-not-
+# fail treatment; re-running this script after build_libc_stdio.sh
+# picks up real smoketest coverage.
+if [ -f "$OUT/libmalloc.a" ] && [ -f "$OUT/libc_stdio.a" ]; then
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
         -Wno-nullability-completeness -include libc_build_prototypes.h \
         libc_locale_smoketest.c -o "$OUT/libc_locale_smoketest.o"
@@ -288,5 +298,6 @@ if [ -f "$OUT/libmalloc.a" ]; then
         nm -u libc_locale_smoketest.macho >&2
     fi
 else
-    echo "skip: libc_locale_smoketest.macho (needs libc_build/libmalloc.a -- run build_libmalloc.sh, then re-run this script, to relink it)"
+    echo "skip: libc_locale_smoketest.macho (needs libc_build/libmalloc.a and libc_build/libc_stdio.a --" \
+         "run whichever is missing, then re-run this script, to relink it)"
 fi
