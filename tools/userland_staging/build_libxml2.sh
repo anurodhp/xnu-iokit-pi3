@@ -216,6 +216,41 @@ echo "wrote $OUT/libxml2.a ($(ls "$OUT"/xml2_obj/*.o | wc -l | tr -d ' ') object
 # object in the archive in regardless of reference.
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libxml2.dylib"
+# Real, undeclared prerequisites, found 2026-09-13 via a live
+# build_everything.sh run: this dylib link references 7 sibling dylibs
+# with zero prerequisite check, so a real "no such file" clang failure
+# was silently mislabeled "undefined symbols" by the error-detection
+# grep below (which only greps for the undefined-symbol-list shape, not
+# a plain file-not-found line). Confirmed no cycle back to this script
+# from any of the 7 (grep).
+if [ ! -f "$OUT/system/libdispatch.dylib" ]; then
+    echo "error: $OUT/system/libdispatch.dylib not found -- run build_libdispatch_dylib.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libsystem_m.dylib" ]; then
+    echo "error: $OUT/system/libsystem_m.dylib not found -- run build_libm_dylib.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libsystem_c.dylib" ]; then
+    echo "error: $OUT/system/libsystem_c.dylib not found -- run build_libsystem_c.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libsystem_malloc.dylib" ]; then
+    echo "error: $OUT/system/libsystem_malloc.dylib not found -- run build_libsystem_malloc.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libsystem_platform.dylib" ]; then
+    echo "error: $OUT/system/libsystem_platform.dylib not found -- run build_libsystem_platform.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libdyld.dylib" ]; then
+    echo "error: $OUT/system/libdyld.dylib not found -- run build_libdyld.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libSystem.B.dylib" ]; then
+    echo "error: $OUT/system/libSystem.B.dylib not found -- run build_libsystem.sh first" >&2
+    exit 1
+fi
     # -not_for_dyld_shared_cache: real, newly-surfaced requirement of
     # the daily-driver Xcode's newer ld (NEWLD_BINDIR above) -- it
     # refuses "-undefined dynamic_lookup"/-U on a dylib it classifies

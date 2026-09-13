@@ -458,11 +458,42 @@ fi
 # above. Needs real __strcat_chk/__strcpy_chk/__strncpy_chk (also
 # already-built elsewhere, pulled alongside) and asctime/asctime_r/
 # __isthreaded (this file's own real definitions above).
-if [ ! -f "$OUT/liblaunchd_core.a" ] || [ ! -f "$OUT/libxpc_syscalls2.a" ]; then
-    echo "error: $OUT/liblaunchd_core.a or libxpc_syscalls2.a not found -- run build_launchd_core.sh first" >&2
+# localtime.o/timezone_unix03.o/strcat_chk.o compiled directly here
+# rather than extracted from liblaunchd_core.a, found 2026-09-13
+# (DAR-301 follow-on): extracting from the full archive made this
+# script depend on build_launchd_core.sh, which itself requires
+# build_corefoundation.sh, which requires build_libxml2.sh, which
+# requires THIS script's own libsystem_c.dylib -- a genuine, real
+# 4-way cycle (build_libsystem_c.sh -> build_launchd_core.sh ->
+# build_corefoundation.sh -> build_libxml2.sh -> build_libsystem_c.sh),
+# confirmed real in every link (grep), not a parser artifact. It was
+# invisible until this session's ordering-parser fixes correctly
+# recognized enough real dependencies simultaneously to expose it.
+# Only 3 real, self-contained, zero-cross-dependency Apple source
+# files were actually needed (never the rest of liblaunchd_core.a) --
+# same real LOCALTIME_FLAGS recipe build_launchd_core.sh's own comment
+# already documents in detail, copied here rather than re-derived, to
+# break the cycle instead of routing around it with a skip (unlike
+# this session's other real cycles, skipping these three would ship an
+# incomplete libsystem_c.dylib missing real localtime/timezone/
+# strcat_chk symbols other real code calls unconditionally).
+if [ ! -f "$OUT/libxpc_syscalls2.a" ]; then
+    echo "error: $OUT/libxpc_syscalls2.a not found -- run build_libxpc_syscalls2.sh first" >&2
     exit 1
 fi
-(cd "$EXTRACT" && ar x "../../liblaunchd_core.a" localtime.o timezone_unix03.o strcat_chk.o)
+mkdir -p "$OUT/libc_features_gen"
+ARCHS=arm64 VARIANT_PLATFORM_NAME=iphoneos SRCROOT="$(cd libc_features_platform && pwd)" \
+    DERIVED_FILES_DIR="$(cd "$OUT" && pwd)/libc_features_gen" \
+    perl "$LIBC/xcodescripts/generate_features.pl" >/dev/null
+LOCALTIME_FLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -fno-stack-check \
+    -include localtime_private_decls.h \
+    -I "$LIBC/include" -I "$OUT/libc_features_gen/arm64" -I "$PTHREAD/private" \
+    -idirafter "$LIBC/fbsdcompat" -idirafter "$LIBC/darwin" -idirafter "$XNU/bsd" -idirafter "$XNU/osfmk")
+"$CLANG" "${LOCALTIME_FLAGS[@]}" "$LIBC/stdtime/FreeBSD/localtime.c" -o "$EXTRACT/localtime.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -DPRIVATE=1 \
+    -D_FORTIFY_SOURCE=0 "$LIBC/secure/strcat_chk.c" -o "$EXTRACT/strcat_chk.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -DPRIVATE=1 \
+    "$LIBC/stdtime/timezone_unix03.c" -o "$EXTRACT/timezone_unix03.o"
 (cd "$EXTRACT" && ar x "../../libxpc_syscalls2.a" chk_fail_compat.o strcpy_chk.o strncpy_chk.o)
 
 # darwin_check_fd_set_overflow_compat.o added 2026-08-31 (static-linking
