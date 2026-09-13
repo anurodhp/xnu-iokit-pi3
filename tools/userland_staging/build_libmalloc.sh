@@ -216,6 +216,77 @@ cat > "$OUT/compat_include/os/feature_private.h" <<'EOF'
 #endif
 EOF
 
+# compat_include/mach/{mach_vm.h,vm_map_internal.h}: real, already-
+# documented gap that was never actually implemented (found 2026-09-12,
+# DAR-301 follow-on) -- this script's own header comment and the inline
+# comments above the mig invocation below both describe these two files
+# in detail (real iPhoneOS SDK's <mach/mach_vm.h> is literally "#error
+# mach_vm.h unsupported"; vm_map_internal.h can't be mig-generated here
+# because it would duplicate-define mach_make_memory_entry against
+# mach_vm.defs's own generated output), but neither file was ever
+# actually written anywhere. build_libsystem_kernel.sh/
+# build_libmach_ipc.sh already have their own real prerequisite checks
+# expecting exactly these two paths to exist after this script runs.
+# Real signatures copied verbatim from their real call sites in
+# third_party/xnu-7195/libsyscall/mach/mach_vm.c.
+mkdir -p "$OUT/compat_include/mach"
+cat > "$OUT/compat_include/mach/mach_vm.h" <<'EOF'
+/* See build_libmalloc.sh's own header comment for the real reasoning.
+ * Written by build_libmalloc.sh; do not edit here, it is regenerated
+ * on every run. */
+#ifndef _COMPAT_MACH_MACH_VM_H_
+#define _COMPAT_MACH_MACH_VM_H_
+#include <mach/mach_types.h>
+#include <mach/vm_types.h>
+#include <mach/vm_prot.h>
+#include <mach/vm_inherit.h>
+#include <mach/memory_object_types.h>
+
+kern_return_t mach_vm_allocate(mach_port_name_t target, mach_vm_address_t *address, mach_vm_size_t size, int flags);
+kern_return_t mach_vm_deallocate(mach_port_name_t target, mach_vm_address_t address, mach_vm_size_t size);
+kern_return_t mach_vm_protect(mach_port_name_t task, mach_vm_address_t address, mach_vm_size_t size, boolean_t set_maximum, vm_prot_t new_protection);
+kern_return_t mach_vm_map(mach_port_name_t target, mach_vm_address_t *address, mach_vm_size_t size, mach_vm_offset_t mask, int flags, mem_entry_name_port_t object, memory_object_offset_t offset, boolean_t copy, vm_prot_t cur_protection, vm_prot_t max_protection, vm_inherit_t inheritance);
+#endif
+EOF
+cat > "$OUT/compat_include/mach/vm_map_internal.h" <<'EOF'
+/* See build_libmalloc.sh's own header comment (above the mach_vm.defs
+ * mig invocation) for the real reasoning. Written by build_libmalloc.sh;
+ * do not edit here, it is regenerated on every run. */
+#ifndef _COMPAT_MACH_VM_MAP_INTERNAL_H_
+#define _COMPAT_MACH_VM_MAP_INTERNAL_H_
+#include <mach/mach_types.h>
+#include <mach/vm_types.h>
+#include <mach/vm_prot.h>
+#include <mach/vm_inherit.h>
+#include <mach/message.h>
+
+kern_return_t _kernelrpc_vm_map(mach_port_name_t target, vm_address_t *address, vm_size_t size, vm_offset_t mask, int flags, mem_entry_name_port_t object, vm_offset_t offset, boolean_t copy, vm_prot_t cur_protection, vm_prot_t max_protection, vm_inherit_t inheritance);
+kern_return_t _kernelrpc_vm_remap(mach_port_name_t target, vm_address_t *address, vm_size_t size, vm_offset_t mask, int flags, mach_port_name_t src_task, vm_address_t src_address, boolean_t copy, vm_prot_t *cur_protection, vm_prot_t *max_protection, vm_inherit_t inheritance);
+kern_return_t _kernelrpc_vm_read(mach_port_name_t target, vm_address_t address, vm_size_t size, vm_offset_t *data, mach_msg_type_number_t *dataCnt);
+#endif
+EOF
+
+# compat_include/mach_reply_port_decl.h: same real, already-documented-
+# but-never-implemented gap as the two files above (see this script's
+# own header comment on mach_reply_port() -- osfmk/mach/mach_traps.h has
+# two declarations that don't coexist cleanly for mig_reply_port.c's one
+# real call site, so it's declared directly instead). Real signature
+# copied verbatim from the real userland declaration at
+# third_party/xnu-7195/osfmk/mach/mach_traps.h (the PRIVATE, non-KERNEL
+# block). build_libsystem_kernel.sh already has its own real
+# prerequisite check expecting this exact path to exist after this
+# script runs.
+cat > "$OUT/compat_include/mach_reply_port_decl.h" <<'EOF'
+/* See build_libmalloc.sh's own header comment for the real reasoning.
+ * Written by build_libmalloc.sh; do not edit here, it is regenerated
+ * on every run. */
+#ifndef _COMPAT_MACH_REPLY_PORT_DECL_H_
+#define _COMPAT_MACH_REPLY_PORT_DECL_H_
+#include <mach/mach_types.h>
+extern mach_port_name_t mach_reply_port(void);
+#endif
+EOF
+
 XCODE12="/Applications/Xcode-12.app/Contents/Developer"
 CLANG="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
 SDK="$XCODE12/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
@@ -296,6 +367,7 @@ MACH_VM_DEFS="$(cd "$(dirname "$XNU/osfmk/mach/mach_vm.defs")" && pwd)/$(basenam
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness -Wno-availability -Wno-deprecated-declarations \
     -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 -DDARWINTEST=1 -D_FORTIFY_SOURCE=0 \
+    -D__API_UNAVAILABLE_PLATFORM_bridgeos=ios,unavailable \
     -D__API_AVAILABLE_PLATFORM_bridgeos(x)=ios,introduced=x \
     -include libmalloc_compat.h \
     -I $MALLOC/src -I $MALLOC/private -I $MALLOC \
@@ -303,6 +375,7 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
     -I $LIBC/include -I $LIBC/darwin -I $LIBC/gen -I libc_build/compat_include \
     -I $PTHREAD/private -I $PTHREAD/include -I $XNU/bsd \
     -I $OUT/malloc_mig \
+    -I ../../third_party/dyld/include \
     -idirafter $XNU/osfmk -idirafter $XNU/libkern -I $XNU/libsyscall"
 
 # Real Apple magazine allocator core -- see this script's header comment
@@ -425,6 +498,51 @@ PLATCFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-bu
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 -D_FORTIFY_SOURCE=0 -I libc_build/compat_include -I $LIBC/include -I $LIBC/darwin \
     -D_FORTIFY_SOURCE=0 "$LIBC/secure/memset_chk.c" -o "$OUT/memset_chk.o"
+# os_assumes_malloc_shim.h: real gap, found 2026-09-12 (DAR-301
+# follow-on) -- referenced below via -include but never actually
+# written anywhere. Unlike build_libc_locale.sh's own os/assumes.h
+# stand-in (correctly empty for vfprintf.c, its one real consumer,
+# which calls zero os_assumes/os_assert macros), chk_fail.c genuinely
+# needs one real declaration from the real os/assumes.h: os_crash(), a
+# variadic noreturn printf-style function (real signature, confirmed
+# against chk_fail.c's own two call sites -- both pass a plain string
+# literal, no format args beyond that, but real Apple's os_crash is
+# variadic). It also needs size_t visible, which real os/assumes.h pulls
+# in transitively via its own real header chain -- <sys/types.h> here
+# instead, same effect. This is this file's own -include (not the
+# shared os/assumes.h path) precisely because the fix is specific to
+# what chk_fail.c needs, not a general "safe to be empty" stand-in like
+# vfprintf.c's case.
+mkdir -p "$OUT/compat_include/os"
+cat > "$OUT/compat_include/os_assumes_malloc_shim.h" <<'EOF'
+/* Forced pre-include satisfying chk_fail.c's <os/assumes.h> needs --
+ * see build_libmalloc.sh's own comment at its one real call site for
+ * the full reasoning. Written by build_libmalloc.sh; do not edit here,
+ * it is regenerated on every run. */
+#ifndef _OS_ASSUMES_MALLOC_SHIM_H_
+#define _OS_ASSUMES_MALLOC_SHIM_H_
+#include <sys/types.h>
+__attribute__((noreturn, format(printf, 1, 2)))
+void os_crash(const char *format, ...);
+#endif
+EOF
+# chk_fail.c's own "#include <os/assumes.h>" still needs to resolve to
+# a real file via -I compat_include even with the forced pre-include
+# above (the pre-include only guarantees os_crash/size_t are visible
+# BEFORE that line runs) -- same content, guarded, so the second
+# inclusion is a real no-op rather than a duplicate declaration error.
+cat > "$OUT/compat_include/os/assumes.h" <<'EOF'
+/* Real content for chk_fail.c's own #include <os/assumes.h> --
+ * identical to os_assumes_malloc_shim.h, see build_libmalloc.sh's own
+ * comment there. Written by build_libmalloc.sh; do not edit here, it
+ * is regenerated on every run. */
+#ifndef _OS_ASSUMES_MALLOC_SHIM_H_
+#define _OS_ASSUMES_MALLOC_SHIM_H_
+#include <sys/types.h>
+__attribute__((noreturn, format(printf, 1, 2)))
+void os_crash(const char *format, ...);
+#endif
+EOF
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 -D_FORTIFY_SOURCE=0 \
     -include libc_build/compat_include/os_assumes_malloc_shim.h \
@@ -511,6 +629,32 @@ echo "wrote $OUT/libmalloc.a"
 # allocator metadata that only crashes on a LATER unrelated allocation,
 # not the free() call itself -- so later iterations succeeding is itself
 # part of the real test).
+#
+# Real, undeclared forward dependency, found 2026-09-12 (DAR-301
+# follow-on): this smoketest links against libc_stdio.a/
+# libc_locale_for_stdio.a, both built by build_libc_stdio.sh -- which
+# itself requires libmalloc.a (build_libmalloc.sh, this script). That
+# is a genuine cycle in the real build graph, not a parser bug: this
+# script's own ARCHIVE (libmalloc.a, already written above) has no such
+# dependency, only its smoketest does. Failing hard here would deadlock
+# build_everything.sh (build_libc_stdio.sh can never run first since it
+# needs this script's own libmalloc.a). Skip the smoketest with a clear,
+# honest message instead of erroring the whole script -- same
+# "report a real gap rather than force a false pass or a false failure"
+# convention this project's own bash core-file survey already
+# establishes elsewhere. Re-run this script by hand after
+# build_libc_stdio.sh to get real smoketest coverage.
+SMOKETEST_DEPS_READY=1
+for dep in libc_stdio.a libc_locale_for_stdio.a; do
+    if [ ! -f "$OUT/$dep" ]; then
+        SMOKETEST_DEPS_READY=0
+    fi
+done
+if [ "$SMOKETEST_DEPS_READY" = "0" ]; then
+    echo "skip: libmalloc_smoketest.macho (libc_stdio.a/libc_locale_for_stdio.a not yet built --"
+    echo "      real cycle: build_libc_stdio.sh itself needs this script's libmalloc.a first."
+    echo "      libmalloc.a is written; re-run this script after build_libc_stdio.sh for real smoketest coverage.)"
+else
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     libmalloc_smoketest.c -o "$OUT/libmalloc_smoketest.o"
 # $UNIX2003-suffixed link aliases -- see this script's header comment.
@@ -545,4 +689,5 @@ otool -l libmalloc_smoketest.macho | grep -q LC_UNIXTHREAD || \
 if nm -u libmalloc_smoketest.macho | grep -q .; then
     echo "WARNING: undefined symbols present:" >&2
     nm -u libmalloc_smoketest.macho >&2
+fi
 fi
