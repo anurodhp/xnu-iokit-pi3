@@ -58,6 +58,19 @@ HERE = Path(__file__).resolve().parent
 # "run build_X.sh" / "Run tools/userland_staging/build_X.sh" -- idiom 1
 # above. Case-insensitive "run", optional path prefix before the name.
 PREREQ_RE = re.compile(r"(?i)\brun\s+(?:\S+/)?(build_[A-Za-z0-9_]+\.sh)")
+# "run build_X.sh, build_Y.sh, and build_Z.sh first" -- a real, common
+# variant of idiom 1 (found 2026-09-13) that plain PREREQ_RE above only
+# ever captures the FIRST name from, silently dropping the rest as real
+# dependencies (build_libpthread_qos.sh's own "run build_libplatform.sh,
+# build_libpthread.sh, and build_launchd_syscalls.sh first" only ever
+# contributed the first of its three real prerequisites). Only extracts
+# from a "run ... first" span on one line, and truncates that span at
+# the first literal " or " -- some real scripts genuinely phrase an
+# EITHER/OR alternative this way too (build_login.sh: "run
+# build_simple_cmds.sh (or build_getty.sh, which shares ...) first"),
+# and forcing both sides of a real alternative as required prerequisites
+# would be a real, incorrect edge, not just a redundant one.
+RUN_SPAN_RE = re.compile(r"(?i)\brun\s+([^\n]*?)\s+first\b")
 # "for VAR in item1 item2 ...; do ... done" -- idiom 2 above. Captures
 # the loop variable, its word list, and the loop body separately so the
 # body can be checked for a `build_${VAR}.sh`-style reference before
@@ -90,6 +103,19 @@ def main() -> int:
         for match in PREREQ_RE.findall(text):
             if match != name and match in script_set:
                 deps[name].add(match)
+
+        for span in RUN_SPAN_RE.findall(text):
+            # Drop a real EITHER/OR alternative -- word-boundary split, not
+            # a literal " or " substring match: build_login.sh's real text
+            # is "build_simple_cmds.sh (or build_getty.sh, ...) first", where
+            # "or" is preceded by "(" with no space, which a literal " or "
+            # search misses entirely (confirmed by testing this exact
+            # string during development -- silently extracted both sides
+            # of a real alternative as if both were required).
+            span = re.split(r"\bor\b", span, maxsplit=1)[0]
+            for match in re.findall(r"build_[A-Za-z0-9_]+\.sh", span):
+                if match != name and match in script_set:
+                    deps[name].add(match)
 
         for var, word_list, body in FOR_LOOP_RE.findall(text):
             # Confirm this loop is a real prerequisite gate structurally --
