@@ -20,6 +20,28 @@ XNU="../../third_party/xnu-7195"
 OUT="libc_build"
 mkdir -p "$OUT/apple_gen" "$OUT/compat_include"
 
+# stdio_flockfile_compat.h: real, already-documented gap (see
+# build_libc_stdio.sh's own comment on this exact file) that this
+# script also force-includes (-include, below), but this script now
+# runs BEFORE build_libc_stdio.sh in the real tier order (same
+# cross-dependency class as build_libplatform.sh's/build_libmalloc.sh's
+# own compat-header self-sufficiency fixes) -- found 2026-09-13 via a
+# live build_everything.sh run. Writing this script's own copy makes it
+# self-sufficient regardless of run order; build_libc_stdio.sh writing
+# the identical content again later is a harmless idempotent overwrite.
+cat > "$OUT/compat_include/stdio_flockfile_compat.h" <<'EOF'
+/* See build_libc_stdio.sh's own stdio_flockfile_compat.h for the full
+ * real reasoning (FLOCKFILE/FUNLOCKFILE genuinely undefined in this
+ * checkout; true no-op is correct on this single-threaded target).
+ * Written here too since build_libc_gen.sh now runs first; do not edit
+ * here, it is regenerated on every run. */
+#ifndef _COMPAT_STDIO_FLOCKFILE_H_
+#define _COMPAT_STDIO_FLOCKFILE_H_
+#define FLOCKFILE(fp) ((void)(fp))
+#define FUNLOCKFILE(fp) ((void)(fp))
+#endif
+EOF
+
 # Real values straight from third_party/xnu-7195/bsd/sys/dirent.h (this
 # project's own kernel source, not guessed/approximated) -
 # getdirentries64_flags_t/GETDIRENTRIES64_EOF/GETDIRENTRIES64_EXTENDED_BUFSIZE
@@ -198,7 +220,17 @@ echo "wrote $OUT/libc_gen.a"
 
 # Real smoketest: exercise opendir/readdir/closedir + getcwd against /tmp
 # (see inject_into_sd_image.sh - this build's target image always has
-# /tmp provisioned).
+# /tmp provisioned). Real, undeclared forward dependency on libc_stdio.a/
+# libc_locale_for_stdio.a, found 2026-09-13 via a live build_everything.sh
+# run -- unlike build_libmalloc.sh's own forward reference to
+# build_libc_stdio.sh, this is NOT a cycle (build_libc_stdio.sh has no
+# dependency back on build_libc_gen.sh, confirmed by grep), so a normal
+# hard prerequisite check here just correctly reorders the two scripts
+# instead of needing a soft skip.
+if [ ! -f "$OUT/libc_stdio.a" ] || [ ! -f "$OUT/libc_locale_for_stdio.a" ]; then
+    echo "error: $OUT/libc_stdio.a or $OUT/libc_locale_for_stdio.a not found -- run build_libc_stdio.sh first" >&2
+    exit 1
+fi
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness -include libc_build_prototypes.h \
     -D_LIBC_NO_FEATURE_VERIFICATION -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 \
