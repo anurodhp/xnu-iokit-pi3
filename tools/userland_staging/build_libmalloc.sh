@@ -644,13 +644,27 @@ echo "wrote $OUT/libmalloc.a"
 # convention this project's own bash core-file survey already
 # establishes elsewhere. Re-run this script by hand after
 # build_libc_stdio.sh to get real smoketest coverage.
-SMOKETEST_DEPS_READY=1
-for dep in libc_stdio.a libc_locale_for_stdio.a; do
-    if [ ! -f "$OUT/$dep" ]; then
-        SMOKETEST_DEPS_READY=0
-    fi
-done
-if [ "$SMOKETEST_DEPS_READY" = "0" ]; then
+#
+# Deliberately NOT written as a `for dep in ...; do if [ ! -f
+# "$OUT/$dep" ]; ...` loop (found 2026-09-13): that is exactly the
+# shape tools/userland_staging/gen_build_order.py's idiom-2 parser
+# recognizes as a real, hard, ordering-relevant dependency -- but this
+# check is soft (a skip, not an exit 1), and the real prerequisite here
+# is a genuine cycle. Expressing it in the recognized shape made the
+# parser add a real graph edge back onto build_libc_stdio.sh, which
+# already has the correct, real, opposite edge onto this script -- the
+# parser's own cycle-breaker then dropped edges essentially at DFS-order
+# random across the whole libmalloc/libclosure/libc_stdio/libc_locale
+# cluster (13 edges in one run), which silently broke the ALREADY-FIXED
+# build_libplatform.sh -> build_libmalloc.sh -> build_libclosure.sh
+# ordering and reintroduced exactly the failure this whole fix chain has
+# been closing. Two independent plain `[ -f ... ]` tests, no loop, no
+# `$OUT/$var` pattern -- correct at runtime, invisible to the ordering
+# parser, matching neither recognized idiom on purpose.
+NEED_LIBC_STDIO_TIER=0
+[ -f "$OUT/libc_stdio.a" ] || NEED_LIBC_STDIO_TIER=1
+[ -f "$OUT/libc_locale_for_stdio.a" ] || NEED_LIBC_STDIO_TIER=1
+if [ "$NEED_LIBC_STDIO_TIER" = "1" ]; then
     echo "skip: libmalloc_smoketest.macho (libc_stdio.a/libc_locale_for_stdio.a not yet built --"
     echo "      real cycle: build_libc_stdio.sh itself needs this script's libmalloc.a first."
     echo "      libmalloc.a is written; re-run this script after build_libc_stdio.sh for real smoketest coverage.)"
