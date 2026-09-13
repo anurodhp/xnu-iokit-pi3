@@ -134,8 +134,40 @@ def main() -> int:
             # first", no build_*.sh text at all) -- matching the
             # structural existence-check instead of any wording is robust
             # to all of them and to future phrasings nobody's written yet.
+            # Real gap, found 2026-09-13: many real `for d in libsystem_c
+            # ...; do` loops check `$OUT/system/$d.dylib`, not `$OUT/$d`
+            # directly -- a literal subdirectory (system/) sits between
+            # $OUT and the loop variable (every *_dylib.sh static-to-
+            # dylib migration script's own dependency-check loop uses
+            # this exact shape). The original regex only matched a bare
+            # `$OUT/$var`, so this whole idiom-2 class of real dependency
+            # was silently invisible -- confirmed by build_copyfile_dylib.sh
+            # /build_libiconv_dylib.sh/build_libm_dylib.sh/
+            # build_ncurses_dylib.sh/build_openpam_dylib.sh/
+            # build_removefile_dylib.sh all already having a real,
+            # correct `for d in libsystem_c ... libsystem_pthread; do if
+            # [ ! -f "$OUT/system/$d.dylib" ]` guard that never produced a
+            # graph edge.
+            #
+            # Allowing an arbitrary path segment between $OUT/ and the
+            # variable is NOT safe on its own, though (regression found
+            # in the same pass): a plain compile-output path like
+            # `"$CLANG" ... -o "$OUT/launchd_core_obj/$f.o"` matches the
+            # same shape as a real existence check but proves nothing --
+            # build_launchd_core.sh's own `for f in ... launchd ...; do`
+            # source-compile loop (line ~116) has a bare "launchd" item
+            # for launchd.c, which turned into a fabricated
+            # build_launchd_core.sh -> build_launchd.sh cycle edge
+            # (neither script's real prerequisite) once the path-segment
+            # allowance above was added. The real idiom-2 gate is always
+            # an `-f` existence TEST, never an `-o` compile-output
+            # destination, so requiring a literal `-f "..."` test
+            # wrapping the reference (not just textual proximity to
+            # $OUT/$var anywhere in the body) is what actually
+            # distinguishes the two -- confirmed against every real
+            # for-loop idiom-2 user in this directory.
             loop_ref_re = re.compile(
-                r"\$OUT/\$\{?" + re.escape(var) + r"\}?\b"
+                r'-f\s*"\$OUT/(?:[A-Za-z0-9_]+/)*\$\{?' + re.escape(var) + r'\}?[^"]*"'
             )
             if not loop_ref_re.search(body):
                 continue
