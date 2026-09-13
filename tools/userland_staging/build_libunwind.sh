@@ -233,6 +233,36 @@ echo "wrote $OUT/libunwind.a"
 # frames (what we want to prove is really unwindable) - the rest of this
 # project's freestanding tiers are deliberately left untouched, they don't
 # need to be unwind-table-producing to keep working correctly.
+# Real, undeclared forward dependencies, found 2026-09-13 via a live
+# build_everything.sh run: this smoketest's link line below references
+# libc_gen.a/libc_stdio.a/libc_locale_for_stdio.a/libc_printf.a/
+# libpthread.a/libclosure.a/pthread_tsd_shim_libc_bootstrap.o with zero
+# prerequisite check. At least one is a genuine cycle -- libc_stdio.a
+# (build_libc_stdio.sh's own real `for dep in ... libunwind.a ...` check
+# requires THIS script's libunwind.a first, confirmed by grep). Combined
+# into one soft-skip covering the whole set rather than individually
+# classifying each remaining item as cyclic or not, matching the uniform
+# pattern already established for build_libmalloc.sh/build_libclosure.sh/
+# build_libc_locale.sh/build_libmach_ipc.sh's own real cycles --
+# consistency and build_everything.sh completion over squeezing out one
+# more real smoketest pass. libunwind.a itself (already written above)
+# has no dependency on any of these, only its smoketest does.
+NEED_LATER_TIER=0
+[ -f "$OUT/libc_gen.a" ] || NEED_LATER_TIER=1
+[ -f "$OUT/libc_stdio.a" ] || NEED_LATER_TIER=1
+[ -f "$OUT/libc_locale_for_stdio.a" ] || NEED_LATER_TIER=1
+[ -f "$OUT/libc_printf.a" ] || NEED_LATER_TIER=1
+[ -f "$OUT/libpthread.a" ] || NEED_LATER_TIER=1
+[ -f "$OUT/libclosure.a" ] || NEED_LATER_TIER=1
+[ -f "$OUT/pthread_tsd_shim_libc_bootstrap.o" ] || NEED_LATER_TIER=1
+if [ "$NEED_LATER_TIER" = "1" ]; then
+    echo "skip: libunwind_smoketest.macho (one or more of libc_gen.a/libc_stdio.a/"
+    echo "      libc_locale_for_stdio.a/libc_printf.a/libpthread.a/libclosure.a/"
+    echo "      pthread_tsd_shim_libc_bootstrap.o not yet built -- libc_stdio.a is a"
+    echo "      real cycle: build_libc_stdio.sh itself needs this script's libunwind.a"
+    echo "      first. libunwind.a is written; re-run this script later for real"
+    echo "      smoketest coverage.)"
+else
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -funwind-tables \
     -Wno-nullability-completeness -include libc_build_prototypes.h \
@@ -279,4 +309,5 @@ otool -l libunwind_smoketest.macho | grep -q LC_UNIXTHREAD || \
 if nm -u libunwind_smoketest.macho | grep -q .; then
     echo "WARNING: undefined symbols present:" >&2
     nm -u libunwind_smoketest.macho >&2
+fi
 fi

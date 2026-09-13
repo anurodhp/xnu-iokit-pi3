@@ -230,10 +230,12 @@ echo "wrote $OUT/libmach_ipc.a"
 # for-loop, no "run build_X.sh" text -- invisible to
 # gen_build_order.py's idiom recognition on purpose.
 NEED_LATER_TIER=0
-for _f in libpthread.a libc_gen.a libc_locale_for_stdio.a libc_stdio.a \
-          simple_obj/sys____mmap.o simple_obj/sys____munmap.o; do
-    [ -f "$OUT/$_f" ] || NEED_LATER_TIER=1
-done
+[ -f "$OUT/libpthread.a" ] || NEED_LATER_TIER=1
+[ -f "$OUT/libc_gen.a" ] || NEED_LATER_TIER=1
+[ -f "$OUT/libc_locale_for_stdio.a" ] || NEED_LATER_TIER=1
+[ -f "$OUT/libc_stdio.a" ] || NEED_LATER_TIER=1
+[ -f "$OUT/simple_obj/sys____mmap.o" ] || NEED_LATER_TIER=1
+[ -f "$OUT/simple_obj/sys____munmap.o" ] || NEED_LATER_TIER=1
 if [ "$NEED_LATER_TIER" = "1" ]; then
     echo "skip: mach_ipc_smoketest.macho (one or more of libpthread.a/libc_gen.a/"
     echo "      libc_locale_for_stdio.a/libc_stdio.a/simple_obj/sys____mmap.o/"
