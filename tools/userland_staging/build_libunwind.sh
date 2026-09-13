@@ -121,13 +121,21 @@ if [ ! -d "$CXX_HEADERS" ]; then
     echo "error: real libc++ headers not found at $CXX_HEADERS (shipped with the Xcode-12 toolchain itself, not the SDK)" >&2
     exit 1
 fi
-for dep in libmalloc libplatform libc_gen libc_stdio; do
-    if [ ! -f "$OUT/$dep.a" ]; then
-        echo "error: $OUT/$dep.a not found -- run build_$dep.sh first" >&2
-        exit 1
-    fi
-done
-
+# Real, pre-existing bug (found 2026-09-13, not caused by this session's
+# other fixes): this top-level check used to gate the ENTIRE script,
+# including the archive compile below, on libmalloc.a/libplatform.a/
+# libc_gen.a/libc_stdio.a -- but none of those four are actually
+# referenced anywhere in the real archive-build section (confirmed by
+# grep: zero hits between here and the smoketest). They're smoketest-only
+# prerequisites that got incorrectly hoisted to a top-level gate. Worse,
+# doing so creates a genuine 3-way cycle that has nothing to do with the
+# real libunwind.a build: build_libc_stdio.sh's own real prerequisite
+# list requires libunwind.a (for its archive, not just its smoketest),
+# so gating THIS script's archive on build_libc_stdio.sh already having
+# run makes the two scripts mutually unbuildable from a fresh checkout.
+# Moved into the smoketest's own guard below, where these four
+# (libc_gen.a/libc_stdio.a already covered there) actually belong,
+# letting the real, independent libunwind.a archive compile regardless.
 ok=0
 skip=0
 
@@ -248,6 +256,8 @@ echo "wrote $OUT/libunwind.a"
 # more real smoketest pass. libunwind.a itself (already written above)
 # has no dependency on any of these, only its smoketest does.
 NEED_LATER_TIER=0
+[ -f "$OUT/libmalloc.a" ] || NEED_LATER_TIER=1
+[ -f "$OUT/libplatform.a" ] || NEED_LATER_TIER=1
 [ -f "$OUT/libc_gen.a" ] || NEED_LATER_TIER=1
 [ -f "$OUT/libc_stdio.a" ] || NEED_LATER_TIER=1
 [ -f "$OUT/libc_locale_for_stdio.a" ] || NEED_LATER_TIER=1
@@ -256,12 +266,12 @@ NEED_LATER_TIER=0
 [ -f "$OUT/libclosure.a" ] || NEED_LATER_TIER=1
 [ -f "$OUT/pthread_tsd_shim_libc_bootstrap.o" ] || NEED_LATER_TIER=1
 if [ "$NEED_LATER_TIER" = "1" ]; then
-    echo "skip: libunwind_smoketest.macho (one or more of libc_gen.a/libc_stdio.a/"
-    echo "      libc_locale_for_stdio.a/libc_printf.a/libpthread.a/libclosure.a/"
-    echo "      pthread_tsd_shim_libc_bootstrap.o not yet built -- libc_stdio.a is a"
-    echo "      real cycle: build_libc_stdio.sh itself needs this script's libunwind.a"
-    echo "      first. libunwind.a is written; re-run this script later for real"
-    echo "      smoketest coverage.)"
+    echo "skip: libunwind_smoketest.macho (one or more of libmalloc.a/libplatform.a/"
+    echo "      libc_gen.a/libc_stdio.a/libc_locale_for_stdio.a/libc_printf.a/"
+    echo "      libpthread.a/libclosure.a/pthread_tsd_shim_libc_bootstrap.o not yet"
+    echo "      built -- libc_stdio.a is a real cycle: build_libc_stdio.sh itself"
+    echo "      needs this script's libunwind.a first. libunwind.a is written;"
+    echo "      re-run this script later for real smoketest coverage.)"
 else
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -funwind-tables \
