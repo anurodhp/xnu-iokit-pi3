@@ -126,6 +126,27 @@ echo "wrote $OUT/libclosure.a"
 # a __block-qualified byref variable (BLOCK_HAS_COPY_DISPOSE path,
 # exercising _Block_object_assign/_Block_object_dispose for real, not
 # just the fast/no-copy-helper path the first block takes).
+# Real, genuine cycle (found 2026-09-13, same shape as
+# build_libmalloc.sh's own documented one): this smoketest links
+# against libc_stdio.a/libc_locale_for_stdio.a, but build_libc_stdio.sh
+# itself requires libclosure.a (this script's own output, confirmed by
+# grep) to build in the first place. libclosure.a itself (already
+# written above) has no such dependency, only its smoketest does.
+# Skip with an honest message instead of a hard failure that would
+# deadlock build_everything.sh. Deliberately two independent plain
+# `[ -f ... ]` tests, no for-loop, no "run build_X.sh" text -- matches
+# neither of gen_build_order.py's recognized idioms on purpose (see
+# build_libmalloc.sh's own near-identical comment for the full story of
+# why expressing this as a recognized-shape check creates a false cycle
+# that gets resolved by dropping real, unrelated edges elsewhere).
+NEED_LIBC_STDIO_TIER=0
+[ -f "$OUT/libc_stdio.a" ] || NEED_LIBC_STDIO_TIER=1
+[ -f "$OUT/libc_locale_for_stdio.a" ] || NEED_LIBC_STDIO_TIER=1
+if [ "$NEED_LIBC_STDIO_TIER" = "1" ]; then
+    echo "skip: libclosure_smoketest.macho (libc_stdio.a/libc_locale_for_stdio.a not yet built --"
+    echo "      real cycle: build_libc_stdio.sh itself needs this script's libclosure.a first."
+    echo "      libclosure.a is written; re-run this script after build_libc_stdio.sh for real smoketest coverage.)"
+else
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -fblocks -I "$CLOSURE" \
     libclosure_smoketest.c -o "$OUT/libclosure_smoketest.o"
@@ -155,4 +176,5 @@ otool -l libclosure_smoketest.macho | grep -q LC_UNIXTHREAD || \
 if nm -u libclosure_smoketest.macho | grep -q .; then
     echo "WARNING: undefined symbols present:" >&2
     nm -u libclosure_smoketest.macho >&2
+fi
 fi
