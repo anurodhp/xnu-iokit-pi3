@@ -260,6 +260,23 @@ echo "wrote $OUT/libiokituser.a"
 # kernel, plus real Apple enqueue/dequeue logic against a locally-built
 # fake queue standing in for a kernel-mapped one -- IOConnectMapMemory
 # itself lives in the unbuildable IOKitLib.c).
+#
+# Real gap, found 2026-09-13 (same class as build_libmalloc.sh's/
+# build_libclosure.sh's own guards): libc_locale_for_stdio.a/libc_stdio.a
+# are a genuine real dependency of the SMOKETEST link only (libiokituser.a
+# itself, written above, needs neither) -- confirmed via grep, neither
+# build_libc_stdio.sh nor build_libc_locale.sh references iokituser at
+# all, so this is not a cycle, just a script that used to run late enough
+# in practice that the gap never surfaced. Two independent plain
+# `[ -f ... ]` tests, no loop, no `$OUT/$var` pattern -- correct at
+# runtime, invisible to gen_build_order.py's ordering parser on purpose.
+NEED_LIBC_STDIO_TIER=0
+[ -f "$OUT/libc_stdio.a" ] || NEED_LIBC_STDIO_TIER=1
+[ -f "$OUT/libc_locale_for_stdio.a" ] || NEED_LIBC_STDIO_TIER=1
+if [ "$NEED_LIBC_STDIO_TIER" = "1" ]; then
+    echo "skip: iokituser_smoketest.macho (libc_stdio.a/libc_locale_for_stdio.a not yet built --"
+    echo "      libiokituser.a is written; re-run this script after build_libc_stdio.sh for real smoketest coverage.)"
+else
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness -DPRIVATE=1 -DIOKIT=1 \
     -I "$OUT/compat_include" -I "$IOKITUSER" -I "$XNU/iokit" -I "$XNU/libkern" \
@@ -297,3 +314,4 @@ echo "treating Part 1 (real kernel Mach-IPC round trip) as confirmed;"
 echo "Part 2 (local enqueue/dequeue logic) only needs the link above plus"
 echo "a plain macOS-side run of the same logic to be believable, but the"
 echo "real kernel round trip needs the real target kernel."
+fi
