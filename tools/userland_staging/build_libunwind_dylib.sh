@@ -63,10 +63,31 @@ if [ ! -f "$OUT/libunwind.a" ]; then
     echo "error: $OUT/libunwind.a not found -- run build_libunwind.sh first" >&2
     exit 1
 fi
-if [ ! -f "$OUT/system/libsystem_kernel.dylib" ] || [ ! -f "$OUT/system/libsystem_platform.dylib" ] || \
-   [ ! -f "$OUT/system/libsystem_malloc.dylib" ] || [ ! -f "$OUT/system/libsystem_pthread.dylib" ] || \
-   [ ! -f "$OUT/system/libsystem_c.dylib" ]; then
-    echo "error: libsystem_kernel/platform/malloc/pthread/c.dylib not found -- run those build scripts first" >&2
+# Real gap, found 2026-09-13 (DAR-301 follow-on): the old combined
+# error message ("run those build scripts first", no literal build_X.sh
+# names) named none of the five real prerequisite scripts, so
+# gen_build_order.py's parser recognized zero of these five real
+# dependencies as graph edges -- confirmed no cycle back to this script
+# from any of the five (grep), so naming each individually here is a
+# clean fix, not a soft-skip situation.
+if [ ! -f "$OUT/system/libsystem_kernel.dylib" ]; then
+    echo "error: $OUT/system/libsystem_kernel.dylib not found -- run build_libsystem_kernel.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libsystem_platform.dylib" ]; then
+    echo "error: $OUT/system/libsystem_platform.dylib not found -- run build_libsystem_platform.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libsystem_malloc.dylib" ]; then
+    echo "error: $OUT/system/libsystem_malloc.dylib not found -- run build_libsystem_malloc.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libsystem_pthread.dylib" ]; then
+    echo "error: $OUT/system/libsystem_pthread.dylib not found -- run build_libsystem_pthread.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libsystem_c.dylib" ]; then
+    echo "error: $OUT/system/libsystem_c.dylib not found -- run build_libsystem_c.sh first" >&2
     exit 1
 fi
 
