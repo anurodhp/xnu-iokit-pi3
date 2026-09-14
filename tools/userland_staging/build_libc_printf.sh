@@ -157,6 +157,7 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
     -I $LIBC/gdtoa -I $LIBC/gdtoa/FreeBSD \
     -I $PTHREAD/include -I $PTHREAD/private \
     -I $XNU/osfmk -I $XNU/libsyscall \
+    -I ../../third_party/dyld/include \
     -I ../../generated"
 
 # Real Apple/FreeBSD source: the xprintf engine + every public printf*/
