@@ -285,6 +285,17 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-buil
     -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
     -DVARIANT_STATIC -DVARIANT_CANCELABLE -DVARIANT_DARWINEXTSN -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \
     -DUSE__RES_9 -DPRIVATE \
+    `# DNS_AVAILABLE (DAR-306, 2026-09-14): enables dns_module.c, this` \
+    `# project's own new si_module (real orchestration glue over this` \
+    `# script's own already-linked, real, unmodified libresolv.dylib --` \
+    `# res_query()/ns_initparse()/ns_parserr() do all the real DNS` \
+    `# protocol work, see dns_module.c's own header). Same real-guard` \
+    `# shape as the existing MDNS_AVAILABLE patch just below in` \
+    `# si_module.c/search_module.c -- mirrors mDNSResponder's real slot` \
+    `# in the default search order (cache -> ds -> mdns -> file) since` \
+    `# mDNSResponder itself isn't ported here, the same real reason` \
+    `# MDNS_AVAILABLE stays undefined.` \
+    -DDNS_AVAILABLE=1 \
     -D__ct_rune_t=__darwin_ct_rune_t -D__va_list=__builtin_va_list \
     -I libinfo_compat_include -I dispatch_compat_headers \
     -I "$LIBRESOLV" \
@@ -312,7 +323,7 @@ compile_one() {
 }
 
 echo "compiling real Libinfo si_module framework + public API (files-only mode, see header above)..."
-for f in si_data.c thread_data.c kvbuf.c ils.c si_module.c cache_module.c search_module.c file_module.c getnameinfo_link.c libinfo.c si_getaddrinfo.c si_compare.c; do
+for f in si_data.c thread_data.c kvbuf.c ils.c si_module.c cache_module.c search_module.c file_module.c dns_module.c getnameinfo_link.c libinfo.c si_getaddrinfo.c si_compare.c; do
     compile_one "$LIBINFO/lookup.subproj/$f"
 done
 compile_one "$LIBINFO/gen.subproj/ether_addr.c"
@@ -453,7 +464,12 @@ if [ -f "$OUT/system/libdyld.dylib" ] && [ -f "$OUT/system/libSystem.B.dylib" ];
     if [ -f libinfo_smoketest.macho ]; then
         otool -l libinfo_smoketest.macho | grep -q LC_DYLD_CHAINED_FIXUPS || \
             echo "WARNING: no LC_DYLD_CHAINED_FIXUPS in smoketest exec" >&2
-        UNEXPECTED_EXE=$(nm -u libinfo_smoketest.macho | grep -v -E '^_NXArgc$|^_NXArgv$|^___progname$|^_exit$|^_printf$|^_pthread_main_thread_bootstrap$|^_(get|set|end)(pw|gr)(nam|uid|gid|ent)$' || true)
+        # DAR-306: getaddrinfo/freeaddrinfo/gai_strerror are real exports of
+        # libinfo.dylib itself (si_getaddrinfo.c); inet_ntop/memset are real
+        # exports of libSystem.B.dylib/libsystem_c.dylib -- both genuinely
+        # undefined-and-deferred-to-dyld here, same as every other symbol
+        # already allow-listed below, not a new gap.
+        UNEXPECTED_EXE=$(nm -u libinfo_smoketest.macho | grep -v -E '^_NXArgc$|^_NXArgv$|^___progname$|^_exit$|^_printf$|^_pthread_main_thread_bootstrap$|^_(get|set|end)(pw|gr)(nam|uid|gid|ent)$|^_(getaddrinfo|freeaddrinfo|gai_strerror|inet_ntop|memset)$' || true)
         if [ -n "$UNEXPECTED_EXE" ]; then
             echo "WARNING: unexpected undefined symbols in libinfo_smoketest.macho:" >&2
             echo "$UNEXPECTED_EXE" >&2

@@ -31,6 +31,9 @@
 #include <stdio.h>
 #include <pwd.h>
 #include <grp.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <string.h>
 
 static void
 print_pw(const char *label, struct passwd *pw)
@@ -95,6 +98,30 @@ main(void)
 	}
 	endgrent();
 	printf("total group entries enumerated: %d\n", n);
+
+	printf("-- getaddrinfo() real DNS lookup (DAR-306, dns_module.c) --\n");
+	{
+		struct addrinfo hints, *res, *ai;
+		char buf[INET6_ADDRSTRLEN];
+		int rc;
+
+		memset(&hints, 0, sizeof(hints));
+		hints.ai_family = AF_INET;
+		hints.ai_socktype = SOCK_STREAM;
+
+		rc = getaddrinfo("www.apple.com", NULL, &hints, &res);
+		if (rc != 0) {
+			printf("getaddrinfo(www.apple.com): FAILED: %s\n", gai_strerror(rc));
+		} else {
+			for (ai = res; ai != NULL; ai = ai->ai_next) {
+				struct sockaddr_in *sin = (struct sockaddr_in *)(void *)ai->ai_addr;
+				if (inet_ntop(AF_INET, &sin->sin_addr, buf, sizeof(buf)) != NULL) {
+					printf("getaddrinfo(www.apple.com): %s\n", buf);
+				}
+			}
+			freeaddrinfo(res);
+		}
+	}
 
 	printf("== done ==\n");
 	return 0;
