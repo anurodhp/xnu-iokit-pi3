@@ -137,7 +137,7 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     echo "error: Xcode-12.app not found at $XCODE12 (see tools/build_kexts.sh for the same dependency)" >&2
     exit 1
 fi
-for a in libopenpam libc_locale syslogd_libc_extras liblaunchd_syscalls libpthread; do
+for a in libopenpam libc_locale liblaunchd_syscalls libpthread; do
     if [ ! -f "$OUT/$a.a" ]; then
         echo "error: $OUT/$a.a not found -- run build_${a}.sh first" >&2
         exit 1
