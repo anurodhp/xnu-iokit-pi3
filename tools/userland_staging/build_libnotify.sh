@@ -248,7 +248,17 @@ echo "wrote $OUT/libnotify.a"
     -idirafter "$XNU/osfmk" \
     -I "$MIGOUT" \
     libnotify_smoketest.c -o "$OUT/libnotify_smoketest.o"
+# Real gap, found 2026-09-13 via a live build_everything.sh run: crt.c's
+# optional weak_import hook (_pthread_main_thread_bootstrap) went
+# unresolved -- same DAR-302-class gap as build_launchd_mig.sh/
+# build_crt0_smoketest.sh. This script's real use of libc_stdio.a
+# doesn't pull in findfp.o's real pthread-mutex-backed locking (unlike
+# build_libc_gen.sh's own smoketest, confirmed by this exact link only
+# reporting the one weak_import symbol, not real pthread_mutex_*
+# symbols too), so the one-line -U deferral is sufficient here -- no
+# need for the full libpthread.a/libclosure.a/libunwind.a/mmap treatment.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
+    -Wl,-U,_pthread_main_thread_bootstrap \
     -o libnotify_smoketest.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/libnotify_smoketest.o" \
@@ -267,9 +277,9 @@ otool -l libnotify_smoketest.macho | grep -q LC_LOAD_DYLIB && \
     { echo "error: libnotify_smoketest.macho unexpectedly links a dylib" >&2; exit 1; }
 otool -l libnotify_smoketest.macho | grep -q LC_UNIXTHREAD || \
     { echo "error: libnotify_smoketest.macho missing LC_UNIXTHREAD (not a static Mach-O entry)" >&2; exit 1; }
-if nm -u libnotify_smoketest.macho | grep -q .; then
+if nm -u libnotify_smoketest.macho | grep -v '^_pthread_main_thread_bootstrap$' | grep -q .; then
     echo "error: libnotify_smoketest.macho has undefined symbols:" >&2
-    nm -u libnotify_smoketest.macho >&2
+    nm -u libnotify_smoketest.macho | grep -v '^_pthread_main_thread_bootstrap$' >&2
     exit 1
 fi
 echo "libnotify_smoketest.macho: fully static, zero undefined symbols"
