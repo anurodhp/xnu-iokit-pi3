@@ -88,7 +88,7 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     echo "error: Xcode-12.app not found at $XCODE12 (see tools/build_kexts.sh for the same dependency)" >&2
     exit 1
 fi
-for a in libxpc libxpc_syscalls libxpc_syscalls2 liblaunchd_mig libmach_ipc syslogd_libc_extras; do
+for a in libxpc libxpc_syscalls libxpc_syscalls2 liblaunchd_mig libmach_ipc liblaunchd_syscalls; do
     if [ ! -f "$OUT/$a.a" ]; then
         echo "error: $OUT/$a.a not found -- run build_${a}.sh first" >&2
         exit 1
@@ -127,7 +127,17 @@ fi
 (cd "$EXTRACT" && ar x "../../libxpc.a")
 (cd "$EXTRACT" && ar x "../../libxpc_syscalls.a")
 (cd "$EXTRACT" && ar x "../../libxpc_syscalls2.a")
-(cd "$EXTRACT" && ar x "../../syslogd_libc_extras.a" sys__dup.o)
+# Real gap, found 2026-09-14: this used to extract sys__dup.o from
+# syslogd_libc_extras.a, which made this script and build_syslogd.sh a
+# real cycle (syslogd.sh genuinely needs libxpc.dylib -- real check +
+# real link -- and syslogd_libc_extras.a can't exist before syslogd.sh
+# runs). syslogd.sh's own syslogd_libc_extras.a copy of sys__dup.o is
+# itself just `ar x`'d from liblaunchd_syscalls.a (see that script's
+# own recipe) -- extracting from that original, much-earlier-built
+# archive directly instead breaks the cycle at its root rather than
+# reordering around it (same "recompile/re-extract in the consumer"
+# pattern already established elsewhere in this tree).
+(cd "$EXTRACT" && ar x "../../liblaunchd_syscalls.a" sys__dup.o)
 
 # 5 members REMOVED 2026-08-31 (static-linking cleanup, dylib-vs-dylib
 # duplicate-symbol pass): libxpc_syscalls.a's own private copies of
