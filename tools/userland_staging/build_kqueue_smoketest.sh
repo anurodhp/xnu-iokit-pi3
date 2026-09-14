@@ -52,33 +52,70 @@ fi
 # Real Apple $UNIX2003/$INODE64-suffixed symbol aliasing (ld64 -alias),
 # needed because libmalloc.a/libc_printf.a call the suffixed names
 # directly (real Apple SDK behavior) while this project's own syscall
-# stubs only define the plain name. build_simple_cmds.sh's own
-# LINK_ALIASES already carries the exact real list every one of its
-# binaries needs; extracted verbatim here rather than duplicated by hand
-# so the two never drift apart.
-eval "$(awk '/^LINK_ALIASES="/{flag=1} flag{print; if ($0 !~ /\\$/) exit}' build_simple_cmds.sh)"
-
-# This smoketest's minimal link doesn't pull in every base symbol
-# build_simple_cmds.sh's own binaries do (e.g. no ___pipe/_connect/
-# _send -- no networking or process spawning here); real ld64-609 hits
-# the exact same assertion-failure crash tar(1) already worked around
-# (LINK_ALIASES_TAR's own header comment) when asked to alias a base
-# symbol that isn't present at all in a small link. Filtered down to
-# only the aliases whose base symbol this specific link actually defines
-# -- not a behavior change, same real workaround shape as tar's.
-read -ra _alias_tokens <<< "$LINK_ALIASES"
-LINK_ALIASES=""
-for tok in "${_alias_tokens[@]}"; do
-    case "$tok" in
-        -Wl,-alias,___pipe,*|-Wl,-alias,_connect,*|-Wl,-alias,_fchmod,*|-Wl,-alias,_getattrlist,*| \
-        -Wl,-alias,_getopt\$UNIX2003,*|-Wl,-alias,_getrlimit,*|-Wl,-alias,_lchown,*| \
-        -Wl,-alias,_mmap,*|-Wl,-alias,_munmap,*|-Wl,-alias,_nanosleep,*|-Wl,-alias,_read,*| \
-        -Wl,-alias,_reallocarray,*|-Wl,-alias,_regcomp,*|-Wl,-alias,_send,*| \
-        -Wl,-alias,_setattrlist,*|-Wl,-alias,_sigsuspend,*|-Wl,-alias,_waitpid,*|-Wl,-alias,_writev,*)
-            ;;
-        *) LINK_ALIASES="$LINK_ALIASES $tok" ;;
-    esac
-done
+# stubs only define the plain name.
+#
+# Real gap, found 2026-09-14: this used to `awk`-scrape
+# build_simple_cmds.sh's own LINK_ALIASES variable out of its source
+# text at eval time, "extracted verbatim... so the two never drift
+# apart" -- except build_simple_cmds.sh's real per-command dynamic-link
+# rewrite (2026-08-28 static-linking cleanup) REPLACED that one shared
+# LINK_ALIASES variable with per-command inline alias lists, so the
+# scrape silently found nothing and `eval`'d an empty string, only
+# surfacing now as "LINK_ALIASES: unbound variable" once this script
+# was actually reached in a real run for the first time. The two
+# scripts had already drifted apart; the scrape just never caught it.
+# Fixed by resolving the list once (git history has the exact real
+# LINK_ALIASES text as it stood before that rewrite) and hard-coding
+# the result directly here -- same filtered-down subset this script's
+# own minimal link already needed (no ___pipe/_connect/_send -- no
+# networking or process spawning here; real ld64-609 hits the exact
+# same assertion-failure crash tar(1) already worked around,
+# LINK_ALIASES_TAR's own header comment, when asked to alias a base
+# symbol that isn't present at all in a small link), just no longer
+# dependent on build_simple_cmds.sh's own internal variable shape.
+LINK_ALIASES="-Wl,-alias,_open,_open\$UNIX2003 \
+    -Wl,-alias,_close,_close\$UNIX2003 \
+    -Wl,-alias,_write,_write\$UNIX2003 \
+    -Wl,-alias,___kill,_kill\$UNIX2003 \
+    -Wl,-alias,___kill,_kill \
+    -Wl,-alias,__mal_semwait_sleep,_sleep\$UNIX2003 \
+    -Wl,-alias,___kdebug_trace,_kdebug_trace \
+    -Wl,-alias,_fcntl,_fcntl\$UNIX2003 \
+    -Wl,-alias,_fstat,_fstat\$INODE64 \
+    -Wl,-alias,_lstat,_lstat\$INODE64 \
+    -Wl,-alias,_stat,_stat\$INODE64 \
+    -Wl,-alias,_poll,_poll\$UNIX2003 \
+    -Wl,-alias,__err,_err \
+    -Wl,-alias,__warn,_warn \
+    -Wl,-alias,_fputs,_fputs\$UNIX2003 \
+    -Wl,-alias,_mprotect,_mprotect\$UNIX2003 \
+    -Wl,-alias,_pthread_rwlock_rdlock\$UNIX2003,_pthread_rwlock_rdlock \
+    -Wl,-alias,_pthread_rwlock_unlock\$UNIX2003,_pthread_rwlock_unlock \
+    -Wl,-alias,_strerror,_strerror\$UNIX2003 \
+    -Wl,-alias,_fwrite,_fwrite\$UNIX2003 \
+    -Wl,-alias,_strtod,_strtod\$UNIX2003 \
+    -Wl,-alias,_fdopen,_fdopen\$UNIX2003 \
+    -Wl,-alias,_fstatfs,_fstatfs\$INODE64 \
+    -Wl,-alias,_fopen,_fopen\$UNIX2003 \
+    -Wl,-alias,__flockfile,_flockfile \
+    -Wl,-alias,__funlockfile,_funlockfile \
+    -Wl,-alias,_pthread_rwlock_rdlock\$UNIX2003,__pthread_rwlock_rdlock \
+    -Wl,-alias,_pthread_rwlock_wrlock\$UNIX2003,__pthread_rwlock_wrlock \
+    -Wl,-alias,_pthread_rwlock_unlock\$UNIX2003,__pthread_rwlock_unlock \
+    -Wl,-alias,_strchr,_index \
+    -Wl,-alias,_fstatat64,_fstatat\$INODE64 \
+    -Wl,-alias,_closedir,_closedir\$UNIX2003 \
+    -Wl,-alias,_opendir,_opendir\$INODE64\$UNIX2003 \
+    -Wl,-alias,_readdir,_readdir\$INODE64 \
+    -Wl,-alias,_readdir_r,_readdir_r\$INODE64 \
+    -Wl,-alias,_fdopendir,_fdopendir\$INODE64\$UNIX2003 \
+    -Wl,-alias,_fsync,_fsync\$UNIX2003 \
+    -Wl,-alias,_pread,_pread\$UNIX2003 \
+    -Wl,-alias,_pwrite,_pwrite\$UNIX2003 \
+    -Wl,-alias,_statfs,_statfs\$INODE64 \
+    -Wl,-alias,_getfsstat,_getfsstat\$INODE64 \
+    -Wl,-alias,_confstr,_confstr\$UNIX2003 \
+    -Wl,-alias,_pthread_testcancel,_pthread_testcancel\$UNIX2003"
 
 # libpthread.a's own real pthread_mmap_compat.o (see build_libpthread.sh)
 # directly defines _mmap\$UNIX2003/_munmap\$UNIX2003, not plain
@@ -109,7 +146,15 @@ if [ ! -f "$OUT/libcxx_locale_for_stdio_scratch.a" ]; then
     ar d "$OUT/libcxx_locale_for_stdio_scratch.a" pthread_tsd_shim.o
 fi
 
-LINK_COMMON="$OUT/libc_printf.a $OUT/libc_gen.a $OUT/libc_stdio.a $OUT/libcxx_locale_for_stdio_scratch.a $OUT/libc_gen.a $OUT/libc_stdio.a \
+# ___gdtoa_locks (COMMON/tentative symbol, glue.o): same real gap
+# already fixed in build_cron.sh/build_removefile.sh/build_uname.sh/
+# build_bash.sh/build_copyfile.sh/build_getty.sh/build_ifconfig.sh/
+# build_login.sh/build_ping.sh/build_ps.sh -- ar x it directly (never
+# -force_load).
+mkdir -p "$OUT/kqueue_smoketest_glue_extract"
+(cd "$OUT/kqueue_smoketest_glue_extract" && ar x "../libc_printf.a" glue.o)
+
+LINK_COMMON="$OUT/libc_printf.a $OUT/kqueue_smoketest_glue_extract/glue.o $OUT/libc_gen.a $OUT/libc_stdio.a $OUT/libcxx_locale_for_stdio_scratch.a $OUT/libc_gen.a $OUT/libc_stdio.a \
     $OUT/pthread_tsd_shim_libc_bootstrap.o $OUT/libpthread.a $OUT/simple_sched_yield_trap.o $OUT/simple_sched_yield.o \
     $SYS_OBJS $OUT/simple_obj/statfs64_compat.o \
     $OUT/libclosure.a $OUT/libmalloc.a $OUT/cerror_stub.o $OUT/libplatform.a"
