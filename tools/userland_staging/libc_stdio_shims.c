@@ -80,7 +80,7 @@ int _pthread_mutex_destroy(void *m) {
  * build_libplatform.sh's own header comment for what real work that tier
  * took.
  *
- * ---- os_once (real semantics, single-threaded target) --------------------
+ * ---- os_once (real semantics) --------------------------------------------
  * third_party/Libc/stdio/FreeBSD/makebuf.c's __getevp() (reads the
  * STDBUF/STDBUF1 buffer-size-override env vars, a real but non-essential
  * feature) calls this once-only-init API from <os/once_private.h> - an
@@ -88,17 +88,43 @@ int _pthread_mutex_destroy(void *m) {
  * (confirmed by grep across the whole third_party/Libc tree before adding
  * a stand-in). compat_include/os/once_private.h (this build's own,
  * documented there) declares the matching os_once_t/os_once() surface;
- * this is the real body. Single-threaded correctness argument is
- * identical to pthread_once's in this same file: no concurrent
- * first-callers can race here, so "run it once, remember with a plain
- * flag" is the real behavior, not an approximation. Predicate storage is
- * owned by the CALLER (a plain long, not an opaque ABI struct like real
- * pthread_once_t), so no side table is needed the way pthread_once above
- * needed one.
- */
+ * this is the real body. Predicate storage is owned by the CALLER (a
+ * plain long, not an opaque ABI struct like real pthread_once_t), so no
+ * side table is needed the way pthread_once above needed one.
+ *
+ * REAL BUG FOUND AND FIXED 2026-09-03 (DAR-227): this used to be a plain
+ * `if (*predicate == 0) { *predicate = 1; function(context); }`,
+ * justified as "identical [reasoning] to pthread_once's in this same
+ * file" - but that pthread_once was ALREADY redirected above (this
+ * file's own comment, "pthread_once() itself is NOT redefined here") to
+ * pthread_tsd_shim.c's real implementation, which got the real atomic
+ * fix for this exact bug class as part of this same ticket. The citation
+ * this function's old comment pointed at had already gone stale one file
+ * over; this is the propagation-by-citation failure mode DAR-227 warned
+ * about, one hop removed. Same real fix: a 3-state gate (not-yet /
+ * in-progress / done) with proper acquire/release pairing, matching
+ * pthread_tsd_shim.c's pthread_once() - see that function for the full
+ * reasoning on why a spin instead of a real lock/park. */
+#define OS_ONCE_NOT_YET       0
+#define OS_ONCE_INPROGRESS    1
+#define OS_ONCE_DONE          2
+
 void os_once(long *predicate, void *context, void (*function)(void *)) {
-    if (*predicate == 0) {
-        *predicate = 1;
-        function(context);
+    for (;;) {
+        long v = __atomic_load_n(predicate, __ATOMIC_ACQUIRE);
+        if (v == OS_ONCE_DONE) {
+            return;
+        }
+        if (v == OS_ONCE_INPROGRESS) {
+            __asm__ __volatile__("yield" ::: "memory");
+            continue;
+        }
+        long expected = v;
+        if (__atomic_compare_exchange_n(predicate, &expected, OS_ONCE_INPROGRESS,
+                                        0 /* strong */, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+            function(context);
+            __atomic_store_n(predicate, OS_ONCE_DONE, __ATOMIC_RELEASE);
+            return;
+        }
     }
 }

@@ -75,6 +75,14 @@ for dep in libpthread.a libclosure.a libunwind.a pthread_tsd_shim_libc_bootstrap
         exit 1
     fi
 done
+# DAR-227: new real dependency as of the FLOCKFILE/FUNLOCKFILE fix -
+# fclose.o/fgets.o/fwrite.o/etc now reference the real __isthreaded
+# (libc_gen_shims.c, part of libc_gen.a) to gate real per-FILE locking,
+# where they used to need nothing (both macros were plain no-ops).
+if [ ! -f "$OUT/libc_gen.a" ]; then
+    echo "error: $OUT/libc_gen.a not found -- run build_libc_gen.sh first" >&2
+    exit 1
+fi
 
 cat > "$OUT/compat_include/spinlock.h" <<'EOF'
 /* Apple-internal header, not part of the public iPhoneOS SDK. Confirmed
@@ -94,8 +102,9 @@ cat > "$OUT/compat_include/os/once_private.h" <<'EOF'
  * reading the STDBUF/STDBUF1 buffer-size-override env vars exactly
  * once. os_once_t is a plain caller-owned `long` here (not an opaque
  * ABI struct the way real pthread_once_t is) - see
- * libc_stdio_shims.c's os_once() for the real single-threaded-correct
- * implementation body. */
+ * libc_stdio_shims.c's os_once() for the real, thread-safe
+ * implementation body (DAR-227, 2026-09-03). Callers must zero-init
+ * their own os_once_t (no OS_ONCE_INIT sentinel here). */
 #ifndef _COMPAT_OS_ONCE_PRIVATE_H_
 #define _COMPAT_OS_ONCE_PRIVATE_H_
 typedef long os_once_t;
@@ -110,16 +119,43 @@ cat > "$OUT/compat_include/stdio_flockfile_compat.h" <<'EOF'
  * getc.c, putc.c, and others) to guard per-FILE access,
  * but are NOT defined anywhere in this project's Libc checkout (confirmed
  * by grep across the whole tree) - real Apple ships their definition in a
- * private umbrella header this checkout doesn't include. Real behavior on
- * a genuinely single-threaded target (see libc_stdio_shims.c's identical
- * pthread mutex/once reasoning) is a true no-op: there is no concurrent
- * access for per-FILE locking to protect against. Force-included
+ * private umbrella header this checkout doesn't include. Force-included
  * (-include) into every stdio-tier file, same mechanism already used for
- * libc_build_prototypes.h. */
+ * libc_build_prototypes.h.
+ *
+ * REAL BUG FOUND AND FIXED 2026-09-03 (DAR-227), found via a citation
+ * sweep after fixing libc_stdio_shims.c's os_once() (which this file's
+ * old comment pointed at as having "identical" reasoning - that citation
+ * led here, one hop further than the ticket's original 7 files). This
+ * used to be a true unconditional no-op, justified by "a genuinely
+ * single-threaded target" - stale since Phase 7.5 (2026-08-20), and
+ * unlike some of this bug class's other instances, this one guards
+ * SHARED per-FILE state (stdout/stderr in particular are shared across
+ * every thread in a process) - a real, live data race, not a theoretical
+ * one, in any multi-threaded consumer that does buffered stdio.
+ *
+ * FOUND DURING THE FIX: libc_build_prototypes.h (force-included BEFORE
+ * this header, per this script's own CFLAGS -include order) now owns the
+ * real, correct, `__isthreaded`-gated definition (see that file's own
+ * header for the two real bugs found landing it - a broken weak-alias
+ * dependency AND a stale single-threaded comment, DAR-227). This header
+ * used to unconditionally redefine FLOCKFILE/FUNLOCKFILE right after,
+ * clobbering whatever came before it with a no-op - the exact
+ * propagation-by-shadowing failure mode this ticket is about, via
+ * #include order instead of a copy-pasted comment. `#ifndef FLOCKFILE`
+ * below means this is now just a guarded fallback for any future
+ * consumer that force-includes THIS header without
+ * libc_build_prototypes.h first - never active in this build, kept only
+ * so this header still does something useful if ever included alone. */
 #ifndef _COMPAT_STDIO_FLOCKFILE_H_
 #define _COMPAT_STDIO_FLOCKFILE_H_
-#define FLOCKFILE(fp) ((void)(fp))
-#define FUNLOCKFILE(fp) ((void)(fp))
+#ifndef FLOCKFILE
+extern int __isthreaded;
+extern void _flockfile(void *fp);
+extern void _funlockfile(void *fp);
+#define FLOCKFILE(fp) do { if (__isthreaded) _flockfile(fp); } while (0)
+#define FUNLOCKFILE(fp) do { if (__isthreaded) _funlockfile(fp); } while (0)
+#endif
 #endif
 EOF
 
@@ -302,6 +338,7 @@ trap - EXIT
     "$OUT/libc_stdio_smoketest.o" \
     "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_stdio.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
+    "$OUT/libc_gen.a" \
     "$OUT/libpthread.a" \
     "$OUT/sys_mmap_for_libc_stdio_smoketest.o" "$OUT/sys_munmap_for_libc_stdio_smoketest.o" \
     "$OUT/libclosure.a" \
