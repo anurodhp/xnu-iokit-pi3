@@ -54,12 +54,26 @@ for f in system/libsystem_c.dylib system/libsystem_pthread.dylib \
          system/libsystem_platform.dylib system/libsystem_blocks.dylib \
          system/libdispatch.dylib system/libsystem_notify.dylib \
          system/libxpc.dylib \
-         system/libdyld.dylib system/libSystem.B.dylib; do
+         system/libdyld.dylib; do
     if [ ! -f "$OUT/$f" ]; then
         echo "error: $OUT/$f not found -- run the libSystem tier build scripts first" >&2
         exit 1
     fi
 done
+# Real gap, found 2026-09-14: "libSystem.B.dylib" doesn't derive to a
+# real script name even after gen_build_order.py's own path-prefix
+# stripping (its embedded period, "libSystem.B", fails the parser's
+# plain-identifier regex outright, and even if it didn't, the real
+# producer is build_libsystem.sh -- lowercase, no period -- not
+# "build_libSystem.B.sh"). Folding it into the generic loop above made
+# this real dependency invisible to the parser, which is how
+# build_libsystem.sh ended up scheduled after this script despite the
+# real requirement. Pulled out into its own check with the correct
+# script name so the parser can see it.
+if [ ! -f "$OUT/system/libSystem.B.dylib" ]; then
+    echo "error: $OUT/system/libSystem.B.dylib not found -- run build_libsystem.sh first" >&2
+    exit 1
+fi
 # Real gap, found 2026-09-13: the generic loop above's error message
 # names no literal build_X.sh, so gen_build_order.py's parser recognized
 # zero of these as real dependency edges -- and even a literal name
