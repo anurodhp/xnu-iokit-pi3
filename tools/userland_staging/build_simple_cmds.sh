@@ -525,6 +525,27 @@ if [ ! -f "$OUT/system/libsystem_m.dylib" ]; then
     echo "error: $OUT/system/libsystem_m.dylib not found -- run build_libm_dylib.sh first" >&2
     exit 1
 fi
+# Real gap, found 2026-09-14: LINK_DYLIBS below (the base set every
+# single command in this script's per-command loop links against, not
+# just grep/df) also needs libdyld.dylib and libSystem.B.dylib, with no
+# prerequisite check at all -- only ever surfaced by actually running
+# this script this far in the real order (every prior attempt died
+# earlier). Same reasoning as the removefile_dylib/libm_dylib checks
+# just above: safe to name literally now that the libxpc_syscalls.sh
+# <-> simple_cmds.sh edge that used to make this bridge into a large
+# cycle is gone (that script no longer depends on this one at all,
+# fixed 2026-09-14) and the libsystem_c.sh <-> libdyld.sh cycle is
+# fixed too (moved the dyld-API reexport to libSystem.B.dylib) --
+# reverify with gen_build_order.py's own cycle-drop count (baseline 0)
+# before assuming this still holds after further changes.
+if [ ! -f "$OUT/system/libdyld.dylib" ]; then
+    echo "error: $OUT/system/libdyld.dylib not found -- run build_libdyld.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libSystem.B.dylib" ]; then
+    echo "error: $OUT/system/libSystem.B.dylib not found -- run build_libsystem.sh first" >&2
+    exit 1
+fi
 for dep in libcopyfile libremovefile; do
     if [ ! -f "$OUT/$dep.a" ]; then
         echo "error: $OUT/$dep.a not found -- run build_$dep.sh first" >&2
