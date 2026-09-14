@@ -267,6 +267,37 @@ if [ ! -f "$OUT/libpthread.a" ]; then
     echo "error: $OUT/libpthread.a not found -- run build_libpthread.sh first" >&2
     exit 1
 fi
+# Real gaps, found 2026-09-14 via a live build_everything.sh run (same
+# real classes already fixed in build_cron.sh/build_libc_stdio.sh/
+# build_libc_gen.sh, see those scripts' own header comments for the
+# full citations):
+# 1. _mmap undefined -- libpthread.a's real pthread_create() needs it;
+#    mmap/munmap are NO_SYSCALL_STUB syscalls with no static provider
+#    since libSystem.B.dylib took over for real. Confirmed via grep this
+#    script has no existing real mmap()/munmap() provider of its own
+#    (unlike crontab_extra_syscalls.o's case, where adding this fix
+#    would have been a real duplicate).
+# 2. ___gdtoa_locks undefined -- a real COMMON symbol in
+#    libc_printf.a(glue.o) that a plain archive reference doesn't
+#    reliably pull in; `ar x` it directly instead of -force_load
+#    (which pulls in genuinely unwanted files elsewhere, confirmed in
+#    build_cron.sh's own investigation).
+MACSDK="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null)"
+MMAP_TMPGEN="$(mktemp -d)"
+trap 'rm -rf "$MMAP_TMPGEN"' EXIT
+ARCHS=arm64 perl "$XNU/libsyscall/xcodescripts/create-syscalls.pl" \
+    "$XNU/bsd/kern/syscalls.master" \
+    "$XNU/libsyscall/custom" \
+    "$XNU/libsyscall/Platforms" \
+    iPhoneOS \
+    "$MMAP_TMPGEN" >/dev/null
+MMAP_SYSCFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -I $XNU/libsyscall/custom -I $XNU/libsyscall/mach -idirafter $XNU/osfmk -idirafter $MACSDK/usr/include"
+"$CLANG" $MMAP_SYSCFLAGS "$MMAP_TMPGEN/___mmap.s" -o "$OUT/sys_mmap_for_removefile.o"
+"$CLANG" $MMAP_SYSCFLAGS "$MMAP_TMPGEN/___munmap.s" -o "$OUT/sys_munmap_for_removefile.o"
+rm -rf "$MMAP_TMPGEN"
+trap - EXIT
+mkdir -p "$OUT/removefile_glue_extract"
+(cd "$OUT/removefile_glue_extract" && ar x "../libc_printf.a" glue.o)
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
     libunwind_sched_yield.s -o "$OUT/removefile_sched_yield_trap.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
@@ -277,10 +308,15 @@ fi
     "$OUT/removefile_smoketest.o" "$OUT/libremovefile.a" \
     "$OUT/libclosure.a" \
     "$OUT/libc_printf.a" \
+    "$OUT/removefile_glue_extract/glue.o" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
     "$OUT/libpthread.a" "$OUT/removefile_sched_yield_trap.o" "$OUT/removefile_sched_yield.o" \
+    "$OUT/sys_mmap_for_removefile.o" "$OUT/sys_munmap_for_removefile.o" \
     "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    "$OUT/libunwind.a" \
+    -Wl,-alias,___mmap,_mmap \
+    -Wl,-alias,___munmap,_munmap \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
     -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
