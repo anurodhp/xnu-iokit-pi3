@@ -178,7 +178,17 @@ for f in "$LIBC"/stdio/FreeBSD/*.c; do
     else
         skip=$((skip + 1))
         rm -f "$out"
-        echo "  skip: $base"
+        # Real gap, found 2026-09-13/14: this loop used to silently
+        # "skip: $base" with no error content, which hid a real,
+        # environment-dependent vfprintf.c/vfwprintf.c compile failure
+        # (reproducible in a full sequential build_everything.sh run at
+        # this script's own early position -- position 7, almost no
+        # compat headers from other scripts exist yet -- but NOT
+        # reproducible standalone after this session's own testing had
+        # accumulated many other scripts' compat headers in the same
+        # libc_build/ dir, masking the real gap). Print the real error so
+        # the next occurrence is diagnosable instead of a silent "skip:".
+        echo "  skip: $base -- $(cat "$OUT/apple_printf/${base}.err")"
     fi
 done
 echo "apple_printf: $ok compiled, $skip skipped"
