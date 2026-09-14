@@ -93,18 +93,18 @@
 #      (nameserv_async.c's end_resolving()) because of that call site's
 #      own real ordering guarantee -- see the compat file's own header
 #      comment for why this is not a general-purpose join.
-#   3. chrony_global_locale_compat.c + chrony_part_load_locale_stub.c --
+#   3. libc_locale_globals_compat.c (this project's own already-shared
+#      fix, see its real compile step further down for why -- NOT a
+#      chrony-local file) + chrony_part_load_locale_stub.c --
 #      strftime_l(..., NULL)/localtime.c need __global_locale/_c_locale/
 #      __locale_key, but compiling all of xlocale.c for real pulls in
 #      the full setlocale()/uselocale() category-loader machinery
 #      (___collate_load_tables/___detect_path_locale/etc) chrony never
 #      exercises (it never calls setlocale/uselocale/newlocale anywhere,
-#      confirmed by grep). Provides just the three globals, using
-#      xlocale.c's own real C_LOCALE_INITIALIZER macro/struct layout
-#      copied verbatim (not reinvented), plus honest-failure stubs for
-#      the two symbols (__part_load_locale/__ldpart_free_extra) that are
-#      only ever reachable through __time_load_locale(), which nothing
-#      in this build calls.
+#      confirmed by grep). chrony_part_load_locale_stub.c provides
+#      honest-failure stubs for the two symbols (__part_load_locale/
+#      __ldpart_free_extra) that are only ever reachable through
+#      __time_load_locale(), which nothing in this build calls.
 #   chrony_mach_boottime_decl.h / chrony_locale_tsd_key_alias.h are
 #   smaller, same-class fixes: a missing prototype for a real, separately
 #   compiled function (mach_boottime.c), and two real TSD key constants
@@ -287,13 +287,52 @@ compile thread_selfusage_trap -arch arm64 -I "$ASMCOMPAT" -I "$XNU/libsyscall/cu
 # comment (the "THREE REAL, DOCUMENTED GAP CLASSES" section) for each.
 compile chrony_thread_policy_stub chrony_thread_policy_stub.c
 compile chrony_pthread_join_compat chrony_pthread_join_compat.c
-compile chrony_global_locale_compat "${FBSD_LOCALE_INC[@]}" chrony_global_locale_compat.c
+# libc_locale_globals_compat.c, NOT a chrony-local reinvention -- this
+# project's own already-proven, already-shared fix (8 other build_*.sh
+# scripts already use it: build_copyfile_dylib.sh, build_libiconv_dylib.sh,
+# build_libresolv_dylib.sh, build_ncurses_dylib.sh, build_openpam_dylib.sh,
+# build_simple_cmds.sh, plus build_libdispatch_dylib.sh/build_libc_locale.sh's
+# own history of it) for the exact same real __global_locale/__locale_key
+# direct-addressing gap strftime.c/localtime.c hit here. A real, narrower
+# hand-written version (chrony_global_locale_compat.c) was tried first
+# and REMOVED after code review -- it left __locale_key permanently at
+# (pthread_key_t)-1, which is only safe on TARGET_IPHONE_SIMULATOR (see
+# this file's own real xlocale_private.h-cited comment for the exact
+# real crash this caused the first time anything in this project called
+# plain snprintf()/vsnprintf() on a real device target, 2026-08-27) --
+# use the file that already carries the real fix (a real
+# pthread_key_init_np() TSD registration) instead of reintroducing a bug
+# this project already found and fixed once. chrony_locale_tsd_key_alias.h
+# is reused here too: this file's own __xlocale_init_compat() constructor
+# references __LIBC_PTHREAD_KEY_XLOCALE, real Apple's own name for it
+# (third_party/Libc/include/sys/cdefs.h:119, `__LIBC_PTHREAD_KEY(0)` ==
+# 10 for a non-simulator target -- confirmed identical to
+# __PTK_LIBC_LOCALE_KEY, the same real slot this alias header already
+# maps LOCALTIME/GMTIME through), not reachable via this script's own
+# -idirafter-ordered include path (Libc/include/sys/cdefs.h loses to the
+# SDK's own same-named header there) without it.
+compile libc_locale_globals_compat "${FBSD_LOCALE_INC[@]}" -include chrony_locale_tsd_key_alias.h libc_locale_globals_compat.c
 compile chrony_part_load_locale_stub chrony_part_load_locale_stub.c
 
 echo "chronyd: $ok compiled, $fail gaps (see $OUT/chrony_obj/*.err for full detail)"
 if [ "$fail" -ne 0 ]; then
     exit 1
 fi
+
+# Real gap, found by code review: table.o/none.o between them define 4
+# real, PUBLIC, MUTABLE, process-wide locale globals (__CurrentRuneLocale/
+# __DefaultRuneLocale/___mb_cur_max/___mb_sb_limit) that libsystem_c.dylib
+# (already on this link's own dylib list) ALSO defines for real -- the
+# same duplicate-mutable-state bug class this project has hit repeatedly
+# (mach_task_self_, malloc zones, the pthread runtime) if left as two
+# independently-external copies. narrow_rune_locale.sh (this project's
+# own already-established fix, used by 5 other leaf-dylib build scripts
+# for this exact pair of files) demotes those 4 to file-local via a real
+# `ld -r -unexported_symbol`, leaving __DefaultRuneXLocale/__none_* (the
+# two genuinely-private-extern-in-real-Apple-source symbols this
+# consumer actually needs locally) untouched -- see that script's own
+# header comment for the full real explanation.
+./narrow_rune_locale.sh "$OUT/chrony_obj" locale_
 
 # Real, curated raw-syscall generation -- same real create-syscalls.pl
 # mechanism build_launchd_syscalls.sh already established (see that
@@ -337,6 +376,7 @@ rm -f chronyd.macho
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -Wl,-u,__current_pid \
+    -Wl,-unexported_symbol,__DefaultRuneXLocale \
     -o chronyd.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/chrony_obj/*.o \

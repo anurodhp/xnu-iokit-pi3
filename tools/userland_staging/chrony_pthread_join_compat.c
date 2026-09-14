@@ -31,7 +31,25 @@
  *
  * Do NOT reuse this for a future caller that does not have its own
  * independent real completion signal -- that would be a real,
- * un-synchronized race, not this one's situation. */
+ * un-synchronized race, not this one's situation.
+ *
+ * REAL, KNOWN RESOURCE LEAK (flagged by code review, not fixed here):
+ * pthread_main_thread_bootstrap.c's pthread_create() mmap()s a real
+ * stack + metadata block per spawned thread, and nothing anywhere in
+ * that file ever munmap()s it -- there is no real per-thread teardown
+ * path in this project yet, matching the exact same "no real thread
+ * port, no real bookkeeping" gap cited above (the same root cause, not
+ * a separate bug). Since this returns success without ever reclaiming
+ * that mapping, every DNS_Name2IPAddressAsync() call chrony's own
+ * ntp_sources.c makes (one real re-resolution per configured source,
+ * roughly once per poll interval) permanently leaks one
+ * PTHREAD_CREATE_STACK_SIZE (256 KiB) stack mapping plus its metadata.
+ * chronyd is this project's first real long-running, repeatedly-
+ * thread-spawning daemon (KeepAlive=true), so this is a real, slow,
+ * unbounded leak over a long uptime -- not fixable from this call site
+ * (the `pthread_t` handed back carries no real stack address/size to
+ * free), and not attempted here for the same kernel-level-follow-on
+ * reason pthread_join() itself can't be made real yet. */
 int
 pthread_join(pthread_t thread, void **value_ptr)
 {

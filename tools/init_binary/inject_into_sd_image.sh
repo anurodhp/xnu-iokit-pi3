@@ -617,7 +617,18 @@ else
 fi
 
 if [ -f tools/userland_staging/chronyd.macho ]; then
-    mkdir -p "$MNT/usr/sbin" "$MNT/Library/LaunchDaemons" "$MNT/etc" "$MNT/var/log"
+    # Real gap, found by code review: chrony's own real CNF_CreateDirs()
+    # (third_party/chrony/conf.c) only creates the directories for
+    # bind_cmd_path/logdir/dumpdir/nts_dump_dir -- NOT the driftfile's
+    # directory. chrony.conf sets `driftfile /var/lib/chrony/drift`, and
+    # util.c's UTI_OpenFile() opens that path with a plain open(...,
+    # O_CREAT, ...), no mkdir -- so without this, every
+    # update_drift_file() write silently fails ENOENT (logged LOGS_ERR,
+    # non-fatal) and drift persistence across reboots never works.
+    # /var/run/chrony IS still real-created by CNF_CreateDirs() itself
+    # (it owns the cmdmon socket's directory), so only /var/lib/chrony
+    # needs a manual mkdir here.
+    mkdir -p "$MNT/usr/sbin" "$MNT/Library/LaunchDaemons" "$MNT/etc" "$MNT/var/log" "$MNT/var/lib/chrony"
     cp tools/userland_staging/chronyd.macho "$MNT/usr/sbin/chronyd"
     chmod 755 "$MNT/usr/sbin/chronyd"
     echo "+ wrote $(wc -c < tools/userland_staging/chronyd.macho) bytes to $MNT/usr/sbin/chronyd"
@@ -632,9 +643,12 @@ if [ -f tools/userland_staging/chronyd.macho ]; then
     cp tools/userland_staging/chrony.conf "$MNT/etc/chrony.conf"
     chmod 644 "$MNT/etc/chrony.conf"
     echo "+ wrote chrony.conf to $MNT/etc/"
-    echo "  (/var/run/chrony and /var/lib/chrony are created by chronyd itself"
-    echo "  at startup, CNF_CreateDirs() -- real chrony behavior, no manual"
-    echo "  mkdir needed here)"
+    echo "+ ensured $MNT/var/lib/chrony exists (driftfile's own directory --"
+    echo "  real chrony's CNF_CreateDirs() does NOT create this one, see"
+    echo "  this block's own comment above)"
+    echo "  (/var/run/chrony IS created by chronyd itself at startup,"
+    echo "  CNF_CreateDirs() -- real chrony behavior, no manual mkdir needed"
+    echo "  for that one)"
 else
     echo "= tools/userland_staging/chronyd.macho not built -- run tools/userland_staging/build_chrony.sh first if wanted, skipping"
 fi
