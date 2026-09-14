@@ -72,6 +72,7 @@ rm -rf "$OUT/cron_obj" "$OUT/crontab_obj"
 mkdir -p "$OUT/cron_obj" "$OUT/crontab_obj" "$OUT/commoncrypto_glue/CommonCrypto"
 
 cp "$COMMONCRYPTO/include/CommonDigest.h" "$OUT/commoncrypto_glue/CommonCrypto/CommonDigest.h"
+cp "$COMMONCRYPTO/include/Private/CommonDigestSPI.h" "$OUT/commoncrypto_glue/CommonCrypto/CommonDigestSPI.h"
 
 XCODE12="/Applications/Xcode-12.app/Contents/Developer"
 CLANG="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
@@ -102,7 +103,8 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
     -I $LIBC/include -I $LIBC/darwin -I $LIBC/fbsdcompat -I $LIBC/locale -I $LIBC/locale/FreeBSD \
     -I $LIBC/stdtime/FreeBSD -I $LIBC/gen \
     -I $PTHREAD/include -I $PTHREAD/private \
-    -I $XNU/bsd -I $XNU/osfmk -I $XNU/libsyscall"
+    -I $XNU/bsd -I $XNU/osfmk -I $XNU/libsyscall \
+    -idirafter $XNU/BUILD/obj/EXPORT_HDRS/osfmk"
 
 ok=0
 skip=0
@@ -161,16 +163,53 @@ fi
     libunwind_sched_yield.s -o "$OUT/cron_obj/cron_sched_yield_trap.o"
 "$CLANG" $CFLAGS libunwind_sched_yield.c -o "$OUT/cron_obj/cron_sched_yield.o"
 
+# Real gap, found 2026-09-13 via a live build_everything.sh run (first
+# time cron.macho's real link with real libc_printf.a/libpthread.a was
+# reached): two real issues.
+#
+# 1. ___vfprintf/___gdtoa_locks/_vfprintf_l undefined even though the
+# providing objects (xprintf.o, gdtoa-misc.o, fprintf.o, printf.o) are
+# all real members of libc_printf.a already on this link line -- real
+# ld64 single-pass left-to-right archive resolution can't satisfy a
+# member's own need for ANOTHER member of the SAME archive once other
+# archives (libc_gen.a/libc_stdio.a) have already been scanned past it.
+# Same real fix build_libc_printf.sh's own smoketest already established
+# (libc_printf.a listed twice): list it again after libc_gen.a/
+# libc_stdio.a.
+#
+# 2. _mmap undefined (libpthread.a's real pthread_create() needs it) --
+# same NO_SYSCALL_STUB gap as build_libc_stdio.sh/build_libc_gen.sh/
+# build_pthread_once_deep_repro.sh (mmap/munmap have no static provider
+# since libSystem.B.dylib covers them dynamically only).
+MACSDK="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null)"
+MMAP_TMPGEN="$(mktemp -d)"
+trap 'rm -rf "$MMAP_TMPGEN"' EXIT
+ARCHS=arm64 perl "$XNU/libsyscall/xcodescripts/create-syscalls.pl" \
+    "$XNU/bsd/kern/syscalls.master" \
+    "$XNU/libsyscall/custom" \
+    "$XNU/libsyscall/Platforms" \
+    iPhoneOS \
+    "$MMAP_TMPGEN" >/dev/null
+MMAP_SYSCFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -I $XNU/libsyscall/custom -I $XNU/libsyscall/mach -idirafter $XNU/osfmk -idirafter $MACSDK/usr/include"
+"$CLANG" $MMAP_SYSCFLAGS "$MMAP_TMPGEN/___mmap.s" -o "$OUT/sys_mmap_for_cron.o"
+"$CLANG" $MMAP_SYSCFLAGS "$MMAP_TMPGEN/___munmap.s" -o "$OUT/sys_munmap_for_cron.o"
+rm -rf "$MMAP_TMPGEN"
+trap - EXIT
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o cron.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/cron_obj/*.o \
     "$OUT/libc_printf.a" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_string.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
+    "$OUT/libc_printf.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
     "$OUT/libpthread.a" \
+    "$OUT/sys_mmap_for_cron.o" "$OUT/sys_munmap_for_cron.o" \
     "$OUT/libclosure.a" \
     "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    "$OUT/libunwind.a" \
+    -Wl,-alias,___mmap,_mmap \
+    -Wl,-alias,___munmap,_munmap \
     -Wl,-alias,_open,'_open$UNIX2003' \
     -Wl,-alias,_close,'_close$UNIX2003' \
     -Wl,-alias,_write,'_write$UNIX2003' \
@@ -264,16 +303,38 @@ fi
     libunwind_sched_yield.s -o "$OUT/crontab_obj/crontab_sched_yield_trap.o"
 "$CLANG" $CFLAGS libunwind_sched_yield.c -o "$OUT/crontab_obj/crontab_sched_yield.o"
 
+# Same real gaps as cron.macho's own link above (this file's own header
+# comment has the full citation): libc_printf.a listed twice for its own
+# internal cross-references, plus the real ___mmap/___munmap raw trap
+# for libpthread.a's real pthread_create().
+MMAP_TMPGEN2="$(mktemp -d)"
+trap 'rm -rf "$MMAP_TMPGEN2"' EXIT
+ARCHS=arm64 perl "$XNU/libsyscall/xcodescripts/create-syscalls.pl" \
+    "$XNU/bsd/kern/syscalls.master" \
+    "$XNU/libsyscall/custom" \
+    "$XNU/libsyscall/Platforms" \
+    iPhoneOS \
+    "$MMAP_TMPGEN2" >/dev/null
+MMAP_SYSCFLAGS2="-isysroot $SDK -target arm64-apple-ios14.4 -c -I $XNU/libsyscall/custom -I $XNU/libsyscall/mach -idirafter $XNU/osfmk -idirafter $MACSDK/usr/include"
+"$CLANG" $MMAP_SYSCFLAGS2 "$MMAP_TMPGEN2/___mmap.s" -o "$OUT/sys_mmap_for_crontab.o"
+"$CLANG" $MMAP_SYSCFLAGS2 "$MMAP_TMPGEN2/___munmap.s" -o "$OUT/sys_munmap_for_crontab.o"
+rm -rf "$MMAP_TMPGEN2"
+trap - EXIT
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o crontab.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/crontab_obj/*.o \
     "$OUT/libc_printf.a" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_string.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
+    "$OUT/libc_printf.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
     "$OUT/libpthread.a" \
+    "$OUT/sys_mmap_for_crontab.o" "$OUT/sys_munmap_for_crontab.o" \
     "$OUT/libclosure.a" \
     "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    "$OUT/libunwind.a" \
+    -Wl,-alias,___mmap,_mmap \
+    -Wl,-alias,___munmap,_munmap \
     -Wl,-alias,_open,'_open$UNIX2003' \
     -Wl,-alias,_close,'_close$UNIX2003' \
     -Wl,-alias,_write,'_write$UNIX2003' \
