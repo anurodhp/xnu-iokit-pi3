@@ -1285,6 +1285,136 @@ else
     echo "+ $MNT/etc/hostname already exists -- leaving as-is"
 fi
 
+# /Library/Preferences/SystemConfiguration/preferences.plist (DAR-304,
+# 2026-09-14): real gap found via live plugin_support.c/ipconfigd.c
+# instrumentation -- IPConfiguration's real prime() -> start_initialization()
+# -> configure_from_cache() reads Setup:/Network/Service/*/IPv4 from
+# SCDynamicStore, which PreferencesMonitor's real (unmodified) prefsmon.c
+# populates FROM this exact file at boot. With no file at all,
+# entity_all() returns NULL, configure_from_cache() takes the
+# unblock_startup() no-op path, and en0 never gets DHCP -- confirmed via
+# a real fprintf(stderr,...) instrumented boot showing
+# "all_ipv4=0x0 ... S_interfaces count=2" and "calling unblock_startup
+# (no configured services)".
+#
+# Real Apple's prefsmon.c DOES have automatic default-config creation
+# (establishNewPreferences(), storeCallback()) for exactly this
+# "no preferences.plist yet" case -- but it's gated entirely on a real
+# "quiet"/"timeout" key that InterfaceNamer publishes once its own real
+# IOKit driver-matching settles (State:/.../InterfaceNamer, read via
+# kInterfaceNamerKey_Quiet/kInterfaceNamerKey_Timeout). This project's
+# InterfaceNamer is a deliberate stand-in (configd_builtin_plugins_stub.c,
+# blocked on the real IOKitLib/CF/dispatch/lockdown wall, tracked
+# separately) that never publishes that key, so the real auto-create path
+# can never fire here -- confirmed by reading storeCallback()'s own
+# source, not guessed.
+#
+# Staging this file directly is the real, faithful equivalent of what a
+# real Mac's first-boot/imaging process already does before configd ever
+# runs for the first time (this project's own SD-image provisioning IS
+# that first-boot imaging step) -- not a bypass of real config logic,
+# just supplying the one input real InterfaceNamer would otherwise have
+# triggered PreferencesMonitor to synthesize. Schema is real Apple's
+# well-documented SCPreferences format (CurrentSet -> Sets/<UUID> ->
+# Network/Service/<UUID>/__LINK__ -> NetworkServices/<UUID>), a single
+# DHCP-configured Ethernet service bound to en0.
+mkdir -p "$MNT/Library/Preferences/SystemConfiguration"
+PREFS_PLIST="$MNT/Library/Preferences/SystemConfiguration/preferences.plist"
+# Overwrite not just when missing but also when it's a real, on-disk but
+# EMPTY skeleton (just "__VERSION__", no "NetworkServices" key) -- real
+# SCPreferencesCreate() writes exactly that skeleton the first time any
+# code opens a nonexistent preferences.plist, which happens during a
+# plain QEMU boot before this script's own real config below is staged.
+# Without this check, a stale skeleton from an earlier boot/test run
+# would make this script think real config already exists and silently
+# skip writing it -- found the hard way validating DAR-304's own fix.
+PREFS_NEEDS_WRITE=1
+if [ -f "$PREFS_PLIST" ]; then
+    if /usr/bin/plutil -extract NetworkServices raw -o - "$PREFS_PLIST" >/dev/null 2>&1; then
+        PREFS_NEEDS_WRITE=0
+    fi
+fi
+if [ "$PREFS_NEEDS_WRITE" = "1" ]; then
+    cat > "$PREFS_PLIST" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CurrentSet</key>
+	<string>/Sets/8DCD07A2-0000-0000-0000-000000000000</string>
+	<key>NetworkServices</key>
+	<dict>
+		<key>8DCD07A2-0000-0000-0000-000000000001</key>
+		<dict>
+			<key>DNS</key>
+			<dict/>
+			<key>IPv4</key>
+			<dict>
+				<key>ConfigMethod</key>
+				<string>DHCP</string>
+			</dict>
+			<key>Interface</key>
+			<dict>
+				<key>DeviceName</key>
+				<string>en0</string>
+				<key>Hardware</key>
+				<string>Ethernet</string>
+				<key>Type</key>
+				<string>Ethernet</string>
+				<key>UserDefinedName</key>
+				<string>Ethernet</string>
+			</dict>
+			<key>Proxies</key>
+			<dict>
+				<key>ExceptionsList</key>
+				<array>
+					<string>*.local</string>
+					<string>169.254/16</string>
+				</array>
+			</dict>
+			<key>UserDefinedName</key>
+			<string>Ethernet</string>
+		</dict>
+	</dict>
+	<key>Sets</key>
+	<dict>
+		<key>8DCD07A2-0000-0000-0000-000000000000</key>
+		<dict>
+			<key>Network</key>
+			<dict>
+				<key>Global</key>
+				<dict>
+					<key>IPv4</key>
+					<dict>
+						<key>ServiceOrder</key>
+						<array>
+							<string>8DCD07A2-0000-0000-0000-000000000001</string>
+						</array>
+					</dict>
+				</dict>
+				<key>Service</key>
+				<dict>
+					<key>8DCD07A2-0000-0000-0000-000000000001</key>
+					<dict>
+						<key>__LINK__</key>
+						<string>/NetworkServices/8DCD07A2-0000-0000-0000-000000000001</string>
+					</dict>
+				</dict>
+			</dict>
+			<key>UserDefinedName</key>
+			<string>Automatic</string>
+		</dict>
+	</dict>
+</dict>
+</plist>
+EOF
+    chmod 644 "$PREFS_PLIST"
+    echo "+ wrote $PREFS_PLIST"
+    echo "  (real SCPreferences schema, one DHCP-configured Ethernet service on en0 -- DAR-304)"
+else
+    echo "+ $PREFS_PLIST already has real NetworkServices config -- leaving as-is"
+fi
+
 # /etc/ttys (DAR-164, real gap found completing the real login(1) E2E
 # flow): real login.c's own rootterm() (system_cmds/login.tproj/login.c,
 # non-PAM branch) refuses ANY root login unless getttynam(ttyn) finds a
