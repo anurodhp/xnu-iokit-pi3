@@ -80,10 +80,17 @@ if [ ! -f "$OUT/system/libxpc.dylib" ] || [ ! -f "$OUT/liblaunchd_mig.a" ] || [ 
     echo "error: $OUT/system/libxpc.dylib, $OUT/liblaunchd_mig.a, and $OUT/liblaunchd_syscalls.a required -- run build_libxpc_dylib.sh / build_launchd_mig.sh / build_launchd_syscalls.sh first" >&2
     exit 1
 fi
-if [ ! -f "$OUT/libCoreFoundation.a" ] || [ ! -f "$OUT/cf_libc_extras.a" ]; then
-    echo "error: $OUT/libCoreFoundation.a and $OUT/cf_libc_extras.a required -- run build_corefoundation.sh first" >&2
-    exit 1
-fi
+# Real gap, found 2026-09-14 (the "cf_libc_extras.a" gap flagged
+# earlier this session as needing real investigation once actually
+# reached, not guessed): checked directly -- neither libCoreFoundation.a
+# nor cf_libc_extras.a is referenced anywhere else in this script (no
+# `ar x`, no link reference, confirmed via a full grep of this file).
+# cf_libc_extras.a itself was retired 2026-08-29 and never rebuilt by
+# build_corefoundation.sh; build_syslogd.sh already dropped its own
+# identical dead check the same way (see that script's own comment on
+# where its real needs -- geteuid.o et al -- actually come from now).
+# This check block was pure dead weight blocking every real run from
+# reaching this script at all. Removed.
 
 CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness -Wno-deprecated-declarations -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 -DOS_OBJECT_USE_OBJC=0 \

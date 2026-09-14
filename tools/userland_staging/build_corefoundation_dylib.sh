@@ -141,8 +141,21 @@ done
 SIBLING_DYLIBS=(libsystem_c libsystem_malloc libsystem_platform libsystem_kernel libsystem_pthread \
     libsystem_notify libsystem_m libdispatch libc++ libxml2 libresolv libcopyfile libremovefile \
     libopenpam libdyld libxpc libinfo)
-if [ ! -f "$OUT/liblaunchd_core.a" ] || [ ! -f "$OUT/liblaunchd_syscalls.a" ] || [ ! -f "$OUT/libmalloc.a" ]; then
-    echo "error: $OUT/liblaunchd_core.a, $OUT/liblaunchd_syscalls.a, $OUT/libmalloc.a required (this dylib pulls a handful of real, narrow, non-duplicated objects out of each -- see the extraction step below)" >&2
+# Real gap, found 2026-09-14: this combined `||` check with one shared
+# generic message was invisible to gen_build_order.py's parser (its
+# idiom-1 regex needs a literal "run build_X.sh first" per script), which
+# is how build_launchd_core.sh ended up scheduled after this script
+# despite this real requirement. Rephrased into individual checks.
+if [ ! -f "$OUT/liblaunchd_core.a" ]; then
+    echo "error: $OUT/liblaunchd_core.a not found -- run build_launchd_core.sh first (this dylib pulls a handful of real, narrow, non-duplicated objects out of it -- see the extraction step below)" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/liblaunchd_syscalls.a" ]; then
+    echo "error: $OUT/liblaunchd_syscalls.a not found -- run build_launchd_syscalls.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/libmalloc.a" ]; then
+    echo "error: $OUT/libmalloc.a not found -- run build_libmalloc.sh first" >&2
     exit 1
 fi
 for d in "${SIBLING_DYLIBS[@]}"; do
