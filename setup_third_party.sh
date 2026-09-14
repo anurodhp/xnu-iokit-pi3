@@ -258,10 +258,22 @@
 #     Verified (2026-08-22): real macOS has not used ntpd since High
 #     Sierra (10.13, 2017) either, replaced by the closed-source `timed`
 #     -- so this isn't just a this-project gap, ntpd is dead upstream too.
-#     ntp sync, if wanted later, should come from FreeBSD's actively-
-#     maintained `contrib/ntp` (reference NTP Project code, genuinely
-#     portable, NTP license) instead -- not yet pinned, tracked in
-#     `docs/daemon-roadmap.md`.
+#   - chrony (DAR-169, 2026-09-14): the real ntp-sync answer that
+#     replaced the "not yet pinned" `contrib/ntp` idea above -- chrony
+#     already ships a real Darwin/macOS backend (`sys_macosx.c`) built on
+#     the same real `ntp_adjtime()`/`adjtime()`/`settimeofday()` BSD
+#     syscalls this project's own xnu-7195 already implements, and is
+#     upstream's own actively-recommended ntpd replacement (also true on
+#     real modern macOS -- Homebrew's chrony formula exists for exactly
+#     this reason). Not an Apple open-source project, so no
+#     apple-oss-distributions manifest entry to match against; cloned
+#     from this project's own fork (git@github.com:anurodhp/chrony.git,
+#     branch `iokit-port`, tag `4.9`) per the standing "gitrepo" rule for
+#     unowned upstreams (see the `dyld`/`Libc`/`cron` entries above for
+#     the same pattern) -- no local patches needed yet, so `iokit-port`
+#     currently just tracks the real `4.9` tag verbatim. See
+#     `tools/userland_staging/build_chrony.sh`'s own header comment for
+#     the full real build story.
 #   - libutil (Phase 5.5 item 3, 2026-08-22): `cron`'s pidfile handling
 #     (`pidfile_open`/`pidfile_write`/`pidfile_close`, `<libutil.h>`)
 #     needed a real source this project hadn't pulled yet. Same
@@ -593,6 +605,7 @@ Libm|https://github.com/apple-oss-distributions/Libm.git|Libm-2026|
 bootp|https://github.com/apple-oss-distributions/bootp.git|bootp-413.80.1|
 configd|git@github.com:anurodhp/configd.git|iokit-port||https://github.com/apple-oss-distributions/configd.git
 PowerManagement|https://github.com/apple-oss-distributions/PowerManagement.git|PowerManagement-1132.81.1|
+chrony|git@github.com:anurodhp/chrony.git|iokit-port||https://github.com/mlichvar/chrony.git
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch upstream_url; do

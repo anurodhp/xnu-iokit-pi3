@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+	DAR-169: real chronyd, launched by real launchd in place of the never-
+	shipped ntpd (real macOS itself has not used ntpd since 10.13; see
+	setup_third_party.sh's own "chrony (DAR-169..." header comment for
+	the full real citation trail). This is a project-authored plist, not
+	vendored Apple/upstream source -- chrony ships no launchd job of its
+	own (it is a systemd/sysvinit-oriented project upstream), so this
+	follows the same "org.puredarwin.*" project-authored-plist precedent
+	as org.puredarwin.kqueue-socket-smoketest.plist in this same
+	directory, just installed for real rather than as an opt-in
+	diagnostic.
+
+	`-n` (nofork) matches real chronyd.service's own real ExecStart
+	(third_party/chrony/examples/chronyd.service) -- launchd, like
+	systemd, supervises the process directly and expects it to stay in
+	the foreground rather than double-forking away from its own
+	supervision.
+
+	StandardOutPath/StandardErrorPath point at a real file for the same
+	real reason build_syslogd.sh's own DAR-257 fix and notifyd's DAR-167
+	fix both already document: real launchd never wires an unconfigured
+	job's stdio to /dev/console, so without this a launchd-spawned
+	chronyd's own diagnostics are invisible even though it makes real
+	write(2, ..., fd=2) calls (confirmed by the same class of QEMU boot
+	test those two fixes were verified with).
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>org.chrony.chronyd</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/sbin/chronyd</string>
+		<string>-n</string>
+	</array>
+	<key>KeepAlive</key>
+	<true/>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/var/log/chronyd_stderr.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/chronyd_stderr.log</string>
+</dict>
+</plist>

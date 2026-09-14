@@ -616,6 +616,29 @@ else
     echo "= tools/userland_staging/notifyd.macho not built -- run tools/userland_staging/build_notifyd.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/chronyd.macho ]; then
+    mkdir -p "$MNT/usr/sbin" "$MNT/Library/LaunchDaemons" "$MNT/etc" "$MNT/var/log"
+    cp tools/userland_staging/chronyd.macho "$MNT/usr/sbin/chronyd"
+    chmod 755 "$MNT/usr/sbin/chronyd"
+    echo "+ wrote $(wc -c < tools/userland_staging/chronyd.macho) bytes to $MNT/usr/sbin/chronyd"
+    echo "  (DAR-169 -- real upstream chrony (this project's own fork,"
+    echo "  git@github.com:anurodhp/chrony.git, branch iokit-port, tag 4.9),"
+    echo "  tools/userland_staging/build_chrony.sh -- real dynamic Mach-O, see"
+    echo "  that script's own header comment for the full real build story)"
+    cp tools/userland_staging/org.chrony.chronyd.plist \
+        "$MNT/Library/LaunchDaemons/org.chrony.chronyd.plist"
+    chmod 644 "$MNT/Library/LaunchDaemons/org.chrony.chronyd.plist"
+    echo "+ wrote org.chrony.chronyd.plist to $MNT/Library/LaunchDaemons/"
+    cp tools/userland_staging/chrony.conf "$MNT/etc/chrony.conf"
+    chmod 644 "$MNT/etc/chrony.conf"
+    echo "+ wrote chrony.conf to $MNT/etc/"
+    echo "  (/var/run/chrony and /var/lib/chrony are created by chronyd itself"
+    echo "  at startup, CNF_CreateDirs() -- real chrony behavior, no manual"
+    echo "  mkdir needed here)"
+else
+    echo "= tools/userland_staging/chronyd.macho not built -- run tools/userland_staging/build_chrony.sh first if wanted, skipping"
+fi
+
 if [ -f tools/userland_staging/libc_build/notifyd_roundtrip_smoketest.macho ]; then
     mkdir -p "$MNT/usr/local/bin"
     cp tools/userland_staging/libc_build/notifyd_roundtrip_smoketest.macho \
