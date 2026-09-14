@@ -126,10 +126,40 @@ for a in libc_string libc_gen libc_stdio libc_printf libc_locale_for_stdio libc_
         exit 1
     fi
 done
-if [ ! -f "$OUT/system/libsystem_kernel.dylib" ] || [ ! -f "$OUT/system/libsystem_platform.dylib" ] || \
-   [ ! -f "$OUT/system/libsystem_malloc.dylib" ] || [ ! -f "$OUT/system/libsystem_pthread.dylib" ] || \
-   [ ! -f "$OUT/system/libsystem_blocks.dylib" ] || [ ! -f "$OUT/system/libdyld.dylib" ]; then
-    echo "error: libsystem_kernel/platform/malloc/pthread/blocks/libdyld.dylib not found -- run those build scripts first" >&2
+# 2026-09-14: rephrased from one combined generic-message check into
+# individual "run build_X.sh first" checks so gen_build_order.py's
+# parser can actually detect these real dependencies (its idiom-1
+# regex needs a literal per-script phrase, not a chained `||` with one
+# shared generic message -- the combined form was invisible to it,
+# which is how libsystem_pthread ended up scheduled AFTER this script
+# despite this real requirement, only caught by actually running the
+# scripts in order rather than trusting build_everything.sh alone).
+# libdyld.dylib deliberately dropped from this list: this dylib used to
+# link/reexport it directly, which made libsystem_c.sh <-> libdyld.sh a
+# real cycle (libdyld.sh's own dependency on libsystem_c.dylib -- for
+# real, direct symbol needs -- is genuine and unavoidable). Fixed by
+# moving the dyld-API reexport up to the real libSystem.B.dylib umbrella
+# (build_libsystem.sh) instead, matching real Apple architecture (the
+# umbrella reexports libdyld.dylib, not libsystem_c.dylib doing it
+# prematurely) -- see build_libsystem.sh's own comment on that reexport.
+if [ ! -f "$OUT/system/libsystem_kernel.dylib" ]; then
+    echo "error: $OUT/system/libsystem_kernel.dylib not found -- run build_libsystem_kernel.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libsystem_platform.dylib" ]; then
+    echo "error: $OUT/system/libsystem_platform.dylib not found -- run build_libsystem_platform.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libsystem_malloc.dylib" ]; then
+    echo "error: $OUT/system/libsystem_malloc.dylib not found -- run build_libsystem_malloc.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libsystem_pthread.dylib" ]; then
+    echo "error: $OUT/system/libsystem_pthread.dylib not found -- run build_libsystem_pthread.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libsystem_blocks.dylib" ]; then
+    echo "error: $OUT/system/libsystem_blocks.dylib not found -- run build_libsystem_blocks.sh first" >&2
     exit 1
 fi
 if [ ! -f "$OUT/libncurses.a" ]; then
@@ -277,16 +307,39 @@ done
 "$CLANG" $SIGLIST_CFLAGS -I "$LIBC" os_assumes_compat.c -o "$EXTRACT/os_assumes_compat.o"
 "$CLANG" $SIGLIST_CFLAGS environ_lock_compat.c -o "$EXTRACT/environ_lock_compat.o"
 "$CLANG" $SIGLIST_CFLAGS findenv_locked_compat.c -o "$EXTRACT/findenv_locked_compat.o"
+# _environ (the actual global storage, not _NSGetEnviron's indirection
+# below): real gap, found 2026-09-14 fixing the libsystem_c.sh <->
+# libdyld.sh ordering cycle. The comment this replaced claimed
+# "_environ itself comes from dyld's real libdyldGlue.o" -- checked
+# directly against third_party/dyld's real, pinned source and that's
+# not true: libdyldGlue.cpp only ever USES `&environ` (real Apple's own
+# ProgramVars-struct plumbing), never DEFINES the actual storage
+# anywhere in this checkout, confirmed via a real grep across the whole
+# dyld tree, not assumed. On real macOS, dyld's own entry-point code
+# populates this global before any dylib's code runs; this project's
+# dyld doesn't implement that yet (see third_party/Csu/start.s's own
+# extensive comment on the parallel gap for statically-linked targets,
+# `CRT_DYNAMIC_LINKING`) -- a real, honestly-flagged architecture gap,
+# not fabricated completeness. Until real dyld-side ProgramVars support
+# exists, this dylib owns the actual storage directly (it's the first,
+# and so far only, real consumer needing it) -- a minimal, explicit
+# `char **environ = NULL;` definition, not a stub: setenv()/getenv()
+# read and write it correctly once real dyld or crt-style code sets
+# `*environ = ...` to a real envp (documented as an open item here
+# rather than silently working around it).
+cat > "$OUT/environ_storage_compat.c" <<'EOF'
+char **environ = 0;
+EOF
+"$CLANG" $SIGLIST_CFLAGS "$OUT/environ_storage_compat.c" -o "$EXTRACT/environ_storage_compat.o"
+
 # _NSGetEnviron: real Apple's setenv.c reaches `environ` through this
-# indirection (crt_externs.h #defines environ to (*_NSGetEnviron())), and
-# real dyld-940 in this checkout does not define it -- confirmed by
-# grepping third_party/dyld, not assumed; only `_environ` itself comes
-# from dyld's real libdyldGlue.o. simple_cmds_getenv_compat.c already has
-# a real one, narrowed here to that single symbol via `ld -r
-# -exported_symbol` because the rest of that file is this project's
-# pre-dyld single-threaded getenv/setenv simplification, superseded by
-# the real Apple setenv.c linked just above (same narrowing precedent as
-# build_libdispatch_dylib.sh's _mach_make_memory_entry_64 extraction).
+# indirection (crt_externs.h #defines environ to (*_NSGetEnviron())).
+# simple_cmds_getenv_compat.c already has a real one, narrowed here to
+# that single symbol via `ld -r -exported_symbol` because the rest of
+# that file is this project's pre-dyld single-threaded getenv/setenv
+# simplification, superseded by the real Apple setenv.c linked just
+# above (same narrowing precedent as build_libdispatch_dylib.sh's
+# _mach_make_memory_entry_64 extraction).
 LD_FOR_NARROW="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
 "$CLANG" $SIGLIST_CFLAGS simple_cmds_getenv_compat.c -o "$EXTRACT/nsgetenviron_raw.o"
 "$LD_FOR_NARROW" -r -arch arm64 -exported_symbol __NSGetEnviron \
@@ -803,8 +856,15 @@ rm -f "$OUT/system/libsystem_c.dylib"
     -o "$OUT/system/libsystem_c.dylib" \
     "$EXTRACT"/*.o \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" \
-    "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" "$OUT/system/libsystem_blocks.dylib" \
-    -Wl,-reexport_library,"$OUT/system/libdyld.dylib"
+    "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" "$OUT/system/libsystem_blocks.dylib"
+    # ^ libdyld.dylib is deliberately NOT reexported here (moved
+    # 2026-09-14 to the real libSystem.B.dylib umbrella,
+    # build_libsystem.sh, instead -- this dylib reexporting libdyld.dylib
+    # made libsystem_c.sh <-> libdyld.sh a real cycle, since libdyld.sh
+    # genuinely needs libsystem_c.dylib to exist first for its own real
+    # symbol needs. libSystem.B.dylib already runs after both, so it's
+    # the correct place for this reexport, matching real Apple
+    # architecture -- see that script's own comment.)
     # ^ libremovefile.dylib is deliberately NOT linked here (removed
     # 2026-09-14): this dylib's own qsort.o (extracted from libremovefile.a
     # above) calls flsl(), but flsl.o is compiled directly into this

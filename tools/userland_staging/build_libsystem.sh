@@ -142,6 +142,23 @@ if [ ! -f "$OUT/system/libsystem_c.dylib" ] || [ ! -f "$OUT/system/libc++.dylib"
     echo "error: $OUT/system/libsystem_c.dylib / libc++.dylib not found -- run build_libsystem_c.sh and build_libcxx_dylib.sh first" >&2
     exit 1
 fi
+# libdyld.dylib reexport added 2026-09-14: this used to live on
+# libsystem_c.dylib's own link (build_libsystem_c.sh), which made that
+# script and build_libdyld.sh a real cycle (libdyld.sh genuinely needs
+# libsystem_c.dylib to exist first for real symbol needs of its own,
+# and reexporting libdyld.dylib back from libsystem_c.dylib meant
+# neither could go first). This umbrella already runs after both real
+# dylibs exist, so it's the correct place for this reexport -- matches
+# real Apple architecture too (libSystem.B.dylib is the umbrella that
+# reexports dyld's dl*/_NSGetExecutablePath-class API, not libsystem_c
+# doing it prematurely). See build_libsystem_c.sh's own comment on the
+# removed reexport for the full history (docs/backlog.md item d10 is
+# where the requirement itself -- ICU's libicuuc.66.dylib expecting
+# _dlclose "from libSystem" -- was first found).
+if [ ! -f "$OUT/system/libdyld.dylib" ]; then
+    echo "error: $OUT/system/libdyld.dylib not found -- run build_libdyld.sh first" >&2
+    exit 1
+fi
 # libunwind.dylib reexport added 2026-08-29 (docs/daemon-roadmap.md Phase
 # 6.8 continued, item 1 real root-cause): a real launchd-as-PID-1 boot
 # panicked with dyld's own real exit reason "Symbol not found:
@@ -305,6 +322,7 @@ rm -f "$OUT/system/libSystem.B.dylib"
     -Wl,-reexport_library,"$OUT/system/libcopyfile.dylib" \
     -Wl,-reexport_library,"$OUT/system/libremovefile.dylib" \
     -Wl,-reexport_library,"$OUT/system/libresolv.dylib" \
+    -Wl,-reexport_library,"$OUT/system/libdyld.dylib" \
     "$RTLIB"
     # ALL -Wl,-alias entries REMOVED 2026-08-28 (docs/backlog.md item
     # d10): real, systemic gap, first found via _mmap specifically --
