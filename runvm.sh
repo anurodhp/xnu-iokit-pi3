@@ -31,6 +31,38 @@
 #   EXTRA_BOOT_ARGS=-user_fault_debug tools/boot_test.py --login ...
 # (tools/boot_test.py passes its environment straight through.)
 #
+# `vm_compressor=0` (VM_PAGER_NOT_CONFIGURED), added 2026-09-14: real
+# gap found via the FIRST real launchd.macho boot (previous PID-1 was a
+# custom static binary that never triggered this). Default
+# vm_compressor_mode is VM_PAGER_COMPRESSOR_WITH_SWAP, which spawns a
+# real background kernel thread (vm_swapfile_create_thread,
+# osfmk/vm/vm_compressor_backing_store.c) that repeatedly tries to
+# create a real swap file on "/" -- impossible on a fresh SD image (no
+# /private/var/vm), so it retries forever ("vm_swap_create_file failed
+# @ N secs" on console, real not cosmetic). Confirmed via a live QEMU
+# monitor register sample (`info registers` + `x` on the frame pointer,
+# resolved against the unstripped kernel's own nm table) that this
+# background thread's real filesystem-creation attempt and launchd's
+# own foreground `mount("devfs", "/dev", ...)` call race on the root
+# mount's real per-mount locks (vnode_iterate -> IOLockLock, found
+# spinning) -- the boot hung indefinitely right after "remounted /
+# read-write" in the large majority of real test runs.
+#
+# `vm_compressor=2` (VM_PAGER_COMPRESSOR_NO_SWAP) was tried FIRST and
+# does NOT fix this -- a real, confirmed XNU naming quirk
+# (osfmk/vm/vm_pageout.c's real switch on vm_compressor_mode): NO_SWAP
+# only means `vm_config.swap_is_active` stays FALSE (swap isn't used
+# for paging), but `vm_config.swap_is_present` is set TRUE for BOTH
+# WITH_SWAP and NO_SWAP, and vm_compressor_swap_init() -- the function
+# that spawns vm_swapfile_create_thread -- is gated on
+# VM_CONFIG_SWAP_IS_PRESENT, not swap_is_active. Only
+# VM_PAGER_NOT_CONFIGURED (0x0, "no compressor or swap configured")
+# leaves swap_is_present FALSE (the bzero'd struct default, untouched
+# by that mode's real case in the switch). Disables in-RAM compression
+# too, not just swap -- acceptable for this 1GB QEMU target's real
+# usage (a single test boot, not a production workload), same real
+# reasoning as choosing no swap partition at all.
+#
 # `cpu-factor=10`, added 2026-08-13: real ARM64 interrupt delivery landed
 # this same day (docs/roadmap.md Phase 3), which for the first time put
 # real sustained interrupt-driven I/O load (multiple sequential real SD
@@ -123,5 +155,5 @@ exec ./third_party/qemu-zhuowei/aarch64-softmmu/qemu-system-aarch64 -M raspi3 -m
   -dtb devicetrees/rpi3.dtb \
   -drive "file=$SD_IMAGE,if=sd,format=raw" \
   $USB_DEVICES \
-  -append "debug=0x8 kextlog=0xfff -noprogress -v -enable_kprintf_spam rd=$ROOT_DEV serial=3 cpu-factor=10 $EXTRA_BOOT_ARGS" \
+  -append "debug=0x8 kextlog=0xfff -noprogress -v -enable_kprintf_spam rd=$ROOT_DEV serial=3 cpu-factor=10 vm_compressor=0 $EXTRA_BOOT_ARGS" \
   -monitor unix:qemu/mon.sock,server,nowait
