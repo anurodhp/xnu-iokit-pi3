@@ -260,12 +260,49 @@ fi
     libunwind_sched_yield.s -o "$OUT/copyfile_sched_yield_trap.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     libunwind_sched_yield.c -o "$OUT/copyfile_sched_yield.o"
+
+# ___gdtoa_locks (COMMON/tentative symbol, glue.o): same real gap
+# already fixed in build_cron.sh/build_removefile.sh/build_uname.sh/
+# build_bash.sh -- libc_printf.a's vfprintf.o/xprintf_float.o
+# reference it, but a COMMON symbol reference doesn't trigger ld64's
+# normal on-demand archive re-scan, so listing libc_printf.a again
+# wouldn't pull glue.o in. `ar x` it directly instead (never
+# -force_load: pulls in unrelated/incompatible objects).
+mkdir -p "$OUT/copyfile_glue_extract"
+(cd "$OUT/copyfile_glue_extract" && ar x "../libc_printf.a" glue.o)
+
+# _mmap/_munmap: same real gap already fixed elsewhere (libpthread.a's
+# pthread_create -> pthread_main_thread_bootstrap.o needs it, and this
+# script has no existing provider). Real create-syscalls.pl raw trap +
+# alias to the plain name (NO_SYSCALL_STUB entries -- create-
+# syscalls.pl only emits the raw ___mmap/___munmap trap, never the
+# plain callable name; real Apple's plain wrappers live in
+# libsyscall/wrappers/unix03/ and need more infra than this
+# smoketest exercises, so aliasing the raw trap is the established
+# fix here).
+XNU_FOR_MMAP="../../third_party/xnu-7195"
+MACSDK="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null)"
+MMAP_TMPGEN="$(mktemp -d)"
+trap 'rm -rf "$MMAP_TMPGEN"' EXIT
+ARCHS=arm64 perl "$XNU_FOR_MMAP/libsyscall/xcodescripts/create-syscalls.pl" \
+    "$XNU_FOR_MMAP/bsd/kern/syscalls.master" \
+    "$XNU_FOR_MMAP/libsyscall/custom" \
+    "$XNU_FOR_MMAP/libsyscall/Platforms" \
+    iPhoneOS \
+    "$MMAP_TMPGEN" >/dev/null
+MMAP_SYSCFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -I $XNU_FOR_MMAP/libsyscall/custom -I $XNU_FOR_MMAP/libsyscall/mach -idirafter $XNU_FOR_MMAP/osfmk -idirafter $MACSDK/usr/include"
+"$CLANG" $MMAP_SYSCFLAGS "$MMAP_TMPGEN/___mmap.s" -o "$OUT/copyfile_mmap_raw.o"
+"$CLANG" $MMAP_SYSCFLAGS "$MMAP_TMPGEN/___munmap.s" -o "$OUT/copyfile_munmap_raw.o"
+rm -rf "$MMAP_TMPGEN"
+trap - EXIT
+
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o copyfile_smoketest.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/copyfile_smoketest.o" -Wl,-force_load,"$OUT/libcopyfile.a" "$OUT/libremovefile.a" \
     "$OUT/libclosure.a" \
-    "$OUT/libc_printf.a" \
+    "$OUT/libc_printf.a" "$OUT/copyfile_glue_extract/glue.o" \
+    "$OUT/copyfile_mmap_raw.o" "$OUT/copyfile_munmap_raw.o" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
     "$OUT/libpthread.a" "$OUT/copyfile_sched_yield_trap.o" "$OUT/copyfile_sched_yield.o" \
@@ -302,7 +339,9 @@ fi
     -Wl,-alias,_getattrlist,'_getattrlist$UNIX2003' \
     -Wl,-alias,_fstatx_np,'_fstatx_np$INODE64' \
     -Wl,-alias,_lstatx_np,'_lstatx_np$INODE64' \
-    -Wl,-alias,_statx_np,'_statx_np$INODE64'
+    -Wl,-alias,_statx_np,'_statx_np$INODE64' \
+    -Wl,-alias,___mmap,_mmap \
+    -Wl,-alias,___munmap,_munmap
 echo "wrote copyfile_smoketest.macho"
 
 otool -l copyfile_smoketest.macho | grep -q LC_LOAD_DYLIB && \
