@@ -105,12 +105,72 @@ fi
 MEMBERS="bitarray.o magazine_large.o magazine_malloc.o magazine_medium.o magazine_rack.o \
     magazine_small.o magazine_tiny.o malloc_printf.o vm.o simple_string_io.o \
     memcpy_chk.o memset_chk.o chk_fail.o \
-    libmalloc_sleep_shim.o pthread_tsd_shim.o \
+    libmalloc_sleep_shim.o \
     sys_getpid.o sys_mprotect.o sys_kill.o sys_write.o sys_madvise.o sys_kdebug_trace.o \
     sys_exit.o sys_semwait_signal.o"
 rm -rf "$OUT/libsystem_malloc/extracted"
 mkdir -p "$OUT/libsystem_malloc/extracted"
 (cd "$OUT/libsystem_malloc/extracted" && ar x "../../libmalloc.a" $MEMBERS)
+
+# pthread_tsd_shim.o REMOVED from the MEMBERS ar-x list above 2026-09-14
+# (real gap, found via a live build_everything.sh run): build_libpthread.sh
+# now retires this exact member from the SHARED libmalloc.a (real,
+# deliberate, documented -- avoids a genuine duplicate-symbol conflict
+# against libpthread.a's own real pthread_tsd.c for STATIC consumers
+# that link both archives together, e.g. build_libc_stdio.sh's own
+# smoketest). But THIS script has an unrelated, real, independent need
+# for the exact same object (see this file's own header comment just
+# above: libsystem_malloc.dylib can't link the real
+# libsystem_pthread.dylib without a genuine circular dylib dependency,
+# which is why pthread_tsd_shim.c's own from-scratch TSD implementation
+# exists at all) -- the two real requirements share one source file but
+# are otherwise unrelated, and libpthread.sh's retirement (correct for
+# its own real reason) silently broke this script's own `ar x`, which
+# assumed the member would always still be there. Fix: compile
+# pthread_tsd_shim.c directly here instead of depending on libmalloc.a
+# still containing it -- same real source, same flags as
+# build_libmalloc.sh's own original build of this file, writing to the
+# same extracted/ path so the rest of this script's narrowing step below
+# is unaffected.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -Wno-nullability-completeness -include libc_build_prototypes.h \
+    pthread_tsd_shim.c -o "$OUT/libsystem_malloc/extracted/pthread_tsd_shim.o"
+# Not `ar x`-extracted above (see comment there) -- added back to
+# MEMBERS here, after the freshly-compiled object already exists on disk
+# under the same filename, purely so the final link's
+# `for m in $MEMBERS` loop below picks it up (same real precedent as
+# libmalloc_dispatch.o just below).
+MEMBERS="$MEMBERS pthread_tsd_shim.o"
+
+# os_crash(): real gap, found 2026-09-14 via a live build_everything.sh
+# run. chk_fail.o (extracted above from libmalloc.a) calls real
+# os_crash() -- build_libmalloc.sh's own compat_include/os/assumes.h
+# (see that script's own header comment) only ever wrote the real
+# DECLARATION (`void os_crash(const char *format, ...)
+# __attribute__((noreturn, format(printf, 1, 2)))`), never a body,
+# because chk_fail.o has always just been compiled there, not fully
+# linked -- build_libmalloc.a's own smoketest already tolerates
+# undefined symbols as a WARNING, not a hard failure, so this real gap
+# was silently latent until now, the first time chk_fail.o is linked
+# into something (a real dylib) that requires every symbol resolved.
+# Real semantics needed (matching Apple's own os_crash: an unconditional
+# process-terminating call for a detected fatal corruption, per this
+# project's own established "fail-closed" precedent, e.g.
+# libc_printf_mach_stub.c's real %n-write mitigation) -- __builtin_trap()
+# is a real compiler intrinsic (illegal instruction trap), needing zero
+# external symbols, so this real implementation can't itself introduce
+# a new link dependency.
+cat > "$OUT/libsystem_malloc/os_crash_impl.c" <<'EOF'
+#include <stdarg.h>
+__attribute__((noreturn))
+void os_crash(const char *format, ...) {
+	(void)format;
+	__builtin_trap();
+}
+EOF
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    "$OUT/libsystem_malloc/os_crash_impl.c" -o "$OUT/libsystem_malloc/extracted/os_crash_impl.o"
+MEMBERS="$MEMBERS os_crash_impl.o"
 
 # libmalloc_dispatch.o recompiled fresh here (NOT `ar x`-extracted from
 # libmalloc.a like the rest of MEMBERS) 2026-08-30 (static-linking
