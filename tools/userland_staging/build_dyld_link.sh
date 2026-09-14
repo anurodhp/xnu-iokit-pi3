@@ -225,6 +225,23 @@ cp "$OUT/libmalloc.a" "$SCRATCH/libmalloc_scratch.a"
 ar d "$SCRATCH/libmalloc_scratch.a" libmalloc_dispatch.o
 ar r "$SCRATCH/libmalloc_scratch.a" "$SCRATCH/libmalloc_dispatch_trimmed.o"
 
+# _os_crash: real gap, same as build_libsystem_malloc.sh's own (that
+# script's os_crash_impl.c already exists on disk from its own real
+# build -- see its header comment for the full why, __builtin_trap()
+# body matching this project's fail-closed semantics). This archive's
+# own chk_fail.o (a real member of libmalloc.a, carried over into this
+# scratch copy) calls it with no provider. Recompile the same source
+# directly here rather than depend on build_libsystem_malloc.sh having
+# run first (same "recompile in the consumer" pattern already used
+# elsewhere in this tree).
+if [ ! -f "$OUT/libsystem_malloc/os_crash_impl.c" ]; then
+    echo "error: $OUT/libsystem_malloc/os_crash_impl.c not found -- run build_libsystem_malloc.sh first (reused here)" >&2
+    exit 1
+fi
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    "$OUT/libsystem_malloc/os_crash_impl.c" -o "$SCRATCH/os_crash_impl.o"
+ar r "$SCRATCH/libmalloc_scratch.a" "$SCRATCH/os_crash_impl.o"
+
 cp "$OUT/libc_printf.a" "$SCRATCH/libc_printf_scratch.a"
 ar d "$SCRATCH/libc_printf_scratch.a" libc_printf_mach_stub.o
 ar r "$SCRATCH/libc_printf_scratch.a" "$SCRATCH/libc_printf_mach_stub_trimmed.o"
