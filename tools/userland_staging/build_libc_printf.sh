@@ -44,7 +44,37 @@ LIBC="../../third_party/Libc"
 PTHREAD="../../third_party/libpthread"
 XNU="../../third_party/xnu-7195"
 OUT="libc_build"
-mkdir -p "$OUT/apple_printf" "$OUT/compat_include_printf/os" "$OUT/compat_include"
+mkdir -p "$OUT/apple_printf" "$OUT/compat_include_printf/os" "$OUT/compat_include/mach-o"
+
+# mach-o/dyld_priv.h: real gap, found 2026-09-13/14 via a live
+# build_everything.sh run. vfprintf.c/vfwprintf.c both unconditionally
+# `#include <mach-o/dyld_priv.h>`, but neither file calls a single real
+# _dyld_* function from it (confirmed by grep) -- the include is
+# genuinely vestigial. Their own real __printf_is_memory_read_only()
+# (backing the %n-write CVE mitigation this script's own header comment
+# already documents) uses vm_region_64()/mach_task_self() from
+# <mach/vm_region.h> instead, already included separately. This
+# project's own real dyld checkout (third_party/dyld/include) DOES have
+# a real mach-o/dyld_priv.h/dyld.h, but that real dyld.h source is a
+# newer Apple vintage than Xcode-12's iPhoneOS14.4 SDK's own
+# Availability.h -- __API_UNAVAILABLE(ios, tvos, watchos)-style
+# multi-platform macro calls in the real dyld.h fail to parse ("expected
+# ','") against this older SDK's Availability.h, a genuine version
+# mismatch, not a simple missing-definition gap (confirmed: neither
+# __DRIVERKIT_19_0 nor __API_UNAVAILABLE_PLATFORM_driverkit is the
+# missing piece -- both already resolve correctly; the mismatch is
+# systemic across the whole real header). Since nothing here actually
+# needs any real declaration from it, writing a minimal empty stand-in
+# (same established pattern as this project's other real-but-unused
+# Apple header stand-ins, e.g. build_cron.sh's vproc.h) is the correct
+# fix, not chasing the real header's version mismatch. Placed in
+# $OUT/compat_include (already ahead of any real dyld path on this
+# script's own -I order) so it's found first.
+cat > "$OUT/compat_include/mach-o/dyld_priv.h" <<'EOF'
+#ifndef _MACH_O_DYLD_PRIV_H_COMPAT_
+#define _MACH_O_DYLD_PRIV_H_COMPAT_
+#endif
+EOF
 
 # stdio_flockfile_compat.h: real gap, found 2026-09-13 via a live
 # build_everything.sh run -- this script's own gdtoa/apple_printf compile
@@ -157,7 +187,6 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
     -I $LIBC/gdtoa -I $LIBC/gdtoa/FreeBSD \
     -I $PTHREAD/include -I $PTHREAD/private \
     -I $XNU/osfmk -I $XNU/libsyscall \
-    -I ../../third_party/dyld/include \
     -I ../../generated"
 
 # Real Apple/FreeBSD source: the xprintf engine + every public printf*/
