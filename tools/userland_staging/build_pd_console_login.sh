@@ -40,7 +40,7 @@ fi
 PD="../../third_party/PureDarwin/src/Libraries/XPC"
 OUT="libc_build"
 
-for a in liblaunchd_syscalls.a libxpc_syscalls.a cf_libc_extras.a \
+for a in liblaunchd_syscalls.a libxpc_syscalls.a \
          libc_gen.a libc_string.a libc_stdio.a libc_printf.a libc_locale_for_stdio.a \
          libmalloc.a libplatform.a libpthread.a; do
     if [ ! -f "$OUT/$a" ]; then
@@ -94,7 +94,14 @@ rm -f "$OUT/pd_console_login.macho"
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/pd_console_login.o" \
     "$OUT/liblaunchd_syscalls.a" "$OUT/libxpc_syscalls.a" \
-    "$OUT/cf_libc_extras.a" \
+    `# cf_libc_extras.a REMOVED (2026-09-14): that archive was retired` \
+    `# 2026-08-29 (see build_launchd.sh's own cf_libc_extras_no_dup.a` \
+    `# rebuild comment) and nothing has produced it since -- this script's` \
+    `# own reference to it was a stale leftover from before that retirement,` \
+    `# never caught here because build_pd_console_login.sh hadn't been run` \
+    `# since. pd_console_login.c's real source (tty ioctl/termios/setsid/` \
+    `# exec/setenv) needs nothing from it -- confirmed via a real trial` \
+    `# link with it removed entirely succeeding clean.` \
     `# libc_gen.a/libc_string.a/libc_stdio.a/libc_printf.a/` \
     `# libc_locale_for_stdio.a/libmalloc.a/libplatform.a/libpthread.a` \
     `# REMOVED 2026-09-03 (dynamicfix sweep): all of them are merged into` \
