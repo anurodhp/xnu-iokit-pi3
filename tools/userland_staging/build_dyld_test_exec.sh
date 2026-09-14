@@ -128,9 +128,16 @@ fi
 # overwrites this binary's own thread state/PC before start.s's `start:`
 # label ever runs at all, per this script's own header comment above).
 rm -f dyld_test_exec.macho
+# _pthread_main_thread_bootstrap: real gap, same established
+# weak-import-only class already fixed elsewhere in this tree --
+# Csu's crt.c calls it via weak_import (real Apple source), needing an
+# explicit -Wl,-U for a fully dynamic link since nothing here provides
+# a strong definition (that symbol is libsystem_pthread.dylib's own
+# real export, not needed as a hard link for this minimal test exec).
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -DCRT_DYNAMIC_LINKING \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
+    -Wl,-U,_pthread_main_thread_bootstrap \
     -o dyld_test_exec.macho \
     "$CSU/start.s" "$CSU/crt.c" dyld_test_exec_main.o "$OUT/libtest.dylib" \
     "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib"
