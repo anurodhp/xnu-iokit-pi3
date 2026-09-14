@@ -498,29 +498,31 @@ done
 # the static .a archives checked here) with no prerequisite check at
 # all.
 #
-# Deliberately NOT phrased with the literal "run build_X first" idiom
-# gen_build_order.py's parser recognizes: this script is already part of
-# a real, already-accepted build_simple_cmds.sh <-> build_libpthread.sh
-# cycle (its own real smoketest needs libpthread.a, libpthread.sh's own
-# smoketest needs this script's raw syscall stubs -- a genuine tangle,
-# not a bug). Both of the real dylibs checked below are themselves built
-# from build_libm.sh/build_removefile.sh, whose own smoketests need
-# libc_gen.a/libc_stdio.a/libpthread.a -- naming either dylib script
-# literally here would bridge the small, already-accepted 2-node cycle
-# above into ~30 otherwise-unrelated scripts' own real prerequisite
-# edges, since all of those become transitively reachable once the
-# bridge exists. Confirmed by a real BFS trace during this session's own
-# audit: cycle-drop count went 4 -> 46 with either literal phrasing
-# present (including inside an explanatory code comment -- the parser
-# does not distinguish comments from code), back to 4 with neither. The
-# runtime checks below are unaffected either way -- they were already
-# silently invisible to the ordering parser before either check existed.
+# 2026-09-14: now phrased with the literal "run build_X.sh first" idiom
+# gen_build_order.py's parser recognizes (previously deliberately left
+# unphrased -- a real BFS trace during an earlier session found that
+# naming either dylib script this way bridged this script's own,
+# already-accepted build_simple_cmds.sh <-> build_libpthread.sh cycle
+# into ~30 otherwise-unrelated scripts, cycle-drop count 4 -> 46). That
+# analysis predated the actual root cause: build_libsystem_c.sh had a
+# STALE direct link against libremovefile.dylib (real reason: qsort.o's
+# flsl() call -- fixed by compiling flsl.o locally on 2026-08-30, but
+# the now-redundant dylib link was never removed), which is what made
+# build_removefile_dylib.sh <-> build_libsystem_c.sh a real cycle and
+# dragged everything reachable from it along for the ride. Removing that
+# stale link (build_libsystem_c.sh, 2026-09-14) leaves only the correct,
+# one-directional build_removefile_dylib.sh -> build_libsystem_c.sh
+# edge, so naming the dylib scripts here no longer bridges into a large
+# cycle -- reverify with gen_build_order.py's own cycle-drop count
+# (baseline 1, the same removefile_dylib<->libsystem_c pair, now safely
+# resolved in the correct direction) before assuming this still holds
+# after further changes to either script.
 if [ ! -f "$OUT/system/libremovefile.dylib" ]; then
-    echo "error: dependency missing: libc_build/system/libremovefile.dylib (build the removefile dylib tier before this script)" >&2
+    echo "error: $OUT/system/libremovefile.dylib not found -- run build_removefile_dylib.sh first" >&2
     exit 1
 fi
 if [ ! -f "$OUT/system/libsystem_m.dylib" ]; then
-    echo "error: dependency missing: libc_build/system/libsystem_m.dylib (build the libm dylib tier before this script)" >&2
+    echo "error: $OUT/system/libsystem_m.dylib not found -- run build_libm_dylib.sh first" >&2
     exit 1
 fi
 for dep in libcopyfile libremovefile; do

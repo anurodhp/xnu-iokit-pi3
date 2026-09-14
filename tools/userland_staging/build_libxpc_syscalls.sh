@@ -92,14 +92,23 @@ if [ ! -d "$OUT/dyld_syscall_gen" ]; then
     echo "error: $OUT/dyld_syscall_gen not found -- run build_dyld_link.sh first (reused here for __process_policy/__thread_selfid/proc_rlimit_control)" >&2
     exit 1
 fi
-if [ ! -f "$OUT/simple_sched_yield.o" ] || [ ! -f "$OUT/simple_obj/sys__dup.o" ]; then
-    echo "error: $OUT/simple_sched_yield.o / simple_obj/sys__dup.o not found -- run build_simple_cmds.sh first" >&2
-    exit 1
-fi
-if [ ! -f "$OUT/simple_obj/common_simple_cmds_getenv_compat.o" ]; then
-    echo "error: $OUT/simple_obj/common_simple_cmds_getenv_compat.o not found -- run build_simple_cmds.sh first (real getenv()/_NSGetEnviron())" >&2
-    exit 1
-fi
+# sched_yield/getenv/_NSGetEnviron used to be reused from
+# build_simple_cmds.sh's own output (a real dependency edge that, once
+# named for gen_build_order.py, formed a genuine ordering cycle:
+# build_simple_cmds.sh's own per-command dynamic-link tier needs the
+# real libsystem_c.dylib/libremovefile.dylib/libsystem_m.dylib tier,
+# which needs this script's own libxpc_syscalls.a, which needed
+# build_simple_cmds.sh -- see build_simple_cmds.sh's own comment on its
+# libremovefile.dylib/libsystem_m.dylib checks, added 2026-09-14).
+# Fixed by compiling these same few small, self-contained sources
+# directly here instead -- same "recompile the source directly in the
+# consumer" pattern already used by ~14 other scripts for
+# libunwind_sched_yield.c/.s (see build_uname.sh/build_ps.sh/etc), so
+# this script no longer needs build_simple_cmds.sh to have run at all.
+# (sys__dup.o/sys__kevent.o/etc further below are used only by this
+# script's own optional, non-fatal trial re-link -- never a real
+# prerequisite for the actual libxpc_syscalls.a archive built above
+# them -- so no compile/check for those is needed here.)
 
 XCODE12="/Applications/Xcode-12.app/Contents/Developer"
 CLANG="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
@@ -136,9 +145,13 @@ for s in ___thread_selfid ___process_policy _proc_rlimit_control; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -arch arm64 -I"$OUT/sys_asm_compat" -idirafter "$XNU/osfmk" \
         "$OUT/dyld_syscall_gen/${s}.s" -o "$OUT/xpc_syscall_obj/dyldgen_${s}.o"
 done
-cp "$OUT/simple_sched_yield.o" "$OUT/simple_sched_yield_trap.o" "$OUT/xpc_syscall_obj/"
-cp "$OUT/simple_obj/common_simple_cmds_getenv_compat.o" "$OUT/xpc_syscall_obj/getenv_compat.o"
-echo "reused: 3 dyld_syscall_gen stubs, sched_yield pair, getenv/_NSGetEnviron"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    libunwind_sched_yield.s -o "$OUT/xpc_syscall_obj/simple_sched_yield_trap.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    libunwind_sched_yield.c -o "$OUT/xpc_syscall_obj/simple_sched_yield.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    simple_cmds_getenv_compat.c -o "$OUT/xpc_syscall_obj/getenv_compat.o"
+echo "reused: 3 dyld_syscall_gen stubs; compiled sched_yield pair + getenv/_NSGetEnviron directly (no longer via build_simple_cmds.sh)"
 
 # --- real Mach trap stubs (new, hand-copied from osfmk/mach/syscall_sw.h) ---
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c mach_semaphore_traps.s -o "$OUT/xpc_syscall_obj/mach_semaphore_traps.o"
