@@ -49,12 +49,35 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
     -idirafter $XNU/osfmk -idirafter $XNU/libkern"
 
 $CLANG $CFLAGS pthread_once_deep_repro.c -o "$OUT/pthread_once_deep_repro.o"
+# Real gap, found 2026-09-13 via a live build_everything.sh run: real
+# pthread_create() (libpthread.a's pthread_main_thread_bootstrap.o)
+# calls real mmap() for stack allocation, and mmap/munmap are
+# NO_SYSCALL_STUB syscalls with no static provider since
+# libSystem.B.dylib took over for real (see build_libc_stdio.sh's own
+# header comment for the full citation) -- same fix, same recipe.
+MACSDK="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null)"
+MMAP_TMPGEN="$(mktemp -d)"
+trap 'rm -rf "$MMAP_TMPGEN"' EXIT
+ARCHS=arm64 perl "$XNU/libsyscall/xcodescripts/create-syscalls.pl" \
+    "$XNU/bsd/kern/syscalls.master" \
+    "$XNU/libsyscall/custom" \
+    "$XNU/libsyscall/Platforms" \
+    iPhoneOS \
+    "$MMAP_TMPGEN" >/dev/null
+MMAP_SYSCFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -I $XNU/libsyscall/custom -I $XNU/libsyscall/mach -idirafter $XNU/osfmk -idirafter $MACSDK/usr/include"
+"$CLANG" $MMAP_SYSCFLAGS "$MMAP_TMPGEN/___mmap.s" -o "$OUT/sys_mmap_for_pthread_once_deep_repro.o"
+"$CLANG" $MMAP_SYSCFLAGS "$MMAP_TMPGEN/___munmap.s" -o "$OUT/sys_munmap_for_pthread_once_deep_repro.o"
+rm -rf "$MMAP_TMPGEN"
+trap - EXIT
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o pthread_once_deep_repro.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/pthread_once_deep_repro.o" \
     "$OUT/libpthread.a" \
-    "$OUT/libplatform.a" "$OUT/libmalloc.a" "$OUT/libc_stdio.a" "$OUT/cerror_stub.o"
+    "$OUT/sys_mmap_for_pthread_once_deep_repro.o" "$OUT/sys_munmap_for_pthread_once_deep_repro.o" \
+    "$OUT/libplatform.a" "$OUT/libmalloc.a" "$OUT/libc_stdio.a" "$OUT/cerror_stub.o" \
+    -Wl,-alias,___mmap,_mmap \
+    -Wl,-alias,___munmap,_munmap
 echo "wrote pthread_once_deep_repro.macho"
 
 otool -l pthread_once_deep_repro.macho | grep -q LC_LOAD_DYLIB && \
