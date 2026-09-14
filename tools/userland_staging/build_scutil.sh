@@ -354,7 +354,14 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-buil
     -I "$PTHREAD/include" -I "$PTHREAD/private" \
     -I "$PLATFORM/private" -I "$PLATFORM/include" \
     -I ../../generated \
-    -I "$XNU/libsyscall/mach" -I "$XNU/libsyscall" -I "$XNU/osfmk" -I "$XNU/bsd")
+    -I "$XNU/libsyscall/mach" -I "$XNU/libsyscall" -I "$XNU/osfmk" -I "$XNU/bsd" \
+    `# -idirafter "$LIBC" (2026-09-14): needed for the real` \
+    `# third_party/Libc/os/variant_private.h forwarding shim` \
+    `# (libc_build/compat_include/os/variant_private.h's own` \
+    `# #include_next, see build_libsystemconfiguration_client.sh's header` \
+    `# for the real shared-stub-collision fix this replaced) to have` \
+    `# somewhere to actually resolve to -- was missing here entirely.` \
+    -idirafter "$LIBC")
 
 FILES="$SCUTIL/scutil.c \
     $SCUTIL/commands.c \

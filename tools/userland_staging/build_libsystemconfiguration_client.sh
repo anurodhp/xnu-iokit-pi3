@@ -332,26 +332,32 @@ os_state_handle_t os_state_add_handler(dispatch_queue_t q, os_state_block_t bloc
 #endif /* _OS_STATE_PRIVATE_H_COMPAT_ */
 EOF
 
-# Real gap, same never-open-sourced class: SCPrivate.h itself (not just
-# SCProxies.c, confirmed by this script's own real first compile attempt --
-# ALL 34 target files hit this, since all of them transitively #include
-# SCPrivate.h) #includes <os/variant_private.h> for
-# os_variant_has_internal_content() -- same real, honest "always false"
-# stand-in this project already established for its sibling SPI
-# (libsystem_notify_misc_compat.c/syslogd_oslog_compat.c's
-# os_variant_has_internal_diagnostics()), same one-function shape
-# build_bootp_dhcp_engine.sh already used for the identical header gap.
+# CORRECTED 2026-09-14 (real shared-header collision, found via
+# build_notifyd.sh failing with "implicit declaration of function
+# 'os_variant_has_internal_diagnostics'"): this and
+# build_bootp_dhcp_engine.sh both wrote a narrow, ONE-function stub to
+# this exact shared path ($OUT/compat_include/os/variant_private.h),
+# each declaring only the one os_variant_* function ITS OWN source
+# happened to call (os_variant_has_internal_content() here,
+# os_variant_has_internal_diagnostics() for notify_client.c /
+# syslogd_oslog_compat.c) -- whichever script ran last silently won the
+# shared path and broke every OTHER consumer's declaration. The real
+# header (third_party/Libc/os/variant_private.h, already reachable via
+# -idirafter "$LIBC" below) declares ALL real os_variant_* SPI
+# functions for real (confirmed: os_variant_has_internal_content AND
+# os_variant_has_internal_diagnostics both present, real Apple source,
+# not guessed) -- so this is a forwarding shim to the one real header
+# instead of a second, narrower, colliding stub. #include_next (not
+# #include) is required: this file installs AT the resolved path
+# `os/variant_private.h`, so a plain #include of the same name would
+# just re-include itself; #include_next continues the search past this
+# file's own directory to $LIBC's real copy (matches the same
+# forwarding-shim shape build_libplatform.sh's
+# compat_include/System/machine/cpu_capabilities.h already established).
 cat > "$OUT/compat_include/os/variant_private.h" <<'EOF'
 #ifndef _OS_VARIANT_PRIVATE_H_COMPAT_
 #define _OS_VARIANT_PRIVATE_H_COMPAT_
-#include <stdbool.h>
-#ifdef __cplusplus
-extern "C" {
-#endif
-bool os_variant_has_internal_content(const char *subsystem);
-#ifdef __cplusplus
-}
-#endif
+#include_next <os/variant_private.h>
 #endif /* _OS_VARIANT_PRIVATE_H_COMPAT_ */
 EOF
 
@@ -768,7 +774,8 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-buil
     -I "$PTHREAD/include" -I "$PTHREAD/private" \
     -I "$PLATFORM/private" -I "$PLATFORM/include" \
     -I ../../generated \
-    -I "$XNU/libsyscall/mach" -I "$XNU/libsyscall" -I "$XNU/osfmk" -I "$XNU/bsd")
+    -I "$XNU/libsyscall/mach" -I "$XNU/libsyscall" -I "$XNU/osfmk" -I "$XNU/bsd" \
+    -idirafter "$LIBC")
 
 # ------------------------------------------------------------------
 # Real file set: 23 SCD*.c + 12 SCP*.c + SCHelper_client.c + real

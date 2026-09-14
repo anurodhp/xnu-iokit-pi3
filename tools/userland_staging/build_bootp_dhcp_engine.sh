@@ -263,31 +263,35 @@ cmp -s os_log_compat_headers/os/log_private.h "$OUT/compat_include/os/log_privat
     exit 1
 }
 
-# Same real gap class, one header later in SCPrivate.h's own #include
-# block: <os/variant_private.h> is also never open-sourced (confirmed by
-# the same WebSearch + full pinned-repo grep pass above), and this
-# project already has a real, honest precedent for its sibling SPI --
-# os_variant_has_internal_diagnostics() in syslogd_oslog_compat.c /
-# libsystem_notify_misc_compat.c, both documented "real, always-safe
-# default answer -- this is not an internal Apple diagnostics build".
-# SCPrivate.h's own real source (SCD.c:820) only calls the ONE function
-# this header declares (os_variant_has_internal_content(), the
-# "...content" not "...diagnostics" sibling -- confirmed by grep, not
-# guessed) to gate an extra verbose-log-content decision, same honest
-# "false" default applies.
+# CORRECTED 2026-09-14 (real shared-header collision, found via
+# build_notifyd.sh failing with "implicit declaration of function
+# 'os_variant_has_internal_diagnostics'"): this and
+# build_libsystemconfiguration_client.sh both wrote a narrow,
+# ONE-function stub to this exact shared path
+# ($OUT/compat_include/os/variant_private.h), each declaring only the
+# one os_variant_* function ITS OWN source happened to call
+# (os_variant_has_internal_content() here,
+# os_variant_has_internal_diagnostics() for notify_client.c /
+# syslogd_oslog_compat.c) -- whichever script ran last silently won the
+# shared path and broke every OTHER consumer's declaration. The real
+# header (third_party/Libc/os/variant_private.h, reachable via
+# -idirafter "$LIBC" elsewhere in this script's CFLAGS) declares ALL
+# real os_variant_* SPI functions for real (confirmed: both
+# os_variant_has_internal_content and os_variant_has_internal_diagnostics
+# present, real Apple source, not guessed) -- so this is a forwarding
+# shim to the one real header instead of a second, narrower, colliding
+# stub. #include_next (not #include) is required: this file installs
+# AT the resolved path `os/variant_private.h`, so a plain #include of
+# the same name would just re-include itself; #include_next continues
+# the search past this file's own directory to $LIBC's real copy
+# (matches the same forwarding-shim shape build_libplatform.sh's
+# compat_include/System/machine/cpu_capabilities.h already established).
 rm -rf "$OUT/compat_include/os/variant_private.h"
 mkdir -p "$OUT/compat_include/os"
 cat > "$OUT/compat_include/os/variant_private.h" <<'EOF'
 #ifndef _OS_VARIANT_PRIVATE_H_COMPAT_
 #define _OS_VARIANT_PRIVATE_H_COMPAT_
-#include <stdbool.h>
-#ifdef __cplusplus
-extern "C" {
-#endif
-bool os_variant_has_internal_content(const char *subsystem);
-#ifdef __cplusplus
-}
-#endif
+#include_next <os/variant_private.h>
 #endif /* _OS_VARIANT_PRIVATE_H_COMPAT_ */
 EOF
 
@@ -433,12 +437,52 @@ ln -sf "$(pwd)/$IOKITUSER/ps.subproj/IOPowerSources.h" "$OUT/iokit_headers/IOKit
 # Defining it here, using the exact same `platform,unavailable` shape the
 # other three already use, is a real, honest match for what a newer SDK's
 # own header actually says -- not a fabricated value.
+#
+# __API_AVAILABLE_PLATFORM_bridgeos no-op (2026-09-14): same real,
+# same-class gap, hit once this script's CFLAGS started reaching real
+# third_party/Libc/os/variant_private.h (-idirafter $LIBC, added
+# alongside the real-header forwarding-shim fix for the
+# os_variant_private.h shared-stub collision) -- that header's real
+# `API_AVAILABLE(macosx(...), ..., bridgeos(4.0))` needs this SDK's
+# missing AVAILABLE-side bridgeos macro, the same way the
+# UNAVAILABLE-side one just above was already needed.
+#
+# Deliberately NOT using $AVAIL_VERSIONS's newer AvailabilityInternalPrivate.h
+# here (unlike build_notifyd.sh): tried it first, and it broke a
+# DIFFERENT file this script also needs --
+# SystemConfiguration/SCDynamicStore.h's own real
+# `SPI_AVAILABLE(ios(2.0), tvos(9.0), watchos(1.0), bridgeos(1.0))`
+# expands, via that newer header's own real (and here incompatible)
+# `__API_AVAILABLE_GET_MACRO_93585900(...)` dispatch shape, into
+# something this pinned Xcode-12 clang's older availability-attribute
+# parser can't parse ("expected function body after function
+# declarator") -- a real, deeper version-skew gap a `-D` override can't
+# paper over, since a header's own #define always wins over an earlier
+# command-line -D of the same name. Leaving $AVAIL_VERSIONS off this
+# script's include path entirely sidesteps it: SCDynamicStore.h then
+# resolves SPI_AVAILABLE via the pinned SDK's own (simpler, and here
+# sufficient) definition instead.
+#
+# IMPORTANT: the __API_AVAILABLE_PLATFORM_bridgeos(x)=... parens below
+# are DELIBERATELY UNESCAPED, unlike build_notifyd.sh's identical-
+# looking flag. That script's CFLAGS is a bash ARRAY, where each
+# element is an unquoted shell word and `\(`/`\)` is the correct way to
+# pass a literal paren through. THIS script's CFLAGS is a plain
+# double-quoted STRING; backslash has no special meaning before `(`
+# inside double quotes, so `\(` there would survive as two literal
+# characters (backslash + paren) in the argument clang actually
+# receives -- defining a macro literally NAMED `...bridgeos\(x\)`
+# instead of a function-like macro, silently not matching any real use
+# site. Found the hard way: that was the first, wrong version of this
+# fix. Do not "fix" this back to match build_notifyd.sh's escaping; the
+# two contexts need opposite treatment for the same real intent.
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness \
     -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
     -DVARIANT_STATIC -DVARIANT_CANCELABLE -DVARIANT_DARWINEXTSN -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \
     -D__va_list=__builtin_va_list \
-    -D__API_UNAVAILABLE_PLATFORM_bridgeos=bridgeos,unavailable \
+    -D__API_UNAVAILABLE_PLATFORM_bridgeos=ios,unavailable \
+    -D__API_AVAILABLE_PLATFORM_bridgeos(x)=ios,introduced=x \
     -DPRIVATE \
     `# bootp_compat_include FIRST: this script's own private overrides` \
     `# (SCPreferencesKeychainPrivate.h), deliberately not in the shared` \
@@ -452,7 +496,8 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
     -I $LIBC/stdtime/FreeBSD \
     -I $PTHREAD/include -I $PTHREAD/private \
     -I $XNU/bsd -I $XNU/osfmk -I $XNU/libsyscall \
-    -I ../../generated"
+    -I ../../generated \
+    -idirafter $LIBC"
 
 # Real file set, extended 2026-09-01 past the original 9-file protocol-
 # engine slice per DAR-170's "no shortcuts" plan step 1: dhcp.c (the

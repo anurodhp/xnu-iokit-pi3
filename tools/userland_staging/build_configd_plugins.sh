@@ -388,6 +388,12 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-buil
     -D__API_UNAVAILABLE_PLATFORM_bridgeos=bridgeos,unavailable \
     -D__API_AVAILABLE_PLATFORM_bridgeos\(x\)=ios,introduced=x \
     -DPRIVATE \
+    `# -idirafter "$LIBC" below (2026-09-14): needed for the real` \
+    `# third_party/Libc/os/variant_private.h forwarding shim` \
+    `# (libc_build/compat_include/os/variant_private.h's own` \
+    `# #include_next, see build_libsystemconfiguration_client.sh's header` \
+    `# for the real shared-stub-collision fix this replaced) to have` \
+    `# somewhere to actually resolve to -- was missing here entirely.` \
     -include "sys/fileport.h" \
     -include "network_config_check_compat.h" \
     -include "IOKit/usb/USBSpec_ifnamer_compat.h" \
@@ -413,7 +419,8 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-buil
     -I "$PTHREAD/include" -I "$PTHREAD/private" \
     -I "$PLATFORM/private" -I "$PLATFORM/include" \
     -I ../../generated \
-    -I "$XNU/libsyscall/mach" -I "$XNU/libsyscall" -I "$XNU/osfmk" -I "$XNU/bsd")
+    -I "$XNU/libsyscall/mach" -I "$XNU/libsyscall" -I "$XNU/osfmk" -I "$XNU/bsd" \
+    -idirafter "$LIBC")
 
 FILES="$CONFIGD/Plugins/InterfaceNamer/ifnamer.c \
     $CONFIGD/Plugins/LinkConfiguration/linkconfig.c \
