@@ -272,6 +272,20 @@ if [ ! -f "$OUT/libpthread.a" ]; then
     echo "error: $OUT/libpthread.a not found -- run build_libpthread.sh first" >&2
     exit 1
 fi
+# Real gap, found 2026-09-13 (proactive audit ahead of a build_everything.sh
+# rerun -- this script is the immediate next real failure after
+# build_launchd_mig.sh's own identical bug class): the smoketest link
+# below needs libc_stdio.a/libc_locale_for_stdio.a/libc_gen.a with no
+# prerequisite check at all. libc_printf.a itself (written above) needs
+# neither.
+if [ ! -f "$OUT/libc_stdio.a" ] || [ ! -f "$OUT/libc_locale_for_stdio.a" ]; then
+    echo "error: $OUT/libc_stdio.a and $OUT/libc_locale_for_stdio.a required -- run build_libc_stdio.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/libc_gen.a" ]; then
+    echo "error: $OUT/libc_gen.a not found -- run build_libc_gen.sh first" >&2
+    exit 1
+fi
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
     libunwind_sched_yield.s -o "$OUT/libc_printf_sched_yield_trap.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \

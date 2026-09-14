@@ -151,6 +151,14 @@ ar rcs "$OUT/liblaunchd_mig.a" \
     "$MIGOUT/internal_user.o" "$MIGOUT/domain_user.o"
 echo "wrote $OUT/liblaunchd_mig.a"
 
+# Real gap, found 2026-09-13 (proactive audit ahead of a build_everything.sh
+# rerun -- this is what broke the real run): the smoketest link below
+# needs libc_locale_for_stdio.a/libc_stdio.a with no prerequisite check at
+# all. liblaunchd_mig.a itself (written above) needs neither.
+if [ ! -f "$OUT/libc_locale_for_stdio.a" ] || [ ! -f "$OUT/libc_stdio.a" ]; then
+    echo "error: $OUT/libc_locale_for_stdio.a and $OUT/libc_stdio.a required -- run build_libc_stdio.sh first" >&2
+    exit 1
+fi
 # Real smoketest: same "send a real, well-formed Mach message to a
 # deliberately invalid destination, confirm a real kernel error rather
 # than a crash/hang" shape as libnotify_smoketest.c -- see that file's

@@ -94,6 +94,13 @@ for a in libxpc libxpc_syscalls libxpc_syscalls2 liblaunchd_mig libmach_ipc sysl
         exit 1
     fi
 done
+# Real gap, found 2026-09-13: "libdispatch" in the loop below derives to
+# the wrong existing script (build_libdispatch.sh builds an unrelated
+# static archive; the real dylib producer is build_libdispatch_dylib.sh).
+if [ ! -f "$OUT/system/libdispatch.dylib" ]; then
+    echo "error: $OUT/system/libdispatch.dylib not found -- run build_libdispatch_dylib.sh first" >&2
+    exit 1
+fi
 for d in libsystem_c libsystem_malloc libsystem_platform libsystem_kernel libsystem_pthread libdispatch libsystem_blocks; do
     if [ ! -f "$OUT/system/$d.dylib" ]; then
         echo "error: $OUT/system/$d.dylib not found -- run build_${d}.sh first" >&2

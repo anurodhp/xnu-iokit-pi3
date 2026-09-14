@@ -186,6 +186,13 @@ if [ ! -f "$OUT/libmalloc.a" ]; then
     echo "error: $OUT/libmalloc.a not found -- run build_libmalloc.sh first (mach_task_self_, mach_port_deallocate)" >&2
     exit 1
 fi
+# Real gap, found 2026-09-13: the smoketest link below also needs
+# libc_locale_for_stdio.a/libc_stdio.a with no prerequisite check at all.
+# libnotify.a itself (written above) needs neither.
+if [ ! -f "$OUT/libc_locale_for_stdio.a" ] || [ ! -f "$OUT/libc_stdio.a" ]; then
+    echo "error: $OUT/libc_locale_for_stdio.a and $OUT/libc_stdio.a required -- run build_libc_stdio.sh first" >&2
+    exit 1
+fi
 # Same selection precedent as build_libmach_ipc.sh/build_iokituser.sh:
 # deliberately `$(which mig)` (the currently-xcode-select'ed toolchain's
 # copy), not xcrun's.

@@ -277,6 +277,37 @@ if [ ! -f "$OUT/chk_fail.o" ]; then
     echo "error: $OUT/chk_fail.o not found -- run build_libmalloc.sh first" >&2
     exit 1
 fi
+# Real gap, found 2026-09-13: several items in the loop below derive to
+# either a wrong existing script (libdispatch/libxpc -> build_libdispatch.sh
+# /build_libxpc.sh both exist but build unrelated static archives) or no
+# script at all (libbsm/libcopyfile/libopenpam drop the "lib" prefix in
+# their real producer names; "libSystem.B" contains a literal dot and
+# never matches the plain-short-name-token check at all). Named
+# individually here with the real, correct script names.
+if [ ! -f "$OUT/system/libdispatch.dylib" ]; then
+    echo "error: $OUT/system/libdispatch.dylib not found -- run build_libdispatch_dylib.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libxpc.dylib" ]; then
+    echo "error: $OUT/system/libxpc.dylib not found -- run build_libxpc_dylib.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libbsm.dylib" ]; then
+    echo "error: $OUT/system/libbsm.dylib not found -- run build_bsm_dylib.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libcopyfile.dylib" ]; then
+    echo "error: $OUT/system/libcopyfile.dylib not found -- run build_copyfile_dylib.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libopenpam.dylib" ]; then
+    echo "error: $OUT/system/libopenpam.dylib not found -- run build_openpam_dylib.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libSystem.B.dylib" ]; then
+    echo "error: $OUT/system/libSystem.B.dylib not found -- run build_libsystem.sh first" >&2
+    exit 1
+fi
 for dylib in libdispatch libxpc libsystem_kernel libsystem_pthread libsystem_malloc \
              libsystem_platform libsystem_blocks libsystem_c libsystem_m libbsm \
              libcopyfile libinfo libopenpam libSystem.B; do

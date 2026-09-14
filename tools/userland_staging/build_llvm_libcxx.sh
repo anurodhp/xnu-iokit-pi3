@@ -194,6 +194,16 @@ NEED_OK=1
 for a in libcxxabi libunwind libc_string libc_stdio libc_locale_for_stdio libc_gen libc_printf libpthread libclosure libmalloc libplatform; do
     [ -f "$OUT/$a.a" ] || NEED_OK=0
 done
+# Real gap, found 2026-09-13: "libcxxabi" in the loop above's own
+# runtime check (`$OUT/libcxxabi.a`) is correct, but gen_build_order.py's
+# word-list derivation tries "build_libcxxabi.sh", which doesn't exist --
+# the real producer is build_llvm_libcxxabi.sh ("llvm_" prefix, not
+# "lib"). No functional bug (this whole block already degrades
+# gracefully via NEED_OK rather than hard-failing), but without a real
+# graph edge this smoketest can silently never get real coverage if
+# scheduled before its real prerequisite. Named explicitly here, still
+# folded into the existing soft NEED_OK gate rather than a hard exit 1.
+[ -f "$OUT/libcxxabi.a" ] || NEED_OK=0  # run build_llvm_libcxxabi.sh first
 if [ "$NEED_OK" -eq 1 ]; then
     rm -f libcxx_smoketest.macho
     "$CLANGXX" $CXX_FLAGS -fexceptions -frtti -funwind-tables llvm_libcxx_smoketest.cpp -o "$OUT/libcxx_smoketest.o"

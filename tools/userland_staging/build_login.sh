@@ -183,6 +183,22 @@ for dep in libplatform.a libmalloc.a libpthread.a libclosure.a libc_gen.a libc_s
         exit 1
     fi
 done
+# Real gap, found 2026-09-13: 2 items in the loop above derive to the
+# wrong candidate -- "liblaunchd_syscalls.a" strips to
+# "build_liblaunchd_syscalls.sh" (doesn't exist; real producer is
+# build_launchd_syscalls.sh, no "lib" prefix on "launchd"), and
+# "launchd_libc_extras.a" strips to "build_launchd_libc_extras.sh"
+# (doesn't exist at all; real producer is build_launchd_core.sh, a much
+# later script -- this script genuinely needs 3 of its object members,
+# extracted below via `ar p`). Named individually here.
+if [ ! -f "$OUT/liblaunchd_syscalls.a" ]; then
+    echo "error: $OUT/liblaunchd_syscalls.a not found -- run build_launchd_syscalls.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/launchd_libc_extras.a" ]; then
+    echo "error: $OUT/launchd_libc_extras.a not found -- run build_launchd_core.sh first" >&2
+    exit 1
+fi
 for f in simple_obj/sys____chmod.o \
          simple_obj/sys__chown.o simple_obj/sys__dup2.o simple_obj/sys__execve.o \
          simple_obj/sys__chflags.o simple_obj/sys__setgid.o simple_obj/sys__setuid.o \

@@ -625,6 +625,12 @@ if [ ! -f "$OUT/libopenpam.a" ]; then
     echo "error: $OUT/libopenpam.a not found -- run build_openpam.sh first" >&2
     exit 1
 fi
+# Real gap, found 2026-09-13: the final dylib link also needs the real
+# libremovefile.dylib with no prerequisite check at all.
+if [ ! -f "$OUT/system/libremovefile.dylib" ]; then
+    echo "error: $OUT/system/libremovefile.dylib not found -- run build_removefile_dylib.sh first" >&2
+    exit 1
+fi
 (cd "$EXTRACT" && ar x "../../libopenpam.a" time.o gettimeofday.o ls_fenv_compat.o ps_commpage_gettimeofday_stub.o simple_cmds_time_compat.o)
 
 # Real gap: real access()/fstatat()/ftruncate()/mkdirat()/rmdir()/

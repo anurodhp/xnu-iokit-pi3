@@ -138,12 +138,29 @@ done
 # class already documented for `_fdopen$UNIX2003` in docs/backlog.md
 # item d9 ("any real consumer resolves dylib imports against old
 # exports" if not rebuilt after a sibling's exports change).
-for d in libcopyfile libremovefile libresolv; do
-    if [ ! -f "$OUT/system/$d.dylib" ]; then
-        echo "error: $OUT/system/$d.dylib not found -- run build_${d}_dylib.sh first" >&2
-        exit 1
-    fi
-done
+# Real gap, found 2026-09-13: this loop's own parameterized error message
+# (build_${d}_dylib.sh) is never a literal build_X.sh string in the
+# source text, so gen_build_order.py's word-list derivation either drops
+# the edge entirely (libcopyfile/libremovefile: real producer scripts are
+# build_copyfile_dylib.sh/build_removefile_dylib.sh, dropping the "lib"
+# prefix -- "build_libcopyfile.sh"/"build_libremovefile.sh" don't exist)
+# or silently derives a WRONG one (libresolv: "build_libresolv.sh" DOES
+# exist, but builds the unrelated static libresolv.a, not this real
+# dylib -- the real producer is build_libresolv_dylib.sh). Named
+# individually below with the real, correct script names instead of
+# relying on the loop's word list at all.
+if [ ! -f "$OUT/system/libcopyfile.dylib" ]; then
+    echo "error: $OUT/system/libcopyfile.dylib not found -- run build_copyfile_dylib.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libremovefile.dylib" ]; then
+    echo "error: $OUT/system/libremovefile.dylib not found -- run build_removefile_dylib.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libresolv.dylib" ]; then
+    echo "error: $OUT/system/libresolv.dylib not found -- run build_libresolv_dylib.sh first" >&2
+    exit 1
+fi
 # libc_gen.a/libc_string.a/libc_stdio.a/libc_printf.a/
 # libcxx_locale_for_stdio_scratch.a/libcxx_tsd_shim_bootstrap_compat.o no
 # longer required here (static-to-dylib migration step 4, docs/

@@ -493,6 +493,36 @@ done
 # libremovefile.a (real public rename()/unlink()); both already built by
 # earlier tiers (build_copyfile.sh, build_removefile.sh) for rm/the
 # copyfile smoketest, reused here rather than rebuilt.
+# Real gap, found 2026-09-13: grep's/df's own per-command extra_libs
+# below also need libremovefile.dylib/libsystem_m.dylib (distinct from
+# the static .a archives checked here) with no prerequisite check at
+# all.
+#
+# Deliberately NOT phrased with the literal "run build_X first" idiom
+# gen_build_order.py's parser recognizes: this script is already part of
+# a real, already-accepted build_simple_cmds.sh <-> build_libpthread.sh
+# cycle (its own real smoketest needs libpthread.a, libpthread.sh's own
+# smoketest needs this script's raw syscall stubs -- a genuine tangle,
+# not a bug). Both of the real dylibs checked below are themselves built
+# from build_libm.sh/build_removefile.sh, whose own smoketests need
+# libc_gen.a/libc_stdio.a/libpthread.a -- naming either dylib script
+# literally here would bridge the small, already-accepted 2-node cycle
+# above into ~30 otherwise-unrelated scripts' own real prerequisite
+# edges, since all of those become transitively reachable once the
+# bridge exists. Confirmed by a real BFS trace during this session's own
+# audit: cycle-drop count went 4 -> 46 with either literal phrasing
+# present (including inside an explanatory code comment -- the parser
+# does not distinguish comments from code), back to 4 with neither. The
+# runtime checks below are unaffected either way -- they were already
+# silently invisible to the ordering parser before either check existed.
+if [ ! -f "$OUT/system/libremovefile.dylib" ]; then
+    echo "error: dependency missing: libc_build/system/libremovefile.dylib (build the removefile dylib tier before this script)" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libsystem_m.dylib" ]; then
+    echo "error: dependency missing: libc_build/system/libsystem_m.dylib (build the libm dylib tier before this script)" >&2
+    exit 1
+fi
 for dep in libcopyfile libremovefile; do
     if [ ! -f "$OUT/$dep.a" ]; then
         echo "error: $OUT/$dep.a not found -- run build_$dep.sh first" >&2

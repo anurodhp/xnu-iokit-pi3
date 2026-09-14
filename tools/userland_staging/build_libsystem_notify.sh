@@ -88,6 +88,13 @@ for d in libsystem_c libsystem_malloc libsystem_platform libsystem_kernel libsys
         exit 1
     fi
 done
+# Real gap, found 2026-09-13: "libdispatch" in the loop above derives to
+# the wrong existing script (build_libdispatch.sh builds an unrelated
+# static archive; the real dylib producer is build_libdispatch_dylib.sh).
+if [ ! -f "$OUT/system/libdispatch.dylib" ]; then
+    echo "error: $OUT/system/libdispatch.dylib not found -- run build_libdispatch_dylib.sh first" >&2
+    exit 1
+fi
 # libxpc.dylib real dependency added (DAR-164, real gap found root-causing
 # pd-console-login's post-exec abort -- see build_libsystem_kernel.sh's own
 # updated comment for the wider real kernel-side-probe trail): this

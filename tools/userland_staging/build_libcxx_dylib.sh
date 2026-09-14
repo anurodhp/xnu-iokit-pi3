@@ -114,6 +114,13 @@ if [ ! -f "$OUT/system/libsystem_kernel.dylib" ] || [ ! -f "$OUT/system/libsyste
     echo "error: libsystem_kernel/platform/malloc/pthread/blocks/c.dylib not found -- run those build scripts first" >&2
     exit 1
 fi
+# Real gap, found 2026-09-13: the final dylib link below also needs the
+# real libunwind.dylib (distinct from the libunwind.a static archive
+# already checked above) with no prerequisite check at all.
+if [ ! -f "$OUT/system/libunwind.dylib" ]; then
+    echo "error: $OUT/system/libunwind.dylib not found -- run build_libunwind_dylib.sh first" >&2
+    exit 1
+fi
 
 rm -rf "$EXTRACT"
 mkdir -p "$EXTRACT"

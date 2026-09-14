@@ -255,10 +255,24 @@ if [ ! -f "$OUT/system/libsystem_c.dylib" ] || [ ! -f "$OUT/system/libsystem_mal
     echo "error: libsystem_c/malloc/pthread/kernel.dylib not found -- run those build scripts first" >&2
     exit 1
 fi
-if [ ! -f "$OUT/syslogd_libc_extras.a" ]; then
-    echo "error: $OUT/syslogd_libc_extras.a not found -- run build_syslogd.sh first" >&2
-    exit 1
-fi
+# syslogd_libc_extras.a check REMOVED 2026-09-13 (found via this
+# session's own forward-reference audit): its only real purpose was
+# geteuid.o/atoi.o, both already removed from this script's own
+# extraction on 2026-08-29 in favor of the sibling-dylib exports
+# documented in the "Objects removed" comment above -- nothing in this
+# script has extracted from syslogd_libc_extras.a since, so this check
+# was pure dead weight left behind by that cleanup. Real impact beyond
+# the dead check itself: it created a genuine, large, accidental
+# dependency edge (build_libdispatch_dylib.sh, needed very early by
+# almost everything, transitively requiring build_syslogd.sh, needed
+# very late) that closed a real 5-way cycle once build_syslogd.sh
+# separately gained its own real build_launchd_core.sh dependency this
+# same session (syslogd -> launchd_core -> corefoundation -> libxml2 ->
+# this script -> syslogd) -- confirmed via gen_build_order.py: removing
+# this dead check dropped the cycle-warning count from 12 back to the
+# expected baseline and restored build_launchd_core.sh's real, verified
+# position after build_corefoundation.sh (DAR-cycle-fix earlier this
+# session -- that ordering is load-bearing, not incidental).
 
 XCODE12="/Applications/Xcode-12.app/Contents/Developer"
 CLANG="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"

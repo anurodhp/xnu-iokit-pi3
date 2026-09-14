@@ -41,6 +41,14 @@ if [ ! -x "$NEWLD_BINDIR/ld" ]; then
     exit 1
 fi
 
+# Real gap, found 2026-09-13: "libSystem.B" contains a literal dot, so it
+# never matched gen_build_order.py's plain-short-name-token check anyway
+# even if this loop's error message named a script -- no edge was ever
+# produced for it. Named individually below instead.
+if [ ! -f "$OUT/system/libSystem.B.dylib" ]; then
+    echo "error: $OUT/system/libSystem.B.dylib not found -- run build_libsystem.sh first" >&2
+    exit 1
+fi
 for f in system/libsystem_c.dylib system/libsystem_pthread.dylib \
          system/libsystem_malloc.dylib system/libsystem_kernel.dylib \
          system/libdyld.dylib system/libSystem.B.dylib; do

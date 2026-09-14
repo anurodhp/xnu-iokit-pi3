@@ -60,6 +60,20 @@ for f in system/libsystem_c.dylib system/libsystem_pthread.dylib \
         exit 1
     fi
 done
+# Real gap, found 2026-09-13: the generic loop above's error message
+# names no literal build_X.sh, so gen_build_order.py's parser recognized
+# zero of these as real dependency edges -- and even a literal name
+# wouldn't help for libdispatch.dylib/libxpc.dylib/libSystem.B.dylib
+# specifically, since their real producer script names
+# (build_libdispatch_dylib.sh/build_libxpc_dylib.sh/build_libsystem.sh)
+# don't match the simple libX.dylib -> build_libX.sh transform the
+# parser's word-list derivation assumes (build_libdispatch.sh and
+# build_libxpc.sh both exist too, but build DIFFERENT, static archives).
+# Named individually here so the real edges are both correct and visible.
+if [ ! -f "$OUT/system/libdispatch.dylib" ]; then
+    echo "error: $OUT/system/libdispatch.dylib not found -- run build_libdispatch_dylib.sh first" >&2
+    exit 1
+fi
 
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 -Wall -fblocks"
 

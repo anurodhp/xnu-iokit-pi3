@@ -249,6 +249,13 @@ if [ ! -f "$OUT/libpthread.a" ]; then
     echo "error: $OUT/libpthread.a not found -- run build_libpthread.sh first" >&2
     exit 1
 fi
+# Real gap, found 2026-09-13: smoketest link below also force_loads
+# libremovefile.a (copyfile() calls into it for the real remove-on-error
+# path) with no prerequisite check at all.
+if [ ! -f "$OUT/libremovefile.a" ]; then
+    echo "error: $OUT/libremovefile.a not found -- run build_removefile.sh first" >&2
+    exit 1
+fi
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
     libunwind_sched_yield.s -o "$OUT/copyfile_sched_yield_trap.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \

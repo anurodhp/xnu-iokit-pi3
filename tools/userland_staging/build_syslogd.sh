@@ -91,6 +91,21 @@ for a in liblaunchd_mig liblaunchd_syscalls libmach_ipc libc_gen libc_string lib
         exit 1
     fi
 done
+# Real gap, found 2026-09-13: "liblaunchd_syscalls" in the loop above
+# derives to "build_liblaunchd_syscalls.sh", which doesn't exist -- the
+# real producer is build_launchd_syscalls.sh (no "lib" prefix on
+# "launchd"). Also, launchd_libc_extras.a (used further below) has no
+# check anywhere in this script at all; its real producer,
+# build_launchd_core.sh, is one of the last scripts in the whole build
+# order, so this is a real, large forward reference, not a cosmetic gap.
+if [ ! -f "$OUT/liblaunchd_syscalls.a" ]; then
+    echo "error: $OUT/liblaunchd_syscalls.a not found -- run build_launchd_syscalls.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/launchd_libc_extras.a" ]; then
+    echo "error: $OUT/launchd_libc_extras.a not found -- run build_launchd_core.sh first" >&2
+    exit 1
+fi
 # libmalloc.a and libpthread.a are NOT in the list above any more
 # (DAR-217, 2026-09-02) -- see the link step's own "libmalloc.a REMOVED
 # FROM THIS LINK" and "libpthread.a AND cerror_stub.o REMOVED FROM THIS
@@ -118,6 +133,42 @@ done
 # step's own comments for why reaching them through libSystem.B.dylib's
 # LC_REEXPORT_DYLIB is not enough for ld64 in this project's sysroot), so
 # every one of them is a real, fail-fast prerequisite.
+# Real gap, found 2026-09-13: several items in the loop below derive to
+# either a wrong existing script (libdispatch/libresolv/libxpc all exist
+# as static-archive-building build_X.sh scripts, distinct from their
+# real dylib producers) or no script at all (libcopyfile/libopenpam/
+# libncurses drop the "lib" prefix in their real producer names;
+# "libSystem.B" contains a literal dot and never matches the
+# plain-short-name-token check at all). Named individually here with the
+# real, correct script names.
+if [ ! -f "$OUT/system/libdispatch.dylib" ]; then
+    echo "error: $OUT/system/libdispatch.dylib not found -- run build_libdispatch_dylib.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libSystem.B.dylib" ]; then
+    echo "error: $OUT/system/libSystem.B.dylib not found -- run build_libsystem.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libcopyfile.dylib" ]; then
+    echo "error: $OUT/system/libcopyfile.dylib not found -- run build_copyfile_dylib.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libresolv.dylib" ]; then
+    echo "error: $OUT/system/libresolv.dylib not found -- run build_libresolv_dylib.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libxpc.dylib" ]; then
+    echo "error: $OUT/system/libxpc.dylib not found -- run build_libxpc_dylib.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libopenpam.dylib" ]; then
+    echo "error: $OUT/system/libopenpam.dylib not found -- run build_openpam_dylib.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libncurses.dylib" ]; then
+    echo "error: $OUT/system/libncurses.dylib not found -- run build_ncurses_dylib.sh first" >&2
+    exit 1
+fi
 for d in libdispatch libdyld libSystem.B libsystem_kernel libsystem_pthread libsystem_malloc \
          libsystem_platform libsystem_blocks \
          libsystem_c libcopyfile libresolv libsystem_notify libxpc libopenpam libncurses; do
@@ -266,8 +317,7 @@ echo "wrote $OUT/libsyslogd.a ($(ls "$OUT"/syslogd_obj/*.o | wc -l | tr -d ' ') 
 # libremovefile, already linked). Real gaps found during this pass's own
 # QEMU boot test that are NOT part of this migration's scope (this
 # project's own internal glue archives, not independent libraries, stay
-# static by design -- docs/backlog.md item d8): getpwnam
-# (cf_libc_extras.a's copyfile_syscalls.o), chown/dup/geteuid/getuid/
+# static by design -- docs/backlog.md item d8): chown/dup/geteuid/getuid/
 # kevent/mkdir/umask/uuid_clear/signal (liblaunchd_syscalls.a -- NOT
 # linked as a whole archive because its own private_names_compat.o real
 # __write alias collides with libc_locale_for_stdio.a's own real
@@ -275,10 +325,23 @@ echo "wrote $OUT/libsyslogd.a ($(ls "$OUT"/syslogd_obj/*.o | wc -l | tr -d ' ') 
 # trial link; every other real member is independent and safe),
 # mach_port_destruct/mach_port_move_member (dyld_core.a's real MIG
 # client stub, mach_portUser.o).
+#
+# getpwnam/geteuid/getuid REMOVED from this extraction 2026-09-13: they
+# used to come from cf_libc_extras.a's copyfile_syscalls.o/geteuid.o/
+# getuid.o, but that archive was fully retired 2026-08-29 (its whole
+# purpose replaced by the real per-library dylibs -- see
+# build_corefoundation.sh's own git history, commit bf0611c's era) and
+# no build_*.sh script anywhere produces it any more -- this line was a
+# stale leftover from before that retirement that nothing had caught
+# (found via a static forward-reference audit, not a real build
+# failure). All 3 real symbols are already covered by this script's own
+# direct libcopyfile.dylib/libremovefile.dylib links below (getpwnam/
+# getuid -> libcopyfile.dylib, geteuid -> libremovefile.dylib, per the
+# same commit's own verified mapping), so no replacement extraction is
+# needed.
 rm -rf "$OUT/syslogd_libc_extras_obj"
 mkdir -p "$OUT/syslogd_libc_extras_obj"
 ( cd "$OUT/syslogd_libc_extras_obj" && \
-  ar x "../cf_libc_extras.a" copyfile_syscalls.o geteuid.o getuid.o && \
   ar x "../liblaunchd_syscalls.a" sys__chown.o sys__dup.o sys__kevent.o sys__umask.o uuid_clear.o signal.o && \
   ar x "../launchd_libc_extras.a" qsort.o heapsort.o )
 rm -f "$OUT/syslogd_libc_extras.a"

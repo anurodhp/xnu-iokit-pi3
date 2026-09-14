@@ -483,6 +483,25 @@ $CLANG -isysroot "$SDK" -target arm64-apple-ios14.4 -c libunwind_sched_yield.s -
 # own SYS_OBJS (this smoketest's real second-thread/mutex/TSD code pulls
 # in an unpredictable transitive subset, easier to link them all than
 # guess which).
+# Real gap, found 2026-09-13: the smoketest below needs libc_gen.a/
+# libc_stdio.a/libc_locale_for_stdio.a (the last one is the real source
+# the scratch copy right below is made from) with no prerequisite check
+# at all. libpthread.a itself (written earlier in this script) needs
+# none of them -- and this can't be a hard `exit 1` check either: it's a
+# real cycle (build_libc_stdio.sh's own archive step needs libpthread.a
+# first), same class as build_libmalloc.sh's/build_libclosure.sh's own
+# smoketest-only soft-skip guards. Two independent plain `[ -f ... ]`
+# tests, no loop, no `$OUT/$var` pattern -- correct at runtime, invisible
+# to gen_build_order.py's ordering parser on purpose.
+NEED_LIBC_STDIO_TIER=0
+[ -f "$OUT/libc_gen.a" ] || NEED_LIBC_STDIO_TIER=1
+[ -f "$OUT/libc_stdio.a" ] || NEED_LIBC_STDIO_TIER=1
+[ -f "$OUT/libc_locale_for_stdio.a" ] || NEED_LIBC_STDIO_TIER=1
+if [ "$NEED_LIBC_STDIO_TIER" = "1" ]; then
+    echo "skip: pthread_smoketest.macho (libc_gen.a/libc_stdio.a/libc_locale_for_stdio.a not yet built --"
+    echo "      real cycle: build_libc_stdio.sh itself needs this script's libpthread.a first."
+    echo "      libpthread.a is written; re-run this script after build_libc_stdio.sh for real smoketest coverage.)"
+else
 if [ ! -f "$OUT/libcxx_locale_for_stdio_scratch.a" ]; then
     cp "$OUT/libc_locale_for_stdio.a" "$OUT/libcxx_locale_for_stdio_scratch.a"
     ar d "$OUT/libcxx_locale_for_stdio_scratch.a" pthread_tsd_shim.o
@@ -530,6 +549,7 @@ otool -l pthread_smoketest.macho | grep -q LC_UNIXTHREAD || \
 if nm -u pthread_smoketest.macho | grep -q .; then
     echo "WARNING: undefined symbols present:" >&2
     nm -u pthread_smoketest.macho >&2
+fi
 fi
 
 # NOT done by this script (documented follow-up, not silently skipped):

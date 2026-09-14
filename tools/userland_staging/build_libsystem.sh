@@ -68,6 +68,25 @@ for d in libcopyfile libremovefile libresolv; do
         exit 1
     fi
 done
+# Real gap, found 2026-09-13: same mismatch already documented in
+# build_libdyld.sh's own header -- libcopyfile/libremovefile derive to
+# nonexistent "build_libcopyfile.sh"/"build_libremovefile.sh" (real
+# names drop the "lib" prefix: build_copyfile_dylib.sh/
+# build_removefile_dylib.sh), and libresolv derives to the WRONG
+# existing script (build_libresolv.sh builds the unrelated static
+# libresolv.a, not build_libresolv_dylib.sh). Named individually here.
+if [ ! -f "$OUT/system/libcopyfile.dylib" ]; then
+    echo "error: $OUT/system/libcopyfile.dylib not found -- run build_copyfile_dylib.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libremovefile.dylib" ]; then
+    echo "error: $OUT/system/libremovefile.dylib not found -- run build_removefile_dylib.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libresolv.dylib" ]; then
+    echo "error: $OUT/system/libresolv.dylib not found -- run build_libresolv_dylib.sh first" >&2
+    exit 1
+fi
 # libsystem_m.dylib reexport ATTEMPTED and REVERTED 2026-08-31, RETRIED
 # AND CLOSED 2026-09-04 (static-linking cleanup, DAR-160/DAR-16).
 # docs/historic/backlog.md item d12 proposed reexporting libsystem_m.dylib

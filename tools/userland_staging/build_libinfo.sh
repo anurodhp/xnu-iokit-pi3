@@ -220,6 +220,26 @@ for d in libsystem_c libsystem_malloc libsystem_platform libsystem_kernel libsys
         exit 1
     fi
 done
+# Real gap, found 2026-09-13: the loop above's word-list derivation
+# ("build_${d}.sh") is wrong for 3 of its own items -- libdispatch.dylib
+# and libresolv.dylib are really built by build_libdispatch_dylib.sh/
+# build_libresolv_dylib.sh (build_libdispatch.sh/build_libresolv.sh both
+# exist too, but build unrelated static archives), and libcopyfile.dylib
+# is really built by build_copyfile_dylib.sh (no "lib" prefix;
+# build_libcopyfile.sh doesn't exist at all). Named individually here so
+# gen_build_order.py sees the real producers.
+if [ ! -f "$OUT/system/libdispatch.dylib" ]; then
+    echo "error: $OUT/system/libdispatch.dylib not found -- run build_libdispatch_dylib.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libresolv.dylib" ]; then
+    echo "error: $OUT/system/libresolv.dylib not found -- run build_libresolv_dylib.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libcopyfile.dylib" ]; then
+    echo "error: $OUT/system/libcopyfile.dylib not found -- run build_copyfile_dylib.sh first" >&2
+    exit 1
+fi
 
 # Real, verified fix (see build_libresolv_dylib.sh's own header for the
 # full trail, docs/backlog.md item d9): Xcode 12's bundled ld64-609
