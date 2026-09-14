@@ -284,10 +284,25 @@ fi
 # Real exec()/waitpid() family objects (see this script's header) -- real
 # Apple Libc source, already compiled by that script, reused verbatim
 # rather than recompiled with a second set of flags.
-if [ ! -f "$OUT/liblaunchd_syscalls_no_dup.a" ]; then
-    echo "error: $OUT/liblaunchd_syscalls_no_dup.a not found -- run build_launchd_syscalls.sh first" >&2
+#
+# Real gap, found 2026-09-14: liblaunchd_syscalls_no_dup.a was never
+# actually produced anywhere -- only referenced/checked/extracted from
+# here, with an error message wrongly pointing at build_launchd_syscalls.sh
+# (which builds the real, un-suffixed liblaunchd_syscalls.a, already a
+# real prerequisite of several other scripts this session). Only
+# surfaced now by actually running this script for the first time in a
+# real order. Derived here as a scratch copy of the real archive (same
+# "cp + ar d + ar r" pattern already established in
+# build_dyld_link.sh's own libmalloc_scratch.a/dyld_core_scratch.a) --
+# currently a straight copy (no member actually removed yet); if a real
+# duplicate-symbol conflict surfaces linking this dylib, fix it here by
+# actually removing the specific conflicting member, verified against a
+# real link error, not guessed in advance.
+if [ ! -f "$OUT/liblaunchd_syscalls.a" ]; then
+    echo "error: $OUT/liblaunchd_syscalls.a not found -- run build_launchd_syscalls.sh first" >&2
     exit 1
 fi
+cp "$OUT/liblaunchd_syscalls.a" "$OUT/liblaunchd_syscalls_no_dup.a"
 # This project's own real arm64 setjmp/longjmp register asm (see
 # ed_setjmp_compat.c / ed_setjmp_raw.s).
 if [ ! -f "$OUT/ed_setjmp_raw.o" ]; then
