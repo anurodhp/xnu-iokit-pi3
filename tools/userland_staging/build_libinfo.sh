@@ -240,6 +240,18 @@ if [ ! -f "$OUT/system/libcopyfile.dylib" ]; then
     echo "error: $OUT/system/libcopyfile.dylib not found -- run build_copyfile_dylib.sh first" >&2
     exit 1
 fi
+# Real gap, found 2026-09-14: this dylib's own si_module framework
+# genuinely calls dlopen()/dlsym()/dlclose()/dlerror() directly (real
+# Apple Libinfo architecture -- plugin modules loaded dynamically), but
+# nothing linked it against libdyld.dylib (the real owner of those
+# symbols) -- only surfaced now by actually running this script this
+# far in the real order (every prior attempt died earlier). Plain link
+# (not reexport): this dylib uses dl* internally, doesn't need to pass
+# it along to its own consumers.
+if [ ! -f "$OUT/system/libdyld.dylib" ]; then
+    echo "error: $OUT/system/libdyld.dylib not found -- run build_libdyld.sh first" >&2
+    exit 1
+fi
 
 # Real, verified fix (see build_libresolv_dylib.sh's own header for the
 # full trail, docs/backlog.md item d9): Xcode 12's bundled ld64-609
@@ -364,6 +376,7 @@ rm -f "$OUT/system/libinfo.dylib"
     "$OUT/system/libsystem_pthread.dylib" "$OUT/system/libsystem_notify.dylib" \
     "$OUT/system/libsystem_blocks.dylib" "$OUT/system/libdispatch.dylib" \
     "$OUT/system/libresolv.dylib" "$OUT/system/libcopyfile.dylib" \
+    "$OUT/system/libdyld.dylib" \
     2>"$OUT/libinfo_dylib_link.err" \
     && echo "wrote $OUT/system/libinfo.dylib" \
     || { echo "libinfo.dylib link found real undefined symbols:" >&2; grep '^  "' "$OUT/libinfo_dylib_link.err" | sed 's/,.*//' | sort -u >&2; exit 1; }
@@ -384,9 +397,9 @@ otool -l "$OUT/system/libinfo.dylib" | grep -q LC_DYLD_CHAINED_FIXUPS || {
 # else binds anywhere but a real, named, expected sibling dylib).
 echo "declared -Wl,-U deferrals (expect: <flat-namespace> bind target, resolved at real load time):"
 xcrun dyld_info -fixups "$OUT/system/libinfo.dylib" 2>/dev/null | grep '<flat-namespace>' | awk '{print "  " $NF}'
-UNEXPECTED=$(xcrun dyld_info -fixups "$OUT/system/libinfo.dylib" 2>/dev/null | grep -v -E '<flat-namespace>|<weak-def-coalesce>' | grep 'bind' | grep -v -E 'libsystem_c/|libsystem_malloc/|libsystem_platform/|libsystem_kernel/|libsystem_pthread/|libsystem_notify/|libsystem_blocks/|libdispatch/|libresolv/|libcopyfile/' || true)
+UNEXPECTED=$(xcrun dyld_info -fixups "$OUT/system/libinfo.dylib" 2>/dev/null | grep -v -E '<flat-namespace>|<weak-def-coalesce>' | grep 'bind' | grep -v -E 'libsystem_c/|libsystem_malloc/|libsystem_platform/|libsystem_kernel/|libsystem_pthread/|libsystem_notify/|libsystem_blocks/|libdispatch/|libresolv/|libcopyfile/|libdyld/' || true)
 if [ -n "$UNEXPECTED" ]; then
-    echo "error: real, unexpected non-sibling bind targets found (not flat-namespace, not one of the 10 linked sibling dylibs):" >&2
+    echo "error: real, unexpected non-sibling bind targets found (not flat-namespace, not one of the 11 linked sibling dylibs):" >&2
     echo "$UNEXPECTED" >&2
     exit 1
 fi
