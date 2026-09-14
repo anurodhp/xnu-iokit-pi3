@@ -210,7 +210,16 @@ if [ ! -f "$PD/launchctl/launchctl.c" ]; then
     echo "error: $PD/launchctl/launchctl.c not found -- run setup_third_party.sh first" >&2
     exit 1
 fi
-for a in liblaunchd_core.a cf_libc_extras.a launchd_libc_extras.a \
+# Real gap, found 2026-09-14 (the "cf_libc_extras.a" gap flagged
+# earlier this session as needing real investigation once actually
+# reached, not guessed): cf_libc_extras.a was retired 2026-08-29 and
+# never rebuilt. The one real thing this script needs from it --
+# syslog()/openlog()/setlogmask() (copyfile_syscalls.o, per this
+# script's own header comment above) -- moved to its real current home,
+# libcopyfile.a (already confirmed via `ar t`: copyfile_syscalls.o is a
+# real member there now), same "moved to its real owning archive" class
+# build_syslogd.sh's own header already documents for getuid/geteuid.
+for a in liblaunchd_core.a libcopyfile.a launchd_libc_extras.a \
          liblaunchd_mig.a liblaunchd_syscalls.a \
          libmach_ipc.a libclosure.a libmalloc.a libplatform.a libpthread.a \
          libc_gen.a libc_string.a libc_stdio.a libc_printf.a libc_locale_for_stdio.a \
@@ -535,7 +544,7 @@ rm -f "$OUT/launchctl.macho"
     "$OUT/launchctl_obj/launchctl.o" \
     "$OUT/sys_getpid_current_pid_only.o" \
     "$OUT/liblaunchctl_extras.a" \
-    "$OUT/cf_libc_extras.a" "$OUT/launchd_libc_extras.a" \
+    "$OUT/libcopyfile.a" "$OUT/launchd_libc_extras.a" \
     "$OUT/liblaunchd_mig.a" "$OUT/liblaunchd_syscalls.a" \
     `# libclosure.a/libmalloc.a/libplatform.a/libpthread.a/libc_gen.a/` \
     `# libc_string.a/libc_stdio.a/libc_printf.a/libc_locale_for_stdio.a` \

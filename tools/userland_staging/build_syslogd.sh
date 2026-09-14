@@ -165,6 +165,10 @@ if [ ! -f "$OUT/system/libopenpam.dylib" ]; then
     echo "error: $OUT/system/libopenpam.dylib not found -- run build_openpam_dylib.sh first" >&2
     exit 1
 fi
+if [ ! -f "$OUT/system/libinfo.dylib" ]; then
+    echo "error: $OUT/system/libinfo.dylib not found -- run build_libinfo.sh first" >&2
+    exit 1
+fi
 if [ ! -f "$OUT/system/libncurses.dylib" ]; then
     echo "error: $OUT/system/libncurses.dylib not found -- run build_ncurses_dylib.sh first" >&2
     exit 1
@@ -590,6 +594,11 @@ rm -f syslogd.macho
     "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     "$OUT/system/libsystem_notify.dylib" "$OUT/system/libxpc.dylib" \
     "$OUT/system/libopenpam.dylib" "$OUT/system/libncurses.dylib" \
+    `# _getpwnam: real gap, found 2026-09-14 -- asl_common.o's real` \
+    `# __dst_add_uid()/__dst_add_gid() call it directly, real owner is` \
+    `# libinfo.dylib's own si_module framework (already confirmed via` \
+    `# nm -gU), not linked here before now.` \
+    "$OUT/system/libinfo.dylib" \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
     -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
     -Wl,-alias,_getattrlist,'_getattrlist$UNIX2003' \
