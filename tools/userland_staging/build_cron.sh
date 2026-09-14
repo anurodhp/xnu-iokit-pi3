@@ -195,13 +195,35 @@ MMAP_SYSCFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -I $XNU/libsyscall
 "$CLANG" $MMAP_SYSCFLAGS "$MMAP_TMPGEN/___munmap.s" -o "$OUT/sys_munmap_for_cron.o"
 rm -rf "$MMAP_TMPGEN"
 trap - EXIT
+# Real gap, found 2026-09-14: even listed twice, libc_printf.a's real
+# ___gdtoa_locks (a genuine COMMON/tentative-definition symbol, defined
+# in glue.o, confirmed via nm) still didn't resolve for gdtoa-misc.o's
+# own real reference to it -- common symbols don't force archive-member
+# pull-in the same way a strong "T"/"D" definition does, so a second
+# textual mention of the same archive path doesn't guarantee ld64
+# revisits glue.o. -Wl,-force_load,libc_printf.a was tried and reverted:
+# it pulls in EVERY real object in the archive unconditionally, which
+# drags in genuinely unwanted files this real Apple/FreeBSD tier
+# deliberately never needs for cron (vfwscanf.o's wide-char scanf,
+# xprintf_vis.o's vis(3) encoding, and machdep_ldisQ.o -- a real
+# per-arch quad-precision long-double variant this script's own header
+# comment already documents as excluded for arm64 via
+# FreeBSD_INCLUDED_SOURCE_FILE_NAMES_arm64, confirmed real duplicate/
+# incompatible with machdep_ldisd.o's own strtold), each surfacing its
+# own new never-needed undefined symbols once force-loaded. Narrower,
+# correct fix: extract just glue.o (genuinely small, self-contained,
+# confirmed via nm to define only ___gdtoa_locks-class real gdtoa
+# globals) and link it directly, forcing only the one real object this
+# link actually needs.
+mkdir -p "$OUT/cron_glue_extract"
+(cd "$OUT/cron_glue_extract" && ar x "../libc_printf.a" glue.o)
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o cron.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/cron_obj/*.o \
     "$OUT/libc_printf.a" \
+    "$OUT/cron_glue_extract/glue.o" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_string.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
-    "$OUT/libc_printf.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
     "$OUT/libpthread.a" \
     "$OUT/sys_mmap_for_cron.o" "$OUT/sys_munmap_for_cron.o" \
@@ -305,36 +327,34 @@ fi
 
 # Same real gaps as cron.macho's own link above (this file's own header
 # comment has the full citation): libc_printf.a listed twice for its own
-# internal cross-references, plus the real ___mmap/___munmap raw trap
-# for libpthread.a's real pthread_create().
-MMAP_TMPGEN2="$(mktemp -d)"
-trap 'rm -rf "$MMAP_TMPGEN2"' EXIT
-ARCHS=arm64 perl "$XNU/libsyscall/xcodescripts/create-syscalls.pl" \
-    "$XNU/bsd/kern/syscalls.master" \
-    "$XNU/libsyscall/custom" \
-    "$XNU/libsyscall/Platforms" \
-    iPhoneOS \
-    "$MMAP_TMPGEN2" >/dev/null
-MMAP_SYSCFLAGS2="-isysroot $SDK -target arm64-apple-ios14.4 -c -I $XNU/libsyscall/custom -I $XNU/libsyscall/mach -idirafter $XNU/osfmk -idirafter $MACSDK/usr/include"
-"$CLANG" $MMAP_SYSCFLAGS2 "$MMAP_TMPGEN2/___mmap.s" -o "$OUT/sys_mmap_for_crontab.o"
-"$CLANG" $MMAP_SYSCFLAGS2 "$MMAP_TMPGEN2/___munmap.s" -o "$OUT/sys_munmap_for_crontab.o"
-rm -rf "$MMAP_TMPGEN2"
-trap - EXIT
+# internal cross-references. Real mmap()/munmap() are NOT needed here
+# the way cron.macho's own link above needs them -- crontab_obj/*.o
+# already includes crontab_extra_syscalls.o, which has its own real
+# hand-written mmap()/munmap() (plain C, real syscall numbers #197/#73,
+# both genuinely NO_SYSCALL_STUB in syscalls.master) predating this
+# session's own work. Confirmed via a real duplicate-symbol link error
+# when this session first tried adding the same raw-trap fix here too
+# ("duplicate symbol '_mmap' in crontab_extra_syscalls.o and
+# sys_mmap_for_crontab.o") -- crontab.macho was already correctly
+# self-sufficient for this real gap; only cron.macho needed the fix.
+# Same real glue.o fix as cron.macho's own link above (this file's own
+# header comment has the full citation): ___gdtoa_locks is a real COMMON
+# symbol in libc_printf.a(glue.o) that a second archive mention doesn't
+# reliably re-pull-in.
+mkdir -p "$OUT/cron_glue_extract"
+(cd "$OUT/cron_glue_extract" && ar x "../libc_printf.a" glue.o)
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o crontab.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/crontab_obj/*.o \
     "$OUT/libc_printf.a" \
+    "$OUT/cron_glue_extract/glue.o" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_string.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
-    "$OUT/libc_printf.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
     "$OUT/libpthread.a" \
-    "$OUT/sys_mmap_for_crontab.o" "$OUT/sys_munmap_for_crontab.o" \
     "$OUT/libclosure.a" \
     "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
     "$OUT/libunwind.a" \
-    -Wl,-alias,___mmap,_mmap \
-    -Wl,-alias,___munmap,_munmap \
     -Wl,-alias,_open,'_open$UNIX2003' \
     -Wl,-alias,_close,'_close$UNIX2003' \
     -Wl,-alias,_write,'_write$UNIX2003' \
