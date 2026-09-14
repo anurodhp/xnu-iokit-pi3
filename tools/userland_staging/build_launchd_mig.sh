@@ -170,7 +170,17 @@ fi
 # generated job.h, same minimal-extern convention libnotify_smoketest.c
 # already established).
 "$CLANG" "${CFLAGS[@]}" launchd_mig_smoketest.c -o "$OUT/launchd_mig_smoketest.o"
+# Real gap, found 2026-09-13 via a live build_everything.sh run (first
+# time this smoketest ever actually reached its own link -- every prior
+# attempt died earlier): "_pthread_main_thread_bootstrap" undefined,
+# referenced from crt.c's _crt_run_static_initializers. Same real
+# DAR-302-class weak_import gap already documented and fixed in
+# build_crt0_smoketest.sh/build_libplatform.sh/etc (see either script's
+# own header comment for the full citation) -- this script links no
+# libpthread.a (doesn't need real threading), so crt.c's optional
+# weak_import hook must be explicitly declared undefined here too.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
+    -Wl,-U,_pthread_main_thread_bootstrap \
     -o launchd_mig_smoketest.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/launchd_mig_smoketest.o" \
