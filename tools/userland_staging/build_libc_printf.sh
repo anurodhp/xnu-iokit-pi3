@@ -71,6 +71,38 @@ cat > "$OUT/compat_include/stdio_flockfile_compat.h" <<'EOF'
 #endif
 EOF
 
+# System/machine/cpu_capabilities.h: real gap, found 2026-09-13 via a
+# live build_everything.sh run -- this script's own gdtoa/apple_printf
+# compile loop pulls in xlocale_private.h -> tsd_private.h, which
+# force-includes this real installed-SDK-style header
+# (System/machine/cpu_capabilities.h), a path this non-Xcode-project
+# build never produces on its own. build_libplatform.sh is the
+# established writer (see that script's own header comment for the
+# real forwarding-shim content and its own "found via a live run" fix
+# for the exact same class of gap), but this script currently runs
+# BEFORE it (position 7 vs 9 in gen_build_order.py's resolved order).
+# Same self-sufficiency fix as stdio_flockfile_compat.h above: write
+# this script's own idempotent copy, verbatim, rather than add another
+# ordering dependency.
+mkdir -p "$OUT/compat_include/System/machine" "$OUT/compat_include/System/arm"
+cat > "$OUT/compat_include/System/machine/cpu_capabilities.h" <<'EOF'
+/* real content already exists at $XNU/osfmk/arm/cpu_capabilities.h - see
+ * that file's own -I flag below; this just forwards to it from the real
+ * installed-SDK-style path third_party/libpthread/private/pthread/
+ * tsd_private.h expects but this non-Xcode-project build never produces. */
+#include <arm/cpu_capabilities.h>
+EOF
+cat > "$OUT/compat_include/System/arm/cpu_capabilities.h" <<'EOF'
+/* Same real forwarding shim as System/machine/cpu_capabilities.h (see
+ * that file's own comment) - a second real installed-SDK-style include
+ * path (System/arm/... vs System/machine/...) real Apple headers expect
+ * for the same real content at $XNU/osfmk/arm/cpu_capabilities.h. */
+#ifndef _SYSTEM_ARM_CPU_CAPABILITIES_H_COMPAT_
+#define _SYSTEM_ARM_CPU_CAPABILITIES_H_COMPAT_
+#include <arm/cpu_capabilities.h>
+#endif
+EOF
+
 XCODE12="/Applications/Xcode-12.app/Contents/Developer"
 CLANG="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
 SDK="$XCODE12/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
