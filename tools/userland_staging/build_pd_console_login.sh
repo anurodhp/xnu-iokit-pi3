@@ -48,16 +48,32 @@ for a in liblaunchd_syscalls.a libxpc_syscalls.a \
         exit 1
     fi
 done
-if [ ! -f "$OUT/cerror_stub.o" ]; then
-    echo "error: $OUT/cerror_stub.o not found -- run build_launchd_core.sh first" >&2
-    exit 1
-fi
-for d in libdyld.dylib libSystem.B.dylib; do
+for d in libdyld.dylib libSystem.B.dylib libsystem_kernel.dylib; do
     if [ ! -f "$OUT/system/$d" ]; then
-        echo "error: $OUT/system/$d not found -- run build_libdyld.sh/build_libsystem.sh first" >&2
+        echo "error: $OUT/system/$d not found -- run build_libdyld.sh/build_libsystem.sh/build_libsystem_kernel.sh first" >&2
         exit 1
     fi
 done
+
+# DAR-25: libxpc_syscalls.a's getenv_compat.o (__NSGetEnviron/_getenv/
+# _putenv/_setenv/_unsetenv) and cerror_stub.o (___error/_cerror/
+# _cerror_nocancel/_errno/__pthread_exit_if_canceled) both duplicate real
+# exports of libsystem_c.dylib/libsystem_kernel.dylib -- both already
+# linked below. Confirmed via `nm -gU` on both dylibs before removing
+# anything. Same "private derived-archive copy, never edit the shared
+# original" pattern build_launchd.sh/build_syslogd.sh already use for
+# this exact bug class (libxpc_syscalls.a is shared with
+# build_libnotify_client.sh/build_libxpc_dylib.sh/
+# build_libxpc_syscalls2.sh, which may still need their own private
+# copy -- untouched here). setenv.o is dropped too even though it isn't
+# currently pulled in (getenv_compat.o already satisfies every _setenv/
+# _unsetenv reference pd_console_login.o has): it's a second, unused
+# private copy of the same two symbols and would become a live duplicate
+# the moment getenv_compat.o's copy is removed, since setenv.o's own
+# _setenv/_unsetenv would then be the first local definition ld64 finds.
+rm -f "$OUT/libxpc_syscalls_no_getenv.a"
+cp "$OUT/libxpc_syscalls.a" "$OUT/libxpc_syscalls_no_getenv.a"
+ar d "$OUT/libxpc_syscalls_no_getenv.a" getenv_compat.o setenv.o
 
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding \
     -fno-builtin -fno-stack-protector -O0 -Wall \
@@ -93,7 +109,11 @@ rm -f "$OUT/pd_console_login.macho"
     -o "$OUT/pd_console_login.macho" \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/pd_console_login.o" \
-    "$OUT/liblaunchd_syscalls.a" "$OUT/libxpc_syscalls.a" \
+    "$OUT/liblaunchd_syscalls.a" "$OUT/libxpc_syscalls_no_getenv.a" \
+    `# libxpc_syscalls.a swapped for the derived _no_getenv.a copy above` \
+    `# (DAR-25): getenv_compat.o/setenv.o dropped, real owner` \
+    `# libsystem_c.dylib below now resolves __NSGetEnviron/_getenv/` \
+    `# _putenv/_setenv/_unsetenv instead.` \
     `# cf_libc_extras.a REMOVED (2026-09-14): that archive was retired` \
     `# 2026-08-29 (see build_launchd.sh's own cf_libc_extras_no_dup.a` \
     `# rebuild comment) and nothing has produced it since -- this script's` \
@@ -108,7 +128,9 @@ rm -f "$OUT/pd_console_login.macho"
     `# dylibs reached through the libSystem.B.dylib this link already` \
     `# loads, so the static copies were private duplicate malloc/pthread/` \
     `# stdio state. Same "one owner per symbol" class as build_launchd.sh.` \
-    "$OUT/cerror_stub.o" \
+    `# cerror_stub.o REMOVED (2026-09-14, DAR-25): duplicated` \
+    `# libsystem_kernel.dylib's real ___error/_cerror/_cerror_nocancel/` \
+    `# _errno/__pthread_exit_if_canceled, now listed explicitly below.` \
     "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     `# libsystem_pthread.dylib/libsystem_c.dylib listed EXPLICITLY rather` \
     `# than left to libSystem.B.dylib's LC_REEXPORT_DYLIB of them, same` \
@@ -131,6 +153,12 @@ rm -f "$OUT/pd_console_login.macho"
     `# single-owner property DAR-162/DAR-131 are about.` \
     "$OUT/system/libsystem_pthread.dylib" "$OUT/system/libsystem_c.dylib" \
     "$OUT/system/libsystem_malloc.dylib" \
+    `# libsystem_kernel.dylib listed EXPLICITLY (DAR-25, 2026-09-14): real` \
+    `# owner of ___error/_cerror/_cerror_nocancel/_errno/` \
+    `# __pthread_exit_if_canceled now that cerror_stub.o is gone (confirmed` \
+    `# via nm -gU), same reexport-depth reasoning as the other explicit` \
+    `# libsystem_*.dylib entries on this link line.` \
+    "$OUT/system/libsystem_kernel.dylib" \
     `# libsystem_platform.dylib listed EXPLICITLY (DAR-13, 2026-09-04):` \
     `# real single owner of _memcpy/_memset now (see` \
     `# build_libsystem_platform.sh's own updated header). Was previously` \
