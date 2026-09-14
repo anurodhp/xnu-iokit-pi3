@@ -69,7 +69,7 @@ fi
 OUT="libc_build"
 ICU_LIB="icu_build/target/lib"
 
-for a in liblaunchd_core.a cf_libc_extras.a launchd_libc_extras.a \
+for a in liblaunchd_core.a launchd_libc_extras.a \
          liblaunchd_mig.a liblaunchd_syscalls.a \
          libmach_ipc.a libclosure.a libmalloc.a libplatform.a libpthread.a \
          libc_gen.a libc_string.a libc_stdio.a libc_printf.a libc_locale_for_stdio.a; do
@@ -78,6 +78,18 @@ for a in liblaunchd_core.a cf_libc_extras.a launchd_libc_extras.a \
         exit 1
     fi
 done
+# cf_libc_extras.a itself was retired 2026-08-29 and rebuilt from
+# scratch below out of libcopyfile.a/libresolv.a instead (see that
+# block's own comment) -- check for its two real sources here so the
+# error points at the right scripts.
+if [ ! -f "$OUT/libcopyfile.a" ]; then
+    echo "error: $OUT/libcopyfile.a not found -- run build_copyfile.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/libresolv.a" ]; then
+    echo "error: $OUT/libresolv.a not found -- run build_libresolv.sh first" >&2
+    exit 1
+fi
 # DAR-195: real libCoreFoundation.dylib, not the old static archive --
 # same migration already applied to build_launchctl.sh.
 if [ ! -f "$OUT/system/libCoreFoundation.dylib" ]; then
@@ -638,8 +650,37 @@ ar d "$OUT/launchd_libc_extras_no_dup.a" \
     libplatform_sigaction.o libresolv_getentropy_syscall.o \
     ls_fenv_compat.o qsort.o removefile_syscalls.o
 
+# Real gap, found 2026-09-14 (the "cf_libc_extras.a" gap flagged
+# earlier this session as needing real investigation once actually
+# reached, not guessed): cf_libc_extras.a was retired 2026-08-29 and
+# never rebuilt. Rebuilt from scratch here containing only the two
+# real, QEMU-verified-necessary members the comment below identifies
+# (copyfile_syscalls.o, gethostname.o) -- geteuid.o/getuid.o (this
+# archive's other two original members, per the `ar d` step this
+# replaces) are deliberately NOT included: real libsystem_kernel.dylib
+# already exports _geteuid/_getegid for real (see
+# build_openpam_dylib.sh's own identical removal + reasoning), so they
+# were always safe to drop, unlike the two kept below.
+#
+# Pulled from libcopyfile.a/libresolv.a (the real STATIC archives,
+# build_copyfile.sh/build_libresolv.sh -- NOT the *_dylib.sh variants,
+# which compile copyfile_syscalls.c with a different
+# LIBRESOLV_SOCKET_SYSCALLS_DYLIB_VARIANT define): confirmed via `ar t`
+# both archives still carry the exact same real objects
+# copyfile_syscalls.o's own real gethostname.o QEMU-boot-tested this
+# comment describes needed extracting from originally. Extracting the
+# static archive copy (not linking the reexported dylib, which is
+# exactly the "same name, wrong build" trap this whole comment block
+# documents) is the same real distinction this session's
+# build_launchctl.sh fix already relied on successfully for
+# copyfile_syscalls.o alone.
 rm -f "$OUT/cf_libc_extras_no_dup.a"
-cp "$OUT/cf_libc_extras.a" "$OUT/cf_libc_extras_no_dup.a"
+CF_EXTRAS_SCRATCH="$OUT/cf_libc_extras_scratch"
+rm -rf "$CF_EXTRAS_SCRATCH"
+mkdir -p "$CF_EXTRAS_SCRATCH"
+(cd "$CF_EXTRAS_SCRATCH" && ar x "../libcopyfile.a" copyfile_syscalls.o)
+(cd "$CF_EXTRAS_SCRATCH" && ar x "../libresolv.a" gethostname.o)
+ar rcs "$OUT/cf_libc_extras_no_dup.a" "$CF_EXTRAS_SCRATCH/copyfile_syscalls.o" "$CF_EXTRAS_SCRATCH/gethostname.o"
 # copyfile_syscalls.o/gethostname.o kept (NOT stripped) 2026-09-03: a
 # first attempt stripped both, believing them pure duplicates of
 # libcopyfile.dylib/libresolv.dylib (both real, reachable only via
@@ -666,8 +707,9 @@ cp "$OUT/cf_libc_extras.a" "$OUT/cf_libc_extras_no_dup.a"
 # libdyld) get this treatment without a real boot-test confirming it.
 # Do NOT re-strip these, and do NOT re-add libresolv.dylib/
 # libcopyfile.dylib to this link purely to satisfy them.
-ar d "$OUT/cf_libc_extras_no_dup.a" \
-    geteuid.o getuid.o
+# (geteuid.o/getuid.o already excluded above -- never added to this
+# scratch archive in the first place, so no `ar d` step is needed here
+# anymore.)
 
 # DAR-195: real bind() gap surfaced by the libCoreFoundation.a ->
 # libCoreFoundation.dylib migration above -- see
