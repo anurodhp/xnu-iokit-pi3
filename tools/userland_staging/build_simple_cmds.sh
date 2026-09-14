@@ -482,57 +482,53 @@ if [ ! -x "$NEWLD_BINDIR/ld" ]; then
     echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE) -- run 'xcode-select -p' to check, see docs/backlog.md item d9" >&2
     exit 1
 fi
-# Real gap, found 2026-09-13 via a live build_everything.sh run: this
-# used to be a hard `exit 1` on any of these being missing, but this
-# script is genuinely, unavoidably part of a real cycle -- its own real
-# per-command build below needs libpthread.a (among others), while
-# build_libpthread.sh's own smoketest needs THIS script's raw syscall
-# stub .o files (produced further below, independent of any of these
-# archives -- confirmed via inspection, that section only needs
-# $CLANG/$SDK/$XNU). gen_build_order.py's arbitrary cycle-break can (and
-# did, this run) resolve it with this script scheduled before
-# build_libpthread.sh, which a hard exit can't survive without also
-# blocking the stub generation other scripts' own soft-skips are
-# waiting on. Converted to a soft flag: CMDS_TIER_READY=0 means "skip
-# building the real per-command binaries further below, but let
-# everything else in this script (including the stub generation) run to
-# completion and exit 0" -- see the CMD_LIST loop's own skip check.
-#
+for dep in libmalloc libplatform libclosure libpthread libc_gen libc_stdio libc_printf libc_locale libc_locale_for_stdio libmach_ipc; do
+    if [ ! -f "$OUT/$dep.a" ]; then
+        echo "error: $OUT/$dep.a not found -- run build_$dep.sh first" >&2
+        exit 1
+    fi
+done
 # cp/mv also need libcopyfile.a (real copyfile()/fcopyfile(), plus its
 # already-built realpath/fchown/fchflags/fchmod members) and
 # libremovefile.a (real public rename()/unlink()); both already built by
 # earlier tiers (build_copyfile.sh, build_removefile.sh) for rm/the
-# copyfile smoketest, reused here rather than rebuilt. grep's/df's own
-# per-command extra_libs further below also need libremovefile.dylib/
-# libsystem_m.dylib (distinct from the static .a archives checked here).
+# copyfile smoketest, reused here rather than rebuilt.
+# Real gap, found 2026-09-13: grep's/df's own per-command extra_libs
+# below also need libremovefile.dylib/libsystem_m.dylib (distinct from
+# the static .a archives checked here) with no prerequisite check at
+# all.
 #
 # Deliberately NOT phrased with the literal "run build_X first" idiom
-# gen_build_order.py's parser recognizes (same reasoning as before this
-# edit, now applying to the whole combined check): naming these scripts
-# literally would bridge the small, already-accepted
-# build_simple_cmds.sh <-> build_libpthread.sh cycle into ~30
-# otherwise-unrelated scripts' own real prerequisite edges, since all of
-# those become transitively reachable once the bridge exists. Confirmed
-# by a real BFS trace during this session's own audit: cycle-drop count
-# went 4 -> 46 with literal phrasing present ANYWHERE (including inside
-# an explanatory code comment -- the parser does not distinguish
-# comments from code), back to 4 with neither.
-CMDS_TIER_READY=1
-for dep in libmalloc libplatform libclosure libpthread libc_gen libc_stdio libc_printf libc_locale libc_locale_for_stdio libmach_ipc libcopyfile libremovefile; do
-    [ -f "$OUT/$dep.a" ] || CMDS_TIER_READY=0
-done
-[ -f "$OUT/system/libremovefile.dylib" ] || CMDS_TIER_READY=0
-[ -f "$OUT/system/libsystem_m.dylib" ] || CMDS_TIER_READY=0
-if [ "$CMDS_TIER_READY" != "1" ]; then
-    echo "note: one or more of libmalloc.a/libplatform.a/libclosure.a/libpthread.a/"
-    echo "      libc_gen.a/libc_stdio.a/libc_printf.a/libc_locale.a/libc_locale_for_stdio.a/"
-    echo "      libmach_ipc.a/libcopyfile.a/libremovefile.a/libc_build/system/libremovefile.dylib/"
-    echo "      libc_build/system/libsystem_m.dylib not yet built -- real cycle (see comment"
-    echo "      above): this script's own raw syscall stubs will still be produced below for"
-    echo "      build_libpthread.sh's/build_libmach_ipc.sh's own soft-skip smoketests, but the"
-    echo "      real per-command binaries further below will be skipped this run; re-run this"
-    echo "      script later for real command coverage."
+# gen_build_order.py's parser recognizes: this script is already part of
+# a real, already-accepted build_simple_cmds.sh <-> build_libpthread.sh
+# cycle (its own real smoketest needs libpthread.a, libpthread.sh's own
+# smoketest needs this script's raw syscall stubs -- a genuine tangle,
+# not a bug). Both of the real dylibs checked below are themselves built
+# from build_libm.sh/build_removefile.sh, whose own smoketests need
+# libc_gen.a/libc_stdio.a/libpthread.a -- naming either dylib script
+# literally here would bridge the small, already-accepted 2-node cycle
+# above into ~30 otherwise-unrelated scripts' own real prerequisite
+# edges, since all of those become transitively reachable once the
+# bridge exists. Confirmed by a real BFS trace during this session's own
+# audit: cycle-drop count went 4 -> 46 with either literal phrasing
+# present (including inside an explanatory code comment -- the parser
+# does not distinguish comments from code), back to 4 with neither. The
+# runtime checks below are unaffected either way -- they were already
+# silently invisible to the ordering parser before either check existed.
+if [ ! -f "$OUT/system/libremovefile.dylib" ]; then
+    echo "error: dependency missing: libc_build/system/libremovefile.dylib (build the removefile dylib tier before this script)" >&2
+    exit 1
 fi
+if [ ! -f "$OUT/system/libsystem_m.dylib" ]; then
+    echo "error: dependency missing: libc_build/system/libsystem_m.dylib (build the libm dylib tier before this script)" >&2
+    exit 1
+fi
+for dep in libcopyfile libremovefile; do
+    if [ ! -f "$OUT/$dep.a" ]; then
+        echo "error: $OUT/$dep.a not found -- run build_$dep.sh first" >&2
+        exit 1
+    fi
+done
 
 # DAR-204 (2026-09-04): sleep/tail's real MIG client stubs (clockUser.o/
 # mach_hostUser.o/taskUser.o, via $OUT/libmach_ipc.a -- see the sleep|tail
@@ -1634,23 +1630,12 @@ CMD_LIST=(
 
 built=0
 failed=0
-skipped_tier=0
 for spec in "${CMD_LIST[@]}"; do
     name="${spec%%:*}"
     rest="${spec#*:}"
     src="${rest%%:*}"
     extra_raw="${rest#*:}"
     extra="${extra_raw//|/ }"
-
-    # Real cycle skip (see CMDS_TIER_READY's own header comment far
-    # above): this command's real build needs libpthread.a/etc, not yet
-    # built this run. Counted separately from $failed so the script's
-    # own final exit status (`[ "$failed" -eq 0 ]`) still reports success
-    # -- this is a deferred re-run, not a build error.
-    if [ "$CMDS_TIER_READY" != "1" ]; then
-        skipped_tier=$((skipped_tier + 1))
-        continue
-    fi
 
     # Clear any previous command's $OUT/cmd_pre_include override before
     # this command's own cmd_cflags case (below) decides whether to
@@ -2369,5 +2354,5 @@ for spec in "${CMD_LIST[@]}"; do
     fi
 done
 
-echo "build_simple_cmds: $built built, $failed failed, $skipped_tier skipped (real cycle, see CMDS_TIER_READY comment)"
+echo "build_simple_cmds: $built built, $failed failed"
 [ "$failed" -eq 0 ]
