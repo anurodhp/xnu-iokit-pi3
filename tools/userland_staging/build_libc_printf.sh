@@ -44,7 +44,32 @@ LIBC="../../third_party/Libc"
 PTHREAD="../../third_party/libpthread"
 XNU="../../third_party/xnu-7195"
 OUT="libc_build"
-mkdir -p "$OUT/apple_printf" "$OUT/compat_include_printf/os"
+mkdir -p "$OUT/apple_printf" "$OUT/compat_include_printf/os" "$OUT/compat_include"
+
+# stdio_flockfile_compat.h: real gap, found 2026-09-13 via a live
+# build_everything.sh run -- this script's own gdtoa/apple_printf compile
+# loop below force-includes this header (-include, see CFLAGS further
+# down) but never wrote it itself, relying entirely on build_libc_gen.sh
+# (or build_libc_stdio.sh) having already run first with no check for
+# that at all. Same self-sufficiency fix already applied to
+# build_libc_gen.sh/build_libplatform.sh/build_libmalloc.sh for the
+# identical cross-dependency class -- write this script's own idempotent
+# copy rather than add another ordering dependency. Content copied
+# verbatim from build_libc_gen.sh's own copy (FLOCKFILE/FUNLOCKFILE
+# genuinely undefined in this checkout; true no-op is correct on this
+# single-threaded target).
+cat > "$OUT/compat_include/stdio_flockfile_compat.h" <<'EOF'
+/* See build_libc_stdio.sh's own stdio_flockfile_compat.h for the full
+ * real reasoning (FLOCKFILE/FUNLOCKFILE genuinely undefined in this
+ * checkout; true no-op is correct on this single-threaded target).
+ * Written here too since this script may run before build_libc_gen.sh/
+ * build_libc_stdio.sh; do not edit here, it is regenerated on every run. */
+#ifndef _COMPAT_STDIO_FLOCKFILE_H_
+#define _COMPAT_STDIO_FLOCKFILE_H_
+#define FLOCKFILE(fp) ((void)(fp))
+#define FUNLOCKFILE(fp) ((void)(fp))
+#endif
+EOF
 
 XCODE12="/Applications/Xcode-12.app/Contents/Developer"
 CLANG="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
