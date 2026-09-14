@@ -139,7 +139,14 @@ int os_fault_with_payload(uint32_t reason_namespace, uint64_t reason_code,
 	return 0;
 }
 
-int os_variant_has_internal_diagnostics(const char *subsystem) {
+/* Real gap, found 2026-09-14: real Apple's os/variant_private.h (already
+ * on this project's -I path) declares this returning `bool`, not `int`
+ * -- a genuine type conflict once a consumer includes both that real
+ * header and this file's own prototype in the same translation unit
+ * (notify_client.c, build_notifyd.sh). Only surfaced now that this file
+ * was actually compiled in that context for the first time. Matched to
+ * the real signature exactly rather than just silencing the warning. */
+_Bool os_variant_has_internal_diagnostics(const char *subsystem) {
 	(void)subsystem;
 	return 0;
 }

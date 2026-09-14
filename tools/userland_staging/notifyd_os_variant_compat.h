@@ -12,21 +12,20 @@
  * declaration of the same real function is a real "conflicting types"
  * error, found the hard way writing this file).
  *
- * os_variant_has_internal_diagnostics() has no real declaration anywhere
- * in this pinned SDK or third_party checkout (real Apple's own
- * <os/variant_private.h>, grepped, zero hits) -- this header supplies
- * the one real, missing prototype, matching the real body this
- * project's own libsystem_notify_misc_compat.c defines (see that file's
- * own header comment for the full real gap writeup -- same one
- * build_libsystem_notify.sh's own real fix already established for
- * libsystem_notify.dylib).
+ * os_variant_has_internal_diagnostics(): CORRECTED 2026-09-14 -- the
+ * previous version of this comment claimed "no real declaration
+ * anywhere in this pinned SDK or third_party checkout... grepped, zero
+ * hits", which was wrong (an unverified assumption, never actually
+ * caught until this file was compiled for real for the first time):
+ * third_party/Libc/os/variant_private.h DOES declare it for real,
+ * returning `bool`, and is reachable from this compile. Re-declaring
+ * it here with a different (`int`) return type was the real
+ * "conflicting types" bug. Fixed by including the real header instead
+ * of hand-rolling a second, wrong-typed prototype -- matching the real
+ * body this project's own libsystem_notify_misc_compat.c defines (see
+ * that file's own header comment; also fixed to return `_Bool` to
+ * match).
  */
 #include <os/reason_private.h>
-#ifdef __cplusplus
-extern "C" {
-#endif
-int os_variant_has_internal_diagnostics(const char *subsystem);
-#ifdef __cplusplus
-}
-#endif
+#include <os/variant_private.h>
 #endif /* _NOTIFYD_OS_VARIANT_COMPAT_H_ */
