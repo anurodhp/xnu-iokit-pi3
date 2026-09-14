@@ -82,7 +82,7 @@ if [ ! -f "$OUT/libnotify.a" ] || [ ! -f "$OUT/libnotify_client.a" ]; then
     echo "error: libnotify.a / libnotify_client.a not found -- run build_libnotify.sh and build_libnotify_client.sh first" >&2
     exit 1
 fi
-for d in libsystem_c libsystem_malloc libsystem_platform libsystem_kernel libsystem_pthread libdispatch libsystem_blocks libncurses libdyld libxpc; do
+for d in libsystem_c libsystem_malloc libsystem_platform libsystem_kernel libsystem_pthread libdispatch libsystem_blocks libncurses libxpc; do
     if [ ! -f "$OUT/system/$d.dylib" ]; then
         echo "error: $OUT/system/$d.dylib not found -- run build_${d}.sh first" >&2
         exit 1
@@ -176,10 +176,19 @@ rm -f "$EXTRACT/notify_mig_special_reply_port_trap.o"
 # real (libdyldGlue.cpp, real Apple source) -- notify_client.o's one
 # call site (`_notify_strdup_if_mutable()`) gets the real answer instead
 # of this project's own honest-but-now-superseded "always false" stand-in.
-# libdyld.dylib does not depend on libsystem_notify.dylib (confirmed via
-# `otool -L`), so linking it here is not circular. Left in place inside
-# libnotify_client.a itself (unchanged) for any other, still-static
-# consumer of that archive.
+# "libdyld.dylib does not depend on libsystem_notify.dylib, so linking
+# it here is not circular" was true when written (2026-08-31) but was
+# silently invalidated 2026-09-14 by an unrelated fix elsewhere: this
+# dylib is now a real, indirect prerequisite of libdyld.dylib
+# (libdyld.sh -> build_libresolv_dylib.sh -> this script, the first
+# edge load-bearing/real per that script's own header comment, the
+# second added when libresolv_dylib.sh's own real-but-previously-
+# unchecked need for libsystem_notify.dylib was fixed). Direct-linking
+# libdyld.dylib here would make that a genuine cycle. Deferred via
+# `-Wl,-U` instead -- same established pattern already used just below
+# for _bootstrap_look_up2/_pipe, safe because libdyld.dylib is always
+# loaded alongside via libSystem.B.dylib at real process runtime, so
+# flat-namespace resolution still finds it.
 rm -f "$EXTRACT/notify_dyld_compat.o"
 
 # REAL BUG FOUND+FIXED 2026-08-29: creat/shm_open/usleep/
@@ -202,13 +211,13 @@ rm -f "$OUT/system/libsystem_notify.dylib"
     -Wl,-fixup_chains \
     -Wl,-U,_bootstrap_look_up2 \
     -Wl,-U,_pipe \
+    -Wl,-U,__dyld_is_memory_immutable \
     -o "$OUT/system/libsystem_notify.dylib" \
     "$EXTRACT"/*.o \
     "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_malloc.dylib" \
     "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/system/libsystem_pthread.dylib" "$OUT/system/libdispatch.dylib" \
     "$OUT/system/libsystem_blocks.dylib" "$OUT/system/libncurses.dylib" \
-    "$OUT/system/libdyld.dylib" \
     "$OUT/system/libxpc.dylib" \
     2>"$OUT/libsystem_notify_link.err" \
     && echo "wrote $OUT/system/libsystem_notify.dylib" \

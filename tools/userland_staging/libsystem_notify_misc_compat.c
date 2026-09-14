@@ -58,6 +58,17 @@
  * this file's own creat() below rather than reinvented.
  */
 struct real_timespec { long tv_sec; long tv_nsec; };
+/* Real gap, found 2026-09-14 (first time this file was actually
+ * compiled in a real, from-scratch build_everything.sh-order run --
+ * every prior attempt died before reaching build_libsystem_notify.sh):
+ * mode_t used below (creat()'s real signature) with no header exposing
+ * it under this file's -ffreestanding compile, same local-definition
+ * pattern as struct real_timespec above rather than fighting header
+ * inclusion. Real Darwin type, confirmed against this project's pinned
+ * iPhoneOS SDK (sys/_types/_mode_t.h -> sys/_types.h): mode_t is
+ * __darwin_mode_t is __uint16_t, i.e. unsigned short on this LP64 arm64
+ * target. */
+typedef unsigned short mode_t;
 
 extern int open(const char *path, int flags, ...);
 extern int nanosleep(const struct real_timespec *rqtp, struct real_timespec *rmtp);

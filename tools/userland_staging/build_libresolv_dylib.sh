@@ -228,6 +228,14 @@ if [ ! -f "$OUT/system/libxpc.dylib" ]; then
     echo "error: $OUT/system/libxpc.dylib not found -- run build_libxpc_dylib.sh first" >&2
     exit 1
 fi
+# Real gap, found 2026-09-14: the final link (further below) also
+# needs libsystem_notify.dylib, with no prerequisite check at all --
+# only surfaced by actually running this script this far in the real
+# order (every prior attempt died earlier).
+if [ ! -f "$OUT/system/libsystem_notify.dylib" ]; then
+    echo "error: $OUT/system/libsystem_notify.dylib not found -- run build_libsystem_notify.sh first" >&2
+    exit 1
+fi
 for f in "$CONFIGD/dnsinfo/dnsinfo_copy.c" \
          "$CONFIGD/libSystemConfiguration/libSystemConfiguration_client.c"; do
     if [ ! -f "$f" ]; then
