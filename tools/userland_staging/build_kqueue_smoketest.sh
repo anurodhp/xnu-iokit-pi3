@@ -94,7 +94,7 @@ LINK_ALIASES="$LINK_ALIASES -Wl,-alias,_mmap\$UNIX2003,_mmap -Wl,-alias,_munmap\
 # wholesale here rather than picked one at a time, since libc_gen.a/
 # libc_printf.a pull in an unpredictable transitive subset of them
 # depending on which real Apple .c file happens to get linked in first.
-SYS_OBJS=$(ls "$OUT"/simple_obj/sys_*.o)
+SYS_OBJS=$(ls "$OUT"/simple_obj/sys_*.o 2>/dev/null || true)
 
 # Real, pre-existing duplicate-archive-member conflict (same one
 # build_llvm_libcxx.sh's own header comment documents and fixes the same
