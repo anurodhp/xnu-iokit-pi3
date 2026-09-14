@@ -100,6 +100,17 @@ fi
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     libunwind_sched_yield.c -o "$OUT/uname_sched_yield.o"
 
+# ___gdtoa_locks (COMMON/tentative symbol, glue.o) -- same real gap
+# already fixed in build_cron.sh/build_removefile.sh: libc_printf.a's
+# vfprintf.o/xprintf_float.o reference it, but a COMMON symbol
+# reference doesn't trigger ld64's normal on-demand archive re-scan the
+# way a strong T/D symbol would, so listing libc_printf.a a second time
+# doesn't pull glue.o in. `ar x` it directly instead (never
+# -force_load: that pulls in unrelated/incompatible objects too, see
+# build_cron.sh's own header for the real example).
+mkdir -p "$OUT/uname_glue_extract"
+(cd "$OUT/uname_glue_extract" && ar x "../libc_printf.a" glue.o)
+
 # Same TSD-bootstrap-before-any-real-libc-call requirement every prior
 # tier needs (compat_mode()'s pthread_once, setlocale(), etc all read
 # TSD) -- pthread_tsd_shim_libc_bootstrap.o is the real, already-verified
@@ -108,7 +119,7 @@ fi
     -o uname.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/uname/uname_main_wrapper.o" "$OUT/uname/uname.o" "$OUT/uname/get_compat.o" "$OUT/uname/getopt.o" \
-    "$OUT/libc_printf.a" \
+    "$OUT/libc_printf.a" "$OUT/uname_glue_extract/glue.o" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
     "$OUT/libpthread.a" "$OUT/uname_sched_yield_trap.o" "$OUT/uname_sched_yield.o" \
