@@ -322,13 +322,27 @@ done
 # `CRT_DYNAMIC_LINKING`) -- a real, honestly-flagged architecture gap,
 # not fabricated completeness. Until real dyld-side ProgramVars support
 # exists, this dylib owns the actual storage directly (it's the first,
-# and so far only, real consumer needing it) -- a minimal, explicit
-# `char **environ = NULL;` definition, not a stub: setenv()/getenv()
-# read and write it correctly once real dyld or crt-style code sets
-# `*environ = ...` to a real envp (documented as an open item here
-# rather than silently working around it).
+# and so far only, real consumer needing it).
+#
+# REAL BUG FOUND+FIXED 2026-09-14 (found via a real QEMU boot +
+# -user_fault_debug, launchd's own real main() -> launchd_runtime_init()
+# returns, then `if (NULL == getenv("PATH")) setenv("PATH", ...)`
+# crashed with EXC_BAD_ACCESS, far 0x0, backtrace confirming the fault
+# was inside real Apple setenv.c called from launchd's real main()):
+# the initial value here was a null POINTER (`environ = 0`), but real
+# Apple's setenv.c/getenv.c (third_party/Libc/stdlib/FreeBSD/*.c,
+# already linked into this dylib) never NULL-checks `environ` itself --
+# every real implementation assumes it always points to AT LEAST a
+# one-element, NULL-terminated array (a real, empty envp), the same
+# invariant a real exec()'d process's envp always satisfies even with
+# zero real variables. `environ = 0` is a null pointer to nothing,
+# so the very first real environ[N] scan inside setenv()/getenv()
+# dereferences NULL directly. Fixed by pointing environ at a real
+# static one-element `{ NULL }` array instead -- a real, minimal,
+# correctly-shaped empty environment, not a stub.
 cat > "$OUT/environ_storage_compat.c" <<'EOF'
-char **environ = 0;
+static char *empty_environ[1] = { 0 };
+char **environ = empty_environ;
 EOF
 "$CLANG" $SIGLIST_CFLAGS "$OUT/environ_storage_compat.c" -o "$EXTRACT/environ_storage_compat.o"
 
