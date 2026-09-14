@@ -445,11 +445,19 @@ if [ "$fail" -eq 0 ]; then
     # though nothing calls tcdrain(3) itself - same real gap, same real
     # fix (libpthread.a only exports the $UNIX2003-suffixed symbol) as
     # build_ps.sh already found for the identical real termios.c.
+    # ___gdtoa_locks (COMMON/tentative symbol, glue.o): same real gap
+    # already fixed in build_cron.sh/build_removefile.sh/build_uname.sh
+    # -- libc_printf.a's vfprintf.o/xprintf_float.o reference it, but a
+    # COMMON symbol reference doesn't trigger ld64's normal on-demand
+    # archive re-scan, so listing libc_printf.a again wouldn't pull
+    # glue.o in. `ar x` it directly instead (never -force_load).
+    mkdir -p "$BOUT/glue_extract"
+    (cd "$BOUT/glue_extract" && ar x "../../$OUT/libc_printf.a" glue.o)
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
         -o bash.macho \
         ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
         "$BOUT"/obj/*.o "$BOUT"/sys_stubs/*.o \
-        "$OUT/libc_printf.a" "$OUT/libc_stdio.a" "$OUT/libc_locale.a" "$OUT/libc_gen.a" "$OUT/libc_regex.a" "$OUT/libc_string.a" \
+        "$OUT/libc_printf.a" "$BOUT/glue_extract/glue.o" "$OUT/libc_stdio.a" "$OUT/libc_locale.a" "$OUT/libc_gen.a" "$OUT/libc_regex.a" "$OUT/libc_string.a" \
         "$OUT/libunwind.a" "$OUT/libpthread.a" "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/libplatform.a" \
         -Wl,-alias,_pthread_testcancel,'_pthread_testcancel$UNIX2003' \
         -Wl,-alias,_setenv,'_setenv$UNIX2003' \
