@@ -514,7 +514,7 @@ NEED_LIBC_STDIO_TIER=0
 [ -f "$OUT/libc_gen.a" ] || NEED_LIBC_STDIO_TIER=1
 [ -f "$OUT/libc_stdio.a" ] || NEED_LIBC_STDIO_TIER=1
 [ -f "$OUT/libc_locale_for_stdio.a" ] || NEED_LIBC_STDIO_TIER=1
-PTHREAD_SMOKETEST_SYS_OBJS=$(ls "$OUT"/simple_obj/sys_*.o 2>/dev/null)
+PTHREAD_SMOKETEST_SYS_OBJS=$(ls "$OUT"/simple_obj/sys_*.o 2>/dev/null || true)
 [ -n "$PTHREAD_SMOKETEST_SYS_OBJS" ] || NEED_LIBC_STDIO_TIER=1
 if [ "$NEED_LIBC_STDIO_TIER" = "1" ]; then
     echo "skip: pthread_smoketest.macho (libc_gen.a/libc_stdio.a/libc_locale_for_stdio.a/"
