@@ -241,6 +241,61 @@ echo "wrote $OUT/libc_locale_for_stdio.a (libc_locale.a minus its now-redundant 
     -DVARIANT_STATIC -DVARIANT_CANCELABLE -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \
     -I $LIBC/include \
     libc_stdio_smoketest.c -o "$OUT/libc_stdio_smoketest.o"
+# Real gap, found 2026-09-13 via a live build_everything.sh run (the
+# first time this smoketest ever actually linked a real libpthread.a
+# with real pthread_create() support -- every prior attempt died earlier
+# in a real cycle before reaching this point): pthread_main_thread_
+# bootstrap.o (this project's own file, real Apple pthread_create() path)
+# calls real mmap()/munmap() directly for stack/metadata allocation, and
+# this fully static link (-static, no dyld) has no way to reach
+# libSystem.B.dylib's own real _mmap/_munmap export -- build_simple_cmds.sh's
+# own header comment documents that this project deliberately dropped its
+# static sys____mmap.o/sys____munmap.o stubs once the dylib covered it
+# for real, which is correct for every dynamically-linked real command
+# but leaves genuinely no static provider for a smoketest like this one.
+#
+# mmap/munmap are both real NO_SYSCALL_STUB entries in syscalls.master
+# (confirmed) -- real Apple's actual plain _mmap/_munmap come from
+# hand-written wrappers (third_party/xnu-7195/libsyscall/wrappers/unix03/
+# mmap.c and munmap.c) that call raw __mmap/__munmap (TWO leading
+# underscores) internally, do real UNIX03 parameter validation, and hook
+# real stack-logging (__syscall_logger/mach_task_self()) -- a much bigger
+# real dependency chain (checked: no __mmap.s/__mmap raw-trap file exists
+# anywhere in this checkout, unlike the ordinary cancelable syscalls that
+# create-syscalls.pl's generic template handles) than is worth pulling in
+# for a throwaway verification smoketest. libc_stdio.a itself (the real,
+# shipped archive) already wrote successfully above, needing none of
+# this. Pragmatic fix for smoketest purposes only: alias the plain names
+# directly to the raw kernel trap create-syscalls.pl DOES generate
+# (___mmap/___munmap, confirmed via nm) -- functionally correct (real
+# kernel mmap/munmap, real pthread stack allocation), just skipping real
+# Apple's extra UNIX03 parameter validation and stack-logging hook, which
+# this smoketest doesn't exercise or need.
+#
+# `-Wl,-alias` argument order, empirically confirmed this session (the
+# existing _mprotect/_kill/_write/_sleep/_kdebug_trace aliases above
+# already use it correctly, this is just documenting it since it's easy
+# to get backwards): `-alias <symbol that already exists> <new alias
+# name to create>` -- NOT the reverse. Verified with a minimal standalone
+# repro: `-alias _real_func _desired_new_name` correctly makes
+# `_desired_new_name` resolve to `_real_func`'s address; the reversed
+# order makes ld64-609 crash with "Assertion failed: (target != NULL)"
+# instead of erroring cleanly (same ld64-609 fragility class as
+# docs/backlog.md's other documented -alias/-fixup_chains bugs).
+MACSDK="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null)"
+MMAP_TMPGEN="$(mktemp -d)"
+trap 'rm -rf "$MMAP_TMPGEN"' EXIT
+ARCHS=arm64 perl "$XNU/libsyscall/xcodescripts/create-syscalls.pl" \
+    "$XNU/bsd/kern/syscalls.master" \
+    "$XNU/libsyscall/custom" \
+    "$XNU/libsyscall/Platforms" \
+    iPhoneOS \
+    "$MMAP_TMPGEN" >/dev/null
+MMAP_SYSCFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -I $XNU/libsyscall/custom -I $XNU/libsyscall/mach -idirafter $XNU/osfmk -idirafter $MACSDK/usr/include"
+"$CLANG" $MMAP_SYSCFLAGS "$MMAP_TMPGEN/___mmap.s" -o "$OUT/sys_mmap_for_libc_stdio_smoketest.o"
+"$CLANG" $MMAP_SYSCFLAGS "$MMAP_TMPGEN/___munmap.s" -o "$OUT/sys_munmap_for_libc_stdio_smoketest.o"
+rm -rf "$MMAP_TMPGEN"
+trap - EXIT
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o libc_stdio_smoketest.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
@@ -248,6 +303,7 @@ echo "wrote $OUT/libc_locale_for_stdio.a (libc_locale.a minus its now-redundant 
     "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_stdio.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
     "$OUT/libpthread.a" \
+    "$OUT/sys_mmap_for_libc_stdio_smoketest.o" "$OUT/sys_munmap_for_libc_stdio_smoketest.o" \
     "$OUT/libclosure.a" \
     "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
     "$OUT/libunwind.a" \
@@ -256,7 +312,9 @@ echo "wrote $OUT/libc_locale_for_stdio.a (libc_locale.a minus its now-redundant 
     -Wl,-alias,___kill,_kill \
     -Wl,-alias,_write,'_write$UNIX2003' \
     -Wl,-alias,__mal_semwait_sleep,'_sleep$UNIX2003' \
-    -Wl,-alias,___kdebug_trace,_kdebug_trace
+    -Wl,-alias,___kdebug_trace,_kdebug_trace \
+    -Wl,-alias,___mmap,_mmap \
+    -Wl,-alias,___munmap,_munmap
 # libc_stdio.a is listed twice deliberately: real ld64, unlike a symbol-
 # table-indexed linker, only pulls archive members in a single left-to-
 # right pass, so libc_locale_for_stdio.a's collate.o/setrunelocale.o
