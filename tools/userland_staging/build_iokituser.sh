@@ -282,7 +282,17 @@ else
     -I "$OUT/compat_include" -I "$IOKITUSER" -I "$XNU/iokit" -I "$XNU/libkern" \
     -idirafter "$XNU/osfmk" -I "$XNU/libsyscall/mach" \
     iokituser_smoketest.c -o "$OUT/iokituser_smoketest.o"
+# -U _pthread_main_thread_bootstrap (2026-09-14): same real weak_import
+# crt.c gained 2026-09-01 (DAR-164) that build_libplatform.sh's own
+# smoketest already tolerates the identical way -- this script doesn't
+# link libpthread.a either, so the reference is genuinely unresolved.
+# Never hit before because the NEED_LIBC_STDIO_TIER soft-skip above
+# always fired under this project's old, looser run order (libc_stdio.a
+# wasn't built yet when iokituser ran); gen_build_order.py's real
+# dependency order now gets here with libc_stdio.a already present, so
+# this smoketest link is attempted for the first time.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
+    -Wl,-U,_pthread_main_thread_bootstrap \
     -o iokituser_smoketest.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/iokituser_smoketest.o" \
@@ -301,12 +311,17 @@ otool -l iokituser_smoketest.macho | grep -q LC_LOAD_DYLIB && \
     { echo "error: iokituser_smoketest.macho unexpectedly links a dylib" >&2; exit 1; }
 otool -l iokituser_smoketest.macho | grep -q LC_UNIXTHREAD || \
     { echo "error: iokituser_smoketest.macho missing LC_UNIXTHREAD (not a static Mach-O entry)" >&2; exit 1; }
-if nm -u iokituser_smoketest.macho | grep -q .; then
+# _pthread_main_thread_bootstrap is the ONE deliberately-unresolved
+# symbol here (crt.c's optional weak_import hook, -U'd above, same
+# real reasoning as build_libplatform.sh's own identical filter) --
+# filtered out so this check keeps flagging real, unintended gaps
+# instead of always firing.
+if nm -u iokituser_smoketest.macho | grep -v '^_pthread_main_thread_bootstrap$' | grep -q .; then
     echo "error: iokituser_smoketest.macho has undefined symbols:" >&2
-    nm -u iokituser_smoketest.macho >&2
+    nm -u iokituser_smoketest.macho | grep -v '^_pthread_main_thread_bootstrap$' >&2
     exit 1
 fi
-echo "iokituser_smoketest.macho: fully static, zero undefined symbols"
+echo "iokituser_smoketest.macho: fully static, zero undefined symbols (besides the deliberately-unresolved weak_import hook)"
 echo
 echo "NOTE: this smoketest has NOT been run under real QEMU yet -- do that"
 echo "(inject into the SD image, boot, run it, check for PASS) before"
