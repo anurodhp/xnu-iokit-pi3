@@ -443,6 +443,22 @@ ar rcs "$OUT/liblaunchctl_extras.a" \
     "$OUT/launchctl_obj/launchctl_task_for_pid_trap.o"
 echo "wrote $OUT/liblaunchctl_extras.a"
 
+# Real gap, found 2026-09-14: linking the whole of libcopyfile.a here
+# (wholesale, for its real copyfile_syscalls.o -- see this script's own
+# header comment on why syslog() comes from there now) pulls in
+# strtoul.o too, whose real ___global_locale reference has no resolved
+# address in this specific static link -- a real "ld64 wants a local
+# fixup target that doesn't exist here" error (`ld: fixup error
+# (kind=arm64_adrp_lo12)... target '___global_locale' does not have
+# address`), the same class already documented in
+# feedback_ld64_alias_nonlocal_base_bug.md. Narrow `ar x` just the one
+# real object this script actually needs instead (confirmed via `nm`:
+# copyfile_syscalls.o alone provides the real _syslog this script
+# calls) -- never -force_load/wholesale-link an archive just to reach
+# one member.
+mkdir -p "$OUT/launchctl_copyfile_extract"
+(cd "$OUT/launchctl_copyfile_extract" && ar x "../libcopyfile.a" copyfile_syscalls.o)
+
 # Real libxpc_syscalls2.a mach_portUser.o narrowing against
 # libCoreFoundation.a's own cf_mach_port_mig_fallback_stub.o (this
 # script's OWN local launchctl_xpc_syscalls2_fixed.a copy) is retired:
@@ -544,7 +560,7 @@ rm -f "$OUT/launchctl.macho"
     "$OUT/launchctl_obj/launchctl.o" \
     "$OUT/sys_getpid_current_pid_only.o" \
     "$OUT/liblaunchctl_extras.a" \
-    "$OUT/libcopyfile.a" "$OUT/launchd_libc_extras.a" \
+    "$OUT/launchctl_copyfile_extract/copyfile_syscalls.o" "$OUT/launchd_libc_extras.a" \
     "$OUT/liblaunchd_mig.a" "$OUT/liblaunchd_syscalls.a" \
     `# libclosure.a/libmalloc.a/libplatform.a/libpthread.a/libc_gen.a/` \
     `# libc_string.a/libc_stdio.a/libc_printf.a/libc_locale_for_stdio.a` \
