@@ -128,7 +128,49 @@ fi
 # scoped to this one build tree, not filed as a general ICU.patch change,
 # since it's specific to combining --disable-tools with
 # --with-cross-build, not a general upstream inconsistency.
-sed -i '' 's/^#DATASUBDIR = data$/DATASUBDIR = data/' Makefile
+# Real gap, found 2026-09-14: this exact sed invocation has hung 3
+# times in a row across separate build_everything.sh attempts at this
+# exact point (right after ICU host's config.status finishes), always
+# with the SAME signature -- `sample <pid> 1` on the stuck process
+# shows its entire call stack is just `_dyld_start`, meaning the
+# process hangs during dynamic linker startup before main() even
+# runs. Running the identical command directly (outside this deep
+# build_everything.sh process tree) always completes instantly, and a
+# same-machine retry has always succeeded -- this is a transient
+# macOS process-launch stall (most likely a backlogged code-signing/
+# provenance-check daemon after the kernel's heavy parallel `make -j`
+# build), not a real bug in this command or a stdin issue. A
+# background-and-watchdog retry loop is the minimal real fix: run sed
+# in the background, give it 15s to finish naturally (the real case
+# takes well under 1s), kill and retry (up to 3 total attempts) if it
+# doesn't. A no-op on the common path.
+ICU_DATASUBDIR_SED_OK=0
+for _attempt in 1 2 3; do
+    sed -i '' 's/^#DATASUBDIR = data$/DATASUBDIR = data/' Makefile &
+    _sed_pid=$!
+    _waited=0
+    while kill -0 "$_sed_pid" 2>/dev/null && [ "$_waited" -lt 15 ]; do
+        sleep 1
+        _waited=$((_waited + 1))
+    done
+    if kill -0 "$_sed_pid" 2>/dev/null; then
+        echo "warning: sed -i DATASUBDIR hung (attempt $_attempt/3, transient dyld launch stall, see build_icu_target.sh's own comment) -- killing and retrying" >&2
+        kill -9 "$_sed_pid" 2>/dev/null
+        wait "$_sed_pid" 2>/dev/null
+        continue
+    fi
+    wait "$_sed_pid"
+    ICU_DATASUBDIR_SED_OK=1
+    break
+done
+if [ "$ICU_DATASUBDIR_SED_OK" != "1" ]; then
+    echo "error: sed -i DATASUBDIR failed 3 times (not just the known transient hang) -- investigate for real" >&2
+    exit 1
+fi
+grep -q '^DATASUBDIR = data$' Makefile || {
+    echo "error: DATASUBDIR edit didn't take effect" >&2
+    exit 1
+}
 
 NCPU=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
 echo "+ building ($GMAKE -j$NCPU)"
