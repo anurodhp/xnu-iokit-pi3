@@ -207,20 +207,27 @@ echo "ps (real Apple adv_cmds/ps): $ok compiled, $skip skipped (tasks.c now real
 "$CLANG" $CFLAGS libunwind_sched_yield.c -o "$OUT/ps_obj/ps_sched_yield.o"
 "$CLANG" $CFLAGS ../libinfo_custom/libinfo_custom.c -o "$OUT/ps_obj/libinfo_custom.o"
 
+# ___gdtoa_locks (COMMON/tentative symbol, glue.o): same real gap
+# already fixed in build_cron.sh/build_removefile.sh/build_uname.sh/
+# build_bash.sh/build_copyfile.sh/build_getty.sh/build_ifconfig.sh/
+# build_login.sh/build_ping.sh -- ar x it directly (never -force_load).
+mkdir -p "$OUT/ps_glue_extract"
+(cd "$OUT/ps_glue_extract" && ar x "../libc_printf.a" glue.o)
+
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o ps.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/ps_obj/*.o \
     "$OUT/simple_obj/sys____mmap.o" "$OUT/simple_obj/sys____munmap.o" \
-    "$OUT/libc_printf.a" \
+    "$OUT/libc_printf.a" "$OUT/ps_glue_extract/glue.o" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
     "$OUT/libpthread.a" \
     "$OUT/libclosure.a" \
     "$OUT/libmach_ipc.a" \
     "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
-    -Wl,-alias,'_mmap$UNIX2003',_mmap \
-    -Wl,-alias,'_munmap$UNIX2003',_munmap \
+    -Wl,-alias,___mmap,_mmap \
+    -Wl,-alias,___munmap,_munmap \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
     -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \

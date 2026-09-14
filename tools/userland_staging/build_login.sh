@@ -426,6 +426,13 @@ ar p "$OUT/launchd_libc_extras.a" libplatform_sigaction.o > "$OUT/login_obj/logi
 # header comment.
 ar p "$OUT/launchd_libc_extras.a" ncurses_extra_syscalls.o > "$OUT/login_obj/login_sigaction_c.o"
 
+# ___gdtoa_locks (COMMON/tentative symbol, glue.o): same real gap
+# already fixed in build_cron.sh/build_removefile.sh/build_uname.sh/
+# build_bash.sh/build_copyfile.sh/build_getty.sh/build_ifconfig.sh --
+# ar x it directly (never -force_load).
+mkdir -p "$OUT/login_glue_extract"
+(cd "$OUT/login_glue_extract" && ar x "../libc_printf.a" glue.o)
+
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o login.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
@@ -435,7 +442,7 @@ ar p "$OUT/launchd_libc_extras.a" ncurses_extra_syscalls.o > "$OUT/login_obj/log
     "$OUT/simple_obj/sys__chflags.o" "$OUT/simple_obj/sys__setgid.o" "$OUT/simple_obj/sys__setuid.o" \
     "$OUT/simple_obj/sys____mmap.o" "$OUT/simple_obj/sys__geteuid.o" "$OUT/simple_obj/sys__getuid.o" \
     "$OUT/simple_obj/sys__getpriority.o" \
-    "$OUT/libc_printf.a" \
+    "$OUT/libc_printf.a" "$OUT/login_glue_extract/glue.o" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
     "$OUT/libpthread.a" \
@@ -491,7 +498,7 @@ ar p "$OUT/launchd_libc_extras.a" ncurses_extra_syscalls.o > "$OUT/login_obj/log
     -Wl,-alias,__err,_err \
     -Wl,-alias,_fwrite,'_fwrite$UNIX2003' \
     -Wl,-alias,_getrlimit,'_getrlimit$UNIX2003' \
-    -Wl,-alias,'_mmap$UNIX2003',_mmap \
+    -Wl,-alias,___mmap,_mmap \
     2>"$OUT/login_link.err" \
     || { echo "error: real link failed -- see $OUT/login_link.err" >&2; tail -100 "$OUT/login_link.err" >&2; exit 1; }
 echo "wrote login.macho"

@@ -364,6 +364,16 @@ fi
     libunwind_sched_yield.s -o "$OUT/getty_obj/getty_sched_yield_trap.o"
 "$CLANG" $CFLAGS libunwind_sched_yield.c -o "$OUT/getty_obj/getty_sched_yield.o"
 
+# ___gdtoa_locks (COMMON/tentative symbol, glue.o): same real gap
+# already fixed in build_cron.sh/build_removefile.sh/build_uname.sh/
+# build_bash.sh/build_copyfile.sh -- libc_printf.a's vfprintf.o/
+# xprintf_float.o reference it, but a COMMON symbol reference doesn't
+# trigger ld64's normal on-demand archive re-scan, so listing
+# libc_printf.a again wouldn't pull glue.o in. `ar x` it directly
+# instead (never -force_load).
+mkdir -p "$OUT/getty_glue_extract"
+(cd "$OUT/getty_glue_extract" && ar x "../libc_printf.a" glue.o)
+
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o getty.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
@@ -372,7 +382,7 @@ fi
     "$OUT/simple_obj/sys____chmod.o" "$OUT/simple_obj/sys__chown.o" \
     "$OUT/simple_obj/sys__dup2.o" "$OUT/simple_obj/sys__execve.o" \
     "$OUT/simple_obj/sys____mmap.o" "$OUT/simple_obj/sys____munmap.o" \
-    "$OUT/libc_printf.a" \
+    "$OUT/libc_printf.a" "$OUT/getty_glue_extract/glue.o" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
     "$OUT/libpthread.a" \
@@ -419,8 +429,8 @@ fi
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003','__pthread_rwlock_rdlock' \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003','__pthread_rwlock_wrlock' \
     -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003','__pthread_rwlock_unlock' \
-    -Wl,-alias,'_mmap$UNIX2003',_mmap \
-    -Wl,-alias,'_munmap$UNIX2003',_munmap
+    -Wl,-alias,___mmap,_mmap \
+    -Wl,-alias,___munmap,_munmap
 echo "wrote getty.macho"
 
 otool -l getty.macho | grep -q LC_LOAD_DYLIB && \

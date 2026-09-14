@@ -186,12 +186,19 @@ fi
     libunwind_sched_yield.s -o "$OUT/ifconfig_obj/ifconfig_sched_yield_trap.o"
 "$CLANG" $CFLAGS libunwind_sched_yield.c -o "$OUT/ifconfig_obj/ifconfig_sched_yield.o"
 
+# ___gdtoa_locks (COMMON/tentative symbol, glue.o): same real gap
+# already fixed in build_cron.sh/build_removefile.sh/build_uname.sh/
+# build_bash.sh/build_copyfile.sh/build_getty.sh -- ar x it directly
+# (never -force_load).
+mkdir -p "$OUT/ifconfig_glue_extract"
+(cd "$OUT/ifconfig_glue_extract" && ar x "../libc_printf.a" glue.o)
+
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o ifconfig.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/ifconfig_obj/*.o \
     "$OUT/simple_obj/sys____mmap.o" "$OUT/simple_obj/sys____munmap.o" \
-    "$OUT/libc_printf.a" \
+    "$OUT/libc_printf.a" "$OUT/ifconfig_glue_extract/glue.o" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_string.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
     "$OUT/libpthread.a" \
@@ -216,8 +223,8 @@ fi
     -Wl,-alias,_strerror,'_strerror$UNIX2003' \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
     -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
-    -Wl,-alias,'_mmap$UNIX2003',_mmap \
-    -Wl,-alias,'_munmap$UNIX2003',_munmap
+    -Wl,-alias,___mmap,_mmap \
+    -Wl,-alias,___munmap,_munmap
 echo "wrote ifconfig.macho"
 
 otool -l ifconfig.macho | grep -q LC_LOAD_DYLIB && \

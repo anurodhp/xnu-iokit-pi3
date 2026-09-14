@@ -269,12 +269,49 @@ fi
     libunwind_sched_yield.s -o "$OUT/ping_obj/ping_sched_yield_trap.o"
 "$CLANG" $CFLAGS libunwind_sched_yield.c -o "$OUT/ping_obj/ping_sched_yield.o"
 
+# ___gdtoa_locks (COMMON/tentative symbol, glue.o): same real gap
+# already fixed in build_cron.sh/build_removefile.sh/build_uname.sh/
+# build_bash.sh/build_copyfile.sh/build_getty.sh/build_ifconfig.sh/
+# build_login.sh -- ar x it directly (never -force_load).
+mkdir -p "$OUT/ping_glue_extract"
+(cd "$OUT/ping_glue_extract" && ar x "../libc_printf.a" glue.o)
+
+# _mmap/_munmap: the comment above (2026-08-25 addendum) claims
+# libpthread.a already provides a real `_mmap$UNIX2003` symbol and
+# aliases the plain name from it -- that was true of libpthread.a's
+# structure at the time, but real subsequent static-linking cleanup
+# work replaced that with a direct, plain `_mmap`/`_munmap` definition
+# (pthread_mmap_compat.o, bundled into libpthread.a by
+# build_libpthread.sh) with no `$UNIX2003` variant at all, making this
+# alias stale (same real gap independently hit and fixed in
+# build_cron.sh/build_removefile.sh/build_uname.sh/build_bash.sh/
+# build_copyfile.sh/build_getty.sh/build_ifconfig.sh/build_login.sh --
+# `ld: warning: undefined base symbol '_mmap$UNIX2003'` in every one of
+# those until fixed). Real create-syscalls.pl raw trap + alias to the
+# plain name is the established fix.
+XNU_FOR_MMAP="../../third_party/xnu-7195"
+MACSDK_FOR_MMAP="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null)"
+MMAP_TMPGEN="$(mktemp -d)"
+trap 'rm -rf "$MMAP_TMPGEN"' EXIT
+ARCHS=arm64 perl "$XNU_FOR_MMAP/libsyscall/xcodescripts/create-syscalls.pl" \
+    "$XNU_FOR_MMAP/bsd/kern/syscalls.master" \
+    "$XNU_FOR_MMAP/libsyscall/custom" \
+    "$XNU_FOR_MMAP/libsyscall/Platforms" \
+    iPhoneOS \
+    "$MMAP_TMPGEN" >/dev/null
+MMAP_SYSCFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -I $XNU_FOR_MMAP/libsyscall/custom -I $XNU_FOR_MMAP/libsyscall/mach -idirafter $XNU_FOR_MMAP/osfmk -idirafter $MACSDK_FOR_MMAP/usr/include"
+"$CLANG" $MMAP_SYSCFLAGS "$MMAP_TMPGEN/___mmap.s" -o "$OUT/ping_mmap_raw.o"
+"$CLANG" $MMAP_SYSCFLAGS "$MMAP_TMPGEN/___munmap.s" -o "$OUT/ping_munmap_raw.o"
+rm -rf "$MMAP_TMPGEN"
+trap - EXIT
+
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o ping.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/ping_obj/*.o \
+    "$OUT/ping_mmap_raw.o" "$OUT/ping_munmap_raw.o" \
     "$OUT/libm.a" \
-    "$OUT/libc_printf.a" \
+    "$OUT/libc_printf.a" "$OUT/ping_glue_extract/glue.o" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_string.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
     "$OUT/libpthread.a" \
@@ -310,7 +347,8 @@ fi
     -Wl,-alias,_usleep,'_usleep$UNIX2003' \
     -Wl,-alias,_strtod,'_strtod$UNIX2003' \
     -Wl,-alias,__writev,'_writev$UNIX2003' \
-    -Wl,-alias,'_mmap$UNIX2003',_mmap \
+    -Wl,-alias,___mmap,_mmap \
+    -Wl,-alias,___munmap,_munmap \
     2>"$OUT/ping_link.err" && echo "wrote ping.macho" || { echo "error: ping.macho link failed:" >&2; cat "$OUT/ping_link.err" >&2; exit 1; }
 
 otool -l ping.macho | grep -q LC_LOAD_DYLIB && \
