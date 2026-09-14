@@ -250,9 +250,27 @@ if [ ! -d "$OUT/dispatch_obj" ]; then
     echo "error: $OUT/dispatch_obj not found -- run build_libdispatch_real.sh first" >&2
     exit 1
 fi
-if [ ! -f "$OUT/system/libsystem_c.dylib" ] || [ ! -f "$OUT/system/libsystem_malloc.dylib" ] || \
-   [ ! -f "$OUT/system/libsystem_pthread.dylib" ] || [ ! -f "$OUT/system/libsystem_kernel.dylib" ]; then
-    echo "error: libsystem_c/malloc/pthread/kernel.dylib not found -- run those build scripts first" >&2
+# Real gap, found 2026-09-13 (surfaced immediately by the very next
+# build_everything.sh attempt after removing this script's dead
+# syslogd_libc_extras.a check, which had been the only thing anchoring
+# it late enough in the order for these 4 real prerequisites to
+# accidentally already be satisfied): this combined error message names
+# no literal build_X.sh, so gen_build_order.py's parser recognized none
+# of these real dependencies. Named individually here.
+if [ ! -f "$OUT/system/libsystem_c.dylib" ]; then
+    echo "error: $OUT/system/libsystem_c.dylib not found -- run build_libsystem_c.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libsystem_malloc.dylib" ]; then
+    echo "error: $OUT/system/libsystem_malloc.dylib not found -- run build_libsystem_malloc.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libsystem_pthread.dylib" ]; then
+    echo "error: $OUT/system/libsystem_pthread.dylib not found -- run build_libsystem_pthread.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libsystem_kernel.dylib" ]; then
+    echo "error: $OUT/system/libsystem_kernel.dylib not found -- run build_libsystem_kernel.sh first" >&2
     exit 1
 fi
 # syslogd_libc_extras.a check REMOVED 2026-09-13 (found via this
