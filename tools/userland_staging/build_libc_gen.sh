@@ -237,19 +237,58 @@ fi
     -DVARIANT_STATIC -DVARIANT_CANCELABLE -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \
     -I $LIBC/include \
     libc_gen_smoketest.c -o "$OUT/libc_gen_smoketest.o"
+# Real gap, found 2026-09-13 via a live build_everything.sh run (first
+# time this smoketest ever actually linked real libc_stdio.a with real
+# pthread-backed locking): findfp.o/libc_stdio_shims.o's real
+# pthread_mutex_lock/unlock/trylock/destroy calls (findfp.c's real
+# stream-table locking, see build_libc_stdio.sh's own header comment for
+# the stub->real sweep) need libpthread.a linked in for real, and crt.c's
+# own optional weak_import hook (_pthread_main_thread_bootstrap) needs
+# either the real archive or the same DAR-302-class -U deferral used
+# elsewhere. build_libpthread.sh already runs before this script
+# (position 22 vs 27, confirmed via gen_build_order.py, NOT a cycle --
+# libc_stdio.a has no dependency back on libc_gen.a), so linking the
+# real archive is correct here, matching build_libc_stdio.sh's own
+# already-working smoketest recipe (same libclosure.a/libunwind.a
+# companions for real pthread_once/TSD machinery, same real raw
+# ___mmap/___munmap trap + alias for pthread_create's real stack
+# allocation -- mmap/munmap are NO_SYSCALL_STUB entries in
+# syscalls.master with no static provider since libSystem.B.dylib took
+# over for real, see that script's own header comment for the full
+# citation).
+MACSDK="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null)"
+MMAP_TMPGEN="$(mktemp -d)"
+trap 'rm -rf "$MMAP_TMPGEN"' EXIT
+ARCHS=arm64 perl "$XNU/libsyscall/xcodescripts/create-syscalls.pl" \
+    "$XNU/bsd/kern/syscalls.master" \
+    "$XNU/libsyscall/custom" \
+    "$XNU/libsyscall/Platforms" \
+    iPhoneOS \
+    "$MMAP_TMPGEN" >/dev/null
+MMAP_SYSCFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -I $XNU/libsyscall/custom -I $XNU/libsyscall/mach -idirafter $XNU/osfmk -idirafter $MACSDK/usr/include"
+"$CLANG" $MMAP_SYSCFLAGS "$MMAP_TMPGEN/___mmap.s" -o "$OUT/sys_mmap_for_libc_gen_smoketest.o"
+"$CLANG" $MMAP_SYSCFLAGS "$MMAP_TMPGEN/___munmap.s" -o "$OUT/sys_munmap_for_libc_gen_smoketest.o"
+rm -rf "$MMAP_TMPGEN"
+trap - EXIT
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o libc_gen_smoketest.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/libc_gen_smoketest.o" \
     "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
+    "$OUT/libpthread.a" \
+    "$OUT/sys_mmap_for_libc_gen_smoketest.o" "$OUT/sys_munmap_for_libc_gen_smoketest.o" \
+    "$OUT/libclosure.a" \
     "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    "$OUT/libunwind.a" \
     -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
     -Wl,-alias,___kill,'_kill$UNIX2003' \
     -Wl,-alias,___kill,_kill \
     -Wl,-alias,_write,'_write$UNIX2003' \
     -Wl,-alias,__mal_semwait_sleep,'_sleep$UNIX2003' \
-    -Wl,-alias,___kdebug_trace,_kdebug_trace
+    -Wl,-alias,___kdebug_trace,_kdebug_trace \
+    -Wl,-alias,___mmap,_mmap \
+    -Wl,-alias,___munmap,_munmap
 echo "wrote libc_gen_smoketest.macho"
 
 otool -l libc_gen_smoketest.macho | grep -q LC_LOAD_DYLIB && \
