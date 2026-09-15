@@ -84,20 +84,49 @@ check_divergence() {
 	[ -e "$dst" ] || return 0
 	cmp -s "$src" "$dst" && return 0
 	local rel="${dst#$XNU/}"
-	if ! git -C "$XNU" diff --quiet -- "$rel" 2>/dev/null; then
+	# DAR-299: `git diff --quiet` is blind to two real cases this guard
+	# needs to catch. First, an UNTRACKED file (never `git add`ed in the
+	# xnu-7195 submodule) - `git diff` only ever compares tracked content
+	# against the index/HEAD, so it reports nothing for a path git has
+	# never seen, even if that file holds real, unsaved local work.
+	# Second, a file that IS tracked but has real changes STAGED (added)
+	# and not yet committed - `git diff` (no `--cached`) only compares
+	# the working tree against the INDEX, so a staged-but-uncommitted
+	# edit shows as "clean" there even though it differs from HEAD and
+	# could still be lost. `git status --porcelain` covers all three
+	# real states this guard cares about (untracked `??`, staged `A`/`M`,
+	# and working-tree-dirty ` M`) with one check, not guessed - this is
+	# the standard, documented way to ask git "does anything here differ
+	# from what's safely committed."
+	if [ -n "$(git -C "$XNU" status --porcelain -- "$rel" 2>/dev/null)" ]; then
 		diverged+=("$rel")
+		return 1
 	fi
 }
 
 copy_into() {
 	# copy_into <destdir> <files...>
+	#
+	# DAR-299: the real, more severe half of this bug was structural, not
+	# just check_divergence's own untracked-file blind spot above. This
+	# used to be two separate loops over the same file list - one that
+	# called check_divergence for every file, then a SECOND, unconditional
+	# one that cp'd every file regardless of what the first loop found.
+	# The final `if [ ${#diverged[@]} -ne 0 ]` exit (below, after every
+	# copy_into call in the whole script has already run) only ever fires
+	# AFTER every file - diverged or not - has already been overwritten.
+	# A perfectly correct divergence check was still no real protection:
+	# by the time its result was ever acted on, the damage was already
+	# done. Single loop now: a file only gets copied if check_divergence
+	# says it is safe to, while $diverged still accumulates every real
+	# finding so the final error message still reports all of them
+	# together, not just the first.
 	local dst="$1"; shift
 	local f
 	for f in "$@"; do
-		check_divergence "$dst/$(basename "$f")" "$f"
-	done
-	for f in "$@"; do
-		cp "$f" "$dst/$(basename "$f")"
+		if check_divergence "$dst/$(basename "$f")" "$f"; then
+			cp "$f" "$dst/$(basename "$f")"
+		fi
 	done
 }
 
