@@ -393,11 +393,44 @@ done
 if [ "$NEED_OK" -eq 1 ] && [ -f ncurses_smoketest.c ]; then
     rm -f ncurses_smoketest.macho
     "$CLANG" $CFLAGS ncurses_smoketest.c -o "$OUT/ncurses_smoketest.o"
+
+    # ___gdtoa_locks (COMMON/tentative symbol, glue.o): same real gap
+    # already fixed in build_ping.sh/build_cron.sh/build_removefile.sh/
+    # build_uname.sh/build_bash.sh/build_copyfile.sh/build_getty.sh/
+    # build_ifconfig.sh/build_login.sh -- ar x it directly (never
+    # -force_load). Added 2026-09-15 (DAR-311): this smoketest had been
+    # failing to link on exactly this symbol, unnoticed because the link
+    # step only warned instead of failing the build.
+    mkdir -p "$OUT/ncurses_glue_extract"
+    (cd "$OUT/ncurses_glue_extract" && ar x "../libc_printf.a" glue.o)
+
+    # _mmap: referenced by _pthread_create in
+    # libpthread.a(pthread_main_thread_bootstrap.o). Real
+    # create-syscalls.pl raw trap + alias to the plain name is the
+    # established fix, same as build_ping.sh's own (identically
+    # commented) block. Added 2026-09-15 (DAR-311), second of the two
+    # real symbol gaps this smoketest had been silently failing on.
+    XNU_FOR_MMAP="../../third_party/xnu-7195"
+    MACSDK_FOR_MMAP="$(xcrun --sdk macosx --show-sdk-path 2>/dev/null)"
+    MMAP_TMPGEN="$(mktemp -d)"
+    trap 'rm -rf "$MMAP_TMPGEN"' EXIT
+    ARCHS=arm64 perl "$XNU_FOR_MMAP/libsyscall/xcodescripts/create-syscalls.pl" \
+        "$XNU_FOR_MMAP/bsd/kern/syscalls.master" \
+        "$XNU_FOR_MMAP/libsyscall/custom" \
+        "$XNU_FOR_MMAP/libsyscall/Platforms" \
+        iPhoneOS \
+        "$MMAP_TMPGEN" >/dev/null
+    MMAP_SYSCFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -I $XNU_FOR_MMAP/libsyscall/custom -I $XNU_FOR_MMAP/libsyscall/mach -idirafter $XNU_FOR_MMAP/osfmk -idirafter $MACSDK_FOR_MMAP/usr/include"
+    "$CLANG" $MMAP_SYSCFLAGS "$MMAP_TMPGEN/___mmap.s" -o "$OUT/ncurses_mmap_raw.o"
+    "$CLANG" $MMAP_SYSCFLAGS "$MMAP_TMPGEN/___munmap.s" -o "$OUT/ncurses_munmap_raw.o"
+    rm -rf "$MMAP_TMPGEN"
+    trap - EXIT
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
         -o ncurses_smoketest.macho \
         ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
         "$OUT/ncurses_smoketest.o" "$OUT/libncurses.a" \
-        "$OUT/libc_locale_for_stdio.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" \
+        "$OUT/ncurses_mmap_raw.o" "$OUT/ncurses_munmap_raw.o" \
+        "$OUT/libc_locale_for_stdio.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_printf.a" "$OUT/ncurses_glue_extract/glue.o" \
         "$OUT/libc_locale_for_stdio.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
         "$OUT/libmach_ipc.a" \
         "$OUT/libc_string.a" "$OUT/libunwind.a" "$OUT/libpthread.a" "$OUT/libclosure.a" \
@@ -410,7 +443,22 @@ if [ "$NEED_OK" -eq 1 ] && [ -f ncurses_smoketest.c ]; then
         -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
         -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
         -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
-        2>"$OUT/ncurses_smoketest_link.err" && echo "wrote ncurses_smoketest.macho" || echo "WARNING: smoketest link failed (libncurses.a itself is still built -- see $OUT/ncurses_smoketest_link.err)" >&2
+        -Wl,-alias,___mmap,_mmap \
+        -Wl,-alias,___munmap,_munmap \
+        2>"$OUT/ncurses_smoketest_link.err" || {
+            # HARD GATE as of 2026-09-15 (DAR-311). This used to print a
+            # warning and carry on, which made the whole smoketest inert:
+            # it had in fact been failing to link for some time (on
+            # ___gdtoa_locks and _mmap, both now fixed above) and nothing
+            # surfaced it. A verification step that cannot fail the build
+            # verifies nothing -- same reasoning as build_appleusbcdc.sh's
+            # own no-op gate (DAR-294) and build_syslogd.sh's real
+            # bind_target_audit.sh gate.
+            echo "error: ncurses smoketest link failed -- libncurses.a is not linkable against the curated stack:" >&2
+            cat "$OUT/ncurses_smoketest_link.err" >&2
+            exit 1
+        }
+    echo "wrote ncurses_smoketest.macho"
 
     if [ -f ncurses_smoketest.macho ]; then
         otool -l ncurses_smoketest.macho | grep -q LC_LOAD_DYLIB && \
