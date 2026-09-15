@@ -806,7 +806,27 @@ BCM2837DWC2::haltChannel(uint32_t chan, uint32_t *hcintOut)
 		// A forced halt is acknowledged within a frame or two on real
 		// silicon and immediately under emulation; this 50ms bound
 		// only exists so a wedged channel cannot hang the workloop.
-		waitForChannelInt(chan, kHCINT_CHHLTD, 50, &hcint);
+		//
+		// DAR-290: that assumption is unverified, and the real
+		// consequence of it being wrong is serious - HCCHAR.CHENA is
+		// left set, so the next doTransfer()'s CHEN-set write ORs onto
+		// an already-set bit instead of a real disable->enable edge,
+		// silently never arming the next transfer while the controller
+		// keeps servicing stale channel state (the exact "wedged
+		// channel blocks every other endpoint" class DAR-282 fixed for
+		// the direct-NAK path). Re-check CHEN after the wait rather
+		// than trusting waitForChannelInt()'s return value alone was
+		// hit - a genuine miss here is a real, visible-in-the-log
+		// condition worth surfacing, not a silent one, even though no
+		// retry/reset strategy is attempted (unverified whether 50ms is
+		// ever actually insufficient in practice - see this function's
+		// own comment above).
+		if (!waitForChannelInt(chan, kHCINT_CHHLTD, 50, &hcint) &&
+		    (regRead(hcOffset(chan, kDWC2_HCCHAR)) & kHCCHAR_CHEN)) {
+			IOLog("BCM2837DWC2: haltChannel: forced halt did not complete within "
+			      "50ms, channel %u still enabled (HCCHAR=%#x HCINT=%#x)\n",
+			    chan, regRead(hcOffset(chan, kDWC2_HCCHAR)), hcint);
+		}
 	} else {
 		hcint = regRead(hcOffset(chan, kDWC2_HCINT));
 	}

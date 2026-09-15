@@ -853,7 +853,15 @@ BCM2837USBHostController::queueDataTransfer(short functionNumber, short endpoint
 		 * leaked completion.
 		 */
 		if (endpointNumber != 1 || !isIn) {
-			Complete(completion, kIOUSBEndpointNotFound, bufferSize);
+			// DAR-296: every other error path in this function (ep ==
+			// NULL below, bufferSize/memDesc mismatch, fRootHubIntPending
+			// already set) signals failure by return value alone - the
+			// real IOUSBFamily controller-command dispatch layer above
+			// this UIM is what calls Complete() when a UIMCreate*Transfer
+			// call returns non-success. Calling Complete() here too was a
+			// real double-notification: the real caller may see both a
+			// completed-transfer callback and a distinct error return for
+			// what should be one terminal outcome.
 			return kIOUSBEndpointNotFound;
 		}
 		if (fRootHubIntPending) {
@@ -1299,6 +1307,19 @@ BCM2837USBHostController::PublishEnumeratedDevice(const DWC2USBDevice *dev)
 	// for the root hub. This is the equivalent step for a real device, and it
 	// is what lets AppleUSBCDC's IOUSBDevice personality match.
 	nub->registerService();
+
+	// DAR-298: NewDevice() (above) hands back a reference owned by this
+	// function. CreateDevice()'s successful attach() already gave the
+	// registry its own, independent reference (real
+	// IORegistryEntry::attachToParent() -> makeLink() adds this nub to
+	// the parent's child OSArray, and OSArray::setObject() retains -
+	// confirmed by reading xnu-7195's own IORegistryEntry.cpp, not
+	// assumed), so this function's own reference must be released once
+	// it's done using the local pointer, same as the error path above
+	// already does. Left unreleased, every enumerated device leaked one
+	// refcount - real, compounding IORegistry bloat on repeated
+	// enumeration/hot-plug cycles.
+	nub->release();
 
 	return kIOReturnSuccess;
 }
