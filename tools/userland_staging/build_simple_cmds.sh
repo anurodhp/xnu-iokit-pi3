@@ -1357,13 +1357,23 @@ CMD_LIST=(
     # already proven by cp/sed) this tier already has wired. New real
     # pieces: acl.c/acl_entry.c/acl_perm.c/acl_flag.c (real, unmodified
     # Apple posix1e ACL-entry-manipulation source, zero filesec_t
-    # dependency -- needed at link time for print.c's printacl(), dead
-    # code today but must still resolve); ls_acl_compat.c (honest
-    # ENOTSUP/NULL stub for ONLY acl_get_link_np/acl_get_file -- the real
-    # implementation needs a private <sys/filesec.h> layout Apple removed
-    # from the public SDK entirely, confirmed absent from both this
-    # checkout and Xcode 12's SDKs, not reconstructed/guessed -- see that
-    # file's own header and docs/backlog.md for the tracked follow-up);
+    # dependency -- needed at link time for print.c's printacl()).
+    # DAR-148 (2026-09-15): acl_get_link_np()/acl_get_file() are now REAL,
+    # not a stub -- acl_file.c/acl_translate.c/filesec.c/statx_np.c, all
+    # real unmodified Apple source, plus ls_acl_syscalls.c (the three raw
+    # stat64_extended/lstat64_extended/fstat64_extended syscalls,
+    # NO_SYSCALL_STUB, same class of gap as cp_mv_syscalls.c's lchown/
+    # setattrlist) and a small reconstructed <sys/filesec.h>
+    # (ls_acl_compat_headers/sys/filesec.h) -- Apple dropped that ONE
+    # small header from the public SDK, but the opaque filesec_t object
+    # it declares is defined entirely privately inside filesec.c itself
+    # (not reverse-engineered), and the real kernel-ABI struct
+    # (kauth_filesec) it's built on is NOT missing -- Xcode 12's SDK ships
+    # a full, real <sys/kauth.h> directly. This target's HFS+/msdosfs
+    # mounts still have no kernel-side ACL *storage* wired, so
+    # acl_get_link_np() correctly reports "no ACL" for every real file
+    # today regardless -- same observable behavior as the old stub, but
+    # via the real implementation stack rather than an honest placeholder.
     # ls_mbr_compat.c (honest always-fails mbr_identifier_translate --
     # this project has no opendirectoryd, same class of gap as nohup's
     # vprocmgr stub; ls.c's own real uuid_to_name() already has a correct
@@ -1376,7 +1386,7 @@ CMD_LIST=(
     # libutil source, curl-fetched above -- genuinely missing from this
     # checkout, not a libc gap); getbsize.c (real, already proven by du);
     # uuid/uuidsrc/unparse.c (real, already-vendored uuid_unparse_upper).
-    "ls:$FILE_CMDS/ls/ls.c:$FILE_CMDS/ls/print.c|$FILE_CMDS/ls/util.c|$FILE_CMDS/ls/cmp.c|$LIBC/posix1e/acl.c|$LIBC/posix1e/acl_entry.c|$LIBC/posix1e/acl_perm.c|$LIBC/posix1e/acl_flag.c|ls_acl_compat.c|ls_mbr_compat.c|bash_readline_termcap_compat.c|$LIBC/string/FreeBSD/strmode.c|$OUT/freebsd_extra/humanize_number.c|$LIBC/gen/FreeBSD/getbsize.c|$LIBC/uuid/uuidsrc/unparse.c|$LIBC/gen/get_compat.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/gen/strtofflags.c|mv_pwcache_compat.c|../libinfo_custom/libinfo_custom.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c"
+    "ls:$FILE_CMDS/ls/ls.c:$FILE_CMDS/ls/print.c|$FILE_CMDS/ls/util.c|$FILE_CMDS/ls/cmp.c|$LIBC/posix1e/acl.c|$LIBC/posix1e/acl_entry.c|$LIBC/posix1e/acl_perm.c|$LIBC/posix1e/acl_flag.c|$LIBC/posix1e/acl_file.c|$LIBC/posix1e/acl_translate.c|$LIBC/gen/filesec.c|$LIBC/sys/statx_np.c|ls_acl_syscalls.c|ls_acl_pwgr_compat.c|ls_mbr_compat.c|bash_readline_termcap_compat.c|$LIBC/string/FreeBSD/strmode.c|$OUT/freebsd_extra/humanize_number.c|$LIBC/gen/FreeBSD/getbsize.c|$LIBC/uuid/uuidsrc/unparse.c|$LIBC/gen/get_compat.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/gen/strtofflags.c|mv_pwcache_compat.c|../libinfo_custom/libinfo_custom.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c"
     # Block 4: chmod/chown, deliberately re-examined per the roadmap's own
     # note that "chmod needs real ACLs" was never actually verified for
     # the common mode-bit-only case -- turned out FALSE: real Apple
@@ -1483,8 +1493,10 @@ CMD_LIST=(
     # family all do plain integer day/second arithmetic against
     # stat-returned timestamps, no date-string parser involved).
     # function.c's real __APPLE__ f_acl()/-acl predicate only calls
-    # acl_get_link_np/acl_get_entry/acl_free (the ls(1) tier's own real
-    # subset, reused verbatim via ls_acl_compat.c/acl_entry.c/acl.c) --
+    # acl_get_link_np/acl_get_entry/acl_free -- resolved for find.macho
+    # via libcopyfile.dylib (its own real, separately-built copy of
+    # these symbols, unrelated to ls's own now-real DAR-148 chain; see
+    # this file's own "find)" extra_libs case) --
     # its sibling ACL_TYPE_NFS4/acl_is_trivial_np code path is real
     # upstream's `#else /* !__APPLE__ */` branch, dead code under this
     # project's -target arm64-apple-ios build (confirmed by reading the
@@ -1743,7 +1755,7 @@ for spec in "${CMD_LIST[@]}"; do
             # the same header) upstream build-time knob is set, which
             # makes it use plain <stdint.h> instead -- a real supported
             # upstream code path, not a workaround.
-            cmd_cflags="-I ../../third_party/bash/bash-3.2/lib/termcap -I ../../third_party/Libinfo/membership.subproj -DHAVE_STDINT_H=1"
+            cmd_cflags="-I ../../third_party/bash/bash-3.2/lib/termcap -I ../../third_party/Libinfo/membership.subproj -DHAVE_STDINT_H=1 -I ls_acl_compat_headers"
             ;;
         diff)
             # See the gnudiff_glue generation comment above (near
