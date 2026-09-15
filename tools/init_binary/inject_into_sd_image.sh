@@ -368,8 +368,10 @@ fi
 
 # cron.macho/crontab.macho intentionally NOT installed here (2026-08-22).
 # Both build real (tools/userland_staging/build_cron.sh still produces
-# working, fully-static Mach-O binaries, and can be run/inspected on its
-# own) but cron.macho itself has a real, unresolved startup crash --
+# working Mach-O binaries -- real DYNAMIC ones as of 2026-09-15, DAR-314;
+# they were fully static when this comment was first written -- and can
+# be run/inspected on their own) but cron.macho itself has a real,
+# unresolved startup crash --
 # SIGSEGV in open_pidfile()'s snprintf() call, immediately after this
 # same process's own signal(SIGCHLD/SIGCLD, ...) + signal(SIGHUP, ...)
 # registrations, bisected with temporary write(2) checkpoints down to

@@ -101,27 +101,42 @@ tools/build_kexts.sh [outdir]    # compile iokit/*/*.cpp standalone (default: bu
   `build_libsystem.sh`/`build_dylib_smoketest.sh` DO produce real
   `.dylib`s on purpose. New work should prefer real per-library dylibs
   over new static archives going forward (see `docs/daemon-roadmap.md`'s
-  "Static-vs-dylib architecture debt" section) — but the "must stay fully
-  static" invariant is NOT limited to `tools/pwtool/build.py`. **Four
-  shipped binaries are deliberately, fully static and must stay that way:
-  `tools/pwtool/build.py` (runs before/without dyld by design),
-  `build_bash.sh`, `build_login.sh` and `build_getty.sh`.** All four link
-  `-nostdlib -static -e start` and each asserts zero `LC_LOAD_DYLIB` +
-  a real `LC_UNIXTHREAD` in its own smoketest — that check is the
-  invariant, not a leftover. Verify with `grep -n -- '-static' <script>`
-  before assuming any binary here is dynamic.
-  **Corollary for static-linking cleanup work:** a script is only a
-  dedup target if its final link BOTH loads `libSystem.B.dylib`/sibling
-  dylibs AND links the same functionality statically. Stripping archives
-  from the four above removes the *only* copy of libc, not a duplicate —
-  it is not the same change at all. Grepping for archive names is not
-  sufficient to identify targets: `build_bash.sh`/`build_login.sh`/
-  `build_getty.sh` were misidentified as targets exactly that way
-  (2026-09-03, `dynamicfix` branch), and `build_simple_cmds.sh` reads as
-  a target by grep while actually having been fully converted on
-  2026-08-28 — all of its archive hits are comments describing the
-  historical state. Confirm against the real link command, not a grep
-  count.
+  "Static-vs-dylib architecture debt" section).
+  **Standing rule as of 2026-09-15 (DAR-314): no shipped binary may be
+  fully static unless it must run before dyld is available.** Exactly one
+  qualifies — `tools/pwtool/build.py`, which runs before/without dyld by
+  design; it links `-nostdlib -static -e start` and asserts zero
+  `LC_LOAD_DYLIB` + a real `LC_UNIXTHREAD`, and that check is the
+  invariant, not a leftover. Every other shipped binary is dynamic. The
+  eight that used to be static (`bash`, `getty`, `login`, `ping`, `ps`,
+  `cron`, `crontab`, `ifconfig`) were converted on 2026-09-15; their
+  scripts now assert the *inverse* (`LC_LOAD_DYLINKER /usr/lib/dyld` +
+  `LC_LOAD_DYLIB` + `LC_MAIN`, hard `exit 1`). An earlier version of this
+  file said `bash`/`login`/`getty` "must stay that way" — that is
+  superseded; do not restore static linking to them. `launchd` is PID 1
+  and is itself dynamic, so dyld is up before any of them runs.
+  **When converting or touching one of these links, run
+  `bind_target_audit.sh` — it is not optional.** `getty` and `login` both
+  linked *clean* after conversion and still failed it (`UNRESOLVABLE
+  libSystem/_chown`, `_dup2`, `_execve`, `_getpriority`): dropping the
+  static archives also dropped real raw-syscall wrapper objects
+  (`simple_obj/sys__*.o`) that no dylib exports. That is the DAR-217
+  hazard — a clean link that aborts at dyld load — and on a boot-path
+  binary it is near-invisible to debug.
+  Three more things a conversion does **not** get to drop, each found by
+  actually linking: the `__err`/`__warn` → `err`/`warn` aliases (this
+  project's `libsystem_c.dylib` exports only the `_`-prefixed FreeBSD
+  internals); any alias whose *base* is one of the binary's own local
+  objects rather than a dylib export (ping's socket wrappers,
+  cron/crontab's `_pwrite`/`_wait`/`_waitpid`); and the locale support
+  objects (`libc_locale_globals_compat.c` + `locale/FreeBSD/table.c` +
+  `none.c`, plus `collate.c`/`collcmp.c` where `libc_regex.a` is linked)
+  — `__locale_key`, `__global_locale`, `_DefaultRuneXLocale` and
+  `___collate_equiv_value` are all *local*, non-exported symbols inside
+  `libsystem_c.dylib`. Use the shared `libc_locale_globals_compat.c`, never
+  a hand-written narrower one (DAR-169: a hand-rolled variant left
+  `__locale_key` at `(pthread_key_t)-1` and crashed on any real
+  `snprintf()` on a device target).
   **`build_libc_regex.sh` is the reference template for porting one more
   Apple library** (real per-file compile loop reporting gaps, real `ar`
   archive step, real dependency check against already-built `.a` files,
