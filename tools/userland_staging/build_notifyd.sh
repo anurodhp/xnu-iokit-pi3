@@ -461,6 +461,28 @@ compile_one "$LIBC/stdlib/FreeBSD/atoll.c" -DXLOCALE_STATE_EXPORTED
 compile_one "libsystem_notify_misc_compat.c"
 compile_one "$LIBC/gen/FreeBSD/signal.c"
 compile_one "configd_sigaction_compat.c"
+# DAR-124: libbsm.dylib carries three real, non-weak flat-namespace
+# `-Wl,-U` deferrals (_getgrgid/_getpwuid/_syslog, confirmed via
+# `xcrun dyld_info -fixups system/libbsm.dylib | grep flat-namespace`)
+# that nothing in notifyd's own dylib closure resolves -- unlike
+# launchctl.macho, which happens to provide all three locally.
+# pathwatch.c's real getpwuid(uid) call (line ~154) is compiled into
+# this binary and reachable, so this is a real, live call-time crash
+# risk, not a theoretical one: real dyld-940's chained-fixups binding
+# does NOT abort at load for an unresolved *non-weak* flat-namespace
+# `__got` slot the way DAR-124's original finding assumed (verified
+# empirically -- notifyd.macho boots and runs today with these three
+# slots genuinely unbound anywhere in its closure), but calling through
+# that unresolved slot still crashes the instant pathwatch.c's code
+# path is actually exercised. Fixed the same way launchd/launchctl
+# already close this exact gap: real, unmodified Libc/gen/oldsyslog.c
+# (already reused verbatim by build_getty.sh/build_login.sh/
+# build_launchctl.sh for the identical symbol) for _syslog, and this
+# project's own already-proven ps_passwd_compat.c (already reused by
+# launchd) for _getpwuid/_getgrgid -- not a new compat file, per this
+# project's standing "search before writing a compat shim" rule.
+compile_one "$LIBC/gen/oldsyslog.c"
+compile_one "ps_passwd_compat.c"
 
 # Real raw-syscall trap generation, same create-syscalls.pl recipe
 # build_corefoundation.sh's own header comment already established for
