@@ -246,9 +246,53 @@ fi
 
 # Everything verified: swap the completed tree into place. Clearing the
 # trap first so a failure after this point cannot delete the live tree.
-trap - EXIT
-rm -rf "$SHIM"
+#
+# DAR-295: this used to be `rm -rf "$SHIM"; mv "$SHIM_NEW" "$SHIM"` - two
+# separate commands, not one atomic operation, despite this function's
+# own comment above already reasoning (correctly) that "the loser of a
+# race replaces a complete tree with an identical complete tree." A
+# single `mv` (same-filesystem rename(2)) genuinely is atomic, but
+# `rm -rf` then a *separate* `mv` is not, and left a real window where
+# $SHIM did not exist at all.
+#
+# The first fix attempt here (move the old tree aside with a $$-uniqued
+# name, then move the new one in) turned out to still be unsafe under
+# real concurrency, found by actually running two of these in parallel,
+# not by reading the code: (1) it has the identical two-command problem
+# one level down - between this run's own "move old aside" and "move
+# new in", $SHIM briefly does not exist either, a smaller copy of the
+# same bug; (2) worse, on macOS `rename(2)` refuses to replace an
+# existing NON-empty directory ("Directory not empty"), so if run A's
+# own "move new in" completes and recreates $SHIM before run B's own
+# "move new in" gets there, B's mv fails outright and aborts B's run.
+#
+# A real mutex around the swap is the only thing that actually
+# eliminates all of this, not a cleverer sequence of renames - so that
+# is what's here: a mkdir-based lock (atomic, POSIX-portable, the same
+# mutual-exclusion primitive this project already uses to serialize
+# other genuinely concurrency-unsafe operations, e.g. its own real QEMU
+# boot-test lock). Only one run's swap ever executes at a time, so no
+# run ever observes a missing $SHIM and no run's mv ever races another
+# run's. The scratch-build phase above this stays fully parallel (the
+# whole reason DAR-243's original fix moved validation off the live
+# tree) - only this brief final swap is now serialized.
+SHIM_LOCK="${SHIM}.swap.lock"
+while ! mkdir "$SHIM_LOCK" 2>/dev/null; do
+	sleep 0.1
+done
+# Replaces the scratch-cleanup trap from the top of this script (a
+# single process can only ever have one EXIT trap active) with one that
+# covers both real held resources at this point: the swap lock just
+# acquired, and $SHIM_NEW, in case this process is killed or fails
+# partway through the swap below rather than completing normally.
+trap 'rm -rf "$SHIM_LOCK" "$SHIM_NEW"' EXIT
+SHIM_OLD="${SHIM}.old.$$"
+rm -rf "$SHIM_OLD"
+[ -e "$SHIM" ] && mv "$SHIM" "$SHIM_OLD"
 mv "$SHIM_NEW" "$SHIM"
+rm -rf "$SHIM_OLD"
+rmdir "$SHIM_LOCK"
+trap - EXIT
 
 echo "=== third_party/_sdk_shim regenerated ==="
 echo "  IOKit/network: $(ls "$SHIM/IOKit/network" | wc -l | tr -d ' ') headers"
