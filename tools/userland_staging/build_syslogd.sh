@@ -343,11 +343,15 @@ echo "wrote $OUT/libsyslogd.a ($(ls "$OUT"/syslogd_obj/*.o | wc -l | tr -d ' ') 
 # getuid -> libcopyfile.dylib, geteuid -> libremovefile.dylib, per the
 # same commit's own verified mapping), so no replacement extraction is
 # needed.
+# uuid_clear.o/qsort.o/heapsort.o REMOVED from this extraction list
+# (DAR-24, 2026-09-14): all three duplicate real, local (non-reexport)
+# libsystem_c.dylib exports, confirmed via `dyld_info -exports`, already
+# linked below. Same class as build_launchd.sh's own DAR-23 removal of
+# the identical uuid_clear.o.
 rm -rf "$OUT/syslogd_libc_extras_obj"
 mkdir -p "$OUT/syslogd_libc_extras_obj"
 ( cd "$OUT/syslogd_libc_extras_obj" && \
-  ar x "../liblaunchd_syscalls.a" sys__chown.o sys__dup.o sys__kevent.o sys__umask.o uuid_clear.o signal.o && \
-  ar x "../launchd_libc_extras.a" qsort.o heapsort.o )
+  ar x "../liblaunchd_syscalls.a" sys__chown.o sys__dup.o sys__kevent.o sys__umask.o signal.o )
 rm -f "$OUT/syslogd_libc_extras.a"
 ar rcs "$OUT/syslogd_libc_extras.a" "$OUT"/syslogd_libc_extras_obj/*.o
 echo "wrote $OUT/syslogd_libc_extras.a"
@@ -524,6 +528,25 @@ ar d "$OUT/libc_locale_for_stdio_syslogd.a" pthread_tsd_shim_libc_bootstrap.o
 ar d "$OUT/libc_locale_for_stdio_syslogd.a" cerror_stub.o
 
 rm -f syslogd.macho
+# -DCRT_DYNAMIC_LINKING tried (DAR-24, 2026-09-14) and REVERTED -- real
+# regression, not assumed safe from the DAR-153/DAR-161 precedent.
+# syslogd.macho locally defines NXArgc/NXArgv/environ/___progname
+# despite a loaded dylib also exporting them (dup_symbol_audit.sh's own
+# finding), the same shape build_launchd.sh/build_launchctl.sh/
+# build_pd_console_login.sh all fixed with this exact flag -- but adding
+# it here produced a real, silent early-boot crash: a real QEMU bisect
+# (flag in vs out, holding every other change fixed) showed a clean
+# `login:` boot with the flag OUT and a real
+# `Failed to send exception EXC_CORPSE_NOTIFY. error code: 5 for pid 8`
+# (the exact invisible-launchd-job-abort signature CLAUDE.md documents)
+# immediately after getty exec'd with the flag IN. Root cause not yet
+# isolated -- unlike launchd.macho/launchctl.macho/pd_console_login.macho
+# (all plain `main()` executables), syslogd.c's real main() reaches
+# dispatch_main() via libdispatch's real event loop before this project
+# has ever exercised that path with dyld-owned environ/NXArgc storage;
+# something in that startup sequence does not tolerate it yet. Real,
+# scoped-out follow-up -- do not re-add this flag without root-causing
+# the crash first, not just re-testing that it boots.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
@@ -554,7 +577,10 @@ rm -f syslogd.macho
     `# still-fully-static consumer.` \
     "$OUT/syslogd_obj/syslogd_misc_libc_compat.o" \
     "$OUT/syslogd_obj/syslogd_mach_port_compat.o" "$OUT/syslogd_obj/syslogd_mach_port_extra_trap.o" \
-    "$OUT/syslogd_obj/error_codes.o" \
+    `# error_codes.o REMOVED (DAR-24, 2026-09-14): __mach_errors duplicates` \
+    `# a real, local libsystem_kernel.dylib export (confirmed via` \
+    `# dyld_info -exports), already linked below. Same file, same real` \
+    `# owner, same fix already applied to build_launchd.sh/DAR-23.` \
     "$OUT/syslogd_libc_extras.a" \
     `# libc_regex.a/libc_gen.a/libc_string.a/libc_stdio.a/libc_printf.a/` \
     `# libc_locale_for_stdio_syslogd.a REMOVED 2026-09-03 (dynamicfix` \
