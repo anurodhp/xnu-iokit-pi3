@@ -5,10 +5,21 @@
 #include <IOKit/IOTimerEventSource.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/network/IONetworkMedium.h>
+#include <pexpert/pexpert.h>
 
 #define super IOEthernetController
 
 OSDefineMetaClassAndStructors(SMSC9514Ethernet, IOEthernetController);
+
+// QEMU-only poll-interval scaling (2026-09-15), same reasoning and same
+// debug_cpu_performance_degradation_factor knob as
+// BCM2837USBHostController.cpp's own pollIntervalUS() -- see that file's
+// header comment for the full real QEMU-monitor-probe writeup.
+// kRxPollIntervalMS (20ms/50Hz, private to this class -- computed inline at
+// its one call site in enable() below, not a free function) is a smaller
+// contributor than the USB controller's 1ms/1000Hz timer but real and worth
+// the same fix; kLinkPollIntervalMS (1000ms/1Hz) is already cheap enough
+// that scaling it further isn't worth the slower link-state detection.
 
 bool
 SMSC9514Ethernet::init(OSDictionary *properties, SMSCUSBTransport *transport)
@@ -674,7 +685,7 @@ SMSC9514Ethernet::enable(IONetworkInterface *interface)
 		fLinkTimer->setTimeoutMS(kLinkPollIntervalMS);
 	}
 	if (fRxTimer != NULL) {
-		fRxTimer->setTimeoutMS(kRxPollIntervalMS);
+		fRxTimer->setTimeoutMS(kRxPollIntervalMS * (UInt32)debug_cpu_performance_degradation_factor);
 	}
 	return kIOReturnSuccess;
 }
@@ -814,5 +825,5 @@ SMSC9514Ethernet::rxTimerFired(OSObject *owner, IOTimerEventSource *sender)
 		return;
 	}
 	self->pollReceive();
-	sender->setTimeoutMS(kRxPollIntervalMS);
+	sender->setTimeoutMS(kRxPollIntervalMS * (UInt32)debug_cpu_performance_degradation_factor);
 }

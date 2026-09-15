@@ -13,6 +13,7 @@
 #include <IOKit/usb/USBHub.h>
 #include <IOKit/usb/USBSpec.h>
 #include <libkern/OSByteOrder.h>
+#include <pexpert/pexpert.h>
 
 #define super IOUSBControllerV2
 OSDefineMetaClassAndStructors(BCM2837USBHostController, IOUSBControllerV2);
@@ -35,6 +36,28 @@ OSDefineMetaClassAndStructors(BCM2837USBHostController, IOUSBControllerV2);
 // bulk IN gets one attempt per frame - the same cadence a real interrupt-
 // driven controller would service it at, without the interrupt.
 #define kPollIntervalUS		1000
+
+// QEMU-only poll-interval scaling (2026-09-15): kPollIntervalUS above is
+// correct and cheap on real hardware -- 1ms costs almost nothing on real
+// silicon. Under QEMU/TCG it does not: every tick's frameNumber() read is a
+// real MMIO trap-and-emulate, and processQueues() takes the workloop gate
+// lock even when there is nothing to service, 1000 times a second, for the
+// entire uptime (fEngineRunning never goes false in normal operation). Found
+// via a real QEMU monitor register-probe session at an otherwise-idle login
+// prompt -- host CPU pinned near 100%, PC parked in
+// _lck_mtx_lock/_hw_lock_lock/_lck_mtx_unlock, called from
+// IOTimerEventSource's own thread_call_start_iotes_invocation, not a hang.
+// debug_cpu_performance_degradation_factor (pexpert/gen/pe_gen.c) is the
+// exact same "this platform is known slow, don't hold it to real-hardware
+// timing" signal runvm.sh's own cpu-factor=10 boot-arg already sets for the
+// INTERRUPT_MASKED_DEBUG watchdog -- it is 1 on real hardware (unchanged
+// behavior) and 10 under this project's own QEMU boot args, so reusing it
+// here cuts QEMU's polling rate 10x (10ms/100Hz) without a new boot-arg and
+// without touching real-hardware cadence at all.
+static inline UInt32 pollIntervalUS(void)
+{
+	return kPollIntervalUS * (UInt32)debug_cpu_performance_degradation_factor;
+}
 
 // Ticks a transfer may make no progress before it is failed. Control and
 // bulk OUT get real ceilings because a stuck one must not hang a caller
@@ -185,7 +208,7 @@ BCM2837USBHostController::UIMInitialize(IOService *provider)
 	}
 
 	fEngineRunning = true;
-	fPollTimer->setTimeoutUS(kPollIntervalUS);
+	fPollTimer->setTimeoutUS(pollIntervalUS());
 
 	IOLog("BCM2837USBHostController: UIM up on %s, %u enumerated device "
 	      "address(es) reserved\n", fDWC2->getName(), reserved);
@@ -555,7 +578,7 @@ BCM2837USBHostController::pollTimerFired(OSObject *owner, IOTimerEventSource *se
 	me->processQueues();
 
 	if (me->fEngineRunning) {
-		sender->setTimeoutUS(kPollIntervalUS);
+		sender->setTimeoutUS(pollIntervalUS());
 	}
 }
 
