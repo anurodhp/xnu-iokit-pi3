@@ -138,6 +138,11 @@ enum {
 	kGRSTCTL_AHBIDLE    = 1U << 31,
 
 	kGINTSTS_CURMODE_HOST = 1U << 0,
+	// Real bit position confirmed against QEMU's own real dwc2-regs.h
+	// (third_party/qemu-zhuowei/include/hw/usb/dwc2-regs.h:
+	// `#define GINTSTS_HCHINT BIT(25)`), same source this whole class
+	// already cross-checks its other real register bits against.
+	kGINTSTS_HCHINT     = 1U << 25,
 
 	kHWCFG2_ARCHITECTURE_MASK  = 0x3U << 3,
 	kHWCFG2_ARCHITECTURE_SHIFT = 3,
@@ -493,6 +498,37 @@ private:
 	 */
 	IOLock                  *fTransferLock;
 
+	/*
+	 * Interrupt-driven channel-completion state (DAR-136), same hybrid
+	 * shape as BCM2837SDHCI's fInterruptLock/fStatusLock/fPendingIntStatus
+	 * (see that class's own header/interruptOccurred()/waitForIntStatus32()
+	 * for the full real story this is modeled on): fStatusLock is an
+	 * IOSimpleLock (a real spinlock, safe to take from interrupt level,
+	 * where IOLockLock/IOLockSleep are documented as unsafe) guarding
+	 * fPendingHcInt; fInterruptLock is a real IOLock only ever touched from
+	 * thread context, needed because IOLockSleepDeadline() requires a
+	 * lockable IOLock to atomically unlock-and-sleep on. IOLockWakeup()
+	 * bridges the two without itself taking fInterruptLock (a bare
+	 * thread_wakeup_prim(), confirmed safe at interrupt level in xnu's
+	 * IOLocks.cpp, same as SDHCI's own comment documents).
+	 *
+	 * Scoped to ONE channel deliberately, matching this whole driver's
+	 * existing one-channel-at-a-time design (see the class header's own
+	 * "u-boot hardcodes one host channel... kept, for now" note) --
+	 * fPendingHcInt accumulates whatever HCINT bits interruptOccurred()/
+	 * the poll fallback in waitForChannelInt() have observed for
+	 * kDWC2Channel since the last consumer drained it, not a per-channel
+	 * array. Revisit alongside that same "nothing here issues concurrent
+	 * transfers yet" scope note if this ever grows past one channel.
+	 */
+	IOLock                  *fInterruptLock;
+	IOSimpleLock            *fStatusLock;
+	uint32_t                 fPendingHcInt;
+	uint32_t                 fRealInterruptHits;
+	uint32_t                 fPollFallbackHits;
+	bool                     fLoggedRealInterrupt;
+	bool                     fLoggedPollFallback;
+
 	// Bring-up scaffolding (see the long comment at the call site in
 	// start()): owned for as long as this controller is, so the Ethernet
 	// driver they back has a live transport past start() returning. NULL
@@ -533,6 +569,22 @@ private:
 	bool waitForBits(uint32_t offset, uint32_t mask, bool set, uint32_t timeoutMS);
 	// waitForBits() wants every bit in the mask; this one wants any of them.
 	bool waitForAnyBits(uint32_t offset, uint32_t mask, uint32_t timeoutMS);
+
+	// Real interrupt handler (DAR-136) -- see fInterruptLock's own header
+	// comment. Registered against the provider in start(), same call shape
+	// as BCM2837SDHCI::interruptOccurred().
+	static void interruptOccurred(OSObject *target, void *refCon,
+	    IOService *nub, int source);
+	// Hybrid interrupt-or-poll wait for `chan`'s HCINT to have ANY bit in
+	// `mask` set, real interrupt wins immediately via IOLockWakeup(), a
+	// direct register poll is the safety net (same shape as
+	// BCM2837SDHCI::waitForIntStatus32() -- see fInterruptLock's own
+	// header comment). *hcintOut gets the FULL accumulated HCINT bit
+	// pattern observed (not just the mask-matched subset), matching what
+	// waitForChannelSettled()'s real callers need (XFERCOMP/NAK/STALL/
+	// error bits, not only CHHLTD).
+	bool waitForChannelInt(uint32_t chan, uint32_t mask, uint32_t timeoutMS,
+	    uint32_t *hcintOut);
 
 	// Core bring-up, ported from u-boot's dwc_otg_core_init/
 	// dwc_otg_core_host_init.

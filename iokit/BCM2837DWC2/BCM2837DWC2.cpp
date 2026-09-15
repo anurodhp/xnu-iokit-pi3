@@ -152,6 +152,148 @@ BCM2837DWC2::waitForAnyBits(uint32_t offset, uint32_t mask, uint32_t timeoutMS)
 	return false;
 }
 
+/*
+ * Primary interrupt handler (DAR-136), same role/shape as
+ * BCM2837SDHCI::interruptOccurred() - runs at hardware interrupt context,
+ * so it may only touch fStatusLock (a real IOSimpleLock/spinlock) and call
+ * IOLockWakeup(), which xnu's IOLocks.cpp implements as a bare
+ * thread_wakeup_prim() that never itself touches fInterruptLock. No IOLog,
+ * no IOLockLock/IOLockSleep - both documented in IOKit/IOLocks.h as unsafe
+ * at interrupt level.
+ *
+ * Scope is deliberately narrow: this driver only ever arms the one shared
+ * hardware channel (kDWC2Channel, see BCM2837DWC2.h's fTransferLock
+ * comment for why there is only one), so there is exactly one channel's
+ * HCINT to check - no HAINT bit scan across multiple channels.
+ */
+void
+BCM2837DWC2::interruptOccurred(OSObject *target, void * /*refCon*/, IOService * /*nub*/, int /*source*/)
+{
+	BCM2837DWC2 *self = OSDynamicCast(BCM2837DWC2, target);
+	if (self == NULL) {
+		return;
+	}
+
+	uint32_t gintsts = self->regRead(kDWC2_GINTSTS);
+	if (!(gintsts & kGINTSTS_HCHINT)) {
+		return;
+	}
+
+	uint32_t haint = self->regRead(kDWC2_HAINT);
+	if (!(haint & (1U << kDWC2Channel))) {
+		return;
+	}
+
+	uint32_t hcint = self->regRead(self->hcOffset(kDWC2Channel, kDWC2_HCINT));
+	if (hcint == 0) {
+		return;
+	}
+
+	// Ack (W1C) exactly what was read, same reasoning as
+	// BCM2837SDHCI::interruptOccurred(): a blind full-register write risks
+	// clobbering a bit that arrived in the instant between the read above
+	// and this write.
+	self->regWrite(self->hcOffset(kDWC2Channel, kDWC2_HCINT), hcint);
+
+	IOInterruptState istate = IOSimpleLockLockDisableInterrupt(self->fStatusLock);
+	self->fPendingHcInt |= hcint;
+	self->fRealInterruptHits++;
+	IOSimpleLockUnlockEnableInterrupt(self->fStatusLock, istate);
+
+	IOLockWakeup(self->fInterruptLock, (void *)&self->fPendingHcInt, false);
+}
+
+/*
+ * Real interrupt/poll hybrid wait for the single shared hardware channel,
+ * modeled directly on BCM2837SDHCI::waitForIntStatus32() (see that
+ * function's own comment for the two-lock rationale). Differs from
+ * SDHCI's version in what it reports: this driver's own caller
+ * (transferChunk(), via waitForChannelSettled()) needs the FULL live HCINT
+ * bit pattern observed at match time, not just the bits in `mask` - the
+ * same DMA completion that sets CHHLTD/NAK can carry XFERCOMP/STALL/error
+ * bits the caller decodes separately (see transferChunk()/doTransfer()).
+ * fPendingHcInt is therefore accumulated by OR (never filtered to `mask`)
+ * and only cleared once a `mask` bit is actually seen in it, or on
+ * timeout - never partially, so no bit set by a real interrupt or a poll
+ * read is ever silently dropped before some call gets to see it.
+ */
+bool
+BCM2837DWC2::waitForChannelInt(uint32_t chan, uint32_t mask, uint32_t timeoutMS, uint32_t *hcintOut)
+{
+	IOLockLock(fInterruptLock);
+	bool matched = false;
+	uint32_t observed = 0;
+	uint32_t waitedMS = 0;
+	const uint32_t kPollIntervalMS = 1;
+
+	for (;;) {
+		IOInterruptState istate = IOSimpleLockLockDisableInterrupt(fStatusLock);
+		if ((fPendingHcInt & mask) != 0) {
+			matched = true;
+			observed = fPendingHcInt;
+			fPendingHcInt = 0;
+		}
+		IOSimpleLockUnlockEnableInterrupt(fStatusLock, istate);
+
+		if (matched) {
+			break;
+		}
+
+		// Poll fallback: read+ack the raw register ourselves, same bit
+		// handling as interruptOccurred(). A real interrupt for the same
+		// event may race this read - harmless, since ack is idempotent
+		// (W1C) and both paths take fStatusLock before touching
+		// fPendingHcInt.
+		uint32_t raw = regRead(hcOffset(chan, kDWC2_HCINT));
+		if (raw != 0) {
+			regWrite(hcOffset(chan, kDWC2_HCINT), raw);
+			istate = IOSimpleLockLockDisableInterrupt(fStatusLock);
+			fPendingHcInt |= raw;
+			fPollFallbackHits++;
+			if ((fPendingHcInt & mask) != 0) {
+				matched = true;
+				observed = fPendingHcInt;
+				fPendingHcInt = 0;
+			}
+			IOSimpleLockUnlockEnableInterrupt(fStatusLock, istate);
+			if (matched) {
+				break;
+			}
+		}
+
+		if (waitedMS >= timeoutMS) {
+			// Timeout: report whatever is live right now, matching the
+			// pre-interrupt polled code's own unconditional final
+			// regRead() so the caller's own timeout diagnostic still
+			// prints something meaningful.
+			observed = regRead(hcOffset(chan, kDWC2_HCINT));
+			break;
+		}
+
+		uint64_t pollDeadline;
+		clock_interval_to_deadline(kPollIntervalMS, kMillisecondScale, &pollDeadline);
+		IOLockSleepDeadline(fInterruptLock, (void *)&fPendingHcInt, pollDeadline, THREAD_UNINT);
+		waitedMS += kPollIntervalMS;
+	}
+	IOLockUnlock(fInterruptLock);
+
+	if (!fLoggedRealInterrupt && fRealInterruptHits > 0) {
+		fLoggedRealInterrupt = true;
+		IOLog("BCM2837DWC2: real hardware interrupt observed at least once "
+		    "(interruptOccurred() -> waitForChannelInt())\n");
+	}
+	if (!fLoggedPollFallback && fPollFallbackHits > 0) {
+		fLoggedPollFallback = true;
+		IOLog("BCM2837DWC2: poll fallback resolved at least one wait "
+		    "(no interrupt arrived within one %u ms tick)\n", kPollIntervalMS);
+	}
+
+	if (hcintOut != NULL) {
+		*hcintOut = observed;
+	}
+	return matched;
+}
+
 #pragma mark - Core bring-up
 
 bool
@@ -281,10 +423,20 @@ BCM2837DWC2::coreInit(void)
 	regWrite(kDWC2_GAHBCFG, ahbcfg);
 
 	/*
-	 * Global interrupts stay MASKED (GLBLINTRMSK not set): completion is
-	 * polled. See BCM2837DWC2.h's limitations note - this is deliberate
-	 * and is the documented follow-up, not an oversight.
+	 * Real interrupt plumbing (DAR-136): unmask the two upper levels of
+	 * the real 3-level status/mask hierarchy (HCINTMSK -> HAINTMSK ->
+	 * GINTMSK -> GAHBCFG.GLBLINTRMSK, confirmed against QEMU's own real
+	 * dwc2_update_irq()/dwc2_raise_host_irq() in
+	 * third_party/qemu-zhuowei/hw/usb/hcd-dwc2.c, which gates the actual
+	 * qemu_set_irq() on exactly this chain) here, safely: GLBLINTRMSK
+	 * (the master gate, set separately in start() only after the real
+	 * interrupt handler is registered) is still clear at this point, so
+	 * none of this can actually assert the interrupt line yet.
+	 * HCINTMSK itself (the lowest level, per-channel) is armed/disarmed
+	 * per-transfer around doTransfer()'s own HCINT-clear, not here.
 	 */
+	regWrite(kDWC2_GINTMSK, kGINTSTS_HCHINT);
+	regWrite(kDWC2_HAINTMSK, 1U << kDWC2Channel);
 
 	// No HNP/SRP: forced host, nothing to negotiate.
 	regModify(kDWC2_GUSBCFG, kGUSBCFG_HNPCAP | kGUSBCFG_SRPCAP, 0);
@@ -621,12 +773,7 @@ BCM2837DWC2::channelInit(DWC2Endpoint *ep, bool isIn, bool useSplit)
 bool
 BCM2837DWC2::waitForChannelSettled(uint32_t chan, uint32_t timeoutMS, uint32_t *hcintOut)
 {
-	bool settled = waitForAnyBits(hcOffset(chan, kDWC2_HCINT),
-	    kHCINT_CHHLTD | kHCINT_NAK, timeoutMS);
-	if (hcintOut != NULL) {
-		*hcintOut = regRead(hcOffset(chan, kDWC2_HCINT));
-	}
-	return settled;
+	return waitForChannelInt(chan, kHCINT_CHHLTD | kHCINT_NAK, timeoutMS, hcintOut);
 }
 
 /*
@@ -644,16 +791,27 @@ BCM2837DWC2::waitForChannelSettled(uint32_t chan, uint32_t timeoutMS, uint32_t *
 void
 BCM2837DWC2::haltChannel(uint32_t chan, uint32_t *hcintOut)
 {
+	uint32_t hcint = 0;
 	if (regRead(hcOffset(chan, kDWC2_HCCHAR)) & kHCCHAR_CHEN) {
 		regModify(hcOffset(chan, kDWC2_HCCHAR), 0,
 		    kHCCHAR_CHEN | kHCCHAR_CHDIS);
+		// Routed through the same interrupt/poll hybrid as
+		// waitForChannelInt() (DAR-136), not a raw register poll:
+		// HCINTMSK is still armed for this channel while haltChannel()
+		// runs (doTransfer only disarms it after this function
+		// returns), so a real interrupt can land here too, and an
+		// unsynchronized second poller racing interruptOccurred()'s
+		// own read-ack-fStatusLock sequence is exactly the class of
+		// bug fTransferLock's own header comment documents (DAR-282).
 		// A forced halt is acknowledged within a frame or two on real
-		// silicon and immediately under emulation; this bound only exists
-		// so a wedged channel cannot hang the workloop.
-		waitForBits(hcOffset(chan, kDWC2_HCINT), kHCINT_CHHLTD, true, 50);
+		// silicon and immediately under emulation; this 50ms bound
+		// only exists so a wedged channel cannot hang the workloop.
+		waitForChannelInt(chan, kHCINT_CHHLTD, 50, &hcint);
+	} else {
+		hcint = regRead(hcOffset(chan, kDWC2_HCINT));
 	}
 	if (hcintOut != NULL) {
-		*hcintOut = regRead(hcOffset(chan, kDWC2_HCINT));
+		*hcintOut = hcint;
 	}
 }
 
@@ -683,7 +841,21 @@ BCM2837DWC2::transferChunk(uint32_t xferLen, uint32_t *actualLen, uint32_t *hcin
 		// The channel has to be taken down before the next transfer can be
 		// armed on it, because only a real disabled->enabled edge starts
 		// one.
-		haltChannel(kDWC2Channel, &hcint);
+		//
+		// OR in haltChannel()'s own observed bits rather than replacing
+		// hcint outright (DAR-136): waitForChannelInt() now acks (W1C)
+		// whatever it reads the moment it is observed, so the NAK bit
+		// just matched above is already cleared in the real register by
+		// the time haltChannel() does its own read - a plain overwrite
+		// here would lose it, misreporting a completely normal "device
+		// had nothing ready, auto-retried" NAK as a bare CHHLTD, which
+		// falls through every known-reason check below into the generic
+		// "unknown" I/O error. This is exactly the trap the pre-interrupt
+		// polled code never had to worry about, since nothing was ever
+		// acked out from under it.
+		uint32_t haltHcint = 0;
+		haltChannel(kDWC2Channel, &haltHcint);
+		hcint |= haltHcint;
 	}
 
 	if (hcintOut != NULL) {
@@ -851,6 +1023,13 @@ BCM2837DWC2::doTransfer(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
 
 			// Clear any stale conditions for this channel before arming it.
 			regWrite(hcOffset(kDWC2Channel, kDWC2_HCINT), kHCINT_ALL);
+
+			// Unmask (DAR-136): the lowest level of the real 3-level
+			// HCINTMSK -> HAINTMSK -> GINTMSK -> GAHBCFG.GLBLINTRMSK
+			// hierarchy (the upper three are set once in hostInit()/
+			// start() and left armed). Symmetric disarm is at this
+			// function's end (regWrite(..HCINTMSK.., 0)).
+			regWrite(hcOffset(kDWC2Channel, kDWC2_HCINTMSK), kHCINT_ALL);
 
 			/*
 			 * Ordering matters here: the staging buffer write above and
@@ -1223,6 +1402,17 @@ BCM2837DWC2::start(IOService *provider)
 		return false;
 	}
 
+	fInterruptLock = IOLockAlloc();
+	if (fInterruptLock == NULL) {
+		IOLog("BCM2837DWC2: IOLockAlloc (interrupt) failed\n");
+		return false;
+	}
+	fStatusLock = IOSimpleLockAlloc();
+	if (fStatusLock == NULL) {
+		IOLog("BCM2837DWC2: IOSimpleLockAlloc failed\n");
+		return false;
+	}
+
 	IODeviceMemory *devMem = provider->getDeviceMemoryWithIndex(0);
 	if (devMem == NULL) {
 		IOLog("BCM2837DWC2: no device memory on provider\n");
@@ -1267,6 +1457,26 @@ BCM2837DWC2::start(IOService *provider)
 		IOLog("BCM2837DWC2: host init failed\n");
 		return false;
 	}
+
+	/*
+	 * Register the real interrupt handler before opening the master gate
+	 * (GAHBCFG.GLBLINTRMSK below) - deliberately in that order, so there is
+	 * no window where hardware could raise the line before anything is
+	 * listening. GINTMSK/HAINTMSK for channel 0 are already unmasked (see
+	 * coreInit()); this is the only remaining, and last, level of the
+	 * hierarchy.
+	 */
+	IOReturn intResult = provider->registerInterrupt(0, this, &BCM2837DWC2::interruptOccurred);
+	if (intResult != kIOReturnSuccess) {
+		IOLog("BCM2837DWC2: registerInterrupt failed, %#x\n", intResult);
+		return false;
+	}
+	intResult = provider->enableInterrupt(0);
+	if (intResult != kIOReturnSuccess) {
+		IOLog("BCM2837DWC2: enableInterrupt failed, %#x\n", intResult);
+		return false;
+	}
+	regModify(kDWC2_GAHBCFG, 0, kGAHBCFG_GLBLINTRMSK);
 
 	if (!portPowerOn()) {
 		IOLog("BCM2837DWC2: port power-on failed\n");
@@ -1684,6 +1894,7 @@ BCM2837DWC2::stop(IOService *provider)
 		regWrite(kDWC2_GINTMSK, 0);
 		regWrite(kDWC2_GAHBCFG, 0);
 	}
+	provider->unregisterInterrupt(0);
 	super::stop(provider);
 }
 
@@ -1710,6 +1921,14 @@ BCM2837DWC2::free(void)
 	if (fTransferLock != NULL) {
 		IOLockFree(fTransferLock);
 		fTransferLock = NULL;
+	}
+	if (fStatusLock != NULL) {
+		IOSimpleLockFree(fStatusLock);
+		fStatusLock = NULL;
+	}
+	if (fInterruptLock != NULL) {
+		IOLockFree(fInterruptLock);
+		fInterruptLock = NULL;
 	}
 	super::free();
 }
