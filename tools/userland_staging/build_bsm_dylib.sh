@@ -107,6 +107,28 @@ if [ ! -x "$NEWLD_BINDIR/ld" ]; then
 fi
 
 (cd "$EXTRACT" && ar x "../../libbsm.a")
+# bsm_smoketest.o/bsm_smoketest_extra_syscalls.o REMOVED (DAR-23,
+# 2026-09-14): libbsm.a carries these two purely for its own standalone
+# smoketest binary (a real `main()` driving au_open/au_write against the
+# rest of the archive, see build_bsm.sh) -- real, load-bearing there, but
+# the blanket `"$EXTRACT"/*.o` glob below was sweeping them into THIS
+# dylib too, so libbsm.dylib shipped a real, externally-visible `_main`
+# (bsm_smoketest.o) plus a private duplicate `_getgid`/`_getuid`
+# (bsm_smoketest_extra_syscalls.o, already real exports of
+# libsystem_kernel.dylib, a sibling link below -- the exact
+# geteuid.o/getuid.o duplicate-symbol class the comment right below this
+# one already fixed once, just missed on this second, differently-named
+# pair of objects). A dylib exporting `_main` isn't just noise: any
+# executable that links libbsm.dylib and also defines its own real
+# `main()` -- launchd.macho/launchctl.macho/notifyd.macho all do --
+# reads as "locally-defined symbol shadowing a loaded dylib" per
+# dup_symbol_audit.sh, indistinguishable from a genuine duplicate-state
+# bug until traced back here. Confirmed via `ar t libc_build/libbsm.a`
+# that only these two smoketest-named members are the source (the other
+# 12 are real BSM library sources); confirmed via `nm -m` that neither
+# is referenced by anything real BSM sources call. build_bsm.sh's own
+# archive keeps both -- only this dylib's link excludes them.
+rm -f "$EXTRACT/bsm_smoketest.o" "$EXTRACT/bsm_smoketest_extra_syscalls.o"
 # geteuid.o/getuid.o REMOVED 2026-08-30 (static-linking cleanup,
 # dylib-vs-dylib duplicate-symbol pass): these two objects' own real
 # _geteuid/_getuid syscall wrappers are, as of 2026-08-29 (see

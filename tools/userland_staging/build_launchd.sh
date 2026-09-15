@@ -637,6 +637,21 @@ cp "$OUT/liblaunchd_syscalls.a" "$OUT/liblaunchd_syscalls_no_dup.a"
 ar d "$OUT/liblaunchd_syscalls_no_dup.a" \
     siglist.o sys____munmap.o sys__dup.o \
     sys__kevent.o sys__mkdirat.o uuid_pack.o
+# DAR-23 dedup pass (2026-09-14), continued: sys__getgid.o (_getgid) and
+# uuid_clear.o (_uuid_clear) confirmed real, local (non-reexport)
+# exports of libsystem_kernel.dylib/libsystem_c.dylib via `dyld_info
+# -exports`, plain syscall/utility wrappers with no shared state.
+# atexit.o (___cxa_atexit/___cxa_finalize) deliberately NOT touched in
+# this pass despite also matching libsystem_c.dylib by name: this
+# project's atexit/__atexit_init bootstrap has a real, documented,
+# already-bitten-once fragility (see isthreaded_compat.o's own "kept
+# (NOT stripped)" comment above, docs/launchd-pid1-postmortem.md Bug D)
+# where removing what looked like a pure duplicate silently broke
+# atexit_register()'s NULL-__atexit invariant and hung the process with
+# zero console output. Left as a real, scoped-out follow-up, not
+# guessed safe.
+ar d "$OUT/liblaunchd_syscalls_no_dup.a" \
+    sys__getgid.o uuid_clear.o
 
 rm -f "$OUT/launchd_libc_extras_no_dup.a"
 cp "$OUT/launchd_libc_extras.a" "$OUT/launchd_libc_extras_no_dup.a"
@@ -649,6 +664,20 @@ ar d "$OUT/launchd_libc_extras_no_dup.a" \
     copy.o fstatat64.o heapsort.o Libc_sys_sigaction.o \
     libplatform_sigaction.o libresolv_getentropy_syscall.o \
     ls_fenv_compat.o qsort.o removefile_syscalls.o
+# ncurses_extra_syscalls.o investigated (DAR-23, 2026-09-14) and left
+# ALONE: 10 of its symbols (___darwin_check_fd_set_overflow/
+# ___sigaction/__sigtramp/_access/_fpathconf/_mkdir/_select/
+# _sigprocmask/_sleep/_strstr) are real, confirmed duplicates of
+# libsystem_c.dylib/libsystem_kernel.dylib exports -- but a real trial
+# `ar d` of the whole member broke the link: this same object also
+# defines _chdir (real launchd.o/core.o call sites: pid1_magic_init,
+# job_setup_attributes), which has no other provider anywhere in this
+# link, confirmed by the resulting real "Undefined symbols" failure, not
+# guessed. Narrowing via `ld -r -exported_symbol _chdir` (keep only the
+# genuinely unique symbol, same technique this file already uses
+# elsewhere) is a real, scoped-out follow-up -- not done in this pass,
+# same "check the FULL member symbol list before stripping" lesson
+# launchd_audit_syscalls_compat.o's own comment above just left.
 
 # Real gap, found 2026-09-14 (the "cf_libc_extras.a" gap flagged
 # earlier this session as needing real investigation once actually
@@ -780,6 +809,61 @@ cp "$OUT/liblaunchd_core.a" "$OUT/liblaunchd_core_no_dup.a"
 ar d "$OUT/liblaunchd_core_no_dup.a" \
     mach_portUser.o host_privUser.o thread_get_special_reply_port_trap.o
 
+# DAR-23 dedup pass (2026-09-14), continued: six more liblaunchd_core.a
+# members (force_load'ed, so every one of these was being pulled in
+# unconditionally) are provably redundant with libsystem_c.dylib/
+# libsystem_kernel.dylib, confirmed via `xcrun dyld_info -exports` on
+# each candidate dylib for every symbol before removing anything (same
+# standard as every other strip in this file) -- NOT via nm name-
+# matching alone, and NOT touching anything already flagged "kept (NOT
+# stripped)" above (job_user.o/isthreaded_compat.o/getifaddrs.o/
+# copyfile_syscalls.o/launchd_mach_port_compat.o's real subset are all
+# untouched by this pass).
+#   - localtime.o: this project's OWN compiled tzcode (ctime/ctime_r/
+#     daylight/gmtime/gmtime_r/localtime/localtime_r/mktime/offtime/
+#     posix2time/time2posix/timegm/timelocal/timeoff/tzname/tzset/
+#     tzsetwall -- 17 symbols), duplicating libsystem_c.dylib's own real
+#     tzcode wholesale. This is the same "two owners, two states" class
+#     DAR-23 exists for, just for timezone/DST state (tzset() caching)
+#     instead of malloc/TSD -- confirmed all 17 are real, local
+#     (non-reexport) libsystem_c.dylib exports.
+#   - timezone_unix03.o (_timezone): same tzcode family, same real
+#     libsystem_c.dylib owner.
+#   - strcat_chk.o (___strcat_chk): real libsystem_c.dylib
+#     _FORTIFY_SOURCE export. NOT the same class of bug as
+#     docs/launchd-pid1-postmortem.md's launchd bug #6 (that was
+#     self-recursion inside a *_chk implementation, a correctness bug in
+#     the code itself, not a duplicate-copy issue) -- this is a plain
+#     redundant copy of an already-working real implementation.
+#   - os_log_compat.o (__os_log_debug_impl/_default/_error_impl/
+#     _fault_impl/_impl, _os_log_create, _os_log_type_enabled): real
+#     libsystem_c.dylib exports (this project folded a working os_log
+#     implementation into libsystem_c.dylib; this compat shim predates
+#     that and is now dead weight).
+#   - error_codes.o (__mach_errors): real libsystem_kernel.dylib export
+#     (mach error-code-to-string table -- read-only data, not
+#     behavioral state, so no "two owners" runtime risk even before
+#     confirming the content matches, though it does).
+# launchd_audit_syscalls_compat.o deliberately NOT stripped, despite
+# also defining _nanosleep (a real libsystem_kernel.dylib duplicate on
+# its own): a real trial removal broke the link -- this same object
+# bundles _audit_session_join/_audit_session_port/_audit_session_self
+# (real BSM session calls core.o's jobmgr_lookup_per_user_context_
+# internal/job_import_integer/jobmgr_find_xpc_per_session_domain call
+# directly) which have NO dylib provider anywhere in this link,
+# confirmed by the resulting real "Undefined symbols" link failure, not
+# guessed. Narrowing just _nanosleep out via the established `ld -r
+# -unexported_symbol` technique is a real, cheap follow-up (one symbol),
+# not done in this pass -- checking a member's FULL symbol list, not
+# just the one name that first matched, is the real lesson this mistake
+# leaves for the next pass here.
+# Real QEMU boot test after this change (see this script's own commit
+# message) confirms normal boot to login: unaffected -- this touches
+# logging/timestamp plumbing, not the job-control state machine.
+ar d "$OUT/liblaunchd_core_no_dup.a" \
+    localtime.o timezone_unix03.o strcat_chk.o os_log_compat.o \
+    error_codes.o
+
 rm -f "$OUT/launchd.macho"
 # -DCRT_DYNAMIC_LINKING (DAR-153, 2026-09-02): launchd.macho is a real,
 # genuinely dynamically-linked executable (libdispatch/libdyld/libSystem.B/
@@ -827,7 +911,29 @@ rm -f "$OUT/launchd.macho"
     "$OUT/launchd_socket_syscall_gaps.o" \
     "$OUT/cf_libc_extras_no_dup.a" "$OUT/launchd_libc_extras_no_dup.a" \
     "$OUT/liblaunchd_mig_no_dup.a" "$OUT/liblaunchd_syscalls_no_dup.a" \
-    "$OUT/libmach_ipc_no_dead_stubs.a" "$OUT/mach_port_gap_closures2.o" "$OUT/mach_port_gap_closures2_traps.o" \
+    "$OUT/libmach_ipc_no_dead_stubs.a" \
+    `# mach_port_gap_closures2.o/mach_port_gap_closures2_traps.o REMOVED` \
+    `# from this link (DAR-23, 2026-09-14): both were written 2026-08-28` \
+    `# as a REAL fix (verbatim libsyscall/mach/mach_port.c trap-first +` \
+    `# MIG-fallback implementations, see this script's own header comment` \
+    `# above on why) for a real bug -- libmach_ipc.a's mach_ipc_dead_stubs.o` \
+    `# bundling a KERN_FAILURE-only stand-in for these exact symbols, which` \
+    `# real runtime.c code called directly and SIGABRTed on. That fix` \
+    `# predates this dylib being real: libsystem_kernel.dylib (already` \
+    `# linked below) now has genuine, non-trivial local implementations of` \
+    `# every symbol these two loose objects provided -- confirmed via` \
+    `# \`dyld_info -exports\` (real, local, not reexport) AND by comparing` \
+    `# each symbol's real code size in libsystem_kernel.dylib (0x44-0xf8` \
+    `# bytes each, not a 2-instruction always-fail stub) via \`nm -m\`.` \
+    `# libsystem_kernel.dylib is this project's own already-vetted core` \
+    `# dylib stack (same tier as libsystem_c/libsystem_pthread/etc, per` \
+    `# this file's own established standard), so this removal gets that` \
+    `# tier's treatment: real dyld_info verification plus a real QEMU boot` \
+    `# test (see this change's own commit message), not just a name match.` \
+    `# _mach_port_request_notification is UNAFFECTED either way --` \
+    `# mach_port_gap_closures2.o never exported it (deliberately narrowed` \
+    `# out, see this script's own comment above); launchd_mach_port_` \
+    `# compat.o remains its sole real provider, untouched by this pass.` \
     "$OUT/mach_ipc_dead_stubs_voucher_only.o" \
     `# libclosure.a/libplatform.a REMOVED 2026-09-03 (dynamicfix sweep):` \
     `# same "one owner per symbol" rule as the libmalloc.a/libpthread.a` \
