@@ -245,14 +245,71 @@ int __darwin_check_fd_set_overflow(int fd, const void *fd_set_ptr, int unlimited
  * plain, unversioned '_sleep' genuinely crashes ld64 itself (a real
  * "Assertion failed: (target != NULL), function generateLinkEditInfo"
  * internal linker bug, reproduced directly while wiring up this tier's
- * smoketest, not guessed). Real fix: a plain one-line forwarder to that
- * same already-real implementation, same "thin forwarder over an
- * already-real private syscall" shape this file's own read()/select()
- * forwarders above already use -- no linker aliasing needed for this
- * one at all. */
-extern unsigned int _mal_semwait_sleep(unsigned int seconds);
+ * smoketest, not guessed).
+ *
+ * REAL BUG FOUND+FIXED (2026-09-15): this used to be a one-line forwarder
+ * straight to _mal_semwait_sleep() -- but that function's own header
+ * comment (libmalloc_sleep_shim.c) is explicit that it was written for
+ * ONE rare, single-shot malloc debug pause that "doesn't need signal-
+ * interrupt correctness", and deliberately skips real Apple/FreeBSD
+ * sleep.c's EINTR-retry loop on that basis. This project's own real
+ * PureDarwin launchd.c reuses plain sleep() for something that basis
+ * does NOT hold for: update_thread()'s `while (launchd_sync_frequency)
+ * { sync(); sleep(launchd_sync_frequency); }` -- and launchd, as real
+ * PID 1, receives real SIGCHLD continuously (every process anywhere in
+ * the system that exits gets reparented to PID 1 and reaped). Each
+ * SIGCHLD interrupts the underlying __semwait_signal(2) with EINTR, the
+ * old no-retry forwarder returned immediately instead of actually
+ * waiting, and the loop went straight back into a fresh, real, expensive
+ * sync() -> hfs_sync() -> vnode_iterate() pass -- confirmed via a real
+ * QEMU monitor register-probe session (PC parked in
+ * _lck_mtx_lock/_hw_lock_lock, called from vnode_iterate, called from
+ * hfs_sync) plus a real temporary kernel diagnostic print showing
+ * hfs_sync() entered over 23,000 times in a few seconds at an otherwise-
+ * idle login prompt, host CPU pinned near 100%. Real fix: track real
+ * elapsed time with mach_absolute_time() (already a real, linked
+ * dependency of this project's own launchd runtime.o/CoreFoundation
+ * CFDate.o, so no new gap) and retry __semwait_signal with the real
+ * remaining duration on EINTR, same substance as real FreeBSD sleep.c's
+ * own retry loop -- just without pulling in that whole implementation,
+ * matching this file's own "thin forwarder over a real primitive" style.
+ * _mal_semwait_sleep()/libmalloc_sleep_shim.c itself is UNTOUCHED: its
+ * one real caller (malloc_report()'s debug-only pause) genuinely doesn't
+ * need this, and it's a real, narrowly-scoped shim, not a general-
+ * purpose one -- this file no longer forwards to it for that reason. */
+#include <mach/mach_time.h>
+
+extern int __semwait_signal(int cond_sem, int mutex_sem, int timeout,
+    int relative, long long tv_sec, int tv_nsec);
+
 unsigned int sleep(unsigned int seconds) {
-    return _mal_semwait_sleep(seconds);
+    if (seconds == 0) {
+        return 0;
+    }
+
+    mach_timebase_info_data_t tb = {0, 0};
+    mach_timebase_info(&tb);
+    if (tb.numer == 0 || tb.denom == 0) {
+        tb.numer = 1;
+        tb.denom = 1;
+    }
+
+    unsigned long long target_ns = (unsigned long long)seconds * 1000000000ULL;
+    uint64_t start = mach_absolute_time();
+
+    for (;;) {
+        uint64_t elapsed_ticks = mach_absolute_time() - start;
+        unsigned long long elapsed_ns =
+            (unsigned long long)elapsed_ticks * tb.numer / tb.denom;
+        if (elapsed_ns >= target_ns) {
+            break;
+        }
+        unsigned long long remaining_ns = target_ns - elapsed_ns;
+        __semwait_signal(0, 0, 1, 1,
+            (long long)(remaining_ns / 1000000000ULL),
+            (int)(remaining_ns % 1000000000ULL));
+    }
+    return 0;
 }
 
 /* pthread_testcancel(): libc_gen.a's real termios.o (tcdrain()) calls this
