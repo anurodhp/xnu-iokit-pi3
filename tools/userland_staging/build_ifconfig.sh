@@ -162,6 +162,9 @@ for spec in \
     "ifconfig_syslog_compat.c:" \
     "ifconfig_strtod_compat.c:" \
     "simple_cmds_mmap_compat.c:" \
+    "libc_locale_globals_compat.c:" \
+    "$LIBC/locale/FreeBSD/table.c:" \
+    "$LIBC/locale/FreeBSD/none.c:" \
     ; do
     f="${spec%%:*}"
     extra="${spec#*:}"
@@ -193,45 +196,72 @@ fi
 mkdir -p "$OUT/ifconfig_glue_extract"
 (cd "$OUT/ifconfig_glue_extract" && ar x "../libc_printf.a" glue.o)
 
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
+# DYNAMIC LINK (DAR-314, 2026-09-15). This used to link fully static
+# (-nostdlib -static -e start) against libc_printf.a/libc_gen.a/
+# libc_stdio.a/libc_locale_for_stdio.a/libc_string.a/libpthread.a/
+# libclosure.a/libmalloc.a/libplatform.a/cerror_stub.o plus a ~20-entry
+# -Wl,-alias block hand-synthesizing the UNIX2003/INODE64 symbol-
+# versioning gaps static linking forced this project to fake. All of
+# that is obsolete now: real dyld-940 boots (Phase 6.5), ifconfig runs
+# long after dyld is up, and real libSystem.B.dylib already reexports
+# libsystem_c/libsystem_pthread/libsystem_malloc/libsystem_platform/
+# libsystem_blocks AND bakes in that exact UNIX2003/INODE64 alias set
+# itself (build_libsystem.sh's own tail), so none of those are needed.
+# Same real conversion build_simple_cmds.sh did on 2026-08-28 for its
+# 76 commands -- see its LINK_COMMON comment for the full reasoning.
+#
+# The err/warn aliases below are the ONE part of the old alias block
+# that is NOT a static-linking artifact and must survive the conversion:
+# this project's libsystem_c.dylib exports only the `_`-prefixed FreeBSD
+# internals `__err`/`__warn`, never the bare public `err()`/`warn()`
+# (confirmed via nm -gU), so the public names still have to be
+# synthesized by hand. build_simple_cmds.sh keeps these two for exactly
+# the same reason even after its own full dynamic conversion (its
+# link_aliases, and the COMMON_ERR_OBJ comment explaining why __err/
+# __warn are deliberately excluded from its unexported-symbol list so
+# these aliases still have a base).
+#
+# The dylibs are listed individually rather than relying on
+# libSystem.B.dylib's LC_REEXPORT_DYLIB: ld64 resolves an absolute
+# /usr/lib/... install name against the HOST SDK's stub instead of this
+# project's local libc_build/system/ copy, a real hazard already
+# documented in CLAUDE.md and hit for real by DAR-13/DAR-196.
+DAILY_XCODE="$(xcode-select -p 2>/dev/null)"
+NEWLD_BINDIR="$DAILY_XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+if [ ! -x "$NEWLD_BINDIR/ld" ]; then
+    echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE)" >&2
+    exit 1
+fi
+for d in system/libsystem_c.dylib system/libsystem_pthread.dylib \
+         system/libsystem_malloc.dylib system/libsystem_platform.dylib \
+         system/libdyld.dylib system/libSystem.B.dylib; do
+    if [ ! -f "$OUT/$d" ]; then
+        echo "error: $OUT/$d not found -- build the dylib tier first" >&2
+        exit 1
+    fi
+done
+LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libsystem_platform.dylib $OUT/system/libdyld.dylib $OUT/system/libSystem.B.dylib"
+
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
+    -DCRT_DYNAMIC_LINKING \
+    -B"$NEWLD_BINDIR" \
+    -Wl,-fixup_chains \
     -o ifconfig.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/ifconfig_obj/*.o \
-    "$OUT/simple_obj/sys____mmap.o" "$OUT/simple_obj/sys____munmap.o" \
-    "$OUT/libc_printf.a" "$OUT/ifconfig_glue_extract/glue.o" \
-    "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_string.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
-    "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
-    "$OUT/libpthread.a" \
-    "$OUT/libclosure.a" \
-    "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
-    -Wl,-alias,_open,'_open$UNIX2003' \
-    -Wl,-alias,_close,'_close$UNIX2003' \
-    -Wl,-alias,_write,'_write$UNIX2003' \
-    -Wl,-alias,___kill,'_kill$UNIX2003' \
-    -Wl,-alias,___kill,_kill \
-    -Wl,-alias,__mal_semwait_sleep,'_sleep$UNIX2003' \
-    -Wl,-alias,___kdebug_trace,_kdebug_trace \
-    -Wl,-alias,_fcntl,'_fcntl$UNIX2003' \
-    -Wl,-alias,_fstat,'_fstat$INODE64' \
-    -Wl,-alias,_lstat,'_lstat$INODE64' \
-    -Wl,-alias,_stat,'_stat$INODE64' \
+    $LINK_DYLIBS \
     -Wl,-alias,__err,_err \
-    -Wl,-alias,__warn,_warn \
-    -Wl,-alias,_fputs,'_fputs$UNIX2003' \
-    -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
-    -Wl,-alias,'_getopt$UNIX2003',_getopt \
-    -Wl,-alias,_strerror,'_strerror$UNIX2003' \
-    -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
-    -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
-    -Wl,-alias,___mmap,_mmap \
-    -Wl,-alias,___munmap,_munmap
+    -Wl,-alias,__warn,_warn
 echo "wrote ifconfig.macho"
 
-otool -l ifconfig.macho | grep -q LC_LOAD_DYLIB && \
-    echo "WARNING: LC_LOAD_DYLIB present -- no longer dyld-free" >&2
-otool -l ifconfig.macho | grep -q LC_UNIXTHREAD || \
-    echo "WARNING: no LC_UNIXTHREAD -- kernel exec won't know where to start" >&2
-if nm -u ifconfig.macho | grep -q .; then
-    echo "WARNING: undefined symbols present:" >&2
-    nm -u ifconfig.macho >&2
-fi
+# Real dynamic-executable assertions (DAR-314). These are the INVERSE of
+# the old static ones -- inverted, not deleted, so the check still has
+# teeth. Same three real load commands build_simple_cmds.sh verifies.
+bad=0
+otool -l ifconfig.macho | grep -A2 "cmd LC_LOAD_DYLINKER" | grep -q "/usr/lib/dyld" || {
+    echo "error: no LC_LOAD_DYLINKER /usr/lib/dyld -- not a real dynamic executable" >&2; bad=1; }
+otool -l ifconfig.macho | grep -q "cmd LC_LOAD_DYLIB" || {
+    echo "error: no LC_LOAD_DYLIB -- not a real dynamic executable" >&2; bad=1; }
+otool -l ifconfig.macho | grep -q "cmd LC_MAIN" || {
+    echo "error: no LC_MAIN (real unixproc entry)" >&2; bad=1; }
+[ "$bad" -eq 0 ] || exit 1

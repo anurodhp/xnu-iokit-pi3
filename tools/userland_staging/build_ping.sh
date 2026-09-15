@@ -242,6 +242,9 @@ for spec in \
     "libresolv_socket_syscalls.c:" \
     "ping_extra_syscalls.c:" \
     "mach_ipc_clock_init.c:" \
+    "libc_locale_globals_compat.c:" \
+    "$LIBC/locale/FreeBSD/table.c:" \
+    "$LIBC/locale/FreeBSD/none.c:" \
     "ping_resolver_compat.c:" \
     "ping_alarm_compat.c:" \
     "ping_main_wrapper.c:" \
@@ -306,39 +309,40 @@ MMAP_SYSCFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -I $XNU_FOR_MMAP/l
 rm -rf "$MMAP_TMPGEN"
 trap - EXIT
 
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
+# DYNAMIC LINK (DAR-314, 2026-09-15) -- see build_ifconfig.sh's own
+# identically-structured block for the full reasoning. Short version:
+# ping runs long after dyld is up, so there is no reason for it to be
+# fully static; real libSystem.B.dylib + siblings replace the whole
+# static libc archive stack and bake in the UNIX2003/INODE64 aliases.
+# The err/warn aliases survive because libsystem_c.dylib only exports
+# the `_`-prefixed FreeBSD internals, never the bare public names.
+# libmach_ipc.a stays: it is a real archive with no dylib equivalent
+# here, and DAR-312's usleep() fix needs semaphore_create from it.
+DAILY_XCODE="$(xcode-select -p 2>/dev/null)"
+NEWLD_BINDIR="$DAILY_XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+if [ ! -x "$NEWLD_BINDIR/ld" ]; then
+    echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE)" >&2
+    exit 1
+fi
+LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libsystem_platform.dylib $OUT/system/libdyld.dylib $OUT/system/libSystem.B.dylib"
+
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
+    -DCRT_DYNAMIC_LINKING \
+    -B"$NEWLD_BINDIR" \
+    -Wl,-fixup_chains \
     -o ping.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/ping_obj/*.o \
-    "$OUT/ping_mmap_raw.o" "$OUT/ping_munmap_raw.o" \
-    "$OUT/libm.a" \
-    "$OUT/libc_printf.a" "$OUT/ping_glue_extract/glue.o" \
-    "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_string.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
-    "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
-    "$OUT/libpthread.a" \
-    "$OUT/libclosure.a" \
-    "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
     "$OUT/libmach_ipc.a" \
-    "$OUT/libunwind.a" \
-    -Wl,-alias,_open,'_open$UNIX2003' \
-    -Wl,-alias,_close,'_close$UNIX2003' \
-    -Wl,-alias,_write,'_write$UNIX2003' \
-    -Wl,-alias,___kill,'_kill$UNIX2003' \
-    -Wl,-alias,___kill,_kill \
-    -Wl,-alias,__mal_semwait_sleep,'_sleep$UNIX2003' \
-    -Wl,-alias,___kdebug_trace,_kdebug_trace \
-    -Wl,-alias,_fcntl,'_fcntl$UNIX2003' \
-    -Wl,-alias,_fstat,'_fstat$INODE64' \
-    -Wl,-alias,_lstat,'_lstat$INODE64' \
-    -Wl,-alias,_stat,'_stat$INODE64' \
+    $LINK_DYLIBS \
     -Wl,-alias,__err,_err \
     -Wl,-alias,__warn,_warn \
-    -Wl,-alias,_fputs,'_fputs$UNIX2003' \
-    -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
-    -Wl,-alias,'_getopt$UNIX2003',_getopt \
-    -Wl,-alias,_strerror,'_strerror$UNIX2003' \
-    -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
-    -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
+    `# Socket/writev/usleep versioned names: these alias ping's OWN` \
+    `# locally-compiled syscall wrappers (ping_extra_syscalls.c,` \
+    `# libresolv_socket_syscalls.c), NOT dylib exports, so unlike the` \
+    `# generic UNIX2003 block they are not made redundant by` \
+    `# libSystem.B.dylib's baked-in alias set and must survive the` \
+    `# DAR-314 dynamic conversion.` \
     -Wl,-alias,_bind,'_bind$UNIX2003' \
     -Wl,-alias,_connect,'_connect$UNIX2003' \
     -Wl,-alias,_send,'_send$UNIX2003' \
@@ -347,17 +351,16 @@ trap - EXIT
     -Wl,-alias,_recvmsg,'_recvmsg$UNIX2003' \
     -Wl,-alias,_sendmsg,'_sendmsg$UNIX2003' \
     -Wl,-alias,_usleep,'_usleep$UNIX2003' \
-    -Wl,-alias,_strtod,'_strtod$UNIX2003' \
     -Wl,-alias,__writev,'_writev$UNIX2003' \
-    -Wl,-alias,___mmap,_mmap \
-    -Wl,-alias,___munmap,_munmap \
     2>"$OUT/ping_link.err" && echo "wrote ping.macho" || { echo "error: ping.macho link failed:" >&2; cat "$OUT/ping_link.err" >&2; exit 1; }
 
-otool -l ping.macho | grep -q LC_LOAD_DYLIB && \
-    echo "WARNING: LC_LOAD_DYLIB present -- no longer dyld-free" >&2
-otool -l ping.macho | grep -q LC_UNIXTHREAD || \
-    echo "WARNING: no LC_UNIXTHREAD -- kernel exec won't know where to start" >&2
-if nm -u ping.macho | grep -q .; then
-    echo "WARNING: undefined symbols present:" >&2
-    nm -u ping.macho >&2
-fi
+# Real dynamic-executable assertions (DAR-314) -- inverted from the old
+# static ones, not deleted, so the check still has teeth.
+bad=0
+otool -l ping.macho | grep -A2 "cmd LC_LOAD_DYLINKER" | grep -q "/usr/lib/dyld" || {
+    echo "error: no LC_LOAD_DYLINKER /usr/lib/dyld -- not a real dynamic executable" >&2; bad=1; }
+otool -l ping.macho | grep -q "cmd LC_LOAD_DYLIB" || {
+    echo "error: no LC_LOAD_DYLIB -- not a real dynamic executable" >&2; bad=1; }
+otool -l ping.macho | grep -q "cmd LC_MAIN" || {
+    echo "error: no LC_MAIN (real unixproc entry)" >&2; bad=1; }
+[ "$bad" -eq 0 ] || exit 1
