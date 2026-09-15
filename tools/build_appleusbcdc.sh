@@ -261,7 +261,7 @@ fi
 # kernel will provide. Anything else is a real gap and must be listed
 # here deliberately.
 #
-# _kmod_info is the one known, deliberate exception: linkup.h's
+# _kmod_info is one known, deliberate exception: linkup.h's
 # KMOD_INFO_NAME refers to the kmod_info struct that only exists for a
 # driver loaded as a .kext bundle, and this project compiles drivers
 # directly into the kernel with no kext-bundle pipeline at all. It needs
@@ -275,8 +275,31 @@ fi
 #
 # C++-mangled symbols (__Z...) are dropped wholesale: those are IOKit,
 # IONetworkingFamily and IOUSBFamily methods, all of which the kernel
-# will provide. What is left is plain C, which is short enough to eyeball.
-KNOWN_UNRESOLVED='^_kmod_info$'
+# will provide. What is left is plain C.
+#
+# DAR-294: this gate previously never actually failed (see below), so
+# this list was never exercised for real - a real first run surfaced 22
+# more plain-C symbols, every one confirmed (by grepping this project's
+# own real xnu-7195 checkout, not assumed) as a real Libkern/BSD/IOKit
+# kernel export this driver set genuinely expects the kernel to
+# provide at final link, the same "the kernel will provide it" case the
+# comment above already describes for C++ symbols, just not yet
+# extended to cover plain C ones:
+#   IOFree/IOLog/IOMalloc_internal/IOSleep/kprintf - osfmk/iokit basics
+#   KHEAP_DEFAULT - osfmk/kern/kalloc.h real kalloc heap descriptor
+#   OSObject_operator_delete$XNU_INTERNAL/OSObject_operator_new$XNU_INTERNAL
+#     - libkern/c++/OSObject.h's real placement new/delete, exported via
+#     config/Libkern.exports
+#   PAGE_SHIFT_CONST - osfmk/mach/arm/vm_param.h, already referenced by
+#     this project's own already-vendored SMSC9514Ethernet.cpp
+#   bcopy/bzero/snprintf/strchr/__strlcat_chk - real BSD/Libc primitives
+#     the kernel itself links
+#   gIOEthernetWakeOnLANFilterGroup/gIONetworkFilterGroup - real IOKit
+#     globals declared in iokit/IOKit/network/IOEthernetController.h and
+#     IONetworkController.h, defined in Network/IOEthernetInterface.cpp
+#   kOSBooleanTrue/kOSBooleanFalse - real Libkern OSBoolean singletons
+#   mbuf_copyback/mbuf_data/mbuf_len/mbuf_next - real BSD mbuf KPI
+KNOWN_UNRESOLVED='^_(kmod_info|IOFree|IOLog|IOMalloc_internal|IOSleep|KHEAP_DEFAULT|OSObject_operator_delete\$XNU_INTERNAL|OSObject_operator_new\$XNU_INTERNAL|PAGE_SHIFT_CONST|__strlcat_chk|bcopy|bzero|gIOEthernetWakeOnLANFilterGroup|gIONetworkFilterGroup|kOSBooleanFalse|kOSBooleanTrue|kprintf|mbuf_copyback|mbuf_data|mbuf_len|mbuf_next|snprintf|strchr)$'
 # NOTE on the nm invocation, learned the hard way while writing this:
 # plain `nm` CANNOT be used here. This script exports DEVELOPER_DIR
 # pointing at Xcode 12, and /usr/bin/nm is an xcrun shim that resolves
@@ -314,10 +337,20 @@ unexpected=$(LC_ALL=C comm -23 "$_nm_tmp/undefined" "$_nm_tmp/defined" \
 	| LC_ALL=C grep -vE '^___stack_chk' \
 	| LC_ALL=C grep -vE "$KNOWN_UNRESOLVED" || true)
 rm -rf "$_nm_tmp"
+# DAR-294: this is the hard gate the comment block above describes -
+# "must be listed here deliberately" meant fail the build, not print a
+# note and exit 0. An unexpected plain-C symbol here is exactly the
+# missing-translation-unit class of bug this whole check exists to
+# catch (same failure class as the "check that always passes" already
+# fixed for the sibling nm-invocation gate above, DAR-243's own
+# adversarial review).
 if [ -n "$unexpected" ]; then
-	echo "note: plain-C symbols this object set does not define; each must be" >&2
-	echo "      provided by the kernel at the vendoring milestone:" >&2
+	echo "error: plain-C symbols this object set does not define, and that are" >&2
+	echo "       not covered by KNOWN_UNRESOLVED above - a real, undocumented gap" >&2
+	echo "       (missing translation unit, or a symbol that needs adding to" >&2
+	echo "       KNOWN_UNRESOLVED with a real citation for why it's expected):" >&2
 	echo "$unexpected" | sed 's/^/  /' >&2
+	exit 1
 fi
 
 echo "=== AppleUSBCDCECM: $built/$(( ${#FILES[@]} + ${#C_FILES[@]} )) objects built into $OUT_DIR/ ==="
