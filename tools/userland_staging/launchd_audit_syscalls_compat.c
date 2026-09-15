@@ -35,6 +35,7 @@
 #include <gethostuuid.h>
 #include <bsm/audit.h>
 #include <time.h>
+#include <errno.h>
 
 extern long cerror_nocancel(int err);
 
@@ -86,18 +87,60 @@ ssize_t readlink(const char *path, char *buf, size_t bufsiz) {
 
 /* nanosleep(3): real Apple source (Libc/gen/nanosleep.c) is a large,
  * dual-path implementation (mk_timer-based vs __semwait_signal-based)
- * needing real Mach clock APIs this project hasn't wired for this
- * purpose. Real Apple's own simple/no-cancel-point case reduces to
- * exactly this: __semwait_signal(0, 0, 1, 1, tv_sec, tv_nsec) with no
- * real semaphores involved -- a plain relative timed wait, matching the
- * real raw syscall (#334, bsd/kern/syscalls.master) directly rather
- * than porting the whole file for launchd's simple retry-backoff use
- * (core.c). Doesn't fill in *remaining_time on early wake (real
- * callers here pass NULL for it). */
+ * needing real Mach clock APIs. This is the reduced, no-cancel-point
+ * case of it -- but it MUST still pass a real semaphore port.
+ *
+ * FIXED 2026-09-15 (DAR-309). This previously passed 0 for BOTH
+ * cond_sem and mutex_sem, with a comment asserting real Apple's simple
+ * case "reduces to exactly this ... with no real semaphores involved".
+ * That claim was FALSE, and the real pinned sources disprove it on both
+ * ends:
+ *
+ *   - Real Apple (third_party/Libc/gen/nanosleep.c:104) passes a REAL
+ *     semaphore as cond_sem and MACH_PORT_NULL only as mutex_sem:
+ *       SEMWAIT_SIGNAL(clock_sem, MACH_PORT_NULL, 1, 1, sec, nsec)
+ *     where clock_sem is created at that file's own line 55 via
+ *     semaphore_create(mach_task_self(), &clock_sem, SYNC_POLICY_FIFO, 0).
+ *
+ *   - Real kernel (xnu-7195): with mutex_sem==0 and timeout==1,
+ *     __semwait_signal_nocancel() (bsd/kern/kern_sig.c:1232) calls
+ *     semaphore_timedwait_trap_internal(cond_sem, ...), which calls
+ *     port_name_to_semaphore(name, ...) (osfmk/kern/sync_sema.c:945).
+ *     That returns KERN_INVALID_NAME immediately for an invalid name
+ *     (osfmk/kern/ipc_sync.c:63, !MACH_PORT_VALID(0)) WITHOUT ever
+ *     reaching semaphore_wait_internal().
+ *
+ * So cond_sem==0 never blocked at all -- it failed instantly, every
+ * call. That is the real root cause of DAR-309's ~100% PID-1 CPU: every
+ * caller that thought it was sleeping was actually spinning. Real fix is
+ * Apple's own: a real semaphore, which mach_ipc_clock_init() already
+ * creates here exactly the way Apple's _init_clock_port() does, and
+ * which simple_cmds_nanosleep_compat.c already uses correctly.
+ *
+ * Note ETIMEDOUT is the NORMAL success path (the timeout expired), same
+ * as real Apple's own nanosleep.c:106. Doesn't fill in *remaining_time
+ * on early wake (real callers here pass NULL for it), same as before. */
+extern void mach_ipc_clock_init(void);
+extern mach_port_t g_mach_ipc_clock_sem;
+
 int nanosleep(const struct timespec *req, struct timespec *rem) {
     (void)rem;
-    long rc = syscall6(SYS_semwait_signal, 0, 0, 1, 1, req->tv_sec, req->tv_nsec);
-    return (rc < 0) ? -1 : 0;
+    if (req == NULL || req->tv_sec < 0 || req->tv_nsec >= 1000000000L) {
+        errno = EINVAL;
+        return -1;
+    }
+    mach_ipc_clock_init();
+    long rc = syscall6(SYS_semwait_signal, (long)g_mach_ipc_clock_sem, 0, 1, 1,
+        req->tv_sec, req->tv_nsec);
+    if (rc < 0) {
+        /* Real relative timed wait that ran to completion reports
+         * ETIMEDOUT -- real success, per real Apple nanosleep.c:106. */
+        if (errno == ETIMEDOUT) {
+            return 0;
+        }
+        return -1;
+    }
+    return 0;
 }
 
 int getpeername(int socket, struct sockaddr * __restrict address, socklen_t * __restrict address_len) {

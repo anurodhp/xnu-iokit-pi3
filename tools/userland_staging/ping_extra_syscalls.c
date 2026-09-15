@@ -87,7 +87,22 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *oset) {
  * linked into libmalloc.a via sys_semwait_signal.o -- confirmed via nm,
  * same real primitive libmalloc_sleep_shim.c's _mal_semwait_sleep()
  * already uses for whole-second sleeps) with a real us->sec/nsec split
- * instead of that wrapper's whole-second-only granularity. */
+ * instead of that wrapper's whole-second-only granularity.
+ *
+ * WARNING (corrected 2026-09-15, DAR-309): the "simpler equivalent"
+ * claim above is FALSE, inherited from libmalloc_sleep_shim.c's own
+ * (now-corrected) comment. cond_sem=0 is not a valid semaphore port, so
+ * the real kernel fails this call INSTANTLY rather than waiting --
+ * port_name_to_semaphore() returns KERN_INVALID_NAME for
+ * !MACH_PORT_VALID(0) (xnu-7195 osfmk/kern/ipc_sync.c:63) without ever
+ * reaching semaphore_wait_internal(). Real Apple passes a REAL
+ * semaphore as cond_sem (third_party/Libc/gen/nanosleep.c:104). Net
+ * effect here: usleep() does not delay at all, so ping's inter-packet
+ * pacing is not actually applied. Not a CPU burner (single call, no
+ * retry loop -- unlike DAR-309's launchd path), but still wrong.
+ * Tracked separately; the real fix is the mach_ipc_clock_init() +
+ * g_mach_ipc_clock_sem form simple_cmds_nanosleep_compat.c uses, which
+ * needs mach_ipc_clock_init.c added to build_ping.sh's compile list. */
 extern int __semwait_signal(int cond_sem, int mutex_sem, int timeout,
     int relative, long long tv_sec, int tv_nsec);
 int usleep(unsigned int usec) {

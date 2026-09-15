@@ -277,10 +277,33 @@ int __darwin_check_fd_set_overflow(int fd, const void *fd_set_ptr, int unlimited
  * one real caller (malloc_report()'s debug-only pause) genuinely doesn't
  * need this, and it's a real, narrowly-scoped shim, not a general-
  * purpose one -- this file no longer forwards to it for that reason. */
+/* FIXED 2026-09-15 (DAR-309): this loop used to pass 0 as __semwait_signal's
+ * cond_sem. That is not a valid semaphore port name, so the real kernel
+ * failed the call INSTANTLY instead of waiting -- port_name_to_semaphore()
+ * (osfmk/kern/ipc_sync.c:63) returns KERN_INVALID_NAME for !MACH_PORT_VALID(0)
+ * without ever reaching semaphore_wait_internal(). The elapsed-time retry loop
+ * below then span on that instantly-failing call for the WHOLE sleep duration,
+ * burning ~100% CPU while still returning at the correct wall-clock time --
+ * which is exactly why an iteration-count diagnostic on launchd's own
+ * update_thread() looked perfectly healthy (correct ~30s cadence) while the
+ * host sat at ~97% CPU on both QEMU and real Pi 3 hardware.
+ *
+ * Real Apple passes a REAL semaphore here (third_party/Libc/gen/nanosleep.c:104,
+ * SEMWAIT_SIGNAL(clock_sem, MACH_PORT_NULL, 1, 1, sec, nsec)); mach_ipc_clock_init()
+ * creates one the same way real Apple's own _init_clock_port() does. The
+ * elapsed-time retry loop itself is KEPT deliberately -- it is the real,
+ * still-needed part of the earlier fix: launchd is real PID 1 and takes
+ * continuous real SIGCHLD, each of which interrupts the wait with EINTR, and
+ * without re-waiting the remaining duration update_thread() would go straight
+ * back into a fresh, expensive sync() -> hfs_sync() pass (the original
+ * 23,000-hfs_sync storm). Now each retry genuinely BLOCKS for the remaining
+ * time instead of spinning on it. */
 #include <mach/mach_time.h>
 
 extern int __semwait_signal(int cond_sem, int mutex_sem, int timeout,
     int relative, long long tv_sec, int tv_nsec);
+extern void mach_ipc_clock_init(void);
+extern mach_port_t g_mach_ipc_clock_sem;
 
 unsigned int sleep(unsigned int seconds) {
     if (seconds == 0) {
@@ -294,6 +317,8 @@ unsigned int sleep(unsigned int seconds) {
         tb.denom = 1;
     }
 
+    mach_ipc_clock_init();
+
     unsigned long long target_ns = (unsigned long long)seconds * 1000000000ULL;
     uint64_t start = mach_absolute_time();
 
@@ -305,7 +330,7 @@ unsigned int sleep(unsigned int seconds) {
             break;
         }
         unsigned long long remaining_ns = target_ns - elapsed_ns;
-        __semwait_signal(0, 0, 1, 1,
+        __semwait_signal(g_mach_ipc_clock_sem, 0, 1, 1,
             (long long)(remaining_ns / 1000000000ULL),
             (int)(remaining_ns % 1000000000ULL));
     }
