@@ -516,6 +516,26 @@ rm -f "$OUT/sys_getpid_current_pid_only.o"
     -unexported_symbol ___getpid -unexported_symbol _getpid \
     "$OUT/sys_getpid.o" -o "$OUT/sys_getpid_current_pid_only.o"
 
+# DAR-233 dedup pass (2026-09-14): liblaunchd_syscalls.a members already
+# proven redundant for launchd.macho (DAR-23, same archive, same real
+# dylib owners -- confirmed via `dyld_info -exports` there, and a real
+# QEMU boot after) reused here rather than re-derived from scratch:
+# siglist.o/sys____munmap.o/sys__dup.o/sys__kevent.o/sys__mkdirat.o/
+# uuid_pack.o (build_launchd.sh's first pass) plus sys__getgid.o/
+# uuid_clear.o (build_launchd.sh's DAR-23 continuation) -- _getgid/
+# _uuid_clear/_kevent are confirmed real duplicates in THIS binary too
+# (dup_symbol_audit.sh's own launchctl.macho list). The other four
+# aren't in that list (launchctl may not reference them at all, or
+# something else already supplies them) -- included anyway since
+# build_launchd.sh already proved them safe and a real relink either
+# no-ops on them or surfaces a real undefined-symbol error immediately,
+# not a silent behavior change.
+rm -f "$OUT/liblaunchd_syscalls_no_dup.a"
+cp "$OUT/liblaunchd_syscalls.a" "$OUT/liblaunchd_syscalls_no_dup.a"
+ar d "$OUT/liblaunchd_syscalls_no_dup.a" \
+    siglist.o sys____munmap.o sys__dup.o sys__kevent.o \
+    sys__mkdirat.o uuid_pack.o sys__getgid.o uuid_clear.o
+
 rm -f "$OUT/launchctl.macho"
 # -DCRT_DYNAMIC_LINKING (DAR-161, 2026-08-31): launchctl.macho is a real,
 # genuinely dynamically-linked executable (libdispatch/libdyld/
@@ -561,7 +581,7 @@ rm -f "$OUT/launchctl.macho"
     "$OUT/sys_getpid_current_pid_only.o" \
     "$OUT/liblaunchctl_extras.a" \
     "$OUT/launchctl_copyfile_extract/copyfile_syscalls.o" "$OUT/launchd_libc_extras.a" \
-    "$OUT/liblaunchd_mig.a" "$OUT/liblaunchd_syscalls.a" \
+    "$OUT/liblaunchd_mig.a" "$OUT/liblaunchd_syscalls_no_dup.a" \
     `# libclosure.a/libmalloc.a/libplatform.a/libpthread.a/libc_gen.a/` \
     `# libc_string.a/libc_stdio.a/libc_printf.a/libc_locale_for_stdio.a` \
     `# REMOVED 2026-09-03 (dynamicfix sweep): every one of them is merged` \
@@ -604,7 +624,13 @@ rm -f "$OUT/launchctl.macho"
     `#    archive for symbols the dylib already owns, not to re-order` \
     `#    again.` \
     "$OUT/system/libsystem_kernel.dylib" \
-    "$OUT/libmach_ipc.a" "$OUT/cerror_stub.o" \
+    "$OUT/libmach_ipc.a" \
+    `# cerror_stub.o REMOVED (DAR-233, 2026-09-14): duplicated` \
+    `# ___error/_cerror/_cerror_nocancel/_errno/__pthread_exit_if_canceled,` \
+    `# all real, local, non-trivial exports of libsystem_kernel.dylib` \
+    `# (confirmed via dyld_info -exports, same exact fix already proven` \
+    `# safe for pd_console_login.macho/DAR-25 and launchd.macho/DAR-23) --` \
+    `# already listed just above, so no new dylib needed.` \
     "$OUT/system/libCoreFoundation.dylib" \
     `# libxpc.dylib listed HERE, before libdyld.dylib, 2026-09-04 (DAR-235):` \
     `# real fix for launchctl.macho binding _vproc_swap_integer to` \
