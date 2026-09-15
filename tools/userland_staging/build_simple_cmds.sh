@@ -1279,7 +1279,16 @@ CMD_LIST=(
     "head:$TEXT_CMDS/head/head.c:"
     "tail:$TEXT_CMDS/tail/tail.c:$TEXT_CMDS/tail/forward.c|$TEXT_CMDS/tail/reverse.c|$TEXT_CMDS/tail/misc.c|$TEXT_CMDS/tail/read.c|$LIBC/stdio/FreeBSD/_flock_stub.c|$LIBC/stdio/FreeBSD/freopen.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/gen/FreeBSD/usleep.c|simple_cmds_nanosleep_compat.c|simple_cmds_mmap_compat.c"
     "mkdir:$FILE_CMDS/mkdir/mkdir.c:$XNU/libsyscall/wrappers/unix03/chmod.c|$LIBC/util/mkpath_np.c|$LIBC/gen/FreeBSD/setmode.c|simple_cmds_sigprocmask_compat.c"
-    "touch:$FILE_CMDS/touch/touch.c:$XNU/libsyscall/wrappers/unix03/chmod.c|simple_cmds_time_compat.c|$LIBC/sys/gettimeofday.c|ps_commpage_gettimeofday_stub.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c|simple_cmds_lutimes_compat.c"
+    # DAR-142 (2026-09-15): touch -h's lutimes() symlink case is now
+    # real, unmodified Libc/emulated/lutimes.c (was
+    # simple_cmds_lutimes_compat.c, an honest ENOSYS stub for exactly
+    # this one case). setattrlist(2) itself needs no new provider here:
+    # COMMON_EXTRA (see this script's own definition above) already
+    # compiles cp_mv_syscalls.c's real setattrlist(2) into every simple
+    # command's link, touch included - confirmed the hard way via a
+    # real duplicate-symbol link error from a first-pass, narrower
+    # per-command extraction that turned out redundant.
+    "touch:$FILE_CMDS/touch/touch.c:$XNU/libsyscall/wrappers/unix03/chmod.c|simple_cmds_time_compat.c|$LIBC/sys/gettimeofday.c|ps_commpage_gettimeofday_stub.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c|$LIBC/emulated/lutimes.c"
     "rm:$FILE_CMDS/rm/rm.c:$LIBC/gen/get_compat.c|ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c|simple_cmds_rpmatch_compat.c|simple_cmds_undelete_stub.c|$LIBC/gen/strtofflags.c"
     "which:$SHELL_CMDS/which/which.c:"
     "env:$SHELL_CMDS/env/env.c:$SHELL_CMDS/env/envopts.c|$LIBC/gen/FreeBSD/exec.c|simple_cmds_execve_compat.c"
