@@ -162,6 +162,13 @@ fi
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
     libunwind_sched_yield.s -o "$OUT/cron_obj/cron_sched_yield_trap.o"
 "$CLANG" $CFLAGS libunwind_sched_yield.c -o "$OUT/cron_obj/cron_sched_yield.o"
+# DAR-314: __locale_key/__global_locale and _DefaultRuneXLocale are LOCAL
+# (lowercase `s` in nm) inside libsystem_c.dylib, not exports, so the
+# dynamic link must provide them. Uses this project's already-proven
+# shared compat file, not a narrower hand-written one (see DAR-169).
+"$CLANG" $CFLAGS libc_locale_globals_compat.c -o "$OUT/cron_obj/libc_locale_globals_compat.o"
+"$CLANG" $CFLAGS "$LIBC/locale/FreeBSD/table.c" -o "$OUT/cron_obj/table.o"
+"$CLANG" $CFLAGS "$LIBC/locale/FreeBSD/none.c" -o "$OUT/cron_obj/none.o"
 
 # Real gap, found 2026-09-13 via a live build_everything.sh run (first
 # time cron.macho's real link with real libc_printf.a/libpthread.a was
@@ -217,60 +224,44 @@ trap - EXIT
 # link actually needs.
 mkdir -p "$OUT/cron_glue_extract"
 (cd "$OUT/cron_glue_extract" && ar x "../libc_printf.a" glue.o)
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
+# DYNAMIC LINK (DAR-314, 2026-09-15) -- see build_ifconfig.sh's own
+# identically-structured block for the full reasoning. cron/crontab run
+# long after dyld is up, so neither needs to be fully static.
+DAILY_XCODE="$(xcode-select -p 2>/dev/null)"
+NEWLD_BINDIR="$DAILY_XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+if [ ! -x "$NEWLD_BINDIR/ld" ]; then
+    echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE)" >&2
+    exit 1
+fi
+LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libsystem_platform.dylib $OUT/system/libdyld.dylib $OUT/system/libSystem.B.dylib"
+
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
+    -DCRT_DYNAMIC_LINKING \
+    -B"$NEWLD_BINDIR" \
+    -Wl,-fixup_chains \
     -o cron.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/cron_obj/*.o \
-    "$OUT/libc_printf.a" \
-    "$OUT/cron_glue_extract/glue.o" \
-    "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_string.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
-    "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
-    "$OUT/libpthread.a" \
-    "$OUT/sys_mmap_for_cron.o" "$OUT/sys_munmap_for_cron.o" \
-    "$OUT/libclosure.a" \
-    "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
-    "$OUT/libunwind.a" \
-    -Wl,-alias,___mmap,_mmap \
-    -Wl,-alias,___munmap,_munmap \
-    -Wl,-alias,_open,'_open$UNIX2003' \
-    -Wl,-alias,_close,'_close$UNIX2003' \
-    -Wl,-alias,_write,'_write$UNIX2003' \
-    -Wl,-alias,___kill,'_kill$UNIX2003' \
-    -Wl,-alias,___kill,_kill \
-    -Wl,-alias,__mal_semwait_sleep,'_sleep$UNIX2003' \
-    -Wl,-alias,___kdebug_trace,_kdebug_trace \
-    -Wl,-alias,_fcntl,'_fcntl$UNIX2003' \
-    -Wl,-alias,_fstat,'_fstat$INODE64' \
-    -Wl,-alias,_lstat,'_lstat$INODE64' \
-    -Wl,-alias,_stat,'_stat$INODE64' \
+    $LINK_DYLIBS \
     -Wl,-alias,__err,_err \
     -Wl,-alias,__warn,_warn \
-    -Wl,-alias,_fputs,'_fputs$UNIX2003' \
-    -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
-    -Wl,-alias,'_getopt$UNIX2003',_getopt \
-    -Wl,-alias,_strerror,'_strerror$UNIX2003' \
-    -Wl,-alias,_wait,'_wait$UNIX2003' \
-    -Wl,-alias,_select,'_select$1050' \
-    -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
-    -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
-    -Wl,-alias,_closedir,'_closedir$UNIX2003' \
-    -Wl,-alias,_fdopen,'_fdopen$UNIX2003' \
-    -Wl,-alias,_fopen,'_fopen$UNIX2003' \
-    -Wl,-alias,_opendir,'_opendir$INODE64$UNIX2003' \
-    -Wl,-alias,_readdir,'_readdir$INODE64' \
+    `# These three alias cron's OWN locally-compiled wrappers, not dylib` \
+    `# exports, so libSystem.B.dylib's baked-in UNIX2003 alias set does` \
+    `# not cover them and they survive the DAR-314 conversion.` \
     -Wl,-alias,_pwrite,'_pwrite$UNIX2003' \
-    -Wl,-alias,_read,'_read$UNIX2003' \
+    -Wl,-alias,_wait,'_wait$UNIX2003' \
     -Wl,-alias,_waitpid,'_waitpid$UNIX2003'
 echo "wrote cron.macho"
 
-otool -l cron.macho | grep -q LC_LOAD_DYLIB && \
-    echo "WARNING: LC_LOAD_DYLIB present -- no longer dyld-free" >&2
-otool -l cron.macho | grep -q LC_UNIXTHREAD || \
-    echo "WARNING: no LC_UNIXTHREAD -- kernel exec won't know where to start" >&2
-if nm -u cron.macho | grep -q .; then
-    echo "WARNING: undefined symbols present:" >&2
-    nm -u cron.macho >&2
-fi
+# Real dynamic-executable assertions (DAR-314) -- inverted, not deleted.
+bad=0
+otool -l cron.macho | grep -A2 "cmd LC_LOAD_DYLINKER" | grep -q "/usr/lib/dyld" || {
+    echo "error: cron: no LC_LOAD_DYLINKER /usr/lib/dyld" >&2; bad=1; }
+otool -l cron.macho | grep -q "cmd LC_LOAD_DYLIB" || {
+    echo "error: cron: no LC_LOAD_DYLIB" >&2; bad=1; }
+otool -l cron.macho | grep -q "cmd LC_MAIN" || {
+    echo "error: cron: no LC_MAIN" >&2; bad=1; }
+[ "$bad" -eq 0 ] || exit 1
 
 # --- crontab ---------------------------------------------------------
 
@@ -324,6 +315,13 @@ fi
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
     libunwind_sched_yield.s -o "$OUT/crontab_obj/crontab_sched_yield_trap.o"
 "$CLANG" $CFLAGS libunwind_sched_yield.c -o "$OUT/crontab_obj/crontab_sched_yield.o"
+# DAR-314: __locale_key/__global_locale and _DefaultRuneXLocale are LOCAL
+# (lowercase `s` in nm) inside libsystem_c.dylib, not exports, so the
+# dynamic link must provide them. Uses this project's already-proven
+# shared compat file, not a narrower hand-written one (see DAR-169).
+"$CLANG" $CFLAGS libc_locale_globals_compat.c -o "$OUT/crontab_obj/libc_locale_globals_compat.o"
+"$CLANG" $CFLAGS "$LIBC/locale/FreeBSD/table.c" -o "$OUT/crontab_obj/table.o"
+"$CLANG" $CFLAGS "$LIBC/locale/FreeBSD/none.c" -o "$OUT/crontab_obj/none.o"
 
 # Same real gaps as cron.macho's own link above (this file's own header
 # comment has the full citation): libc_printf.a listed twice for its own
@@ -343,57 +341,36 @@ fi
 # reliably re-pull-in.
 mkdir -p "$OUT/cron_glue_extract"
 (cd "$OUT/cron_glue_extract" && ar x "../libc_printf.a" glue.o)
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
+    -DCRT_DYNAMIC_LINKING \
+    -B"$NEWLD_BINDIR" \
+    -Wl,-fixup_chains \
     -o crontab.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/crontab_obj/*.o \
-    "$OUT/libc_printf.a" \
-    "$OUT/cron_glue_extract/glue.o" \
-    "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_string.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
-    "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
-    "$OUT/libpthread.a" \
-    "$OUT/libclosure.a" \
-    "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
-    "$OUT/libunwind.a" \
-    -Wl,-alias,_open,'_open$UNIX2003' \
-    -Wl,-alias,_close,'_close$UNIX2003' \
-    -Wl,-alias,_write,'_write$UNIX2003' \
-    -Wl,-alias,___kill,'_kill$UNIX2003' \
-    -Wl,-alias,___kill,_kill \
-    -Wl,-alias,__mal_semwait_sleep,'_sleep$UNIX2003' \
-    -Wl,-alias,___kdebug_trace,_kdebug_trace \
-    -Wl,-alias,_fcntl,'_fcntl$UNIX2003' \
-    -Wl,-alias,_fstat,'_fstat$INODE64' \
-    -Wl,-alias,_lstat,'_lstat$INODE64' \
-    -Wl,-alias,_stat,'_stat$INODE64' \
+    $LINK_DYLIBS \
     -Wl,-alias,__err,_err \
     -Wl,-alias,__warn,_warn \
-    -Wl,-alias,_fputs,'_fputs$UNIX2003' \
-    -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
-    -Wl,-alias,'_getopt$UNIX2003',_getopt \
-    -Wl,-alias,_strerror,'_strerror$UNIX2003' \
-    -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
-    -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
-    -Wl,-alias,_closedir,'_closedir$UNIX2003' \
-    -Wl,-alias,_fdopen,'_fdopen$UNIX2003' \
-    -Wl,-alias,_fopen,'_fopen$UNIX2003' \
-    -Wl,-alias,_opendir,'_opendir$INODE64$UNIX2003' \
-    -Wl,-alias,_readdir,'_readdir$INODE64' \
+    `# These three alias cron's OWN locally-compiled wrappers, not dylib` \
+    `# exports, so libSystem.B.dylib's baked-in UNIX2003 alias set does` \
+    `# not cover them and they survive the DAR-314 conversion.` \
     -Wl,-alias,_pwrite,'_pwrite$UNIX2003' \
-    -Wl,-alias,_read,'_read$UNIX2003' \
-    -Wl,-alias,_waitpid,'_waitpid$UNIX2003' \
     -Wl,-alias,_wait,'_wait$UNIX2003' \
+    -Wl,-alias,_waitpid,'_waitpid$UNIX2003' \
     -Wl,-alias,_fchmod,'_fchmod$UNIX2003' \
-    -Wl,-alias,_mmap,'_mmap$UNIX2003' \
-    -Wl,-alias,_munmap,'_munmap$UNIX2003' \
+    `# real libsystem_c.dylib exports _strftime$UNIX2003 but never the` \
+    `# bare _strftime (confirmed nm -gU), so alias the versioned export` \
+    `# to the plain name crontab's real Apple source calls -- same` \
+    `# direction as the _getopt$UNIX2003 -> _getopt alias elsewhere.` \
     -Wl,-alias,'_strftime$UNIX2003',_strftime
 echo "wrote crontab.macho"
 
-otool -l crontab.macho | grep -q LC_LOAD_DYLIB && \
-    echo "WARNING: LC_LOAD_DYLIB present -- no longer dyld-free" >&2
-otool -l crontab.macho | grep -q LC_UNIXTHREAD || \
-    echo "WARNING: no LC_UNIXTHREAD -- kernel exec won't know where to start" >&2
-if nm -u crontab.macho | grep -q .; then
-    echo "WARNING: undefined symbols present:" >&2
-    nm -u crontab.macho >&2
-fi
+# Real dynamic-executable assertions (DAR-314) -- inverted, not deleted.
+bad=0
+otool -l crontab.macho | grep -A2 "cmd LC_LOAD_DYLINKER" | grep -q "/usr/lib/dyld" || {
+    echo "error: crontab: no LC_LOAD_DYLINKER /usr/lib/dyld" >&2; bad=1; }
+otool -l crontab.macho | grep -q "cmd LC_LOAD_DYLIB" || {
+    echo "error: crontab: no LC_LOAD_DYLIB" >&2; bad=1; }
+otool -l crontab.macho | grep -q "cmd LC_MAIN" || {
+    echo "error: crontab: no LC_MAIN" >&2; bad=1; }
+[ "$bad" -eq 0 ] || exit 1

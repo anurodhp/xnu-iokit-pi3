@@ -193,6 +193,15 @@ echo "ps (real Apple adv_cmds/ps): $ok compiled, $skip skipped (tasks.c now real
 "$CLANG" $CFLAGS ps_passwd_compat.c -o "$OUT/ps_obj/ps_passwd_compat.o"
 "$CLANG" $CFLAGS ps_libproc_syscall.c -o "$OUT/ps_obj/ps_libproc_syscall.o"
 "$CLANG" $CFLAGS ps_extra_syscalls.c -o "$OUT/ps_obj/ps_extra_syscalls.o"
+# DAR-314: __locale_key/__global_locale and _DefaultRuneXLocale are LOCAL
+# (lowercase `s` in nm) inside libsystem_c.dylib, not exports, so the
+# dynamic link has to provide them itself. Uses this project's already-
+# proven shared compat file, NOT a narrower hand-written one -- DAR-169
+# documents a hand-rolled variant that left __locale_key at
+# (pthread_key_t)-1 and crashed on any real snprintf() on a device target.
+"$CLANG" $CFLAGS libc_locale_globals_compat.c -o "$OUT/ps_obj/libc_locale_globals_compat.o"
+"$CLANG" $CFLAGS "$LIBC/locale/FreeBSD/table.c" -o "$OUT/ps_obj/table.o"
+"$CLANG" $CFLAGS "$LIBC/locale/FreeBSD/none.c" -o "$OUT/ps_obj/none.o"
 "$CLANG" $CFLAGS ps_err_warn_compat.c -o "$OUT/ps_obj/ps_err_warn_compat.o"
 "$CLANG" $CFLAGS ps_time_compat.c -o "$OUT/ps_obj/ps_time_compat.o"
 "$CLANG" $CFLAGS ps_commpage_gettimeofday_stub.c -o "$OUT/ps_obj/ps_commpage_gettimeofday_stub.o"
@@ -214,53 +223,42 @@ echo "ps (real Apple adv_cmds/ps): $ok compiled, $skip skipped (tasks.c now real
 mkdir -p "$OUT/ps_glue_extract"
 (cd "$OUT/ps_glue_extract" && ar x "../libc_printf.a" glue.o)
 
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
+# DYNAMIC LINK (DAR-314, 2026-09-15) -- see build_ifconfig.sh's own
+# identically-structured block for the full reasoning. ps runs long
+# after dyld is up, so there is no reason for it to be fully static.
+# libmach_ipc.a stays (real archive, no dylib equivalent here).
+DAILY_XCODE="$(xcode-select -p 2>/dev/null)"
+NEWLD_BINDIR="$DAILY_XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+if [ ! -x "$NEWLD_BINDIR/ld" ]; then
+    echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE)" >&2
+    exit 1
+fi
+LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libsystem_platform.dylib $OUT/system/libdyld.dylib $OUT/system/libSystem.B.dylib"
+
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
+    -DCRT_DYNAMIC_LINKING \
+    -B"$NEWLD_BINDIR" \
+    -Wl,-fixup_chains \
     -o ps.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/ps_obj/*.o \
-    "$OUT/simple_obj/sys____mmap.o" "$OUT/simple_obj/sys____munmap.o" \
-    "$OUT/libc_printf.a" "$OUT/ps_glue_extract/glue.o" \
-    "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
-    "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
-    "$OUT/libpthread.a" \
-    "$OUT/libclosure.a" \
     "$OUT/libmach_ipc.a" \
-    "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
-    -Wl,-alias,___mmap,_mmap \
-    -Wl,-alias,___munmap,_munmap \
-    -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
-    -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
-    -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
-    -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
-    -Wl,-alias,___kill,'_kill$UNIX2003' \
-    -Wl,-alias,___kill,_kill \
-    -Wl,-alias,_write,'_write$UNIX2003' \
-    -Wl,-alias,__mal_semwait_sleep,'_sleep$UNIX2003' \
-    -Wl,-alias,___kdebug_trace,_kdebug_trace \
-    -Wl,-alias,_open,'_open$UNIX2003' \
-    -Wl,-alias,_close,'_close$UNIX2003' \
-    -Wl,-alias,_closedir,'_closedir$UNIX2003' \
-    -Wl,-alias,_opendir,'_opendir$INODE64$UNIX2003' \
-    -Wl,-alias,_readdir,'_readdir$INODE64' \
-    -Wl,-alias,_fcntl,'_fcntl$UNIX2003' \
-    -Wl,-alias,_fstat,'_fstat$INODE64' \
-    -Wl,-alias,_lstat,'_lstat$INODE64' \
-    -Wl,-alias,_stat,'_stat$INODE64' \
-    -Wl,-alias,_fstatfs,'_fstatfs$INODE64' \
-    -Wl,-alias,_strerror,'_strerror$UNIX2003' \
-    -Wl,-alias,_fputs,'_fputs$UNIX2003' \
-    -Wl,-alias,'_getopt$UNIX2003',_getopt \
-    -Wl,-alias,_pthread_testcancel,'_pthread_testcancel$UNIX2003'
+    $LINK_DYLIBS
+# NOTE: no -Wl,-alias,__err,_err / __warn here, unlike build_ifconfig.sh
+# and build_ping.sh -- ps already compiles its own ps_err_warn_compat.c
+# providing the public err()/warn(), so adding the aliases produces a
+# real `duplicate symbol '_err'` against command-line-aliases-file.
 echo "wrote ps.macho"
 
-otool -l ps.macho | grep -q LC_LOAD_DYLIB && \
-    echo "WARNING: LC_LOAD_DYLIB present -- no longer dyld-free" >&2
-otool -l ps.macho | grep -q LC_UNIXTHREAD || \
-    echo "WARNING: no LC_UNIXTHREAD -- kernel exec won't know where to start" >&2
-if nm -u ps.macho | grep -q .; then
-    echo "WARNING: undefined symbols present:" >&2
-    nm -u ps.macho >&2
-fi
+# Real dynamic-executable assertions (DAR-314) -- inverted, not deleted.
+bad=0
+otool -l ps.macho | grep -A2 "cmd LC_LOAD_DYLINKER" | grep -q "/usr/lib/dyld" || {
+    echo "error: no LC_LOAD_DYLINKER /usr/lib/dyld -- not a real dynamic executable" >&2; bad=1; }
+otool -l ps.macho | grep -q "cmd LC_LOAD_DYLIB" || {
+    echo "error: no LC_LOAD_DYLIB -- not a real dynamic executable" >&2; bad=1; }
+otool -l ps.macho | grep -q "cmd LC_MAIN" || {
+    echo "error: no LC_MAIN (real unixproc entry)" >&2; bad=1; }
+[ "$bad" -eq 0 ] || exit 1
 
 # DAR-263 report-only gate. ps.macho is fully static (no LC_LOAD_DYLIB
 # at all) and carries mach_ipc_dead_stubs.o's KERN_FAILURE stand-ins,
