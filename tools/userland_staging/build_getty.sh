@@ -363,6 +363,12 @@ fi
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
     libunwind_sched_yield.s -o "$OUT/getty_obj/getty_sched_yield_trap.o"
 "$CLANG" $CFLAGS libunwind_sched_yield.c -o "$OUT/getty_obj/getty_sched_yield.o"
+# DAR-314: __locale_key/__global_locale and _DefaultRuneXLocale are LOCAL
+# inside libsystem_c.dylib, not exports, so the dynamic link must provide
+# them. Already-proven shared compat file, not a narrower one (DAR-169).
+"$CLANG" $CFLAGS libc_locale_globals_compat.c -o "$OUT/getty_obj/libc_locale_globals_compat.o"
+"$CLANG" $CFLAGS "$LIBC/locale/FreeBSD/table.c" -o "$OUT/getty_obj/table.o"
+"$CLANG" $CFLAGS "$LIBC/locale/FreeBSD/none.c" -o "$OUT/getty_obj/none.o"
 
 # ___gdtoa_locks (COMMON/tentative symbol, glue.o): same real gap
 # already fixed in build_cron.sh/build_removefile.sh/build_uname.sh/
@@ -374,73 +380,71 @@ fi
 mkdir -p "$OUT/getty_glue_extract"
 (cd "$OUT/getty_glue_extract" && ar x "../libc_printf.a" glue.o)
 
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
+# DYNAMIC LINK (DAR-314, 2026-09-15). getty was one of the binaries
+# CLAUDE.md previously listed as "deliberately, fully static and must
+# stay that way". That is superseded: the only real reason to be static
+# is running before dyld exists, and getty does not -- it is exec'd by
+# launchd, which is itself dynamically linked, so dyld is already up and
+# serving. pd_console_login.macho is already dynamic inside this very
+# launchd -> getty -> login -> bash chain, which is the direct proof.
+# Only tools/pwtool/build.py stays static now.
+#
+# See build_ifconfig.sh's own block for the full reasoning on what gets
+# dropped (the static libc archive stack + the generic UNIX2003/INODE64
+# alias block, all covered by real libSystem.B.dylib) and what does not.
+DAILY_XCODE="$(xcode-select -p 2>/dev/null)"
+NEWLD_BINDIR="$DAILY_XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+if [ ! -x "$NEWLD_BINDIR/ld" ]; then
+    echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE)" >&2
+    exit 1
+fi
+LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libsystem_platform.dylib $OUT/system/libdyld.dylib $OUT/system/libSystem.B.dylib"
+
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
+    -DCRT_DYNAMIC_LINKING \
+    -B"$NEWLD_BINDIR" \
+    -Wl,-fixup_chains \
     -o getty.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/getty_obj/*.o "$OUT/ed_setjmp_raw.o" \
-    "$OUT/simple_obj/sys__access.o" "$OUT/simple_obj/sys__sigprocmask.o" \
-    "$OUT/simple_obj/sys____chmod.o" "$OUT/simple_obj/sys__chown.o" \
-    "$OUT/simple_obj/sys__dup2.o" "$OUT/simple_obj/sys__execve.o" \
-    "$OUT/simple_obj/sys____mmap.o" "$OUT/simple_obj/sys____munmap.o" \
-    "$OUT/libc_printf.a" "$OUT/getty_glue_extract/glue.o" \
-    "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
-    "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
-    "$OUT/libpthread.a" \
-    "$OUT/libclosure.a" \
+    `# Real raw-syscall wrapper objects with NO dylib equivalent:` \
+    `# libSystem.B.dylib does not export _chown/_dup2/_execve (verified` \
+    `# by bind_target_audit.sh, which failed UNRESOLVABLE on all three` \
+    `# when they were dropped -- a clean link that would have aborted at` \
+    `# dyld load, exactly the DAR-217 hazard). Kept across DAR-314.` \
+    "$OUT/simple_obj/sys__chown.o" \
+    "$OUT/simple_obj/sys__dup2.o" \
+    "$OUT/simple_obj/sys__execve.o" \
     "$OUT/libmach_ipc.a" \
-    `# _writev/_send raw traps -- real objects, see the send_real.o` \
-    `# compile step above for the full why. Neither send_real.o nor` \
-    `# the two ar-extracted sigaction objects are listed here: all` \
-    `# three live in $OUT/getty_obj/, and the "$OUT"/getty_obj/*.o` \
-    `# glob above already includes them -- listing them again here` \
-    `# was a real duplicate-symbol link error the first time (same` \
-    `# mistake as build_login.sh's own send_real.o, caught the same` \
-    `# way: by actually running this script).` \
+    `# Real raw-syscall objects with no dylib equivalent here -- see the` \
+    `# send_real.o compile step above. Kept across the conversion.` \
     "$OUT/libsystem_kernel/sys_writev.o" \
     "$OUT/libsystem_kernel/sys___sendto_nocancel.o" \
     "$OUT/libsystem_kernel/sys___sigaction.o" \
-    "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
-    -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
-    -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
-    -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
-    -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
-    -Wl,-alias,___kill,'_kill$UNIX2003' \
-    -Wl,-alias,___kill,_kill \
-    -Wl,-alias,_write,'_write$UNIX2003' \
-    -Wl,-alias,__mal_semwait_sleep,'_sleep$UNIX2003' \
-    -Wl,-alias,___kdebug_trace,_kdebug_trace \
-    -Wl,-alias,_open,'_open$UNIX2003' \
-    -Wl,-alias,_close,'_close$UNIX2003' \
-    -Wl,-alias,_fcntl,'_fcntl$UNIX2003' \
-    -Wl,-alias,_fstat,'_fstat$INODE64' \
-    -Wl,-alias,_stat,'_stat$INODE64' \
-    -Wl,-alias,_strerror,'_strerror$UNIX2003' \
-    -Wl,-alias,_fputs,'_fputs$UNIX2003' \
-    -Wl,-alias,'_getopt$UNIX2003',_getopt \
-    -Wl,-alias,_connect,'_connect$UNIX2003' \
-    -Wl,-alias,_fopen,'_fopen$UNIX2003' \
+    $LINK_DYLIBS \
+    `# Aliases that survive: each targets a LOCAL definition (getty's own` \
+    `# objects / the raw-syscall objects above) or a versioned dylib` \
+    `# export whose bare name libsystem_c.dylib never exports, so` \
+    `# libSystem.B.dylib's baked-in set does not cover them.` \
+    -Wl,-alias,__err,_err \
+    -Wl,-alias,__warn,_warn \
     -Wl,-alias,_writev,'_writev$UNIX2003' \
     -Wl,-alias,_send,'_send$UNIX2003' \
-    -Wl,-alias,_setrlimit,'_setrlimit$UNIX2003' \
+    -Wl,-alias,_connect,'_connect$UNIX2003' \
     -Wl,-alias,_select,'_select$1050' \
-    -Wl,-alias,_read,'_read$UNIX2003' \
-    -Wl,-alias,_lstat,'_lstat$INODE64' \
-    -Wl,-alias,_strchr,_index \
-    -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003','__pthread_rwlock_rdlock' \
-    -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003','__pthread_rwlock_wrlock' \
-    -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003','__pthread_rwlock_unlock' \
-    -Wl,-alias,___mmap,_mmap \
-    -Wl,-alias,___munmap,_munmap
+    -Wl,-alias,_setrlimit,'_setrlimit$UNIX2003' \
+    -Wl,-alias,_strchr,_index
 echo "wrote getty.macho"
 
-otool -l getty.macho | grep -q LC_LOAD_DYLIB && \
-    echo "WARNING: LC_LOAD_DYLIB present -- no longer dyld-free" >&2
-otool -l getty.macho | grep -q LC_UNIXTHREAD || \
-    echo "WARNING: no LC_UNIXTHREAD -- kernel exec won't know where to start" >&2
-if nm -u getty.macho | grep -q .; then
-    echo "WARNING: undefined symbols present:" >&2
-    nm -u getty.macho >&2
-fi
+# Real dynamic-executable assertions (DAR-314) -- inverted, not deleted.
+bad=0
+otool -l getty.macho | grep -A2 "cmd LC_LOAD_DYLINKER" | grep -q "/usr/lib/dyld" || {
+    echo "error: getty: no LC_LOAD_DYLINKER /usr/lib/dyld" >&2; bad=1; }
+otool -l getty.macho | grep -q "cmd LC_LOAD_DYLIB" || {
+    echo "error: getty: no LC_LOAD_DYLIB" >&2; bad=1; }
+otool -l getty.macho | grep -q "cmd LC_MAIN" || {
+    echo "error: getty: no LC_MAIN" >&2; bad=1; }
+[ "$bad" -eq 0 ] || exit 1
 
 # DAR-263 report-only gate. Same reasoning as build_login.sh's own
 # comment: getty.macho carries mach_ipc_dead_stubs.o's stand-ins,

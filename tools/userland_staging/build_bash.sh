@@ -372,6 +372,46 @@ for n in $SYS_STUB_NAMES; do
     $CLANG $SYSCLANG_FLAGS "$BOUT/sys_stubs/_${n}.s" -o "$BOUT/sys_stubs/${n}.o"
 done
 
+# DAR-314 (dynamic conversion): these were previously satisfied by the
+# static libc_locale.a/libc_gen.a archives. Their symbols are LOCAL
+# (lowercase in nm), not exports, inside libsystem_c.dylib, so a dynamic
+# link has to provide them itself:
+#   libc_locale_globals_compat.c -- __locale_key/__global_locale. The
+#     already-proven shared file, NOT a narrower hand-written one: DAR-169
+#     documents a hand-rolled variant that left __locale_key at
+#     (pthread_key_t)-1 and crashed on any real snprintf() on a device.
+#   table.c/none.c        -- _DefaultRuneXLocale and the _none_* mb/wc ops.
+#   collate.c/collcmp.c   -- ___collate_equiv_value, needed by libc_regex.a's
+#                            tre-match-backtrack.o/tre-match-parallel.o.
+#   timelocal.c           -- ___get_current_time_locale.
+#   the two stubs         -- __part_load_locale/__ldpart_free_extra and
+#     __open_path_locale, all only reachable through the setlocale()/
+#     newlocale() category loader, which is dead code here. Same real
+#     shims chrony and build_simple_cmds.sh already use for this.
+BASH_LIBC="../../third_party/Libc"
+BASH_LOCALE_FLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -Wno-nullability-completeness -Wno-deprecated-declarations \
+    -include libc_build_prototypes.h \
+    -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
+    -DVARIANT_STATIC -DVARIANT_CANCELABLE -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \
+    -DPRIVATE \
+    -D__ct_rune_t=__darwin_ct_rune_t -D__va_list=__builtin_va_list \
+    -I $BASH_LIBC/include -I $BASH_LIBC/darwin -I $BASH_LIBC/fbsdcompat \
+    -I $BASH_LIBC/locale -I $BASH_LIBC/locale/FreeBSD \
+    -I $BASH_LIBC/stdtime/FreeBSD -I $BASH_LIBC/gen \
+    -I $PTHREAD/include -I $PTHREAD/private \
+    -I $OUT/compat_include \
+    -I $XNU/bsd -I $XNU/osfmk -I $XNU/libsyscall"
+$CLANG $BASH_LOCALE_FLAGS libc_locale_globals_compat.c -o "$BOUT/obj/zz_locale_globals.o"
+$CLANG $BASH_LOCALE_FLAGS chrony_part_load_locale_stub.c -o "$BOUT/obj/zz_part_load_locale_stub.o"
+$CLANG $BASH_LOCALE_FLAGS simple_cmds_libsystem_c_gap_compat.c -o "$BOUT/obj/zz_libsystem_c_gap.o"
+for lf in locale/FreeBSD/table.c locale/FreeBSD/none.c locale/FreeBSD/collate.c locale/FreeBSD/collcmp.c stdtime/FreeBSD/timelocal.c; do
+    lb=$(basename "$lf" .c)
+    $CLANG $BASH_LOCALE_FLAGS -I"$BASH_LIBC/locale/FreeBSD" -I"$BASH_LIBC/include" \
+        "$BASH_LIBC/$lf" -o "$BOUT/obj/zz_${lb}.o" 2>"$BOUT/obj/zz_${lb}.err" \
+        || { echo "error: bash locale support object ${lb} failed to compile:" >&2; cat "$BOUT/obj/zz_${lb}.err" >&2; exit 1; }
+done
+
 if [ "$fail" -eq 0 ]; then
     # Two real bugs found+fixed via QEMU debugging of the Eighteenth
     # pass's real bash SIGSEGV (docs/roadmap.md's Nineteenth pass has the
@@ -453,19 +493,47 @@ if [ "$fail" -eq 0 ]; then
     # glue.o in. `ar x` it directly instead (never -force_load).
     mkdir -p "$BOUT/glue_extract"
     (cd "$BOUT/glue_extract" && ar x "../../$OUT/libc_printf.a" glue.o)
-    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
+    # DYNAMIC LINK (DAR-314, 2026-09-15). bash was one of the binaries
+    # CLAUDE.md previously listed as "deliberately, fully static and must
+    # stay that way". Superseded: the only real reason to be static is
+    # running before dyld exists, and bash does not -- it is the login
+    # shell at the end of the launchd -> getty -> login -> bash chain,
+    # every earlier link of which is now dynamic. Only
+    # tools/pwtool/build.py stays static. See build_ifconfig.sh's block
+    # for the full reasoning on what is dropped and what is not.
+    DAILY_XCODE="$(xcode-select -p 2>/dev/null)"
+    NEWLD_BINDIR="$DAILY_XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+    if [ ! -x "$NEWLD_BINDIR/ld" ]; then
+        echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE)" >&2
+        exit 1
+    fi
+    LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libsystem_platform.dylib $OUT/system/libdyld.dylib $OUT/system/libSystem.B.dylib"
+
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
+        -DCRT_DYNAMIC_LINKING \
+        -B"$NEWLD_BINDIR" \
+        -Wl,-fixup_chains \
         -o bash.macho \
         ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
         "$BOUT"/obj/*.o "$BOUT"/sys_stubs/*.o \
-        "$OUT/libc_printf.a" "$BOUT/glue_extract/glue.o" "$OUT/libc_stdio.a" "$OUT/libc_locale.a" "$OUT/libc_gen.a" "$OUT/libc_regex.a" "$OUT/libc_string.a" \
-        "$OUT/libunwind.a" "$OUT/libpthread.a" "$OUT/libclosure.a" "$OUT/libmalloc.a" "$OUT/libplatform.a" \
+        "$OUT/libc_regex.a" \
+        $LINK_DYLIBS \
+        -Wl,-alias,__err,_err \
+        -Wl,-alias,__warn,_warn \
         -Wl,-alias,_pthread_testcancel,'_pthread_testcancel$UNIX2003' \
-        -Wl,-alias,_setenv,'_setenv$UNIX2003' \
+        `# no _setenv$UNIX2003 alias: bash already compiles` \
+        `# simple_cmds_getenv_compat_c.o which defines it directly, so` \
+        `# aliasing it too is a real duplicate-symbol link error.` \
         -Wl,-alias,_select,'_select$1050' \
         -Wl,-alias,_fopen,'_fopen$UNIX2003' \
-        -Wl,-alias,'_mmap$UNIX2003',_mmap \
         2>"$BOUT/link.err" && echo "wrote bash.macho" || { echo "LINK FAILED, see $BOUT/link.err:"; tail -100 "$BOUT/link.err"; exit 1; }
-    otool -l bash.macho | grep -q LC_LOAD_DYLIB && echo "WARNING: LC_LOAD_DYLIB present" >&2
-    otool -l bash.macho | grep -q LC_UNIXTHREAD || echo "WARNING: no LC_UNIXTHREAD" >&2
-    nm -u bash.macho | head -20
+    # Real dynamic-executable assertions (DAR-314) -- inverted, not deleted.
+    bad=0
+    otool -l bash.macho | grep -A2 "cmd LC_LOAD_DYLINKER" | grep -q "/usr/lib/dyld" || {
+        echo "error: bash: no LC_LOAD_DYLINKER /usr/lib/dyld" >&2; bad=1; }
+    otool -l bash.macho | grep -q "cmd LC_LOAD_DYLIB" || {
+        echo "error: bash: no LC_LOAD_DYLIB" >&2; bad=1; }
+    otool -l bash.macho | grep -q "cmd LC_MAIN" || {
+        echo "error: bash: no LC_MAIN" >&2; bad=1; }
+    [ "$bad" -eq 0 ] || exit 1
 fi

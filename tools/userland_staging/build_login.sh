@@ -395,6 +395,31 @@ fi
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
     libunwind_sched_yield.s -o "$OUT/login_obj/login_sched_yield_trap.o"
 "$CLANG" $CFLAGS libunwind_sched_yield.c -o "$OUT/login_obj/login_sched_yield.o"
+# DAR-314: locale globals are LOCAL inside libsystem_c.dylib, not exports.
+"$CLANG" $CFLAGS libc_locale_globals_compat.c -o "$OUT/login_obj/libc_locale_globals_compat.o"
+"$CLANG" $CFLAGS "$LIBC/locale/FreeBSD/table.c" -o "$OUT/login_obj/table.o"
+"$CLANG" $CFLAGS "$LIBC/locale/FreeBSD/none.c" -o "$OUT/login_obj/none.o"
+# collate.c/collcmp.c: libc_regex.a's ___collate_equiv_value. Same
+# local-not-exported situation as the locale trio above.
+# NOT ldpart.c: its real __part_load_locale() pulls in ___open_path_locale
+# and the rest of the setlocale()/newlocale() category-loader machinery.
+# login never calls setlocale/newlocale/uselocale anywhere (verified by
+# grep over third_party/system_cmds/login.tproj), so that loader is dead
+# code here -- reuse the existing honest-failure stub rather than drag in
+# the loader. Same real reasoning chrony's own use of this file documents.
+# ldpart.c is NOT compiled: its real __part_load_locale() and collate.c's
+# ___collate_load_tables both reach the setlocale()/newlocale() category-
+# loader, which login never triggers (it calls no setlocale/newlocale/
+# uselocale anywhere -- verified by grep over third_party/system_cmds/
+# login.tproj). Reuse the two existing, already-proven honest-failure
+# shims rather than dragging in setlocale.c: chrony_part_load_locale_stub.c
+# for __part_load_locale/__ldpart_free_extra, and this project's shared
+# simple_cmds_libsystem_c_gap_compat.c for __open_path_locale (the same
+# file build_simple_cmds.sh uses for exactly this, via COMMON_EXTRA).
+"$CLANG" $CFLAGS chrony_part_load_locale_stub.c -o "$OUT/login_obj/part_load_locale_stub.o"
+"$CLANG" $CFLAGS simple_cmds_libsystem_c_gap_compat.c -o "$OUT/login_obj/libsystem_c_gap_compat.o"
+"$CLANG" $CFLAGS "$LIBC/locale/FreeBSD/collate.c" -o "$OUT/login_obj/collate.o"
+"$CLANG" $CFLAGS "$LIBC/locale/FreeBSD/collcmp.c" -o "$OUT/login_obj/collcmp.o"
 
 # Real narrow extraction (same "ar p member > obj" pattern
 # build_launchctl.sh's own header already established): real
@@ -433,84 +458,62 @@ ar p "$OUT/launchd_libc_extras.a" ncurses_extra_syscalls.o > "$OUT/login_obj/log
 mkdir -p "$OUT/login_glue_extract"
 (cd "$OUT/login_glue_extract" && ar x "../libc_printf.a" glue.o)
 
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
+# DYNAMIC LINK (DAR-314, 2026-09-15). login was one of the binaries
+# CLAUDE.md previously listed as "deliberately, fully static and must
+# stay that way". Superseded: the only real reason to be static is
+# running before dyld exists, and login does not -- it is exec'd from
+# the launchd -> getty -> login -> bash chain, in which launchd itself
+# and pd_console_login.macho are already dynamic. Only
+# tools/pwtool/build.py stays static now. See build_ifconfig.sh's block
+# for the full reasoning on what is dropped and what is not.
+DAILY_XCODE="$(xcode-select -p 2>/dev/null)"
+NEWLD_BINDIR="$DAILY_XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin"
+if [ ! -x "$NEWLD_BINDIR/ld" ]; then
+    echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE)" >&2
+    exit 1
+fi
+LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libsystem_platform.dylib $OUT/system/libdyld.dylib $OUT/system/libSystem.B.dylib"
+
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
+    -DCRT_DYNAMIC_LINKING \
+    -B"$NEWLD_BINDIR" \
+    -Wl,-fixup_chains \
     -o login.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/login_obj/*.o "$OUT/ed_setjmp_raw.o" \
-    "$OUT/simple_obj/sys____chmod.o" "$OUT/simple_obj/sys__chown.o" \
-    "$OUT/simple_obj/sys__dup2.o" "$OUT/simple_obj/sys__execve.o" \
-    "$OUT/simple_obj/sys__chflags.o" "$OUT/simple_obj/sys__setgid.o" "$OUT/simple_obj/sys__setuid.o" \
-    "$OUT/simple_obj/sys____mmap.o" "$OUT/simple_obj/sys__geteuid.o" "$OUT/simple_obj/sys__getuid.o" \
+    `# Real raw-syscall wrapper object with no dylib equivalent --` \
+    `# libSystem.B.dylib does not export _getpriority (bind_target_audit.sh` \
+    `# flagged it UNRESOLVABLE when dropped: a clean link that would have` \
+    `# aborted at dyld load, the DAR-217 hazard). Kept across DAR-314.` \
     "$OUT/simple_obj/sys__getpriority.o" \
-    "$OUT/libc_printf.a" "$OUT/login_glue_extract/glue.o" \
-    "$OUT/libc_gen.a" "$OUT/libc_stdio.a" "$OUT/libc_locale_for_stdio.a" "$OUT/libc_gen.a" "$OUT/libc_stdio.a" \
-    "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
-    "$OUT/libpthread.a" \
-    "$OUT/libclosure.a" \
-    "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
     "$OUT/liblaunchd_syscalls.a" \
     "$OUT/libmach_ipc.a" \
     "$OUT/libc_regex.a" \
-    `# _writev/_send's raw-trap dependency -- real objects, see the` \
-    `# send_real.o compile step above for the full why. (send_real.o` \
-    `# itself is NOT listed here: it lives in $OUT/login_obj/ and the` \
-    `# "$OUT"/login_obj/*.o glob above already includes it -- listing` \
-    `# it again here was a real duplicate-symbol link error, caught` \
-    `# immediately by actually running this script, not assumed fixed.)` \
+    `# Real raw-syscall objects with no dylib equivalent -- see the` \
+    `# send_real.o compile step above. Kept across the conversion.` \
     "$OUT/libsystem_kernel/sys_writev.o" \
     "$OUT/libsystem_kernel/sys___sendto_nocancel.o" \
-    -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
-    -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
-    -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
-    -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
-    -Wl,-alias,___kill,'_kill$UNIX2003' \
-    -Wl,-alias,_write,'_write$UNIX2003' \
-    -Wl,-alias,__mal_semwait_sleep,'_sleep$UNIX2003' \
-    -Wl,-alias,___kdebug_trace,_kdebug_trace \
-    -Wl,-alias,_open,'_open$UNIX2003' \
-    -Wl,-alias,_close,'_close$UNIX2003' \
-    -Wl,-alias,_fcntl,'_fcntl$UNIX2003' \
-    -Wl,-alias,_fstat,'_fstat$INODE64' \
-    -Wl,-alias,_stat,'_stat$INODE64' \
-    -Wl,-alias,_strerror,'_strerror$UNIX2003' \
-    -Wl,-alias,_fputs,'_fputs$UNIX2003' \
-    -Wl,-alias,'_getopt$UNIX2003',_getopt \
-    -Wl,-alias,_connect,'_connect$UNIX2003' \
-    -Wl,-alias,_fopen,'_fopen$UNIX2003' \
+    $LINK_DYLIBS \
+    `# Aliases that survive: each targets a LOCAL definition or a` \
+    `# versioned dylib export whose bare name is never exported.` \
+    -Wl,-alias,__err,_err \
+    -Wl,-alias,__warn,_warn \
     -Wl,-alias,_writev,'_writev$UNIX2003' \
     -Wl,-alias,_send,'_send$UNIX2003' \
-    -Wl,-alias,_setrlimit,'_setrlimit$UNIX2003' \
-    -Wl,-alias,_select,'_select$1050' \
-    -Wl,-alias,_read,'_read$UNIX2003' \
-    -Wl,-alias,_lstat,'_lstat$INODE64' \
-    -Wl,-alias,_strchr,_index \
-    -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003','__pthread_rwlock_rdlock' \
-    -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003','__pthread_rwlock_wrlock' \
-    -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003','__pthread_rwlock_unlock' \
-    -Wl,-alias,_sigaction,'_sigaction$UNIX2003' \
-    -Wl,-alias,_wait4,'_wait4$UNIX2003' \
-    -Wl,-alias,_execvp,'_execvp$UNIX2003' \
-    -Wl,-alias,_execlp,'_execlp$UNIX2003' \
-    -Wl,-alias,_waitpid,'_waitpid$UNIX2003' \
-    -Wl,-alias,_regcomp,'_regcomp$UNIX2003' \
+    -Wl,-alias,_connect,'_connect$UNIX2003' \
     -Wl,-alias,_ttyname_r,'_ttyname_r$UNIX2003' \
-    -Wl,-alias,'_usleep$UNIX2003',_usleep \
-    -Wl,-alias,__err,_err \
-    -Wl,-alias,_fwrite,'_fwrite$UNIX2003' \
-    -Wl,-alias,_getrlimit,'_getrlimit$UNIX2003' \
-    -Wl,-alias,___mmap,_mmap \
-    2>"$OUT/login_link.err" \
-    || { echo "error: real link failed -- see $OUT/login_link.err" >&2; tail -100 "$OUT/login_link.err" >&2; exit 1; }
+    -Wl,-alias,_waitpid,'_waitpid$UNIX2003'
 echo "wrote login.macho"
 
-otool -l login.macho | grep -q LC_LOAD_DYLIB && \
-    echo "WARNING: LC_LOAD_DYLIB present -- no longer dyld-free" >&2
-otool -l login.macho | grep -q LC_UNIXTHREAD || \
-    echo "WARNING: no LC_UNIXTHREAD -- kernel exec won't know where to start" >&2
-if nm -u login.macho | grep -q .; then
-    echo "WARNING: undefined symbols present:" >&2
-    nm -u login.macho >&2
-fi
+# Real dynamic-executable assertions (DAR-314) -- inverted, not deleted.
+bad=0
+otool -l login.macho | grep -A2 "cmd LC_LOAD_DYLINKER" | grep -q "/usr/lib/dyld" || {
+    echo "error: login: no LC_LOAD_DYLINKER /usr/lib/dyld" >&2; bad=1; }
+otool -l login.macho | grep -q "cmd LC_LOAD_DYLIB" || {
+    echo "error: login: no LC_LOAD_DYLIB" >&2; bad=1; }
+otool -l login.macho | grep -q "cmd LC_MAIN" || {
+    echo "error: login: no LC_MAIN" >&2; bad=1; }
+[ "$bad" -eq 0 ] || exit 1
 
 # DAR-263 report-only gate. login.macho links libmach_ipc.a and carries
 # mach_ipc_dead_stubs.o's mach_port_insert_right/extract_right/unguard
