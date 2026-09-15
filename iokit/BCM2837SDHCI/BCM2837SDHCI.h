@@ -112,18 +112,15 @@
  *     just a safety net, not the only mechanism that was ever working).
  *   - Card-insertion/removal interrupts (SDHCI_INT_CARD_INSERT/REMOVE) are
  *     unimplemented - reportMediaState() never reports a changed state.
- *   - **Bus width is still 1-bit.** kRegHostControl is never written, so
- *     the 4-bit data bus every SD card supports goes unused and every
- *     transfer moves 1 bit per clock instead of 4. Deliberately left
- *     alone by DAR-103, which fixed only the clock: widening the bus is
- *     not a host-side register write, it is a real ACMD6 (SET_BUS_WIDTH)
- *     negotiation with the card - the card's SCR must first be read
- *     (ACMD51) to confirm it supports 4-bit, ACMD6 sent, and only then
- *     may HOST_CONTROL's DATA_WIDTH bit be set; setting the host bit
- *     without the card having switched puts the two ends in different
- *     bus widths, which is data corruption rather than a clean failure.
- *     That is a self-contained follow-on, not a TODO hidden inside the
- *     clock work.
+ *   - **Bus width widening (DAR-218): DONE.** widenBusTo4Bit(), called
+ *     from cardIdentify() after CMD7 (SELECT_CARD), reads the card's SCR
+ *     via a real ACMD51 data transfer, checks SD_BUS_WIDTHS (bits
+ *     [51:48]) for 4-bit DAT[3:0] support, negotiates via a real ACMD6
+ *     (SET_BUS_WIDTH), and only on the card's own success flips
+ *     kRegHostControl's 4-bit bit - never a host-side-only write, which
+ *     would leave the two ends disagreeing (data corruption, not a clean
+ *     failure). QEMU-verified: its sd_set_scr() (hw/sd/sd.c) advertises
+ *     4-bit support and this driver's decode of it matches.
  *   - High speed (>25MHz, CMD6 function switch) is likewise not
  *     attempted; the clock stops at SD default speed (25MHz).
  *   - Voltage/power sequencing (SDHCI_POWER_CONTROL) uses the standard
@@ -263,6 +260,11 @@ private:
 		kDefaultSpeedClockHz = 25000000,
 	};
 
+	// SDHCI_HOST_CONTROL bits we actually use (drivers/mmc/host/sdhci.h).
+	enum {
+		kHostControl4BitBus = 1U << 1, // SDHCI_CTRL_4BITBUS
+	};
+
 	// SDHCI_PRESENT_STATE bits we actually use.
 	enum {
 		kPresentCmdInhibit  = 1U << 0,
@@ -388,6 +390,17 @@ private:
 	// controller state instead of dying on a stuck INHIBIT bit.
 	void     resetCmdLine(void);
 	void     resetDatLine(void);
+
+	// Real ACMD51 (SEND_SCR) + ACMD6 (SET_BUS_WIDTH) negotiation (DAR-218):
+	// reads the card's SCR to confirm 4-bit DAT[3:0] support, tells the
+	// card to switch via ACMD6, and only on success flips
+	// kRegHostControl's 4-bit bit. Returns false (not an error - just
+	// "stayed at 1-bit") if the card doesn't advertise 4-bit support, or
+	// a real failure if any command in the sequence fails. Called once
+	// from cardIdentify(), after CMD7 (SELECT_CARD) and before CMD16
+	// (SET_BLOCKLEN) restores kRegBlockSize to the real 512-byte
+	// geometry this function borrows for its own 8-byte SCR read.
+	bool     widenBusTo4Bit(void);
 
 	// Programs the SD clock to the highest rate that is <= targetHz and
 	// that this controller's divider can actually express. Requires

@@ -696,9 +696,14 @@ BCM2837SDHCI::tryRaiseDataPhaseClock(void)
 		      "at %u Hz - reverting to the identification clock\n",
 		    candidateHz, slowHz);
 	} else {
-		IOLog("BCM2837SDHCI: SD clock raised to %u Hz (default speed, 1-bit "
+		// DAR-218: bus width is negotiated once in cardIdentify(), before
+		// this clock-raise ever runs - report what's actually live in
+		// kRegHostControl rather than a hardcoded "1-bit", which would
+		// now be wrong on any card widenBusTo4Bit() succeeded on.
+		bool is4Bit = (readReg8(kRegHostControl) & kHostControl4BitBus) != 0;
+		IOLog("BCM2837SDHCI: SD clock raised to %u Hz (default speed, %s "
 		      "bus); block %u verified identical before and after\n",
-		    candidateHz, kRefBlock);
+		    candidateHz, is4Bit ? "4-bit" : "1-bit", kRefBlock);
 		raised = true;
 	}
 
@@ -834,6 +839,106 @@ unstuffBits(const uint32_t resp[4], int start, int size)
 	return res & mask;
 }
 
+/*
+ * Real ACMD51 (SEND_SCR) + ACMD6 (SET_BUS_WIDTH) negotiation (DAR-218).
+ * See this file's header comment for why setting kRegHostControl's 4-bit
+ * bit without this sequence would be data corruption, not a clean
+ * failure: the card and controller must agree on bus width.
+ *
+ * ACMD51 is a real 8-byte data-phase read, done here as its own tiny PIO
+ * transfer rather than reusing readBlocksPIO() (which is sized around
+ * fBlockSize/512-byte block-storage reads) - kRegBlockSize/BlockCount are
+ * left at 8/1 after this call, but that's harmless: cardIdentify() always
+ * calls CMD16 (SET_BLOCKLEN) right after this, which resets
+ * kRegBlockSize back to 512 unconditionally.
+ */
+bool
+BCM2837SDHCI::widenBusTo4Bit(void)
+{
+	uint32_t r55[4];
+	if (!sendCommand(55, fRCA << 16, kCmdRespShort, false, r55)) {
+		IOLog("BCM2837SDHCI: CMD55 (before ACMD51) failed\n");
+		return false;
+	}
+
+	writeReg16(kRegBlockSize, 8);
+	writeReg16(kRegBlockCount, 1);
+	writeReg16(kRegTransferMode, kCmdTransBlkCntEn | kCmdTransRead);
+
+	uint32_t r51[4];
+	if (!sendCommand(51, 0, kCmdRespShort, true, r51)) {
+		IOLog("BCM2837SDHCI: ACMD51 (SEND_SCR) command failed\n");
+		return false;
+	}
+
+	uint32_t status;
+	if (!waitForIntStatus32(kIntBufReadRdy | kIntErrorMask, 1000000, &status)) {
+		IOLog("BCM2837SDHCI: ACMD51 data phase timed out - resetting dat line\n");
+		resetDatLine();
+		return false;
+	}
+	if (status & kIntErrorMask) {
+		IOLog("BCM2837SDHCI: ACMD51 data phase error, INT_STATUS=%#x - resetting dat line\n", status);
+		resetDatLine();
+		return false;
+	}
+
+	// Unlike the CMD-line response registers (a defined hardware layout
+	// that sendCommand()'s R2 handling already gets as resp[0]=high 32
+	// bits), kRegBuffer is a raw DAT-line FIFO: each 32-bit read packs
+	// whatever bytes are next in arrival order into the word
+	// little-endian - the FIRST byte off the wire (SCR's MSB, scr[0])
+	// lands in the LOW byte of the word, not the high one. Confirmed
+	// against QEMU's own sdhci_read_dataport() (hw/sd/sdhci.c):
+	// `value |= fifo_buffer[data_count] << i*8` with i starting at 0 for
+	// the first byte consumed.
+	uint32_t scrWord0 = readReg32(kRegBuffer); // scr[0..3], scr[0] in bits[7:0]
+	(void)readReg32(kRegBuffer); // scr[4..7] - unused, nothing this driver needs lives there
+
+	if (!waitForIntStatus32(kIntTransferDone | kIntErrorMask, 1000000, &status)) {
+		IOLog("BCM2837SDHCI: ACMD51 did not reach TRANSFER_COMPLETE - resetting dat line\n");
+		resetDatLine();
+		return false;
+	}
+	if (status & kIntErrorMask) {
+		IOLog("BCM2837SDHCI: ACMD51 error at TRANSFER_COMPLETE, INT_STATUS=%#x - resetting dat line\n", status);
+		resetDatLine();
+		return false;
+	}
+
+	// SD_BUS_WIDTHS is the low nibble of scr[1] (SCR bits [51:48]). scr[1]
+	// is the second byte consumed, so per the little-endian FIFO packing
+	// above it lands in scrWord0 bits [15:8]. Bit 2 of that nibble (0x4)
+	// is "card supports 4-bit DAT[3:0]"; bit 0 (0x1, DAT0-only) is always
+	// set and not itself useful here. Verified against QEMU's own
+	// sd_set_scr() (hw/sd/sd.c: scr[1] = (2<<4)|0b0101) and the SD
+	// Physical Layer spec's SCR field table, not derived from memory of
+	// the spec alone.
+	uint32_t sdBusWidths = (scrWord0 >> 8) & 0xF;
+	if (!(sdBusWidths & 0x4)) {
+		IOLog("BCM2837SDHCI: card SCR reports no 4-bit support (SD_BUS_WIDTHS=%#x) - staying at 1-bit\n",
+		    sdBusWidths);
+		return false;
+	}
+
+	uint32_t r55b[4], r6[4];
+	if (!sendCommand(55, fRCA << 16, kCmdRespShort, false, r55b)) {
+		IOLog("BCM2837SDHCI: CMD55 (before ACMD6) failed\n");
+		return false;
+	}
+	// ACMD6 arg bits[1:0]: 00 = 1-bit (default), 10 = 4-bit. This is what
+	// actually switches the CARD side; only once it succeeds is it safe
+	// to flip the host's own bit below.
+	if (!sendCommand(6, 0x2, kCmdRespShort, false, r6)) {
+		IOLog("BCM2837SDHCI: ACMD6 (SET_BUS_WIDTH) failed\n");
+		return false;
+	}
+
+	writeReg8(kRegHostControl, readReg8(kRegHostControl) | kHostControl4BitBus);
+	IOLog("BCM2837SDHCI: bus widened to 4-bit (card SCR confirmed support, ACMD6 negotiated)\n");
+	return true;
+}
+
 bool
 BCM2837SDHCI::cardIdentify(void)
 {
@@ -922,6 +1027,14 @@ BCM2837SDHCI::cardIdentify(void)
 		IOLog("BCM2837SDHCI: CMD7 failed\n");
 		return false;
 	}
+
+	// DAR-218: negotiate 4-bit bus width now that the card is selected
+	// (ACMD-prefixed commands and data transfers both require transfer
+	// state). Not fatal if this returns false - that just means "stayed
+	// at 1-bit", either because the card doesn't support it or the
+	// negotiation itself failed; either way CMD16 right below restores
+	// kRegBlockSize regardless of what widenBusTo4Bit() left it at.
+	widenBusTo4Bit();
 
 	// CMD16: SET_BLOCKLEN - force 512-byte blocks. On SDHC/SDXC cards this
 	// is actually a no-op per spec (always 512), but harmless/cheap to send.
