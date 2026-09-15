@@ -79,34 +79,52 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *oset) {
     return (int)syscall3(SYS_sigprocmask, (long)how, (long)set, (long)oset);
 }
 
-/* usleep(3): real Apple Libc/gen/FreeBSD/usleep.c routes through a
- * private _nanosleep needing this project's Mach-IPC clock-service
- * bootstrap (simple_cmds_nanosleep_compat.c) -- more dependency surface
- * than pinger()'s flood-ping (-f) delay needs. Real, simpler equivalent:
- * a direct timed __semwait_signal(2) call (real syscall #334, already
- * linked into libmalloc.a via sys_semwait_signal.o -- confirmed via nm,
- * same real primitive libmalloc_sleep_shim.c's _mal_semwait_sleep()
- * already uses for whole-second sleeps) with a real us->sec/nsec split
- * instead of that wrapper's whole-second-only granularity.
+/* usleep(3): real Apple Libc/gen/FreeBSD/usleep.c is a thin wrapper that
+ * splits useconds into a timespec and calls _nanosleep() -- and real
+ * Apple's nanosleep (third_party/Libc/gen/nanosleep.c:104) performs the
+ * wait as
+ *     SEMWAIT_SIGNAL(clock_sem, MACH_PORT_NULL, 1, 1, sec, nsec)
+ * with a REAL semaphore as cond_sem (clock_sem, created at that same
+ * file's line 55 via semaphore_create(mach_task_self(), &clock_sem,
+ * SYNC_POLICY_FIFO, 0)) and MACH_PORT_NULL only as mutex_sem. This is
+ * that same real wait, with usleep.c's own us->sec/nsec split inlined
+ * rather than routing through a separate nanosleep symbol ping doesn't
+ * otherwise need.
  *
- * WARNING (corrected 2026-09-15, DAR-309): the "simpler equivalent"
- * claim above is FALSE, inherited from libmalloc_sleep_shim.c's own
- * (now-corrected) comment. cond_sem=0 is not a valid semaphore port, so
- * the real kernel fails this call INSTANTLY rather than waiting --
- * port_name_to_semaphore() returns KERN_INVALID_NAME for
- * !MACH_PORT_VALID(0) (xnu-7195 osfmk/kern/ipc_sync.c:63) without ever
- * reaching semaphore_wait_internal(). Real Apple passes a REAL
- * semaphore as cond_sem (third_party/Libc/gen/nanosleep.c:104). Net
- * effect here: usleep() does not delay at all, so ping's inter-packet
- * pacing is not actually applied. Not a CPU burner (single call, no
- * retry loop -- unlike DAR-309's launchd path), but still wrong.
- * Tracked separately; the real fix is the mach_ipc_clock_init() +
- * g_mach_ipc_clock_sem form simple_cmds_nanosleep_compat.c uses, which
- * needs mach_ipc_clock_init.c added to build_ping.sh's compile list. */
+ * FIXED 2026-09-15 (DAR-312, same root cause as DAR-309). This used to
+ * pass 0 for BOTH cond_sem and mutex_sem, justified by a comment
+ * calling that a "real, simpler equivalent" -- a claim inherited from
+ * libmalloc_sleep_shim.c's own (now also corrected) comment. It was
+ * false: 0 is not a valid semaphore port name, so the real kernel
+ * failed the call INSTANTLY instead of waiting. port_name_to_semaphore()
+ * returns KERN_INVALID_NAME for !MACH_PORT_VALID(0) (xnu-7195
+ * osfmk/kern/ipc_sync.c:63) without ever reaching
+ * semaphore_wait_internal(); reached from __semwait_signal_nocancel()
+ * (bsd/kern/kern_sig.c:1232) -> semaphore_timedwait_trap_internal()
+ * (osfmk/kern/sync_sema.c:945). Net effect: usleep() did not delay at
+ * all, so ping's inter-packet pacing (-i / flood -f) was never applied.
+ *
+ * ETIMEDOUT is the NORMAL success return for a relative timed wait that
+ * ran to completion -- real Apple's own nanosleep.c:106 treats it as
+ * success, and so does this. */
+#include <errno.h>
+#include <mach/mach_types.h>
+
 extern int __semwait_signal(int cond_sem, int mutex_sem, int timeout,
     int relative, long long tv_sec, int tv_nsec);
+extern void mach_ipc_clock_init(void);
+extern mach_port_t g_mach_ipc_clock_sem;
+
 int usleep(unsigned int usec) {
-    __semwait_signal(0, 0, 1, 1, (long long)(usec / 1000000), (int)((usec % 1000000) * 1000));
+    if (usec == 0) {
+        return 0;
+    }
+    mach_ipc_clock_init();
+    int ret = __semwait_signal(g_mach_ipc_clock_sem, MACH_PORT_NULL, 1, 1,
+        (long long)(usec / 1000000), (int)((usec % 1000000) * 1000));
+    if (ret < 0 && errno != ETIMEDOUT) {
+        return -1;
+    }
     return 0;
 }
 

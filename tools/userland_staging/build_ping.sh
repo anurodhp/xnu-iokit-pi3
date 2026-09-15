@@ -241,6 +241,7 @@ for spec in \
     "ps_commpage_gettimeofday_stub.c:" \
     "libresolv_socket_syscalls.c:" \
     "ping_extra_syscalls.c:" \
+    "mach_ipc_clock_init.c:" \
     "ping_resolver_compat.c:" \
     "ping_alarm_compat.c:" \
     "ping_main_wrapper.c:" \
@@ -317,6 +318,7 @@ trap - EXIT
     "$OUT/libpthread.a" \
     "$OUT/libclosure.a" \
     "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    "$OUT/libmach_ipc.a" \
     "$OUT/libunwind.a" \
     -Wl,-alias,_open,'_open$UNIX2003' \
     -Wl,-alias,_close,'_close$UNIX2003' \
