@@ -327,6 +327,10 @@ private:
 	void     writeReg8(uint32_t offset, uint8_t value);
 	void     writeReg16(uint32_t offset, uint16_t value);
 	void     writeReg32(uint32_t offset, uint32_t value);
+	// DAR-316: real Arasan clock-domain-crossing erratum (see the .cpp
+	// definition site for the full citation) - called by all three
+	// writeReg* above after the store, never by readReg*.
+	void     writeSpacing(uint32_t offset);
 
 	bool     waitClear32(uint32_t offset, uint32_t mask, uint32_t timeoutUs);
 

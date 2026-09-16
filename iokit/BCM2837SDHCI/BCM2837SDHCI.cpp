@@ -72,9 +72,40 @@ BCM2837SDHCI::init(OSDictionary *properties)
 uint8_t  BCM2837SDHCI::readReg8(uint32_t off)  { return *((volatile uint8_t  *)((uintptr_t)fRegBase + off)); }
 uint16_t BCM2837SDHCI::readReg16(uint32_t off) { return *((volatile uint16_t *)((uintptr_t)fRegBase + off)); }
 uint32_t BCM2837SDHCI::readReg32(uint32_t off) { return *((volatile uint32_t *)((uintptr_t)fRegBase + off)); }
-void BCM2837SDHCI::writeReg8(uint32_t off, uint8_t v)   { *((volatile uint8_t  *)((uintptr_t)fRegBase + off)) = v; }
-void BCM2837SDHCI::writeReg16(uint32_t off, uint16_t v) { *((volatile uint16_t *)((uintptr_t)fRegBase + off)) = v; }
-void BCM2837SDHCI::writeReg32(uint32_t off, uint32_t v) { *((volatile uint32_t *)((uintptr_t)fRegBase + off)) = v; }
+
+// DAR-316: real, silicon-specific erratum, not a defensive guess - u-boot's
+// bcm2835_sdhci.c ("brcm,bcm2835-sdhci", the same compatible string this
+// driver's own header cites) documents it directly, itself carried over
+// from the Linux kernel: "The Arasan has a bugette whereby it may lose the
+// content of successive writes to registers that are within two SD-card
+// clock cycles of each other (a clock domain crossing problem) ... the
+// data register does not have this problem." u-boot enforces at least
+// kRegWriteSpacingUs between every register write except the data FIFO
+// port (kRegBuffer), computed once off the 400kHz identification rate and
+// kept for the whole session rather than recalculated per clock change -
+// same choice made here. This driver previously had NO spacing at all:
+// back-to-back writes (writeReg32(kRegArgument,...) immediately followed
+// by writeReg16(kRegCommand,...) in sendCommand(), TransferMode then
+// BlockCount in read/writeBlocksPIO(), ...) execute nanoseconds apart on
+// real ARM64 silicon, far under this threshold, and QEMU's MMIO-trap
+// overhead incidentally provides enough real spacing to hide the bug
+// entirely - a real, silent, real-hardware-only write can be dropped by
+// the controller with no error status ever latched, which matches DAR-
+// 316's evidence (PRESENT_STATE genuinely wedged, INT_STATUS clean)
+// better than any theory tested so far this ticket.
+enum { kRegWriteSpacingUs = 6 }; // (2 * 1000000 / 400000) + 1, matching u-boot exactly
+
+void
+BCM2837SDHCI::writeSpacing(uint32_t off)
+{
+	if (off != kRegBuffer) {
+		IODelay(kRegWriteSpacingUs);
+	}
+}
+
+void BCM2837SDHCI::writeReg8(uint32_t off, uint8_t v)   { *((volatile uint8_t  *)((uintptr_t)fRegBase + off)) = v; writeSpacing(off); }
+void BCM2837SDHCI::writeReg16(uint32_t off, uint16_t v) { *((volatile uint16_t *)((uintptr_t)fRegBase + off)) = v; writeSpacing(off); }
+void BCM2837SDHCI::writeReg32(uint32_t off, uint32_t v) { *((volatile uint32_t *)((uintptr_t)fRegBase + off)) = v; writeSpacing(off); }
 
 bool
 BCM2837SDHCI::waitClear32(uint32_t offset, uint32_t mask, uint32_t timeoutUs)
@@ -433,6 +464,13 @@ BCM2837SDHCI::resetCmdLine(void)
 	if (!pollUntil(^bool(void) { return (readReg8(kRegSoftwareReset) & 0x02) == 0; }, 100000)) {
 		IOLog("BCM2837SDHCI: resetCmdLine: SOFTWARE_RESET_CMD did not clear\n");
 	}
+	// DAR-316 defensive: u-boot's sdhci.c reprograms TIMEOUT_CONTROL before
+	// every single data/busy command rather than trusting it to survive a
+	// reset - this SoC's behavior on that point isn't documented locally,
+	// so reassert the same maximum value resetHost() set rather than risk
+	// every post-reset command running with the register's much shorter
+	// power-on-reset default.
+	writeReg8(kRegTimeoutControl, 0x0E);
 }
 
 void
@@ -457,6 +495,8 @@ BCM2837SDHCI::resetDatLine(void)
 	if (!pollUntil(^bool(void) { return (readReg8(kRegSoftwareReset) & 0x04) == 0; }, 100000)) {
 		IOLog("BCM2837SDHCI: resetDatLine: SOFTWARE_RESET_DAT did not clear\n");
 	}
+	// DAR-316 defensive: see the matching comment in resetCmdLine().
+	writeReg8(kRegTimeoutControl, 0x0E);
 }
 
 /*
@@ -570,6 +610,24 @@ BCM2837SDHCI::setClock(uint32_t targetHz)
 		// data instead of merely being slow.
 		clkField = (uint16_t)(0xFFU << 8);
 		actualHz = 0;
+	}
+
+	// DAR-316: u-boot's sdhci_set_clock() (third_party/u-boot/drivers/mmc/
+	// sdhci.c) polls PRESENT_STATE for CMD_INHIBIT|DATA_INHIBIT to clear
+	// BEFORE gating the clock off - this driver never did. Matters
+	// specifically because tryRaiseDataPhaseClock() calls setClock() a
+	// second time immediately after a live data read, with no settling
+	// gap between the read returning and the clock being cut; yanking
+	// SDCLK away while the DAT state machine hasn't fully quiesced could
+	// leave it wedged with no further clock edges to ever finish its own
+	// internal transition - a real, terminal way to reach a stuck-forever
+	// DAT_INHIBIT. Every other setClock() call site runs at cold boot
+	// before any card traffic, so this is a no-op there; only the
+	// post-read call is where this precondition can ever actually matter.
+	if (!waitClear32(kRegPresentState, kPresentCmdInhibit | kPresentDatInhibit, 1000000)) {
+		IOLog("BCM2837SDHCI: setClock: CMD/DAT_INHIBIT still set before "
+		    "gating the clock off - proceeding anyway (SDHCI spec offers no "
+		    "better recovery than a straight reset here)\n");
 	}
 
 	writeReg16(kRegClockControl, 0x0000); // disable SD clock while reprogramming
@@ -748,7 +806,23 @@ BCM2837SDHCI::sendCommand(uint8_t cmdIndex, uint32_t arg, uint32_t respType, boo
 		resetCmdLine();
 		return false;
 	}
-	if (hasData && !waitClear32(kRegPresentState, kPresentDatInhibit, 1000000)) {
+	// DAR-316: unconditional except CMD12 (STOP_TRANSMISSION), matching
+	// u-boot's sdhci.c precondition mask exactly (SDHCI_CMD_INHIBIT |
+	// SDHCI_DATA_INHIBIT for every command except STOP_TRANSMISSION and
+	// data-less tuning, which this SoC never issues). Previously this only
+	// checked DAT_INHIBIT when the *new* command itself had a data phase
+	// (hasData) - so a run of non-data commands (CMD7 SELECT_CARD, CMD13
+	// SEND_STATUS, CMD16 SET_BLOCKLEN) could sail straight through a
+	// genuinely stuck DAT_INHIBIT left by an earlier data command with
+	// zero logging, and only the *next* hasData command's own check would
+	// ever notice - potentially far removed from whatever actually caused
+	// it. Matches DAR-316's real evidence (no error logged before the
+	// stuck message fires) better than gating on this command's own
+	// hasData ever did. CMD12 stays exempt - it's the command whose whole
+	// purpose is releasing a still-busy DAT circuit, so waiting for that
+	// same circuit to clear before allowing CMD12 to even be sent would be
+	// circular.
+	if (cmdIndex != 12 && !waitClear32(kRegPresentState, kPresentDatInhibit, 1000000)) {
 		// DAR-316 diagnostic: this fires as a PRECONDITION check, before
 		// CMD%u is ever issued -- DAT_INHIBIT was already stuck from
 		// something prior, for either a read or a write command. Dumped
@@ -769,6 +843,7 @@ BCM2837SDHCI::sendCommand(uint8_t cmdIndex, uint32_t arg, uint32_t respType, boo
 		    fPendingIntStatus, cmdIndex, hasData, arg);
 		writeReg8(kRegSoftwareReset, 0x04); // SOFTWARE_RESET_DAT only - no card to send CMD12 to yet
 		pollUntil(^bool(void) { return (readReg8(kRegSoftwareReset) & 0x04) == 0; }, 100000);
+		writeReg8(kRegTimeoutControl, 0x0E); // DAR-316 defensive, see resetCmdLine()'s comment
 		return false;
 	}
 
@@ -834,37 +909,21 @@ BCM2837SDHCI::sendCommand(uint8_t cmdIndex, uint32_t arg, uint32_t respType, boo
 		return false;
 	}
 
-	if (respType == kCmdRespShortBusy) {
-		// R1b: CMD_COMPLETE only means the 48-bit response arrived - the SD
-		// Host Controller Simplified Spec (3.7.1.2) is explicit that busy
-		// (the card holding DAT0 low) can continue well after that, and
-		// software must confirm DAT_INHIBIT has cleared before treating the
-		// command as done. Nothing here previously did that: CMD12/CMD7
-		// both returned "success" the instant CMD_COMPLETE arrived, and the
-		// two STOP_TRANSMISSION call sites in readBlocksPIO()/
-		// writeBlocksPIO() also ignored this function's return value
-		// outright - so a card still busy past this point was invisible,
-		// and the very next hasData command's own DAT_INHIBIT precondition
-		// check would find it genuinely (not transiently) stuck with zero
-		// preceding error. Matches DAR-316's real-hardware evidence exactly
-		// (register dump showed DAT_INHIBIT+DAT_LINE_ACTIVE stuck with a
-		// clean INT_STATUS and nothing logged first).
-		if (!waitClear32(kRegPresentState, kPresentDatInhibit, 1000000)) {
-			IOLog("BCM2837SDHCI: CMD%u (R1b) completed but DAT_INHIBIT never "
-			    "cleared - resetting dat line directly\n", cmdIndex);
-			// Deliberately NOT resetDatLine(): that function itself issues a
-			// CMD12 with this same kCmdRespShortBusy respType, and CMD12 is
-			// exactly one of the three real callers of this branch - calling
-			// back into resetDatLine() from here would recurse through
-			// sendCommand() again on a card that just proved it won't clear
-			// busy, with no bound on depth. Same raw SOFTWARE_RESET_DAT the
-			// precondition check above already uses standalone, for the same
-			// reason ("no card to reliably send CMD12 to" - it just failed).
-			writeReg8(kRegSoftwareReset, 0x04);
-			pollUntil(^bool(void) { return (readReg8(kRegSoftwareReset) & 0x04) == 0; }, 100000);
-			return false;
-		}
-	}
+	// DAR-316: deliberately NOT waiting for DAT_INHIBIT to clear here after
+	// an R1b (busy) response, even though that was tried - real, proven-
+	// working firmware for this exact silicon (u-boot's bcm2835_sdhci.c,
+	// "brcm,bcm2835-sdhci") sets SDHCI_QUIRK_BROKEN_R1B and, per its
+	// sdhci.c core, never waits on PRESENT_STATE for busy completion after
+	// a data-less R1b command (CMD7/CMD12, this driver's only R1b users) -
+	// only SDHCI_INT_RESPONSE. Where a real busy-completion wait genuinely
+	// matters, it happens naturally at the PRECONDITION check above, before
+	// the *next* command - see that check's widened, now-unconditional
+	// DAT_INHIBIT gate (matching sdhci.c's own mask, which excludes only
+	// STOP_TRANSMISSION itself). Explicitly polling for busy right here
+	// instead risks failing CMD7 in cardIdentify() (breaking card init
+	// outright) or a still-fine multi-block transfer's trailing CMD12 on
+	// this specific chip, which is documented as unreliable at exactly
+	// this signal - the opposite of what DAR-316 needs.
 
 	if (resp != NULL) {
 		if (respType == kCmdRespLong) {
