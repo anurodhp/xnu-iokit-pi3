@@ -71,11 +71,24 @@ check(const char *what, unsigned long got, unsigned long want)
 	}
 }
 
-/* Captured so the main thread can prove the child got a different
- * allocation rather than sharing one buffer. */
-static unsigned long *child_addr_of_initialized;
+/* DAR-281: this used to be two separate variables - a plain (non-
+ * volatile) `child_addr_of_initialized` pointer plus this file's own
+ * `child_done` volatile flag, stored in that order by the child and read
+ * in the opposite order by the spinning main thread with no barrier
+ * between them. arm64 is weakly ordered and the compiler was free to
+ * cache/reorder the non-volatile pointer's load, so the main thread
+ * could legally observe child_done==1 while still reading
+ * child_addr_of_initialized as NULL - and NULL happens to be exactly
+ * the value the pre-DAR-279 broken tlv_get_addr stub returned, so that
+ * exact race made the check silently report "ok, addresses differ"
+ * (0x... vs 0x0) for the one bug it exists to catch. Folded into a
+ * single variable instead: NULL means "child not ready yet", non-NULL
+ * is simultaneously the go signal AND the real address, published with
+ * one store and consumed with one load - there is no second variable
+ * left to tear or reorder against. */
+static unsigned long * volatile child_ready_addr;
 
-/* The child->main handoff is a plain volatile flag plus sched_yield(),
+/* The child->main handoff is a plain volatile pointer plus sched_yield(),
  * and that is deliberate.
  *
  * pthread_join() is not among this port's real libsystem_pthread.dylib
@@ -83,15 +96,21 @@ static unsigned long *child_addr_of_initialized;
  * substitute -- a mutex plus condition variable -- was tried first and
  * turned out to take SIGSEGV on this port: a real QEMU boot put the
  * main thread in _pthread_cond_wait+0x2a8 reading through a NULL
- * pointer (far 0x26). That is a real, separate bug, filed on its own;
- * it is not this test's subject, and depending on it would mean this
- * test could never report PASS for reasons that have nothing to do with
- * TLV. A volatile flag needs nothing but loads and stores.
+ * pointer (far 0x26). That is a real, separate bug (DAR-280, root-caused
+ * and fixed 2026-09-16 - this port's kernel was reporting
+ * mutex_default_policy=0 to libpthread, routing every condvar wait into
+ * unimplemented psynch_cvwait() rather than the real, working ulock
+ * path); this test still doesn't depend on it, since switching this
+ * file's own synchronization design is a separate change from fixing
+ * the race that was actually found here. A volatile pointer needs
+ * nothing but loads and stores.
  *
  * Bounded, so a child that never runs fails loudly instead of hanging
- * the boot test that invokes this. */
-static volatile int child_done;
-#define HANDOFF_SPIN_LIMIT 100000000
+ * the boot test that invokes this. Previously 100,000,000 sched_yield()
+ * calls, which under QEMU/TCG is hours - indistinguishable from a hang
+ * for any real boot test despite the comment's stated intent; a few
+ * million is still generous against real scheduler jitter. */
+#define HANDOFF_SPIN_LIMIT 5000000
 
 static void *
 child_main(void *arg)
@@ -100,8 +119,12 @@ child_main(void *arg)
 
 	/* First touch on this thread: the lazy-allocate slow path. The
 	 * values must be the image's template, NOT what the main thread
-	 * stored before spawning us. */
-	child_addr_of_initialized = &tlv_initialized;
+	 * stored before spawning us. Captured into a local now (DAR-281) -
+	 * the address doesn't change for the life of the thread, so recording
+	 * it early and publishing it later, as the single handoff store
+	 * below, is equivalent to the old two-variable version but without
+	 * the race. */
+	unsigned long *my_addr = &tlv_initialized;
 	check("child initial tlv_initialized", tlv_initialized, TLV_INIT_VALUE);
 	check("child initial tlv_zero", tlv_zero, 0UL);
 
@@ -119,7 +142,10 @@ child_main(void *arg)
 	 * crash as _pthread_cond_wait's, not TLV's, from the boot log alone.
 	 * Keep them. */
 	printf("tlv_smoketest: mark child-signal\n");
-	child_done = 1;
+	/* DAR-281: the one handoff store - both the go signal and the real
+	 * address, so the main thread cannot observe "ready" without also
+	 * observing where the buffer actually is. */
+	child_ready_addr = my_addr;
 	return NULL;
 }
 
@@ -157,27 +183,34 @@ main(int argc, char **argv)
 		} else {
 			printf("tlv_smoketest: mark main-wait\n");
 			long spins = 0;
-			while (!child_done && spins < HANDOFF_SPIN_LIMIT) {
+			while (!child_ready_addr && spins < HANDOFF_SPIN_LIMIT) {
 				sched_yield();
 				spins++;
 			}
-			if (!child_done) {
+			if (!child_ready_addr) {
 				printf("tlv_smoketest: FAIL child never ran "
 				    "(%ld spins)\n", spins);
 				failures++;
-			}
-			printf("tlv_smoketest: mark main-woke\n");
-
-			if (child_addr_of_initialized == main_addr_of_initialized) {
-				printf("tlv_smoketest: FAIL both threads share one "
-				    "buffer at %p\n",
-				    (void *)main_addr_of_initialized);
-				failures++;
 			} else {
-				printf("tlv_smoketest: ok   per-thread addresses "
-				    "differ (%p vs %p)\n",
-				    (void *)main_addr_of_initialized,
-				    (void *)child_addr_of_initialized);
+				printf("tlv_smoketest: mark main-woke\n");
+
+				/* DAR-281: NULL can no longer be observed here at all
+				 * (the loop above only exits non-NULL or timed-out,
+				 * handled above) - the degenerate case this check exists
+				 * to catch can't silently read as success regardless of
+				 * ordering, unlike the two-variable version this
+				 * replaced. */
+				if (child_ready_addr == main_addr_of_initialized) {
+					printf("tlv_smoketest: FAIL both threads share one "
+					    "buffer at %p\n",
+					    (void *)main_addr_of_initialized);
+					failures++;
+				} else {
+					printf("tlv_smoketest: ok   per-thread addresses "
+					    "differ (%p vs %p)\n",
+					    (void *)main_addr_of_initialized,
+					    (void *)child_ready_addr);
+				}
 			}
 		}
 
