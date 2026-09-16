@@ -685,10 +685,49 @@ pthread_create(pthread_t _Nullable *_Nonnull restrict thread,
 	 * EINVAL without it. */
 	static int registered = 0;
 	if (!registered) {
+		/* DAR-280: this used to pass pthread_init_data=NULL/size=0 - the
+		 * legacy no-data calling convention. real_bsdthread_register()
+		 * (bsd/kern/bsd_pthread_workq.c) only fills in and copies back
+		 * `mutex_default_policy` (the flag that tells libpthread's real
+		 * pthread_mutex.c/pthread_cond.c to use the real, working ulock
+		 * sync path instead of the never-implemented psynch_* syscalls)
+		 * inside its own `if (pthread_init_data != 0)` branch - with NULL
+		 * here, that reply never happens, `__pthread_mutex_use_ulock`
+		 * (prototypes_internal.h/pthread_mutex.c) never leaves its
+		 * compiled-in `false` default, and every pthread_cond_wait()/
+		 * contended pthread_mutex_lock() call in this process falls into
+		 * psynch_cvwait()/psynch_mutexwait() - both unconditionally
+		 * ENOTSUP-stubbed in bsd_pthread_stub.c - with no code path here
+		 * ever giving libpthread a chance to ask for anything else. This
+		 * was the real, load-bearing gap behind DAR-280's pthread_cond_wait
+		 * SIGSEGV: two real kernel-side bugs (the registration struct's
+		 * missing __attribute__((packed)), and mutex_default_policy being
+		 * left at 0) were both real and both fixed, but neither could ever
+		 * take effect while this call never passed a data pointer at all.
+		 *
+		 * struct _pthread_registration_data is the real, canonical
+		 * definition (kern/kern_internal.h, already visible here via this
+		 * file's own "internal.h" -> "prototypes_internal.h" include
+		 * chain) - not a local re-declaration, so this can't drift out of
+		 * sync with pthread_mutex.c's own copy the way the kernel's did.
+		 */
+		struct _pthread_registration_data reg_data;
+		__builtin_memset(&reg_data, 0, sizeof(reg_data));
+		reg_data.version = sizeof(reg_data);
+		reg_data.dispatch_queue_offset = __PTK_LIBDISPATCH_KEY0 * sizeof(void *);
+
 		int rv = __bsdthread_register(_real_pthread_start_abi, NULL, 0,
-				NULL, 0, 0);
+				(void *)&reg_data, sizeof(reg_data),
+				reg_data.dispatch_queue_offset);
 		if (rv < 0) {
 			return errno;
+		}
+		/* Real _pthread_init()'s own logic (pthread_mutex.c), minimally:
+		 * this project has no separate _pthread_init() call site (see
+		 * this file's own header comment on why pthread.c doesn't compile
+		 * standalone here), so consume the kernel's reply directly. */
+		if (reg_data.mutex_default_policy & _PTHREAD_REG_DEFAULT_USE_ULOCK) {
+			__pthread_mutex_use_ulock = true;
 		}
 		registered = 1;
 	}
