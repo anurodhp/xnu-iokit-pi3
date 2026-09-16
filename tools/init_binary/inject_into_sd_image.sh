@@ -131,21 +131,65 @@ if [ -f tools/userland_staging/libc_build/launchd.macho ]; then
     echo "  tools/userland_staging/build_launchd.sh; needs /usr/lib/dyld +"
     echo "  the full dylib stack already installed above)"
 
-    # Real gap found wiring launchd up for its first actual boot: ICU's
-    # LC_ID_DYLIB install names are RELATIVE ("libicuuc.66.dylib", not an
-    # absolute /usr/lib/... path -- confirmed via otool -D), so dyld
-    # resolves them against launchd's own cwd at exec time, which the
-    # kernel leaves as "/" for the very first process (no parent to
-    # inherit a cwd from). Installing at image root, matching that
-    # relative name literally, rather than rebuilding ICU with real
-    # absolute install names (a separate, larger follow-up -- this is a
-    # known simplification, not the real Apple convention).
+    # DAR-315, real gap found wiring launchd up for its first actual boot,
+    # revised 2026-09-15 to the real fix: ICU4C's own build (build_icu_
+    # target.sh) produces dylibs with RELATIVE LC_ID_DYLIB/LC_LOAD_DYLIB
+    # names ("libicuuc.66.dylib", not /usr/lib/...) -- confirmed via
+    # otool -D/-L, not the real Apple convention every other dylib here
+    # follows. This USED to be worked around by installing a copy at the
+    # image root, matching the relative name literally so it resolved
+    # against launchd's cwd (kernel leaves cwd="/" for the very first
+    # process, since it has no parent to inherit one from) -- but that
+    # only covered launchd. Every OTHER process (configd, ipconfig run
+    # from an interactive login shell, etc.) resolves the SAME relative
+    # name against ITS OWN cwd instead, which is not guaranteed to be
+    # "/". Found for real 2026-09-15: QEMU's root shell happens to have
+    # cwd=="/" (confirmed via `pwd`), masking this for months; real
+    # hardware's root shell does not, and `ipconfig`/`configd` (both
+    # link libCoreFoundation.dylib -> libicuuc.66.dylib) aborted at dyld
+    # load with "Library not loaded: libicuuc.66.dylib" + EXC_CORPSE_
+    # NOTIFY there -- which is also why configd's StandardErrorPath log
+    # and chronyd both looked broken all along (configd was never
+    # surviving past dyld load to do anything, including the pre-exec
+    # file setup launchd does for it).
+    #
+    # Real fix, not a second workaround: the three already-built target
+    # dylibs (tools/userland_staging/icu_build/target/lib/) have had
+    # their LC_ID_DYLIB AND their cross-references to each other
+    # (libicui18n -> libicuuc/libicudata, libicuuc -> libicudata)
+    # rewritten to real absolute /usr/lib/... paths via install_name_tool
+    # -id/-change, matching every other dylib in this system -- verified
+    # via otool -L afterward, not just otool -D. That makes ONE install
+    # location (/usr/lib, dyld's real standard path, not a fallback
+    # trick) correct and sufficient for every consumer's cwd, including
+    # PID 1's -- no image-root copy needed. (install_name_tool only
+    # rewrites what's baked into ALREADY-linked consumers of a FUTURE
+    # relink; launchd.macho/CoreFoundation.dylib/configd.macho/
+    # ipconfig.macho were all linked against the pre-fix relative-name
+    # dylibs, so their own LC_LOAD_DYLIB entries are still the bare
+    # relative name -- those resolve via dyld's real, standard
+    # DYLD_FALLBACK_LIBRARY_PATH-equivalent search, which tries /usr/lib
+    # regardless of cwd, matching the search order dyld's own abort
+    # message already showed. A full fix for THAT would mean relinking
+    # every ICU consumer against the corrected dylibs -- real, but a
+    # separate, larger follow-up, not bundled into this ticket.)
     ICU_LIB="tools/userland_staging/icu_build/target/lib"
+    mkdir -p "$MNT/usr/lib"
     for d in libicuuc.66.dylib libicui18n.66.dylib libicudata.66.dylib; do
         if [ -f "$ICU_LIB/$d" ]; then
-            cp "$ICU_LIB/$d" "$MNT/$d"
-            chmod 755 "$MNT/$d"
-            echo "+ wrote $(wc -c < "$ICU_LIB/$d") bytes to $MNT/$d (launchd's real ICU dep, relative install name)"
+            cp "$ICU_LIB/$d" "$MNT/usr/lib/$d"
+            chmod 755 "$MNT/usr/lib/$d"
+            echo "+ wrote $(wc -c < "$ICU_LIB/$d") bytes to $MNT/usr/lib/$d (real absolute install name, DAR-315)"
+            # Clean up the image-root copy the pre-fix version of this
+            # script used to write. A stale one left over from re-running
+            # this script against an already-staged image would otherwise
+            # just sit there unused (nothing resolves against it once the
+            # dylib has a real absolute ID) -- 34MB of dead weight per
+            # ICU release, not a "harmless leftover".
+            if [ -f "$MNT/$d" ]; then
+                rm -f "$MNT/$d"
+                echo "  (removed stale pre-DAR-315 image-root copy $MNT/$d)"
+            fi
         else
             echo "error: $ICU_LIB/$d not found -- run build_icu_target.sh first" >&2
             exit 1
