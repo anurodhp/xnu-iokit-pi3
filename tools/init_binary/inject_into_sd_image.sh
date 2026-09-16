@@ -770,6 +770,21 @@ else
     echo "= tlv_smoketest.macho not built -- run tools/userland_staging/build_tlv_smoketest.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/libc_build/pthread_cond_smoketest.macho ]; then
+    mkdir -p "$MNT/usr/local/bin"
+    cp tools/userland_staging/libc_build/pthread_cond_smoketest.macho \
+        "$MNT/usr/local/bin/pthread_cond_smoketest"
+    chmod 755 "$MNT/usr/local/bin/pthread_cond_smoketest"
+    echo "+ wrote pthread_cond_smoketest to $MNT/usr/local/bin/"
+    echo "  (DAR-280 real mutex + condition-variable handoff check -- the"
+    echo "  exact textbook pattern that used to SIGSEGV inside"
+    echo "  pthread_cond_wait on far 0x26. Run by hand from the root shell"
+    echo "  post-boot; prints a single PASS/FAIL line. tools/userland_staging/"
+    echo "  build_pthread_cond_smoketest.sh)"
+else
+    echo "= pthread_cond_smoketest.macho not built -- run tools/userland_staging/build_pthread_cond_smoketest.sh first if wanted, skipping"
+fi
+
 for v in "" "_broken"; do
     src="tools/userland_staging/libc_build/sigaction_tramp_smoketest${v}.macho"
     if [ -f "$src" ]; then

@@ -202,6 +202,21 @@ MEMBERS="$MEMBERS $QOS_MEMBERS"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     libsystem_pthread_dylib_bootstrap_compat.c -o "$OUT/libsystem_pthread/dylib_bootstrap_compat.o"
 
+# DAR-280: real pthread_cond_wait()/pthread_cond_timedwait() trampolines
+# (see pthread_cond_wait_public.c's own header) - replaces a raw
+# `-Wl,-alias,__pthread_cond_wait,_pthread_cond_wait` that used to sit on
+# the link line below. That alias was a real, root-caused bug, not a
+# narrower version of this: aliasing the public 2-arg symbol directly
+# onto the internal 5-arg implementation meant a normal
+# pthread_cond_wait(cond, mutex) caller left abstime/isRelative/conforming
+# (x2/x3/x4) as whatever garbage those registers already held, and the
+# internal function's `if (abstime)` guard only skips its timeout-conversion
+# block for a genuine NULL - a real SIGSEGV dereferencing a garbage
+# `abstime->tv_nsec`, confirmed via a real QEMU crash disassembled back to
+# that exact instruction. This needs internal.h's own include path.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    pthread_cond_wait_public.c -o "$OUT/libsystem_pthread/cond_wait_public.o"
+
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libsystem_pthread.dylib"
 # Real UNIX2003/raw-syscall-naming aliases real pthread source calls by
@@ -251,7 +266,6 @@ rm -f "$OUT/system/libsystem_pthread.dylib"
     -Wl,-alias,___mmap,_mmap \
     -Wl,-alias,___munmap,_munmap \
     -Wl,-unexported_symbol,_mmap -Wl,-unexported_symbol,_munmap \
-    -Wl,-alias,__pthread_cond_wait,_pthread_cond_wait \
     -Wl,-alias,'_pthread_cond_init$UNIX2003',_pthread_cond_init \
     -Wl,-alias,_pthread_testcancel,'_pthread_testcancel$UNIX2003' \
     -Wl,-unexported_symbol,'_pthread_testcancel$UNIX2003' \
@@ -293,6 +307,7 @@ rm -f "$OUT/system/libsystem_pthread.dylib"
     "$OUT/libsystem_pthread/sched_yield_trap.o" "$OUT/libsystem_pthread/sched_yield.o" \
     "$OUT/libsystem_pthread/atfork_compat.o" \
     "$OUT/libsystem_pthread/dylib_bootstrap_compat.o" \
+    "$OUT/libsystem_pthread/cond_wait_public.o" \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_malloc.dylib"
 
 echo "wrote $OUT/system/libsystem_pthread.dylib"
