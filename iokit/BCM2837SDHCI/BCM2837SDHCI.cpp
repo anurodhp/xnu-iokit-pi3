@@ -6,6 +6,7 @@
 #include <IOKit/storage/IOMedia.h>
 #include <libkern/OSByteOrder.h>
 #include <string.h>
+#include <pexpert/pexpert.h>	// PE_parse_boot_argn (DAR-316 bisect gate)
 
 #define super IOBlockStorageDevice
 
@@ -1034,7 +1035,40 @@ BCM2837SDHCI::cardIdentify(void)
 	// at 1-bit", either because the card doesn't support it or the
 	// negotiation itself failed; either way CMD16 right below restores
 	// kRegBlockSize regardless of what widenBusTo4Bit() left it at.
-	widenBusTo4Bit();
+	//
+	// DAR-316: gated on a boot-arg so real hardware can be bisected
+	// WITHOUT a full card reflash - boot with `sd-4bit=0` to stay at
+	// 1-bit. Default (arg absent) keeps DAR-218's real 4-bit behavior,
+	// so this is a diagnostic escape hatch, not a behavior change.
+	// Exists because real-hardware symptoms appeared the same day
+	// DAR-218 landed (every file creation failing: no /var/log/*.log,
+	// no /var/run/chrony, chronyd fatal on its pid file, syslogd absent)
+	// while a fresh-state QEMU boot reproduced NONE of them - and this
+	// file's own header warns that a host/card bus-width mismatch is
+	// "data corruption rather than a clean failure", which is exactly
+	// what write-only-failure looks like.
+	// Real hardware has NO way to set a boot-arg (they are baked into
+	// u-boot.bin's CONFIG_BOOTCOMMAND, and reaching u-boot's interactive
+	// prompt needs a keyboard this board does not have), so the DEFAULT is
+	// what a real-hardware bisect actually varies: build one kernel with
+	// -DDAR316_SD4BIT_DEFAULT=0, copy it to the boot partition, power
+	// cycle. The boot-arg is still honored, which is what makes the same
+	// kernel testable under QEMU.
+#ifndef DAR316_SD4BIT_DEFAULT
+#define DAR316_SD4BIT_DEFAULT 1
+#endif
+	uint32_t sd4bit = DAR316_SD4BIT_DEFAULT;
+	(void)PE_parse_boot_argn("sd-4bit", &sd4bit, sizeof(sd4bit));
+	// Logged unconditionally and BEFORE acting on it: the whole point of
+	// this gate is that a serial boot log identifies which variant is
+	// running. A message that only prints in one branch cannot do that.
+	IOLog("BCM2837SDHCI: DAR-316 gate: sd-4bit=%u (compiled default %u)\n",
+	    sd4bit, (uint32_t)DAR316_SD4BIT_DEFAULT);
+	if (sd4bit == 0) {
+		IOLog("BCM2837SDHCI: 4-bit widening DISABLED, staying at 1-bit bus\n");
+	} else {
+		widenBusTo4Bit();
+	}
 
 	// CMD16: SET_BLOCKLEN - force 512-byte blocks. On SDHC/SDXC cards this
 	// is actually a no-op per spec (always 512), but harmless/cheap to send.
@@ -1155,7 +1189,36 @@ BCM2837SDHCI::start(IOService *provider)
 		// and self-reverting (see tryRaiseDataPhaseClock()); a false
 		// return just means the bus stays at the identification clock,
 		// which is exactly where every boot before this change ran.
-		tryRaiseDataPhaseClock();
+		//
+		// DAR-316 bisect: real hardware hit a real, reproducible write
+		// failure (DAT_INHIBIT stuck before CMD24, then jnl:
+		// write_journal_header I/O error) on the FIRST write attempted
+		// after boot -- every prior operation up to that point was a
+		// read, including tryRaiseDataPhaseClock()'s own read-compare
+		// self-check at the raised clock, which passed. Confirmed
+		// independent of 4-bit widening (DAR-218) via a real boot with
+		// that code path's default flipped to OFF -- identical failure,
+		// identical location. The clock raise is the one remaining
+		// variable in common with a boot that (per the user) previously
+		// worked, so this gate skips it entirely: default 0 means "skip
+		// the raise, stay at the 400kHz identification clock for the
+		// whole session" (real hardware has no way to set the boot-arg
+		// -- see BCM2837SDHCI.cpp's other DAR-316 comment -- so this
+		// board-testable direction is the compiled default, same as the
+		// other two gates).
+#ifndef DAR316_SD_SKIP_CLOCK_RAISE_DEFAULT
+#define DAR316_SD_SKIP_CLOCK_RAISE_DEFAULT 0
+#endif
+		uint32_t skipRaise = DAR316_SD_SKIP_CLOCK_RAISE_DEFAULT;
+		(void)PE_parse_boot_argn("sd-skip-clock-raise", &skipRaise, sizeof(skipRaise));
+		IOLog("BCM2837SDHCI: DAR-316 gate: sd-skip-clock-raise=%u (compiled default %u)\n",
+		    skipRaise, (uint32_t)DAR316_SD_SKIP_CLOCK_RAISE_DEFAULT);
+		if (skipRaise != 0) {
+			IOLog("BCM2837SDHCI: clock raise SKIPPED, staying at the "
+			    "%u Hz identification clock\n", (uint32_t)kIdentificationClockHz);
+		} else {
+			tryRaiseDataPhaseClock();
+		}
 	}
 
 	registerService();
