@@ -250,6 +250,22 @@ drifted before.
   2026-08-25 for the dyld port); write custom code only as a last resort
   (e.g. `libc_locale` string/locale stubs, the from-scratch SHA-256/384/512
   replacing the corecrypto-kext-dependent implementation).
+- **A comment justifying a shim's deviation from real Apple/kernel behavior
+  must cite the specific real source file and line that supports it, or it
+  doesn't count as justified** (DAR-313, 2026-09-16). "Real Apple's own
+  simple case reduces to exactly this" or "no real semaphore involved" is
+  not a citation, it's an assertion — and an unchecked one can compile
+  clean, link clean, `nm` clean, and just silently do the wrong thing
+  forever. DAR-309 (four investigation sessions, ~100% PID-1 CPU) was
+  exactly this: a false claim about `__semwait_signal`'s `cond_sem=0`
+  semantics, written once in `libmalloc_sleep_shim.c`, then cited as
+  precedent by two more files without anyone opening
+  `bsd/kern/kern_sig.c`/`osfmk/kern/ipc_sync.c` to check it. When writing
+  or reviewing one of these shims: name the real file (this project's own
+  pinned `third_party/` checkout, or `third_party/xnu-7195` for kernel
+  semantics) the claim rests on, and actually read it — don't reuse
+  another shim's citation transitively without independently confirming it
+  still says what it's cited as saying.
 - **Resolve known dependencies before booting QEMU**: before a real QEMU
   boot test on a new/changed userland binary that links libdispatch/
   libsystem_*/etc, run `tools/userland_staging/gap_audit.sh` against it
