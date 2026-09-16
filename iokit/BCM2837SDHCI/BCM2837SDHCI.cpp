@@ -749,7 +749,24 @@ BCM2837SDHCI::sendCommand(uint8_t cmdIndex, uint32_t arg, uint32_t respType, boo
 		return false;
 	}
 	if (hasData && !waitClear32(kRegPresentState, kPresentDatInhibit, 1000000)) {
+		// DAR-316 diagnostic: this fires as a PRECONDITION check, before
+		// CMD%u is ever issued -- DAT_INHIBIT was already stuck from
+		// something prior, for either a read or a write command. Dumped
+		// before SOFTWARE_RESET_DAT below touches anything. Real card,
+		// cable, and power-supply swaps all reproduced this (and the
+		// related read-timeout in readBlocksPIO()) identically, narrowing
+		// this to a driver-code question -- this dump is the next real
+		// evidence, not another code-reading guess.
+		uint32_t presentState = readReg32(kRegPresentState);
+		uint16_t clockControl = readReg16(kRegClockControl);
+		uint32_t intStatusRaw = readReg32(kRegIntStatus);
+		uint32_t intEnable = readReg32(kRegIntEnable);
 		IOLog("BCM2837SDHCI: DAT_INHIBIT stuck before CMD%u - resetting dat line\n", cmdIndex);
+		IOLog("BCM2837SDHCI: DAR-316 diag: PRESENT_STATE=%#x CLOCK_CONTROL=%#x "
+		    "INT_STATUS(raw)=%#x INT_ENABLE=%#x fPendingIntStatus=%#x "
+		    "cmdIndex=%u hasData=%u arg=%#x\n",
+		    presentState, clockControl, intStatusRaw, intEnable,
+		    fPendingIntStatus, cmdIndex, hasData, arg);
 		writeReg8(kRegSoftwareReset, 0x04); // SOFTWARE_RESET_DAT only - no card to send CMD12 to yet
 		pollUntil(^bool(void) { return (readReg8(kRegSoftwareReset) & 0x04) == 0; }, 100000);
 		return false;
@@ -779,6 +796,28 @@ BCM2837SDHCI::sendCommand(uint8_t cmdIndex, uint32_t arg, uint32_t respType, boo
 		// die on the very first waitClear32() above. Reset the command
 		// line so the controller comes back to a clean, usable state.
 		resetCmdLine();
+		// DAR-316: a data command (hasData) can leave DAT_INHIBIT/DAT_LINE_
+		// ACTIVE genuinely stuck in PRESENT_STATE even when the failure
+		// surfaces here, at the command-completion stage, before any
+		// per-block data wait ever runs - resetCmdLine() alone (SOFTWARE_
+		// RESET_CMD, SDHCI spec bit 1) does not touch the separate DAT
+		// circuit (SOFTWARE_RESET_DAT, bit 2). Matches real Linux
+		// sdhci_send_command()'s own cleanup, which resets both the cmd
+		// and (when the command had a data phase) data circuits on any
+		// command failure, not just cmd. Root-caused for real: a stuck
+		// DAT_INHIBIT from exactly this omission, on a LATER unrelated
+		// command, is what turned a single transient CRC/end-bit error
+		// into every subsequent journal write/replay I/O failure this
+		// ticket chased all day - confirmed via a real register dump
+		// (PRESENT_STATE showed DAT_INHIBIT+DAT_LINE_ACTIVE stuck while
+		// DAT[3:0] signal levels read idle and INT_STATUS was clean;
+		// fPendingIntStatus still held a leftover 0x608000 - Error +
+		// Data CRC Error + Data End Bit Error - from whichever earlier
+		// hasData command actually hit this branch and never got its DAT
+		// circuit reset).
+		if (hasData) {
+			resetDatLine();
+		}
 		return false;
 	}
 	if (status & kIntErrorMask) {
@@ -787,7 +826,44 @@ BCM2837SDHCI::sendCommand(uint8_t cmdIndex, uint32_t arg, uint32_t respType, boo
 		// error (SDHCI spec 3.7.1) requires SOFTWARE_RESET_CMD before the
 		// controller can reliably accept another command.
 		resetCmdLine();
+		// DAR-316: see the matching comment on the timeout branch above -
+		// same real gap, same fix, same root-caused evidence.
+		if (hasData) {
+			resetDatLine();
+		}
 		return false;
+	}
+
+	if (respType == kCmdRespShortBusy) {
+		// R1b: CMD_COMPLETE only means the 48-bit response arrived - the SD
+		// Host Controller Simplified Spec (3.7.1.2) is explicit that busy
+		// (the card holding DAT0 low) can continue well after that, and
+		// software must confirm DAT_INHIBIT has cleared before treating the
+		// command as done. Nothing here previously did that: CMD12/CMD7
+		// both returned "success" the instant CMD_COMPLETE arrived, and the
+		// two STOP_TRANSMISSION call sites in readBlocksPIO()/
+		// writeBlocksPIO() also ignored this function's return value
+		// outright - so a card still busy past this point was invisible,
+		// and the very next hasData command's own DAT_INHIBIT precondition
+		// check would find it genuinely (not transiently) stuck with zero
+		// preceding error. Matches DAR-316's real-hardware evidence exactly
+		// (register dump showed DAT_INHIBIT+DAT_LINE_ACTIVE stuck with a
+		// clean INT_STATUS and nothing logged first).
+		if (!waitClear32(kRegPresentState, kPresentDatInhibit, 1000000)) {
+			IOLog("BCM2837SDHCI: CMD%u (R1b) completed but DAT_INHIBIT never "
+			    "cleared - resetting dat line directly\n", cmdIndex);
+			// Deliberately NOT resetDatLine(): that function itself issues a
+			// CMD12 with this same kCmdRespShortBusy respType, and CMD12 is
+			// exactly one of the three real callers of this branch - calling
+			// back into resetDatLine() from here would recurse through
+			// sendCommand() again on a card that just proved it won't clear
+			// busy, with no bound on depth. Same raw SOFTWARE_RESET_DAT the
+			// precondition check above already uses standalone, for the same
+			// reason ("no card to reliably send CMD12 to" - it just failed).
+			writeReg8(kRegSoftwareReset, 0x04);
+			pollUntil(^bool(void) { return (readReg8(kRegSoftwareReset) & 0x04) == 0; }, 100000);
+			return false;
+		}
 	}
 
 	if (resp != NULL) {
@@ -1365,7 +1441,26 @@ BCM2837SDHCI::readBlocksPIO(uint64_t startBlock, uint32_t nblks, void *buf)
 	for (uint32_t b = 0; b < nblks; b++) {
 		uint32_t status;
 		if (!waitForIntStatus32(kIntBufReadRdy | kIntErrorMask, 1000000, &status)) {
-			IOLog("BCM2837SDHCI: read block %u/%u timed out waiting BUFFER_READ_READY - resetting dat line\n", b, nblks);
+			// DAR-316 diagnostic: real register state read BEFORE
+			// resetDatLine() touches anything, since that function issues
+			// CMD12 + SOFTWARE_RESET_DAT immediately and would overwrite
+			// exactly the state we want to see. Real card/write, cable, and
+			// power-supply swaps all reproduced this identical timeout
+			// (multi-block CMD18, first block, real hardware only -- QEMU
+			// and the Mac's own SD reader never hit it), narrowing this to
+			// a driver-code question; this dump is the next real evidence,
+			// not another code-reading guess.
+			uint32_t presentState = readReg32(kRegPresentState);
+			uint16_t clockControl = readReg16(kRegClockControl);
+			uint32_t intStatusRaw = readReg32(kRegIntStatus);
+			uint32_t intEnable = readReg32(kRegIntEnable);
+			IOLog("BCM2837SDHCI: read block %u/%u timed out waiting BUFFER_READ_READY - "
+			    "resetting dat line\n", b, nblks);
+			IOLog("BCM2837SDHCI: DAR-316 diag: PRESENT_STATE=%#x CLOCK_CONTROL=%#x "
+			    "INT_STATUS(raw)=%#x INT_ENABLE=%#x fPendingIntStatus=%#x "
+			    "startBlock=%llu nblks=%u\n",
+			    presentState, clockControl, intStatusRaw, intEnable,
+			    fPendingIntStatus, (unsigned long long)startBlock, nblks);
 			// Backlog P0#2: a stuck DAT_INHIBIT here previously meant every
 			// later command touching the data path would die too.
 			resetDatLine();
@@ -1396,7 +1491,11 @@ BCM2837SDHCI::readBlocksPIO(uint64_t startBlock, uint32_t nblks, void *buf)
 
 	if (nblks > 1) {
 		uint32_t r[4];
-		sendCommand(12, 0, kCmdRespShortBusy, false, r); // STOP_TRANSMISSION
+		if (!sendCommand(12, 0, kCmdRespShortBusy, false, r)) { // STOP_TRANSMISSION
+			IOLog("BCM2837SDHCI: CMD12 (STOP_TRANSMISSION) failed after read - "
+			    "leaving read as failed rather than an unterminated transfer\n");
+			return false;
+		}
 	}
 	return true;
 }
@@ -1447,7 +1546,11 @@ BCM2837SDHCI::writeBlocksPIO(uint64_t startBlock, uint32_t nblks, const void *bu
 
 	if (nblks > 1) {
 		uint32_t r[4];
-		sendCommand(12, 0, kCmdRespShortBusy, false, r); // STOP_TRANSMISSION
+		if (!sendCommand(12, 0, kCmdRespShortBusy, false, r)) { // STOP_TRANSMISSION
+			IOLog("BCM2837SDHCI: CMD12 (STOP_TRANSMISSION) failed after write - "
+			    "leaving write as failed rather than an unterminated transfer\n");
+			return false;
+		}
 	}
 	return true;
 }
