@@ -120,6 +120,28 @@ SMSC9514Ethernet::resetChip(void)
 		return false;
 	}
 
+	// Real read-modify-write, not a blind write: HW_CFG has other live
+	// bits (BIR_, the reserved/default bits this driver doesn't otherwise
+	// touch) that a plain write would clobber to 0. Matches
+	// smsc95xx_init_common()'s real post-reset HW_CFG sequence
+	// (third_party/u-boot/drivers/usb/eth/smsc95xx.c:568-576) - that file's
+	// TURBO_MODE is unconditionally #define'd (line 141), so its
+	// `read_buf |= (HW_CFG_MEF_ | HW_CFG_BCE_)` is real, live code there,
+	// not a dead #ifdef branch.
+	uint32_t hwCfg;
+	if (!fTransport->readRegister(kRegHwCfg, &hwCfg)) {
+		return false;
+	}
+	hwCfg |= (kHwCfgMef | kHwCfgBce);
+	hwCfg &= ~(uint32_t)kHwCfgRxDoff;
+	if (!fTransport->writeRegister(kRegHwCfg, hwCfg)) {
+		return false;
+	}
+
+	// PM_CTRL genuinely gets no follow-up RMW in the real reference driver
+	// either (smsc95xx_init_common() never touches PM_CTRL again after
+	// this write/poll pair) - the PHY_RST pulse really is a one-shot
+	// blind write there, unlike HW_CFG above.
 	if (!fTransport->writeRegister(kRegPmCtl, kPmCtlPhyRst)) {
 		return false;
 	}
@@ -148,13 +170,29 @@ SMSC9514Ethernet::resetChip(void)
 	}
 
 	// Enable MAC receiver/transmitter and the corresponding FIFO paths.
+	// Real read-modify-write over the chip's actual current MAC_CR, not a
+	// blind write of only TXEN/RXEN into a fresh zero - the prior blind
+	// write clobbered every other MAC_CR bit (e.g. whatever duplex/loopback/
+	// reserved default the chip itself powers up with) to 0. Matches
+	// smsc95xx_init_common()'s real shadow-register pattern
+	// (third_party/u-boot/drivers/usb/eth/smsc95xx.c:619 reads MAC_CR into
+	// priv->mac_cr before smsc95xx_set_multicast()/smsc95xx_start_tx_path()/
+	// smsc95xx_start_rx_path() OR bits into it and write the whole value
+	// back - line 443's PRMS_/MCPAS_ clearing has no HPFILT_ equivalent
+	// here since this driver has no hash-table filter, see
+	// setMulticastMode()'s own comment on that).
 	// Promiscuous/multicast filtering correctly starts at defaults (off)
 	// here - setMulticastMode()/setPromiscuousMode() are real read-modify-
 	// write over whatever resetChip() leaves MAC_CR at, and the network
 	// stack (IOEthernetInterface) re-applies whichever filters it needs
 	// once the interface actually comes up, so there is nothing for reset
 	// to pre-apply.
-	uint32_t macCr = kMacCrTxEn | kMacCrRxEn;
+	uint32_t macCr;
+	if (!fTransport->readRegister(kRegMacCr, &macCr)) {
+		return false;
+	}
+	macCr &= ~(uint32_t)(kMacCrPrmS | kMacCrMcPas);
+	macCr |= (kMacCrTxEn | kMacCrRxEn);
 	if (!fTransport->writeRegister(kRegMacCr, macCr)) {
 		return false;
 	}
@@ -719,6 +757,24 @@ SMSC9514Ethernet::outputPacket(mbuf_t m, void * /*param*/)
 	size_t frameLen = 0;
 	for (mbuf_t n = m; n != NULL; n = mbuf_next(n)) {
 		frameLen += mbuf_len(n);
+	}
+
+	// TX_CMD_A/TX_CMD_B's frame-length fields are 11 bits wide
+	// (TX_CMD_A_BUF_SIZE_MASK_ in smsc95xx.h). Real Ethernet MTU (1500 +
+	// 14 header + 4 FCS = 1518, or ~1522 with a VLAN tag) never gets
+	// anywhere near 0x7FF (2047), so this should never trigger in normal
+	// operation - but without this check, a frame that ever did exceed it
+	// would have its length silently truncated by the `& 0x7FF` below
+	// while the full (larger) frame data still got copied into the
+	// transfer: a real, silent data-corruption/protocol-violation bug on
+	// the wire, not just a dropped packet. Fail the same way the other
+	// error paths in this function do (freePacket() + kIOReturnOutputDropped)
+	// rather than let that happen.
+	if (frameLen > 0x7FF) {
+		IOLog("SMSC9514Ethernet: outputPacket: frame length %zu exceeds "
+		      "TX_CMD 11-bit field (0x7FF) - dropping\n", frameLen);
+		freePacket(m);
+		return kIOReturnOutputDropped;
 	}
 
 	size_t bufSize = frameLen + 8;

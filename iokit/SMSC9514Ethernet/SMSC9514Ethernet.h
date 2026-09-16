@@ -171,6 +171,16 @@ private:
 		kHwCfgLRst = 1U << 3, // Soft Lite Reset
 		kHwCfgSRst = 1U << 0, // Soft Reset
 
+		// Real values from third_party/u-boot/drivers/usb/eth/smsc95xx.c's
+		// HW_CFG_MEF_/HW_CFG_BCE_/HW_CFG_RXDOFF_. That file's TURBO_MODE is
+		// unconditionally #define'd (line 141), so
+		// smsc95xx_init_common()'s `read_buf |= (HW_CFG_MEF_ | HW_CFG_BCE_)`
+		// is live code there, not a dead #ifdef branch - see resetChip()'s
+		// post-lite-reset HW_CFG read-modify-write.
+		kHwCfgMef    = 0x00000020, // Multiple Ethernet Frames
+		kHwCfgBce    = 0x00000002, // Burst Cap Enable
+		kHwCfgRxDoff = 0x00000600, // RX Data Offset
+
 		kPmCtlPhyRst = 1U << 4,
 
 		kMacCrMcPas = 1U << 19, // Pass All Multicast
