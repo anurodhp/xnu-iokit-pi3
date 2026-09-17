@@ -410,6 +410,63 @@ else
     echo "= tools/userland_staging/ping.macho not built -- run build_ping.sh first if wanted, skipping"
 fi
 
+# real vipw.tproj (DAR-174, Phase 5 account-provisioning tools):
+# real, unmodified system_cmds/vipw.tproj/vipw.c + pw_util.c, installed
+# at the real Apple path (/usr/sbin/vipw, confirmed against
+# system_cmds.xcodeproj's own INSTALL_PATH, not guessed). Not wired into
+# any boot-path exec chain -- an admin invokes it manually from a
+# logged-in root shell. Real, named runtime gap: pw_util.c's own
+# pw_mkdb() execs a separate pwd_mkdb binary to rebuild /etc/pwd.db +
+# /etc/spwd.db, and this project has not yet ported Berkeley DB
+# (pwd_mkdb.tproj itself is not built -- see build_vipw.sh's own header
+# for the full writeup); until pwd_mkdb.macho exists, vipw degrades
+# gracefully (pw_mkdb() returns 1, vipw.c's own real main() loop offers
+# to re-edit rather than corrupting the password database) instead of
+# actually rebuilding the hashed db. Not yet QEMU-boot-tested end to end
+# (DAR-174's own build pass deliberately stayed off QEMU to avoid
+# clashing with concurrent QEMU use elsewhere) -- real interactive
+# verification is a recommended follow-up.
+if [ -f tools/userland_staging/vipw.macho ]; then
+    mkdir -p "$MNT/usr/sbin"
+    cp tools/userland_staging/vipw.macho "$MNT/usr/sbin/vipw"
+    chmod 755 "$MNT/usr/sbin/vipw"
+    echo "+ wrote $(wc -c < tools/userland_staging/vipw.macho) bytes to $MNT/usr/sbin/vipw"
+    echo "  (real, unmodified Apple vipw -- DAR-174, see"
+    echo "  tools/userland_staging/build_vipw.sh; pw_mkdb() degrades gracefully"
+    echo "  without pwd_mkdb, which this project has not ported yet)"
+else
+    echo "= tools/userland_staging/vipw.macho not built -- run build_vipw.sh first if wanted, skipping"
+fi
+
+# real passwd.tproj (DAR-174, Phase 5 account-provisioning tools):
+# real, unmodified system_cmds/passwd.tproj/passwd.c + file_passwd.c,
+# installed at the real Apple path (/usr/bin/passwd, confirmed against
+# system_cmds.xcodeproj's own INSTALL_PATH). Built with the real
+# iPhoneOS SDK device target, which mechanically excludes passwd.h's
+# own NIS/OpenDirectory/PAM branches (TARGET_OS_IPHONE &&
+# !TARGET_OS_SIMULATOR is false only on a real device build -- see
+# build_passwd.sh's own header for the exact real-source citation), so
+# this binary takes the same real, designed-in INFO_FILE branch as
+# Apple's own device build -- not a project-side workaround. Real,
+# named runtime gap this leaves (already true of Apple's own
+# file_passwd.c, not introduced here): it rewrites /etc/master.passwd
+# in place but does not regenerate /etc/pwd.db / /etc/spwd.db (no
+# pwd_mkdb call at all in this code path); harmless as long as
+# consumers read /etc/master.passwd directly (this project's current
+# Libinfo resolvers do), stale otherwise. Not yet QEMU-boot-tested end
+# to end -- real interactive verification is a recommended follow-up.
+if [ -f tools/userland_staging/passwd.macho ]; then
+    mkdir -p "$MNT/usr/bin"
+    cp tools/userland_staging/passwd.macho "$MNT/usr/bin/passwd"
+    chmod 755 "$MNT/usr/bin/passwd"
+    echo "+ wrote $(wc -c < tools/userland_staging/passwd.macho) bytes to $MNT/usr/bin/passwd"
+    echo "  (real, unmodified Apple passwd -- DAR-174, see"
+    echo "  tools/userland_staging/build_passwd.sh; FILE infosystem only, no"
+    echo "  NIS/OpenDirectory/PAM on a real device target)"
+else
+    echo "= tools/userland_staging/passwd.macho not built -- run build_passwd.sh first if wanted, skipping"
+fi
+
 # cron.macho/crontab.macho intentionally NOT installed here (2026-08-22).
 # Both build real (tools/userland_staging/build_cron.sh still produces
 # working Mach-O binaries -- real DYNAMIC ones as of 2026-09-15, DAR-314;
