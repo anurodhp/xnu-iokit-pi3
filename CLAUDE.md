@@ -153,8 +153,13 @@ tools/build_kexts.sh [outdir]    # compile iokit/*/*.cpp standalone (default: bu
   `docs/apple-oss-catalog.md`), clone it, write `build_<name>.sh` off the
   template above, run it for real, verify with a real smoketest — no
   fabricated stubs beyond a clearly-documented, provable architectural
-  gap (e.g. OpenPAM's `dlopen`-based module loader has no home here since
-  there's no dyld at all; that's a real gap to document, not paper over).
+  gap (e.g. OpenPAM's `dlopen`-based module loader returns no module
+  today — not because there's no dyld (real dyld-940 has existed since
+  Phase 6.5, and `libdyld.dylib` exports real `_dlopen`/`_dlsym`/
+  `_dlerror`/`_dlclose`), but because this project builds no real PAM
+  service-module `.so` files for it to find yet, corrected 2026-09-16
+  after this exact sentence was found stale — DAR-226; see
+  `openpam_dynamic_compat.c`'s own header for the current real gap).
   This kind of independent library port is a good candidate for
   delegating to parallel background subagents (one per library) to keep
   context small — but have the orchestrating session make any *shared*

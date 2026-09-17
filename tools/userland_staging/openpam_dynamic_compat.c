@@ -2,42 +2,30 @@
  * real, unmodified third_party/OpenPAM/openpam/lib/openpam_dynamic.c
  * would otherwise provide: `pam_module_t *openpam_dynamic(const char *)`.
  *
- * WHY THE REAL FILE ISN'T COMPILED HERE (this is the honest module-
- * loading architectural gap build_openpam.sh's header comment and the
- * project docs point at -- read this before assuming it's a missing
- * syscall that just needs a stub):
+ * CORRECTED 2026-09-16 (DAR-226 - stale-assumption sweep): this file's
+ * own justification used to claim "no dyld anywhere in this project" and
+ * "dlopen() itself can never succeed". That has been false since Phase
+ * 6.5 (2026-08-25) - real dyld-940 exists and boots, and
+ * `libc_build/system/libdyld.dylib` today exports real `_dlopen`/
+ * `_dlsym`/`_dlerror`/`_dlclose`/`_dlopen_preflight`/`_dlopen_from`/
+ * `_dlopen_audited` (confirmed via `nm -m`, not assumed). CLAUDE.md
+ * repeated the same stale claim in its build-conventions section until
+ * this same pass corrected it there too - it had become documented
+ * project doctrine, not just a stale comment in one file.
  *
- * openpam_dynamic.c is OpenPAM's actual dynamic PAM-module loader. Its
- * real job is to dlopen() a service module (e.g. pam_unix.so), dlsym()
- * the real pam_sm_* entry points out of it, and hand back a populated
- * pam_module_t. Every one of its real dependencies is a piece of dyld's
- * runtime that structurally does not exist on this target (no dyld
- * anywhere in this project -- see architecture.md and docs/roadmap.md's
- * "Bash's own remaining honest failure stand-ins" writeup, which already
- * documents dlopen/dlclose/dlsym/dlerror as permanent honest-failure
- * stubs for the exact same reason):
- *   - dlopen()/dlsym()/dlerror() (openpam_dynamic.c:68,74,94 dlopen;
- *     :123 dlsym; :125 dlerror) -- no dyld to ask.
- *   - _dyld_shared_cache_contains_path() (:67) -- dyld shared-cache
- *     lookup API, meaningless without a shared cache.
- *   - <dispatch/dispatch.h>'s dispatch_once()/blocks (:181-206, the
- *     PAM_MODULES_DIR search-path split) -- a real GCD facility this
- *     project has never ported (a per-consumer compat shim exists,
- *     copyfile_dispatch_once_compat.h, but pulling it in here just to
- *     reach a dlopen() call that would always fail anyway isn't worth
- *     the extra surface).
- *   - <System/sys/codesign.h>'s csops()/CS_OPS_CLEAR_LV library-
- *     validation dance (:82-98) -- codesigning enforcement bypass logic
- *     that is moot when dlopen() itself can never succeed.
- *
- * Rather than fabricate a fake dlopen() that pretends to succeed, or pull
- * in three unrelated dyld/GCD/codesign subsystems just to reach a
- * function whose real-world behavior on this target is "always returns
- * NULL", this file provides that one real, honest outcome directly:
- * dynamic module loading is impossible here, full stop, so no module is
- * ever found. This is NOT a shim pretending dlopen works -- it is the
- * textually-accurate terminal state of what openpam_dynamic.c's own real
- * logic reduces to once dlopen() is (honestly) always NULL.
+ * WHY THIS STILL RETURNS NULL TODAY, for a genuinely different and still
+ * real reason: openpam_dynamic()'s job is to dlopen() a service module
+ * (e.g. pam_unix.so) by path. This project builds no PAM service module
+ * .so files at all (confirmed: no pam_unix/pam_deny/pam_permit build
+ * script anywhere under tools/userland_staging/, and build_openpam.sh's
+ * own header already documents excluding OPENPAM_STATIC_MODULES too).
+ * So even with a real, working dlopen() now available, every real path
+ * this function could try genuinely does not exist on disk - dlopen()
+ * would correctly return NULL with "file not found", which is exactly
+ * what this stand-in already returns directly, just without an actual
+ * dlopen() call (and its transitive dispatch_once()/codesign-bypass
+ * dependencies, real Apple source for openpam_dynamic.c:181-206/:82-98,
+ * which are only worth pulling in once there is a real .so to find).
  *
  * openpam_load.c (real, unmodified, DOES compile in this build) calls
  * this function unconditionally at its line 73
@@ -48,20 +36,22 @@
  * OPENPAM_STATIC_MODULES is deliberately left undefined, matching
  * Apple's own real Xcode build).
  *
- * REAL FUTURE FIX, not attempted here (out of scope for this pass):
- * OPENPAM_STATIC_MODULES support (openpam_static.c's real SET_DECLARE/
- * SET_FOREACH linker-set mechanism) would let real PAM modules
- * (pam_unix.a/pam_deny.a-equivalent, statically linked into the same
- * binary as libpam itself and registered into the _openpam_static_modules
- * linker set at link time) be found WITHOUT dlopen -- the module lookup
- * would become a real linear search over statically-registered entries
- * instead of a dlopen() call. That is a real, buildable path forward
- * (unlike dlopen, which needs dyld this project doesn't have), but it
- * needs at least one real static module (a `pam_deny`/`pam_permit`-
- * equivalent compiled the same way) to prove end-to-end, which hasn't
- * been attempted yet. Whoever picks this up next: don't reach for a fake
- * dlopen shim -- reach for OPENPAM_STATIC_MODULES + a real static module
- * archive instead.
+ * REAL FUTURE FIX, not attempted here (out of scope for this pass) - two
+ * real options now that dyld is real, not one:
+ *   1. Compile a real PAM service module (pam_deny.c/pam_permit.c are
+ *      the smallest real OpenPAM-shipped modules) into a real .so via
+ *      build_libdyld_dylib.sh's own dylib recipe, install it where
+ *      openpam_dynamic()'s real PAM_MODULES_DIR search expects it, and
+ *      let the now-real dlopen()/dlsym() actually load it - the
+ *      previously-blocking reason (no dyld) is gone; only the module
+ *      itself is missing now.
+ *   2. OPENPAM_STATIC_MODULES support (openpam_static.c's real
+ *      SET_DECLARE/SET_FOREACH linker-set mechanism), letting real PAM
+ *      modules be statically linked into the same binary as libpam and
+ *      found via a linear search instead of dlopen() at all.
+ * Whoever picks this up next: option 1 is now the more direct path,
+ * since it needs no OpenPAM-internal linker-set work, just one more real
+ * dylib build script.
  */
 
 #include <security/pam_appl.h>
