@@ -85,14 +85,19 @@ uint32_t BCM2837SDHCI::readReg32(uint32_t off) { return *((volatile uint32_t *)(
 // kept for the whole session rather than recalculated per clock change -
 // same choice made here. This driver previously had NO spacing at all:
 // back-to-back writes (writeReg32(kRegArgument,...) immediately followed
-// by writeReg16(kRegCommand,...) in sendCommand(), TransferMode then
-// BlockCount in read/writeBlocksPIO(), ...) execute nanoseconds apart on
-// real ARM64 silicon, far under this threshold, and QEMU's MMIO-trap
-// overhead incidentally provides enough real spacing to hide the bug
-// entirely - a real, silent, real-hardware-only write can be dropped by
-// the controller with no error status ever latched, which matches DAR-
+// by the TRANSFER_MODE/COMMAND write in sendCommand()) execute nanoseconds
+// apart on real ARM64 silicon, far under this threshold, and QEMU's
+// MMIO-trap overhead incidentally provides enough real spacing to hide the
+// bug entirely - a real, silent, real-hardware-only write can be dropped
+// by the controller with no error status ever latched, which matches DAR-
 // 316's evidence (PRESENT_STATE genuinely wedged, INT_STATUS clean)
-// better than any theory tested so far this ticket.
+// better than the bus-width/clock-rate theories tested earlier this
+// ticket. NOT sufficient by itself, though (confirmed by a real-hw boot
+// after this fix landed, still failing identically) - see sendCommand()'s
+// own citation for the real, targeted fix for TRANSFER_MODE/COMMAND and
+// BLOCK_SIZE/BLOCK_COUNT specifically (combining each pair into one
+// 32-bit write, matching Linux's sdhci-iproc.c bcm2835 ops and u-boot's
+// own shadow-write trick, rather than relying on spacing alone for them).
 enum { kRegWriteSpacingUs = 6 }; // (2 * 1000000 / 400000) + 1, matching u-boot exactly
 
 void
@@ -794,7 +799,7 @@ BCM2837SDHCI::tryRaiseDataPhaseClock(void)
 }
 
 bool
-BCM2837SDHCI::sendCommand(uint8_t cmdIndex, uint32_t arg, uint32_t respType, bool hasData, uint32_t resp[4])
+BCM2837SDHCI::sendCommand(uint8_t cmdIndex, uint32_t arg, uint32_t respType, bool hasData, uint32_t resp[4], uint16_t transferMode)
 {
 	if (!waitClear32(kRegPresentState, kPresentCmdInhibit, 1000000)) {
 		IOLog("BCM2837SDHCI: CMD_INHIBIT stuck before CMD%u - resetting cmd line\n", cmdIndex);
@@ -859,7 +864,33 @@ BCM2837SDHCI::sendCommand(uint8_t cmdIndex, uint32_t arg, uint32_t respType, boo
 		flags |= kCmdDataPresent;
 	}
 
-	writeReg16(kRegCommand, (uint16_t)((cmdIndex << 8) | flags));
+	uint16_t cmdWord = (uint16_t)((cmdIndex << 8) | flags);
+	if (hasData) {
+		// DAR-316: real, cited erratum (Linux mainline drivers/mmc/host/
+		// sdhci-iproc.c, sdhci_bcm2835_pltfm_data/sdhci_iproc_32only_ops;
+		// independently corroborated by u-boot's bcm2835_sdhci.c writew(),
+		// which shadows TRANSFER_MODE and only ever writes it combined with
+		// COMMAND) - quoting the Linux comment verbatim: "the Arasan has a
+		// bugette whereby it may lose the content of successive writes to
+		// registers that are within two SD-card clock cycles of each
+		// other... In reality, this only happens when SDHCI_BLOCK_SIZE and
+		// SDHCI_BLOCK_COUNT are written followed by SDHCI_TRANSFER_MODE and
+		// SDHCI_COMMAND." TRANSFER_MODE (0x0C) and COMMAND (0x0E) are the
+		// same 32-bit hardware word on this SoC; two independent 16-bit
+		// writeReg16() calls to it (the previous shape of this code, with
+		// the caller writing TRANSFER_MODE and this function writing
+		// COMMAND moments later) can silently drop one half on real
+		// silicon, with QEMU's SD model - which does not implement this
+		// erratum - never able to reproduce it. This is a DIFFERENT, more
+		// targeted mitigation than the write-spacing fix already applied
+		// (see writeSpacing()): that fix addressed general back-to-back
+		// register writes; this addresses the two real reference drivers'
+		// own explicitly-named worst case, which spacing alone did not
+		// resolve on real hardware (DAR-316, 2026-09-16 real-hw boot log).
+		writeReg32(kRegTransferMode, ((uint32_t)cmdWord << 16) | transferMode);
+	} else {
+		writeReg16(kRegCommand, cmdWord);
+	}
 
 	uint32_t status;
 	if (!waitForIntStatus32(kIntCmdComplete | kIntErrorMask, 1000000, &status)) {
@@ -997,12 +1028,14 @@ BCM2837SDHCI::widenBusTo4Bit(void)
 		return false;
 	}
 
-	writeReg16(kRegBlockSize, 8);
-	writeReg16(kRegBlockCount, 1);
-	writeReg16(kRegTransferMode, kCmdTransBlkCntEn | kCmdTransRead);
+	// DAR-316: BLOCK_SIZE (0x04) and BLOCK_COUNT (0x06) are also one 32-bit
+	// hardware word on this SoC and subject to the same real erratum as
+	// TRANSFER_MODE/COMMAND (see sendCommand()'s own citation) - combined
+	// into one write rather than two independent writeReg16() calls.
+	writeReg32(kRegBlockSize, (1U << 16) | 8U);
 
 	uint32_t r51[4];
-	if (!sendCommand(51, 0, kCmdRespShort, true, r51)) {
+	if (!sendCommand(51, 0, kCmdRespShort, true, r51, kCmdTransBlkCntEn | kCmdTransRead)) {
 		IOLog("BCM2837SDHCI: ACMD51 (SEND_SCR) command failed\n");
 		return false;
 	}
@@ -1488,12 +1521,13 @@ BCM2837SDHCI::readBlocksPIO(uint64_t startBlock, uint32_t nblks, void *buf)
 {
 	uint32_t *dst = (uint32_t *)buf;
 	uint32_t arg = fCardIsSDHC ? (uint32_t)startBlock : (uint32_t)(startBlock * fBlockSize);
-	uint32_t transferMode = kCmdTransBlkCntEn | kCmdTransRead | (nblks > 1 ? kCmdTransMulti : 0);
-	writeReg16(kRegTransferMode, transferMode);
-	writeReg16(kRegBlockCount, (uint16_t)nblks);
+	uint16_t transferMode = kCmdTransBlkCntEn | kCmdTransRead | (nblks > 1 ? kCmdTransMulti : 0);
+	// DAR-316: BLOCK_SIZE/BLOCK_COUNT combined into one write - see the
+	// matching comment in widenBusTo4Bit() and sendCommand()'s own citation.
+	writeReg32(kRegBlockSize, ((uint32_t)nblks << 16) | fBlockSize);
 
 	uint8_t cmdIndex = (nblks > 1) ? 18 : 17; // READ_MULTIPLE_BLOCK / READ_SINGLE_BLOCK
-	if (!sendCommand(cmdIndex, arg, kCmdRespShort, true, NULL)) {
+	if (!sendCommand(cmdIndex, arg, kCmdRespShort, true, NULL, transferMode)) {
 		return false;
 	}
 
@@ -1564,12 +1598,13 @@ BCM2837SDHCI::writeBlocksPIO(uint64_t startBlock, uint32_t nblks, const void *bu
 {
 	const uint32_t *src = (const uint32_t *)buf;
 	uint32_t arg = fCardIsSDHC ? (uint32_t)startBlock : (uint32_t)(startBlock * fBlockSize);
-	uint32_t transferMode = kCmdTransBlkCntEn | (nblks > 1 ? kCmdTransMulti : 0); // no READ bit = write
-	writeReg16(kRegTransferMode, transferMode);
-	writeReg16(kRegBlockCount, (uint16_t)nblks);
+	uint16_t transferMode = kCmdTransBlkCntEn | (nblks > 1 ? kCmdTransMulti : 0); // no READ bit = write
+	// DAR-316: BLOCK_SIZE/BLOCK_COUNT combined into one write - see the
+	// matching comment in widenBusTo4Bit() and sendCommand()'s own citation.
+	writeReg32(kRegBlockSize, ((uint32_t)nblks << 16) | fBlockSize);
 
 	uint8_t cmdIndex = (nblks > 1) ? 25 : 24; // WRITE_MULTIPLE_BLOCK / WRITE_BLOCK
-	if (!sendCommand(cmdIndex, arg, kCmdRespShort, true, NULL)) {
+	if (!sendCommand(cmdIndex, arg, kCmdRespShort, true, NULL, transferMode)) {
 		return false;
 	}
 
@@ -1624,9 +1659,10 @@ BCM2837SDHCI::doAsyncReadWrite(IOMemoryDescriptor *buffer, UInt64 block, UInt64 
 	}
 
 	// Backlog item 16: neither this function nor readBlocksPIO()/
-	// writeBlocksPIO() validated nblks before this fix.
-	// writeReg16(kRegBlockCount, (uint16_t)nblks) truncates any request
-	// >=65536 blocks (32MB) silently, and nothing checked
+	// writeBlocksPIO() validated nblks before this fix. BLOCK_COUNT is a
+	// 16-bit hardware field (packed into kRegBlockSize's combined 32-bit
+	// write as of DAR-316 - see sendCommand()'s citation), so any request
+	// >=65536 blocks (32MB) truncates silently, and nothing checked
 	// block+nblks <= fBlockCount either - a request past the end of the
 	// card would have been issued to hardware as-is. Reject both here,
 	// once, before doing anything else (including the IOMalloc bounce

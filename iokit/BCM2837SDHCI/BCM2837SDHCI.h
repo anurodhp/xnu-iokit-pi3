@@ -358,8 +358,16 @@ private:
 	// Issues one SD command, waits for completion, and reads the response
 	// into resp[0..3] (only resp[0] valid unless respType==kCmdRespLong).
 	// Returns false on any error/timeout status bit or CMD_INHIBIT stuck.
+	//
+	// `transferMode` (only meaningful when hasData is true) is combined with
+	// the COMMAND value into a single 32-bit write to kRegTransferMode -
+	// see the real, cited erratum on that write in the .cpp (DAR-316):
+	// TRANSFER_MODE (0x0C) and COMMAND (0x0E) are the same 32-bit hardware
+	// word on this SoC, and two independent 16-bit writes to it can drop
+	// one of them. Callers with hasData==false never touch TRANSFER_MODE
+	// and pass 0 (unused).
 	bool     sendCommand(uint8_t cmdIndex, uint32_t arg, uint32_t respType,
-	                      bool hasData, uint32_t resp[4]);
+	                      bool hasData, uint32_t resp[4], uint16_t transferMode = 0);
 
 	// Pin-muxes GPIO48-53 to ALT3 ("emmc_gpio48" in Linux DT), routing
 	// this controller to the physical SD slot instead of leaving it on
