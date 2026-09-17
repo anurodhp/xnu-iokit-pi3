@@ -6,6 +6,14 @@
 # setup_third_party.sh's own header comment). Same Csu-static-link
 # pattern as every other tier (no dyld, see architecture.md).
 #
+# SUPERSEDED 2026-09-16 (DAR-182): ifconfig_resolver_compat.c (deleted)
+# used to stand in for getaddrinfo/getnameinfo/freeaddrinfo/gai_strerror/
+# gethostbyname/getnetbyname with an honest "no resolver subsystem"
+# degradation. DAR-306 (2026-09-14) built exactly that subsystem for
+# real (libinfo.dylib's si_module/dns_module dispatcher) - ifconfig.macho
+# now links libinfo.dylib + libresolv.dylib and gets all of those for
+# real instead.
+#
 # Two real, previously-latent bugs only this tool's real usage patterns
 # exercised for the first time, both fixed at their real root cause
 # (not worked around here):
@@ -158,7 +166,6 @@ for spec in \
     "$LIBC/net/inet_pton.c:" \
     "ifconfig_main_wrapper.c:" \
     "ifconfig_extra_syscalls.c:" \
-    "ifconfig_resolver_compat.c:" \
     "ifconfig_syslog_compat.c:" \
     "ifconfig_strtod_compat.c:" \
     "simple_cmds_mmap_compat.c:" \
@@ -240,7 +247,7 @@ for d in system/libsystem_c.dylib system/libsystem_pthread.dylib \
         exit 1
     fi
 done
-LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libsystem_platform.dylib $OUT/system/libdyld.dylib $OUT/system/libSystem.B.dylib"
+LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libsystem_platform.dylib $OUT/system/libdyld.dylib $OUT/system/libSystem.B.dylib $OUT/system/libinfo.dylib $OUT/system/libresolv.dylib"
 
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
     -DCRT_DYNAMIC_LINKING \

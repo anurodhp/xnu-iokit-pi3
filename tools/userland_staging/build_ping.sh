@@ -58,6 +58,18 @@
 #     (real Apple source, __platform_sigaction()) compiled in too, same
 #     as build_cron.sh/build_bash.sh/build_ncurses.sh already do.
 #
+# SUPERSEDED 2026-09-16 (DAR-182): the "no resolver subsystem" framing in
+# the paragraph below (and ping_resolver_compat.c it used to reference)
+# is stale. DAR-306 (2026-09-14) built exactly that si_module/dns_module
+# dispatcher into real libinfo.dylib, and real libresolv.dylib exports
+# the h_errno/herror/hstrerror this file's own comment describes as
+# "compiled directly into ping.macho instead" -- ping.macho no longer
+# compiles third_party/Libinfo/dns.subproj/herror.c or
+# ping_resolver_compat.c (deleted) at all; it links libinfo.dylib +
+# libresolv.dylib for real gethostbyname2()/gethostbyaddr()/h_errno
+# instead. Left the historical paragraph below for the record of what
+# the gap used to be and why.
+#
 # Three real, honestly-scoped gaps (not fabricated stubs -- each one
 # documented in its own small file, same class of finding as
 # ifconfig_resolver_compat.c's gethostbyname()/getaddrinfo() stand-ins):
@@ -233,7 +245,6 @@ for spec in \
     "$LIBC/stdlib/FreeBSD/strtoul.c:" \
     "$LIBC/gen/FreeBSD/signal.c:" \
     "$LIBC/sys/gettimeofday.c:" \
-    "$LIBINFO/dns.subproj/herror.c:" \
     "$LIBPLATFORM/src/setjmp/generic/sigaction.c:" \
     "$ECNPROBE/gmt2local.c:" \
     "ps_extra_syscalls.c:" \
@@ -245,7 +256,6 @@ for spec in \
     "libc_locale_globals_compat.c:" \
     "$LIBC/locale/FreeBSD/table.c:" \
     "$LIBC/locale/FreeBSD/none.c:" \
-    "ping_resolver_compat.c:" \
     "ping_alarm_compat.c:" \
     "ping_main_wrapper.c:" \
     "hexdump_bcmp_compat.c:" \
@@ -324,7 +334,7 @@ if [ ! -x "$NEWLD_BINDIR/ld" ]; then
     echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE)" >&2
     exit 1
 fi
-LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libsystem_platform.dylib $OUT/system/libdyld.dylib $OUT/system/libSystem.B.dylib"
+LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libsystem_platform.dylib $OUT/system/libdyld.dylib $OUT/system/libSystem.B.dylib $OUT/system/libinfo.dylib $OUT/system/libresolv.dylib"
 
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
     -DCRT_DYNAMIC_LINKING \

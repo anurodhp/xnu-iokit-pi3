@@ -727,6 +727,22 @@ else
     echo "= res_init_dnsinfo_smoketest.macho not built -- run tools/userland_staging/build_res_init_dnsinfo_smoketest.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/libc_build/dns_getaddrinfo_smoketest.macho ]; then
+    mkdir -p "$MNT/usr/local/bin"
+    cp tools/userland_staging/libc_build/dns_getaddrinfo_smoketest.macho \
+        "$MNT/usr/local/bin/dns_getaddrinfo_smoketest"
+    chmod 755 "$MNT/usr/local/bin/dns_getaddrinfo_smoketest"
+    echo "+ wrote dns_getaddrinfo_smoketest to $MNT/usr/local/bin/"
+    echo "  (DAR-182: real end-to-end DNS query over a real socket via real"
+    echo "  getaddrinfo()/gethostbyname2() from libinfo.dylib, resolving through"
+    echo "  the static /etc/resolv.conf this script writes (nameserver 10.0.2.3,"
+    echo "  QEMU's usermode DNS proxy) since no real DHCP lease exists. Run by"
+    echo "  hand from the root shell post-boot. Built by"
+    echo "  tools/userland_staging/build_dns_getaddrinfo_smoketest.sh)"
+else
+    echo "= dns_getaddrinfo_smoketest.macho not built -- run tools/userland_staging/build_dns_getaddrinfo_smoketest.sh first if wanted, skipping"
+fi
+
 if [ -f tools/userland_staging/libedit_smoketest.macho ]; then
     mkdir -p "$MNT/usr/local/bin"
     cp tools/userland_staging/libedit_smoketest.macho \
@@ -1381,6 +1397,24 @@ if [ ! -f "$MNT/etc/hostname" ]; then
     echo "  default of the same name if this file is ever missing)"
 else
     echo "+ $MNT/etc/hostname already exists -- leaving as-is"
+fi
+
+# DAR-182: a real, static /etc/resolv.conf for QEMU testing. Real
+# __res_vinit() (third_party/libresolv/res_init.c:1163) always tries the
+# real dns_configuration_copy() XPC path to configd FIRST, and only falls
+# back to parsing this file when that returns NULL (no reachable configd
+# dnsinfo service) -- exactly this image's real state today with no DHCP
+# lease (DAR-170, blocked on DAR-316). 10.0.2.3 is QEMU usermode
+# networking's own built-in DNS proxy, reachable with zero extra QEMU
+# flags (see runvm.sh's `-netdev user` line) -- not this project's guess,
+# real SLIRP behavior. Never overwrites a real resolv.conf a later real
+# DHCP/configd flow may have written.
+if [ ! -f "$MNT/etc/resolv.conf" ]; then
+    echo "nameserver 10.0.2.3" > "$MNT/etc/resolv.conf"
+    chmod 644 "$MNT/etc/resolv.conf"
+    echo "+ wrote $MNT/etc/resolv.conf (nameserver 10.0.2.3, QEMU usermode DNS proxy)"
+else
+    echo "+ $MNT/etc/resolv.conf already exists -- leaving as-is"
 fi
 
 # /Library/Preferences/SystemConfiguration/preferences.plist (DAR-304,
