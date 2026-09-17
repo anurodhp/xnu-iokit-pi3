@@ -548,6 +548,31 @@ EOF
     -include libc_build/compat_include/os_assumes_malloc_shim.h \
     -I libc_build/compat_include -I $LIBC/include -I $LIBC/darwin \
     -D_FORTIFY_SOURCE=0 "$LIBC/secure/chk_fail.c" -o "$OUT/chk_fail.o"
+
+# DAR-264 follow-on: real gap, same one build_libsystem_malloc.sh
+# already independently found and fixed 2026-09-14 (one day before this
+# ticket) - chk_fail.o (built just above) calls real os_crash(), which
+# the compat_include/os/assumes.h shim above only ever forward-declares,
+# never defines. build_libmalloc.a's own smoketest link tolerates
+# undefined symbols as a warning (see its own otool check below), so
+# this stayed silent until it was linked into something (this ticket's
+# libmalloc_smoketest.macho, and separately libsystem_malloc.dylib) that
+# needs every symbol resolved. Reusing the exact same real, minimal,
+# symbol-free implementation build_libsystem_malloc.sh already wrote and
+# proved (real semantics: unconditional process-terminating call for a
+# detected fatal corruption, via __builtin_trap() - a compiler intrinsic,
+# not a call, so it introduces no new link dependency) rather than a
+# second, differently-shaped fix for the same gap.
+cat > "$OUT/os_crash_impl.c" <<'EOF'
+#include <stdarg.h>
+__attribute__((noreturn))
+void os_crash(const char *format, ...) {
+	(void)format;
+	__builtin_trap();
+}
+EOF
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    "$OUT/os_crash_impl.c" -o "$OUT/os_crash_impl.o"
 mkdir -p "$OUT/freebsd_string"
 for f in memcpy memset; do
     dst="$OUT/freebsd_string/${f}.c"
@@ -672,7 +697,21 @@ else
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     libmalloc_smoketest.c -o "$OUT/libmalloc_smoketest.o"
 # $UNIX2003-suffixed link aliases -- see this script's header comment.
+# DAR-264: -Wl,-U,_pthread_main_thread_bootstrap is the same real,
+# already-established precedent build_libsyscall_smoketest.sh/
+# build_libplatform.sh/build_crt0_smoketest.sh/build_launchd_mig.sh/
+# build_iokituser.sh all already use for this exact symbol in this exact
+# -static -e start context. crt.c declares it __attribute__((weak_import)),
+# a real dynamic-linking concept with nothing to mean in a -nostdlib
+# -static link (no dylib to weakly resolve against) - ld64 reports a hard
+# undefined symbol instead of resolving to NULL unless told this one is
+# allowed to stay unresolved. crt.c's own `if (bootstrap)` null guard
+# (a volatile function pointer, checked before ever being called) is
+# what makes actually leaving it unresolved correct here, not merely
+# tolerated: this smoketest is single-threaded and never needs real
+# per-thread TSD/pthread setup.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
+    -Wl,-U,_pthread_main_thread_bootstrap \
     -o libmalloc_smoketest.macho \
     "$CSU/start.s" "$CSU/crt.c" \
     "$OUT/libmalloc_smoketest.o" "$OUT/libmalloc_dispatch.o" \
@@ -684,7 +723,7 @@ else
     "$OUT/pthread_tsd_shim.o" \
     "$OUT/sys_getpid.o" "$OUT/sys_mprotect.o" "$OUT/sys_kill.o" "$OUT/sys_write.o" \
     "$OUT/sys_madvise.o" "$OUT/sys_kdebug_trace.o" "$OUT/sys_exit.o" "$OUT/sys_semwait_signal.o" \
-    "$OUT/memcpy_chk.o" "$OUT/memset_chk.o" "$OUT/chk_fail.o" \
+    "$OUT/memcpy_chk.o" "$OUT/memset_chk.o" "$OUT/chk_fail.o" "$OUT/os_crash_impl.o" \
     "$OUT/freebsd_string/memcpy.o" "$OUT/freebsd_string/memset.o" \
     "$OUT/libplatform.a" "$OUT/cerror_stub.o" \
     "$OUT/libc_locale_for_stdio.a" "$OUT/libc_stdio.a" \

@@ -277,7 +277,14 @@ if [ -f "$OUT/libmalloc.a" ] && [ -f "$OUT/libc_stdio.a" ]; then
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
         -Wno-nullability-completeness -include libc_build_prototypes.h \
         libc_locale_smoketest.c -o "$OUT/libc_locale_smoketest.o"
+    # DAR-264: same real, already-established -Wl,-U precedent as
+    # build_libsyscall_smoketest.sh/build_libplatform.sh/
+    # build_libmalloc.sh's own smoketest (see that script's own comment
+    # for the full reasoning) - crt.c's weak_import declaration means
+    # nothing in a -nostdlib -static link, and this smoketest is
+    # single-threaded and never needs real per-thread TSD/pthread setup.
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
+        -Wl,-U,_pthread_main_thread_bootstrap \
         -o libc_locale_smoketest.macho \
         ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
         "$OUT/libc_locale_smoketest.o" "$OUT/libc_locale.a" "$OUT/libmalloc.a" "$OUT/libc_stdio.a" "$OUT/libplatform.a" \
