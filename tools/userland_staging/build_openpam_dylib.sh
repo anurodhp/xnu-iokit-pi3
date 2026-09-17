@@ -65,10 +65,20 @@
 #     genuine next abort site on a real QEMU boot once alarm/setegid/
 #     seteuid/getgroups (earlier in this dylib's own fixup chain) were
 #     closed -- not spun up speculatively.
-#   - connect$UNIX2003/send$UNIX2003/writev$UNIX2003: same real,
-#     project-wide BSD socket syscall gap build_libresolv_dylib.sh's own
-#     header already documents (docs/backlog.md item d7's CFSocket.c
-#     prerequisite) -- not resolv/openpam-specific.
+#   - connect$UNIX2003/send$UNIX2003/writev$UNIX2003: were a real,
+#     project-wide BSD socket syscall gap when this `-Wl,-U` deferral was
+#     first written -- NO LONGER a flat-namespace gap as of 2026-08-31
+#     (commit 6ba2b5e, "BSD socket family consolidated into
+#     libsystem_kernel.dylib"): real `$UNIX2003`-suffixed wrappers now
+#     live in libsystem_kernel.dylib, already a linked sibling below, and
+#     `xcrun dyld_info -fixups` on this dylib's own built output confirms
+#     `_connect$UNIX2003` binds there for real (not flat-namespace).
+#     `-Wl,-U` is kept here only because it is harmless once a real
+#     provider exists (ld64 still prefers the real bind over the
+#     deferral) -- not because the gap is still open. See the `_socket`
+#     comment further down for why this dylib nonetheless keeps its OWN
+#     separate, private `connect`/`socket`/`send`/`writev` stubs rather
+#     than using libsystem_kernel.dylib's now-real implementations.
 #
 # `_dlclose` DUPLICATE-SYMBOL FIX (2026-08-31, static-linking cleanup,
 # DAR-8): this dylib now also links libdyld.dylib as a sibling (added to
@@ -117,6 +127,21 @@
 # transitively via libSystem.B.dylib), two-level-namespace chained fixups
 # mean neither side's bind can ever be shadowed by the other. Left as a
 # permanent, documented exception -- do not attempt to merge these two.
+#
+# Re-verified 2026-09-17 (DAR-7 continuation) with a stronger reason to
+# leave this exported, found by checking real built artifacts rather than
+# re-reasoning from source alone: `xcrun dyld_info -fixups` on the
+# already-built `libSystemConfiguration.dylib` shows its own `_syslog`
+# reference binds to `libopenpam/_syslog`, a REAL live ordinal-specific
+# dependency (`build_libsystemconfiguration_client.sh` lists
+# libopenpam.dylib ahead of libcopyfile.dylib on its own link line).
+# Hiding `_syslog` from this dylib's export trie the way `_connect`/
+# `_socket` were hidden above would break that bind outright (the exact
+# DAR-217 hazard: clean link, clean nm, dyld abort at load). `_syslog`
+# stays exported -- do not add it to the `-unexported_symbol` list below
+# without first fixing `build_libsystemconfiguration_client.sh`'s own
+# link order (out of this ticket's scope, same precedent as `_connect`'s
+# formerly-blocking `launchctl.macho` dependency above).
 set -e
 cd "$(dirname "$0")"
 
@@ -262,48 +287,72 @@ rm -f "$EXTRACT"/openpam_syscalls_compat.o
 # Real, measured result: 2 of the 5 duplicates this ticket's re-audit found
 # (`_send`/`_writev` vs libsystem_kernel.dylib) are now gone.
 #
-# `_connect` and `_socket` (cat_socket_stub.o) BOTH stay exported --
-# `_socket` is genuinely load-bearing (see below); `_connect` turned out to
-# be a REAL LIVE DEPENDENCY, found the expensive way (a real QEMU boot,
-# not by inspection): `launchctl.macho` (build_launchctl.sh, a script this
-# ticket is explicitly told not to touch) already links libopenpam.dylib
-# ahead of libsystem_kernel.dylib on ITS OWN link line, so ld64 baked an
-# ordinal-specific two-level bind of `_connect` -> libopenpam.dylib
-# straight into launchctl.macho at ITS link time -- an accidental
-# dependency, but a real one. First narrowing pass here hid `_connect` too
-# (only `_socket` looked load-bearing from inspection); a real QEMU boot
-# +login test caught it immediately: `dyld[12]: Symbol not found: _connect
-# / Referenced from: /usr/bin/launchctl / Expected in: /usr/lib/
-# libopenpam.dylib`, hard-aborting the very first `launchctl list` in the
-# shell. `tools/userland_staging/bind_target_audit.sh` confirms it as the
-# only other real UNRESOLVABLE bind this pass created (plus
-# `_pututxline`, see date_compat.o below) -- nothing else in the project
-# needs the now-hidden `_send`/`_writev`/`_shutdown`/`_netsettime`/
-# `_settimeofday`. Same precedent as DAR-229's `_initgroups` call: when a
-# real, already-shipped consumer's OWN link depends on a duplicate symbol
-# staying put, keep the copy that's actually relied upon rather than force
-# a break in a binary this ticket isn't scoped to relink. `_connect`
-# remains a real, counted duplicate vs. libsystem_kernel.dylib -- not
-# fixed by this pass, left for whichever session next touches
-# build_launchctl.sh's own link order (reorder libsystem_kernel.dylib
-# ahead of libopenpam.dylib there, the standard bind_target_audit.sh fix)
-# to actually close.
+# `_connect` and `_socket` (cat_socket_stub.o) HIDDEN FROM THE EXPORT
+# TRIE (2026-09-17, DAR-7 continuation), not removed. Both symbols stay
+# real, local definitions inside this dylib -- oldsyslog.o's own internal
+# `socket()`/`connect$UNIX2003()` call sequence still resolves to them at
+# THIS dylib's own static-link time, same as before, because same-image
+# references never go through the export trie/dyld bind mechanism at all.
+# `-Wl,-unexported_symbol` only stops OTHER images from being able to bind
+# to this dylib's private copies -- it does not change this dylib's own
+# internal behavior.
 #
-# `_socket` (cat_socket_stub.o) is a REAL, deliberate duplicate --
-# genuinely load-bearing, NOT safe to consolidate: oldsyslog.o calls plain
-# `socket()` then, only on success, `connect$UNIX2003()` -- and
-# `connect$UNIX2003` has no real provider anywhere in this project yet
-# (this file's own header, docs/backlog.md item d7). Swapping in
-# libsystem_kernel.dylib's real `_socket` would make that first call
-# succeed for real (this project's launchd DOES bind a real
-# `/var/run/syslog` AF_UNIX SOCK_DGRAM socket via com.apple.syslogd.plist's
-# own Sockets key / socketgroup_setup_one(), confirmed via
-# inject_into_sd_image.sh's own comment -- so this isn't even
-# hypothetical), walking straight into the genuinely-unresolved
-# `connect$UNIX2003` flat-namespace bind on first use -- a real dyld abort
-# on first syslog() call, not a safe dedup. Left exactly as-is, same
-# permanent-exception class as `_syslog` above (also investigated and
-# deliberately not consolidated).
+# History: as of 2026-09-03/04, `_connect` was a REAL LIVE DEPENDENCY,
+# found the expensive way (a real QEMU boot): `launchctl.macho` linked
+# libopenpam.dylib ahead of libsystem_kernel.dylib on ITS OWN link line,
+# so ld64 baked an ordinal-specific two-level bind of `_connect` ->
+# libopenpam.dylib straight into launchctl.macho at ITS link time. That
+# blocked hiding the export outright (see DAR-7's Linear history for the
+# full `dyld[12]: Symbol not found: _connect` trace).
+#
+# Re-verified 2026-09-17: DAR-261 (2026-09-07, unrelated -- a
+# `_task_for_pid` duplicate-symbol fix) moved `libsystem_kernel.dylib`
+# earlier on `build_launchctl.sh`'s own link line as a side effect, ahead
+# of libopenpam.dylib too. Confirmed via `xcrun dyld_info -fixups` on the
+# actual built `launchctl.macho` (not assumed): `_connect` now binds to
+# `libsystem_kernel/_connect`, not libopenpam. Swept every other
+# currently-built image that links libopenpam.dylib
+# (`libCoreFoundation.dylib`, `libSystemConfiguration.dylib`) the same
+# way -- `_connect`/`_socket` both already bind to `libsystem_kernel`
+# everywhere; `libopenpam/_connect` and `libopenpam/_socket` are bound by
+# zero currently-built images project-wide. The 4 not-currently-built
+# consumers (`chronyd.macho`/`configd.macho`/`notifyd.macho`/
+# `syslogd.macho`) all list `libsystem_kernel.dylib` earlier than
+# `libopenpam.dylib` on their own link lines too (checked each
+# build_*.sh's own link-line order directly), so a fresh build of any of
+# them would resolve the same way. Safe to hide both exports now --
+# nothing project-wide has an ordinal-specific bind to libopenpam's
+# copies of `_connect`/`_socket` to break. If a future consumer's link
+# order ever changes to list libopenpam.dylib first, `bind_target_audit.sh`
+# / `dup_symbol_audit.sh --binaries` will catch a resulting shadow before
+# it becomes a live UNRESOLVABLE bind -- re-check with `dyld_info -fixups`
+# before touching this again.
+#
+# `_socket`'s own internal-use reasoning, CORRECTED 2026-09-17: an
+# earlier round of this ticket (2026-09-03/04 comments) claimed
+# `connect$UNIX2003` "has no real provider anywhere in this project" as
+# the reason `_socket` must stay a private stub. That claim was already
+# stale the day it was written -- commit 6ba2b5e (2026-08-31, THREE DAYS
+# EARLIER) had already added real `_connect$UNIX2003`/`_send$UNIX2003`/
+# `_writev$UNIX2003` wrappers to libsystem_kernel.dylib, confirmed today
+# via `nm -gU` on the real built dylib and `dyld_info -fixups` on this
+# dylib's own rebuilt output (binds to `libsystem_kernel/_connect$UNIX2003`
+# for real, not flat-namespace). Per DAR-313 (comment citations must be
+# verified against real source, not reused transitively): the REAL reason
+# to keep this dylib's own private `socket`/`connect`/`send`/`writev`
+# stubs is the one commit 6ba2b5e's own message states directly --
+# oldsyslog.o's `vsyslog()` deliberately needs these calls to FAIL so it
+# takes its real, designed `LOG_CONS` console fallback path; pointing it
+# at libsystem_kernel.dylib's now-real, now-working implementations would
+# make `socket()`+`connect$UNIX2003()` actually succeed against
+# `/var/run/syslog` (this project's launchd DOES bind that real AF_UNIX
+# SOCK_DGRAM socket via com.apple.syslogd.plist's own Sockets key /
+# socketgroup_setup_one(), confirmed via inject_into_sd_image.sh's own
+# comment) -- a real, deliberate BEHAVIOR CHANGE (syslog output routing
+# to a real socket instead of the console), not a symbol-hygiene fix, and
+# out of this ticket's scope. Hiding the EXPORT (this pass's own change)
+# does not touch this internal resolution at all -- see the top of this
+# comment -- so this correction changes no code, only the stated reason.
 #
 # `_pututxline` (date_compat.o) ALSO stays exported -- same real-live-
 # dependency discovery as `_connect` above, this time from
@@ -424,6 +473,13 @@ rm -f "$OUT/system/libopenpam.dylib"
     -Wl,-U,_sigaction \
     -Wl,-U,___ldpart_free_extra -Wl,-U,___part_load_locale \
     -Wl,-U,'_connect$UNIX2003' -Wl,-U,'_send$UNIX2003' -Wl,-U,'_writev$UNIX2003' \
+    `# _connect/_socket HIDDEN from the export trie (DAR-7, 2026-09-17) --` \
+    `# see the "HIDDEN FROM THE EXPORT TRIE" comment near the top of this` \
+    `# file. Both stay real local definitions (cat_socket_stub.o, still` \
+    `# ar-extracted above); oldsyslog.o's own internal socket()/connect()` \
+    `# calls are unaffected -- only external dyld binds to these two` \
+    `# ordinals are removed, and nothing currently built has one.` \
+    -Wl,-unexported_symbol,_connect -Wl,-unexported_symbol,_socket \
     -o "$OUT/system/libopenpam.dylib" \
     "$EXTRACT"/*.o \
     "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_malloc.dylib" \
