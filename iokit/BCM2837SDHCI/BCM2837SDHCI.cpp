@@ -799,6 +799,31 @@ BCM2837SDHCI::tryRaiseDataPhaseClock(void)
 	return raised;
 }
 
+void
+BCM2837SDHCI::writeBlockSizeCountVerified(uint16_t blockCount, uint16_t blockSize)
+{
+	uint32_t want = ((uint32_t)blockCount << 16) | blockSize;
+	for (int attempt = 0; attempt < 3; attempt++) {
+		writeReg32(kRegBlockSize, want);
+		uint32_t got = readReg32(kRegBlockSize);
+		if (got == want) {
+			return;
+		}
+		// DAR-316: see this method's own header comment - not a
+		// timeout/hang risk regardless of whether the retry actually
+		// helps (readReg32() is an immediate register read, and
+		// writeReg32() already ran writeSpacing() before returning), but
+		// honestly NOT proven to defeat whatever the real mechanism turns
+		// out to be, since the write being retried was already atomic.
+		IOLog("BCM2837SDHCI: DAR-316: BLOCK_SIZE/COUNT write did not stick "
+		    "(wrote %#x, read back %#x) - retrying (attempt %d/3)\n",
+		    want, got, attempt + 1);
+	}
+	IOLog("BCM2837SDHCI: DAR-316: BLOCK_SIZE/COUNT write did not stick after "
+	    "3 attempts (wanted %#x) - proceeding anyway, the command that "
+	    "follows will most likely fail visibly\n", want);
+}
+
 bool
 BCM2837SDHCI::sendCommand(uint8_t cmdIndex, uint32_t arg, uint32_t respType, bool hasData, uint32_t resp[4], uint16_t transferMode)
 {
@@ -1065,8 +1090,9 @@ BCM2837SDHCI::widenBusTo4Bit(void)
 	// DAR-316: BLOCK_SIZE (0x04) and BLOCK_COUNT (0x06) are also one 32-bit
 	// hardware word on this SoC and subject to the same real erratum as
 	// TRANSFER_MODE/COMMAND (see sendCommand()'s own citation) - combined
-	// into one write rather than two independent writeReg16() calls.
-	writeReg32(kRegBlockSize, (1U << 16) | 8U);
+	// into one write, verified and retried on mismatch (see
+	// writeBlockSizeCountVerified()'s own citation).
+	writeBlockSizeCountVerified(1, 8);
 
 	uint32_t r51[4];
 	if (!sendCommand(51, 0, kCmdRespShort, true, r51, kCmdTransBlkCntEn | kCmdTransRead)) {
@@ -1556,9 +1582,12 @@ BCM2837SDHCI::readBlocksPIO(uint64_t startBlock, uint32_t nblks, void *buf)
 	uint32_t *dst = (uint32_t *)buf;
 	uint32_t arg = fCardIsSDHC ? (uint32_t)startBlock : (uint32_t)(startBlock * fBlockSize);
 	uint16_t transferMode = kCmdTransBlkCntEn | kCmdTransRead | (nblks > 1 ? kCmdTransMulti : 0);
-	// DAR-316: BLOCK_SIZE/BLOCK_COUNT combined into one write - see the
-	// matching comment in widenBusTo4Bit() and sendCommand()'s own citation.
-	writeReg32(kRegBlockSize, ((uint32_t)nblks << 16) | fBlockSize);
+	// DAR-316: BLOCK_SIZE/BLOCK_COUNT combined into one write, verified and
+	// retried on mismatch - see writeBlockSizeCountVerified()'s own
+	// citation (a real-hw boot showed this exact write silently not
+	// sticking: BLOCK_COUNT stayed stale at an earlier operation's value,
+	// deterministically producing a stuck-after-block-0 timeout).
+	writeBlockSizeCountVerified((uint16_t)nblks, (uint16_t)fBlockSize);
 
 	uint8_t cmdIndex = (nblks > 1) ? 18 : 17; // READ_MULTIPLE_BLOCK / READ_SINGLE_BLOCK
 	if (!sendCommand(cmdIndex, arg, kCmdRespShort, true, NULL, transferMode)) {
@@ -1633,9 +1662,12 @@ BCM2837SDHCI::writeBlocksPIO(uint64_t startBlock, uint32_t nblks, const void *bu
 	const uint32_t *src = (const uint32_t *)buf;
 	uint32_t arg = fCardIsSDHC ? (uint32_t)startBlock : (uint32_t)(startBlock * fBlockSize);
 	uint16_t transferMode = kCmdTransBlkCntEn | (nblks > 1 ? kCmdTransMulti : 0); // no READ bit = write
-	// DAR-316: BLOCK_SIZE/BLOCK_COUNT combined into one write - see the
-	// matching comment in widenBusTo4Bit() and sendCommand()'s own citation.
-	writeReg32(kRegBlockSize, ((uint32_t)nblks << 16) | fBlockSize);
+	// DAR-316: BLOCK_SIZE/BLOCK_COUNT combined into one write, verified and
+	// retried on mismatch - see writeBlockSizeCountVerified()'s own
+	// citation (a real-hw boot showed this exact write silently not
+	// sticking: BLOCK_COUNT stayed stale at an earlier operation's value,
+	// deterministically producing a stuck-after-block-0 timeout).
+	writeBlockSizeCountVerified((uint16_t)nblks, (uint16_t)fBlockSize);
 
 	uint8_t cmdIndex = (nblks > 1) ? 25 : 24; // WRITE_MULTIPLE_BLOCK / WRITE_BLOCK
 	if (!sendCommand(cmdIndex, arg, kCmdRespShort, true, NULL, transferMode)) {
