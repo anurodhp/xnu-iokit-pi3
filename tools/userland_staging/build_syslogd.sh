@@ -528,26 +528,44 @@ ar d "$OUT/libc_locale_for_stdio_syslogd.a" pthread_tsd_shim_libc_bootstrap.o
 ar d "$OUT/libc_locale_for_stdio_syslogd.a" cerror_stub.o
 
 rm -f syslogd.macho
-# -DCRT_DYNAMIC_LINKING tried (DAR-24, 2026-09-14) and REVERTED -- real
-# regression, not assumed safe from the DAR-153/DAR-161 precedent.
-# syslogd.macho locally defines NXArgc/NXArgv/environ/___progname
-# despite a loaded dylib also exporting them (dup_symbol_audit.sh's own
-# finding), the same shape build_launchd.sh/build_launchctl.sh/
-# build_pd_console_login.sh all fixed with this exact flag -- but adding
-# it here produced a real, silent early-boot crash: a real QEMU bisect
-# (flag in vs out, holding every other change fixed) showed a clean
-# `login:` boot with the flag OUT and a real
-# `Failed to send exception EXC_CORPSE_NOTIFY. error code: 5 for pid 8`
-# (the exact invisible-launchd-job-abort signature CLAUDE.md documents)
-# immediately after getty exec'd with the flag IN. Root cause not yet
-# isolated -- unlike launchd.macho/launchctl.macho/pd_console_login.macho
-# (all plain `main()` executables), syslogd.c's real main() reaches
-# dispatch_main() via libdispatch's real event loop before this project
-# has ever exercised that path with dyld-owned environ/NXArgc storage;
-# something in that startup sequence does not tolerate it yet. Real,
-# scoped-out follow-up -- do not re-add this flag without root-causing
-# the crash first, not just re-testing that it boots.
+# -DCRT_DYNAMIC_LINKING re-applied (DAR-310, 2026-09-17), root-causing the
+# DAR-24 revert above instead of leaving it scoped out (real QEMU re-test,
+# multiple boots incl. interactive shell use post-login: no repeat of
+# DAR-24's EXC_CORPSE_NOTIFY-after-getty regression). Without this flag,
+# crt.c's own unconditional `const char** environ = NULL;` (see that
+# file's DAR-161 comment) is a real, LOCAL, STRONG definition baked into
+# syslogd.macho itself -- `nm -m` confirmed `(__DATA,__common) external
+# _environ` in syslogd.macho even though libsystem_c.dylib separately
+# exports a real, correctly-initialized copy. A same-image local
+# definition always wins over any dylib's export, so every direct read of
+# `environ` (proven via a temporary raw-syscall diagnostic dumping
+# syslogd's own `environ` pointer at main() entry) read back a permanent
+# NULL. CRT_DYNAMIC_LINKING makes these four globals plain `extern`
+# instead, binding to the real dyld/libsystem_c-owned copy -- the same
+# fix already applied to launchd.macho/launchctl.macho/
+# pd_console_login.macho.
+#
+# This is a real, confirmed bug fix, but it is NOT, by itself, a fix for
+# syslogd's DAR-310 checkin-triggered crash loop. With this flag alone,
+# `environ` becomes a valid, non-NULL pointer, but to a genuinely EMPTY
+# (zero-entry) array -- confirmed by dumping every string in it. Real
+# Apple's launch_msg(CheckIn) needs `LAUNCHD_TRUSTED_FD_ENV`, which
+# launchd's own job_start()/job_start_child() (core.c) DOES correctly
+# setenv() and DOES still hold in `environ` right up to its own
+# posix_spawn(..., POSIX_SPAWN_SETEXEC, ..., environ) call (confirmed via
+# a temporary pd_core_phase trace) -- but the child's own `environ` never
+# receives it. Root cause is one level deeper: this project's real
+# dyld-940 port (build_dyld_core.sh, real dyldMain.cpp) never threads the
+# kernel-delivered envp into ProgramVars/`environ` for a freshly-exec'd
+# dynamically-linked image -- confirmed by grepping the entire dyld build
+# for "envp" (zero hits) and by start.s's own header comment, which
+# documents that this file's `start:` label (the only place this project
+# writes `environ` for a *static* target) never executes at all for a
+# genuine LC_MAIN dynamic target; real dyld's own entry point calls
+# `_main` directly instead. That is a real, separate, and substantially
+# larger gap -- filed as DAR-310's own follow-up, not fixed here.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
+    -DCRT_DYNAMIC_LINKING \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -o syslogd.macho \
