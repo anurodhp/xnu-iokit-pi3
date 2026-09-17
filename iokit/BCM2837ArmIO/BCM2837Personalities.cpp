@@ -126,6 +126,81 @@ addNumberProperty(OSDictionary *dict, const char *key, uint32_t value)
 	return ok;
 }
 
+/*
+ * DAR-151: real "Content Table" for IOFDiskPartitionScheme
+ * (kIOFDiskPartitionSchemeContentTable, third_party/IOStorageFamily/
+ * IOFDiskPartitionScheme.cpp:49 - literally "Content Table"), translating
+ * a raw MBR partition-type byte into a content-hint string
+ * (instantiateMediaObject(), same file, ~line 486). With no table wired,
+ * every partition's real Content property is just the raw "0xNN" hex
+ * string, and iokit/bsddev/IOKitBSDInit.cpp's generic
+ * IOProviderClass=IOMedia/Content=Apple_HFS root-matching fallback (used
+ * when XNU boots with no rd= boot-arg, real hardware's actual default)
+ * can never succeed without it - QEMU never hits this path since
+ * runvm.sh always passes rd=disk0s2 explicitly.
+ *
+ * Real, unmodified table, copied verbatim from
+ * third_party/IOStorageFamily/Info.plist's own "IOFDiskPartitionScheme"
+ * -> "Content Table" dict (real Apple source, not invented) - this
+ * project has no Info.plist/prelink pipeline (see this file's own
+ * project-wide header comment), so personalities are hand-built here
+ * instead, but the DATA is the real table, not a reduced guess.
+ */
+static bool
+addContentTableEntry(OSDictionary *table, const char *hexKey, const char *contentHint)
+{
+	OSString *value = OSString::withCString(contentHint);
+	if (value == NULL) {
+		return false;
+	}
+	bool ok = table->setObject(hexKey, value);
+	value->release();
+	return ok;
+}
+
+static OSDictionary *
+makeFDiskContentTable(void)
+{
+	OSDictionary *table = OSDictionary::withCapacity(24);
+	if (table == NULL) {
+		return NULL;
+	}
+
+	struct { const char *key; const char *hint; } entries[] = {
+		{ "0x01", "DOS_FAT_12" },
+		{ "0x04", "DOS_FAT_16_S" },
+		{ "0x06", "DOS_FAT_16" },
+		{ "0x07", "Windows_NTFS" },
+		{ "0x0B", "DOS_FAT_32" },
+		{ "0x0C", "Windows_FAT_32" },
+		{ "0x0E", "Windows_FAT_16" },
+		{ "0x14", "DOS_FAT_16_S_Hidden" },
+		{ "0x16", "DOS_FAT_16_Hidden" },
+		{ "0x42", "Windows_LDM" },
+		{ "0x82", "Linux_Swap" },
+		{ "0x83", "Linux" },
+		{ "0x8E", "Linux_LVM" },
+		{ "0xA5", "FreeBSD" },
+		{ "0xA6", "OpenBSD" },
+		{ "0xA7", "Apple_Rhapsody_UFS" },
+		{ "0xA8", "Apple_UFS" },
+		{ "0xA9", "NetBSD" },
+		{ "0xAB", "Apple_Boot" },
+		{ "0xAE", "Apple_Encrypted" },
+		{ "0xAF", "Apple_HFS" },
+		{ "0xFD", "Linux_RAID" },
+	};
+
+	for (unsigned i = 0; i < sizeof(entries) / sizeof(entries[0]); i++) {
+		if (!addContentTableEntry(table, entries[i].key, entries[i].hint)) {
+			table->release();
+			return NULL;
+		}
+	}
+
+	return table;
+}
+
 extern "C" void
 BCM2837RegisterBuiltinPersonalities(void)
 {
@@ -210,6 +285,14 @@ BCM2837RegisterBuiltinPersonalities(void)
 		if (storageCategory != NULL) {
 			fdiskScheme->setObject(kIOMatchCategoryKey, storageCategory);
 			storageCategory->release();
+		}
+		// DAR-151: see makeFDiskContentTable()'s own header comment.
+		OSDictionary *contentTable = makeFDiskContentTable();
+		if (contentTable != NULL) {
+			fdiskScheme->setObject("Content Table", contentTable);
+			contentTable->release();
+		} else {
+			IOLog("BCM2837RegisterBuiltinPersonalities: makeFDiskContentTable failed\n");
 		}
 	}
 	// "cpu0" - closes the real ARM64-IRQ-delivery gap found investigating
