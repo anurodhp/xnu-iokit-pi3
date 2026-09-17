@@ -1645,7 +1645,29 @@ BCM2837SDHCI::writeBlocksPIO(uint64_t startBlock, uint32_t nblks, const void *bu
 	for (uint32_t b = 0; b < nblks; b++) {
 		uint32_t status;
 		if (!waitForIntStatus32(kIntBufWriteRdy | kIntErrorMask, 1000000, &status)) {
+			// DAR-316 diagnostic: this per-block timeout has been observed
+			// real and RECURRING on real hardware (not the one-off it first
+			// looked like) - consistently on block index 1 (the SECOND
+			// block of a multi-block write), regardless of total block
+			// count (seen with both nblks=8 and nblks=16). That specific,
+			// repeatable pattern - not block 0, not a scattered later
+			// block - is itself real evidence worth capturing rather than
+			// guessing about FIFO/clock-domain timing from code reading
+			// alone, the same lesson this ticket's other diagnostics
+			// already paid for. Previously this branch logged only the
+			// block index, unlike the CMD12/command-error branches in
+			// sendCommand() - added the same register dump those already
+			// have.
+			uint32_t presentState = readReg32(kRegPresentState);
+			uint16_t clockControl = readReg16(kRegClockControl);
+			uint32_t intStatusRaw = readReg32(kRegIntStatus);
+			uint32_t intEnable = readReg32(kRegIntEnable);
 			IOLog("BCM2837SDHCI: write block %u/%u timed out waiting BUFFER_WRITE_READY - resetting dat line\n", b, nblks);
+			IOLog("BCM2837SDHCI: DAR-316 diag: PRESENT_STATE=%#x CLOCK_CONTROL=%#x "
+			    "INT_STATUS(raw)=%#x INT_ENABLE=%#x fPendingIntStatus=%#x "
+			    "startBlock=%llu nblks=%u blockIndex=%u\n",
+			    presentState, clockControl, intStatusRaw, intEnable,
+			    fPendingIntStatus, (unsigned long long)startBlock, nblks, b);
 			resetDatLine();
 			return false;
 		}
