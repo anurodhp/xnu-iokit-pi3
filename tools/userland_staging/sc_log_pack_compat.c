@@ -30,6 +30,22 @@
  * That made configd undiagnosable: DAR-261 and DAR-265 both had to be
  * root-caused from ps/exit codes and disassembly alone.
  *
+ * UPDATED 2026-09-17 (DAR-267). os_log_pack_size() used to be a real,
+ * ordinary variadic function that ignored its arguments and returned a
+ * fixed size -- but SC_log()'s real, unmodified macro (SCPrivate.h) calls
+ * it with the SAME argument list it separately passes to
+ * os_log_pack_fill() to actually format the message, so every %@ (or any
+ * other) argument expression was evaluated for real TWICE per log call:
+ * once here, thrown away, and once more in os_log_pack_fill(). See
+ * os_log_compat_headers/os/log_private.h's header comment for the full
+ * citation (real Apple's own __builtin_os_log_format_size is a compiler
+ * builtin that does NOT evaluate its arguments; an ordinary C function
+ * has no such exemption). Renamed to os_log_pack_size_impl() and made
+ * argument-free; that header now provides an os_log_pack_size(...) MACRO
+ * that discards its arguments at the preprocessor level so real call
+ * sites (SC_log(), __os_crash_fmt()) evaluate each message argument only
+ * once, in os_log_pack_fill() below, exactly as real Apple's macro does.
+ *
  * `%@` handling: real SC_log() format strings use `%@` for CFTypeRef
  * arguments, which vsnprintf(3) does not implement -- passing a
  * CFStringRef to an unknown conversion is undefined. Each `%@` is
@@ -47,9 +63,8 @@
 #include <stdio.h>
 
 size_t
-os_log_pack_size(const char *format, ...)
+os_log_pack_size_impl(void)
 {
-	(void)format;
 	return sizeof(struct os_log_pack_s);
 }
 

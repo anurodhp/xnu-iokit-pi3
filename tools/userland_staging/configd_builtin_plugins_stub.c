@@ -127,7 +127,111 @@
  * fault -- it made configd crash EARLIER, on a different, CF-related bug,
  * before ever reaching whatever DAR-266's real crash site is. Reverted;
  * DAR-266's own investigation used CF-free fprintf(stderr, ...) markers
- * (plugin_support.c) instead, which don't evaluate any new CF call. */
+ * (plugin_support.c) instead, which don't evaluate any new CF call.
+ *
+ * DAR-267 follow-up (2026-09-17). Investigated the "eventmon.c:834 ->
+ * CFBundleGetIdentifier() -> __CFLock(&bundle->_lock) -> pthread_mutex_lock()
+ * on a near-NULL pointer" crash noted above. Static/control-flow analysis
+ * against this project's real, pinned sources:
+ *
+ *   RULED OUT (each independently traced/verified, not guessed):
+ *   - Struct layout mismatch: the DAR-266 note's own address arithmetic
+ *     (0xd8 matches struct __CFBundle's real `_lock` field offset,
+ *     CFBundle_Internal.h:78-140) already confirms this project's struct
+ *     layout is correct -- the crash address decodes as (NULL base + real
+ *     offset), not a wrong offset.
+ *   - Bundle retain/release imbalance from plugin_support.c's own
+ *     ALT_CFRelease(bundle) "over-retain correction" (plugin_support.c
+ *     line ~938, comment cites <rdar://problems/4912137&6078752>): traced
+ *     the real refcount arithmetic through this project's own
+ *     CFBundleCreateBundlesFromDirectory() (swift-corelibs-foundation
+ *     CFBundle.c:796-819) -- it really does leave bundles it returns with
+ *     one extra, undropped retain (CFBundleCreate()'s own +1, plus the
+ *     array's +1 from CFArrayAppendValue, with the `#ifdef
+ *     __clang_analyzer__`-only CFRelease() never compiled in for a real
+ *     build) -- i.e. this project's CFBundle really does reproduce Apple's
+ *     documented over-retain bug, so ALT_CFRelease() is a correct
+ *     correction here too, not an over-release. Also: CFBundle.c's global
+ *     `_allBundles` table (line ~126-243) permanently retains every real
+ *     bundle for the life of the process ("the existence of
+ *     CFBundleGetBundleWithIdentifier/CFBundleGetAllBundles means any
+ *     bundle we hand out must be permanently retained" -- CFBundle.c's own
+ *     comment), so a real created-from-disk bundle is not freed at all
+ *     during configd's run.
+ *   - CFLock_t zero-init: CFLocking.h's TARGET_OS_MAC branch (the one this
+ *     project's iPhoneOS-SDK target actually compiles) makes CFLock_t a
+ *     real `pthread_mutex_t`, not a plain zeroable int -- but
+ *     _CFBundleCreate() (CFBundle.c:741) does explicitly
+ *     `bundle->_lock = CFLockInit;` (`= PTHREAD_ERRORCHECK_MUTEX_INITIALIZER`)
+ *     for every real bundle it creates, so the lock is genuinely
+ *     initialized, not relying on zero-fill.
+ *   - Control flow: plugin_support.c's own loadBundle() (line 351) calls
+ *     `CFBundleGetIdentifier(bundleInfo->bundle)` UNCONDITIONALLY (not
+ *     gated by any SC_log/_sc_debug check) for every bundle in allBundles,
+ *     and that call must succeed (a NULL/failed identifier causes the
+ *     bundle to be skipped and never dispatched at all -- so
+ *     KernelEventMonitor could not have reached callLoadFunction()/
+ *     load_KernelEventMonitor() otherwise). The exact same
+ *     `bundleInfo->bundle` pointer is what callLoadFunction() then passes
+ *     as load_KernelEventMonitor()'s `bundle` argument moments later
+ *     (plugin_support.c line 478), with nothing in between that CFReleases
+ *     it. So a literally-NULL `bundle` argument at eventmon.c:834 is hard
+ *     to reconcile with the traced control flow on its own.
+ *
+ *   REAL BUG FOUND AND FIXED (independently valid regardless of whether it
+ *   is THE exact fault mechanism above -- not dynamically confirmed, see
+ *   caveat below): SCPrivate.h's real, unmodified SC_log() macro
+ *   (~line 497-514) expands to
+ *       size_t __pack_size = os_log_pack_size(__format, ##__VA_ARGS__);
+ *       ...
+ *       os_log_pack_fill(__pack, __pack_size, errno, __format, ##__VA_ARGS__);
+ *   passing the SAME __VA_ARGS__ -- for a `%@` conversion, a real,
+ *   arbitrary, possibly side-effecting C expression, e.g. this exact
+ *   `CFBundleGetIdentifier(bundle)` -- to TWO call sites. Real Apple's own
+ *   macro gets away with this because its size call is
+ *   `__builtin_os_log_format_size`, a Clang compiler builtin that computes
+ *   the encoded size from the format string and each argument's static
+ *   TYPE alone, without emitting code to evaluate the argument
+ *   expressions. This project's compat shim (os_log_compat_headers/os/
+ *   log_private.h + sc_log_pack_compat.c) implemented os_log_pack_size()
+ *   as a real, ordinary variadic C function instead -- which the C
+ *   standard requires to evaluate every argument at the call site -- so
+ *   every `%@` argument with a real body (a lock/dictionary-lookup/unlock
+ *   via CFBundleGetInfoDictionary(), in this exact case) was silently
+ *   evaluated TWICE per SC_log() call: once here (result discarded), once
+ *   more in os_log_pack_fill() to actually format the message. Fixed
+ *   2026-09-17 (DAR-267): os_log_pack_size is now a macro
+ *   (os_log_compat_headers/os/log_private.h) that discards its arguments
+ *   at the PREPROCESSOR level -- never handed to the compiler as an
+ *   expression, so never evaluated -- and calls a real, argument-free
+ *   os_log_pack_size_impl() (sc_log_pack_compat.c) instead. Verified via a
+ *   real rebuild (build_libsystemconfiguration_client.sh,
+ *   build_bootp_dhcp_engine.sh, build_configd_plugins.sh,
+ *   build_ipconfiguration_plugin.sh, build_configd.sh, each 0 gaps / 0
+ *   undefined symbols) and `nm`: the old variadic `_os_log_pack_size`
+ *   symbol no longer appears anywhere in configd.macho or
+ *   libSystemConfiguration.dylib, and eventmon.o's own undefined-symbol
+ *   list now shows `_os_log_pack_size_impl` in its place.
+ *
+ *   HONEST CAVEAT: this pass did not run a QEMU boot (per this ticket's
+ *   own instructions -- another agent may be using QEMU concurrently).
+ *   The double-evaluation bug is real and independently worth fixing
+ *   (Apple-parity deviation, doubles real work -- including a full extra
+ *   lock/unlock -- on every %@-argument SC_log() call site with
+ *   `_sc_debug` on), and removing one whole extra nested call chain from
+ *   the exact crashing statement is a plausible contributor given it adds
+ *   real stack depth and a real second mutex acquisition right on the
+ *   faulting path -- but it is NOT dynamically confirmed to be the sole or
+ *   exact mechanism of the observed near-NULL `bundle` fault. Recommended
+ *   follow-up: re-enable `_sc_debug=1` (same constructor approach the
+ *   DAR-266 note above describes, since stock configd.m never sets it),
+ *   boot under QEMU, and confirm the eventmon.c:834 crash is gone; if it
+ *   still reproduces, get a real register dump at the fault PC via the
+ *   QEMU monitor's `x` (virtual memory -- not `xp`, see
+ *   feedback_qemu_monitor_xp_vs_x) against the unstripped configd.macho's
+ *   own symbol table to see what `bundle` (x0 at the CFBundleGetIdentifier
+ *   call) actually holds, rather than continuing from address-offset
+ *   inference alone. */
 
 #define NOT_YET_PORTED(name) \
 	void \
