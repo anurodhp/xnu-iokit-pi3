@@ -1,8 +1,6 @@
 /* Real date(1) has two features gated behind actually SETTING the
  * system clock (`date <newdate>` as root, not the ordinary display/
- * format path this tier's own QEMU verification exercises) that each
- * need a whole additional unbuilt subsystem this project doesn't have,
- * matching this pass's own "roadblocks to stop at" scope:
+ * format path this tier's own QEMU verification exercises):
  *
  * 1. netsettime() (real third_party/shell_cmds/date/netdate.c) --
  *    broadcasts the new time to other hosts via the ancient `timed`
@@ -15,39 +13,49 @@
  *    caller want to skip network notification, i.e. only on an actual
  *    privileged clock-set. An honest "no time daemon reachable" failure
  *    (return nonzero) is the same real outcome this call already has on
- *    every modern real system, not a fabricated success.
+ *    every modern real system, not a fabricated success. DAR-149
+ *    (2026-09-17) re-triaged this and left it exactly as-is: this isn't
+ *    an unimplemented gap, it's already the correct, permanent answer
+ *    -- there is no real system left to make this succeed against.
  *
  * 2. pututxline() (real Libc/gen/utmpx-darwin.c, 1193 lines) -- records
- *    an OLD_TIME/NEW_TIME utmpx entry via a real Mach RPC to a real
- *    ASL/utmpx-logging service reached through servers/bootstrap.h --
- *    this project has no launchd, no Mach bootstrap service registry,
- *    no ASL daemon (see CLAUDE.md's own "no launchd" line). Also only
- *    reached from setthetime(), the same actually-setting-the-clock
- *    path as netsettime() above. A real NULL return (pututxline's own
- *    documented "entry could not be written" failure code) is honest
- *    here, not fabricated.
+ *    an OLD_TIME/NEW_TIME utmpx entry. DAR-149 (2026-09-17) RESOLVED
+ *    this for real: date(1) now compiles the exact same real
+ *    third_party/Libc/gen/NetBSD/utmpx.c + gen/utmpx-darwin.c pair
+ *    build_login.sh already proved out for login.macho (DAR-164),
+ *    backed by the same already-established honest ASL no-op compat
+ *    shims (asl_client_compat.c/login_asl_extra_compat.c) -- see
+ *    build_simple_cmds.sh's own "date)" cmd_cflags/extra_libs case
+ *    comments for the full wiring. The real primary utmpx-file write
+ *    (__pututxline() -> a real fopen("w+")/fwrite() of _PATH_UTMPX,
+ *    /var/run/utmpx) needs no daemon at all; only the SECONDARY wtmp/
+ *    lastlog trail (_utmpx_asl()) degrades to the project's existing
+ *    honest ASL no-op (matches build_login.sh's own header finding: no
+ *    bootstrap-namespace registrar to answer a real asl_open() lookup
+ *    yet). This is what "worth re-triaging" in the ticket actually
+ *    found -- not that syslogd unblocked it (it didn't; ASL stays a
+ *    no-op regardless), but that login.macho had already independently
+ *    solved the identical problem and date(1) had simply never been
+ *    pointed at that solution.
  *
- * Neither stub affects date(1)'s ordinary, overwhelmingly common
+ * Neither item affects date(1)'s ordinary, overwhelmingly common
  * behavior at all: displaying/formatting the current time, -u (UTC),
  * -v (vary offsets), -j (don't set the clock), custom +format strings,
  * and TZ handling are all real, unmodified date.c/vary.c, untouched by
- * this file. Follow-up (actually setting the clock for real) is
- * tracked in docs/backlog.md, not attempted this pass. */
+ * this file. */
 
 #include <stddef.h>
 
-/* DAR-164 (2026-09-01) UPDATE: this file's own header comment above is
- * now STALE for one specific consumer -- build_login.sh compiles the
- * REAL third_party/Libc/gen/NetBSD/utmpx.c + gen/utmpx-darwin.c pair
- * (real pututxline(), backed by this project's own honest ASL/bootstrap
- * compat shims, see build_login.sh's own header for the full writeup),
- * so this stand-in would be a genuine duplicate-symbol conflict there,
- * not a needed fallback. date(1) itself (build_simple_cmds.sh) still
- * compiles neither of those real files, so its own build continues to
- * need this exact honest stub unchanged -- LOGIN_REAL_UTMPX_PUTUTXLINE
- * is only ever defined by build_login.sh's own CFLAGS, making this a
- * per-consumer opt-out, not a behavior change for date(1) or any other
- * existing consumer of this file. */
+/* DAR-164 (2026-09-01) UPDATE, further updated by DAR-149 (2026-09-17):
+ * build_login.sh (and, as of DAR-149, build_simple_cmds.sh's own "date"
+ * entry) compile the REAL third_party/Libc/gen/NetBSD/utmpx.c +
+ * gen/utmpx-darwin.c pair (real pututxline(), backed by this project's
+ * own honest ASL/bootstrap compat shims, see build_login.sh's own
+ * header for the full writeup), so this stand-in would be a genuine
+ * duplicate-symbol conflict for either consumer -- both define
+ * LOGIN_REAL_UTMPX_PUTUTXLINE in their own CFLAGS specifically to opt
+ * out of it here. Any FUTURE consumer of this file that does NOT
+ * define that macro still gets this exact honest stub unchanged. */
 #ifndef LOGIN_REAL_UTMPX_PUTUTXLINE
 struct utmpx;
 

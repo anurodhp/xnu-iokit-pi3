@@ -1521,22 +1521,42 @@ CMD_LIST=(
     # resolver+socket stack (Phase 6, unstarted) for a protocol dead on
     # every real modern system anyway; date_compat.c's honest
     # always-fails stub replaces just that one symbol (see its own
-    # header). Same file also honestly stubs pututxline() (real
-    # implementation is Libc/gen/utmpx-darwin.c, a 1193-line real Mach-
-    # RPC-to-ASL/utmpx-daemon client this project has no launchd/
-    # bootstrap-service backing for -- same "whole additional unbuilt
-    # subsystem" class as netsettime) while implementing a REAL raw
-    # settimeofday(2) syscall (cheap, NO_SYSCALL_STUB, same cp_mv_syscalls.c
-    # pattern) so -d/-t and an actual privileged clock-set still really
-    # work, just without Apple's own wrapper's cosmetic notify(3)/ASL
-    # logging side effects. Real oldsyslog.c (date -u's "date set by ..."
-    # audit log line) reuses cat_socket_stub.c's existing honest
-    # socket()/connect() ENOSYS stand-ins (same real AF_UNIX-to-syslogd
-    # path cat -u's stub already established, syslogd itself not built
-    # yet either, Phase 5.5). Real strptime.c (-f format parsing) and
-    # localtime.c's own real mktime() (vary.c's real -v offset math)
-    # newly needed, both real Apple/FreeBSD source already vendored.
-    "date:$SHELL_CMDS/date/date.c:$SHELL_CMDS/date/vary.c|$LIBC/gen/get_compat.c|$LIBC/gen/oldsyslog.c|cat_socket_stub.c|date_compat.c|$LIBC/stdtime/FreeBSD/strptime.c|$LIBC/stdlib/FreeBSD/strtoq.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/gen/FreeBSD/getlogin.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|$LIBC/sys/gettimeofday.c|ps_commpage_gettimeofday_stub.c|simple_cmds_time_compat.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c"
+    # header) -- DAR-149 (2026-09-17) re-triaged this specifically and
+    # confirmed it's already the correct permanent answer, not a gap.
+    #
+    # pututxline() DAR-149 (2026-09-17): no longer stubbed. date now
+    # compiles the same real Libc/gen/NetBSD/utmpx.c + gen/utmpx-darwin.c
+    # pair build_login.sh already proved out for login.macho (DAR-164),
+    # opting date_compat.c's own local stand-in out via
+    # -DLOGIN_REAL_UTMPX_PUTUTXLINE=1 (this command's own cmd_cflags
+    # case below). asl_client_compat.c/login_asl_extra_compat.c supply
+    # the same already-established honest ASL no-op shims login uses
+    # (no real bootstrap-namespace registrar to answer a real
+    # asl_open() lookup yet -- see either file's own header); the
+    # primary utmpx-file write itself (__pututxline()'s real
+    # fopen("w+")/fwrite() of _PATH_UTMPX) needs no daemon at all and is
+    # now genuinely real. date_utmpx_notify_compat.c supplies the same
+    # honest notify_post() no-op login_syscalls.c already established,
+    # duplicated (not shared) on purpose -- that file also carries
+    # login-only symbols (fork/alarm/getpgid/etc) date has no business
+    # linking. tar_pwgr_r_compat.c (already-built, reused verbatim from
+    # tar's own DAR-5 case below) supplies getpwuid_r() for
+    # utmpx-darwin.c's own (dead-from-date's-call-graph but still
+    # link-required) getlastlogx() path, backed by libinfo.dylib's real
+    # getpwuid() (this command's own extra_libs case below) -- same
+    # "narrow real POSIX _r wrapper over an already-real non-_r
+    # resolver" pattern as tar's own case, not new resolver plumbing.
+    # Implements a REAL raw settimeofday(2) syscall (cheap,
+    # NO_SYSCALL_STUB, same cp_mv_syscalls.c pattern) so -d/-t and an
+    # actual privileged clock-set still really work. Real oldsyslog.c
+    # (date -u's "date set by ..." audit log line) reuses
+    # cat_socket_stub.c's existing honest socket()/connect() ENOSYS
+    # stand-ins (same real AF_UNIX-to-syslogd path cat -u's stub already
+    # established, syslogd itself not built yet either, Phase 5.5). Real
+    # strptime.c (-f format parsing) and localtime.c's own real mktime()
+    # (vary.c's real -v offset math) newly needed, both real Apple/
+    # FreeBSD source already vendored.
+    "date:$SHELL_CMDS/date/date.c:$SHELL_CMDS/date/vary.c|$LIBC/gen/get_compat.c|$LIBC/gen/oldsyslog.c|cat_socket_stub.c|date_compat.c|$LIBC/stdtime/FreeBSD/strptime.c|$LIBC/stdlib/FreeBSD/strtoq.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/gen/FreeBSD/getlogin.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|$LIBC/sys/gettimeofday.c|ps_commpage_gettimeofday_stub.c|simple_cmds_time_compat.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c|$LIBC/gen/NetBSD/utmpx.c|$LIBC/gen/utmpx-darwin.c|asl_client_compat.c|login_asl_extra_compat.c|date_utmpx_notify_compat.c|tar_pwgr_r_compat.c"
     # gzip: docs/roadmap.md Tier A #4. Real, unmodified gzip.c PLUS its
     # own real sibling unity-build includes (unbzip2.c/zuncompress.c/
     # unpack.c/unxz.c, each already individually #include-guarded by
@@ -1894,6 +1914,27 @@ for spec in "${CMD_LIST[@]}"; do
             # commoncrypto_glue generation step (above) copied in.
             cmd_cflags="-I $OUT/commoncrypto_glue"
             ;;
+        date)
+            # DAR-149 (2026-09-17): real utmpx-darwin.c's own
+            # `#include <asl.h>` needs this project's pinned real
+            # syslog-385 asl.h (same real header build_login.sh's own
+            # ASL_INC already points at -- these compat shim functions'
+            # own asl_object_t definitions must match the SAME real
+            # header's declarations, not whatever the SDK's own asl.h
+            # would otherwise resolve to first). Its own
+            # `#include <servers/bootstrap.h>` (unreached code, real
+            # Mach bootstrap-port declarations date never calls, but
+            # still a real preprocessor requirement) resolves the same
+            # way build_login.sh's own XPC_INC does: this project's
+            # pinned PureDarwin libxpc include dir really does carry a
+            # real servers/bootstrap.h, confirmed present, not assumed.
+            # LOGIN_REAL_UTMPX_PUTUTXLINE opts date_compat.c's own local
+            # pututxline()/struct utmpx stand-in out (see that file's
+            # own header) so the real NetBSD/utmpx.c + utmpx-darwin.c
+            # pair's real definition wins instead, exactly like
+            # build_login.sh's own CFLAGS.
+            cmd_cflags="-DLOGIN_REAL_UTMPX_PUTUTXLINE=1 -I ../../third_party/syslog/libsystem_asl.tproj/include -I ../../third_party/PureDarwin/src/Libraries/XPC/libxpc/include"
+            ;;
     esac
 
     if ! "$CLANG" $CFLAGS $cmd_cflags "-Dmain=$real_main" "$src" -o "$obj" 2>"$OUT/simple_obj/${name}.err"; then
@@ -2030,7 +2071,22 @@ for spec in "${CMD_LIST[@]}"; do
             # libsystem_platform.dylib/libcopyfile.dylib/
             # libremovefile.dylib LINK_DYLIBS comments already
             # established -- list the real owning dylib directly.
-            extra_libs="$OUT/system/libsystem_kernel.dylib"
+            #
+            # libinfo.dylib ADDED 2026-09-17 (DAR-149): real
+            # utmpx-darwin.c's own getlastlogx()/getlastlogxbyname()
+            # (dead from date's actual call graph -- setthetime() only
+            # ever reaches pututxline()'s WRITE side -- but still a real
+            # link-time undefined-symbol requirement since the whole
+            # object file is linked, not lazily pulled from an archive)
+            # call a local static _pwuid_r() wrapping getpwuid_r().
+            # tar_pwgr_r_compat.c (this command's own new CMD_LIST
+            # extra, reused verbatim from tar's own DAR-5 case above)
+            # supplies the real POSIX _r entry point over this project's
+            # already-real, already-built plain getpwuid()/getpwnam()/
+            # getgrnam()/getgrgid() -- libinfo.dylib is the real owner of
+            # those four (same real export tar/find/gzip's own extra_libs
+            # cases above already rely on), so it's listed here too.
+            extra_libs="$OUT/system/libsystem_kernel.dylib $OUT/system/libinfo.dylib"
             ;;
         ed)
             # libc_regex.a: re.c's real regcomp/regexec/regerror
@@ -2294,6 +2350,20 @@ for spec in "${CMD_LIST[@]}"; do
     esac
     case "$name" in
         tar) link_aliases="$link_aliases -Wl,-alias,_poll,_poll\$UNIX2003" ;;
+        date)
+            # DAR-149 (2026-09-17): real utmpx-darwin.c's own
+            # _utmpx_working_copy() calls ttyname_r(0/1/2, ...) under
+            # this build's -D__DARWIN_UNIX03=1, which makes the real SDK
+            # header declare (and the compiler reference) the versioned
+            # `_ttyname_r$UNIX2003` name. libsystem_c.dylib only exports
+            # the bare `_ttyname_r` (confirmed via `xcrun dyld_info
+            # -exports`) -- same real gap build_login.sh's own identical
+            # alias already fixes for login.macho (confirmed via a real
+            # `xcrun dyld_info -exports login.macho`, which shows a
+            # genuine `[re-export] _ttyname_r$UNIX2003 (_ttyname_r from
+            # libsystem_c)`, not the malformed-ordinal-0 result the
+            # ld64 alias/nonlocal-base hazard would produce).
+            link_aliases="$link_aliases -Wl,-alias,_ttyname_r,_ttyname_r\$UNIX2003" ;;
     esac
 
     # locale_extra_objs: RESOLVED 2026-08-28 (see NEWLD_BINDIR's own
