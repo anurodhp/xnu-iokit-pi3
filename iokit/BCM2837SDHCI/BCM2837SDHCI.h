@@ -148,6 +148,19 @@ private:
 	IOMemoryMap *fRegMap;
 	volatile void *fRegBase;
 
+	// DAR-316: software shadow of the last value written to kRegTransferMode
+	// (0x0C). Real erratum (see sendCommand()'s own citation): TRANSFER_MODE
+	// and COMMAND (0x0E) are the same 32-bit hardware word on this SoC, and
+	// this holds regardless of whether the command being issued has a data
+	// phase - u-boot's own bcm2835_sdhci_writew() shadows TRANSFER_MODE and
+	// combines it into EVERY COMMAND write unconditionally, never only for
+	// data commands. sendCommand() mirrors that exactly: hasData==true
+	// updates this shadow before combining; hasData==false just re-combines
+	// whatever is already here (unchanged, since non-data commands never
+	// touch TRANSFER_MODE's meaning) rather than doing a bare, independent
+	// 16-bit COMMAND write.
+	uint16_t fShadowTransferMode;
+
 	// Interrupt-driven completion state (see waitForIntStatus32()).
 	IOLock       *fInterruptLock;   // block/wake coordination only - never touched from interrupt context
 	IOSimpleLock *fStatusLock;      // protects fPendingIntStatus between interruptOccurred() and waiters

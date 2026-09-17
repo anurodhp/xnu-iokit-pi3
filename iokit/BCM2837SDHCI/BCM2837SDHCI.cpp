@@ -44,6 +44,7 @@ BCM2837SDHCI::init(OSDictionary *properties)
 	fCurrentClockHz = 0;
 
 	fPendingIntStatus = 0;
+	fShadowTransferMode = 0;
 	fRealInterruptHits = 0;
 	fPollFallbackHits = 0;
 	fLoggedRealInterrupt = false;
@@ -865,32 +866,38 @@ BCM2837SDHCI::sendCommand(uint8_t cmdIndex, uint32_t arg, uint32_t respType, boo
 	}
 
 	uint16_t cmdWord = (uint16_t)((cmdIndex << 8) | flags);
+	// DAR-316: real, cited erratum (Linux mainline drivers/mmc/host/
+	// sdhci-iproc.c, sdhci_bcm2835_pltfm_data/sdhci_iproc_32only_ops;
+	// independently corroborated by u-boot's bcm2835_sdhci.c writew(),
+	// which shadows TRANSFER_MODE and only ever writes it combined with
+	// COMMAND) - quoting the Linux comment verbatim: "the Arasan has a
+	// bugette whereby it may lose the content of successive writes to
+	// registers that are within two SD-card clock cycles of each
+	// other... In reality, this only happens when SDHCI_BLOCK_SIZE and
+	// SDHCI_BLOCK_COUNT are written followed by SDHCI_TRANSFER_MODE and
+	// SDHCI_COMMAND." TRANSFER_MODE (0x0C) and COMMAND (0x0E) are the
+	// same 32-bit hardware word on this SoC, REGARDLESS of whether the
+	// command being issued has a data phase - the erratum is about this
+	// register pair's physical write timing, not about data semantics.
+	// u-boot's own writew() never special-cases this on hasData either:
+	// it unconditionally shadows TRANSFER_MODE and combines it into
+	// EVERY COMMAND write. A first pass here only combined the hasData
+	// path, leaving hasData==false commands (CMD12 included) still doing
+	// a bare, independent 16-bit COMMAND write to the same shared word -
+	// real evidence this was incomplete: a real-hw boot log the same day
+	// showed the DAT_INHIBIT-stuck failure move from CMD24's own
+	// precondition (before the fix) to a real CMD12 CRC/End-Bit error
+	// straight after a write's data phase (after the fix) - progress
+	// (CMD24 itself + the write's data phase now succeed), but CMD12
+	// itself was still exposed. fShadowTransferMode is only ever updated
+	// when hasData is true (matching u-boot: non-data commands never
+	// change TRANSFER_MODE's meaning), but every command - data or not -
+	// now combines whatever is currently shadowed with its own COMMAND
+	// word into one 32-bit write, never a bare writeReg16(kRegCommand).
 	if (hasData) {
-		// DAR-316: real, cited erratum (Linux mainline drivers/mmc/host/
-		// sdhci-iproc.c, sdhci_bcm2835_pltfm_data/sdhci_iproc_32only_ops;
-		// independently corroborated by u-boot's bcm2835_sdhci.c writew(),
-		// which shadows TRANSFER_MODE and only ever writes it combined with
-		// COMMAND) - quoting the Linux comment verbatim: "the Arasan has a
-		// bugette whereby it may lose the content of successive writes to
-		// registers that are within two SD-card clock cycles of each
-		// other... In reality, this only happens when SDHCI_BLOCK_SIZE and
-		// SDHCI_BLOCK_COUNT are written followed by SDHCI_TRANSFER_MODE and
-		// SDHCI_COMMAND." TRANSFER_MODE (0x0C) and COMMAND (0x0E) are the
-		// same 32-bit hardware word on this SoC; two independent 16-bit
-		// writeReg16() calls to it (the previous shape of this code, with
-		// the caller writing TRANSFER_MODE and this function writing
-		// COMMAND moments later) can silently drop one half on real
-		// silicon, with QEMU's SD model - which does not implement this
-		// erratum - never able to reproduce it. This is a DIFFERENT, more
-		// targeted mitigation than the write-spacing fix already applied
-		// (see writeSpacing()): that fix addressed general back-to-back
-		// register writes; this addresses the two real reference drivers'
-		// own explicitly-named worst case, which spacing alone did not
-		// resolve on real hardware (DAR-316, 2026-09-16 real-hw boot log).
-		writeReg32(kRegTransferMode, ((uint32_t)cmdWord << 16) | transferMode);
-	} else {
-		writeReg16(kRegCommand, cmdWord);
+		fShadowTransferMode = transferMode;
 	}
+	writeReg32(kRegTransferMode, ((uint32_t)cmdWord << 16) | fShadowTransferMode);
 
 	uint32_t status;
 	if (!waitForIntStatus32(kIntCmdComplete | kIntErrorMask, 1000000, &status)) {
@@ -927,7 +934,34 @@ BCM2837SDHCI::sendCommand(uint8_t cmdIndex, uint32_t arg, uint32_t respType, boo
 		return false;
 	}
 	if (status & kIntErrorMask) {
+		// DAR-316 diagnostic: this branch previously logged only the raw
+		// completion status, unlike the timeout branch above and the
+		// DAT_INHIBIT-stuck precondition branch earlier in this function -
+		// added after two behavioral fix attempts (combining TRANSFER_MODE/
+		// COMMAND writes, first for hasData only, then unconditionally via
+		// fShadowTransferMode) produced a BYTE-IDENTICAL real-hardware
+		// failure both times on a real CMD12 sent right after a clean
+		// 73-block write (every per-block BUFFER_WRITE_READY wait and the
+		// final TRANSFER_COMPLETE check all reported no error). Since
+		// changing how COMMAND is written made no observable difference,
+		// the real cause is not in this function's own write pattern -
+		// this dump is the next real evidence, not a third guess. Real
+		// question it answers: is PRESENT_STATE's DAT_INHIBIT/DAT_LINE_
+		// ACTIVE genuinely still asserted with the physical DAT[3:0] lines
+		// actually held low by the card (real, still-busy programming
+		// tail from the write) at the moment CMD12's own completion is
+		// checked, or do the lines already read idle (software/timing
+		// artifact, e.g. a late-arriving CRC-status interrupt for the
+		// write's last block landing after this driver's own TRANSFER_
+		// COMPLETE check already passed cleanly, then misattributed here)?
+		uint32_t presentState = readReg32(kRegPresentState);
+		uint16_t clockControl = readReg16(kRegClockControl);
+		uint32_t intEnable = readReg32(kRegIntEnable);
 		IOLog("BCM2837SDHCI: CMD%u error, INT_STATUS=%#x\n", cmdIndex, status);
+		IOLog("BCM2837SDHCI: DAR-316 diag: PRESENT_STATE=%#x CLOCK_CONTROL=%#x "
+		    "INT_ENABLE=%#x fPendingIntStatus=%#x cmdIndex=%u hasData=%u arg=%#x\n",
+		    presentState, clockControl, intEnable, fPendingIntStatus, cmdIndex,
+		    hasData, arg);
 		// Same recovery as the timeout case above - a real CRC/index/end-bit
 		// error (SDHCI spec 3.7.1) requires SOFTWARE_RESET_CMD before the
 		// controller can reliably accept another command.
@@ -1639,6 +1673,63 @@ BCM2837SDHCI::writeBlocksPIO(uint64_t startBlock, uint32_t nblks, const void *bu
 	}
 
 	if (nblks > 1) {
+		// DAR-316: real evidence (2026-09-16 real-hw boot log) that
+		// TRANSFER_COMPLETE above reflects only the HOST side of a write
+		// (all data pushed over DAT) - not the CARD's own post-write busy
+		// tail. Per the SD Physical Layer spec, after the last block the
+		// card returns a short CRC-status token over DAT0 (accept/reject) -
+		// separate from the SDHCI-level Transfer Complete indication - then
+		// holds DAT0 busy while it actually programs the flash. A real
+		// register dump at a CMD12 failure decoded PRESENT_STATE=0x1ef0006:
+		// DAT0's own line-level bit read LOW (genuinely held busy by the
+		// card), not idle. Issuing STOP_TRANSMISSION immediately after
+		// TRANSFER_COMPLETE races that real physical tail: a late CRC-
+		// status-token error can still be in flight and gets misattributed
+		// to CMD12's own completion check instead of the write's -
+		// confirmed against real Linux mainline sdhci.c, which has no
+		// quirk recognizing or special-casing this; a trailing data error
+		// there genuinely does land on whatever command's completion check
+		// happens to observe it first. Scoped to nblks>1 only (adversarial
+		// review, 2026-09-16): a single-block write (CMD24) never sends
+		// CMD12 at all, so it was never the command implicated in the real
+		// failure - applying this unconditionally would add ~1s of
+		// latency and a new false-failure surface to a path that was never
+		// observed to fail, for no benefit.
+		//
+		// This gates on the SAME kPresentDatInhibit bit this ticket's own
+		// "DAT_INHIBIT stuck before CMD%u" precondition path has already
+		// caught lying on this exact chip (stuck busy while the DAT[3:0]
+		// line levels read idle-high the whole time) - not the same
+		// mechanism as the R1b busy-wait reverted earlier (that one waited
+		// AFTER an R1b response and risked breaking CMD7/CMD12 under this
+		// chip's SDHCI_QUIRK_BROKEN_R1B; this waits BEFORE CMD12 is ever
+		// issued, on the write's own data-phase tail), but since the bit
+		// itself is already known-unreliable, a timeout here gets the same
+		// real-register diagnostic dump as that other path instead of a
+		// bare log line, so a real-hw recurrence can tell "genuinely still
+		// busy" (DAT[3:0] levels actually low) apart from "stale/stuck bit,
+		// same as before" on sight rather than needing another guess.
+		if (!waitClear32(kRegPresentState, kPresentDatInhibit, 1000000)) {
+			uint32_t presentState = readReg32(kRegPresentState);
+			uint16_t clockControl = readReg16(kRegClockControl);
+			uint32_t intEnable = readReg32(kRegIntEnable);
+			IOLog("BCM2837SDHCI: write: card busy (DAT_INHIBIT) did not clear "
+			    "after TRANSFER_COMPLETE - resetting dat line\n");
+			IOLog("BCM2837SDHCI: DAR-316 diag: PRESENT_STATE=%#x CLOCK_CONTROL=%#x "
+			    "INT_ENABLE=%#x fPendingIntStatus=%#x startBlock=%llu nblks=%u\n",
+			    presentState, clockControl, intEnable, fPendingIntStatus,
+			    (unsigned long long)startBlock, nblks);
+			resetDatLine();
+			return false;
+		}
+		uint32_t busyTailStatus;
+		if (waitForIntStatus32(kIntErrorMask, 10000, &busyTailStatus) && (busyTailStatus & kIntErrorMask)) {
+			IOLog("BCM2837SDHCI: write: real error during post-transfer card-busy "
+			    "tail, INT_STATUS=%#x - resetting dat line\n", busyTailStatus);
+			resetDatLine();
+			return false;
+		}
+
 		uint32_t r[4];
 		if (!sendCommand(12, 0, kCmdRespShortBusy, false, r)) { // STOP_TRANSMISSION
 			IOLog("BCM2837SDHCI: CMD12 (STOP_TRANSMISSION) failed after write - "
