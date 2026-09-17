@@ -12,7 +12,6 @@
 
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/IOPlatformExpert.h>
-#include <pexpert/pexpert.h>	// PE_parse_boot_argn (DAR-316 bisect gate)
 #include <IOKit/network/IONetworkStack.h>
 
 // iokit/bsddev/IOKitBSDInit.cpp (real Apple source, kernel-private). Used
@@ -1487,50 +1486,25 @@ BCM2837DWC2::start(IOService *provider)
 	 * coreInit()); this is the only remaining, and last, level of the
 	 * hierarchy.
 	 */
-	/*
-	 * DAR-316: gated on a boot-arg so real hardware can be bisected
-	 * WITHOUT a full card reflash - boot with `dwc2-poll=1` to skip
-	 * interrupt registration entirely and run the pre-DAR-136 pure-polled
-	 * path (waitForChannelSettled()'s register-poll fallback, which is
-	 * still present by design as a safety net, becomes the only path).
-	 * Default (arg absent) keeps DAR-136's real interrupt-driven
-	 * behavior, so this is a diagnostic escape hatch, not a behavior
-	 * change. Exists because real-hardware DHCP stopped working the same
-	 * day DAR-136 landed, Ethernet here is USB-attached (SMSC9514 behind
-	 * this controller), and a fresh-state QEMU boot still reported
-	 * "poll fallback resolved at least one wait (no interrupt arrived
-	 * within one 1 ms tick)" - i.e. the interrupt path is already not
-	 * firing under emulation, so real silicon is the only place its real
-	 * behavior has ever been observed.
-	 */
-	// Default (not the boot-arg) is what a real-hardware bisect varies --
-	// that board cannot set boot-args at all, see BCM2837SDHCI.cpp's
-	// matching comment. Build with -DDAR316_DWC2_POLL_DEFAULT=1 to ship a
-	// polled-only kernel.
-#ifndef DAR316_DWC2_POLL_DEFAULT
-#define DAR316_DWC2_POLL_DEFAULT 0
-#endif
-	uint32_t dwc2Poll = DAR316_DWC2_POLL_DEFAULT;
-	(void)PE_parse_boot_argn("dwc2-poll", &dwc2Poll, sizeof(dwc2Poll));
-	// Unconditional, so a serial boot log identifies the running variant.
-	IOLog("BCM2837DWC2: DAR-316 gate: dwc2-poll=%u (compiled default %u)\n",
-	    dwc2Poll, (uint32_t)DAR316_DWC2_POLL_DEFAULT);
-	if (dwc2Poll != 0) {
-		IOLog("BCM2837DWC2: interrupt registration SKIPPED, using polled "
-		    "completion only\n");
-	} else {
-		IOReturn intResult = provider->registerInterrupt(0, this, &BCM2837DWC2::interruptOccurred);
-		if (intResult != kIOReturnSuccess) {
-			IOLog("BCM2837DWC2: registerInterrupt failed, %#x\n", intResult);
-			return false;
-		}
-		intResult = provider->enableInterrupt(0);
-		if (intResult != kIOReturnSuccess) {
-			IOLog("BCM2837DWC2: enableInterrupt failed, %#x\n", intResult);
-			return false;
-		}
-		regModify(kDWC2_GAHBCFG, 0, kGAHBCFG_GLBLINTRMSK);
+	// DAR-316's real-hardware DHCP/write-path bugs were bisected against
+	// this too (a `dwc2-poll=1` boot-arg gate, skipping interrupt
+	// registration entirely to run the pre-DAR-136 pure-polled path,
+	// removed once interrupt-driven completion was conclusively
+	// exonerated as a cause and the real root causes were found and
+	// fixed instead - see BCM2837SDHCI.h's class header and the DAR-316
+	// Linear history for the full trail). waitForChannelSettled()'s own
+	// register-poll fallback remains as a safety net regardless.
+	IOReturn intResult = provider->registerInterrupt(0, this, &BCM2837DWC2::interruptOccurred);
+	if (intResult != kIOReturnSuccess) {
+		IOLog("BCM2837DWC2: registerInterrupt failed, %#x\n", intResult);
+		return false;
 	}
+	intResult = provider->enableInterrupt(0);
+	if (intResult != kIOReturnSuccess) {
+		IOLog("BCM2837DWC2: enableInterrupt failed, %#x\n", intResult);
+		return false;
+	}
+	regModify(kDWC2_GAHBCFG, 0, kGAHBCFG_GLBLINTRMSK);
 
 	if (!portPowerOn()) {
 		IOLog("BCM2837DWC2: port power-on failed\n");
@@ -1948,14 +1922,11 @@ BCM2837DWC2::stop(IOService *provider)
 		regWrite(kDWC2_GINTMSK, 0);
 		regWrite(kDWC2_GAHBCFG, 0);
 	}
-	// DAR-316: only unregister if start() actually registered. Boot-args are
-	// immutable at runtime, so re-parsing here is guaranteed to match the
-	// decision start() made.
-	uint32_t dwc2Poll = DAR316_DWC2_POLL_DEFAULT;
-	(void)PE_parse_boot_argn("dwc2-poll", &dwc2Poll, sizeof(dwc2Poll));
-	if (dwc2Poll == 0) {
-		provider->unregisterInterrupt(0);
-	}
+	// start() always registers the interrupt now (see its own DAR-316
+	// comment - the dwc2-poll bisect gate that used to make this
+	// conditional was removed once interrupt-driven completion was
+	// exonerated as a cause).
+	provider->unregisterInterrupt(0);
 	super::stop(provider);
 }
 
