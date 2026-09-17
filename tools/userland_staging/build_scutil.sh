@@ -534,37 +534,34 @@ for s in _el_init _el_end _el_gets _el_set _el_get _el_source \
 done
 echo "real libedit: all 9 entry points bind /usr/lib/libedit.3.dylib"
 
-# DAR-286: libedit.dylib carries exactly ONE flat-namespace deferral,
-# _fork (see build_libedit.sh's header for the two real reasons it cannot
-# live inside a dylib here). An unresolved flat-namespace bind really
-# does abort dyld-940 at load -- a first attempt at this ticket deferred
-# six symbols and scutil died with
-#   dyld[10]: symbol not found in flat namespace '_execlp'
-# on a real boot. So this is checked rather than assumed: some image
-# scutil actually loads must really export _fork.
-# Matched by real LC_ID_DYLIB install_name, not by filename: several
-# dylibs here ship a versioned install_name whose basename is NOT their
-# built filename (libncurses.dylib -> /usr/lib/libncurses.5.4.dylib,
-# libresolv.dylib -> /usr/lib/libresolv.9.dylib), so a basename compare
-# would silently skip them and could report a false "no owner".
-SCUTIL_LOADS=$(otool -L scutil.macho | tail -n +2 | awk '{print $1}')
-FORK_OWNER=""
-for cand in "$OUT"/system/*.dylib; do
-    iname=$(otool -D "$cand" 2>/dev/null | tail -n +2)
-    [ -n "$iname" ] || continue
-    echo "$SCUTIL_LOADS" | grep -qxF "$iname" || continue
-    if nm -gU "$cand" 2>/dev/null | grep -qE "^[0-9a-f]+ T _fork\$"; then
-        FORK_OWNER="$iname"
-        break
+# DAR-286 originally needed a real gate here because libedit.dylib
+# deferred _fork to the flat namespace, and that deferral only survived
+# because libSystemConfiguration.dylib happened to incidentally export
+# _fork -- a real, load-bearing coupling that had to be checked rather
+# than assumed (see build_libedit.sh's old header, and this git history,
+# for the "-Wl,-U,_fork" story in full).
+#
+# DAR-292 (2026-09-17) closed that gap for real: libsystem_c.dylib is
+# now _fork's real canonical dylib owner, libedit.dylib links it
+# directly, and libedit.dylib's own build now asserts ZERO flat-
+# namespace deferrals (build_libedit.sh's own DEFERRED/EXPECTED gate).
+# So there is no longer a real "does some loaded image happen to
+# provide this" question to answer here -- it is a normal, non-deferred
+# two-level bind, checked the same way as every other real sibling call.
+# Kept as a real check anyway, same shape as the DAR-285/DAR-286 gates
+# above: a reintroduced private fork()/waitpid()/execlp() in scutil
+# itself would link and run, but would silently un-fix DAR-292 for this
+# binary specifically.
+for s in _fork _waitpid _execlp; do
+    if nm -gU scutil.macho 2>/dev/null | grep -qE "^[0-9a-f]+ T $s\$"; then
+        echo "error: scutil.macho DEFINES $s locally -- DAR-292 made libsystem_c.dylib" >&2
+        echo "       (via libedit.dylib, already linked) the real canonical owner;" >&2
+        echo "       a private copy here reintroduces the exact duplicate-static-copy" >&2
+        echo "       risk that ticket closed." >&2
+        exit 1
     fi
 done
-if [ -z "$FORK_OWNER" ]; then
-    echo "error: no dylib scutil.macho loads exports _fork, but libedit.dylib" >&2
-    echo "       defers it to the flat namespace -- scutil would abort at dyld" >&2
-    echo "       load with \"symbol not found in flat namespace '_fork'\"." >&2
-    exit 1
-fi
-echo "real libedit: its one _fork flat-namespace deferral resolves via $FORK_OWNER"
+echo "real DAR-292: scutil.macho carries no private fork()/waitpid()/execlp() copy"
 
 # DAR-287 gates, same shape as the two above. Both symbol families used
 # to be satisfied by a private local copy in this binary; each now has to

@@ -103,28 +103,34 @@
 #     the cursor until a database is installed. Filed as DAR-293;
 #     deliberately not claimed as working here.
 #
-# SIX REAL LIBC SYMBOLS WITH NO CANONICAL DYLIB OWNER
-# ===================================================
-# Real Apple's libedit.3.dylib links libSystem, which owns these. This
-# project has no canonical dylib home for any of them yet -- that is real
-# pre-existing "static-vs-dylib architecture debt" (docs/daemon-roadmap.md),
-# not something this script created. Each is closed below with a REAL,
-# already-in-this-repo implementation, compiled or reused into this
-# dylib and then NARROWED (`-unexported_symbols_list`) so libedit does
-# not become a second public exporter of a libc name -- the same
+# FOUR REAL LIBC SYMBOLS WITH NO CANONICAL DYLIB OWNER (was six, then
+# seven-minus-fork; DAR-292, 2026-09-17, closed three of these for real)
+# ====================================================================
+# Real Apple's libedit.3.dylib links libSystem, which owns all of these.
+# This project's own canonical-dylib-owner gaps for _execlp/_waitpid/
+# _fork are now CLOSED (DAR-292: libsystem_c.dylib -- real Apple's own
+# home for the first two, plus a real, narrower fork() that omits only
+# dispatch_atfork_* for a real, verified ld64 build-order-cycle reason;
+# see that script's own updated header). libedit.dylib already links
+# libsystem_c.dylib directly (this script's own final link line, below)
+# and libsystem_c.dylib already links libsystem_malloc.dylib (which now
+# carries the real __fork raw trap, DAR-292's other half) -- so all
+# three now resolve as NORMAL, non-deferred cross-dylib binds, same as
+# every other real sibling reference in this dylib. Nothing above this
+# dylib needed to change for that: the fix lives entirely in
+# libsystem_c.dylib/libsystem_malloc.dylib and this dylib's own link
+# line just stopped defining private local copies and stopped deferring
+# _fork.
+#
+# The remaining two (setjmp/longjmp's real pair, and _unvis) still have
+# no canonical dylib home in this project and are closed below with a
+# REAL, already-in-this-repo implementation, compiled or reused into
+# this dylib and then NARROWED (`-unexported_symbols_list`) so libedit
+# does not become a second public exporter of a libc name -- the same
 # "keep the real local definition, hide the public export" technique
 # build_ncurses_dylib.sh already uses for _nanosleep and the
 # mach_ipc_clock globals:
 #
-#   _execlp  -- real Libc/gen/FreeBSD/exec.c, already compiled by
-#               build_launchd_syscalls.sh (exec.o in
-#               liblaunchd_syscalls_no_dup.a), with its real __execve
-#               private-name shim (private_names_compat.o) and real
-#               generated execve syscall stub (sys__execve.o).
-#   _waitpid -- real Libc/gen/FreeBSD/waitpid.c (waitpid.o) + this
-#               project's own real curated public waitpid()
-#               (waitpid_compat.o) + the real __wait4_nocancel syscall
-#               stub, all from the same already-built archive.
 #   _setjmp/_longjmp
 #            -- this project's OWN real, already-shipped arm64
 #               implementation: ed_setjmp_compat.c + ed_setjmp_raw.o
@@ -144,49 +150,30 @@
 #               separate cleanup (unvis.macho already defines it
 #               locally), so it lives here, narrowed, for now.
 #
-# THE ONE REMAINING DEFERRAL: _fork
-# =================================
-# _fork is genuinely different and is the single `-Wl,-U` left. Two real,
-# separately-verified reasons a private copy is not possible here:
+# WHAT USED TO BE HERE: _fork's -Wl,-U DEFERRAL, NOW GONE
+# =========================================================
+# Until DAR-292, _fork was a single `-Wl,-U` flat-namespace deferral,
+# safe only because it happened to resolve via libSystemConfiguration.dylib
+# (which scutil, but nothing else, loads) -- build_scutil.sh gated on
+# that explicitly, and any future consumer of libedit.dylib that did not
+# also load libSystemConfiguration.dylib would have aborted at dyld load
+# with "symbol not found in flat namespace '_fork'". DAR-292 replaced
+# that real coupling with a real, canonical libsystem_c.dylib export, so
+# this dylib no longer defers _fork at all -- see the gate near the end
+# of this script (`DEFERRED` / `EXPECTED=""`) for the real, empty
+# flat-namespace closure this now asserts.
 #
-#   1. Real Libc/sys/fork.c's body calls three function pointers
-#      (_libSystem_atfork_prepare/_parent/_child) only ever set by
-#      _libc_fork_init(). A private copy would have them permanently
-#      NULL -- precisely the duplicate-static-copy bug class this
-#      project has been bitten by five separate times (see
-#      dup_symbol_audit.sh's own header).
-#   2. This project's own curated replacement (fork_compat.o, which
-#      fixes exactly that by calling the real handlers directly) cannot
-#      be linked into a dylib either, and this was verified by a real
-#      link attempt, not assumed:
-#        ld: fixup error (kind=arm64_adrp_lo12) at '___fork'+0x18 from
-#            sys____fork.o, target '__current_pid' does not have address
-#      The real __fork syscall asm updates libsystem_malloc.dylib's
-#      `__current_pid` cache through a direct adrp/lo12 pair, which needs
-#      a LOCAL definition -- so hosting fork here would fork that cached
-#      pid into two copies. Same real class as the rune-locale globals
-#      build_libresolv_dylib.sh/build_ncurses_dylib.sh document.
-#
-# 79 of the 101 shipped .macho binaries currently carry their own static
-# copy of _fork; giving it one real dylib owner is a real, separate
-# cleanup, filed as DAR-292.
-#
-# That deferral is SAFE HERE, and this was established by a real QEMU
-# boot, not by assumption. Unresolved flat-namespace binds DO abort
-# dyld-940 at load -- a first attempt deferred all six and scutil died
-# with `dyld[10]: symbol not found in flat namespace '_execlp'`, which is
-# why the other five are now real. _fork survives because flat-namespace
-# lookup really does resolve it: libSystemConfiguration.dylib, which
-# scutil loads, exports a real _fork (confirmed with `nm -gU`), and the
-# same boot proved it -- the abort was on _execlp, never on _fork, even
-# though _fork was deferred identically. build_scutil.sh now gates on
-# that explicitly rather than leaving it to luck.
-#
-# What the deferral costs is bounded and was checked against scutil's
-# real source: _fork's only consumer inside libedit is vi_histedit()
-# (vi.c), the vi-mode `v` command, and scutil.c does
-# `el_set(src->el, EL_EDITOR, "emacs")`, so vi's keymap is never
-# installed and vi_histedit is unreachable there.
+# 84 of the 101 shipped .macho binaries still carry their own private
+# static copy of _fork/_waitpid, and that count is UNCHANGED by this
+# fix -- libedit.dylib/scutil.macho were never members of that set to
+# begin with (they used the flat-namespace deferral just removed, not a
+# private copy). This dylib is still real, converted, verified work: it
+# closes the flat-namespace hazard and the incidental
+# libSystemConfiguration.dylib coupling, and is the template the actual
+# 84-binary sweep should copy. DAR-292's own Linear comment has the
+# concrete recipe (including the single real leverage point,
+# cp_mv_syscalls.c, that build_simple_cmds.sh links into most of the 84
+# via its COMMON_EXTRA list) for converting the rest.
 #
 # APPLE'S OWN EXPORT LIST
 # =======================
@@ -281,28 +268,14 @@ if [ ! -f "$OUT/system/libdispatch.dylib" ]; then
     echo "error: $OUT/system/libdispatch.dylib not found -- run build_libdispatch_dylib.sh first" >&2
     exit 1
 fi
-# Real exec()/waitpid() family objects (see this script's header) -- real
-# Apple Libc source, already compiled by that script, reused verbatim
-# rather than recompiled with a second set of flags.
+# exec()/waitpid()/fork() no longer need extracting from
+# liblaunchd_syscalls.a here at all (DAR-292, 2026-09-17): this dylib
+# already links libsystem_c.dylib, which is now their real canonical
+# dylib owner (see this script's own updated header). The
+# liblaunchd_syscalls_no_dup.a scratch copy this block used to prepare
+# (for exactly that extraction, plus the smoketest's own FORKOBJ below)
+# is gone with it -- nothing else in this script reads it.
 #
-# Real gap, found 2026-09-14: liblaunchd_syscalls_no_dup.a was never
-# actually produced anywhere -- only referenced/checked/extracted from
-# here, with an error message wrongly pointing at build_launchd_syscalls.sh
-# (which builds the real, un-suffixed liblaunchd_syscalls.a, already a
-# real prerequisite of several other scripts this session). Only
-# surfaced now by actually running this script for the first time in a
-# real order. Derived here as a scratch copy of the real archive (same
-# "cp + ar d + ar r" pattern already established in
-# build_dyld_link.sh's own libmalloc_scratch.a/dyld_core_scratch.a) --
-# currently a straight copy (no member actually removed yet); if a real
-# duplicate-symbol conflict surfaces linking this dylib, fix it here by
-# actually removing the specific conflicting member, verified against a
-# real link error, not guessed in advance.
-if [ ! -f "$OUT/liblaunchd_syscalls.a" ]; then
-    echo "error: $OUT/liblaunchd_syscalls.a not found -- run build_launchd_syscalls.sh first" >&2
-    exit 1
-fi
-cp "$OUT/liblaunchd_syscalls.a" "$OUT/liblaunchd_syscalls_no_dup.a"
 # This project's own real arm64 setjmp/longjmp register asm (see
 # ed_setjmp_compat.c / ed_setjmp_raw.s).
 if [ ! -f "$OUT/ed_setjmp_raw.o" ]; then
@@ -440,32 +413,23 @@ fi
 #    in this project yet.
 #
 # See this script's header for the full per-symbol justification. All of
-# these are REAL implementations already in this repo -- six reused as
-# already-built objects out of liblaunchd_syscalls_no_dup.a, one reused
-# as a already-built object (ed_setjmp_raw.o), two compiled here -- and
+# these are REAL implementations already in this repo -- one reused as
+# an already-built object (ed_setjmp_raw.o), two compiled here -- and
 # every public name they carry is narrowed out of this dylib's export
 # table below, so libedit never becomes a second public exporter of a
 # libc symbol.
+#
+# execlp()/waitpid()/fork() used to be extracted here too (six objects
+# out of a scratch liblaunchd_syscalls_no_dup.a copy) -- REMOVED
+# 2026-09-17 (DAR-292): libsystem_c.dylib (already linked below) is now
+# their real canonical dylib owner, so vi.c/history.c's own calls to
+# these three simply bind the sibling directly, same as every other real
+# libc call in this dylib. Nothing replaces this block; there is
+# nothing left to extract.
 # ------------------------------------------------------------------
 EXTRA="$OUT/libedit_extra"
 rm -rf "$EXTRA"
 mkdir -p "$EXTRA"
-
-# Real Apple Libc exec.c + waitpid.c and their real syscall stubs, as
-# already compiled by build_launchd_syscalls.sh. Extracted by name (not
-# by linking the whole archive) so nothing else in it can be dragged in
-# silently -- an archive on the link line would happily satisfy an
-# unrelated libedit reference from a static member instead of letting it
-# bind the real sibling dylib.
-#   exec.o                    real execlp/execl/execv/execvp/... family
-#   private_names_compat.o    real __execve private-name shim exec.o calls
-#   sys__execve.o             real generated execve(2) syscall stub
-#   waitpid.o                 real Libc waitpid.c (__waitpid)
-#   waitpid_compat.o          real curated public waitpid()
-#   sys____wait4_nocancel.o   real generated __wait4_nocancel(2) stub
-(cd "$EXTRA" && ar x "../liblaunchd_syscalls_no_dup.a" \
-    exec.o private_names_compat.o sys__execve.o \
-    waitpid.o waitpid_compat.o sys____wait4_nocancel.o)
 
 # This project's own real arm64 setjmp/longjmp (see the header, and
 # ed_setjmp_compat.c's own, for why Apple's setjmp.s cannot be used).
@@ -501,25 +465,17 @@ cp "$LE/unexports" "$UNEXPORTS"
 # define -- re-derive it with, and keep it equal to:
 #   nm -m libc_build/libedit_extra/*.o | grep '(__' | grep -v non-external \
 #       | awk '{print $NF}' | sort -u
-# (27 names; deliberately does NOT include _fork/___fork, because no fork
-# object is linked into this dylib at all -- see the header.)
+# (13 names -- was 27 before DAR-292 removed the exec()/waitpid()/fork()
+# family: those are no longer defined anywhere in this dylib at all, so
+# there is nothing left of them to narrow. _fork/___fork were never in
+# this list even before DAR-292 -- no fork object was ever linked into
+# this dylib, it was a pure `-Wl,-U` flat-namespace deferral instead,
+# also now gone, see the header and the DEFERRED/EXPECTED gate below.)
 cat >> "$UNEXPORTS" <<'EOF'
 ___ed_longjmp_raw
 ___ed_setjmp_raw
-___wait4_nocancel
-___waitpid
-__execve
-__execvpe
 __longjmp
 __setjmp
-__sigaction
-_execl
-_execle
-_execlp
-_execv
-_execve
-_execvp
-_execvP
 _longjmp
 _setjmp
 _siglongjmp
@@ -529,8 +485,6 @@ _strnunvisx
 _strunvis
 _strunvisx
 _unvis
-_wait4
-_waitpid
 EOF
 
 # ------------------------------------------------------------------
@@ -549,10 +503,10 @@ rm -f "$OUT/system/libedit.dylib"
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -Wl,-unexported_symbols_list,"$UNEXPORTS" \
-    `# the ONE remaining deferral -- see this script's header for the two` \
-    `# real, separately-verified reasons _fork cannot live in a dylib` \
-    `# here, and for the real QEMU evidence that this one resolves.` \
-    -Wl,-U,_fork \
+    `# No -Wl,-U,_fork here any more (DAR-292, 2026-09-17): libsystem_c.dylib` \
+    `# (linked below) is now _fork's real canonical owner, so vi.c's` \
+    `# reference binds it directly like any other real sibling call --` \
+    `# see this script's own updated header for the full real story.` \
     -o "$OUT/system/libedit.dylib" \
     "$OBJ"/*.o \
     "$EXTRA"/*.o \
@@ -608,13 +562,13 @@ if [ "$NEXPORTS" -ne 110 ]; then
     exit 1
 fi
 
-echo "declared -Wl,-U deferrals (expect exactly _fork -- see the header):"
+echo "declared -Wl,-U deferrals (expect NONE -- DAR-292 closed the one that used to be here, _fork):"
 xcrun dyld_info -fixups "$OUT/system/libedit.dylib" 2>/dev/null | grep '<flat-namespace>' | awk '{print "  " $NF}' | sort -u
 DEFERRED=$(xcrun dyld_info -fixups "$OUT/system/libedit.dylib" 2>/dev/null | grep '<flat-namespace>' | awk '{print $NF}' | sed 's|.*/||' | sort -u | tr '\n' ' ')
-EXPECTED="_fork "
+EXPECTED=""
 if [ "$DEFERRED" != "$EXPECTED" ]; then
     echo "error: flat-namespace deferral set changed" >&2
-    echo "  expected: $EXPECTED" >&2
+    echo "  expected: (none)" >&2
     echo "  actual:   $DEFERRED" >&2
     echo "  NOTE: an unresolved flat-namespace bind really does abort dyld-940" >&2
     echo "  at load (proved by a real QEMU boot, see this script's header) --" >&2
@@ -649,34 +603,20 @@ echo "libedit.dylib: every non-deferred external reference binds to a real, name
 # ------------------------------------------------------------------
 rm -f libedit_smoketest.macho
 "$CLANG" "${CFLAGS[@]}" libedit_smoketest.c -o "$OBJ/../libedit_smoketest.o"
-# libedit.dylib's one flat-namespace deferral, _fork, has to resolve in
-# THIS process too -- scutil gets it from libSystemConfiguration.dylib,
-# which a smoketest has no business loading. So this executable carries
-# the real objects itself, exactly as the other 79 shipped .macho
-# binaries in this project already do:
-#   fork_compat.o   this project's own real curated fork() (calls the
-#                   real atfork handlers directly rather than through
-#                   Libc's never-initialised function pointers)
-#   sys____fork.o   the real generated __fork(2) asm stub
-#   sys_getpid.o    from libmalloc.a -- owns the `__current_pid` cache
-#                   sys____fork.o updates through a direct adrp/lo12
-#                   pair, so the two MUST be in the same image (real
-#                   Apple marks it .private_extern in
-#                   libsyscall/custom/__getpid.s for exactly that
-#                   reason). This pairing is also precisely why fork
-#                   cannot live inside libedit.dylib -- see the header.
-FORKOBJ="$EXTRA/fork_for_smoketest"
-rm -rf "$FORKOBJ"
-mkdir -p "$FORKOBJ"
-(cd "$FORKOBJ" && ar x "../../liblaunchd_syscalls_no_dup.a" fork_compat.o sys____fork.o \
-    && ar x "../../libmalloc.a" sys_getpid.o)
+# Used to carry its own private fork_compat.o/sys____fork.o/sys_getpid.o
+# here (libedit.dylib's one flat-namespace deferral, _fork, had to
+# resolve in THIS process too, and scutil got it from
+# libSystemConfiguration.dylib -- a smoketest has no business loading
+# that). REMOVED 2026-09-17 (DAR-292): libedit.dylib no longer defers
+# _fork at all, and this binary already links libsystem_c.dylib +
+# libsystem_malloc.dylib below (their real canonical owners now), so
+# there is nothing left to carry privately.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
     -B"$NEWLD_BINDIR" -Wl,-fixup_chains \
     -o libedit_smoketest.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/libedit_smoketest.o" \
     "$OUT/chk_fail.o" \
-    "$FORKOBJ"/*.o \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" \
     "$OUT/system/libsystem_blocks.dylib" "$OUT/system/libsystem_pthread.dylib" \
     "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_c.dylib" \

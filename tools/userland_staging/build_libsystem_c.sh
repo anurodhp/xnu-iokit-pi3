@@ -716,9 +716,29 @@ SYSCFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -I $XNU/libsyscall/cust
 # mkdir(2) was defined only in libremovefile.dylib and libncurses.dylib,
 # neither of which is its real home, and libsystem_c already generated
 # its _mkdirat sibling from this very loop.
-for s in _access _ftruncate _mkdir _mkdirat _sigprocmask _read; do
+# _execve added 2026-09-17 (DAR-292): raw execve(2) trap, real public
+# name straight out of the generator (`MI_ENTRY_POINT(_execve)`, no
+# triple-underscore raw/public split the way ___wait4_nocancel below
+# needs) -- exec.c's own real `_execve(...)` calls resolve to this
+# directly, no alias needed.
+for s in _access _ftruncate _mkdir _mkdirat _sigprocmask _read _execve; do
     "$CLANG" $SYSCFLAGS "$TMPGEN/${s}.s" -o "$EXTRACT/sys${s}.o"
 done
+# __wait4/__wait4_nocancel added 2026-09-17 (DAR-292): real waitpid.c
+# (compiled below) is built with this dylib's own SIGLIST_CFLAGS, which
+# already sets -DVARIANT_CANCELABLE -- so it takes waitpid.c's
+# `#ifdef VARIANT_CANCELABLE` branch and calls `__wait4` (cancelable),
+# NOT `__wait4_nocancel`. Real trial compile confirmed this the hard
+# way: a first attempt compiled only the _nocancel raw trap and the link
+# failed with "___wait4, referenced from: ___waitpid in waitpid.o".
+# ___wait4_nocancel is compiled anyway (unused by waitpid.c here, but
+# real and harmless) purely because the generator auto-appends a real
+# `.globl _wait4 / .set _wait4, ___wait4_nocancel` alias to that one
+# file specifically (confirmed by reading the generated .s, not
+# assumed) -- so this one extra compile gives this dylib a real, public
+# plain `wait4()` for free, matching real Apple's own export surface.
+"$CLANG" $SYSCFLAGS "$TMPGEN/___wait4.s" -o "$EXTRACT/sys___wait4.o"
+"$CLANG" $SYSCFLAGS "$TMPGEN/___wait4_nocancel.s" -o "$EXTRACT/sys___wait4_nocancel.o"
 # fstatat: real generated _fstatat.s is an empty placeholder (no
 # MI_ENTRY_POINT at all, confirmed by reading the generator's own
 # output, not guessed) -- the real implementation is _fstatat64.s,
@@ -733,6 +753,54 @@ done
 # build_libdyld.sh's own -Wl,-alias list already uses for ___kill/etc).
 "$CLANG" $SYSCFLAGS "$TMPGEN/___rmdir.s" -o "$EXTRACT/sys_rmdir.o"
 "$CLANG" $SYSCFLAGS "$TMPGEN/___unlink.s" -o "$EXTRACT/sys_unlink.o"
+
+# fork()/waitpid()/execlp() real canonical home (DAR-292, 2026-09-17):
+# split out of DAR-286, where scutil/libedit's own real `-Wl,-U,_fork`
+# flat-namespace deferral only worked because libSystemConfiguration.dylib
+# happened to incidentally export `_fork` from configd's own compat
+# objects, not from being the designated owner (see that script's own
+# header). 84 of 101 shipped .macho binaries carry a private static copy
+# of `_fork` today (re-measured 2026-09-17 via `nm` across every built
+# .macho -- the ticket's own 2026-09-11 count of 79 is stale, 5 more
+# since then) -- this dylib is now the one real, canonical owner for
+# new/converted consumers; the 84 are real, separate follow-on sweep
+# work (DAR-292's own Linear comment has the concrete recipe, including
+# the single real leverage point for most of them).
+#
+# waitpid.c/exec.c are real, unmodified Apple/FreeBSD source
+# (Libc/gen/FreeBSD/waitpid.c, Libc/gen/FreeBSD/exec.c) -- the exact same
+# files build_launchd_syscalls.sh already compiles for launchd's own
+# private copy (see that script's own header for the two real fixes both
+# files needed: `__weak_reference(sym,alias)` expanding to nothing in
+# this project's fbsdcompat/sys/cdefs.h, neutralized the same way here).
+# Unlike that launchd copy, this compile needs NO private-name forwarding
+# shims for `_execve`/`_write`/`_sigaction` -- all three are already
+# real, public, local definitions in THIS dylib (sys_execve.o, just
+# compiled above; libc_stdio's own fwrite.o-adjacent _write; and DAR-164's
+# real Libc/sys/sigaction.c, both already resident here -- confirmed via
+# `nm`, not assumed) rather than launchd's forwarding stand-ins.
+# exec.c calls the real private-namespace names (_execve/_write)
+# directly (un-namespace.h convention) with no visible prototype in any
+# header this project's SDK ships -- real Apple's own libc_private.h
+# doesn't declare them either (they're syscall-generator output, not
+# hand-written API). Reuses launchd_syscall_compat_headers/
+# private_names_decls.h purely for its 4 extern prototypes (declarations
+# only -- NOT the corresponding launchd_syscall_wrappers_compat.c
+# forwarding bodies, which this dylib doesn't need: _execve/_write are
+# already real, public, local definitions here, see this block's own
+# header comment above).
+"$CLANG" $SIGLIST_CFLAGS -D'__weak_reference(sym,alias)=' \
+    -include launchd_syscall_compat_headers/private_names_decls.h \
+    "$LIBC/gen/FreeBSD/exec.c" -o "$EXTRACT/exec.o"
+"$CLANG" $SIGLIST_CFLAGS -D'__weak_reference(sym,alias)=' \
+    "$LIBC/gen/FreeBSD/waitpid.c" -o "$EXTRACT/waitpid.o"
+
+# real fork() -- see libsystem_c_fork_compat.c's own header for the full
+# real, verified reasoning on why this canonical version omits
+# dispatch_atfork_* (a real, confirmed ld64 build-order cycle:
+# libdispatch.dylib reexports THIS dylib, so this dylib cannot also need
+# a symbol from it) unlike launchd's own richer private copy.
+"$CLANG" $SIGLIST_CFLAGS libsystem_c_fork_compat.c -o "$EXTRACT/fork_compat.o"
 
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libsystem_c.dylib"
@@ -856,6 +924,33 @@ rm -f "$OUT/system/libsystem_c.dylib"
     -Wl,-alias,_fdopen,'_fdopen$UNIX2003' \
     -Wl,-alias,_strtod,'_strtod$UNIX2003' \
     -Wl,-alias,___strtok_r,_strtok_r \
+    `# waitpid.c's own real __waitpid() never gets its public "waitpid"/` \
+    `# "_waitpid" aliases in this project -- the real` \
+    `# __weak_reference(sym,alias) mechanism it relies on is a no-op here` \
+    `# (fbsdcompat/sys/cdefs.h, same real gap build_launchd_syscalls.sh's` \
+    `# own header already documents for its private copy). Base` \
+    `# (___waitpid) is genuinely local to this link (exec/waitpid.o,` \
+    `# compiled above), same nonlocal-base requirement as every other` \
+    `# alias here.` \
+    -Wl,-alias,___waitpid,_waitpid \
+    -Wl,-alias,___waitpid,__waitpid \
+    `# exec.c's own un-namespace.h convention calls the PRIVATE,` \
+    `# POSIX-reserved name "_execve" directly (real trial link confirmed` \
+    `# this, not assumed: "undefined symbols: __execve, referenced from` \
+    `# _execl in exec.o"). Real Apple's libsyscall generator/syscall.map` \
+    `# never actually alias it (checked, no entry in Platforms/` \
+    `# syscall.map or the iPhoneOS arm64 variant) -- launchd's own` \
+    `# private copy works around the same real gap with a forwarding` \
+    `# compat .c (launchd_syscall_compat_headers/private_names_compat.c).` \
+    `# This dylib already has a real, local, base "_execve" (sys_execve.o` \
+    `# just compiled above), so a plain alias is simpler than a` \
+    `# forwarding call. exec.c's other private name, "_write", needed NO` \
+    `# alias at all -- libc_locale_syscalls.o (already resident here)` \
+    `# already defines it for real, confirmed by a real "duplicate` \
+    `# symbol" link error on a first attempt that added one anyway.` \
+    `# Base is genuinely local to this link, same nonlocal-base` \
+    `# requirement as every other alias here.` \
+    -Wl,-alias,_execve,__execve \
     `# Plain, non-$UNIX2003 spellings of the environment setters. This` \
     `# dylib compiles real Apple setenv.c with -D__DARWIN_UNIX03=1, which` \
     `# emits ONLY the asm-labeled $UNIX2003 names, but real callers` \

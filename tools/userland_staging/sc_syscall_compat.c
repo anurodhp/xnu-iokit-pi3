@@ -1,31 +1,51 @@
 /* Real raw-syscall wrappers + honest stand-ins for the real, unmodified
- * SCD*.c/SCP*.c/dy_framework.c call sites (fork()/execv() in
- * SCDPlugin.c's real plugin-child-process spawn path, chown()/dup2()/
- * setgid()/setuid() also in SCDPlugin.c, fchmod() in SCPCommit.c,
- * getattrlist() in SCPLock.c, usleep() in SCDNotifierInformViaCallback.c's
- * retry backoff, pthread_setcanceltype() in SCDOpen.c, backtrace()/
- * backtrace_symbols() in SCDPrivate.c's real _SC_copyBacktrace()) that
- * this project's existing dylib stack doesn't export yet. Same real
- * carry-flag raw-asm pattern every other hand-written NO_SYSCALL_STUB
- * shim in this project uses (getty_syscalls.c/cp_mv_syscalls.c/
- * bash_syscalls.c), real syscall numbers cross-checked against
- * third_party/xnu-7195/bsd/kern/syscalls.master, not guessed.
+ * SCD*.c/SCP*.c/dy_framework.c call sites (chown()/dup2()/setgid()/
+ * setuid() in SCDPlugin.c, fchmod() in SCPCommit.c, getattrlist() in
+ * SCPLock.c, usleep() in SCDNotifierInformViaCallback.c's retry backoff,
+ * pthread_setcanceltype() in SCDOpen.c, backtrace()/backtrace_symbols()
+ * in SCDPrivate.c's real _SC_copyBacktrace()) that this project's
+ * existing dylib stack doesn't export yet. Same real carry-flag raw-asm
+ * pattern every other hand-written NO_SYSCALL_STUB shim in this project
+ * uses (getty_syscalls.c/cp_mv_syscalls.c/bash_syscalls.c), real syscall
+ * numbers cross-checked against third_party/xnu-7195/bsd/kern/
+ * syscalls.master, not guessed.
  *
- * chown/dup2/setgid/setuid/execve are NOT here -- all five already have
- * real, already-built, standalone raw-syscall objects from
- * build_simple_cmds.sh's own generic SYS_STUBS_NEEDED batch
- * (libc_build/simple_obj/sys__chown.o etc, confirmed via `nm` to export
- * exactly _chown/_dup2/_setgid/_setuid/_execve), linked in directly by
- * this script rather than hand-duplicated here (same "reuse the
- * already-generated stub" precedent getty_syscalls.c's own header
- * comment documents for the same five).
+ * fork()/execv()/wait4() USED TO be defined here too (SCDPlugin.c's real
+ * plugin-child-process spawn path) -- REMOVED 2026-09-17 (DAR-292).
+ * They were a real, honest, but genuinely narrower stand-in than real
+ * Libc's own fork()/exec()/waitpid() family (this file's own prior
+ * header said so explicitly: no pthread_atfork()/malloc-fork-hook
+ * dispatch at all). That was tolerable while no dylib in this project
+ * had a canonical fork()/waitpid()/execlp() owner -- but DAR-292 gave
+ * libsystem_c.dylib (already linked below) exactly that, and dup_symbol_
+ * audit.sh caught the two versions colliding for real the moment the
+ * canonical one existed: `_execv`/`_execve`/`_fork`/`_wait4` all showed up
+ * as genuine dylib-vs-dylib duplicates (this dylib's own private copies
+ * vs libsystem_c.dylib's new real ones), the exact bug class this
+ * project has been bitten by five separate times before (see
+ * dup_symbol_audit.sh's own header). Deleting the private copies here
+ * and letting SCDPlugin.c's real calls bind the sibling libsystem_c.dylib
+ * directly is a strict improvement, not just a dedup: it gains the real
+ * pthread_atfork()/malloc-fork-hook orchestration this stand-in
+ * explicitly never had.
+ *
+ * chown/dup2/setgid/setuid are NOT here -- all four already have real,
+ * already-built, standalone raw-syscall objects from build_simple_cmds.sh's
+ * own generic SYS_STUBS_NEEDED batch (libc_build/simple_obj/sys__chown.o
+ * etc, confirmed via `nm` to export exactly _chown/_dup2/_setgid/_setuid),
+ * linked in directly by this script rather than hand-duplicated here
+ * (same "reuse the already-generated stub" precedent getty_syscalls.c's
+ * own header comment documents for the same four). sys__execve.o used to
+ * be reused the same way for a fifth, _execve -- also removed 2026-09-17
+ * for the same real duplicate-owner reason (libsystem_c.dylib's own real
+ * sys_execve.o, DAR-292, is the sibling now, and build_libsystemconfiguration_
+ * client.sh's own link line no longer lists sys__execve.o at all).
  */
 #include <stdint.h>
 #include <stddef.h>
 #include <sys/types.h>
 
 extern long cerror_nocancel(int err);
-extern char **environ;
 
 static inline long sc_syscall0(long num) {
 	register long x0 asm("x0");
@@ -54,22 +74,6 @@ static inline long sc_syscall2(long num, long a0, long a1) {
 	return x0;
 }
 
-static inline long sc_syscall4(long num, long a0, long a1, long a2, long a3) {
-	register long x0 asm("x0") = a0;
-	register long x1 asm("x1") = a1;
-	register long x2 asm("x2") = a2;
-	register long x3 asm("x3") = a3;
-	register long x16 asm("x16") = num;
-	long is_error;
-	asm volatile("svc #0x80\n"
-	             "cset %1, cs"
-	             : "+r"(x0), "=r"(is_error)
-	             : "r"(x1), "r"(x2), "r"(x3), "r"(x16)
-	             : "memory", "cc");
-	if (is_error) return cerror_nocancel((int)x0);
-	return x0;
-}
-
 static inline long sc_syscall5(long num, long a0, long a1, long a2, long a3, long a4) {
 	register long x0 asm("x0") = a0;
 	register long x1 asm("x1") = a1;
@@ -87,67 +91,15 @@ static inline long sc_syscall5(long num, long a0, long a1, long a2, long a3, lon
 	return x0;
 }
 
-#define SC_SYS_FORK       2
-#define SC_SYS_WAIT4      7
 #define SC_SYS_FCHMOD     124
 #define SC_SYS_GETATTRLIST 220
 
-extern int execve(const char *path, char *const argv[], char *const envp[]);
-
-/* execv(): real, standard BSD shape (Libc/gen/FreeBSD/exec.c's own real
- * body, reproduced verbatim here rather than compiling that whole file
- * in -- exec.c also defines execl/execle/execlp/execvp/execvP, several
- * of which risk colliding with symbols this project's Libc tiers may
- * already provide elsewhere, same real duplicate-copy risk class this
- * project's history has hit before). Real real_execve is the already-
- * built sys__execve.o object (linked in by this script), not
- * reimplemented here. */
-int execv(const char *path, char *const argv[]) {
-	(void)execve(path, argv, environ);
-	return -1;
-}
-
-/* fork(): real x0/x1 discriminator ABI (arm64 XNU's raw fork() trap
- * returns the child's pid in x0 to BOTH parent and child; x1 is the only
- * real parent/child discriminator: 0=parent, 1=child) -- same real ABI
- * quirk this project's bash_syscalls.c/login_syscalls.c/
- * tools/init_binary/init.c already found, documented, and fixed
- * (DAR-220 in bash_syscalls.c's own header comment). This consumer does
- * NOT need bash_syscalls.c's own extra `__current_pid` cache-clearing
- * step: that step exists only because bash.macho separately links a
- * CACHING getpid() (___getpid.s, which caches into `__current_pid`) --
- * confirmed via `nm -gU` that neither `_getpid` nor `__current_pid` is
- * exported by any dylib this script links against, so no such cache
- * exists in this consumer's process image to go stale. Real, unmodified
- * SCDPlugin.c's own fork() caller (_SCDPluginExecCommand2()) does its
- * own getpid()-independent child bookkeeping.
- *
- * Same real gap this project's own libSystem_atfork machinery documents
- * (docs/launchd-pid1-postmortem.md): real Libc/sys/fork.c wraps the raw
- * trap with pthread_atfork()/malloc fork-hook dispatch this project's
- * dylib stack has real support for only in specific already-wired
- * consumers (launchd itself). SCDPlugin.c's own real fork()+execv()
- * pattern (immediate exec in the child, per _SCDPluginExecCommand2())
- * is the classic case where skipping those hooks is safe in practice --
- * documented here as a real, known, narrower-than-launchd's gap, not
- * silently papered over. */
-pid_t fork(void) {
-	register long x0 asm("x0") = 0;
-	register long x1 asm("x1") = 0;
-	register long x16 asm("x16") = SC_SYS_FORK;
-	long is_error;
-	asm volatile("svc #0x80\n"
-	             "cset %2, cs"
-	             : "+r"(x0), "+r"(x1), "=r"(is_error)
-	             : "r"(x16)
-	             : "memory", "cc");
-	if (is_error) return (pid_t)cerror_nocancel((int)x0);
-	return (pid_t)(x1 ? 0 : x0);
-}
-
-int wait4(pid_t pid, int *status, int options, void *rusage) {
-	return (int)sc_syscall4(SC_SYS_WAIT4, pid, (long)status, options, (long)rusage);
-}
+/* fork()/execv()/wait4() used to be defined here -- see this file's own
+ * header for why they were removed 2026-09-17 (DAR-292) rather than
+ * kept as a narrower stand-in: libsystem_c.dylib (already linked below)
+ * is now their real canonical owner, and SCDPlugin.c's real calls bind
+ * it directly, with zero source changes needed here beyond deleting the
+ * private copies. */
 
 /* Real real Apple naming: this project's CFLAGS (-D__DARWIN_UNIX03=1,
  * same as every other tier) make every real header declaration of these
