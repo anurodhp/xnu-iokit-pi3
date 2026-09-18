@@ -48,7 +48,11 @@ fi
 OUT_DIR="${1:-build/kexts}"
 mkdir -p "$OUT_DIR"
 
-KEXTS=(BCM2837InterruptController BCM2837SDHCI SMSC9514Ethernet BCM2837DWC2 BCM2837Mailbox)
+# BCM2837CPU added 2026-09-18 (DAR-157): it was the only driver whose
+# .cpp this script never compiled, so a syntax/type error in it showed up
+# only in a full tools/build_xnu_7195.sh run. It compiles standalone
+# against compile_flags.txt like the rest.
+KEXTS=(BCM2837InterruptController BCM2837SDHCI SMSC9514Ethernet BCM2837DWC2 BCM2837Mailbox BCM2837CPU)
 
 # Compiles every .cpp in each driver directory, not just <dir>/<dir>.cpp:
 # BCM2837DWC2 is split across several translation units (controller,
