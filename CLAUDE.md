@@ -320,6 +320,17 @@ drifted before.
   real owning dylib EARLIER on the link line, never to bolt a re-export
   onto an unrelated dylib. `build_syslogd.sh` runs this audit as a hard
   gate at the end of its link; new dynamic-executable builds should too.
+  **Run it with NO arguments after renaming or removing any exported
+  symbol of a shipped dylib** — with no args it sweeps every built image
+  and is the only check that catches an already-built binary whose bind
+  still names a symbol its target dylib no longer exports. Same
+  nothing-relinks-automatically hazard as the weak-vs-strong rule above,
+  and it really happened (DAR-323): DAR-267 renamed
+  `libSystemConfiguration.dylib`'s `_os_log_pack_size` to
+  `_os_log_pack_size_impl`, `configd`/`scutil` were relinked in that same
+  change, `ipconfig` was not, and it aborted at dyld load on both QEMU and
+  real hardware two days later. The fix there is a plain rebuild of the
+  stale image, not a link-order change.
 - **Adversarial review before commit**: run an adversarial review on
   large/significant changes *before* committing, not after — post-hoc
   reviews in this project's history have caught real bugs (a false-positive
