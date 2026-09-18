@@ -156,6 +156,12 @@ private:
 		kRegAfcCfg  = 0x2C,
 		kRegE2pCmd  = 0x30,
 		kRegE2pData = 0x34,
+		// BURST_CAP/BULK_IN_DLY, real offsets from
+		// third_party/u-boot/drivers/usb/eth/smsc95xx.c:72 and :77. Both
+		// are written by smsc95xx_init_common() BEFORE it enables
+		// HW_CFG_BCE_ - see resetChip() for why that order is load-bearing.
+		kRegBurstCap  = 0x38,
+		kRegBulkInDly = 0x6C,
 	};
 
 	// MAC-level CSRs, same flat register space at higher offsets.
@@ -180,6 +186,16 @@ private:
 		kHwCfgMef    = 0x00000020, // Multiple Ethernet Frames
 		kHwCfgBce    = 0x00000002, // Burst Cap Enable
 		kHwCfgRxDoff = 0x00000600, // RX Data Offset
+
+		// Real BURST_CAP/BULK_IN_DLY values smsc95xx_init_common() writes
+		// on a high-speed link (smsc95xx.c:535-536 and :125):
+		// burst_cap = DEFAULT_HS_BURST_CAP_SIZE / HS_USB_PKT_SIZE
+		//           = (5 * 512) / 512 = 5, and DEFAULT_BULK_IN_DELAY =
+		// 0x2000. The LAN9514 on a Pi 3 is always behind the SoC's own
+		// high-speed hub, never full-speed, so the reference driver's
+		// FS branch has no case here.
+		kBurstCapHs  = 5,
+		kBulkInDelay = 0x00002000,
 
 		kPmCtlPhyRst = 1U << 4,
 

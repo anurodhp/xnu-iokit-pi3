@@ -120,28 +120,11 @@ SMSC9514Ethernet::resetChip(void)
 		return false;
 	}
 
-	// Real read-modify-write, not a blind write: HW_CFG has other live
-	// bits (BIR_, the reserved/default bits this driver doesn't otherwise
-	// touch) that a plain write would clobber to 0. Matches
-	// smsc95xx_init_common()'s real post-reset HW_CFG sequence
-	// (third_party/u-boot/drivers/usb/eth/smsc95xx.c:568-576) - that file's
-	// TURBO_MODE is unconditionally #define'd (line 141), so its
-	// `read_buf |= (HW_CFG_MEF_ | HW_CFG_BCE_)` is real, live code there,
-	// not a dead #ifdef branch.
-	uint32_t hwCfg;
-	if (!fTransport->readRegister(kRegHwCfg, &hwCfg)) {
-		return false;
-	}
-	hwCfg |= (kHwCfgMef | kHwCfgBce);
-	hwCfg &= ~(uint32_t)kHwCfgRxDoff;
-	if (!fTransport->writeRegister(kRegHwCfg, hwCfg)) {
-		return false;
-	}
-
 	// PM_CTRL genuinely gets no follow-up RMW in the real reference driver
 	// either (smsc95xx_init_common() never touches PM_CTRL again after
-	// this write/poll pair) - the PHY_RST pulse really is a one-shot
-	// blind write there, unlike HW_CFG above.
+	// this write/poll pair, smsc95xx.c:504-516) - the PHY_RST pulse really
+	// is a one-shot blind write there, unlike the HW_CFG read-modify-write
+	// below.
 	if (!fTransport->writeRegister(kRegPmCtl, kPmCtlPhyRst)) {
 		return false;
 	}
@@ -166,6 +149,51 @@ SMSC9514Ethernet::resetChip(void)
 		// supposed to have brought out of reset; proceeding on a timeout
 		// would make their failures much more confusing to diagnose.
 		IOLog("SMSC9514Ethernet: PHY reset never cleared\n");
+		return false;
+	}
+
+	// BURST_CAP and BULK_IN_DLY must be programmed BEFORE HW_CFG_BCE_ is
+	// set below, exactly as smsc95xx_init_common() does it
+	// (third_party/u-boot/drivers/usb/eth/smsc95xx.c:534-566: the TURBO_MODE
+	// burst_cap computation, the BURST_CAP write, the BULK_IN_DLY write,
+	// and only then the HW_CFG read-modify-write that ORs in MEF_/BCE_).
+	// Order is load-bearing, not stylistic: BCE_ tells the chip to cap each
+	// bulk-IN transfer at BURST_CAP * 512 bytes, and BURST_CAP resets to 0,
+	// so enabling BCE_ without writing BURST_CAP first arms a zero-length
+	// burst cap. That is exactly what DAR-107 shipped on 2026-09-15 (it
+	// added the MEF_/BCE_ OR but not these two writes) and what DAR-324
+	// reported right afterwards: a real Pi 3 whose en0 comes up with an
+	// active link and correct MAC, yet cannot ping or be pinged.
+	//
+	// This whole three-write block also moved to AFTER the PHY reset above
+	// (it was between the lite reset and the PHY reset before): that is the
+	// real reference driver's own order (smsc95xx.c does PM_CTRL PHY_RST +
+	// poll at :504-516, then BURST_CAP/BULK_IN_DLY/HW_CFG at :534-576), and
+	// it is what the HW_CFG comment below was already citing. Keeping the
+	// writes on the far side of the PHY reset means no question remains
+	// about whether that reset pulse clears them.
+	if (!fTransport->writeRegister(kRegBurstCap, kBurstCapHs)) {
+		return false;
+	}
+	if (!fTransport->writeRegister(kRegBulkInDly, kBulkInDelay)) {
+		return false;
+	}
+
+	// Real read-modify-write, not a blind write: HW_CFG has other live
+	// bits (BIR_, the reserved/default bits this driver doesn't otherwise
+	// touch) that a plain write would clobber to 0. Matches
+	// smsc95xx_init_common()'s real post-reset HW_CFG sequence
+	// (third_party/u-boot/drivers/usb/eth/smsc95xx.c:568-576) - that file's
+	// TURBO_MODE is unconditionally #define'd (line 141), so its
+	// `read_buf |= (HW_CFG_MEF_ | HW_CFG_BCE_)` is real, live code there,
+	// not a dead #ifdef branch.
+	uint32_t hwCfg;
+	if (!fTransport->readRegister(kRegHwCfg, &hwCfg)) {
+		return false;
+	}
+	hwCfg |= (kHwCfgMef | kHwCfgBce);
+	hwCfg &= ~(uint32_t)kHwCfgRxDoff;
+	if (!fTransport->writeRegister(kRegHwCfg, hwCfg)) {
 		return false;
 	}
 
