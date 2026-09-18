@@ -413,6 +413,17 @@ private:
 	bool     sendCommand(uint8_t cmdIndex, uint32_t arg, uint32_t respType,
 	                      bool hasData, uint32_t resp[4], uint16_t transferMode = 0);
 
+	/*
+	 * DAR-316: the pending BLOCK_SIZE/BLOCK_COUNT word, recorded by a data
+	 * command's caller and flushed to hardware by sendCommand() only AFTER
+	 * its CMD_INHIBIT/DAT_INHIBIT waits have passed. Mirrors Linux
+	 * sdhci-iproc.c's own `shadow_blk`, which likewise holds these two
+	 * registers back and writes them out immediately before SDHCI_COMMAND.
+	 * Zero means "nothing pending"; a real transfer always has a non-zero
+	 * block size, so zero is unambiguous.
+	 */
+	uint32_t fPendingBlkSizeCount;
+
 	// Pin-muxes GPIO48-53 to ALT3 ("emmc_gpio48" in Linux DT), routing
 	// this controller to the physical SD slot instead of leaving it on
 	// whatever the stock-firmware default is (see header). Maps the GPIO

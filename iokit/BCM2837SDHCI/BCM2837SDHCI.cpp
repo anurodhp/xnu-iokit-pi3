@@ -44,6 +44,7 @@ BCM2837SDHCI::init(OSDictionary *properties)
 
 	fPendingIntStatus = 0;
 	fShadowTransferMode = 0;
+	fPendingBlkSizeCount = 0;
 	fRealInterruptHits = 0;
 	fPollFallbackHits = 0;
 	fLoggedRealInterrupt = false;
@@ -803,6 +804,27 @@ BCM2837SDHCI::writeBlockSizeCountVerified(uint16_t blockCount, uint16_t blockSiz
 {
 	uint32_t want = ((uint32_t)blockCount << 16) | blockSize;
 	uint32_t got = 0;
+	/*
+	 * DAR-316 (2026-09-18): this is now called from sendCommand(), AFTER
+	 * its CMD_INHIBIT/DAT_INHIBIT waits, instead of from the caller before
+	 * sendCommand() was even entered. That ordering was the real bug the
+	 * retry below had been papering over: the SD Host Controller spec
+	 * forbids writing BLOCK_COUNT while a transfer is executing, and this
+	 * controller duly ignores it, so every write issued while the previous
+	 * transfer was still draining was dropped wholesale -- which is exactly
+	 * the "read back the exact stale prior value" signature this ticket
+	 * kept seeing, and why three back-to-back retries spanning a few
+	 * microseconds could all fail against a card that stays busy for
+	 * milliseconds. The reference driver has always done it in the correct
+	 * order: u-boot sdhci_send_command() waits on PRESENT_STATE
+	 * (drivers/mmc/sdhci.c:269) and only then writes SDHCI_BLOCK_SIZE /
+	 * SDHCI_BLOCK_COUNT (:329-330), TRANSFER_MODE (:331) and COMMAND
+	 * (:337).
+	 *
+	 * The verify+retry is kept anyway. It costs one register read on the
+	 * happy path, and it is the only thing that would make a future
+	 * regression of this class visible instead of silent.
+	 */
 	// DAR-316: real-hardware evidence (2026-09-17) has since shown this
 	// drop-then-recover-within-1-2-retries pattern is common, not rare -
 	// silent here on any attempt that eventually matches (this is now
@@ -828,6 +850,19 @@ BCM2837SDHCI::writeBlockSizeCountVerified(uint16_t blockCount, uint16_t blockSiz
 bool
 BCM2837SDHCI::sendCommand(uint8_t cmdIndex, uint32_t arg, uint32_t respType, bool hasData, uint32_t resp[4], uint16_t transferMode)
 {
+	/*
+	 * DAR-316: consume the caller's pending BLOCK_SIZE/BLOCK_COUNT here,
+	 * before any early return can skip it. It belongs to exactly this one
+	 * command; leaving it set would let a command that failed its inhibit
+	 * precondition below leak its block programming into whatever command
+	 * runs next -- including a non-data CMD12/CMD13, which would then
+	 * write BLOCK_COUNT for no reason and could log a spurious
+	 * did-not-stick line. Flushed to hardware further down, once the
+	 * inhibit waits have passed.
+	 */
+	const uint32_t pendingBlk = fPendingBlkSizeCount;
+	fPendingBlkSizeCount = 0;
+
 	if (!waitClear32(kRegPresentState, kPresentCmdInhibit, 1000000)) {
 		IOLog("BCM2837SDHCI: CMD_INHIBIT stuck before CMD%u - resetting cmd line\n", cmdIndex);
 		// Backlog P0#2: this used to just log and fail, leaving the stuck
@@ -922,6 +957,22 @@ BCM2837SDHCI::sendCommand(uint8_t cmdIndex, uint32_t arg, uint32_t respType, boo
 	// word into one 32-bit write, never a bare writeReg16(kRegCommand).
 	if (hasData) {
 		fShadowTransferMode = transferMode;
+	}
+	/*
+	 * DAR-316: flush BLOCK_SIZE/BLOCK_COUNT here -- after this function's
+	 * CMD_INHIBIT/DAT_INHIBIT waits, immediately before the COMMAND write,
+	 * matching u-boot sdhci_send_command()'s own ordering
+	 * (drivers/mmc/sdhci.c: wait :269, block size/count :329-330, command
+	 * :337) and Linux sdhci-iproc.c's shadow_blk, which holds these two
+	 * registers back for exactly this reason. Writing them from the caller
+	 * before sendCommand() ran was the real cause of the dropped
+	 * BLOCK_COUNT this ticket chased: a write issued while the previous
+	 * transfer is still executing is ignored by the controller, per the SD
+	 * Host Controller spec, and reads back as the stale prior value.
+	 */
+	if (hasData && pendingBlk != 0) {
+		writeBlockSizeCountVerified((uint16_t)(pendingBlk >> 16),
+		    (uint16_t)(pendingBlk & 0xFFFF));
 	}
 	writeReg32(kRegTransferMode, ((uint32_t)cmdWord << 16) | fShadowTransferMode);
 
@@ -1093,7 +1144,7 @@ BCM2837SDHCI::widenBusTo4Bit(void)
 	// TRANSFER_MODE/COMMAND (see sendCommand()'s own citation) - combined
 	// into one write, verified and retried on mismatch (see
 	// writeBlockSizeCountVerified()'s own citation).
-	writeBlockSizeCountVerified(1, 8);
+	fPendingBlkSizeCount = ((uint32_t)1 << 16) | 8;
 
 	uint32_t r51[4];
 	if (!sendCommand(51, 0, kCmdRespShort, true, r51, kCmdTransBlkCntEn | kCmdTransRead)) {
@@ -1539,7 +1590,7 @@ BCM2837SDHCI::readBlocksPIO(uint64_t startBlock, uint32_t nblks, void *buf)
 	// citation (a real-hw boot showed this exact write silently not
 	// sticking: BLOCK_COUNT stayed stale at an earlier operation's value,
 	// deterministically producing a stuck-after-block-0 timeout).
-	writeBlockSizeCountVerified((uint16_t)nblks, (uint16_t)fBlockSize);
+	fPendingBlkSizeCount = ((uint32_t)nblks << 16) | (uint32_t)fBlockSize;
 
 	uint8_t cmdIndex = (nblks > 1) ? 18 : 17; // READ_MULTIPLE_BLOCK / READ_SINGLE_BLOCK
 	if (!sendCommand(cmdIndex, arg, kCmdRespShort, true, NULL, transferMode)) {
@@ -1619,7 +1670,7 @@ BCM2837SDHCI::writeBlocksPIO(uint64_t startBlock, uint32_t nblks, const void *bu
 	// citation (a real-hw boot showed this exact write silently not
 	// sticking: BLOCK_COUNT stayed stale at an earlier operation's value,
 	// deterministically producing a stuck-after-block-0 timeout).
-	writeBlockSizeCountVerified((uint16_t)nblks, (uint16_t)fBlockSize);
+	fPendingBlkSizeCount = ((uint32_t)nblks << 16) | (uint32_t)fBlockSize;
 
 	uint8_t cmdIndex = (nblks > 1) ? 25 : 24; // WRITE_MULTIPLE_BLOCK / WRITE_BLOCK
 	if (!sendCommand(cmdIndex, arg, kCmdRespShort, true, NULL, transferMode)) {
