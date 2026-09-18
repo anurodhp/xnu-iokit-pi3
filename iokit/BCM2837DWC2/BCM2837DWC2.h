@@ -529,6 +529,23 @@ private:
 	bool                     fLoggedRealInterrupt;
 	bool                     fLoggedPollFallback;
 
+	/*
+	 * DAR-297: registerInterfaceWithBSD() can be reached from two
+	 * independent paths -- the direct call in start()'s real-hardware
+	 * SMSC9514Ethernet branch, and interfacePublished(), an IOKit publish
+	 * notification callback that this same start() call installs and
+	 * that the class header comment on registerInterfaceWithBSD() itself
+	 * documents as asynchronous relative to it. Its own getProperty(
+	 * gIOBSDNameKey) check-then-IORegisterNetworkInterface() sequence is
+	 * idempotent against a second SEQUENTIAL call, but not against two
+	 * CONCURRENT ones -- both can observe the property unset before
+	 * either has set it. A real IOLock closes that TOCTOU window; a
+	 * dedicated lock rather than reusing fTransferLock or fInterruptLock
+	 * because this guards BSD/IORegistry state, not the USB channel or
+	 * interrupt state either of those already serialize.
+	 */
+	IOLock                  *fBSDRegisterLock;
+
 	// Bring-up scaffolding (see the long comment at the call site in
 	// start()): owned for as long as this controller is, so the Ethernet
 	// driver they back has a live transport past start() returning. NULL

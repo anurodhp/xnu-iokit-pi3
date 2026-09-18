@@ -1433,6 +1433,12 @@ BCM2837DWC2::start(IOService *provider)
 		return false;
 	}
 
+	fBSDRegisterLock = IOLockAlloc();
+	if (fBSDRegisterLock == NULL) {
+		IOLog("BCM2837DWC2: IOLockAlloc (BSD register) failed\n");
+		return false;
+	}
+
 	IODeviceMemory *devMem = provider->getDeviceMemoryWithIndex(0);
 	if (devMem == NULL) {
 		IOLog("BCM2837DWC2: no device memory on provider\n");
@@ -1845,6 +1851,14 @@ BCM2837DWC2::startUSBHostController(void)
  * the publish notification for an interface that is already fully attached.
  * Without this guard that second pass would try to name the same interface
  * twice.
+ *
+ * DAR-297: that guard alone is only safe against a second SEQUENTIAL call --
+ * start()'s direct call and interfacePublished()'s notification callback
+ * are documented (see the call site in start()) as asynchronous with
+ * respect to each other, so two threads can both observe
+ * getProperty(gIOBSDNameKey) == NULL before either has called
+ * IORegisterNetworkInterface(). fBSDRegisterLock closes that window: the
+ * check and the register call now happen as one atomic section.
  */
 void
 BCM2837DWC2::registerInterfaceWithBSD(IOService *netif)
@@ -1852,13 +1866,17 @@ BCM2837DWC2::registerInterfaceWithBSD(IOService *netif)
 	if (netif == NULL) {
 		return;
 	}
+	IOLockLock(fBSDRegisterLock);
 	// gIOBSDNameKey, not the kIOBSDNameKey string macro: that one lives in
 	// <IOKit/IOBSD.h>, while the OSSymbol is already declared by IOService.h
 	// and is what the property is actually keyed on.
 	if (netif->getProperty(gIOBSDNameKey) != NULL) {
+		IOLockUnlock(fBSDRegisterLock);
 		return; // already named and attached
 	}
-	if (!IORegisterNetworkInterface(netif)) {
+	bool ok = IORegisterNetworkInterface(netif);
+	IOLockUnlock(fBSDRegisterLock);
+	if (!ok) {
 		IOLog("BCM2837DWC2: IORegisterNetworkInterface failed - interface will "
 		      "not appear in ifconfig\n");
 	}
@@ -1961,6 +1979,10 @@ BCM2837DWC2::free(void)
 	if (fInterruptLock != NULL) {
 		IOLockFree(fInterruptLock);
 		fInterruptLock = NULL;
+	}
+	if (fBSDRegisterLock != NULL) {
+		IOLockFree(fBSDRegisterLock);
+		fBSDRegisterLock = NULL;
 	}
 	super::free();
 }
