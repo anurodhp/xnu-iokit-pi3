@@ -1176,9 +1176,23 @@ if [ -f tools/userland_staging/configd.macho ]; then
             if /usr/libexec/PlistBuddy -c "Print :MachServices" -x "$plugin_plist" \
                     > "$tmp_ms" 2>/dev/null; then
                 echo "+ merging \"MachServices\" from: $plugin_plist"
-                /usr/libexec/PlistBuddy -c "Merge $tmp_ms :MachServices" \
-                    "$CONFIGD_LAUNCHD_PLIST" 2>/dev/null
-                merged_any=1
+                merge_err="$(mktemp -t plugin_machservices_err)"
+                if /usr/libexec/PlistBuddy -c "Merge $tmp_ms :MachServices" \
+                        "$CONFIGD_LAUNCHD_PLIST" 2>"$merge_err"; then
+                    merged_any=1
+                else
+                    # DAR-291: don't let set -e's silent, contextless abort be
+                    # the only signal here -- name the plugin and show
+                    # PlistBuddy's own reason (almost always a MachServices
+                    # key collision with a plugin already merged above).
+                    echo "error: PlistBuddy Merge of MachServices from $plugin_plist failed" >&2
+                    echo "  into $CONFIGD_LAUNCHD_PLIST -- likely a MachServices key collision" >&2
+                    echo "  with a plugin already merged. PlistBuddy said:" >&2
+                    sed 's/^/    /' "$merge_err" >&2
+                    rm -f "$tmp_ms" "$merge_err"
+                    exit 1
+                fi
+                rm -f "$merge_err"
             fi
             rm -f "$tmp_ms"
         done
