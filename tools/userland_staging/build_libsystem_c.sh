@@ -411,7 +411,15 @@ rm -f "$EXTRACT/getenv_real_raw.o"
 # (gen/FreeBSD/arc4random.c) compiles clean under this project's
 # standard -DVARIANT_STATIC (already proven by build_libresolv.sh's own
 # identical compile, same real files reused verbatim, not re-derived).
-"$CLANG" $SIGLIST_CFLAGS -include stdlib.h "$LIBC/gen/FreeBSD/arc4random.c" -o "$EXTRACT/arc4random.o"
+#
+# DAR-247: needs three real extra -I paths (os/assumes.h itself, plus
+# _simple.h and os/base_private.h it pulls in) and, scoped to ONLY this
+# one file, arc4random_compat_include's TargetConditionals.h override --
+# see that file's own header for the full real chain (an unreachable
+# os_log/firehose parse-time dependency, not a runtime one).
+"$CLANG" $SIGLIST_CFLAGS -I arc4random_compat_include -I "$LIBC" \
+    -I ../../third_party/libplatform/private -I "$XNU/libkern" \
+    -include stdlib.h "$LIBC/gen/FreeBSD/arc4random.c" -o "$EXTRACT/arc4random.o"
 "$CLANG" $SIGLIST_CFLAGS libresolv_getentropy_syscall.c -o "$EXTRACT/getentropy_syscall.o"
 # NOT libresolv_arc4random_deps_compat.o here (unlike build_libresolv.sh):
 # that file's real open$UNIX2003/read$UNIX2003 forwarders exist only

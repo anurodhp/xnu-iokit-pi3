@@ -143,6 +143,7 @@ LIBC="../../third_party/Libc"
 PTHREAD="../../third_party/libpthread"
 XNU="../../third_party/xnu-7195"
 LIBINFO="../../third_party/Libinfo"
+PLATFORM="../../third_party/libplatform"
 OUT="libc_build"
 rm -rf "$OUT/apple_resolv"
 mkdir -p "$OUT/apple_resolv" "$OUT/compat_include"
@@ -328,10 +329,11 @@ ok=0
 fail=0
 compile() {
     local src="$1"
+    local extra="${2:-}"
     local base
     base=$(basename "$src" .c)
     local out="$OUT/apple_resolv/${base}.o"
-    if "$CLANG" $CFLAGS "$src" -o "$out" 2>"$OUT/apple_resolv/${base}.err"; then
+    if "$CLANG" $CFLAGS $extra "$src" -o "$out" 2>"$OUT/apple_resolv/${base}.err"; then
         ok=$((ok + 1))
         rm -f "$OUT/apple_resolv/${base}.err"
     else
@@ -360,7 +362,13 @@ compile "$LIBC/net/inet_pton.c"
 compile "$LIBC/net/FreeBSD/inet_addr.c"
 compile "$LIBC/net/FreeBSD/inet_ntoa.c"
 compile "$LIBC/net/FreeBSD/inet_makeaddr.c"
-compile "$LIBC/gen/FreeBSD/arc4random.c"
+# DAR-247: real extra -I paths os/assumes.h's own chain needs (itself,
+# plus _simple.h and os/base_private.h it pulls in), and -- scoped to
+# ONLY this one file -- arc4random_compat_include's TargetConditionals.h
+# override. See that file's own header for the full real chain (an
+# unreachable os_log/firehose parse-time dependency, not a runtime one).
+compile "$LIBC/gen/FreeBSD/arc4random.c" \
+    "-I arc4random_compat_include -I $LIBC -I $PLATFORM/private -I $XNU/libkern"
 compile "$LIBC/gen/FreeBSD/gethostname.c"
 compile "$LIBC/stdlib/FreeBSD/atoi.c"
 compile "$LIBINFO/gen.subproj/getifaddrs.c"
