@@ -606,6 +606,7 @@ bootp|https://github.com/apple-oss-distributions/bootp.git|bootp-413.80.1|
 configd|git@github.com:anurodhp/configd.git|iokit-port||https://github.com/apple-oss-distributions/configd.git
 PowerManagement|https://github.com/apple-oss-distributions/PowerManagement.git|PowerManagement-1132.81.1|
 chrony|git@github.com:anurodhp/chrony.git|iokit-port||https://github.com/mlichvar/chrony.git
+vim|https://github.com/apple-oss-distributions/vim.git|vim-91.80.1|
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch upstream_url; do

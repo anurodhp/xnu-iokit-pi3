@@ -462,8 +462,7 @@ scripting-language runtime as a goal in itself):
 - **Everything genuinely cosmetic/documentation**: `man`, `doc_cmds`,
   `texinfo`, `groff`, `tidy`.
 - **Misc single-purpose utilities with no current caller**: `bc`, `nano`,
-  `vim` (Phase 7d names this one explicitly as a future target, just not
-  yet), `patch_cmds`/`gpatch` (only needed if this project starts
+  `patch_cmds`/`gpatch` (only needed if this project starts
   consuming patch files at runtime, not currently), `modemccl`, `uucp`,
   `disklabel`/`gpt`/`bless` (bootability tooling for a boot chain this
   project's `u-boot` already handles differently), `system_config`,
@@ -490,6 +489,23 @@ scripting-language runtime as a goal in itself):
   already pinned as `libplatform-254.80.2`, for `memcpy`/`memset`), not
   Libsystem itself — Libsystem is useful for confirming the umbrella's
   real member list, not individual symbol assignments.
+- **`vim`** — **NOW PINNED** (2026-09-18, `vim-91.80.1`, exact `macos-112`
+  manifest match — `distribution-macOS`'s `macos-112` tree pins commit
+  `effa1353bb4d0a6c70e008be5596a1c60c322593` for the `vim` submodule,
+  which is exactly `vim-91.80.1`'s tag commit, confirmed via a real
+  `git clone --branch vim-91.80.1`, not assumed from tag-name proximity).
+  DAR-185 (Phase 7d). Apple's checkout ships a pre-generated
+  `src/auto/config.h` (not run through `./configure` at build time) that
+  is the real authority for which feature tier/optional subsystems this
+  project's port should match: `FEAT_NORMAL` (not `SMALL`/`BIG`/`HUGE`),
+  `TERMINFO`, `HAVE_ICONV`, `FEAT_JOB_CHANNEL`, `FEAT_NETBEANS_INTG`, and
+  `FEAT_TERMINAL` (the last needing `src/libvterm`) all on; every
+  scripting-language interpreter binding (`FEAT_PERL`/`PYTHON`/`RUBY`/
+  `LUA`/`TCL`/`MZSCHEME`) and the GUI (`FEAT_GUI_GNOME` etc) off — i.e.
+  real Apple's own shipped `/usr/bin/vim` is already a plain-terminal,
+  non-scripted build, matching this project's own stated goal (no
+  scripting-language runtime, no GUI) with no scope-narrowing needed on
+  this project's part.
 
 ## Recommended next action
 

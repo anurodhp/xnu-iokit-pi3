@@ -365,6 +365,29 @@ else
     echo "= tools/userland_staging/bash.macho not built -- run build_bash.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/vim.macho ]; then
+    mkdir -p "$MNT/usr/bin"
+    cp tools/userland_staging/vim.macho "$MNT/usr/bin/vim"
+    chmod 755 "$MNT/usr/bin/vim"
+    echo "+ wrote $(wc -c < tools/userland_staging/vim.macho) bytes to $MNT/usr/bin/vim"
+    echo "  (real, unmodified Apple vim-91.80.1 -- DAR-185/Phase 7d, see"
+    echo "  tools/userland_staging/build_vim.sh)"
+    # /usr/bin/vi: real vim's own main.c parse_command_name() dispatches on
+    # its argv[0] basename ("vi"/"ex"/"view"/"vimdiff"/...) to pick the real
+    # compatibility mode, so a second copy under the name `vi` IS the real
+    # vi -- the same "one binary, multiple installed names" pattern this
+    # script already uses for /bin/bash + /bin/sh and id + whoami. Real
+    # macOS ships /usr/bin/vi as a symlink to vim for exactly this reason;
+    # this project copies rather than symlinks because nothing here creates
+    # HFS+ symlinks on the injected image yet.
+    cp tools/userland_staging/vim.macho "$MNT/usr/bin/vi"
+    chmod 755 "$MNT/usr/bin/vi"
+    echo "+ wrote $(wc -c < tools/userland_staging/vim.macho) bytes to $MNT/usr/bin/vi (same real"
+    echo "  binary, argv[0]-dispatched into vi-compatibility mode)"
+else
+    echo "= tools/userland_staging/vim.macho not built -- run tools/userland_staging/build_vim.sh first if wanted, skipping"
+fi
+
 if [ -f tools/userland_staging/uname.macho ]; then
     mkdir -p "$MNT/usr/bin"
     cp tools/userland_staging/uname.macho "$MNT/usr/bin/uname"
