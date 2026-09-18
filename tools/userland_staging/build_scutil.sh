@@ -197,16 +197,9 @@
 #					(which BUYS the real SCProxies.c) +
 #					a _write$UNIX2003 name bridge
 #
-# Plus three pre-existing compat objects reused as-is:
+# Plus two pre-existing compat objects reused as-is:
 #	configd_sigaction_compat.c		DAR-263's real sigaction trampoline
 #	configd_plugin_log_scpreferences_compat.c   __log_SCPreferences
-#	configd_cfurl_filesize_compat.c		REQUIRED for every binary that
-#						loads libSystemConfiguration.dylib
-#						(two -Wl,-U flat-namespace
-#						undefineds; see
-#						build_ipconfig.sh's own writeup
-#						-- none of the three link-time
-#						audits catch this one)
 set -e
 cd "$(dirname "$0")"
 
@@ -388,8 +381,7 @@ FILES="$SCUTIL/scutil.c \
     scutil_reachability_compat.c \
     scutil_misc_compat.c \
     configd_sigaction_compat.c \
-    configd_plugin_log_scpreferences_compat.c \
-    configd_cfurl_filesize_compat.c"
+    configd_plugin_log_scpreferences_compat.c"
 
 ok=0
 fail=0

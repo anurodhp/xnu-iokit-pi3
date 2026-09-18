@@ -827,7 +827,6 @@ FILES="$SC/SCD.c $SC/SCDAdd.c $SC/SCDCache.c $SC/SCDGet.c \
     $LIBC/stdlib/FreeBSD/strtoq.c \
     $LIBC/stdtime/FreeBSD/timelocal.c \
     configd_plugin_sha256_compat.c \
-    sc_cfurl_reachable_compat.c \
     $MIGOUT/configUser.c $MIGOUT/helperUser.c \
     sc_log_pack_compat.c os_log_with_args_compat.c \
     sc_mach_port_compat.c sc_syscall_compat.c sc_misc_compat.c"
@@ -868,15 +867,14 @@ FILES="$SC/SCD.c $SC/SCDAdd.c $SC/SCDCache.c $SC/SCDGet.c \
 # shipped in the meantime) is deleted, and build_scutil.sh now binds the
 # real functions out of this dylib.
 #
-# sc_cfurl_reachable_compat.c: the one symbol SCNetworkMigration.c needs
-# that nothing in this project defines -- real, public, declared-in-
-# CFURL.h CoreFoundation API with no C body anywhere in the pinned
-# swift-corelibs-foundation source. Deliberately compiled INTO this
-# dylib rather than deferred with a third `-Wl,-U` (which would make a
-# definition mandatory in every image that loads this dylib, the way
-# configd_cfurl_filesize_compat.c already is for the other two); see that
-# file's own header for the full reasoning and for why CoreFoundation
-# remains the real canonical home.
+# SCNetworkMigration.c's CFURLResourceIsReachable() need used to be met
+# by sc_cfurl_reachable_compat.c, compiled into this dylib (DAR-287).
+# DAR-300 (2026-09-18) moved that symbol -- and the
+# CFURLCopyResourcePropertyForKey/kCFURLFileSizeKey pair this link used
+# to defer with `-Wl,-U` -- into libCoreFoundation.dylib, where real
+# Apple puts all three (cf_cfurl_resource_compat.c). Both files are
+# deleted; this dylib now gets all three as ordinary two-level binds
+# against the libCoreFoundation.dylib already on its link line.
 # configd_scnet_keychain_compat.c: real, honest no-op stand-in for 6
 # Keychain-backed password-storage functions these new files need
 # (SCPreferencesKeychainPrivate.h, real header, unmodified, no longer
@@ -1002,14 +1000,15 @@ done
 
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libSystemConfiguration.dylib"
-# Real -Wl,-U deferrals, matching build_libinfo.sh's own precedent for
-# genuinely out-of-scope-this-pass real symbols (documented, not
-# silently dropped): CFURLCopyResourcePropertyForKey/kCFURLFileSizeKey
-# are real CFURL.c API (confirmed present in the pinned swift-corelibs-
-# foundation source) that this project's current libCoreFoundation.dylib
-# build has not compiled/exported yet -- a real, specific, cross-ticket
-# gap (CF's dylib build is DAR-195's, not this script's to edit), not
-# something to fabricate a definition for.
+# No `-Wl,-U` deferrals here any more. This link used to defer
+# CFURLCopyResourcePropertyForKey/kCFURLFileSizeKey, which made a real
+# definition mandatory inside EVERY image that loads this dylib --
+# configd.macho, ipconfig.macho and scutil.macho each compiled
+# configd_cfurl_filesize_compat.c for that reason alone, and
+# sc_client_smoketest.macho, which did not, could not load at all.
+# DAR-300 (2026-09-18) implemented both (and CFURLResourceIsReachable)
+# inside libCoreFoundation.dylib, where real Apple puts them, so they are
+# ordinary two-level binds now and the trap is gone.
 # ___SCNetworkConfigurationSetValue was previously deferred here
 # (SCDHostName.c's own real dependency on the SCNetworkConfiguration
 # family this script used to deliberately exclude) -- DAR-240 (2026-09-04)
@@ -1020,7 +1019,6 @@ rm -f "$OUT/system/libSystemConfiguration.dylib"
     -install_name /usr/lib/libSystemConfiguration.dylib \
     -Wl,-not_for_dyld_shared_cache \
     -B"$NEWLD_BINDIR" -Wl,-fixup_chains \
-    -Wl,-U,_CFURLCopyResourcePropertyForKey -Wl,-U,_kCFURLFileSizeKey \
     -o "$OUT/system/libSystemConfiguration.dylib" \
     "$OUT"/sc_client_obj/*.o \
     "$SIMPLE_OBJ/sys__chown.o" "$SIMPLE_OBJ/sys__dup2.o" \
@@ -1057,12 +1055,34 @@ echo "verified: libSystemConfiguration.dylib is a real DYLIB"
 # proves.
 # ------------------------------------------------------------------
 "$CLANG" "${CFLAGS[@]}" sc_client_smoketest.c -o "$OUT/sc_client_obj/sc_client_smoketest.o"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 \
+# DAR-300: this link used to be a bare `clang -o` against three dylibs --
+# i.e. the SDK's own crt1.o and lazy binding, unlike every other real
+# executable in this directory. That produced a `dyld_stub_binder` bind
+# against libSystem.B.dylib, which this project's libSystem does not
+# export, so bind_target_audit.sh reported it UNRESOLVABLE and the binary
+# could not have loaded even once the CFURL flat-namespace trap above was
+# gone. It now uses the same recipe as scutil.macho/configd.macho:
+# -nostdlib with Csu's real start.s/crt.c, the newer `ld` via -B, and
+# -Wl,-fixup_chains (which removes lazy binding, and with it the
+# dyld_stub_binder reference, entirely).
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
+    -DCRT_DYNAMIC_LINKING \
+    -B"$NEWLD_BINDIR" -Wl,-fixup_chains \
     -o sc_client_smoketest.macho \
+    ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/sc_client_obj/sc_client_smoketest.o" \
-    "$OUT/system/libSystemConfiguration.dylib" \
-    "$OUT/system/libCoreFoundation.dylib" \
+    "$OUT/chk_fail.o" \
+    "$OUT/system/libsystem_kernel.dylib" \
+    "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_blocks.dylib" \
+    "$OUT/system/libsystem_pthread.dylib" \
+    "$OUT/system/libsystem_malloc.dylib" \
     "$OUT/system/libsystem_c.dylib" \
+    "$OUT/system/libCoreFoundation.dylib" \
+    "$OUT/system/libSystemConfiguration.dylib" \
+    "$OUT/system/libdispatch.dylib" "$OUT/system/libxpc.dylib" \
+    "$OUT/system/libdyld.dylib" \
+    "$OUT/system/libsystem_notify.dylib" \
+    "$OUT/system/libSystem.B.dylib" \
     2>"$OUT/sc_client_smoketest_link.err" \
     && echo "wrote sc_client_smoketest.macho" \
     || { echo "error: smoketest link failed:" >&2; tail -60 "$OUT/sc_client_smoketest_link.err" >&2; exit 1; }
@@ -1071,4 +1091,4 @@ otool -L sc_client_smoketest.macho | grep -q "libSystemConfiguration.dylib" || {
     echo "error: smoketest does not link libSystemConfiguration.dylib" >&2
     exit 1
 }
-echo "verified: sc_client_smoketest.macho links real libSystemConfiguration.dylib (run under QEMU to confirm the expected real bootstrap_look_up() failure -- no configd.tproj server exists yet, see DAR-170 Tier 1 step 3)"
+echo "verified: sc_client_smoketest.macho links real libSystemConfiguration.dylib (run it from the root shell on a real boot: either outcome is a pass, see sc_client_smoketest.c's own header -- with a resident configd it now returns a real store)"

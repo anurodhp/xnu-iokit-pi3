@@ -255,7 +255,6 @@ FILES="$CDT/configd.m $CDT/_SCD.c $CDT/configd_server.c $CDT/plugin_support.c \
     $LIBC/gen/FreeBSD/signal.c $LIBC/stdlib/FreeBSD/getopt.c $LIBC/stdlib/FreeBSD/getopt_long.c \
     configd_sigaction_compat.c \
     configd_bsm_wrappers_compat.c \
-    configd_cfurl_filesize_compat.c \
     configd_line_buffered_log_compat.c \
     configd_scnetworkconfig_setvalue_compat.c"
 
@@ -364,16 +363,14 @@ rm -f configd.macho
     "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/libmach_ipc.a" "$OUT/chk_fail.o" \
     "$OUT/bootp_dhcp_engine.a" \
-    `# Passed as a loose .o, NOT via libconfigd.a: nothing in configd's own` \
-    `# object graph calls CFURLCopyResourcePropertyForKey directly (it's only` \
-    `# ever reached via flat-namespace lookup from libSystemConfiguration.` \
-    `# dylib's own -Wl,-U-deferred reference), so ld64's normal` \
-    `# archive-member selection would never pull this object out of the` \
-    `# archive at all -- confirmed empirically (nm showed it silently` \
-    `# missing from a first real link attempt). A loose .o on the link line` \
-    `# is always included, unlike an archive member.` \
-    "$OUT/configd_obj/configd_cfurl_filesize_compat.o" \
-    `# Same loose-.o reasoning as the line above, for a different reason:` \
+    `# configd_cfurl_filesize_compat.o was passed here as a loose .o (not` \
+    `# via libconfigd.a) because nothing in configd's own object graph` \
+    `# called CFURLCopyResourcePropertyForKey directly -- it was only ever` \
+    `# reached by flat-namespace lookup from libSystemConfiguration.dylib's` \
+    `# own -Wl,-U deferral, so ld64's archive-member selection never pulled` \
+    `# it in. DAR-300 (2026-09-18) moved that symbol into` \
+    `# libCoreFoundation.dylib, dropped the deferral, and deleted the file.` \
+    `# The loose-.o reasoning still applies below, for a different reason:` \
     `# configd_line_buffered_log_compat.c defines NO external symbol at all` \
     `# (one static function, reachable only via __attribute__((constructor))),` \
     `# so as an archive member there is nothing for ld64's member selection to` \

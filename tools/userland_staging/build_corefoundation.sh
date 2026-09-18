@@ -478,7 +478,21 @@ fi
 "$CLANG" "${CFLAGS[@]}" "cf_filedescriptor_compat.c" \
     -o "$OUT/cf_obj/cf_filedescriptor_compat.o"
 
-echo "compiled: $((${#FILES[@]} + 23)) real/compat CoreFoundation source files (zero errors)"
+# DAR-300: CFURLResourceIsReachable / CFURLCopyResourcePropertyForKey /
+# kCFURLFileSizeKey -- three real, public CF URL APIs with no native-C
+# body anywhere in the pinned swift-corelibs-foundation tree (two are
+# DEPLOYMENT_RUNTIME_SWIFT-only, one has no implementation at all). They
+# used to live outside CF entirely: two deferred out of
+# libSystemConfiguration.dylib with `-Wl,-U` and defined separately
+# inside configd.macho/ipconfig.macho/scutil.macho, one compiled into
+# libSystemConfiguration.dylib itself. Both workarounds are deleted now
+# that they live where real Apple puts them. Same "no Apple source to
+# port, so it lives in this project's own tree" convention as
+# cf_filedescriptor_compat.c above; see the file's own header comment.
+"$CLANG" "${CFLAGS[@]}" "cf_cfurl_resource_compat.c" \
+    -o "$OUT/cf_obj/cf_cfurl_resource_compat.o"
+
+echo "compiled: $((${#FILES[@]} + 24)) real/compat CoreFoundation source files (zero errors)"
 
 rm -f "$OUT/libCoreFoundation.a"
 ar rcs "$OUT/libCoreFoundation.a" "$OUT"/cf_obj/*.o

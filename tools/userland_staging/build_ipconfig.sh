@@ -75,35 +75,36 @@
 #   configd_plugin_log_scpreferences_compat.c
 #                                    __log_SCPreferences, already written for
 #                                    build_configd_plugins.sh.
-#   configd_cfurl_filesize_compat.c  REQUIRED, not optional -- see below.
 # plus `signal.o` extracted from the already-built liblaunchd_syscalls.a (real
 # BSD signal(3)-over-sigaction wrapper; the same member build_syslogd.sh
 # extracts for the same reason).
 #
-# WHY configd_cfurl_filesize_compat.c IS LINKED HERE TOO
-# =======================================================
-# EVERY binary that loads libSystemConfiguration.dylib needs it, not just
-# configd.macho. That dylib carries two `-Wl,-U` FLAT-namespace undefined
-# symbols (`_CFURLCopyResourcePropertyForKey`, `_kCFURLFileSizeKey`) which
-# this project's DEPLOYMENT_RUNTIME_C CoreFoundation genuinely does not
-# define (they live inside CFURL.c's `#if DEPLOYMENT_RUNTIME_SWIFT` block --
-# full reasoning in configd_cfurl_filesize_compat.c's own header). dyld
-# resolves a flat-namespace bind by searching every loaded image *including
-# the main executable*, and under this project's eager -fixup_chains linking
-# it aborts the whole process at load if none has it. The first real boot of
+# A CFURL FLAT-NAMESPACE TRAP THAT USED TO LIVE HERE (DAR-300, fixed)
+# ===================================================================
+# This binary used to compile configd_cfurl_filesize_compat.c for one
+# reason only: libSystemConfiguration.dylib carried two `-Wl,-U`
+# flat-namespace undefineds (`_CFURLCopyResourcePropertyForKey`,
+# `_kCFURLFileSizeKey`) that this project's DEPLOYMENT_RUNTIME_C
+# CoreFoundation did not define, and dyld resolves a flat-namespace bind
+# by searching every loaded image *including the main executable*, then
+# aborts the whole process at load if none has it. The first real boot of
 # this tool did exactly that:
 #
 #   -sh-3.2# ipconfig set en0 DHCP
 #   dyld[14]: symbol not found in flat namespace '_CFURLCopyResourcePropertyForKey'
 #   Abort trap: 6
 #
-# Worth knowing: none of this project's three link-time audits catch this.
-# `nm -m` reported zero undefined-with-no-owner symbols, bind_target_audit.sh
-# and gap_audit.sh were both clean, and the link itself was clean -- because
-# the unresolved reference is not in this image at all, it is in a dylib this
-# image loads. Passed as a loose .o (not via an archive) for the same reason
-# build_configd.sh does: nothing in this binary's own object graph calls it,
-# so ld64's archive-member selection would never pull it in.
+# Worth knowing, and the reason this is written down rather than deleted:
+# none of this project's three link-time audits caught it. `nm -m`
+# reported zero undefined-with-no-owner symbols, bind_target_audit.sh and
+# gap_audit.sh were both clean, and the link itself was clean -- because
+# the unresolved reference was not in this image at all, it was in a
+# dylib this image loads.
+#
+# DAR-300 (2026-09-18) implemented both symbols (and
+# CFURLResourceIsReachable) inside libCoreFoundation.dylib, where real
+# Apple puts them, and dropped the two deferrals. Nothing here needs to
+# carry a definition any more.
 #
 # REAL REMAINING GAP THIS TOOL MAKES VISIBLE (not caused by it)
 # ============================================================
@@ -265,8 +266,7 @@ FILES="$IPCONFIGTPROJ/client.c \
     $SC/scprefs_observer.c \
     ipconfig_cmd_ioregpath_compat.c \
     configd_sigaction_compat.c \
-    configd_plugin_log_scpreferences_compat.c \
-    configd_cfurl_filesize_compat.c"
+    configd_plugin_log_scpreferences_compat.c"
 
 ok=0
 fail=0

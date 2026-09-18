@@ -840,6 +840,22 @@ else
     echo "= tools/userland_staging/chronyd.macho not built -- run tools/userland_staging/build_chrony.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/sc_client_smoketest.macho ]; then
+    mkdir -p "$MNT/usr/local/bin"
+    cp tools/userland_staging/sc_client_smoketest.macho \
+        "$MNT/usr/local/bin/sc_client_smoketest"
+    chmod 755 "$MNT/usr/local/bin/sc_client_smoketest"
+    echo "+ wrote sc_client_smoketest to $MNT/usr/local/bin/"
+    echo "  (real libSystemConfiguration.dylib client -- SCDynamicStoreCreate()"
+    echo "  against the real configd; tools/userland_staging/"
+    echo "  build_libsystemconfiguration_client.sh. Installed as of DAR-300, which"
+    echo "  is what made it loadable: it used to need a CFURL flat-namespace"
+    echo "  definition it did not carry, and linked against a dyld_stub_binder"
+    echo "  this project's libSystem does not export.)"
+else
+    echo "= sc_client_smoketest.macho not built -- run tools/userland_staging/build_libsystemconfiguration_client.sh first if wanted, skipping"
+fi
+
 if [ -f tools/userland_staging/libc_build/notifyd_roundtrip_smoketest.macho ]; then
     mkdir -p "$MNT/usr/local/bin"
     cp tools/userland_staging/libc_build/notifyd_roundtrip_smoketest.macho \
