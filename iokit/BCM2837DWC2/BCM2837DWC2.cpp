@@ -842,7 +842,7 @@ BCM2837DWC2::haltChannel(uint32_t chan, uint32_t *hcintOut)
  * caller, which owns the multi-chunk loop and the sequence bit.
  */
 IOReturn
-BCM2837DWC2::transferChunk(uint32_t xferLen, uint32_t *actualLen, uint32_t *hcintOut)
+BCM2837DWC2::transferChunk(uint32_t xferLen, bool isIn, uint32_t *actualLen, uint32_t *hcintOut)
 {
 	*actualLen = 0;
 
@@ -886,10 +886,33 @@ BCM2837DWC2::transferChunk(uint32_t xferLen, uint32_t *actualLen, uint32_t *hcin
 	uint32_t remaining = hctsiz & kHCTSIZ_XFERSIZE_MASK;
 
 	if (hcint & kHCINT_XFERCOMP) {
-		// HCTSIZ.XFERSIZE counts *down*: what is left is what was not
-		// moved, so the delta is the real byte count. For an IN this is
-		// how a short packet is detected.
-		*actualLen = (remaining <= xferLen) ? (xferLen - remaining) : 0;
+		/*
+		 * The HCTSIZ.XFERSIZE remainder is only meaningful for an IN.
+		 * On an IN the core counts it down as data arrives, so the delta
+		 * is the real byte count and is how a short packet is detected.
+		 * On an OUT it is not a transmitted-byte count, and the real
+		 * reference driver deliberately does not use it: u-boot's
+		 * chunk_msg() (third_party/u-boot/drivers/usb/host/dwc2.c:893-902)
+		 * subtracts it under `if (in)` only, then reports
+		 * `*actual_len = xfer_len` -- i.e. for an OUT that completed,
+		 * the full requested length was sent.
+		 *
+		 * Applying the subtraction to OUT transfers too was a real bug
+		 * (DAR-326), and a confusing one, because the frame really did
+		 * go out: bulkOut() returned a short count, so
+		 * SMSC9514Ethernet::outputPacket() reported
+		 * kIOReturnOutputDropped, which is 0x0001
+		 * (kIOOutputStatusDropped in iokit/IOKit/network/IOOutputQueue.h)
+		 * -- and IONetworkingFamily hands that value straight up to the
+		 * BSD stack as an errno, where 1 is EPERM. A real Pi 3 therefore
+		 * answered every ping correctly while printing
+		 * "ping: sendto: Operation not permitted" for each one.
+		 */
+		if (isIn) {
+			*actualLen = (remaining <= xferLen) ? (xferLen - remaining) : 0;
+		} else {
+			*actualLen = xferLen;
+		}
 		return kIOReturnSuccess;
 	}
 
@@ -1070,7 +1093,7 @@ BCM2837DWC2::doTransfer(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
 
 			actual = 0;
 			hcint = 0;
-			ret = transferChunk(xferLen, &actual, &hcint);
+			ret = transferChunk(xferLen, isIn, &actual, &hcint);
 
 			if (!(ret == kIOReturnIOError && (hcint & kHCINT_XACTERR))) {
 				break;

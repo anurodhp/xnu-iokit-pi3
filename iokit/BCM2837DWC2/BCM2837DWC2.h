@@ -621,7 +621,7 @@ private:
 
 	// Wait out one already-armed chunk and decode the result. Takes no
 	// buffer or PID: doTransfer owns those and the multi-chunk loop.
-	IOReturn transferChunk(uint32_t xferLen, uint32_t *actualLen, uint32_t *hcintOut);
+	IOReturn transferChunk(uint32_t xferLen, bool isIn, uint32_t *actualLen, uint32_t *hcintOut);
 
 	// Wait for a halt OR an un-halted NAK, and force a still-enabled channel
 	// down. See the implementations for why a NAKed non-periodic channel does
