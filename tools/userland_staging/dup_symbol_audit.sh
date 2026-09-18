@@ -67,7 +67,43 @@
 #
 # Exit status: 0 = no new duplicates, 1 = new duplicates (or a real
 # error). A drop below the baseline is reported but is not a failure.
+#
+# WHY LC_ALL=C IS PINNED BELOW
+# ============================
+# Every fact list here is built with `sort`/`sort -u` and then compared
+# against the baseline (and against each binary's loaded-export set) with
+# `comm`, which is only correct when BOTH inputs are in the byte order it
+# compares with. Nothing pinned the locale until 2026-09-18, so both the
+# baseline write and every comparison run inherited the user's own
+# locale -- `en_US.UTF-8`, whose collation largely ignores `_` and `$`,
+# i.e. exactly the two characters that lead or punctuate almost every
+# symbol name in this project. `comm` then walked input sorted in an
+# order it was not comparing with and emitted garbage IN BOTH
+# DIRECTIONS, which is the dangerous part: not merely extra noise, but
+# false all-clears too. Real observed output (DAR-325): four symbols
+# reported as "newly defined by 2+ dylibs" that are present VERBATIM in
+# dup_symbol_baseline.txt, plus 1676 "new" binary facts and 182 "fixed"
+# ones. The truth for that same tree, established by diffing the baseline
+# before vs after regeneration with BOTH sides normalized to byte order,
+# was 89 new facts and 0 fixed (recorded in full in DAR-327). Note that
+# merely running the old script with LC_ALL=C did NOT give the right
+# answer either -- it reported 176 new / 86 fixed, because the baseline
+# FILE on disk was still in locale order, so one side of the comm was
+# still mis-sorted. Both the comparison AND the stored baseline have to
+# be in the same order, which is why the pin below is paired with a
+# regenerated baseline.
+# `sort -c dup_symbol_baseline.txt` passed under en_US.UTF-8 and failed
+# under LC_ALL=C at line 10, which is how the locale-order baseline was
+# confirmed rather than guessed.
+# LC_ALL (not just LC_COLLATE) because LC_ALL overrides an LC_COLLATE the
+# user may have exported, and nothing here wants locale-dependent
+# `grep`/`sed`/`awk` character classes either -- these are ASCII Mach-O
+# symbol names, always.
+# If you ever regenerate the baseline by hand, regenerate it through this
+# script so it stays byte-order-sorted:
+# `LC_ALL=C sort -c dup_symbol_baseline.txt` must pass.
 set -u
+export LC_ALL=C
 cd "$(dirname "$0")"
 
 OUT="libc_build"
