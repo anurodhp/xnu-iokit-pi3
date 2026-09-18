@@ -793,6 +793,44 @@ fi
 #     (RSA's original 1991-2 license, permissive/attribution-only, the
 #     same lineage every other BSD/Apple MD5 traces to), to replace the
 #     from-scratch MD5 in corecrypto_md5.c.
+#   - lib/libutil/pw_util.c + lib/libutil/flopen.c (DAR-174, chpass(1)):
+#     the pinned Apple system_cmds/chpass.tproj/chpass.c's own real,
+#     unmodified non-OPEN_DIRECTORY branch calls pw_init(NULL,NULL)/
+#     pw_fini()/pw_tempname()/pw_equal()/pw_tmp()/pw_mkdb()/pw_edit()/
+#     pw_make()/pw_dup(), none of which are defined anywhere in this
+#     checkout (confirmed via exhaustive grep) -- Apple's own build
+#     always defines OPEN_DIRECTORY, so this branch was apparently never
+#     build-tested by Apple either. Real Apple system_cmds/vipw.tproj/
+#     pw_util.c (already built, see build_vipw.sh) is NOT a substitute:
+#     its pw_init() takes zero arguments (chpass calls the real BSD
+#     pw_init(dir, master) two-arg form) and it lacks pw_dup/pw_equal/
+#     pw_fini/pw_make/pw_tempname entirely. FreeBSD's lib/libutil/
+#     pw_util.c is the real, current, complete implementation of the
+#     shared password-program helper API BSD/Darwin's chpass/vipw/passwd
+#     all trace to (its own header: "This file is used by all the
+#     'password' programs; vipw(8), chpass(1), and passwd(1)."),
+#     confirmed via a real `git ls-tree` against this same pinned
+#     release/13.2.0 tag -- pulled here rather than any newer tag so
+#     this project has exactly one FreeBSD pin to keep in sync, not two.
+#     flopen.c is pw_lock()'s own real dependency (reliable open+flock
+#     helper), also lib/libutil, also real/unmodified upstream.
+#     lib/libc/gen/pw_scan.c + lib/libc/gen/pw_scan.h: chpass.c's own
+#     real non-OPEN_DIRECTORY LOADENTRY branch (`chpass -a`) and edit.c's
+#     own real verify() need __pw_scan()/_PWSCAN_WARN/_PWSCAN_MASTER --
+#     a DIFFERENT, incompatible real BSD pw_scan lineage than this
+#     project's own system_cmds/pwd_mkdb.tproj/pw_scan.c (3-arg
+#     `pw_scan(char*, struct passwd*, int*)` there vs. this file's
+#     `__pw_scan(char*, struct passwd*, int)`) -- see
+#     tools/userland_staging/chpass_pw_scan_freebsd.c's own header for
+#     the full citation.
+#     tools/userland_staging/chpass_pw_util_freebsd.c adapts pw_util.c
+#     (real function bodies copied verbatim, header cites exact line
+#     ranges) -- pw_copy()/pw_make_v7()/the pw_initpwd()/pw_scan()
+#     wrapper tail are dropped, not because they're broken, but because
+#     chpass.tproj already ships its OWN real pw_copy.c (different,
+#     3-arg signature -- linking both would be a duplicate symbol) and
+#     its own real pw_scan.h/pwd_mkdb.tproj/pw_scan.c pairing (same
+#     conflict). See that file's own header for the full real citation.
 # Pinned to release/13.2.0 (2023-04), a real tagged FreeBSD release.
 FREEBSD_REF="release/13.2.0"
 FREEBSD_DEST="third_party/freebsd-src"
@@ -806,11 +844,11 @@ if [ -d "$FREEBSD_DEST" ]; then
     fi
 fi
 if [ -n "$FREEBSD_DEST" ]; then
-    echo "+ sparse-cloning freebsd-src @ $FREEBSD_REF (rijndael, sha2, md5c.c/md5.h only)"
+    echo "+ sparse-cloning freebsd-src @ $FREEBSD_REF (rijndael, sha2, md5c.c/md5.h, lib/libutil pw_util.c+flopen.c, lib/libc/gen pw_scan.c+.h)"
     git clone --filter=blob:none --no-checkout --depth 1 --branch "$FREEBSD_REF" \
         https://github.com/freebsd/freebsd-src.git "$FREEBSD_DEST"
     git -C "$FREEBSD_DEST" sparse-checkout init --no-cone
-    printf '/sys/crypto/rijndael/*\n/sys/crypto/sha2/*\n/sys/kern/md5c.c\n/sys/sys/md5.h\n' \
+    printf '/sys/crypto/rijndael/*\n/sys/crypto/sha2/*\n/sys/kern/md5c.c\n/sys/sys/md5.h\n/lib/libutil/pw_util.c\n/lib/libutil/flopen.c\n/lib/libc/gen/pw_scan.c\n/lib/libc/gen/pw_scan.h\n' \
         > "$FREEBSD_DEST/.git/info/sparse-checkout"
     git -C "$FREEBSD_DEST" checkout "$FREEBSD_REF"
 fi

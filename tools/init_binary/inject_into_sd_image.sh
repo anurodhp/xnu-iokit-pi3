@@ -415,27 +415,51 @@ fi
 # at the real Apple path (/usr/sbin/vipw, confirmed against
 # system_cmds.xcodeproj's own INSTALL_PATH, not guessed). Not wired into
 # any boot-path exec chain -- an admin invokes it manually from a
-# logged-in root shell. Real, named runtime gap: pw_util.c's own
-# pw_mkdb() execs a separate pwd_mkdb binary to rebuild /etc/pwd.db +
-# /etc/spwd.db, and this project has not yet ported Berkeley DB
-# (pwd_mkdb.tproj itself is not built -- see build_vipw.sh's own header
-# for the full writeup); until pwd_mkdb.macho exists, vipw degrades
-# gracefully (pw_mkdb() returns 1, vipw.c's own real main() loop offers
-# to re-edit rather than corrupting the password database) instead of
-# actually rebuilding the hashed db. Not yet QEMU-boot-tested end to end
-# (DAR-174's own build pass deliberately stayed off QEMU to avoid
-# clashing with concurrent QEMU use elsewhere) -- real interactive
-# verification is a recommended follow-up.
+# logged-in root shell. pw_util.c's own pw_mkdb() execs a separate
+# pwd_mkdb binary to rebuild /etc/pwd.db + /etc/spwd.db -- real,
+# unmodified pwd_mkdb.macho is now also built and installed below
+# (DAR-174's Berkeley DB port, see build_libc_db.sh/build_pwd_mkdb.sh),
+# so this real exec path now actually resolves instead of degrading.
+# Not yet QEMU-boot-tested end to end (DAR-174's own build pass
+# deliberately stayed off QEMU to avoid clashing with concurrent QEMU
+# use elsewhere) -- real interactive verification is a recommended
+# follow-up.
 if [ -f tools/userland_staging/vipw.macho ]; then
     mkdir -p "$MNT/usr/sbin"
     cp tools/userland_staging/vipw.macho "$MNT/usr/sbin/vipw"
     chmod 755 "$MNT/usr/sbin/vipw"
     echo "+ wrote $(wc -c < tools/userland_staging/vipw.macho) bytes to $MNT/usr/sbin/vipw"
     echo "  (real, unmodified Apple vipw -- DAR-174, see"
-    echo "  tools/userland_staging/build_vipw.sh; pw_mkdb() degrades gracefully"
-    echo "  without pwd_mkdb, which this project has not ported yet)"
+    echo "  tools/userland_staging/build_vipw.sh; pw_mkdb() now has a real"
+    echo "  pwd_mkdb to exec, see below)"
 else
     echo "= tools/userland_staging/vipw.macho not built -- run build_vipw.sh first if wanted, skipping"
+fi
+
+# real pwd_mkdb.tproj (DAR-174, Phase 5 account-provisioning tools):
+# real, unmodified system_cmds/pwd_mkdb.tproj/pwd_mkdb.c + pw_scan.c,
+# installed at the real Apple path (/usr/sbin/pwd_mkdb, confirmed
+# against the real Apple iPhoneOS SDK's own pwd.h `_PATH_PWD_MKDB`
+# constant, not guessed). Needed real Berkeley DB (dbopen()/DB_HASH,
+# this project's first-ever port of it -- see
+# tools/userland_staging/build_libc_db.sh's own header for the full
+# scope/citation: db/+hash/ only, btree/recno/mpool deliberately not
+# ported since nothing here calls dbopen() with those types). Not wired
+# into any boot-path exec chain itself -- vipw/chpass/passwd's own
+# pw_mkdb() helper execs it by absolute path. Not yet QEMU-boot-tested
+# end to end -- real interactive verification (actually editing
+# /etc/master.passwd and confirming /etc/pwd.db + /etc/spwd.db get
+# regenerated) is a recommended follow-up.
+if [ -f tools/userland_staging/pwd_mkdb.macho ]; then
+    mkdir -p "$MNT/usr/sbin"
+    cp tools/userland_staging/pwd_mkdb.macho "$MNT/usr/sbin/pwd_mkdb"
+    chmod 755 "$MNT/usr/sbin/pwd_mkdb"
+    echo "+ wrote $(wc -c < tools/userland_staging/pwd_mkdb.macho) bytes to $MNT/usr/sbin/pwd_mkdb"
+    echo "  (real, unmodified Apple pwd_mkdb -- DAR-174, see"
+    echo "  tools/userland_staging/build_pwd_mkdb.sh; first real consumer of"
+    echo "  this project's own new Berkeley DB port, build_libc_db.sh)"
+else
+    echo "= tools/userland_staging/pwd_mkdb.macho not built -- run build_pwd_mkdb.sh first if wanted, skipping"
 fi
 
 # real passwd.tproj (DAR-174, Phase 5 account-provisioning tools):
@@ -465,6 +489,43 @@ if [ -f tools/userland_staging/passwd.macho ]; then
     echo "  NIS/OpenDirectory/PAM on a real device target)"
 else
     echo "= tools/userland_staging/passwd.macho not built -- run build_passwd.sh first if wanted, skipping"
+fi
+
+# real chpass.tproj (DAR-174, Phase 5 account-provisioning tools --
+# 4th and final tool of this ticket): real, unmodified system_cmds/
+# chpass.tproj/{chpass,edit,field,table,util,pw_copy}.c, installed at
+# the real Apple path (/usr/bin/chpass, confirmed against
+# system_cmds.xcodeproj's own INSTALL_PATH). Built non-OPEN_DIRECTORY
+# (same real device-target reasoning as passwd.tproj above -- Apple's
+# own build always defines OPEN_DIRECTORY, so this branch, and this
+# exact real gap, was apparently never build-tested by Apple either;
+# see build_chpass.sh's own header for the full citation). Needed
+# real FreeBSD lib/libutil/pw_util.c + lib/libc/gen/pw_scan.c +
+# lib/libutil/flopen.c (chpass_pw_util_freebsd.c/chpass_pw_scan_
+# freebsd.c/chpass_flopen_freebsd.c) since neither Apple's public SDK
+# nor this project's own vendored Libc ever defined pw_init(dir,master)/
+# pw_fini()/pw_tempname()/pw_equal()/__pw_scan() etc.
+#
+# REAL, CONFIRMED UPSTREAM APPLE BUG this build surfaces but does not
+# fix (fixing it would mean patching real Apple source, out of scope
+# here): chpass.c's own real, unmodified non-OPEN_DIRECTORY tail has
+# `exit(0);` as its literal first statement (chpass.c, right after the
+# password re-entry check) -- BEFORE ever calling pw_copy()/pw_lock()/
+# pw_mkdb() to actually persist an edited entry. So on a real device
+# build, real Apple's own chpass(1) validates the edit and exits
+# without saving; this port reproduces that behavior exactly (byte-for-
+# byte real source), it does not paper over it. See this ticket's own
+# Linear comment for the full writeup.
+if [ -f tools/userland_staging/chpass.macho ]; then
+    mkdir -p "$MNT/usr/bin"
+    cp tools/userland_staging/chpass.macho "$MNT/usr/bin/chpass"
+    chmod 755 "$MNT/usr/bin/chpass"
+    echo "+ wrote $(wc -c < tools/userland_staging/chpass.macho) bytes to $MNT/usr/bin/chpass"
+    echo "  (real, unmodified Apple chpass -- DAR-174, see"
+    echo "  tools/userland_staging/build_chpass.sh; real confirmed upstream"
+    echo "  exit(0)-before-save bug in this exact build config, not fixed here)"
+else
+    echo "= tools/userland_staging/chpass.macho not built -- run build_chpass.sh first if wanted, skipping"
 fi
 
 # cron.macho/crontab.macho intentionally NOT installed here (2026-08-22).
