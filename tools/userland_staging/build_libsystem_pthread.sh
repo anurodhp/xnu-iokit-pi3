@@ -190,8 +190,32 @@ MEMBERS="$MEMBERS $QOS_MEMBERS"
 # pthread.c symbols (a file this project's build_libpthread.sh
 # deliberately never compiles), only ever reached from an actual fork()
 # child, which no dylib-loaded process in this project ever calls.
+# DAR-337: this file now includes libpthread's own internal.h (it needs
+# the real struct pthread_s to re-init the main thread's lock -- see its
+# header), so it is compiled with libpthread's own CFLAGS/include set,
+# the same one build_libpthread.sh uses for pthread_atfork.c itself,
+# rather than the bare -I libsyscall it used while it was only writing
+# TSD slots.
+PTHREAD_SRC="../../third_party/libpthread"
+PLATFORM_SRC="../../third_party/libplatform"
+MALLOC_SRC="../../third_party/libmalloc"
+XNU_SRC="../../third_party/xnu-7195"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    -I ../../third_party/xnu-7195/libsyscall \
+    -Wno-nullability-completeness -Wno-availability -Wno-deprecated-declarations \
+    -D__LIBC__ -D__POSIX_LIB__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_NON_CANCELABLE=1 \
+    -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 -D__PTHREAD_BUILDING_PTHREAD__=1 -D__PTHREAD_EXPOSE_INTERNALS__ \
+    -DOS_ATOMIC_CONFIG_MEMORY_ORDER_DEPENDENCY=1 -DPRIVATE=1 \
+    -D_os_xbs_chrooted=0 \
+    -D__API_UNAVAILABLE_PLATFORM_bridgeos=ios,unavailable \
+    '-D__API_AVAILABLE_PLATFORM_bridgeos(x)=ios,introduced=x' \
+    -I . \
+    -I "$PTHREAD_SRC" -I "$PTHREAD_SRC/src" -I "$PTHREAD_SRC/src/resolver" \
+    -I "$PTHREAD_SRC/private" -I "$PTHREAD_SRC/include" -I "$PTHREAD_SRC/kern" \
+    -I "$PLATFORM_SRC/internal" -I "$PLATFORM_SRC/private" -I "$PLATFORM_SRC/include" \
+    -I "$OUT/compat_include" \
+    -I "$MALLOC_SRC/private" \
+    -I "$XNU_SRC/libsyscall" -I "$XNU_SRC/libsyscall/mach" -I "$XNU_SRC/bsd" \
+    -idirafter "$XNU_SRC/osfmk" -idirafter "$XNU_SRC/libkern" \
     libsystem_pthread_atfork_compat.c -o "$OUT/libsystem_pthread/atfork_compat.o"
 
 # Real gap: see libsystem_pthread_dylib_bootstrap_compat.c's own comment --

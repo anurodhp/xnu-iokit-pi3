@@ -1498,6 +1498,20 @@ if [ -f tools/userland_staging/less.macho ]; then
     echo "  under this name)"
 fi
 
+# DAR-336 / DAR-337 reproducer (found by the OpenSSH port): alarm(3)
+# killing its caller, and a fork() child that forks again crashing. Kept
+# on the image as a permanent regression test -- both bugs are invisible
+# to a link-time or nm-level check and only show up at runtime.
+if [ -f tools/userland_staging/libc_build/fork_alarm_smoketest.macho ]; then
+    mkdir -p "$MNT/usr/local/bin"
+    cp tools/userland_staging/libc_build/fork_alarm_smoketest.macho \
+        "$MNT/usr/local/bin/fork_alarm_smoketest"
+    chmod 755 "$MNT/usr/local/bin/fork_alarm_smoketest"
+    echo "+ wrote $(wc -c < tools/userland_staging/libc_build/fork_alarm_smoketest.macho) bytes to $MNT/usr/local/bin/fork_alarm_smoketest (DAR-336/DAR-337)"
+else
+    echo "= fork_alarm_smoketest.macho not built -- run build_fork_alarm_smoketest.sh first if wanted, skipping"
+fi
+
 # --- OpenSSH (DAR-183, Phase 7b) --------------------------------------
 # Real OpenSSH 9.3p1 out of the FreeBSD pin (third_party/freebsd-src/
 # crypto/openssh @ release/13.2.0), built by
