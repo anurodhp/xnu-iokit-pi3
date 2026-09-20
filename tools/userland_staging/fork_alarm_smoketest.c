@@ -339,6 +339,72 @@ test_alarm_in_child(void)
 	return 0;
 }
 
+/* --- DAR-183 follow-up: real pselect(2) + SIGCHLD ------------------- */
+/* sshd's server_loop2() blocks SIGCHLD, then calls ppoll() (built on
+ * pselect(2)) with a sigset_t that unblocks it only for the duration of
+ * the wait -- so a SIGCHLD arriving exactly during pselect() is the
+ * scenario to reproduce. sshd's own wait_until_can_do_something() dies
+ * with "ppoll: Broken pipe" (EPIPE) immediately after starting a
+ * session's exec'd command -- i.e. right when that command's SIGCHLD is
+ * imminent. This replays exactly that pattern: block SIGCHLD, fork a
+ * child that exits almost immediately, then pselect() with SIGCHLD
+ * unblocked in the mask -- expecting EINTR (interrupted by the signal),
+ * not EPIPE. */
+extern int *__error(void);
+#define dar183_errno (*__error())
+static int
+test_pselect_sigchld(void)
+{
+	sigset_t block, orig, waitmask;
+	pid_t pid;
+	fd_set rfds;
+	int ret, saved_errno;
+
+	say("pselect: step 1 -- blocking SIGCHLD");
+	sigemptyset(&block);
+	sigaddset(&block, SIGCHLD);
+	if (sigprocmask(SIG_BLOCK, &block, &orig) == -1) {
+		say("pselect: FAIL sigprocmask block: %s", strerror(errno));
+		return 1;
+	}
+	say("pselect: step 2 -- forking a child that exits immediately");
+	pid = fork();
+	if (pid == -1) {
+		say("pselect: FAIL fork: %s", strerror(errno));
+		return 1;
+	}
+	if (pid == 0) {
+		_exit(0);
+	}
+	say("pselect: step 3 -- child pid %d forked, calling real pselect(2) "
+	    "with SIGCHLD unblocked in the mask", (int)pid);
+	waitmask = orig;
+	sigdelset(&waitmask, SIGCHLD);
+	FD_ZERO(&rfds);
+	FD_SET(0, &rfds);
+	dar183_errno = 0;
+	ret = pselect(1, &rfds, NULL, NULL, NULL, &waitmask);
+	saved_errno = dar183_errno;
+	say("pselect: step 4 -- pselect() returned %d, errno=%d (%s)",
+	    ret, saved_errno, ret == -1 ? strerror(saved_errno) : "n/a");
+	sigprocmask(SIG_SETMASK, &orig, NULL);
+	{
+		int status;
+		waitpid(pid, &status, 0);
+	}
+	if (ret == -1 && saved_errno == EPIPE) {
+		say("pselect: FAIL real pselect(2) itself returned EPIPE -- "
+		    "reproduced the sshd bug in isolation");
+		return 1;
+	}
+	if (ret == -1 && saved_errno != EINTR) {
+		say("pselect: SUSPECT unexpected errno %d (wanted EINTR from "
+		    "the SIGCHLD, or a clean timeout/ready return)", saved_errno);
+	}
+	say("pselect: PASS (ret=%d errno=%d, no EPIPE)", ret, saved_errno);
+	return 0;
+}
+
 /* --- errno plumbing ------------------------------------------------ */
 /* Third thing the sshd port exposed, cheap to check here: a FAILING
  * socket(2) reported "Broken pipe" (EPIPE) to sshd, and a failing
@@ -381,6 +447,7 @@ main(void)
 	bad |= test_nested_fork_instrumented();
 	bad |= test_alarm();
 	bad |= test_alarm_in_child();
+	bad |= test_pselect_sigchld();
 	bad |= test_socket_errno();
 	say("fork_alarm_smoketest: %s", bad ? "FAILURES ABOVE" : "ALL PASS");
 	return bad;

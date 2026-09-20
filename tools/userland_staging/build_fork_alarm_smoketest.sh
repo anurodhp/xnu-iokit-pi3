@@ -36,7 +36,7 @@ fi
 for f in system/libsystem_c.dylib system/libsystem_pthread.dylib \
          system/libsystem_malloc.dylib system/libsystem_kernel.dylib \
          system/libsystem_platform.dylib system/libdyld.dylib \
-         system/libSystem.B.dylib; do
+         system/libresolv.dylib system/libSystem.B.dylib; do
     if [ ! -f "$OUT/$f" ]; then
         echo "error: $OUT/$f not found -- run the libSystem tier build scripts first" >&2
         exit 1
@@ -63,7 +63,12 @@ rm -f "$OUT/fork_alarm_smoketest.macho"
     "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_pthread.dylib" \
     "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/system/libsystem_platform.dylib" \
-    "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib"
+    "$OUT/system/libdyld.dylib" \
+    `# real pselect(2) raw syscall wrapper (DAR-183 follow-up test) --` \
+    `# same libresolv.dylib sshd itself already links for this exact` \
+    `# symbol (tools/userland_staging/libresolv_more_socket_syscalls.c).` \
+    "$OUT/system/libresolv.dylib" \
+    "$OUT/system/libSystem.B.dylib"
 
 M="$OUT/fork_alarm_smoketest.macho"
 otool -l "$M" | grep -A2 "cmd LC_LOAD_DYLINKER" | grep -q "/usr/lib/dyld" || {
