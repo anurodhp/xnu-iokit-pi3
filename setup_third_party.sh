@@ -845,11 +845,11 @@ if [ -d "$FREEBSD_DEST" ]; then
     fi
 fi
 if [ -n "$FREEBSD_DEST" ]; then
-    echo "+ sparse-cloning freebsd-src @ $FREEBSD_REF (rijndael, sha2, md5c.c/md5.h, lib/libutil pw_util.c+flopen.c, lib/libc/gen pw_scan.c+.h)"
+    echo "+ sparse-cloning freebsd-src @ $FREEBSD_REF (rijndael, sha2, md5c.c/md5.h, lib/libutil pw_util.c+flopen.c, lib/libc/gen pw_scan.c+.h, crypto/openssh + secure/ ssh build glue)"
     git clone --filter=blob:none --no-checkout --depth 1 --branch "$FREEBSD_REF" \
         https://github.com/freebsd/freebsd-src.git "$FREEBSD_DEST"
     git -C "$FREEBSD_DEST" sparse-checkout init --no-cone
-    printf '/sys/crypto/rijndael/*\n/sys/crypto/sha2/*\n/sys/kern/md5c.c\n/sys/sys/md5.h\n/lib/libutil/pw_util.c\n/lib/libutil/flopen.c\n/lib/libc/gen/pw_scan.c\n/lib/libc/gen/pw_scan.h\n' \
+    printf '/sys/crypto/rijndael/*\n/sys/crypto/sha2/*\n/sys/kern/md5c.c\n/sys/sys/md5.h\n/lib/libutil/pw_util.c\n/lib/libutil/flopen.c\n/lib/libc/gen/pw_scan.c\n/lib/libc/gen/pw_scan.h\n/crypto/openssh/*\n/secure/ssh.mk\n/secure/lib/libssh/*\n/secure/usr.sbin/sshd/*\n/secure/usr.bin/ssh/*\n/secure/usr.bin/ssh-keygen/*\n' \
         > "$FREEBSD_DEST/.git/info/sparse-checkout"
     git -C "$FREEBSD_DEST" checkout "$FREEBSD_REF"
 fi

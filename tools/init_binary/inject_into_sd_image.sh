@@ -1498,6 +1498,84 @@ if [ -f tools/userland_staging/less.macho ]; then
     echo "  under this name)"
 fi
 
+# --- OpenSSH (DAR-183, Phase 7b) --------------------------------------
+# Real OpenSSH 9.3p1 out of the FreeBSD pin (third_party/freebsd-src/
+# crypto/openssh @ release/13.2.0), built by
+# tools/userland_staging/build_sshd.sh. Deliberately NOT launchd-managed
+# -- DAR-183's own instruction says that is fine -- so sshd is started by
+# hand (or by a later rc-style step), not by a plist.
+if [ -f tools/userland_staging/sshd.macho ]; then
+    mkdir -p "$MNT/usr/sbin"
+    cp tools/userland_staging/sshd.macho "$MNT/usr/sbin/sshd"
+    chmod 755 "$MNT/usr/sbin/sshd"
+    echo "+ wrote $(wc -c < tools/userland_staging/sshd.macho) bytes to $MNT/usr/sbin/sshd"
+else
+    echo "= tools/userland_staging/sshd.macho not built -- run build_sshd.sh first if wanted, skipping"
+fi
+for pair in "ssh:bin/ssh" "ssh-keygen:bin/ssh-keygen"; do
+    src="tools/userland_staging/${pair%%:*}.macho"
+    dst="usr/${pair##*:}"
+    if [ -f "$src" ]; then
+        mkdir -p "$MNT/$(dirname "$dst")"
+        cp "$src" "$MNT/$dst"
+        chmod 755 "$MNT/$dst"
+        echo "+ wrote $(wc -c < "$src") bytes to $MNT/$dst"
+    else
+        echo "= $src not built -- run build_sshd.sh first if wanted, skipping"
+    fi
+done
+
+# /var/empty: sshd's real privilege-separation chroot directory
+# (_PATH_PRIVSEP_CHROOT_DIR). sshd.c's own privsep_preauth() fatals with
+# "Missing privilege separation directory" unless it exists, is owned by
+# root and is not group/world-writable -- that check is real, unmodified
+# upstream code (misc.c's safe_path()), not a convention this project
+# invented, so the directory has to be here before sshd will start at all.
+mkdir -p "$MNT/var/empty"
+chmod 755 "$MNT/var/empty"
+echo "+ ensured $MNT/var/empty exists, mode 755 (sshd's real privsep chroot dir)"
+
+mkdir -p "$MNT/etc/ssh"
+chmod 755 "$MNT/etc/ssh"
+if [ ! -f "$MNT/etc/ssh/sshd_config" ]; then
+    # Real upstream sshd_config (crypto/openssh/sshd_config, shipped
+    # commented-out-defaults file) is NOT copied verbatim: four of this
+    # system's answers genuinely differ from the upstream defaults, and a
+    # config full of commented-out defaults would hide that. Each active
+    # line below says why it is here.
+    cat > "$MNT/etc/ssh/sshd_config" <<'SSHD_CONF_EOF'
+# Written by tools/init_binary/inject_into_sd_image.sh (DAR-183).
+# Every line here is a deliberate deviation from OpenSSH's own defaults;
+# anything not listed keeps the real upstream default.
+
+# This build has no OpenSSL (see build_sshd.sh), so ssh-ed25519 is the
+# only host key type it can make or load. Naming it explicitly keeps
+# sshd from logging a failure for each of the RSA/ECDSA keys it would
+# otherwise look for.
+HostKey /etc/ssh/ssh_host_ed25519_key
+
+# root is currently the only account this image provisions
+# (/etc/master.passwd, written further down this same script), so the
+# upstream default of "prohibit-password" would lock the system out of
+# its own sshd entirely.
+PermitRootLogin yes
+
+# No PAM in this build (OpenPAM here has no service modules), so the
+# password path is the real crypt(3)/master.passwd one -- the same hashes
+# tools/pwtool writes and login(1) verifies.
+PasswordAuthentication yes
+
+# sftp-server.c is compiled INTO sshd in this port; there is no separate
+# /usr/libexec/sftp-server binary on the image, so the subsystem has to
+# be the in-process one.
+Subsystem	sftp	internal-sftp
+SSHD_CONF_EOF
+    chmod 644 "$MNT/etc/ssh/sshd_config"
+    echo "+ wrote $MNT/etc/ssh/sshd_config"
+else
+    echo "+ $MNT/etc/ssh/sshd_config already exists -- leaving as-is"
+fi
+
 mkdir -p "$MNT/tmp"
 echo "+ ensured $MNT/tmp exists (real fopen()-family O_CREAT target dir -- same"
 echo "  class of gap as /etc and /dev above; found via a real QEMU boot-test"
@@ -1557,6 +1635,26 @@ if [ ! -f "$MNT/etc/master.passwd" ]; then
     echo "+ wrote $MNT/etc/master.passwd and $MNT/etc/group (root:darwin, uid/gid 0)"
 else
     echo "+ $MNT/etc/master.passwd already exists -- leaving accounts as-is"
+fi
+
+# The "sshd" privilege-separation account (DAR-183). sshd.c:1877 does a
+# real getpwnam(SSH_PRIVSEP_USER) and exits with "Privilege separation
+# user sshd does not exist" if it is missing -- unmodified upstream code.
+# Added separately from the root-account block above so it also lands on
+# images provisioned before this existed, and never twice.
+if [ -f "$MNT/etc/master.passwd" ] && ! grep -q '^sshd:' "$MNT/etc/master.passwd"; then
+    # '*' as the hash: no password can ever hash to it, which is the real
+    # BSD convention for an account that must never be logged into. uid/gid
+    # 75 is Apple's own real _sshd uid on macOS; /var/empty + /usr/bin/false
+    # match what real OpenSSH deployments use (this image has no
+    # /usr/bin/false yet, which is harmless -- the account exists to be
+    # setuid()'d to, never to run a login shell).
+    printf 'sshd:*:75:75::0:0:sshd privsep:/var/empty:/usr/bin/false\n' >> "$MNT/etc/master.passwd"
+    echo "+ added the sshd privsep account to $MNT/etc/master.passwd (uid/gid 75, no password)"
+fi
+if [ -f "$MNT/etc/group" ] && ! grep -q '^sshd:' "$MNT/etc/group"; then
+    printf 'sshd:*:75:\n' >> "$MNT/etc/group"
+    echo "+ added the sshd group to $MNT/etc/group (gid 75)"
 fi
 
 if [ ! -f "$MNT/etc/hostname" ]; then
