@@ -29,6 +29,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/wait.h>
@@ -477,6 +478,90 @@ test_socket_errno(void)
 	return 0;
 }
 
+/* --- DAR-342 regression: errno must survive a failed syscall -------- */
+/* Mirrors sshd's real listen_on_addrs() sequence without needing sshd:
+ * an AF_INET6 socket with an EXPLICIT protocol, immediately followed by
+ * a real AF_INET socket + bind().
+ *
+ * DAR-342's actual root cause was NOT in the kernel (live kprintf
+ * instrumentation in socket_common()/bind() confirmed the kernel
+ * returned a correct EAFNOSUPPORT(47) all along). It was that
+ * build_sshd.sh linked a LOOSE cerror_stub.o, which defines
+ * errno/__error/cerror/cerror_nocancel -- and a plain .o is linked
+ * unconditionally. That gave sshd a SECOND, private errno in its own
+ * __DATA,__common, while socket(2) bound to libsystem_kernel.dylib and
+ * set THAT image's errno. Every strerror(errno) in sshd then read a
+ * word no syscall had ever written, reporting a stale "Broken pipe"
+ * for a call that had really failed EAFNOSUPPORT.
+ *
+ * So what this test actually guards is the invariant that broke: the
+ * errno a failed syscall sets must be the errno this process reads
+ * back. It fails on ANY reintroduction of a duplicate errno, not just
+ * the socket path -- which is the point, since build_libsystem_kernel.sh
+ * predicted this exact "two private copies of one process-global" shape
+ * on 2026-08-25 and it went unnoticed until sshd hit it. */
+static int
+test_socket_bind_epipe(void)
+{
+	int fd6, fd4, ret;
+	struct sockaddr_in sin;
+
+	errno = 0;
+	say("sockbind: step 1 -- socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP) "
+	    "(explicit protocol, matches sshd's real call)");
+	fd6 = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+	say("sockbind: step 2 -- fd6=%d errno=%d (%s)", fd6,
+	    fd6 == -1 ? errno : 0, fd6 == -1 ? strerror(errno) : "n/a");
+	if (fd6 == -1 && errno == EPIPE) {
+		say("sockbind: FAIL socket(AF_INET6,...,IPPROTO_TCP) itself "
+		    "returned EPIPE -- DAR-342 has regressed (duplicate "
+		    "errno: this process is reading an errno no syscall wrote)");
+	}
+	if (fd6 >= 0) {
+		close(fd6);
+	}
+
+	errno = 0;
+	say("sockbind: step 3 -- socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)");
+	fd4 = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+	say("sockbind: step 4 -- fd4=%d errno=%d (%s)", fd4,
+	    fd4 == -1 ? errno : 0, fd4 == -1 ? strerror(errno) : "n/a");
+	if (fd4 == -1) {
+		say("sockbind: FAIL socket(AF_INET,...) itself failed -- "
+		    "cannot test bind()");
+		return 1;
+	}
+
+	memset(&sin, 0, sizeof(sin));
+	sin.sin_family = AF_INET;
+	sin.sin_addr.s_addr = 0; /* INADDR_ANY */
+	sin.sin_port = 0;        /* let the kernel pick a port -- avoids a
+	                           * real EADDRINUSE if something else has
+	                           * 22 open, which would be a genuine,
+	                           * unrelated failure to not conflate with
+	                           * this one */
+	errno = 0;
+	say("sockbind: step 5 -- bind(fd4, INADDR_ANY:0)");
+	ret = bind(fd4, (struct sockaddr *)&sin, sizeof(sin));
+	say("sockbind: step 6 -- bind() returned %d errno=%d (%s)", ret,
+	    ret == -1 ? errno : 0, ret == -1 ? strerror(errno) : "n/a");
+	close(fd4);
+	if (ret == -1 && errno == EPIPE) {
+		say("sockbind: FAIL bind() on a freshly-created, healthy "
+		    "AF_INET socket returned EPIPE -- DAR-342 has regressed "
+		    "(duplicate errno, see this test's own header)");
+		return 1;
+	}
+	if (ret == -1) {
+		say("sockbind: FAIL bind() failed for some other real reason: "
+		    "%s", strerror(errno));
+		return 1;
+	}
+	say("sockbind: PASS (fd6=%d, fd4=%d bound cleanly, no EPIPE)",
+	    fd6, fd4);
+	return 0;
+}
+
 int
 main(void)
 {
@@ -494,6 +579,7 @@ main(void)
 	 * back to 0 deliberately, in isolation, to re-confirm the hang. */
 	bad |= test_pselect_sigchld(1);  /* real handler first, matching sshd: expect EINTR, no hang */
 	bad |= test_socket_errno();
+	bad |= test_socket_bind_epipe();
 	say("fork_alarm_smoketest: %s", bad ? "FAILURES ABOVE" : "ALL PASS");
 	return bad;
 }

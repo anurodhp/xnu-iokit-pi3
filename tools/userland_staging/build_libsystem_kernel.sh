@@ -539,6 +539,28 @@ done
     -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
     -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
     "$XNU/libsyscall/custom/__pipe.s" -o "$OUT/libsystem_kernel/pipe_trap.o"
+
+# ptrace(2): same NO_SYSCALL_STUB story as __pipe.s above -- real Apple
+# hand-writes it ($XNU/libsyscall/custom/__ptrace.s) because the wrapper
+# must ZERO errno before the trap (ptrace legitimately returns -1 on
+# success, so the caller distinguishes the two by errno).
+#
+# It belongs HERE, not in a consumer's own link, and that is load-bearing
+# rather than tidiness (DAR-342): the arm64 body is
+#     MI_GET_ADDRESS(x9,_errno)   ->   adrp x9, _errno@page
+#                                      add  x9, x9, _errno@pageoff
+# a DIRECT, same-image address computation (SYS.h:460) with no GOT-
+# indirect form. Assembled into any image that does not itself define
+# _errno it fails the link outright ("fixup error (kind=arm64_adrp_lo12)
+# ... target '_errno' does not have address") -- and the way build_sshd.sh
+# had silenced that was to link a loose cerror_stub.o alongside it, which
+# handed sshd a SECOND private errno and caused DAR-342. Compiled here,
+# next to this dylib's own cerror_stub.o errno, the direct reference is
+# correct by construction and consumers just import _ptrace.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -arch arm64 \
+    -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
+    -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
+    "$XNU/libsyscall/custom/__ptrace.s" -o "$OUT/libsystem_kernel/ptrace_trap.o"
 # __pipe.s (above) only exports the private-indirection name `___pipe`
 # (real Apple naming convention, same as __lchown/__platform_sigaction);
 # the real public `_pipe` name needs a thin C forwarder on top -- reused
@@ -728,6 +750,15 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     `# (nanosleep_compat.o, just above), same nonlocal-base requirement as` \
     `# every other alias here.` \
     -Wl,-alias,_nanosleep,'_nanosleep$UNIX2003' \
+    `# _ptrace added 2026-09-20 (DAR-342): __ptrace.s (ptrace_trap.o, just` \
+    `# added above) exports only the private-indirection name ___ptrace,` \
+    `# the same real Apple naming convention as ___pipe/__lchown. Real` \
+    `# Apple's own libsystem_kernel.dylib exports BOTH names at one` \
+    `# identical address (nm -gU: 0000000000008cc8 T ___ptrace / T` \
+    `# _ptrace), so this alias is Apple parity, not a local convenience.` \
+    `# Base is genuinely local to this link (ptrace_trap.o), same` \
+    `# nonlocal-base requirement as every other alias here.` \
+    -Wl,-alias,___ptrace,_ptrace \
     `# _sendto unexported (kept private-extern, not removed): libresolv.a` \
     `# still owns the real, public canonical PLAIN+$UNIX2003 _sendto pair` \
     `# (its own local base is required there for its own -Wl,-alias, same` \
@@ -767,6 +798,7 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/sys_fpathconf.o" "$OUT/libsystem_kernel/nanosleep_compat.o" \
     "$OUT/libsystem_kernel/sys_kevent.o" "$OUT/libsystem_kernel/sys_kqueue.o" \
     "$OUT/libsystem_kernel/pipe_trap.o" "$OUT/libsystem_kernel/pipe_forwarder.o" \
+    "$OUT/libsystem_kernel/ptrace_trap.o" \
     "$OUT/libsystem_kernel/chmod_wrap.o" "$OUT/libsystem_kernel/xpc_syscall_wrappers_compat.o" \
     "$OUT/libsystem_kernel/select_wrap.o" "$OUT/libsystem_kernel/sendto_wrap.o" \
     "$OUT/libsystem_kernel/recvfrom_wrap.o" \

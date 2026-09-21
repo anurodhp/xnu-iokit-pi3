@@ -73,6 +73,20 @@ fi
 
 SOUT="$OUT/sshd_obj"
 SRCTREE="$OUT/sshd_src"
+
+# Purge previously-built objects before compiling (DAR-342). The link line
+# and the libsshcore.a `ar` step both glob whole directories
+# ("$SOUT"/extra/*.o, "$SOUT"/compat/*.o, "$SOUT"/syscalls/*.o), so an
+# object whose source this script NO LONGER compiles keeps getting swept
+# into the build forever, silently. That is not hypothetical: this
+# directory had accumulated a dar183_debug_socket_compat.o (a temporary
+# diagnostic whose .c was deleted long before) and a custom___ptrace.o
+# (obsoleted when __ptrace.s moved to build_libsystem_kernel.sh) -- the
+# latter kept re-breaking the link with a stale direct _errno reference
+# after the fix that removed it. Same real bug class build_libc_locale.sh
+# documents for its own freebsd_string/*.o wildcard. libc_build/ is
+# gitignored build output, so this is cheap and always safe.
+rm -rf "$SOUT"
 mkdir -p "$SOUT"
 
 # ---------------------------------------------------------------------
@@ -686,30 +700,22 @@ ASM_EOF
     trap - EXIT
 fi
 
-# ptrace(2) is NOT create-syscalls.pl output: syscalls.master has it as a
-# plain entry, but libsyscall ships a HAND-WRITTEN
-# libsyscall/custom/__ptrace.s for it (it zeroes errno before the trap,
-# which the generated shape cannot express), so the generator emits
-# nothing and the real Apple asm is assembled directly here.
-# platform-tracing.c's platform_disable_tracing() ->
-# ptrace(PT_DENY_ATTACH, 0, 0, 0) is sshd's only call site.
-#
-# That file defines ___ptrace (double underscore). The plain _ptrace the
-# caller wants is the SAME function on real Darwin, not a wrapper around
-# it -- verified against the running system, not assumed:
-#   $ nm -gU /usr/lib/system/libsystem_kernel.dylib | grep -i ptrace
-#   0000000000008cc8 T ___ptrace
-#   0000000000008cc8 T _ptrace        <- identical address
-# so the -Wl,-alias on the link line below reproduces exactly what Apple
-# ships, with the alias base local to this link (what ld64 needs).
-if [ ! -f "$SOUT/syscalls/custom___ptrace.o" ]; then
-    mkdir -p "$SOUT/syscalls"
-    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -arch arm64 \
-        -I"$OUT/sys_asm_compat" -I"$XNU/libsyscall/custom" \
-        -I"$XNU/libsyscall/mach" -I"$XNU/osfmk" \
-        "$XNU/libsyscall/custom/__ptrace.s" -o "$SOUT/syscalls/custom___ptrace.o" \
-        || { echo "error: __ptrace.s failed to assemble" >&2; exit 1; }
-fi
+# ptrace(2): NOT assembled here any more (DAR-342). It used to be -- real
+# Apple hand-writes libsyscall/custom/__ptrace.s because the wrapper must
+# zero errno before the trap -- but that file's arm64 body takes the
+# address of _errno DIRECTLY (SYS.h:460 MI_GET_ADDRESS -> adrp/add, no
+# GOT-indirect form), so assembling it into sshd's own link REQUIRES a
+# local _errno definition in this image, which is why a loose
+# cerror_stub.o used to be listed below. That second, private errno is
+# exactly the DAR-342 bug: socket(2) binds to libsystem_kernel.dylib and
+# set THAT image's errno, while every strerror(errno) here read sshd's
+# own copy, which no syscall ever wrote (sshd reported a stale "Broken
+# pipe" for a socket() the kernel had failed with EAFNOSUPPORT).
+# __ptrace.s now lives in build_libsystem_kernel.sh next to that dylib's
+# own errno, which exports both ___ptrace and _ptrace (real Apple parity
+# -- see that script's own block), so platform-tracing.c's
+# platform_disable_tracing() -> ptrace(PT_DENY_ATTACH, 0, 0, 0) simply
+# imports it like any other syscall.
 
 # __thread_selfusage: same story as __ptrace above -- hand-written Apple
 # asm in libsyscall/custom/, not generator output. clock_gettime.c's
@@ -738,10 +744,9 @@ for sy in chdir chown chroot dup dup2 fsync futimes link readlink setgid \
     fi
     REUSED_STUBS="$REUSED_STUBS $o"
 done
-for o in "$OUT/chk_fail.o" "$OUT/cerror_stub.o"; do
+for o in "$OUT/chk_fail.o"; do
     if [ ! -f "$o" ]; then
-        echo "error: $o not found -- run build_libmalloc.sh (chk_fail.o) /" >&2
-        echo "       build_simple_cmds.sh (cerror_stub.o) first" >&2
+        echo "error: $o not found -- run build_libmalloc.sh first" >&2
         exit 1
     fi
 done
@@ -801,7 +806,15 @@ link_ssh_binary() {
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$@" \
     "$OUT/libsshcore.a" \
-    "$OUT/chk_fail.o" "$OUT/cerror_stub.o" \
+    `# NO cerror_stub.o here (DAR-342). It defines errno/__error/cerror/` \
+    `# cerror_nocancel, and a plain .o is linked unconditionally -- so` \
+    `# listing it gave sshd its OWN __DATA,__common _errno, while socket(2)` \
+    `# and friends bind to libsystem_kernel.dylib and set THAT image's` \
+    `# errno. Two storage locations: every strerror(errno) in sshd read a` \
+    `# value no syscall ever wrote. libsystem_kernel.dylib already exports` \
+    `# all four (nm -m: ___error, _cerror, _cerror_nocancel, _errno), and` \
+    `# it is already on LINK_DYLIBS below, so they resolve there instead.` \
+    "$OUT/chk_fail.o" \
     $REUSED_STUBS \
     "$SOUT/syscalls"/*.o \
     "${LINK_DYLIBS[@]}" \
@@ -810,9 +823,6 @@ link_ssh_binary() {
     `# reason, as build_vim.sh's and build_cron.sh's.` \
     -Wl,-alias,'_strftime$UNIX2003',_strftime \
     "${EXTRA_LDFLAGS[@]}" \
-    `# ...and real Apple's own ___ptrace/_ptrace same-address pair (see` \
-    `# the __ptrace.s block above for the nm evidence).` \
-    -Wl,-alias,___ptrace,_ptrace \
     2>"$OUT/${outmacho%.macho}_link.err" && echo "wrote $outmacho" \
     || { echo "LINK FAILED, see $OUT/${outmacho%.macho}_link.err:"; \
          tail -60 "$OUT/${outmacho%.macho}_link.err"; exit 1; }
