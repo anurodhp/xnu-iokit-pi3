@@ -61,13 +61,27 @@
 #
 # openpam_static.c (real, unmodified, DOES compile below) is OpenPAM's
 # OWN static-module mechanism (a linker-set of pam_module_t entries,
-# populated at link time instead of via dlopen) -- but its body is
-# entirely `#ifdef OPENPAM_STATIC_MODULES`, which this build (like
-# Apple's own real one, confirmed above) leaves undefined, so it compiles
-# to an empty translation unit. This is OpenPAM's real intended answer to
-# "how do you load modules without dlopen" -- see openpam_dynamic_compat.c
-# for why it isn't wired up yet (needs at least one real static module to
-# prove end-to-end, not attempted this pass).
+# populated at link time instead of via dlopen). UPDATE (DAR-339,
+# 2026-09-21): this build now defines `-D__FreeBSD__` and
+# `OPENPAM_STATIC_MODULES` compiles for real (openpam.h's own gate:
+# `#if defined(__FreeBSD__)` leaves NO_STATIC_MODULES undefined, which
+# is the ONLY thing that macro controls in this whole real library --
+# confirmed via exhaustive grep, no other `__FreeBSD__`-gated behavior
+# exists anywhere in OpenPAM's real source). Real FreeBSD's own
+# <linker_set.h> (ELF `__start_set_X`/`__stop_set_X` boundary symbols)
+# does NOT carry over to Mach-O -- confirmed via a real, standalone link
+# test, not assumed -- so `su_compat_include/linker_set.h` (added to the
+# -I path above) is a from-scratch, cited Mach-O-native replacement
+# (getsectiondata()-based, see that header's own citation), not a port.
+# `su_getsectiondata_cctools.c`/`su_linker_set_bounds.c` (compiled below,
+# NOT su-specific despite the filename -- same "generic despite the
+# prefix" pattern as this project's own chpass_flopen_freebsd.c) supply
+# the real mechanism that header's macros call into. The actual real
+# pam_unix-equivalent MODULE (su_pam_unix_static.c) is deliberately NOT
+# compiled into this shared archive -- it's linked directly into su's
+# own final binary instead (build_su.sh), matching real FreeBSD's own
+# architecture where libpam stays policy-only and modules are separate
+# translation units, not because it couldn't technically go here too.
 #
 # NET RESULT: real policy parsing (openpam_configure.c/openpam_load.c/
 # openpam_readline.c), real chain construction and walking
@@ -212,11 +226,13 @@ done
 # fixes it for all files uniformly.
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness \
-    -include libc_build_prototypes.h -include sys/types.h \
+    -include libc_build_prototypes.h -include sys/types.h -include su_compat_include/pic_override.h \
     -DLIB_MAJ=2 -DOPENPAM_MODULES_DIR='\"/usr/lib/pam/;/usr/local/lib/pam/\"' -D_GNU_SOURCE \
+    -D__FreeBSD__ \
     -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
     -DVARIANT_STATIC -DVARIANT_CANCELABLE -DVARIANT_DARWINEXTSN -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \
     -D__ct_rune_t=__darwin_ct_rune_t -D__va_list=__builtin_va_list \
+    -I su_compat_include \
     -I $OPENPAM/include -I $OPENPAM/lib \
     -I $OUT/compat_include \
     -I $LIBC/include -I $LIBC/darwin -I $LIBC/fbsdcompat -I $LIBC/locale -I $LIBC/locale/FreeBSD \
@@ -300,6 +316,19 @@ else
     fail=$((fail + 1))
     echo "  gap: openpam_dynamic_compat -- $(grep -m1 'error:' "$OUT/openpam_obj/openpam_dynamic_compat.err")"
 fi
+
+# Real Mach-O linker-set support openpam_static.c's own SET_DECLARE/
+# SET_FOREACH now need (DAR-339, see header comment above).
+for f in su_getsectiondata_cctools.c su_linker_set_bounds.c; do
+    base=$(basename "$f" .c)
+    if "$CLANG" $CFLAGS "$f" -o "$OUT/openpam_obj/${base}.o" 2>"$OUT/openpam_obj/${base}.err"; then
+        ok=$((ok + 1))
+        rm -f "$OUT/openpam_obj/${base}.err"
+    else
+        fail=$((fail + 1))
+        echo "  gap: $base -- $(grep -m1 'error:' "$OUT/openpam_obj/${base}.err")"
+    fi
+done
 
 # Real syslog + time support openpam_log.c's vsyslog() call needs (see
 # header comment) -- real, unmodified Apple source (plus this project's
