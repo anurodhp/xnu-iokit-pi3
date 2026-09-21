@@ -352,32 +352,65 @@ test_alarm_in_child(void)
  * not EPIPE. */
 extern int *__error(void);
 #define dar183_errno (*__error())
+
+static void
+pselect_sigchld_handler(int sig)
+{
+	(void)sig;
+}
+
+/* handler_first: install a real SIGCHLD handler before blocking/pselect(),
+ * matching what real sshd actually does (serverloop.c:352,
+ * `ssh_signal(SIGCHLD, sigchld_handler)`, BEFORE its own block+pselect
+ * sequence at line ~350/373) -- my first version of this test skipped
+ * that step, which matters: XNU's real setsigvec() (kern_sig.c) only
+ * clears p_sigignore for a default-ignored signal (SIGCHLD's sigprop is
+ * SA_IGNORE, third_party/xnu-7195/bsd/sys/signalvar.h) when a REAL,
+ * non-default handler is installed. Leave it at SIG_DFL (even after
+ * sigprocmask-blocking it) and psignal_internal's own early discard
+ * check (`sig_proc->p_sigignore & mask`, kern_sig.c) throws the signal
+ * away before it is ever queued -- unrelated to the atomic
+ * unmask-and-wait race this test was originally written to isolate. */
 static int
-test_pselect_sigchld(void)
+test_pselect_sigchld(int handler_first)
 {
 	sigset_t block, orig, waitmask;
+	struct sigaction sa;
 	pid_t pid;
 	fd_set rfds;
 	int ret, saved_errno;
+	const char *tag = handler_first ? "pselect2" : "pselect";
 
-	say("pselect: step 1 -- blocking SIGCHLD");
+	if (handler_first) {
+		say("%s: step 0 -- installing a real SIGCHLD handler first "
+		    "(matches serverloop.c's real sequence)", tag);
+		memset(&sa, 0, sizeof(sa));
+		sa.sa_handler = pselect_sigchld_handler;
+		sigemptyset(&sa.sa_mask);
+		if (sigaction(SIGCHLD, &sa, NULL) != 0) {
+			say("%s: FAIL sigaction: %s", tag, strerror(errno));
+			return 1;
+		}
+	}
+
+	say("%s: step 1 -- blocking SIGCHLD", tag);
 	sigemptyset(&block);
 	sigaddset(&block, SIGCHLD);
 	if (sigprocmask(SIG_BLOCK, &block, &orig) == -1) {
-		say("pselect: FAIL sigprocmask block: %s", strerror(errno));
+		say("%s: FAIL sigprocmask block: %s", tag, strerror(errno));
 		return 1;
 	}
-	say("pselect: step 2 -- forking a child that exits immediately");
+	say("%s: step 2 -- forking a child that exits immediately", tag);
 	pid = fork();
 	if (pid == -1) {
-		say("pselect: FAIL fork: %s", strerror(errno));
+		say("%s: FAIL fork: %s", tag, strerror(errno));
 		return 1;
 	}
 	if (pid == 0) {
 		_exit(0);
 	}
-	say("pselect: step 3 -- child pid %d forked, calling real pselect(2) "
-	    "with SIGCHLD unblocked in the mask", (int)pid);
+	say("%s: step 3 -- child pid %d forked, calling real pselect(2) "
+	    "with SIGCHLD unblocked in the mask", tag, (int)pid);
 	waitmask = orig;
 	sigdelset(&waitmask, SIGCHLD);
 	FD_ZERO(&rfds);
@@ -385,23 +418,30 @@ test_pselect_sigchld(void)
 	dar183_errno = 0;
 	ret = pselect(1, &rfds, NULL, NULL, NULL, &waitmask);
 	saved_errno = dar183_errno;
-	say("pselect: step 4 -- pselect() returned %d, errno=%d (%s)",
-	    ret, saved_errno, ret == -1 ? strerror(saved_errno) : "n/a");
+	say("%s: step 4 -- pselect() returned %d, errno=%d (%s)",
+	    tag, ret, saved_errno, ret == -1 ? strerror(saved_errno) : "n/a");
 	sigprocmask(SIG_SETMASK, &orig, NULL);
+	if (handler_first) {
+		struct sigaction dfl;
+		memset(&dfl, 0, sizeof(dfl));
+		dfl.sa_handler = SIG_DFL;
+		sigemptyset(&dfl.sa_mask);
+		sigaction(SIGCHLD, &dfl, NULL);
+	}
 	{
 		int status;
 		waitpid(pid, &status, 0);
 	}
 	if (ret == -1 && saved_errno == EPIPE) {
-		say("pselect: FAIL real pselect(2) itself returned EPIPE -- "
-		    "reproduced the sshd bug in isolation");
+		say("%s: FAIL real pselect(2) itself returned EPIPE -- "
+		    "reproduced the sshd bug in isolation", tag);
 		return 1;
 	}
 	if (ret == -1 && saved_errno != EINTR) {
 		say("pselect: SUSPECT unexpected errno %d (wanted EINTR from "
 		    "the SIGCHLD, or a clean timeout/ready return)", saved_errno);
 	}
-	say("pselect: PASS (ret=%d errno=%d, no EPIPE)", ret, saved_errno);
+	say("%s: PASS (ret=%d errno=%d, no EPIPE)", tag, ret, saved_errno);
 	return 0;
 }
 
@@ -447,7 +487,12 @@ main(void)
 	bad |= test_nested_fork_instrumented();
 	bad |= test_alarm();
 	bad |= test_alarm_in_child();
-	bad |= test_pselect_sigchld();
+	/* NOTE: the no-handler (0) variant is known to hang forever (see
+	 * DAR-338's own comments) -- running it here would block the
+	 * handler-first variant from ever executing in the same process.
+	 * Only the real, sshd-faithful sequence runs by default; flip this
+	 * back to 0 deliberately, in isolation, to re-confirm the hang. */
+	bad |= test_pselect_sigchld(1);  /* real handler first, matching sshd: expect EINTR, no hang */
 	bad |= test_socket_errno();
 	say("fork_alarm_smoketest: %s", bad ? "FAILURES ABOVE" : "ALL PASS");
 	return bad;
