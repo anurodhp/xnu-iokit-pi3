@@ -917,4 +917,57 @@ if [ -n "$FREEBSD_DEST" ]; then
     git -C "$FREEBSD_DEST" checkout "$FREEBSD_REF"
 fi
 
+# sudo (DAR-340): unlike every other command this project has ported,
+# sudo is in NEITHER apple-oss-distributions (never open-sourced by
+# Apple, confirmed -- this project's own docs/apple-oss-catalog.md has
+# no entry) NOR FreeBSD base (ships only as a ports package, not
+# usr.bin/usr.sbin, confirmed absent from this project's own pinned
+# release/13.2.0 freebsd-src checkout). Per this project's source-
+# priority rule (CLAUDE.md, tier 3 -- "another real upstream open-
+# source project Apple's own implementation is downstream of or
+# equivalent to"), the real, correct source is the actual sudo project
+# itself: https://github.com/sudo-project/sudo.
+# Pinned to v1.9.5p2 (released 2021-01, the closest real tagged release
+# to this project's own Darwin 20.3/macOS 11.2 anchor, released
+# 2021-02 -- same era-matching principle as every apple-oss-
+# distributions pin, just against a real upstream release date instead
+# of a manifest entry, since no manifest covers sudo at all).
+# Real scoping already done (2026-09-21, DAR-340's own ticket) so the
+# next session doesn't re-derive it:
+#   - plugins/sudoers/gram.y+gram.c and toke.l+toke.c: BOTH the real
+#     yacc/lex grammar sources AND their real pre-generated C output
+#     ship directly in this tag's git tree (confirmed via `git
+#     ls-tree`) -- no bison/flex toolchain dependency needed at all,
+#     removing what DAR-340's own scoping pass flagged as the single
+#     biggest unknown.
+#   - PAM is NOT a hard dependency: configure.ac's own `--with-pam` is
+#     opt-in (confirmed via grep -- only enabled if explicitly
+#     requested AND real PAM dev headers are found), and
+#     plugins/sudoers/auth/passwd.c is the real, plain getpwnam()+
+#     crypt(3) fallback backend used when no other auth method is
+#     configured -- the exact same real algorithm this project's
+#     su_pam_unix_static.c (DAR-339) and login.c's own non-PAM branch
+#     already use. Building with PAM support left off decouples this
+#     port from DAR-339's static-PAM-module machinery entirely.
+#   - config.h still needs real, hand-derived generation (same shape
+#     as the OpenSSH port's own config.h, DAR-183) -- no reference
+#     config.h to diff against since Apple's own sudo build is closed
+#     and was never based on this same configure.ac anyway.
+SUDO_REF="v1.9.5p2"
+SUDO_DEST="third_party/sudo"
+if [ -d "$SUDO_DEST" ]; then
+    if [ "$FORCE" = "1" ]; then
+        echo "+ removing existing $SUDO_DEST (--force)"
+        rm -rf "$SUDO_DEST"
+    else
+        echo "= $SUDO_DEST already exists, skipping (use --force to re-clone)"
+        SUDO_DEST=""
+    fi
+fi
+if [ -n "$SUDO_DEST" ]; then
+    echo "+ cloning sudo @ $SUDO_REF (real sudo-project/sudo upstream, not Apple/FreeBSD -- see this script's own comment above)"
+    git clone --filter=blob:none --depth 1 --branch "$SUDO_REF" \
+        https://github.com/sudo-project/sudo.git "$SUDO_DEST"
+fi
+
 echo "done -- third_party/ populated. See docs/roadmap.md and README.md for what to build next."
