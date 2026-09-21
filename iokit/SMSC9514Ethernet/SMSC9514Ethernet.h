@@ -138,11 +138,24 @@ private:
 	};
 	// Re-poll interval for pollReceive() while the interface is enabled.
 	// SMSC9514USBTransport::bulkIn() itself bounds each individual poll's
-	// NAK-retry loop short (20ms, not transfer()'s 1000ms default) so an
-	// idle poll can't hold up TX/link-status polling on the shared
-	// workloop - this is how often a new poll gets kicked off.
+	// NAK-retry loop short (kRxPollTimeoutMS there, not transfer()'s 1000ms
+	// default) so an idle poll can't hold up TX/link-status polling on the
+	// shared workloop - this is how often a new poll gets kicked off.
+	//
+	// DAR-344: this re-arm is scheduled kRxPollIntervalMS from when the
+	// PREVIOUS poll returned, not from when it started, so a poll that
+	// found nothing (itself up to kRxPollTimeoutMS of NAK-retrying) stacks
+	// with this interval - worst-case gap between NAK-checks was
+	// kRxPollTimeoutMS + kRxPollIntervalMS (20+20=40ms), giving a real,
+	// measured ~13-21ms average RTT on a same-switch LAN ping that should
+	// be sub-millisecond. Lowered from 20 to 4 (with kRxPollTimeoutMS
+	// matching in SMSC9514USBTransport.cpp) to cut worst-case latency
+	// ~5x; this is a mitigation, not a fix - the real fix is interrupt/
+	// async-driven DWC2 transfer completion (BCM2837DWC2.h's "KNOWN
+	// LIMITATIONS": transfer completion is polled and global, not
+	// interrupt-driven).
 	enum {
-		kRxPollIntervalMS = 20,
+		kRxPollIntervalMS = 4,
 	};
 
 	// SCSRs (System Control and Status Registers), byte offsets.

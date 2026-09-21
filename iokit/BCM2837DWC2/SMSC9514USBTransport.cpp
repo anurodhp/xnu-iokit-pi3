@@ -278,8 +278,13 @@ SMSC9514USBTransport::bulkIn(void *buf, uint32_t maxLen)
 	 * poll would stall TX (outputPacket) and link-status polling behind
 	 * it. A short bound here just makes an empty RX FIFO cheap to observe
 	 * and retry on the next tick.
+	 *
+	 * DAR-344: kept equal to SMSC9514Ethernet.h's kRxPollIntervalMS (4ms,
+	 * lowered from 20) since the two stack worst-case (see that header's
+	 * comment) - a same-switch ping was measuring ~13-21ms RTT off the
+	 * old 20/20ms pair.
 	 */
-	static const uint32_t kRxPollTimeoutMS = 20;
+	static const uint32_t kRxPollTimeoutMS = 4;
 
 	uint32_t actual = 0;
 	IOReturn ret = fController->transfer(&fBulkInEP, buf, maxLen, &actual, kRxPollTimeoutMS);
