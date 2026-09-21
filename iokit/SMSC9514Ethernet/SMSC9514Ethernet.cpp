@@ -197,6 +197,25 @@ SMSC9514Ethernet::resetChip(void)
 		return false;
 	}
 
+	// Point GPIO0/1/2 at the chip's own nFDX_LED/nLNK_LED/nSPD_LED outputs.
+	// Without this the RJ45 jack's LEDs on a real Pi 3 never light: those
+	// pins are the only thing driving them, they power up as plain GPIOs,
+	// and the HW_CFG lite reset at the top of this function puts them back
+	// that way - so whatever u-boot had configured before us is gone by the
+	// time we get here. Blind write, not a read-modify-write, and placed
+	// right after the HW_CFG write: that is exactly what the real reference
+	// driver does (third_party/u-boot/drivers/usb/eth/smsc95xx.c:600-603,
+	// after the HW_CFG sequence at :568-588; Linux's
+	// drivers/net/usb/smsc95xx.c smsc95xx_reset() writes the identical
+	// three-bit value at the same point). Every other field in this
+	// register is a GPIO direction/buffer/polarity control for pins this
+	// board does not otherwise use, which is why clobbering them is
+	// correct here rather than merely tolerated.
+	if (!fTransport->writeRegister(kRegLedGpioCfg,
+	    kLedGpioCfgSpdLed | kLedGpioCfgLnkLed | kLedGpioCfgFdxLed)) {
+		return false;
+	}
+
 	// Enable MAC receiver/transmitter and the corresponding FIFO paths.
 	// Real read-modify-write over the chip's actual current MAC_CR, not a
 	// blind write of only TXEN/RXEN into a fresh zero - the prior blind
