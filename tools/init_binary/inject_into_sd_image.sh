@@ -1585,6 +1585,58 @@ for pair in "ssh:bin/ssh" "ssh-keygen:bin/ssh-keygen"; do
     fi
 done
 
+# --- su (DAR-339) -----------------------------------------------------
+# Real Apple shell_cmds/su/su.c, built by tools/userland_staging/
+# build_su.sh against this project's now-real OpenPAM static-module
+# support (build_openpam.sh) + su_pam_unix_static.c. su.c's own real,
+# unmodified main() hard-requires `geteuid() == 0` ("not running
+# setuid" fatal error otherwise, checked directly at su.c's own line
+# ~243) -- this project's first shipped setuid-root binary, so mode and
+# ownership both matter, not just presence. chown to root:wheel is
+# attempted and then VERIFIED (stat'd back), not assumed to have
+# worked: chown(2) to an arbitrary uid is refused for a non-root caller
+# on most real Unix permission models, including a real HFS+ volume
+# mounted by this script's own non-root hdiutil attach (no `-owners
+# on` passed) -- if it silently no-ops here, su would need a real
+# sudo-elevated provisioning step instead, which this script does not
+# attempt to add on its own.
+if [ -f tools/userland_staging/su.macho ]; then
+    cp tools/userland_staging/su.macho "$MNT/usr/bin/su"
+    chown root:wheel "$MNT/usr/bin/su" 2>/dev/null
+    chmod 4755 "$MNT/usr/bin/su"
+    real_owner="$(stat -f '%u:%g' "$MNT/usr/bin/su")"
+    if [ "$real_owner" = "0:0" ]; then
+        echo "+ wrote $(wc -c < tools/userland_staging/su.macho) bytes to $MNT/usr/bin/su (mode 4755, root:wheel confirmed)"
+    else
+        echo "! wrote $(wc -c < tools/userland_staging/su.macho) bytes to $MNT/usr/bin/su, but chown to root:wheel did NOT take (owner is uid:gid $real_owner) -- su will refuse to run (\"not running setuid\") until this image's root account provisions it for real, e.g. from a real root shell on the booted target"
+    fi
+else
+    echo "= tools/userland_staging/su.macho not built -- run build_su.sh first if wanted, skipping"
+fi
+
+# su's own real openpam_configure.c defaults every uncovered PAM
+# facility to "required pam_deny.so" (checked directly) -- without a
+# real /etc/pam.d/su naming the real pam_unix.so this project's own
+# su_pam_unix_static.c registers (build_su.sh), su would fail closed
+# on every facility, not just look insecure.
+mkdir -p "$MNT/etc/pam.d"
+if [ ! -f "$MNT/etc/pam.d/su" ]; then
+    cat > "$MNT/etc/pam.d/su" <<'PAM_SU_EOF'
+# Written by tools/init_binary/inject_into_sd_image.sh (DAR-339).
+# pam_unix.so here is this project's own real static module
+# (su_pam_unix_static.c) -- real crypt(3)/getpwnam() against
+# /etc/master.passwd, the same real hash format every other
+# account-auth tool in this project already reads/writes.
+auth		required	pam_unix.so
+account		required	pam_unix.so
+session		required	pam_unix.so
+PAM_SU_EOF
+    chmod 644 "$MNT/etc/pam.d/su"
+    echo "+ wrote $MNT/etc/pam.d/su"
+else
+    echo "+ $MNT/etc/pam.d/su already exists -- leaving as-is"
+fi
+
 # /var/empty: sshd's real privilege-separation chroot directory
 # (_PATH_PRIVSEP_CHROOT_DIR). sshd.c's own privsep_preauth() fatals with
 # "Missing privilege separation directory" unless it exists, is owned by
