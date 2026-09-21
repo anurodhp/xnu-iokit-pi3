@@ -222,15 +222,40 @@ echo "wrote $OUT/libc_gen.a"
 # (see inject_into_sd_image.sh - this build's target image always has
 # /tmp provisioned). Real, undeclared forward dependency on libc_stdio.a/
 # libc_locale_for_stdio.a, found 2026-09-13 via a live build_everything.sh
-# run -- unlike build_libmalloc.sh's own forward reference to
-# build_libc_stdio.sh, this is NOT a cycle (build_libc_stdio.sh has no
-# dependency back on build_libc_gen.sh, confirmed by grep), so a normal
-# hard prerequisite check here just correctly reorders the two scripts
-# instead of needing a soft skip.
+# run.
+#
+# CORRECTION 2026-09-21: the paragraph this replaced claimed "this is NOT
+# a cycle (build_libc_stdio.sh has no dependency back on build_libc_gen.sh,
+# confirmed by grep)" and made this a hard `exit 1` gate on the theory that
+# gen_build_order.py would "just correctly reorder the two scripts". That
+# claim went stale: build_libc_stdio.sh's own DAR-227 fix added a real
+# `$OUT/libc_gen.a not found -- run build_libc_gen.sh first` hard check
+# (its own file, "DAR-227: new real dependency"), which IS a real edge
+# back onto this script - so the two scripts now form a genuine mutual
+# cycle (gen's smoketest needs stdio's archive; stdio's archive needs
+# gen's archive). A live build_everything.sh run confirmed this directly:
+# gen_build_order.py detects the cycle, reports it
+# ("dependency-cycle edge(s) dropped"), breaks it arbitrarily via stable
+# sort, and landed build_libc_stdio.sh BEFORE build_libc_gen.sh - the
+# wrong order for stdio's own hard requirement, aborting the whole
+# from-scratch build before libc_gen.a (let alone anything downstream,
+# including launchd) ever gets built.
+#
+# The actual fix belongs here, not in the ordering tool: this check gates
+# only this script's OWN smoketest (everything below, through the
+# libc_gen_smoketest.macho link at the end of this file) - libc_gen.a
+# itself is already written above, unconditionally. A missing
+# libc_stdio.a/libc_locale_for_stdio.a is real "not built yet", not a
+# failure of THIS script's real product, so it gets the same soft-skip
+# treatment build_libpthread.sh/build_iokituser.sh already use for their
+# own forward-referencing smoketests (see their "skip: ... not yet built
+# -- re-run this script later" messages) instead of a hard exit.
 if [ ! -f "$OUT/libc_stdio.a" ] || [ ! -f "$OUT/libc_locale_for_stdio.a" ]; then
-    echo "error: $OUT/libc_stdio.a or $OUT/libc_locale_for_stdio.a not found -- run build_libc_stdio.sh first" >&2
-    exit 1
-fi
+    echo "skip: libc_gen_smoketest.macho ($OUT/libc_stdio.a/$OUT/libc_locale_for_stdio.a"
+    echo "      not yet built -- build_libc_stdio.sh needs this script's libc_gen.a"
+    echo "      first, so this script must run before it. libc_gen.a is written;"
+    echo "      re-run this script later for real smoketest coverage.)"
+else
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness -include libc_build_prototypes.h \
     -D_LIBC_NO_FEATURE_VERIFICATION -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 \
@@ -298,4 +323,5 @@ otool -l libc_gen_smoketest.macho | grep -q LC_UNIXTHREAD || \
 if nm -u libc_gen_smoketest.macho | grep -q .; then
     echo "WARNING: undefined symbols present:" >&2
     nm -u libc_gen_smoketest.macho >&2
+fi
 fi
