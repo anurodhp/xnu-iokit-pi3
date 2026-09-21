@@ -94,6 +94,24 @@
 #     that branch. `third_party-patches/libdispatch.patch` is no longer
 #     read by this script -- kept in the tree only as a historical
 #     record.
+#   - Libinfo: originally unmodified Apple source except two real local
+#     commits on top of the pinned `Libinfo-542.40.3` tag -- gating the
+#     `mdns` module behind a new `MDNS_AVAILABLE` guard (mirrors the
+#     existing `DS_AVAILABLE`/`MUSER_AVAILABLE` pattern already in
+#     Apple's own source, DAR-181's original Libinfo port), and adding
+#     `lookup.subproj/dns_module.c`, a new real `si_module` DNS resolver
+#     backend gated behind a new `DNS_AVAILABLE` guard in the same shape
+#     (DAR-306 -- this is what makes `getaddrinfo()` actually do real DNS
+#     queries for the first time on this port). Both had been committed
+#     only in this checkout's own local git history (`bcm2837-bringup-
+#     local` anchor branch, no personal fork remote) -- silently lost on
+#     a fresh `--force` re-clone.
+#
+#     2026-09-21 (DAR-307): cloned from this project's own fork
+#     (git@github.com:anurodhp/Libinfo.git, branch iokit-port) instead of
+#     upstream -- the same two real fixes now live as real committed
+#     history on that branch, same pattern as Libc/dyld/libdispatch
+#     above.
 #   - IOPCIFamily: added 2026-09-08 (DAR-244), headers only. There is no
 #     PCI bus on BCM2837 and this project will never have one -- the pin
 #     exists because IOUSBFamily's IOUSBControllerV3.h declares an
@@ -565,7 +583,7 @@ libclosure|https://github.com/apple-oss-distributions/libclosure.git|libclosure-
 libmalloc|https://github.com/apple-oss-distributions/libmalloc.git|libmalloc-317.40.8|
 objc4|https://github.com/apple-oss-distributions/objc4.git|objc4-818.2|
 libunwind|https://github.com/apple-oss-distributions/libunwind.git|libunwind-200.10|
-Libinfo|https://github.com/apple-oss-distributions/Libinfo.git|Libinfo-542.40.3|
+Libinfo|git@github.com:anurodhp/Libinfo.git|iokit-port||https://github.com/apple-oss-distributions/Libinfo.git
 removefile|https://github.com/apple-oss-distributions/removefile.git|removefile-49.40.3|
 copyfile|https://github.com/apple-oss-distributions/copyfile.git|copyfile-173.40.2|
 Csu|git@github.com:anurodhp/Csu.git|bcm2837-bringup||https://github.com/apple-oss-distributions/Csu.git
