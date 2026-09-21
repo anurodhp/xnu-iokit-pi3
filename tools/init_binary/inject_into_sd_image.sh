@@ -1561,14 +1561,23 @@ fi
 # --- OpenSSH (DAR-183, Phase 7b) --------------------------------------
 # Real OpenSSH 9.3p1 out of the FreeBSD pin (third_party/freebsd-src/
 # crypto/openssh @ release/13.2.0), built by
-# tools/userland_staging/build_sshd.sh. Deliberately NOT launchd-managed
-# -- DAR-183's own instruction says that is fine -- so sshd is started by
-# hand (or by a later rc-style step), not by a plist.
+# tools/userland_staging/build_sshd.sh. DAR-183's own original
+# instruction was to leave this started by hand rather than by a
+# plist; DAR-350 (real, observed on real hardware: "sshd doesnt seem
+# to auto start on rpi3") supersedes that -- com.openssh.sshd.plist
+# (this same directory) now gets real launchd (launchd.macho, this
+# project's own real PID 1) to start it, the same real
+# RunAtLoad+KeepAlive pattern already proven for syslogd/notifyd/
+# configd/chronyd (see that plist's own header for the full citation).
 if [ -f tools/userland_staging/sshd.macho ]; then
-    mkdir -p "$MNT/usr/sbin"
+    mkdir -p "$MNT/usr/sbin" "$MNT/Library/LaunchDaemons" "$MNT/var/log"
     cp tools/userland_staging/sshd.macho "$MNT/usr/sbin/sshd"
     chmod 755 "$MNT/usr/sbin/sshd"
     echo "+ wrote $(wc -c < tools/userland_staging/sshd.macho) bytes to $MNT/usr/sbin/sshd"
+    cp tools/userland_staging/com.openssh.sshd.plist \
+        "$MNT/Library/LaunchDaemons/com.openssh.sshd.plist"
+    chmod 644 "$MNT/Library/LaunchDaemons/com.openssh.sshd.plist"
+    echo "+ wrote com.openssh.sshd.plist to $MNT/Library/LaunchDaemons/ (DAR-350)"
 else
     echo "= tools/userland_staging/sshd.macho not built -- run build_sshd.sh first if wanted, skipping"
 fi

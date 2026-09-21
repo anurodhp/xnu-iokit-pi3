@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+	DAR-350: sshd didn't auto-start on real hardware. DAR-183's own real
+	sshd port deliberately left it started "by hand (or by a later
+	rc-style step)" -- this is that rc-style step, real launchd
+	(launchd.macho, this project's own real PID 1) managing it the same
+	real way syslogd/notifyd/configd/chronyd already are (see
+	org.chrony.chronyd.plist's own header for the from-scratch,
+	project-authored-plist precedent this follows; real macOS's own
+	com.openssh.sshd.plist uses launchd socket activation instead, which
+	this project doesn't have wired up -- RunAtLoad+KeepAlive matches
+	the same simpler, already-proven pattern chronyd/notifyd use).
+
+	`-D` (do not detach/daemonize) matches chronyd's own real `-n`
+	nofork convention for the identical real reason: launchd supervises
+	the process directly and expects it to stay in the foreground, not
+	double-fork away from its own supervision.
+
+	StandardOutPath/StandardErrorPath point at a real file for the same
+	real reason chronyd's/syslogd's/notifyd's own plists already
+	document (DAR-257/DAR-167): real launchd never wires an
+	unconfigured job's stdio to /dev/console.
+
+	Real, already-provisioned prerequisites this job depends on
+	(tools/init_binary/inject_into_sd_image.sh's own sshd block):
+	/etc/ssh/sshd_config, /etc/ssh/ssh_host_ed25519_key,
+	/var/empty (privsep chroot dir), and the real sshd:75 account.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.openssh.sshd</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/sbin/sshd</string>
+		<string>-D</string>
+	</array>
+	<key>KeepAlive</key>
+	<true/>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/var/log/sshd_stderr.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/sshd_stderr.log</string>
+</dict>
+</plist>
