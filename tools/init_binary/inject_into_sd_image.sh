@@ -1602,7 +1602,7 @@ done
 # attempt to add on its own.
 if [ -f tools/userland_staging/su.macho ]; then
     cp tools/userland_staging/su.macho "$MNT/usr/bin/su"
-    chown root:wheel "$MNT/usr/bin/su" 2>/dev/null
+    chown root:wheel "$MNT/usr/bin/su" 2>/dev/null || true
     chmod 4755 "$MNT/usr/bin/su"
     real_owner="$(stat -f '%u:%g' "$MNT/usr/bin/su")"
     if [ "$real_owner" = "0:0" ]; then
