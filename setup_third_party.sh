@@ -572,6 +572,7 @@ IOPCIFamily|https://github.com/apple-oss-distributions/IOPCIFamily.git|IOPCIFami
 IOSerialFamily|https://github.com/apple-oss-distributions/IOSerialFamily.git|IOSerialFamily-93.200.2|
 AppleUSBCDCDriver|https://github.com/apple-oss-distributions/AppleUSBCDCDriver.git|AppleUSBCDCDriver-4303.2.1|
 IONetworkingFamily|https://github.com/apple-oss-distributions/IONetworkingFamily.git|IONetworkingFamily-151.40.1|
+IOGraphics|https://github.com/apple-oss-distributions/IOGraphics.git|IOGraphics-585|
 msdosfs|https://github.com/apple-oss-distributions/msdosfs.git|msdosfs-435.60.1|
 dyld|git@github.com:anurodhp/dyld.git|iokit-port||https://github.com/apple-oss-distributions/dyld.git
 Libc|git@github.com:anurodhp/Libc.git|iokit-port||https://github.com/apple-oss-distributions/Libc.git

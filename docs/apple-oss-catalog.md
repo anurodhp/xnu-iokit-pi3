@@ -389,10 +389,29 @@ IOKit driver stack on bare Pi 3 hardware, no GUI, no enterprise auth, no
 scripting-language runtime as a goal in itself):
 
 - **GUI/graphics/WebKit stack** (`WebCore`, `WebKit`, `WebKit2`,
-  `WebInspectorUI`, `JavaScriptCore`, `WTF`, `IOGraphics`, `IOHIDFamily`,
+  `WebInspectorUI`, `JavaScriptCore`, `WTF`, `IOHIDFamily`,
   `IOAudioFamily`) — this target has no display server, no HID input
   beyond a serial console, no audio hardware driver. Structurally
-  inapplicable, not merely deprioritized.
+  inapplicable, not merely deprioritized. **`IOGraphics` is no longer in
+  this bucket** — pinned 2026-09-21 (`IOGraphics-585`, matching the
+  `macos-112` manifest exactly) for DAR-331 (real HDMI framebuffer, not
+  just the kernel's own boot/panic text console). Real scope there is
+  narrow: `IOGraphicsFamily/IOBootFramebuffer.cpp` is a generic "dumb
+  framebuffer shim" — it matches on provider property
+  `AAPL,boot-display` and just wraps whatever `getPlatform()->
+  getConsoleInfo()` already contains, no VideoCore-specific code needed.
+  This project's own `third_party/xnu-7195` already does the hard part:
+  `pexpert/arm/pe_init.c`'s `bcm2837_video_init()` already queries the
+  VideoCore GPU over the mailbox for a real HDMI framebuffer and
+  populates `PE_state.video`/`boot_args->Video` before
+  `PE_create_console()` runs — today that's used only to draw the
+  kernel's own text console. The real remaining work is wiring
+  (`AAPL,boot-display` on the BCM2837 platform-expert nub +
+  `IOBootFramebuffer` actually built in), not writing a new driver.
+  Confirmed byte-identical to `third_party/PureDarwin`'s `next`-branch
+  copy of the same file (`diff -q`, 2026-09-21), so this real Apple pin
+  supersedes reading it out of PureDarwin per the source-priority rule
+  above.
 - **Enterprise/network auth & directory services** (`Heimdal`,
   `OpenLDAP`, `KerberosHelper`, `MITKerberosShim`, `Security`,
   `security_certificates`, `security_authtrampoline`, `SecurityTokend`,
