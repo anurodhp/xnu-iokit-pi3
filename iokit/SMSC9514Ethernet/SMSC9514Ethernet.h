@@ -129,6 +129,10 @@ private:
 	// footprint small.
 	IOTimerEventSource  *fRxTimer;
 	uint8_t             *fRxBuffer;
+	// Consecutive immediate (0ms) re-arms so far in the current burst-drain
+	// run - see rxTimerFired()'s own comment and kRxBurstCap below on why
+	// this is bounded rather than open-ended.
+	uint32_t             fRxBurstCount;
 	enum {
 		// One bulk-IN transfer can pack several frames (each padded to a
 		// 4-byte boundary, see pollReceive()); sized comfortably past one
@@ -149,13 +153,35 @@ private:
 	// kRxPollTimeoutMS + kRxPollIntervalMS (20+20=40ms), giving a real,
 	// measured ~13-21ms average RTT on a same-switch LAN ping that should
 	// be sub-millisecond. Lowered from 20 to 4 (with kRxPollTimeoutMS
-	// matching in SMSC9514USBTransport.cpp) to cut worst-case latency
-	// ~5x; this is a mitigation, not a fix - the real fix is interrupt/
-	// async-driven DWC2 transfer completion (BCM2837DWC2.h's "KNOWN
-	// LIMITATIONS": transfer completion is polled and global, not
-	// interrupt-driven).
+	// matching in SMSC9514USBTransport.cpp) to cut worst-case latency ~5x.
+	//
+	// DAR-351: DWC2 channel-completion waits are now real interrupt-driven
+	// (DAR-136, BCM2837DWC2.h's fInterruptLock comment) - that is no longer
+	// what bounds this gap. rxTimerFired() below now re-arms at 0ms instead
+	// of kRxPollIntervalMS immediately after a poll that actually received
+	// a frame, on the theory that a live link just proved itself worth
+	// draining fast; an idle poll still backs off to kRxPollIntervalMS, so
+	// a single request/reply exchange from a cold idle link (ping's own
+	// pattern) is not helped by this - only a channel dedicated to RX
+	// (see BCM2837DWC2.h's updated KNOWN LIMITATIONS) removes that half of
+	// the gap, and that is real, scoped, un-started follow-up work, not
+	// done here.
 	enum {
 		kRxPollIntervalMS = 4,
+	};
+	// DAR-351: ceiling on consecutive immediate re-arms in rxTimerFired()'s
+	// burst-drain path, so a sustained-traffic RX burst cannot hold the
+	// shared single DWC2 channel (see BCM2837DWC2.h's fTransferLock/KNOWN
+	// LIMITATIONS comments) away from TX/link-status polling indefinitely -
+	// the same starvation risk kRxPollTimeoutMS already bounds per-poll,
+	// applied across polls. 64 back-to-back full-size frames is already a
+	// generous burst (real LAN9514 traffic this project has ever driven is
+	// nowhere near sustained enough to hit this in practice); the interval
+	// falls back to kRxPollIntervalMS for one tick once hit, which is enough
+	// to let a pending TX or link-status poll through before draining
+	// resumes.
+	enum {
+		kRxBurstCap = 64,
 	};
 
 	// SCSRs (System Control and Status Registers), byte offsets.
@@ -316,7 +342,11 @@ private:
 	bool createMediumTables(void);
 	void updateLinkStatus(void);
 	static void linkTimerFired(OSObject *owner, IOTimerEventSource *sender);
-	void pollReceive(void);
+	// Returns true if this poll actually received at least one valid frame
+	// (see DAR-351's comment on fRxTimer above) - rxTimerFired() uses this
+	// to decide whether to re-arm immediately or back off to the normal
+	// interval.
+	bool pollReceive(void);
 	static void rxTimerFired(OSObject *owner, IOTimerEventSource *sender);
 
 public:

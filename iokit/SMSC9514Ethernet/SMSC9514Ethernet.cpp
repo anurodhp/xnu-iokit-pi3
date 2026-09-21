@@ -35,6 +35,7 @@ SMSC9514Ethernet::init(OSDictionary *properties, SMSCUSBTransport *transport)
 	fLinkTimer = NULL;
 	fRxTimer = NULL;
 	fRxBuffer = NULL;
+	fRxBurstCount = 0;
 	bzero(fMediumTable, sizeof(fMediumTable));
 	bzero(&fMACAddress, sizeof(fMACAddress));
 	return true;
@@ -769,6 +770,7 @@ SMSC9514Ethernet::enable(IONetworkInterface *interface)
 	if (fLinkTimer != NULL) {
 		fLinkTimer->setTimeoutMS(kLinkPollIntervalMS);
 	}
+	fRxBurstCount = 0;
 	if (fRxTimer != NULL) {
 		fRxTimer->setTimeoutMS(kRxPollIntervalMS * (UInt32)debug_cpu_performance_degradation_factor);
 	}
@@ -870,11 +872,11 @@ SMSC9514Ethernet::inputPacketAvailable(void *frameData, uint32_t frameLen)
 	fInterface->inputPacket(m, frameLen);
 }
 
-void
+bool
 SMSC9514Ethernet::pollReceive(void)
 {
 	if (fTransport == NULL || fRxBuffer == NULL || fInterface == NULL) {
-		return;
+		return false;
 	}
 
 	// bulkIn() is a short-timeout poll (see SMSC9514USBTransport::bulkIn())
@@ -882,7 +884,7 @@ SMSC9514Ethernet::pollReceive(void)
 	// for an idle link, not a failure.
 	uint32_t actual = fTransport->bulkIn(fRxBuffer, kRxBufferSize);
 	if (actual < 4) {
-		return;
+		return false;
 	}
 
 	/*
@@ -918,6 +920,8 @@ SMSC9514Ethernet::pollReceive(void)
 		// Next status word is 4-byte aligned.
 		offset += (frameLen + 3) & ~3U;
 	}
+
+	return true;
 }
 
 void
@@ -927,6 +931,21 @@ SMSC9514Ethernet::rxTimerFired(OSObject *owner, IOTimerEventSource *sender)
 	if (self == NULL) {
 		return;
 	}
-	self->pollReceive();
-	sender->setTimeoutMS(kRxPollIntervalMS * (UInt32)debug_cpu_performance_degradation_factor);
+	// DAR-351: a poll that actually found a frame re-arms immediately
+	// (0ms) rather than waiting out the normal interval, so a burst of
+	// several queued frames (e.g. a bulk TCP transfer) drains back-to-back
+	// instead of paying kRxPollIntervalMS between every one of them. An
+	// idle poll (the ping-from-cold-link case) still backs off to the full
+	// interval - see this class's own header comment on fRxTimer for why
+	// that half of the gap needs a dedicated RX channel to close, not a
+	// timer change. Bounded by kRxBurstCap (see its own comment) so a
+	// sustained burst cannot starve TX/link-status of the shared channel.
+	bool gotFrame = self->pollReceive();
+	if (gotFrame && self->fRxBurstCount < kRxBurstCap) {
+		self->fRxBurstCount++;
+		sender->setTimeoutMS(0);
+	} else {
+		self->fRxBurstCount = 0;
+		sender->setTimeoutMS(kRxPollIntervalMS * (UInt32)debug_cpu_performance_degradation_factor);
+	}
 }

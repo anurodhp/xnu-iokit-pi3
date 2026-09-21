@@ -48,19 +48,41 @@
  *
  * ======================= KNOWN LIMITATIONS (honest) =====================
  *
- *   - Transfer completion is POLLED, not interrupt-driven, and global
- *     interrupts are deliberately left masked (GAHBCFG.GLBLINTRMSK clear),
- *     exactly as u-boot does. docs/usb-support-plan.md task 2 calls for
- *     mirroring BCM2837SDHCI's interrupt-driven design instead, and that
- *     remains the right end state - but doing it in the same change as the
- *     first-ever register bring-up would mean debugging two unproven things
- *     at once, and this board's history (BCM2837SDHCI's interrupt work
- *     needed three passes and a device-tree root cause before a real
- *     interrupt was ever observed) argues strongly against that. The poll
- *     loops are bounded and report timeouts; converting them to
- *     IOLockSleep-on-interrupt is a contained follow-up.
+ *   - UPDATE (DAR-136, commit 6b58912): channel-completion waits are now
+ *     real interrupt-driven (interruptOccurred() / waitForChannelInt()),
+ *     with a direct-register-poll fallback for the case no interrupt lands
+ *     within one tick - see fInterruptLock's own header comment for the
+ *     full design (modeled on BCM2837SDHCI's fInterruptLock/fStatusLock
+ *     split). GAHBCFG.GLBLINTRMSK is set in start(), after the handler is
+ *     registered. The paragraph this replaced (which said completion was
+ *     purely polled and GLBLINTRMSK was left clear) described the
+ *     first-cut bring-up and is no longer true of this file - left here,
+ *     corrected rather than deleted, because DAR-351 found
+ *     SMSC9514Ethernet.h still citing the old version of this section by
+ *     name; don't let that happen to *this* correction too.
+ *   - What DAR-136 did NOT change, and what still bounds real RX latency
+ *     (DAR-351): this driver still drives exactly ONE host channel
+ *     (kDWC2Channel) for every transfer, RX and TX alike (see the
+ *     "Divergences from u-boot" note above). A bulk-IN endpoint has no way
+ *     to tell the host "data is ready" other than the host asking via an
+ *     IN token, so SMSC9514Ethernet's RX side still has to periodically
+ *     re-arm a new bulk-IN listen (fRxTimer) rather than sit on one
+ *     already-armed request forever - continuous back-to-back re-arming
+ *     would starve TX and link-status polling of the same shared channel
+ *     for as long as RX held it. DAR-136 made each individual transaction's
+ *     completion wait fast (sub-millisecond once armed, real interrupt
+ *     latency rather than a register-poll loop); it did not and could not
+ *     remove the RX-vs-TX channel-sharing gap between arms, since that is
+ *     a single-channel design choice, not a completion-detection one. The
+ *     real fix for that remaining gap is a second host channel dedicated
+ *     to RX (the silicon has up to 8 - see fNumChannels), so TX/link-status
+ *     can use channel 0 without waiting on an outstanding RX listen. Not
+ *     done: unverifiable in QEMU (LAN9514 is never emulated - see
+ *     reference_qemu_lan9514_never_emulated) and real-hardware time was not
+ *     available this session (DAR-351).
  *   - Isochronous transfers are unimplemented and will not be: no consumer.
- *   - One transfer at a time, no queueing, no async completion callbacks.
+ *   - One transfer at a time on the single active channel, no queueing
+ *     across channels, no cross-channel async completion callbacks.
  */
 
 #ifndef _BCM2837_DWC2_H
