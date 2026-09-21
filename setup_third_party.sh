@@ -832,6 +832,69 @@ fi
 #     3-arg signature -- linking both would be a duplicate symbol) and
 #     its own real pw_scan.h/pwd_mkdb.tproj/pw_scan.c pairing (same
 #     conflict). See that file's own header for the full real citation.
+#   - usr.sbin/pw/* (DAR-341): FreeBSD's real pw(8) -- the actual C
+#     account-management program `adduser.pl` itself shells out to.
+#     Apple never shipped a plain "adduser"/account-creation CLI
+#     (apple-oss-distributions has none; real macOS goes through
+#     dscl/sysadminctl/Directory Services, which this project
+#     deliberately doesn't have -- flat-file auth via Libinfo, no
+#     opendirectoryd). FreeBSD base's own adduser is a Perl script this
+#     project has no runtime for; pw(8) is the real underlying program,
+#     same "prefer the real implementation over an unavailable wrapper"
+#     call as everything else pulled from this checkout. pw_nis.c (YP/NIS
+#     support) is pulled with the rest of the directory and DOES build
+#     here -- checked its real body directly: it has zero real ypclnt/RPC
+#     calls, it's a plain-file passwd-format rewrite triggered only by an
+#     explicit `-Y`/`-y` flag, so there's no actual NIS/network
+#     dependency to close.
+#   - lib/libutil/login_cap.c + login_cap.h (DAR-341): pw_user.c's own
+#     real, unmodified `login_getpwclass()`/`login_close()` calls (3
+#     call sites, confirmed via grep) -- narrow, real, needed regardless
+#     of format support below. Depends only on cgetent()/cgetstr()/
+#     cgetnum()/cgetcap()/cgetclose() (real Apple Libc/gen/FreeBSD/
+#     getcap.c, matching real BSD signatures, not yet compiled into any
+#     shipped dylib -- compiled directly into build_pw.sh like pw_scan.c
+#     already is for chpass). login_class.c (setusercontext() et al.,
+#     sys/cpuset.h + sys/mac.h + sys/rtprio.h -- none of which exist on
+#     Darwin/XNU) is NOT pulled -- pw(8) never calls anything from it.
+#   - lib/libutil/login_crypt.c (DAR-341): real, unmodified upstream body
+#     of `login_setcryptfmt()`, pw_user.c's other real login_cap.h call
+#     (3 sites) -- calls real `crypt_set_format(cipher)`. This project's
+#     real crypt(3) (Libc/gen/crypt.c, already used project-wide by
+#     login/passwd/chpass/sshd) is Apple's own single-format DES-only
+#     implementation with no crypt_set_format() at all -- real FreeBSD
+#     lib/libcrypt/crypt.c's own crypt_set_format(format) (checked
+#     directly) just linear-scans a registered {name,func} table and
+#     returns 1 only on an exact case-insensitive name match, 0
+#     otherwise. tools/userland_staging/pw_crypt_set_format_compat.c
+#     implements that exact real contract restricted to the one format
+#     this project's crypt(3) actually has ("des") -- see that file's
+#     own header. Real upstream pw_user.c already treats
+#     login_setcryptfmt()==NULL as non-fatal (`warn(...)`, not exit) and
+#     falls through to a plain `crypt(password, salt)` call either way,
+#     so this keeps every pw(8)-created account's hash in the same
+#     DES-crypt format every other account-management tool in this
+#     project already reads/writes -- not a behavior downgrade, a
+#     documented real capability limit of this project's crypt(3).
+#   - lib/libutil/gr_util.c (DAR-341): the real, self-contained group-side
+#     counterpart to pw_util.c -- gr_init/gr_lock/gr_tmp/gr_copy/gr_mkdb/
+#     gr_fini/gr_equal/gr_make/gr_dup/gr_add/gr_scan, every one of which
+#     grupd.c/pw_group.c/pw_vpw.c/pw_user.c call and none of which exist
+#     anywhere in this checkout (same real gap class as pw_util.c, just
+#     never hit until this ticket since nothing built here touched
+#     /etc/group management before). No separate gr_scan.c dependency
+#     unlike the pw side -- real upstream's own __gr_scan()/gr_scan() live
+#     directly inside this one file.
+#   - lib/libutil/_secure_path.c (DAR-341): real, self-contained
+#     `_secure_path(path, uid, gid)` -- login_cap.c's own real
+#     login_getclass()/login_getpwclass() call this (checks login.conf
+#     isn't world-writable / wrong-owned before trusting it), not defined
+#     anywhere in this checkout.
+#   - usr.bin/su/* : real BSD su(1), pulled alongside pw(8) since both are
+#     FreeBSD's own real account/session tools at this same tag -- not
+#     yet built (no build_su.sh exists yet), tracked here so a fresh
+#     clone's checkout matches what later su(1) work will need instead of
+#     silently depending on an unrecorded local sparse-checkout add.
 # Pinned to release/13.2.0 (2023-04), a real tagged FreeBSD release.
 FREEBSD_REF="release/13.2.0"
 FREEBSD_DEST="third_party/freebsd-src"
@@ -845,11 +908,11 @@ if [ -d "$FREEBSD_DEST" ]; then
     fi
 fi
 if [ -n "$FREEBSD_DEST" ]; then
-    echo "+ sparse-cloning freebsd-src @ $FREEBSD_REF (rijndael, sha2, md5c.c/md5.h, lib/libutil pw_util.c+flopen.c, lib/libc/gen pw_scan.c+.h, crypto/openssh + secure/ ssh build glue)"
+    echo "+ sparse-cloning freebsd-src @ $FREEBSD_REF (rijndael, sha2, md5c.c/md5.h, lib/libutil pw_util.c+flopen.c+login_cap.c+.h+login_crypt.c+gr_util.c+_secure_path.c, lib/libc/gen pw_scan.c+.h, crypto/openssh + secure/ ssh build glue, usr.sbin/pw, usr.bin/su)"
     git clone --filter=blob:none --no-checkout --depth 1 --branch "$FREEBSD_REF" \
         https://github.com/freebsd/freebsd-src.git "$FREEBSD_DEST"
     git -C "$FREEBSD_DEST" sparse-checkout init --no-cone
-    printf '/sys/crypto/rijndael/*\n/sys/crypto/sha2/*\n/sys/kern/md5c.c\n/sys/sys/md5.h\n/lib/libutil/pw_util.c\n/lib/libutil/flopen.c\n/lib/libc/gen/pw_scan.c\n/lib/libc/gen/pw_scan.h\n/crypto/openssh/*\n/secure/ssh.mk\n/secure/lib/libssh/*\n/secure/usr.sbin/sshd/*\n/secure/usr.bin/ssh/*\n/secure/usr.bin/ssh-keygen/*\n' \
+    printf '/sys/crypto/rijndael/*\n/sys/crypto/sha2/*\n/sys/kern/md5c.c\n/sys/sys/md5.h\n/lib/libutil/pw_util.c\n/lib/libutil/flopen.c\n/lib/libc/gen/pw_scan.c\n/lib/libc/gen/pw_scan.h\n/lib/libutil/login_cap.c\n/lib/libutil/login_cap.h\n/lib/libutil/login_crypt.c\n/lib/libutil/gr_util.c\n/lib/libutil/_secure_path.c\n/crypto/openssh/*\n/secure/ssh.mk\n/secure/lib/libssh/*\n/secure/usr.sbin/sshd/*\n/secure/usr.bin/ssh/*\n/secure/usr.bin/ssh-keygen/*\n/usr.sbin/pw/*\n/usr.bin/su/*\n' \
         > "$FREEBSD_DEST/.git/info/sparse-checkout"
     git -C "$FREEBSD_DEST" checkout "$FREEBSD_REF"
 fi
