@@ -1636,6 +1636,29 @@ else
     echo "+ $MNT/etc/ssh/sshd_config already exists -- leaving as-is"
 fi
 
+# sshd_config's own HostKey line above names /etc/ssh/ssh_host_ed25519_key,
+# but nothing else in this script ever created that file -- a real,
+# missing provisioning step found 2026-09-21 (a booted image's sshd.c own
+# real, unmodified load_hostkeys() call would find zero usable host keys
+# and refuse to start; real upstream sshd requires at least one). The
+# target's own ssh-keygen.macho (copied above) can't do this itself: it's
+# a target-arch Mach-O built against this project's own freestanding
+# libc, not runnable on this host, same real reason
+# tools/pwtool/hash_password_host.c exists as a host-side stand-in for
+# provisioning /etc/master.passwd before real target userland exists to
+# do it. ed25519 is a standard OpenSSH key format either side can read,
+# so the host's own real ssh-keygen (already installed everywhere this
+# script runs) generates the identical real key type sshd_config asks
+# for -- not a stand-in format, the real one.
+if [ ! -f "$MNT/etc/ssh/ssh_host_ed25519_key" ]; then
+    ssh-keygen -q -t ed25519 -f "$MNT/etc/ssh/ssh_host_ed25519_key" -N "" -C "root@$(basename "$MNT")"
+    chmod 600 "$MNT/etc/ssh/ssh_host_ed25519_key"
+    chmod 644 "$MNT/etc/ssh/ssh_host_ed25519_key.pub"
+    echo "+ generated $MNT/etc/ssh/ssh_host_ed25519_key (+ .pub)"
+else
+    echo "+ $MNT/etc/ssh/ssh_host_ed25519_key already exists -- leaving as-is"
+fi
+
 mkdir -p "$MNT/tmp"
 echo "+ ensured $MNT/tmp exists (real fopen()-family O_CREAT target dir -- same"
 echo "  class of gap as /etc and /dev above; found via a real QEMU boot-test"
