@@ -267,6 +267,23 @@ rm -f "$EXTRACT"/time.o "$EXTRACT"/gettimeofday.o \
 # still needs its own local copy.
 rm -f "$EXTRACT"/openpam_syscalls_compat.o
 
+# su_linker_set_bounds.o REMOVED (2026-09-21, real link failure found via
+# a from-scratch build_everything.sh run): this object's own
+# &_mh_execute_header reference is real and correct for su.macho (an
+# MH_EXECUTE image, where the linker always populates that symbol - see
+# su_linker_set_bounds.c's own header) but real Apple <mach-o/ldsyms.h>
+# is explicit that _mh_execute_header "does not appear in any file type
+# other than a MH_EXECUTE file type" - undefined at link time for this
+# MH_DYLIB output ("libopenpam.dylib link found real undefined symbols:
+# __mh_execute_header"). openpam_static.o (also wholesale-extracted
+# above) genuinely needs __ls_begin()/__ls_end() too (confirmed via
+# nm -u), so this is not a case of dropping dead weight - see
+# openpam_dylib_linker_set_bounds.c (compiled below, once CFLAGS exists)
+# for this dylib's own real replacement, using &_mh_dylib_header (the
+# exact MH_DYLIB counterpart, same header, same linker-synthesized
+# mechanism) instead.
+rm -f "$EXTRACT"/su_linker_set_bounds.o
+
 # `_shutdown`/`_send`/`_writev`/`_netsettime`/`_settimeofday`
 # UNREFERENCED-DUPLICATE FIX (2026-09-03, DAR-7 continuation). cat_socket_stub.o
 # and date_compat.o above (pulled in wholesale by the `ar x` because
@@ -461,6 +478,12 @@ rm -f "$OUT/libopenpam_dylib/launchd_passwd_compat_raw.o"
 # static-copy risk from adding a real (non-narrowed) copy here.
 "$CLANG" $CFLAGS -I ../libinfo_custom \
     ../libinfo_custom/libinfo_custom.c -o "$EXTRACT/libinfo_custom.o"
+
+# openpam_dylib_linker_set_bounds.c: this dylib's own real __ls_begin()/
+# __ls_end() (see the su_linker_set_bounds.o removal above for why the
+# su(1)-specific one can't be reused here).
+"$CLANG" $CFLAGS openpam_dylib_linker_set_bounds.c \
+    -o "$EXTRACT/openpam_dylib_linker_set_bounds.o"
 
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libopenpam.dylib"

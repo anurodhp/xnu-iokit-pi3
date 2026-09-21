@@ -25,7 +25,7 @@ MALLOC="../../third_party/libmalloc"
 XNU="../../third_party/xnu-7195"
 OUT="libc_build"
 
-for a in libpthread.a libplatform.a libmalloc.a libc_stdio.a; do
+for a in libpthread.a libplatform.a libmalloc.a libc_stdio.a libc_gen.a; do
     if [ ! -f "$OUT/$a" ]; then
         echo "error: $OUT/$a not found -- run build_libpthread.sh (and its prerequisites) first" >&2
         exit 1
@@ -75,7 +75,7 @@ trap - EXIT
     "$OUT/pthread_once_deep_repro.o" \
     "$OUT/libpthread.a" \
     "$OUT/sys_mmap_for_pthread_once_deep_repro.o" "$OUT/sys_munmap_for_pthread_once_deep_repro.o" \
-    "$OUT/libplatform.a" "$OUT/libmalloc.a" "$OUT/libc_stdio.a" "$OUT/cerror_stub.o" \
+    "$OUT/libplatform.a" "$OUT/libmalloc.a" "$OUT/libc_stdio.a" "$OUT/libc_gen.a" "$OUT/cerror_stub.o" \
     -Wl,-alias,___mmap,_mmap \
     -Wl,-alias,___munmap,_munmap
 echo "wrote pthread_once_deep_repro.macho"

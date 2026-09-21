@@ -233,6 +233,29 @@ if [ ! -x "$NEWLD_BINDIR/ld" ]; then
     echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE)" >&2
     exit 1
 fi
+# Real prerequisite check (2026-09-21) -- this DAR-314 dynamic-link block
+# never checked its own LINK_DYLIBS existed before this, so a from-scratch
+# build_everything.sh run hit a bare `clang: error: no such file or
+# directory` pile for all six instead of one clear message, AND
+# gen_build_order.py never learned this was a real dependency (only a
+# `-f "$OUT/..." ... not found -- run build_X.sh first` idiom feeds it),
+# so it silently ordered this script before the ones that produce these
+# dylibs. See build_ifconfig.sh's identically-structured block for the
+# same fix.
+for d in libsystem_c libsystem_pthread libsystem_malloc libsystem_platform; do
+    if [ ! -f "$OUT/system/$d.dylib" ]; then
+        echo "error: $OUT/system/$d.dylib not found -- run build_${d}.sh first" >&2
+        exit 1
+    fi
+done
+if [ ! -f "$OUT/system/libdyld.dylib" ]; then
+    echo "error: $OUT/system/libdyld.dylib not found -- run build_libdyld.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libSystem.B.dylib" ]; then
+    echo "error: $OUT/system/libSystem.B.dylib not found -- run build_libsystem.sh first" >&2
+    exit 1
+fi
 LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libsystem_platform.dylib $OUT/system/libdyld.dylib $OUT/system/libSystem.B.dylib"
 
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \

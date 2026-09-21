@@ -371,6 +371,16 @@ if [ "$fail" -eq 0 ]; then
         `# free -- and it is the "prefer real dylibs" direction anyway.` \
         "$OUT/system/libiconv.dylib" \
         "$OUT/system/libinfo.dylib" "$OUT/system/libSystem.B.dylib")
+    # Real prerequisite check (2026-09-21), same shape as build_sshd.sh's
+    # own -- without it, a from-scratch build hits a bare clang "no such
+    # file" pile instead of one clear message, and gen_build_order.py
+    # never learns these are real dependencies.
+    for d in "${LINK_DYLIBS[@]}"; do
+        if [ ! -f "$d" ]; then
+            echo "error: $d not found -- run its build_*.sh first" >&2
+            exit 1
+        fi
+    done
 
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
         -DCRT_DYNAMIC_LINKING \

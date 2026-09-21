@@ -55,6 +55,25 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+
+# Real Apple dylib names that carry a literal "." or "+" inside the base
+# name itself (distinct from the trailing .a/.dylib/.o extension idiom-2's
+# word-list items otherwise use) -- libSystem.B.dylib (the ".B" is part of
+# the real name, an umbrella-library version marker) and libc++.dylib (a
+# real "+" in the name). The generic short-name token check below
+# (`[A-Za-z0-9_]+`) rejects both outright once the trailing extension is
+# stripped ("libSystem.B", "libc++"), so their real dependency edges
+# (build_libsystem.sh, build_libcxx_dylib.sh) were silently dropped no
+# matter how the rest of this idiom evolved - found 2026-09-21 chasing
+# build_fork_alarm_smoketest.sh's silently-untracked dependency on
+# build_libsystem.sh. Finite, hand-confirmed (grep for every real producer
+# of "$OUT/system/lib*.dylib" in this directory), not a guessed pattern -
+# a third name showing up here needs the same real confirmation before
+# being added.
+KNOWN_DOTTED_NAME_SCRIPTS = {
+    "libSystem.B": "build_libsystem.sh",
+    "libc++": "build_libcxx_dylib.sh",
+}
 # "run build_X.sh" / "Run tools/userland_staging/build_X.sh" -- idiom 1
 # above. Case-insensitive "run", optional path prefix before the name.
 PREREQ_RE = re.compile(r"(?i)\brun\s+(?:\S+/)?(build_[A-Za-z0-9_]+\.sh)")
@@ -167,10 +186,27 @@ def main() -> int:
             # distinguishes the two -- confirmed against every real
             # for-loop idiom-2 user in this directory.
             loop_ref_re = re.compile(
-                r'-f\s*"\$OUT/(?:[A-Za-z0-9_]+/)*\$\{?' + re.escape(var) + r'\}?[^"]*"'
+                r'-f\s*"\$OUT/(?:[A-Za-z0-9_]+/)*\$\{?' + re.escape(var) + r'\}?([^"]*)"'
             )
-            if not loop_ref_re.search(body):
+            ref_match = loop_ref_re.search(body)
+            if not ref_match:
                 continue
+            # Real gap, found 2026-09-21 chasing build_libsystem_notify.sh's
+            # silently-wrong dependency on build_libxpc.sh: when the body's
+            # own check appends a literal ".dylib" suffix to the bare item
+            # (e.g. `-f "$OUT/system/$d.dylib"` with word-list item
+            # `libxpc`), the real producer of THAT specific file is often a
+            # SEPARATE, "_dylib"-suffixed script (build_libxpc_dylib.sh),
+            # not the plain build_libxpc.sh candidate -- which exists, is a
+            # real script, and produces a DIFFERENT artifact (libxpc.a,
+            # confirmed by reading it), so the wrong-but-present edge was
+            # silently "good enough" to not error, while the real .dylib
+            # dependency (and its real, separate build order requirement)
+            # went completely untracked. Same underlying disease as the
+            # "lib" prefix split fixed above, opposite direction (a real
+            # suffix ADDED to the script name, not a prefix dropped from
+            # the archive name).
+            checks_dylib = ref_match.group(1) == ".dylib"
             for item in word_list.split():
                 item = item.strip("\"'")
                 item = item.rsplit("/", 1)[-1]  # drop a leading path, e.g. "system/"
@@ -186,11 +222,48 @@ def main() -> int:
                 # resulting `build_sys____mmap.sh` candidate is simply
                 # absent from script_set and dropped below.
                 item = re.sub(r"\.(?:a|dylib|o)$", "", item)
+                if item in KNOWN_DOTTED_NAME_SCRIPTS:
+                    known_cand = KNOWN_DOTTED_NAME_SCRIPTS[item]
+                    if known_cand != name and known_cand in script_set:
+                        deps[name].add(known_cand)
+                    continue
                 if not re.fullmatch(r"[A-Za-z0-9_]+", item):
                     continue  # not a plain short-name token (e.g. a var/glob)
                 cand = f"build_{item}.sh"
-                if cand != name and cand in script_set:
+                if cand == name:
+                    continue
+                if checks_dylib:
+                    dylib_cand = f"build_{item}_dylib.sh"
+                    if dylib_cand != name and dylib_cand in script_set:
+                        deps[name].add(dylib_cand)
+                if cand in script_set:
                     deps[name].add(cand)
+                elif item.startswith("lib"):
+                    # Real naming split, found 2026-09-21 chasing
+                    # build_chpass.sh's silently-dropped dependency on
+                    # build_launchd_syscalls.sh: the ARCHIVE this idiom
+                    # checks for often carries a "lib" prefix
+                    # (liblaunchd_syscalls.a, liblaunchd_mig.a,
+                    # liblaunchd_core.a, libcopyfile.a, libremovefile.a,
+                    # libopenpam.a, libncurses.a, libbsm.a, libiokituser.a,
+                    # libsyslogd.a - confirmed real, not a one-off) while
+                    # the SCRIPT that produces it drops that prefix
+                    # (build_launchd_syscalls.sh, not
+                    # build_liblaunchd_syscalls.sh). The un-prefixed
+                    # candidate above is simply absent from script_set for
+                    # all of these, so the edge was silently dropped -
+                    # same failure shape as the two suffix/path-segment
+                    # gaps already fixed above (2026-09-11/13), just a
+                    # third real spelling this idiom uses. A live
+                    # build_everything.sh run showed the practical effect:
+                    # ~30 scripts' real dependency on build_launchd_mig.sh/
+                    # build_launchd_syscalls.sh/build_launchd_core.sh
+                    # (among others) went untracked, so the from-scratch
+                    # order put several of them before the scripts that
+                    # produce their own real prerequisites.
+                    alt = f"build_{item[3:]}.sh"
+                    if alt in script_set:
+                        deps[name].add(alt)
 
     # First, find and drop only the specific edges that actually
     # participate in a cycle (DFS back-edges), rather than force-ready

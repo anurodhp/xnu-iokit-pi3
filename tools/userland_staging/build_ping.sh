@@ -334,6 +334,29 @@ if [ ! -x "$NEWLD_BINDIR/ld" ]; then
     echo "error: no usable 'ld' found under the daily-driver Xcode ($DAILY_XCODE)" >&2
     exit 1
 fi
+# Real prerequisite check (2026-09-21) -- see build_ifconfig.sh's
+# identically-structured block for why this is needed: without it, a
+# from-scratch build hits a bare clang "no such file" pile instead of one
+# clear message, and gen_build_order.py never learns this is a real
+# dependency.
+for d in libsystem_c libsystem_pthread libsystem_malloc libsystem_platform libinfo; do
+    if [ ! -f "$OUT/system/$d.dylib" ]; then
+        echo "error: $OUT/system/$d.dylib not found -- run build_${d}.sh first" >&2
+        exit 1
+    fi
+done
+if [ ! -f "$OUT/system/libdyld.dylib" ]; then
+    echo "error: $OUT/system/libdyld.dylib not found -- run build_libdyld.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libSystem.B.dylib" ]; then
+    echo "error: $OUT/system/libSystem.B.dylib not found -- run build_libsystem.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libresolv.dylib" ]; then
+    echo "error: $OUT/system/libresolv.dylib not found -- run build_libresolv_dylib.sh first" >&2
+    exit 1
+fi
 LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libsystem_platform.dylib $OUT/system/libdyld.dylib $OUT/system/libSystem.B.dylib $OUT/system/libinfo.dylib $OUT/system/libresolv.dylib"
 
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \

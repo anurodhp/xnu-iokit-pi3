@@ -152,6 +152,20 @@ for dep in libplatform.a libmalloc.a libpthread.a libclosure.a libc_gen.a libc_s
         exit 1
     fi
 done
+# Real, previously-undeclared dependency (2026-09-21), same real gap as
+# build_chpass.sh's identical fix: pw_compat_include/libutil.h's own
+# #include_next <libutil.h> is SUPPOSED to land on the shared
+# $OUT/compat_include/libutil.h that build_simple_cmds.sh generates (see
+# this file's own -I ordering comment above) -- but when that file does
+# not exist yet, #include_next silently continues past it to whatever
+# libutil.h is NEXT on the search path instead (chpass_compat_include's,
+# which chains to the same missing file and fails there), producing a
+# confusing "libutil.h file not found" from inside a file named
+# libutil.h rather than a clear prerequisite error.
+if [ ! -f "$OUT/compat_include/libutil.h" ]; then
+    echo "error: $OUT/compat_include/libutil.h not found -- run build_simple_cmds.sh first" >&2
+    exit 1
+fi
 
 # Same real flags/tier as build_chpass.sh, plus:
 #   -I pw_compat_include FIRST: pw(8)'s own real `#include <libutil.h>`
@@ -344,6 +358,33 @@ if [ ! -x "$NEWLD_BINDIR/ld" ]; then
 fi
 # libcopyfile.dylib/libremovefile.dylib listed explicitly (DAR-217, see
 # build_pwd_mkdb.sh/build_chpass.sh's own identical citation).
+# Real prerequisite check (2026-09-21) -- see build_ifconfig.sh's
+# identically-structured block for why this is needed: without it, a
+# from-scratch build hits a bare clang "no such file" pile instead of one
+# clear message, and gen_build_order.py never learns this is a real
+# dependency.
+for d in libsystem_c libsystem_kernel libsystem_pthread libsystem_malloc libsystem_platform; do
+    if [ ! -f "$OUT/system/$d.dylib" ]; then
+        echo "error: $OUT/system/$d.dylib not found -- run build_${d}.sh first" >&2
+        exit 1
+    fi
+done
+if [ ! -f "$OUT/system/libdyld.dylib" ]; then
+    echo "error: $OUT/system/libdyld.dylib not found -- run build_libdyld.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libcopyfile.dylib" ]; then
+    echo "error: $OUT/system/libcopyfile.dylib not found -- run build_copyfile_dylib.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libremovefile.dylib" ]; then
+    echo "error: $OUT/system/libremovefile.dylib not found -- run build_removefile_dylib.sh first" >&2
+    exit 1
+fi
+if [ ! -f "$OUT/system/libSystem.B.dylib" ]; then
+    echo "error: $OUT/system/libSystem.B.dylib not found -- run build_libsystem.sh first" >&2
+    exit 1
+fi
 LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_kernel.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libsystem_platform.dylib $OUT/system/libdyld.dylib $OUT/system/libcopyfile.dylib $OUT/system/libremovefile.dylib $OUT/system/libSystem.B.dylib"
 
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
