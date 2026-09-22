@@ -149,6 +149,12 @@ PYEOF
 #   $IOG, $IOG/GMetric, $IOG/GTrace/Kernel -> "GMetric/GMetric.hpp",
 #                         "GTrace.hpp", "GMetricTypes.h"
 IOG_INC=(
+	# The 24 ktrace codes IOGraphics-585 uses and its own published
+	# IOGraphicsTypesPrivate.h does not define; force-included so the
+	# audit reports gaps that still need real work rather than 24 lines
+	# of noise. See that header for why this is a safe completion and
+	# not a behavioural stub.
+	-include "$REPO_ROOT/compat/IOKit/graphics/IOGraphicsTypesPrivateMissing.h"
 	-I"$REPO_ROOT/compat"
 	-I"$XNU/iokit"
 	-I"$PCI"
