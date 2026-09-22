@@ -561,6 +561,28 @@ else
     echo "= tools/userland_staging/chpass.macho not built -- run build_chpass.sh first if wanted, skipping"
 fi
 
+# real FreeBSD usr.sbin/pw (DAR-341, user-management commands --
+# useradd/userdel/usermod/groupadd/... with no separate "adduser"
+# wrapper, matching real FreeBSD's own single-binary design): installed
+# at /usr/sbin/pw, the real FreeBSD BINDIR for usr.sbin/pw (there is no
+# Apple-sourced pw(8) to cite an INSTALL_PATH from - this tool is
+# FreeBSD-only, unlike vipw/passwd/chpass/pwd_mkdb above, which are all
+# real Apple system_cmds). build_pw.sh itself was real and complete
+# (produces pw.macho, real compile+link+smoketest) but this install
+# step was never added - found 2026-09-21 when the user looked for `pw`
+# on a real device and it was missing, despite DAR-341 tracking it as
+# in progress rather than blocked on anything.
+if [ -f tools/userland_staging/pw.macho ]; then
+    mkdir -p "$MNT/usr/sbin"
+    cp tools/userland_staging/pw.macho "$MNT/usr/sbin/pw"
+    chmod 755 "$MNT/usr/sbin/pw"
+    echo "+ wrote $(wc -c < tools/userland_staging/pw.macho) bytes to $MNT/usr/sbin/pw"
+    echo "  (real, unmodified FreeBSD pw(8) -- DAR-341, see"
+    echo "  tools/userland_staging/build_pw.sh)"
+else
+    echo "= tools/userland_staging/pw.macho not built -- run build_pw.sh first if wanted, skipping"
+fi
+
 # cron.macho/crontab.macho intentionally NOT installed here (2026-08-22).
 # Both build real (tools/userland_staging/build_cron.sh still produces
 # working Mach-O binaries -- real DYNAMIC ones as of 2026-09-15, DAR-314;
@@ -1730,6 +1752,25 @@ mkdir -p "$MNT/var/run"
 echo "+ ensured $MNT/var/run exists (real bind(2) target dir for AF_UNIX"
 echo "  Sockets -- DAR-153, launchd's real socketgroup_setup_one() needs the"
 echo "  parent directory to exist before bind(\"/var/run/syslog\") can succeed)"
+
+# Real macOS convention (not this project's guess): regular-user home
+# directories live at /Users/<name>, confirmed against this host Mac's
+# own /Users. Real macOS itself gives root a separate home, /var/root -
+# this project's own root entry (further below, "root:...::0:0::/:
+# /bin/sh") instead uses "/" for root's home, a real, existing
+# divergence from that convention, not something this change touches
+# either way. Only the bare directory: this project provisions no
+# non-root account yet (only root + the sshd:75 privsep account,
+# neither of which would live under /Users even on real macOS), so
+# there is no specific user's home directory to create here until a
+# real account exists - adding one is a separate step (a master.passwd
+# entry + a real home directory + a real login shell), not implied by
+# this bare directory alone.
+mkdir -p "$MNT/Users"
+chmod 755 "$MNT/Users"
+echo "+ ensured $MNT/Users exists, mode 755 (real macOS convention for"
+echo "  regular-user home directories; no user account provisioned under"
+echo "  it yet)"
 
 # DAR-222: real syslogd (third_party/syslog/syslogd.tproj/daemon.h)
 # hardcodes _PATH_SYSLOGD_LOG "/var/log/syslogd.log" and bsd_out's real
