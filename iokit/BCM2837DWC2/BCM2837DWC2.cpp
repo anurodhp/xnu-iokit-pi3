@@ -787,45 +787,78 @@ BCM2837DWC2::waitForChannelSettled(uint32_t chan, uint32_t timeoutMS, uint32_t *
  * finish in the moment between deciding to abort it and the abort landing, and
  * the caller must see that XFERCOMP rather than throw away data the device
  * really did deliver.
+ *
+ * DAR-352 (real hardware, reproduced twice): the single 50ms wait this
+ * function used to make was confirmed genuinely insufficient at least
+ * twice on real silicon during completely ordinary idle RX polling, no
+ * unusual load involved - HCCHAR read back with BOTH CHENA and CHDIS
+ * still set, permanently. DAR-290's own comment already called this
+ * "unverified... no retry/reset strategy is attempted"; it is verified
+ * now. Retries the forced-disable request up to kHaltRetries times with
+ * a longer wait each time (a real, transient miss on one attempt is a
+ * different, more forgivable failure than the request never landing at
+ * all) before treating it as a confirmed, permanent wedge - at which
+ * point continuing to touch this channel is actively harmful (the next
+ * doTransfer()'s CHEN-set write would OR onto an already-set bit instead
+ * of a real disable->enable edge, servicing stale channel state forever
+ * - DAR-282's exact class), so fChannelWedged is set instead. Every
+ * caller reaching this channel again funnels through doTransfer()'s own
+ * fChannelWedged check (see that function), so this is the only place
+ * that needs to notice and record the wedge.
+ *
+ * This retries the halt; it does not recover the controller. A confirmed
+ * wedge here means real hardware recovery (core reset + host re-init +
+ * root-port re-bring-up + bus re-enumeration) is needed, which is scoped
+ * in DAR-352 but not implemented - the board still needs a physical
+ * power cycle after this fires. What this DOES fix: without it, every
+ * later transfer attempt (chiefly the RX poll timer, running forever)
+ * silently re-discovers the same stuck state every timeout period,
+ * forever, flooding the console - real, observed behavior that on its
+ * own made the board's serial console unusable, independent of whatever
+ * else the wedge broke.
  */
 void
 BCM2837DWC2::haltChannel(uint32_t chan, uint32_t *hcintOut)
 {
+	const uint32_t kHaltRetries = 3;
+	const uint32_t kHaltWaitMS[kHaltRetries] = { 50, 150, 400 };
+
 	uint32_t hcint = 0;
 	if (regRead(hcOffset(chan, kDWC2_HCCHAR)) & kHCCHAR_CHEN) {
-		regModify(hcOffset(chan, kDWC2_HCCHAR), 0,
-		    kHCCHAR_CHEN | kHCCHAR_CHDIS);
-		// Routed through the same interrupt/poll hybrid as
-		// waitForChannelInt() (DAR-136), not a raw register poll:
-		// HCINTMSK is still armed for this channel while haltChannel()
-		// runs (doTransfer only disarms it after this function
-		// returns), so a real interrupt can land here too, and an
-		// unsynchronized second poller racing interruptOccurred()'s
-		// own read-ack-fStatusLock sequence is exactly the class of
-		// bug fTransferLock's own header comment documents (DAR-282).
-		// A forced halt is acknowledged within a frame or two on real
-		// silicon and immediately under emulation; this 50ms bound
-		// only exists so a wedged channel cannot hang the workloop.
-		//
-		// DAR-290: that assumption is unverified, and the real
-		// consequence of it being wrong is serious - HCCHAR.CHENA is
-		// left set, so the next doTransfer()'s CHEN-set write ORs onto
-		// an already-set bit instead of a real disable->enable edge,
-		// silently never arming the next transfer while the controller
-		// keeps servicing stale channel state (the exact "wedged
-		// channel blocks every other endpoint" class DAR-282 fixed for
-		// the direct-NAK path). Re-check CHEN after the wait rather
-		// than trusting waitForChannelInt()'s return value alone was
-		// hit - a genuine miss here is a real, visible-in-the-log
-		// condition worth surfacing, not a silent one, even though no
-		// retry/reset strategy is attempted (unverified whether 50ms is
-		// ever actually insufficient in practice - see this function's
-		// own comment above).
-		if (!waitForChannelInt(chan, kHCINT_CHHLTD, 50, &hcint) &&
-		    (regRead(hcOffset(chan, kDWC2_HCCHAR)) & kHCCHAR_CHEN)) {
+		bool halted = false;
+		for (uint32_t attempt = 0; attempt < kHaltRetries; attempt++) {
+			// Re-issue the CHEN+CHDIS request on every attempt, not just
+			// the first: if the request itself was what got lost (rather
+			// than the channel genuinely taking longer than 50ms to
+			// react to a request it did receive), waiting longer on the
+			// same stale write would never help.
+			regModify(hcOffset(chan, kDWC2_HCCHAR), 0,
+			    kHCCHAR_CHEN | kHCCHAR_CHDIS);
+			// Routed through the same interrupt/poll hybrid as
+			// waitForChannelInt() (DAR-136), not a raw register poll:
+			// HCINTMSK is still armed for this channel while haltChannel()
+			// runs (doTransfer only disarms it after this function
+			// returns), so a real interrupt can land here too, and an
+			// unsynchronized second poller racing interruptOccurred()'s
+			// own read-ack-fStatusLock sequence is exactly the class of
+			// bug fTransferLock's own header comment documents (DAR-282).
+			bool sawHalt = waitForChannelInt(chan, kHCINT_CHHLTD, kHaltWaitMS[attempt], &hcint);
+			if (sawHalt || !(regRead(hcOffset(chan, kDWC2_HCCHAR)) & kHCCHAR_CHEN)) {
+				halted = true;
+				break;
+			}
 			IOLog("BCM2837DWC2: haltChannel: forced halt did not complete within "
-			      "50ms, channel %u still enabled (HCCHAR=%#x HCINT=%#x)\n",
-			    chan, regRead(hcOffset(chan, kDWC2_HCCHAR)), hcint);
+			      "%ums (attempt %u/%u), channel %u still enabled (HCCHAR=%#x HCINT=%#x)\n",
+			    kHaltWaitMS[attempt], attempt + 1, kHaltRetries, chan,
+			    regRead(hcOffset(chan, kDWC2_HCCHAR)), hcint);
+		}
+		if (!halted) {
+			fChannelWedged = true;
+			IOLog("BCM2837DWC2: haltChannel: channel %u CONFIRMED WEDGED after %u "
+			      "retries (HCCHAR=%#x) - every future transfer will fail immediately "
+			      "(kIOReturnNotAttached) rather than retry against dead hardware; a "
+			      "physical power cycle is required to recover USB (DAR-352)\n",
+			    chan, kHaltRetries, regRead(hcOffset(chan, kDWC2_HCCHAR)));
 		}
 	} else {
 		hcint = regRead(hcOffset(chan, kDWC2_HCINT));
@@ -956,6 +989,18 @@ BCM2837DWC2::doTransfer(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
 {
 	if (fRegBase == NULL || fDMAVirt == NULL) {
 		return kIOReturnNotReady;
+	}
+	// DAR-352: the single choke point every public entry point
+	// (transfer()/controlTransfer()/transferStage(), all via
+	// doTransferRetrying()) funnels through, all under fTransferLock -
+	// see fChannelWedged's own header comment. kIOReturnNotAttached
+	// (not kIOReturnNotReady) deliberately: doTransferRetrying()'s own
+	// retry loop treats kIOReturnNotReady as "keep retrying" and
+	// anything else as "return immediately" - reusing kIOReturnNotReady
+	// here would silently retry against dead hardware for the caller's
+	// full timeout instead of failing instantly.
+	if (fChannelWedged) {
+		return kIOReturnNotAttached;
 	}
 	if (ep->maxPacket == 0) {
 		return kIOReturnBadArgument;

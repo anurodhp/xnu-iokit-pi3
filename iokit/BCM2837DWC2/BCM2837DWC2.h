@@ -552,6 +552,41 @@ private:
 	bool                     fLoggedPollFallback;
 
 	/*
+	 * DAR-352: real hardware, real, reproduced-twice failure -
+	 * haltChannel()'s forced CHEN+CHDIS write can fail to complete even
+	 * after retrying (see haltChannel()'s own updated comment), leaving
+	 * the single shared host channel permanently unusable. Once that is
+	 * confirmed, the channel must never be touched again - re-arming a
+	 * channel whose CHENA never really cleared is not a real
+	 * disable->enable edge (this whole file's running theme, e.g. DAR-282/
+	 * DAR-290's own comments), so retrying forever just re-discovers the
+	 * same stuck state every timeout period, forever, flooding the console
+	 * and leaving the whole board looking hung (confirmed on real hardware
+	 * - see DAR-352). fChannelWedged is checked once, centrally, at the
+	 * top of doTransfer() (every public entry point funnels through it
+	 * under fTransferLock, already held on every path that could set or
+	 * read this), so setting it makes every future transfer() /
+	 * controlTransfer() / transferStage() call fail instantly and cleanly
+	 * (kIOReturnNotAttached) instead of touching hardware again. No
+	 * separate lock: guarded by fTransferLock like every other field
+	 * doTransfer()/haltChannel() touch, and every read/write of it already
+	 * happens with that lock held. Relies on this class's normal
+	 * zero-initialization (same as fPendingHcInt/fRealInterruptHits/
+	 * fLoggedRealInterrupt above, none of which get an explicit `= 0`/
+	 * `= false` in start() either) rather than an explicit init line, for
+	 * consistency with those sibling fields.
+	 *
+	 * This does NOT recover the controller - that needs a real core
+	 * reset + host re-init + root-port re-bring-up + bus re-enumeration,
+	 * scoped but not implemented (DAR-352's own "full fix"). This is only
+	 * the "stop hammering, fail cleanly" half: it keeps the rest of the
+	 * board (console, unrelated subsystems) responsive after a wedge
+	 * instead of an endless retry storm, but real recovery still needs a
+	 * physical power cycle until the full fix lands.
+	 */
+	bool                     fChannelWedged;
+
+	/*
 	 * DAR-297: registerInterfaceWithBSD() can be reached from two
 	 * independent paths -- the direct call in start()'s real-hardware
 	 * SMSC9514Ethernet branch, and interfacePublished(), an IOKit publish
