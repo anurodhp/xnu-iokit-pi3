@@ -135,6 +135,22 @@
 #     `macos-112` and IOSerialFamily is not listed there at all, so
 #     `IOSerialFamily-93.200.2` is simply the newest real tag (the repo
 #     has three: 91, 93, 93.200.2).
+#   - IOHIDFamily: added 2026-09-21 (DAR-331), ONE header. This board has
+#     no HID hardware and no window server, and docs/apple-oss-catalog.md
+#     correctly files the rest of IOHIDFamily as structurally inapplicable
+#     here. The pin exists because IOGraphics cannot be compiled without
+#     it: IOGraphicsFamily/IOKit/graphics/IOFramebufferShared.h:26
+#     `#include <IOKit/hidsystem/IOHIDTypes.h>` unconditionally, for the
+#     IOGPoint/IOGBounds cursor geometry types that
+#     StdFBShmem_t/IOFramebuffer's cursor state are declared in terms of.
+#     Every IOGraphics source that reaches IOFramebuffer.h therefore stops
+#     at that include with a hard `file not found` before any other gap is
+#     even visible (confirmed by compiling, not assumed). Manifest-
+#     verified like IOPCIFamily: `distribution-macOS` at `macos-112`
+#     (release.json:105-106) names `IOHIDFamily-1633.81.2`, which is the
+#     tag pinned here -- resolved from the manifest, not picked by
+#     recency. Only `IOHIDSystem/IOKit/hidsystem/IOHIDTypes.h` is used;
+#     nothing in IOHIDFamily is compiled.
 #   - hfs, IOStorageFamily, IOUSBFamily, IONetworkingFamily, msdosfs: unmodified Apple
 #     open-source reference sources, pinned to an exact tag, no patching.
 #     CORRECTED 2026-08-24: a full `distribution-macOS` `macos-112` manifest
@@ -573,6 +589,7 @@ IOSerialFamily|https://github.com/apple-oss-distributions/IOSerialFamily.git|IOS
 AppleUSBCDCDriver|https://github.com/apple-oss-distributions/AppleUSBCDCDriver.git|AppleUSBCDCDriver-4303.2.1|
 IONetworkingFamily|https://github.com/apple-oss-distributions/IONetworkingFamily.git|IONetworkingFamily-151.40.1|
 IOGraphics|https://github.com/apple-oss-distributions/IOGraphics.git|IOGraphics-585|
+IOHIDFamily|https://github.com/apple-oss-distributions/IOHIDFamily.git|IOHIDFamily-1633.81.2|
 msdosfs|https://github.com/apple-oss-distributions/msdosfs.git|msdosfs-435.60.1|
 dyld|git@github.com:anurodhp/dyld.git|iokit-port||https://github.com/apple-oss-distributions/dyld.git
 Libc|git@github.com:anurodhp/Libc.git|iokit-port||https://github.com/apple-oss-distributions/Libc.git
