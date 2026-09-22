@@ -23,6 +23,26 @@
 # clobbered it with the older, known-wrong text. Copying blind in the other
 # direction is just as bad; the only safe move is to stop and let a human
 # say which side is right.
+#
+# Every successful copy is immediately committed *inside the xnu-7195
+# submodule itself* (a real, separate git repo - see architecture.md), for
+# exactly the reason the paragraph above gives: the "uncommitted edit in the
+# XNU tree" check above is only a true signal of a real hand-edit if the
+# destination is normally clean. Before this, a plain `cp` with no commit
+# left the destination WITH an uncommitted diff after every sync - meaning
+# the very next time the SAME file changed in iokit/ and got synced again,
+# this script's own safety check tripped on its own prior, entirely
+# legitimate sync, not a real hand-edit, and refused to run. That happened
+# for real (DAR-352, 2026-09-21): three real driver files were each synced
+# more than once in one session, build_xnu_7195.sh's sync step silently
+# hit this exact refusal on the second sync, and the whole build failed at
+# its very first step - a `set -e` script under `run_in_background`, so
+# the failure was silent in the tool-call summary and only surfaced when
+# the resulting kernel binary was independently checked for the new code
+# and found not to contain it. Auto-committing closes the gap at its root
+# instead of relying on every future session remembering to commit by
+# hand: after this script runs clean, the destination is ALWAYS at a real
+# commit, so the next divergence check is always a genuine signal again.
 set -e
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -51,6 +71,7 @@ NOT_BUILT=()
 copied=0
 missing_from_conf=()
 diverged=()
+copied_files=()
 
 for src in iokit/*/*.cpp iokit/*/*.h; do
 	[ -e "$src" ] || continue
@@ -79,6 +100,7 @@ for src in iokit/*/*.cpp iokit/*/*.h; do
 			cp "$src" "$dst"
 			echo "  synced $src -> $dst"
 			copied=$((copied + 1))
+			copied_files+=("iokit/Drivers/BCM2837/$base")
 		fi
 	fi
 
@@ -90,6 +112,19 @@ for src in iokit/*/*.cpp iokit/*/*.h; do
 		;;
 	esac
 done
+
+# Commit whatever was actually copied, inside the xnu-7195 submodule itself,
+# before either error gate below - a later, unrelated failure (a new source
+# missing from $CONF) must not leave a real, already-copied sync sitting
+# uncommitted, which is exactly the state that caused DAR-352 (see this
+# file's own header comment). Real, targeted `git add` of just the files
+# this run copied - never `git add -A` here, which could sweep in an
+# unrelated real in-progress edit elsewhere in this submodule.
+if [ ${#copied_files[@]} -ne 0 ]; then
+	git -C third_party/xnu-7195 add "${copied_files[@]}"
+	git -C third_party/xnu-7195 commit -q -m "sync ${#copied_files[@]} driver file(s) from the iokit tree (tools/sync_iokit_drivers.sh)"
+	echo "  committed ${#copied_files[@]} file(s) in third_party/xnu-7195 (kept the sync baseline clean)"
+fi
 
 if [ ${#diverged[@]} -ne 0 ]; then
 	echo "error: these files differ from iokit/ AND have uncommitted edits in" >&2
