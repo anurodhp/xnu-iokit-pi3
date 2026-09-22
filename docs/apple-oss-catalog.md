@@ -389,17 +389,29 @@ IOKit driver stack on bare Pi 3 hardware, no GUI, no enterprise auth, no
 scripting-language runtime as a goal in itself):
 
 - **GUI/graphics/WebKit stack** (`WebCore`, `WebKit`, `WebKit2`,
-  `WebInspectorUI`, `JavaScriptCore`, `WTF`, `IOHIDFamily`,
-  `IOAudioFamily`) — this target has no display server, no HID input
-  beyond a serial console, no audio hardware driver. Structurally
-  inapplicable, not merely deprioritized. **`IOGraphics` is no longer in
-  this bucket** — pinned 2026-09-21 (`IOGraphics-585`, matching the
+  `WebInspectorUI`, `JavaScriptCore`, `WTF`, `IOAudioFamily`) — this
+  target has no display server, no HID input beyond a serial console, no
+  audio hardware driver. Structurally inapplicable, not merely
+  deprioritized. **`IOGraphics` is no longer in this bucket** — pinned
+  2026-09-21 (`IOGraphics-585`, matching the
   `macos-112` manifest exactly) for DAR-331 (real HDMI framebuffer, not
   just the kernel's own boot/panic text console). Real scope there is
   narrow: `IOGraphicsFamily/IOBootFramebuffer.cpp` is a generic "dumb
   framebuffer shim" — it matches on provider property
   `AAPL,boot-display` and just wraps whatever `getPlatform()->
   getConsoleInfo()` already contains, no VideoCore-specific code needed.
+  **`IOHIDFamily` left this bucket the same day, for one header only** —
+  pinned `IOHIDFamily-1633.81.2`, which is what the `macos-112` manifest
+  itself names (`release.json:105-106`), because IOGraphics cannot be
+  compiled without it: `IOGraphicsFamily/IOKit/graphics/
+  IOFramebufferShared.h:26` includes `<IOKit/hidsystem/IOHIDTypes.h>`
+  unconditionally, for the `IOGPoint`/`IOGBounds` cursor-geometry types
+  that `StdFBShmem_t` is declared in terms of. Every IOGraphics source
+  that reaches `IOFramebuffer.h` stops there with a hard `file not
+  found` before any other gap is visible (found by compiling). Nothing
+  in `IOHIDFamily` is built, and the rest of that repo — the HID event
+  system, keyboard/pointer drivers, `IOHIDSystem` — stays as
+  inapplicable here as the rest of this bucket.
   This project's own `third_party/xnu-7195` already does the hard part:
   `pexpert/arm/pe_init.c`'s `bcm2837_video_init()` already queries the
   VideoCore GPU over the mailbox for a real HDMI framebuffer and
@@ -411,7 +423,18 @@ scripting-language runtime as a goal in itself):
   Confirmed byte-identical to `third_party/PureDarwin`'s `next`-branch
   copy of the same file (`diff -q`, 2026-09-21), so this real Apple pin
   supersedes reading it out of PureDarwin per the source-priority rule
-  above.
+  above. **Corrected later the same day by actually compiling it
+  (`tools/iographics_gap_audit.sh`):** "wiring, not a new driver" is
+  right about the *design*, but this drop does not build as published.
+  `IOBootFramebuffer.cpp` and 7 of the family's other 11 kernel sources
+  compile clean against this tree; `IOFramebuffer.cpp`, `GTrace.cpp`,
+  `IODisplay.cpp` and `IODisplayWrangler.cpp` do not, because Apple ships
+  `.cpp` files from a newer internal revision than the headers beside
+  them (missing `clearEvent`/`triggerEvent`, missing
+  `IOFramebufferPrivate` members, missing `GTraceBuffer` internals, 24
+  missing `DBG_IOG_*` ktrace codes). Checked `IOGraphics-530.66`, `-585`
+  and `-600`: same class of gap in all three, so the manifest pin is not
+  the problem and there is no complete tag to move to.
 - **Enterprise/network auth & directory services** (`Heimdal`,
   `OpenLDAP`, `KerberosHelper`, `MITKerberosShim`, `Security`,
   `security_certificates`, `security_authtrampoline`, `SecurityTokend`,
