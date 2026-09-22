@@ -149,6 +149,18 @@ PYEOF
 #   $IOG, $IOG/GMetric, $IOG/GTrace/Kernel -> "GMetric/GMetric.hpp",
 #                         "GTrace.hpp", "GMetricTypes.h"
 IOG_INC=(
+	# GTRACE_IMPL and IOG_GMETRIC: Apple's own IOGraphics.xcodeproj sets
+	# both in GCC_PREPROCESSOR_DEFINITIONS for every one of its three
+	# kernel build configs (project.pbxproj, e.g. :2158-2161), so this is
+	# what a real build of this source actually compiles with, not an
+	# invented flag. Without GTRACE_IMPL, GTrace.hpp never defines
+	# GTRACE_LOG_SYNCH (GTrace.hpp:97-105), which IOFramebuffer.cpp and
+	# IODisplayWrangler.cpp both call through IOG_KTRACE_LOG_SYNCH
+	# (IOGraphicsKTrace.h:89-94) -- so omitting it was misreporting a
+	# real, always-defined macro as a gap. IOG_GMETRIC similarly gates
+	# GMetric.hpp:20-40 (unrelated to any missing declaration).
+	-DGTRACE_IMPL
+	-DIOG_GMETRIC
 	# The 24 ktrace codes IOGraphics-585 uses and its own published
 	# IOGraphicsTypesPrivate.h does not define; force-included so the
 	# audit reports gaps that still need real work rather than 24 lines
