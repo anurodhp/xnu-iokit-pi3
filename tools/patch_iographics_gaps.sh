@@ -89,11 +89,7 @@ F="$FBCPP"
 ANCHOR='    integer_t                   fServerMsgIDSentPower;
     integer_t                   fServerMsgIDAckedPower;
 };'
-if ! grep -q "fCloseWorkES" "$F"; then
-	echo "error: unexpected -- fCloseWorkES already absent check ran on wrong file" >&2
-	exit 1
-fi
-if ! grep -qF "IOInterruptEventSource *          fCloseWorkES;" "$F"; then
+if ! grep -qF "IOInterruptEventSource *    fCloseWorkES;" "$F"; then
 	NEW='    integer_t                   fServerMsgIDSentPower;
     integer_t                   fServerMsgIDAckedPower;
     integer_t                   fServerMsgIDSentDim;      // patched, see tools/patch_iographics_gaps.sh
@@ -346,7 +342,7 @@ NEW='				/* was vm_map_wire(); XNU_KERNEL_PRIVATE hides that name, see
 							 (vm_address_t) __private->saveFramebuffer,
 							 ((vm_address_t) __private->saveFramebuffer) + __private->saveLength,
 							 VM_PROT_READ | VM_PROT_WRITE, VM_KERN_MEMORY_IOKIT, FALSE );'
-if grep -qF "$OLD" "$F"; then
+if ! grep -q "vm_map_wire_kernel(" "$F"; then
 	python3 - "$F" "$OLD" "$NEW" <<'PYEOF'
 import sys
 f, old, new = sys.argv[1], sys.argv[2], sys.argv[3]
@@ -381,7 +377,6 @@ fi
 #    value if this project ever wires up a real notification-port client.
 # ---------------------------------------------------------------------
 F="$FBCPP"
-if ! grep -q "kServerAckProtocolGraphicsTypesRev" "$F" | grep -q define 2>/dev/null; then :; fi
 if ! grep -qE '^\s*#define\s+kServerAckProtocolGraphicsTypesRev' "$F"; then
 	ANCHOR='enum
 {
