@@ -141,6 +141,11 @@ if [ -z "${USB_DEVICES+set}" ]; then
   USB_DEVICES="-device usb-hub,id=lan9514hub,bus=usb-bus.0,port=1 -netdev user,id=usbnet0 -device usb-net,netdev=usbnet0,bus=usb-bus.0,port=1.1"
 fi
 
+# EXTRA_USB_DEVICES is appended to USB_DEVICES (default or not), so a
+# caller can add a device without restating the LAN9514 stand-in above.
+# runvm_hdmi.sh uses it for a USB keyboard (DAR-245).
+USB_DEVICES="$USB_DEVICES${EXTRA_USB_DEVICES:+ $EXTRA_USB_DEVICES}"
+
 if [ ! -f "$SD_IMAGE" ]; then
   echo "error: SD card image not found: $SD_IMAGE" >&2
   exit 1

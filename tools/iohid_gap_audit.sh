@@ -78,6 +78,7 @@ ln -s "$HID/IOHIDFamily" "$STAGE/IOKit/hidevent"
 for h in "$HID/IOHIDSystem/IOKit/hidsystem"/*.h; do ln -s "$h" "$STAGE/IOKit/hidsystem/"; done
 ln -s "$HID/IOHIDFamily/IOHIDUsageTables.h" "$STAGE/IOKit/hidsystem/IOHIDUsageTables.h"
 ln -s "$USB/IOUSBHIDDriver/Headers/IOUSBHIDDriver.h" "$STAGE/IOKit/usb/IOUSBHIDDriver.h"
+ln -s "$USB/IOUSBCompositeDriver/Headers/IOUSBCompositeDriver.h" "$STAGE/IOKit/usb/IOUSBCompositeDriver.h"
 ln -s "$REPO_ROOT/generated/HIDDriverKit" "$STAGE/HIDDriverKit"
 
 # Source fixes first (idempotent), so a fresh clone audits the tree the
@@ -188,8 +189,14 @@ SOURCES=(
 	"$REPO_ROOT/generated/HIDDriverKit/impl/IOHIDEventService.iig.cpp"
 	# patched copy written by tools/patch_iohid_gaps.sh (fix 6)
 	"$REPO_ROOT/build/iohid/src/IOUSBHIDDriver.cpp"
+	# IOUSBFamily-560.4.2's generic device driver: configures a class-0
+	# (composite) device so its IOUSBInterface nubs exist for IOUSBHIDDriver.
+	"$USB/IOUSBCompositeDriver/Classes/IOUSBCompositeDriver.cpp"
 )
-# The descriptor parser is C (compiled with the kernel's C line below).
+# The descriptor parser is C (compiled with the kernel's C line below),
+# and so is Cosmo_USB2ADB.c: the USB<->ADB keycode tables
+# (hid_usb_2_adb_keymap etc.) that IOHIDKeyboard/IOHIDEventDriver link against.
+SOURCES+=("$F/Cosmo_USB2ADB.c")
 for c in "$P"/*.c; do SOURCES+=("$c"); done
 
 if [ $# -gt 0 ]; then

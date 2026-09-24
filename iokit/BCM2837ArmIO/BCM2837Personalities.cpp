@@ -303,6 +303,134 @@ addIOGraphicsPersonalities(OSArray *personalities)
 	OSSafeReleaseNULL(errorString);
 }
 
+/*
+ * DAR-245: HID (vendored by tools/vendor_iohid_into_xnu.sh).
+ *
+ * Apple's own personalities, verbatim except for CFBundleIdentifier (no
+ * built-in personality in this file carries one) and IOCFPlugInTypes
+ * (userspace IOHIDLib plugin paths, meaningless without that userland):
+ *
+ *   IOHIDSystem          Info-IOHIDFamily.plist "IOHIDSystem"
+ *                        (IOResources / IOResourceMatch IOBSD)
+ *   IOHIDEventDriver     Info-IOHIDEventDriver.plist "HID Keyboard Driver"
+ *                        (IOHIDInterface, DeviceUsagePairs GD/Keyboard,
+ *                        GD/Keypad). Its IOMatchDefer is inert here:
+ *                        NO_KEXTD compiles the defer path out
+ *                        (IOService.cpp:3969).
+ *   IOUSBCompositeDriver IOUSBFamily-560.4.2 IOUSBCompositeDriver.plist
+ *                        "IOUSBComposite" (IOUSBDevice, bDeviceClass 0 /
+ *                        bDeviceSubClass 0: class defined per interface, which is
+ *                        what keyboards report). It SetConfiguration()s the
+ *                        device, which is what creates the IOUSBInterface nubs
+ *                        below. Nothing else does that for a generic device.
+ *   IOUSBHIDDriver x2    IOUSBFamily-560.4.2 IOUSBHIDDriverSafeBoot.plist
+ *                        "IOUSBHIDDriver0"/"IOUSBHIDDriver1": any
+ *                        IOUSBInterface with bInterfaceClass 3 and subclass 0
+ *                        or 1, i.e. every USB HID interface. Chosen over
+ *                        IOUSBHIDDriver.plist's "Generic Keyboard"
+ *                        (subclass 1 / protocol 1 only), which would miss
+ *                        keyboards that do not advertise boot protocol.
+ *
+ * IOHIDFamily has no MODULE_START (the IOHIDFamily target sets none in
+ * IOHIDFamily.xcodeproj), so unlike IOGraphics nothing has to run first.
+ *
+ * Keys reach the console through IOHIDEventService's legacy keyboard shim
+ * (IOHIDKeyboard -> IOHIDSystem -> cons_cinput, IOHIDSystem.cpp:2309-2317).
+ * The shim is off unless boot-arg hid-legacy-shim=1 or single-user
+ * (IOHIDEventService.cpp:311-330); runvm_hdmi.sh passes the boot-arg.
+ */
+static const char kIOHIDPersonalitiesXML[] =
+    "<array><dict><key>HIDPowerOnDelayNS</key><integer>500000000</integer>"
+    "<key>HIDScrollCountBootDefault</key><dict><key>HIDScrollCountAccelerationFactor</key>"
+    "<integer>163840</integer><key>HIDScrollCountIgnoreMomentumScrolls</key><true/>"
+    "<key>HIDScrollCountMax</key><integer>2000</integer>"
+    "<key>HIDScrollCountMaxTimeDeltaBetween</key><integer>600</integer>"
+    "<key>HIDScrollCountMaxTimeDeltaToSustain</key><integer>250</integer>"
+    "<key>HIDScrollCountMinDeltaToStart</key><integer>30</integer>"
+    "<key>HIDScrollCountMinDeltaToSustain</key><integer>20</integer>"
+    "<key>HIDScrollCountMouseCanReset</key><true/></dict><key>HIDServiceGlobalModifiersUsage"
+    "</key><integer>1</integer><key>HIDServiceSupport</key><true/><key>IOClass</key>"
+    "<string>IOHIDSystem</string><key>IOMatchCategory</key><string>IOHID</string>"
+    "<key>IOProviderClass</key><string>IOResources</string><key>IOResourceMatch</key>"
+    "<string>IOBSD</string><key>PrimaryUsage</key><integer>23</integer><key>PrimaryUsagePage"
+    "</key><integer>65280</integer><key>VendorID</key><integer>1452</integer></dict><dict>"
+    "<key>DeviceUsagePairs</key><array><dict><key>DeviceUsage</key><integer>6</integer>"
+    "<key>DeviceUsagePage</key><integer>1</integer></dict><dict><key>DeviceUsage</key>"
+    "<integer>7</integer><key>DeviceUsagePage</key><integer>1</integer></dict></array>"
+    "<key>HIDAccelCurves</key><array><dict><key>HIDAccelGainLinear</key><integer>65536"
+    "</integer><key>HIDAccelIndex</key><integer>0</integer><key>HIDAccelTangentSpeedLinear"
+    "</key><integer>524288</integer></dict><dict><key>HIDAccelGainCubic</key><integer>5243"
+    "</integer><key>HIDAccelGainLinear</key><integer>60293</integer>"
+    "<key>HIDAccelGainParabolic</key><integer>26214</integer><key>HIDAccelIndex</key>"
+    "<integer>8192</integer><key>HIDAccelTangentSpeedLinear</key><integer>537395</integer>"
+    "<key>HIDAccelTangentSpeedParabolicRoot</key><integer>1245184</integer></dict><dict>"
+    "<key>HIDAccelGainCubic</key><integer>6554</integer><key>HIDAccelGainLinear</key>"
+    "<integer>60948</integer><key>HIDAccelGainParabolic</key><integer>36045</integer>"
+    "<key>HIDAccelIndex</key><integer>32768</integer><key>HIDAccelTangentSpeedLinear</key>"
+    "<integer>543949</integer><key>HIDAccelTangentSpeedParabolicRoot</key><integer>1179648"
+    "</integer></dict><dict><key>HIDAccelGainCubic</key><integer>7864</integer>"
+    "<key>HIDAccelGainLinear</key><integer>61604</integer><key>HIDAccelGainParabolic</key>"
+    "<integer>46531</integer><key>HIDAccelIndex</key><integer>45056</integer>"
+    "<key>HIDAccelTangentSpeedLinear</key><integer>550502</integer>"
+    "<key>HIDAccelTangentSpeedParabolicRoot</key><integer>1114112</integer></dict><dict>"
+    "<key>HIDAccelGainCubic</key><integer>9830</integer><key>HIDAccelGainLinear</key>"
+    "<integer>62259</integer><key>HIDAccelGainParabolic</key><integer>57672</integer>"
+    "<key>HIDAccelIndex</key><integer>57344</integer><key>HIDAccelTangentSpeedLinear</key>"
+    "<integer>557056</integer><key>HIDAccelTangentSpeedParabolicRoot</key><integer>1048576"
+    "</integer></dict><dict><key>HIDAccelGainCubic</key><integer>11796</integer>"
+    "<key>HIDAccelGainLinear</key><integer>62915</integer><key>HIDAccelGainParabolic</key>"
+    "<integer>69468</integer><key>HIDAccelIndex</key><integer>65536</integer>"
+    "<key>HIDAccelTangentSpeedLinear</key><integer>563610</integer>"
+    "<key>HIDAccelTangentSpeedParabolicRoot</key><integer>983040</integer></dict><dict>"
+    "<key>HIDAccelGainCubic</key><integer>14418</integer><key>HIDAccelGainLinear</key>"
+    "<integer>63570</integer><key>HIDAccelGainParabolic</key><integer>81920</integer>"
+    "<key>HIDAccelIndex</key><integer>98304</integer><key>HIDAccelTangentSpeedLinear</key>"
+    "<integer>570163</integer><key>HIDAccelTangentSpeedParabolicRoot</key><integer>917504"
+    "</integer></dict><dict><key>HIDAccelGainCubic</key><integer>17695</integer>"
+    "<key>HIDAccelGainLinear</key><integer>64225</integer><key>HIDAccelGainParabolic</key>"
+    "<integer>95027</integer><key>HIDAccelIndex</key><integer>131072</integer>"
+    "<key>HIDAccelTangentSpeedLinear</key><integer>576717</integer>"
+    "<key>HIDAccelTangentSpeedParabolicRoot</key><integer>851968</integer></dict><dict>"
+    "<key>HIDAccelGainCubic</key><integer>21627</integer><key>HIDAccelGainLinear</key>"
+    "<integer>64881</integer><key>HIDAccelGainParabolic</key><integer>108790</integer>"
+    "<key>HIDAccelIndex</key><integer>163840</integer><key>HIDAccelTangentSpeedLinear</key>"
+    "<integer>583270</integer><key>HIDAccelTangentSpeedParabolicRoot</key><integer>786432"
+    "</integer></dict><dict><key>HIDAccelGainCubic</key><integer>26214</integer>"
+    "<key>HIDAccelGainLinear</key><integer>65536</integer><key>HIDAccelGainParabolic</key>"
+    "<integer>123208</integer><key>HIDAccelIndex</key><integer>196608</integer>"
+    "<key>HIDAccelTangentSpeedLinear</key><integer>589824</integer>"
+    "<key>HIDAccelTangentSpeedParabolicRoot</key><integer>786432</integer></dict></array>"
+    "<key>HIDDefaultBehavior</key><string></string><key>IOClass</key><string>IOHIDEventDriver"
+    "</string><key>IOMatchDefer</key><true/><key>IOProviderClass</key><string>IOHIDInterface"
+    "</string></dict><dict><key>HIDDefaultBehavior</key><string></string><key>IOClass</key>"
+    "<string>IOUSBHIDDriver</string><key>IOProviderClass</key><string>IOUSBInterface</string>"
+    "<key>bInterfaceClass</key><integer>3</integer><key>bInterfaceSubClass</key><integer>0"
+    "</integer></dict><dict><key>HIDDefaultBehavior</key><string></string><key>IOClass</key>"
+    "<string>IOUSBHIDDriver</string><key>IOProviderClass</key><string>IOUSBInterface</string>"
+    "<key>bInterfaceClass</key><integer>3</integer><key>bInterfaceSubClass</key><integer>1"
+    "</integer></dict>"
+    "<dict><key>IOClass</key><string>IOUSBCompositeDriver</string>"
+    "<key>IOProviderClass</key><string>IOUSBDevice</string>"
+    "<key>bDeviceClass</key><integer>0</integer>"
+    "<key>bDeviceSubClass</key><integer>0</integer></dict></array>";
+
+static void
+addIOHIDPersonalities(OSArray *personalities)
+{
+	OSString *errorString = NULL;
+	OSObject *parsed = OSUnserializeXML(kIOHIDPersonalitiesXML, &errorString);
+	OSArray *hid = OSDynamicCast(OSArray, parsed);
+	if (hid == NULL) {
+		IOLog("BCM2837RegisterBuiltinPersonalities: HID personality XML "
+		    "did not parse: %s\n",
+		    errorString ? errorString->getCStringNoCopy() : "(no error string)");
+	} else {
+		personalities->merge(hid);
+	}
+	OSSafeReleaseNULL(parsed);
+	OSSafeReleaseNULL(errorString);
+}
+
 extern "C" void
 BCM2837RegisterBuiltinPersonalities(void)
 {
@@ -528,6 +656,7 @@ BCM2837RegisterBuiltinPersonalities(void)
 	}
 
 	addIOGraphicsPersonalities(personalities);
+	addIOHIDPersonalities(personalities);
 
 	IOLog("BCM2837RegisterBuiltinPersonalities: built %u personalities, gIOCatalogue=%p\n",
 	    personalities->getCount(), (void *)(IOCatalogue *)gIOCatalogue);

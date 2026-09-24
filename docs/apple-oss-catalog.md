@@ -414,10 +414,16 @@ scripting-language runtime as a goal in itself):
   kernel path for that is USB HID → `IOUSBHIDDriver` (IOUSBFamily-560.4.2)
   → `IOHIDDevice`/`IOHIDInterface` → `IOHIDEventDriver` → `IOHIDKeyboard`
   legacy shim → `IOHIDSystem` → `cons_cinput()` (IOHIDSystem.cpp:2311-2317).
-  So the kernel half of `IOHIDFamily` is no longer "inapplicable". All 91
-  kernel sources in the kext target's Sources phase compile against the
-  real kernel flags (`tools/iohid_gap_audit.sh`), after
-  `tools/patch_iohid_gaps.sh` and `compat/iohid/`. Userspace HID
+  So the kernel half of `IOHIDFamily` is no longer "inapplicable": it is
+  built into the kernel (`tools/vendor_iohid_into_xnu.sh`, run by
+  `build_xnu_7195.sh`), together with IOUSBFamily's `IOUSBHIDDriver` and
+  `IOUSBCompositeDriver`. The latter configures a class-0 device so its HID
+  interface nub exists at all. QEMU-verified 2026-09-24: `usb-kbd` behind the
+  hub types into the shell on both the HDMI console and serial, and the
+  same keystrokes do nothing without boot-arg `hid-legacy-shim=1` (Apple's
+  own switch for the kernel keyboard shim; `runvm_hdmi.sh` passes it). The
+  sources needed `tools/patch_iohid_gaps.sh` and `compat/iohid/`;
+  `tools/iohid_gap_audit.sh` is the fast compile check. Userspace HID
   (`IOHIDManager`, `hidd`, event-system plugins) stays out of scope:
   there is no window server. Two findings about the drop itself:
   `AppleHIDUsageTables.h` is a license-only stub in every tag from 1090

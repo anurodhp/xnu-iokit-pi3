@@ -203,4 +203,23 @@ replace_once "$USBHID_OUT" \
 	$'\t\tcase -1:\n\t\t\tif (!--me->_outstandingIO' \
 	$'\t\tcase (UInt32)-1:\t/* was -1; see tools/patch_iohid_gaps.sh fix 6 */\n\t\t\tif (!--me->_outstandingIO'
 
+# 6b. Same staged copy. IOUSBHIDDriver::GetIndexedString() (:2397):
+#
+#     strlcpy((char *)vOutBuf, strBuf, (size_t)strlen);
+#
+# `strlen` there is the libc FUNCTION, not the local `strLen` two lines
+# above it, so the size argument is a kernel text address. Apple's build
+# got away with it: strlcpy stops at strBuf's NUL, and the `outSize < strLen`
+# check just above already guarantees the destination fits. This kernel
+# builds with _FORTIFY_SOURCE, so it becomes __strlcpy_chk, which compares
+# that "size" against the real object size and panics. That really happened
+# on the first QEMU boot with a usb-kbd attached: "__strlcpy_chk object size
+# check failed: dst ..., (256 < 18446744005109157696)" from
+# IOUSBHIDDriver::newManufacturerString() <- IOHIDDevice::publishProperties.
+# The intended size is strLen: the string length plus the NUL, already
+# bounds-checked against the caller's buffer.
+replace_once "$USBHID_OUT" \
+	'strlcpy((char *)vOutBuf, strBuf, (size_t)strlen);' \
+	'strlcpy((char *)vOutBuf, strBuf, (size_t)strLen);	/* was (size_t)strlen, the function; see tools/patch_iohid_gaps.sh fix 6b */'
+
 echo "=== patch_iohid_gaps.sh: IOHIDFamily gaps patched ==="
