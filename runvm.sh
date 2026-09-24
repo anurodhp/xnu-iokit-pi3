@@ -132,6 +132,10 @@ mkdir -p qemu
 
 SD_IMAGE="${SD_IMAGE:-qemu/hfs_root_test.img}"
 ROOT_DEV="${ROOT_DEV:-disk0s2}"
+# Headless by default. runvm_hdmi.sh sets this to a real window (and adds
+# hdmi_console=1) to show the HDMI framebuffer; serial stays on stdio
+# either way.
+QEMU_DISPLAY="${QEMU_DISPLAY:-none}"
 
 if [ -z "${USB_DEVICES+set}" ]; then
   USB_DEVICES="-device usb-hub,id=lan9514hub,bus=usb-bus.0,port=1 -netdev user,id=usbnet0 -device usb-net,netdev=usbnet0,bus=usb-bus.0,port=1.1"
@@ -149,7 +153,7 @@ fi
 # starved a later boot badly enough to look like a boot regression (see
 # tools/boot_test.py's header on why concurrent QEMUs produce exactly that
 # false negative).
-exec ./third_party/qemu-zhuowei/aarch64-softmmu/qemu-system-aarch64 -M raspi3 -m 1024 -display none \
+exec ./third_party/qemu-zhuowei/aarch64-softmmu/qemu-system-aarch64 -M raspi3 -m 1024 -display "$QEMU_DISPLAY" \
   -serial null -serial stdio \
   -kernel build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped \
   -dtb devicetrees/rpi3.dtb \
