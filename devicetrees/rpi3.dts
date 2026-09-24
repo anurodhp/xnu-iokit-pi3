@@ -257,6 +257,29 @@
 		};
 	};
 
+	/*
+	 * DAR-331: the HDMI boot display, as its own nub for IOGraphics'
+	 * IOBootFramebuffer to match. That class's probe() requires the
+	 * property "AAPL,boot-display" on its PROVIDER
+	 * (third_party/IOGraphics/IOGraphicsFamily/IOBootFramebuffer.cpp:50),
+	 * then independently checks getConsoleInfo()'s v_baseAddr != 0
+	 * (:53-55) -- so a headless boot, where pexpert/arm/pe_init.c's
+	 * bcm2837_video_init() found no framebuffer, still correctly fails
+	 * to match even though this node is static.
+	 *
+	 * A top-level node because IODTPlatformExpert::createNubs()
+	 * (iokit/Kernel/IOPlatformExpert.cpp) registerService()s every
+	 * top-level child as an IOPlatformDevice. Setting the property on
+	 * the platform expert itself (DAR-331 step 1's first attempt) could
+	 * never match anything: nothing ever registerService()s the PE.
+	 * On real Macs the property likewise sits on the display device's
+	 * own nub (the GPU's PCI nub), not on the platform expert.
+	 */
+	display {
+		device_type = "display";
+		AAPL,boot-display;
+	};
+
 	chosen {
 		random-seed = <0xDEADBEEF 0x13375EED 0x8BADF00D 0xC0FFEE42 0x5A17BE55 0x9E3779B9 0xF00DFACE 0x2545F491 0x1B873593 0x85EBCA6B 0xC2B2AE35 0x27D4EB2F 0x165667B1 0xD3A2646C 0xFD7046C5 0xB55A4F09>;
 

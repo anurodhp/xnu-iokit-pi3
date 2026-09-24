@@ -31,17 +31,32 @@
 set -ex
 cd "$(dirname "$0")/.."
 REPO_ROOT="$PWD"
-BUILD_ROOT="$PWD/build/xnu-latest-build"
+# Physical paths, not logical ones. Inside a git worktree, third_party/
+# (and build/) are symlinks into the main checkout; `cd third_party/
+# xnu-7195` through the symlink makes make's SRCROOT the WORKTREE path,
+# which then gets baked into BUILD/obj's .cpd dependency files of the one
+# shared xnu tree -- and the next build after that worktree is deleted
+# fails with "No rule to make target .../.claude/worktrees/...". Resolving
+# with cd -P gives every generated path the real location instead.
+if [ ! -d build ]; then
+	echo "error: $REPO_ROOT/build not found. It must already hold" >&2
+	echo "       xnu-latest-build/sdk-7195-ios (no script in this repo creates" >&2
+	echo "       that SDK copy). In a git worktree, symlink build/ to the main" >&2
+	echo "       checkout's build/, as third_party/ already is." >&2
+	exit 1
+fi
+BUILD_ROOT="$(cd -P build && pwd)/xnu-latest-build"
 
 "$REPO_ROOT/tools/sync_iokit_drivers.sh"
 "$REPO_ROOT/tools/vendor_usb_into_xnu.sh"
+"$REPO_ROOT/tools/vendor_iographics_into_xnu.sh"
 
 unset DEVELOPER_DIR
 export SDKROOT_RESOLVED="$BUILD_ROOT/sdk-7195-ios/iPhoneOS.sdk"
 export CTFCONVERT="$BUILD_ROOT/dtrace/dst/usr/local/bin/ctfconvert"
 export CTFMERGE="$BUILD_ROOT/dtrace/dst/usr/local/bin/ctfmerge"
 
-cd third_party/xnu-7195
+cd -P third_party/xnu-7195
 make LOGCOLORS=y \
 	SDKROOT=iphoneos \
 	PLATFORM=iPhoneOS \

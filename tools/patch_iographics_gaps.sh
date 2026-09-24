@@ -537,5 +537,46 @@ if [ "$(grep -c "IOGraphicsXXHash.h" "$F")" != 1 ]; then
 	exit 1
 fi
 
+# ---------------------------------------------------------------------
+# 10. IOFramebuffer::diagnoseReport() -- declared public virtual at
+#     IOFramebuffer.h:396 (reserved vtable slot 1, :397), never defined in
+#     any published tag (checked 530.66, 585, 600). Nothing in the drop
+#     calls it; its doc comment (:392-395) says it exists so VENDOR
+#     subclasses can report diagnostics. But the kernel link needs the
+#     base body for IOFramebuffer's vtable ("Undefined symbols:
+#     IOFramebuffer::diagnoseReport(void*, void*, void*, void*)"). Base
+#     body returns kIOReturnUnsupported, exactly like the sibling
+#     vendor-override base virtuals directly above where it is inserted
+#     (IOFramebuffer.cpp:12859-12874 in the pristine drop, both
+#     setGammaTable overloads).
+# ---------------------------------------------------------------------
+F="$FBCPP"
+if ! grep -q "IOReturn IOFramebuffer::diagnoseReport(" "$F"; then
+	ANCHOR='IOReturn IOFramebuffer::setGammaTable( UInt32 /* channelCount */,'
+	NEW='// Base body -- see tools/patch_iographics_gaps.sh fix 10. Declared at
+// IOFramebuffer.h:396 for vendor subclasses; never published.
+IOReturn IOFramebuffer::diagnoseReport( void * /* param1 */, void * /* param2 */,
+                                        void * /* param3 */, void * /* param4 */ )
+{
+    return (kIOReturnUnsupported);
+}
+
+IOReturn IOFramebuffer::setGammaTable( UInt32 /* channelCount */,'
+	python3 - "$F" "$ANCHOR" "$NEW" <<'PYEOF'
+import sys
+f, anchor, new = sys.argv[1], sys.argv[2], sys.argv[3]
+s = open(f).read()
+if anchor not in s:
+    print("error: setGammaTable anchor not found in %s" % f, file=sys.stderr)
+    sys.exit(1)
+s = s.replace(anchor, new, 1)
+open(f, "w").write(s)
+PYEOF
+fi
+if [ "$(grep -c "IOReturn IOFramebuffer::diagnoseReport(" "$F")" != 1 ]; then
+	echo "error: diagnoseReport definition did not apply exactly once" >&2
+	exit 1
+fi
+
 echo "=== IOGraphics gaps patched in $IOG ==="
 echo "Re-run tools/iographics_gap_audit.sh to confirm."

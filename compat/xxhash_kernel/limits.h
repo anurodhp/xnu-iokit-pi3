@@ -10,8 +10,9 @@
  * redirects to that real header; it defines nothing.
  *
  * Kept in its own directory, on the include path only for the
- * IOGraphics sources (tools/iographics_gap_audit.sh), so it cannot
- * shadow anything elsewhere in the kernel.
+ * IOGraphics sources (tools/iographics_gap_audit.sh, and in the kernel
+ * build the per-object flags from tools/vendor_iographics_into_xnu.sh),
+ * so it cannot shadow anything elsewhere in the kernel.
  */
 #ifndef _COMPAT_XXHASH_KERNEL_LIMITS_H
 #define _COMPAT_XXHASH_KERNEL_LIMITS_H

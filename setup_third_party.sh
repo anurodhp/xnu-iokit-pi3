@@ -591,6 +591,21 @@ mkdir -p third_party
 #     compat/IOKit/graphics/IOGraphicsXXHash.h, which documents the exact
 #     configuration and the 2-arg vs 3-arg XXH64 arity gap.
 #
+#   - lzfse (DAR-331): IOFramebuffer.cpp:2317 declares, and :2390 calls,
+#     `lzvn_decode(dst, dst_size, src, src_size)` to unpack the boot Apple
+#     logo (AppleLogo.h/AppleLogo2X.h are LZVN-packed). On macOS that is a
+#     kernel export; xnu-7195's published source has no LZVN code at all
+#     (checked: `git grep lzvn_decode` finds nothing). Apple's own LZVN
+#     decoder IS open source, inside Apple's LZFSE reference implementation
+#     at github.com/lzfse/lzfse (BSD 3-Clause, Apple Inc.) -- not an
+#     apple-oss-distributions repo, so this is the real-upstream fallback of
+#     the source-priority rule. Pinned to `lzfse-1.0` (2017-03-08, the only
+#     tag); every file used (src/lzvn_decode_base.[ch], lzfse_internal.h,
+#     lzfse_fse.h, lzfse_tunables.h) is byte-identical at the repo's latest
+#     commit. Only the decoder is compiled; see
+#     tools/vendor_iographics_into_xnu.sh and
+#     compat/IOKit/graphics/IOGraphicsLZVN.c for the 4-argument wrapper.
+#
 # name | clone_url | ref (branch or tag) | patch file (optional, relative to third_party-patches/)
 REPOS='
 xnu-7195|git@github.com:anurodhp/xnu-pi3-macos11.git|bcm2837-bringup|
@@ -608,6 +623,7 @@ IONetworkingFamily|https://github.com/apple-oss-distributions/IONetworkingFamily
 IOGraphics|https://github.com/apple-oss-distributions/IOGraphics.git|IOGraphics-585|
 IOHIDFamily|https://github.com/apple-oss-distributions/IOHIDFamily.git|IOHIDFamily-1633.81.2|
 xxHash|https://github.com/Cyan4973/xxHash.git|v0.8.2|
+lzfse|https://github.com/lzfse/lzfse.git|lzfse-1.0|
 msdosfs|https://github.com/apple-oss-distributions/msdosfs.git|msdosfs-435.60.1|
 dyld|git@github.com:anurodhp/dyld.git|iokit-port||https://github.com/apple-oss-distributions/dyld.git
 Libc|git@github.com:anurodhp/Libc.git|iokit-port||https://github.com/apple-oss-distributions/Libc.git

@@ -6,46 +6,15 @@ OSDefineMetaClassAndStructors(BCM2837PlatformExpert, IODTPlatformExpert);
 #define super IODTPlatformExpert
 
 /*
- * DAR-331 step 1: publish "AAPL,boot-display" on this nub, the same
- * property real IOGraphicsFamily's IOBootFramebuffer::probe() looks for on
- * ITS provider before it will ever match (see the header comment for the
- * exact citation). IOBootFramebuffer is not part of this kernel build yet
- * (DAR-331's own status note: IOFramebuffer.cpp alone is ~15K lines with
- * ACPI/IOHibernatePrivate/RootDomain power-management coupling this board
- * does not have - real remaining work, not a one-line wire-up), so nothing
- * matches against this property today. It is still worth setting now,
- * ahead of that: it is real, checkable state (`ioreg` on this nub after a
- * real HDMI-attached boot vs. a headless one), it is a genuine prerequisite
- * IOBootFramebuffer::probe() hard-requires, and setting it here - in the
- * one platform-expert class this board actually has, at the point it
- * already knows the answer - is where real Apple platform code sets this
- * kind of property too (a platform driver publishing it on its own root
- * nub once boot video is known good), not a synthetic stand-in.
- *
- * getConsoleInfo() (IOPlatformExpert.h:276) reads PE_state.video, which
- * pexpert/arm/pe_init.c's bcm2837_video_init() already populated from the
- * VideoCore mailbox long before any IOKit matching runs - v_baseAddr != 0
- * is exactly IOBootFramebuffer::probe()'s own success condition
- * (third_party/IOGraphics/IOGraphicsFamily/IOBootFramebuffer.cpp:53-55),
- * checked here rather than assumed so a headless/no-HDMI boot (v_baseAddr
- * == 0, PE_initialize_console() having fallen back to kPETextMode - see
- * pe_init.c:774-777) does not publish a property promising a framebuffer
- * that was never found.
+ * No start() override. DAR-331 step 1 used to publish "AAPL,boot-display"
+ * on this platform expert, but nothing ever registerService()s a platform
+ * expert (IOPlatformExpert::start() does not, iokit/Kernel/
+ * IOPlatformExpert.cpp:129-195), so no driver could ever match against
+ * it. The property now lives on its own "display" device-tree node
+ * (devicetrees/rpi3.dts), which createNubs() registers like any other
+ * top-level node; IOBootFramebuffer's personality matches that node
+ * (iokit/BCM2837ArmIO/BCM2837Personalities.cpp).
  */
-bool
-BCM2837PlatformExpert::start(IOService *provider)
-{
-	if (!super::start(provider)) {
-		return false;
-	}
-
-	PE_Video bootDisplay;
-	if (getConsoleInfo(&bootDisplay) == kIOReturnSuccess && bootDisplay.v_baseAddr != 0) {
-		setProperty("AAPL,boot-display", kOSBooleanTrue);
-	}
-
-	return true;
-}
 
 // deleteList()/excludeList() are consumed via OSUnserialize() +
 // IODTMatchNubWithKeys() (iokit/Kernel/IODeviceTreeSupport.cpp), not a

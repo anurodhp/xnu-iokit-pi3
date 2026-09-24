@@ -56,6 +56,8 @@
 #include <IOKit/IOCatalogue.h>
 #include <IOKit/IOKitKeys.h>
 #include <IOKit/IOLib.h>
+#include <libkern/c++/OSUnserialize.h>
+#include <mach/kmod.h>
 
 // score < 0 means "don't set IOProbeScore, use kIODefaultProbeScore".
 // nameMatch == NULL means "don't set IONameMatch, match by class alone" -
@@ -199,6 +201,106 @@ makeFDiskContentTable(void)
 	}
 
 	return table;
+}
+
+/*
+ * DAR-331: IOGraphics (vendored by tools/vendor_iographics_into_xnu.sh).
+ *
+ * 1. Module start. IOGraphicsFamilyModuleStart() (IOGraphicsFamily/
+ *    IOFramebuffer.cpp:1978) is the family kext's MODULE_START
+ *    (IOGraphics.xcodeproj/project.pbxproj:2188). It creates
+ *    gIOFBSystemWorkLoop (it panics itself if it can't), the global
+ *    framebuffer arrays, and the gtrace buffers that IOFramebuffer
+ *    uses. Built into the kernel, nothing calls it. OSKext::load() runs
+ *    a kext's start() (libkern/c++/OSKext.cpp:5814) before it sends the
+ *    kext's personalities to the catalogue (:5831), and sends them only
+ *    if start succeeded; and no class of a demand-loaded kext can be
+ *    instantiated before that load has run start(). Same order here: it
+ *    runs right before the IOGraphics personalities are added, from
+ *    InitIOKit() (IOStartIOKit.cpp), before StartIOKitMatching(). If it
+ *    fails, none of the IOGraphics personalities are published.
+ *
+ * 2. Apple's own personalities, verbatim from Info-IOGraphicsFamily.plist
+ *    (IODisplayWrangler, AppleDisplay, AppleBacklightDisplay), minus
+ *    CFBundleIdentifier, which no built-in personality in this file
+ *    carries. IODisplayWrangler's two parameter dicts are real inputs:
+ *    IOFramebuffer::setPreferences() reads both from it
+ *    (IOFramebuffer.cpp:14358-14368).
+ *
+ * 3. IOBootFramebuffer has no published personality -- on Apple's
+ *    platforms IONDRVSupport instantiates it, and that path is PCI/NDRV
+ *    only. Ours matches the top-level "display" device-tree node
+ *    (devicetrees/rpi3.dts), which carries the AAPL,boot-display
+ *    property IOBootFramebuffer::probe() requires (IOBootFramebuffer.cpp:50).
+ *    IOMatchCategory "IOFramebuffer" is the category Apple's own
+ *    framebuffer personalities use (Info-IONDRVSupport.plist).
+ */
+extern "C" kern_return_t IOGraphicsFamilyModuleStart(kmod_info_t *ki, void *data);
+
+static const char kIOGraphicsPersonalitiesXML[] =
+    "<array>"
+    "<dict>"
+    "<key>IOClass</key><string>AppleBacklightDisplay</string>"
+    "<key>IOProbeScore</key><integer>3000</integer>"
+    "<key>IOProviderClass</key><string>IODisplayConnect</string>"
+    "</dict>"
+    "<dict>"
+    "<key>IOClass</key><string>AppleDisplay</string>"
+    "<key>IOProbeScore</key><integer>2000</integer>"
+    "<key>IOProviderClass</key><string>IODisplayConnect</string>"
+    "</dict>"
+    "<dict>"
+    "<key>IOClass</key><string>IODisplayWrangler</string>"
+    "<key>IOGraphicsPrefsParameters</key><dict>"
+    "<key>oscn</key><true/>"
+    "<key>tbri</key><true/>"
+    "<key>thue</key><true/>"
+    "<key>tsat</key><true/>"
+    "<key>vbst</key><true/>"
+    "<key>cyuv</key><integer>268435456</integer>"
+    "<key>pscn</key><true/>"
+    "</dict>"
+    "<key>IOGraphicsIgnoreParameters</key><dict>"
+    "<key>aupc</key><true/>"
+    "<key>auph</key><true/>"
+    "<key>aupp</key><true/>"
+    "<key>aums</key><true/>"
+    "<key> bpc</key><true/>"
+    "</dict>"
+    "<key>IOMatchCategory</key><string>IOGraphics</string>"
+    "<key>IOProviderClass</key><string>IOResources</string>"
+    "<key>IOResourceMatch</key><string>IOKit</string>"
+    "</dict>"
+    "<dict>"
+    "<key>IOClass</key><string>IOBootFramebuffer</string>"
+    "<key>IOMatchCategory</key><string>IOFramebuffer</string>"
+    "<key>IONameMatch</key><string>display</string>"
+    "<key>IOProviderClass</key><string>IOPlatformDevice</string>"
+    "</dict>"
+    "</array>";
+
+static void
+addIOGraphicsPersonalities(OSArray *personalities)
+{
+	kern_return_t kr = IOGraphicsFamilyModuleStart(NULL, NULL);
+	if (kr != KERN_SUCCESS) {
+		IOLog("BCM2837RegisterBuiltinPersonalities: IOGraphicsFamilyModuleStart "
+		    "failed (0x%x) - IOGraphics personalities NOT published\n", kr);
+		return;
+	}
+
+	OSString *errorString = NULL;
+	OSObject *parsed = OSUnserializeXML(kIOGraphicsPersonalitiesXML, &errorString);
+	OSArray *iog = OSDynamicCast(OSArray, parsed);
+	if (iog == NULL) {
+		IOLog("BCM2837RegisterBuiltinPersonalities: IOGraphics personality XML "
+		    "did not parse: %s\n",
+		    errorString ? errorString->getCStringNoCopy() : "(no error string)");
+	} else {
+		personalities->merge(iog);
+	}
+	OSSafeReleaseNULL(parsed);
+	OSSafeReleaseNULL(errorString);
 }
 
 extern "C" void
@@ -424,6 +526,8 @@ BCM2837RegisterBuiltinPersonalities(void)
 		personalities->setObject(cdcEcmData);
 		cdcEcmData->release();
 	}
+
+	addIOGraphicsPersonalities(personalities);
 
 	IOLog("BCM2837RegisterBuiltinPersonalities: built %u personalities, gIOCatalogue=%p\n",
 	    personalities->getCount(), (void *)(IOCatalogue *)gIOCatalogue);

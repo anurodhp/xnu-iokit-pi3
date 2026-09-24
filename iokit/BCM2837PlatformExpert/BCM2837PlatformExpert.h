@@ -36,19 +36,6 @@ public:
 	virtual const char *deleteList(void) APPLE_KEXT_OVERRIDE;
 	virtual const char *excludeList(void) APPLE_KEXT_OVERRIDE;
 
-	// DAR-331, step 1 of the ticket's own real scoping note. Publishes
-	// "AAPL,boot-display" on this nub when pexpert/arm/pe_init.c's
-	// bcm2837_video_init() (via boot_args->Video) already handed the
-	// kernel a real VideoCore HDMI framebuffer, i.e. exactly the condition
-	// real IOGraphicsFamily's IOBootFramebuffer::probe() itself checks
-	// (provider->getProperty("AAPL,boot-display") non-NULL AND
-	// getConsoleInfo().v_baseAddr != 0 -
-	// third_party/IOGraphics/IOGraphicsFamily/IOBootFramebuffer.cpp) -
-	// see this override's own .cpp comment for why the property alone,
-	// with no IOFramebuffer/IOBootFramebuffer in this kernel build yet,
-	// is still real, checkable progress rather than a no-op.
-	virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
-
 	// IODTPlatformExpert::processTopLevel() unconditionally
 	// assert(gIOOptionsEntry != NULL) right after publishNVRAM() - its own
 	// comment says "subclasses that do their own NVRAM initialization
