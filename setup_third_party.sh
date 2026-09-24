@@ -8,18 +8,19 @@
 #   - xnu-7195, xnu-latest, qemu-zhuowei: this project's own personal forks
 #     (anurodhp/*) carry full commit history of the port work -- cloned
 #     directly from there, no patching needed after clone.
-#   - dtc-AppleDeviceTree, u-boot, Csu: small local-only fixes on top of a
-#     third-party (not personal-fork) upstream -- kept as patch files in
-#     third_party-patches/ and applied after cloning upstream, rather than
-#     standing up a whole personal fork for a single commit each. Csu.patch
-#     (3 commits) closes a real reproducibility gap: the first two (real
-#     `environ`/`__progname`/NXArgc/NXArgv globals, Phase 4.6) had been
-#     committed only in this checkout's own local git history with no
-#     patch file and no personal fork remote -- silently lost on a fresh
-#     `--force` re-clone. Bundled here with the third (2026-08-22,
-#     `__DATA,__mod_init_func` constructor support for real ifconfig --
-#     see tools/userland_staging/build_ifconfig.sh) rather than left
-#     unresolved further.
+#   - Every other repo this project CHANGES is also one of our own forks
+#     (anurodhp/*, e.g. dtc-AppleDeviceTree, u-boot, Csu, libdispatch,
+#     configd, chrony), cloned directly with the real upstream added as a
+#     second remote (5th REPOS field). Nothing is patched after cloning:
+#     the old third_party-patches/*.patch + `git am` mechanism is gone.
+#     Standing rule (2026-09-24): changes go into our fork, committed and
+#     pushed, never into a patch file. The last two patch files
+#     (u-boot.patch, dtc-AppleDeviceTree.patch) were deleted once a
+#     tree-hash replay showed each fork's HEAD is byte-identical to
+#     upstream + that patch. If you need to change a repo that is NOT yet
+#     one of our forks, fork it first. The history of the three Csu fixes
+#     (environ/__progname/NXArgc/NXArgv globals, then __mod_init_func
+#     support for ifconfig) now lives in anurodhp/Csu.
 #   - Libc: originally unmodified Apple source except `Libc.patch`
 #     (2026-08-27) -- `locale/xlocale.c`'s own `__xlocale_init()`
 #     (registers the real TSD key `__global_locale`/`__locale_key` need)
@@ -610,7 +611,9 @@ mkdir -p third_party
 #     tools/vendor_iographics_into_xnu.sh and
 #     compat/IOKit/graphics/IOGraphicsLZVN.c for the 4-argument wrapper.
 #
-# name | clone_url | ref (branch or tag) | patch file (optional, relative to third_party-patches/)
+# name | clone_url | ref (branch or tag) | (reserved, must be empty) | upstream_url (optional)
+# The 4th field used to name a third_party-patches/ file to `git am`. That
+# mechanism is retired (see the header); a non-empty value is an error.
 REPOS='
 xnu-7195|git@github.com:anurodhp/xnu-pi3-macos11.git|bcm2837-bringup|
 xnu-latest|git@github.com:anurodhp/xnu-pi3-latest.git|main|
@@ -701,8 +704,9 @@ echo "$REPOS" | while IFS='|' read -r name url ref patch upstream_url; do
     git clone --branch "$ref" "$url" "$dest"
 
     if [ -n "$patch" ]; then
-        echo "+ applying third_party-patches/$patch to $name"
-        git -C "$dest" am "../../third_party-patches/$patch"
+        echo "error: $name names a patch file ($patch). Patch files are retired;" >&2
+        echo "       commit the change to our fork of $name instead (see the header)." >&2
+        exit 1
     fi
 
     # Optional 5th field: real upstream URL for an owned-fork entry (see

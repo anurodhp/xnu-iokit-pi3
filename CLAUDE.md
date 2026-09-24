@@ -41,9 +41,10 @@ P1 = correctness bugs, P2 = known gaps, P3 = hygiene).
 ./setup_third_party.sh --force   # wipe and re-clone everything
 ```
 
-`third_party/` holds: this project's own forks (`xnu-7195`, `xnu-latest`,
-`qemu-zhuowei`) with full port history; small patched upstreams
-(`dtc-AppleDeviceTree`, `u-boot`, patches in `third_party-patches/`); and
+`third_party/` holds: this project's own `anurodhp/*` forks (`xnu-7195`,
+`xnu-latest`, `qemu-zhuowei`, `u-boot`, `dtc-AppleDeviceTree`, and every
+Apple/upstream repo we have changed; `docs/repos-to-clone.md` has the
+list), cloned directly with no patching; and
 40+ unmodified Apple open-source repos pinned to exact tags matched
 against apple-oss-distributions' `distribution-macOS` `macos-112`
 manifest for macOS 11.2/Darwin 20.3 (the libSystem stack, `bash`/
@@ -242,6 +243,15 @@ before assuming `bcm2837-bringup` is checked out or up to date; it has
 drifted before.
 
 ## Working conventions specific to this repo
+
+- **Every third-party repo we change is one of our forks** (standing
+  rule, 2026-09-24). Commit the change in the `anurodhp/*` fork and push
+  it, then point `setup_third_party.sh` at it. Never add a patch file:
+  `third_party-patches/` and its `git am` step are gone, and the script
+  now errors if a REPOS entry names one. Local-only commits and in-place
+  patch scripts over an unowned checkout are violations too. When you find
+  one, file a Linear ticket with the `gitrepo` label (e.g. DAR-354/355/356).
+  `docs/repos-to-clone.md` has the current audit and how to re-run it.
 
 - **Source priority**: try Apple's real open-source version of a component
   first (apple-oss-distributions, pinned via `setup_third_party.sh`); if
