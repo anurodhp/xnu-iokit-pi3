@@ -62,6 +62,7 @@ public:
 	virtual void            quiesceCPU(void) APPLE_KEXT_OVERRIDE;
 	virtual kern_return_t   startCPU(vm_offset_t start_paddr, vm_offset_t arg_paddr) APPLE_KEXT_OVERRIDE;
 	virtual void            haltCPU(void) APPLE_KEXT_OVERRIDE;
+	virtual void            signalCPU(IOCPU *target) APPLE_KEXT_OVERRIDE;
 	virtual const OSSymbol *getCPUName(void) APPLE_KEXT_OVERRIDE;
 	virtual void            free(void) APPLE_KEXT_OVERRIDE;
 };

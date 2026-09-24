@@ -77,11 +77,37 @@ private:
 		// explicitly (backlog item 3).
 		kRegTimerControl0  = 0x40 / sizeof(uint32_t),
 		kRegIRQPending0    = 0x60 / sizeof(uint32_t), // core 0 only - see header
+		// DAR-375: core 0 mailbox 0, used as its IPI (as Linux's
+		// irq-bcm2836.c does). QA7: LOCAL_MAILBOX_INT_CONTROL0 (bit 0 =
+		// mailbox 0 IRQ enable), core 0 mailbox 0 write-set and read /
+		// write-1-to-clear. Same offsets in QEMU's model
+		// (hw/intc/bcm2836_control.c: REG_MBOXCONTROL 0x50, REG_MBOX0_WR
+		// 0x80, REG_MBOX0_RDCLR 0xc0).
+		kRegMailboxControl0 = 0x50 / sizeof(uint32_t),
+		kRegMailbox0Set0    = 0x80 / sizeof(uint32_t),
+		kRegMailbox0Clr0    = 0xC0 / sizeof(uint32_t),
 
+		kVectorMailbox0 = 4, // bit 4 of LOCAL_IRQ_PENDINGN(n) (QEMU: IRQ_MAILBOX0)
 		kVectorGPUIRQ = 8, // bit 8 of LOCAL_IRQ_PENDINGN(n) - real HW bit position
 	};
 
+	// DAR-375: the one instance, and the CPU's IPI handler
+	// (cpu_signal_handler, from ml_processor_register()), so BCM2837CPU
+	// can raise and receive a real IPI through core 0's mailbox 0.
+	static BCM2837LocalIntc *sInstance;
+	static void (*sIPIHandler)(void);
+
 public:
+	/*
+	 * DAR-375 IPI support. BCM2837CPU hands over its IPI handler at
+	 * initCPU() (which runs before this driver starts) and raises IPIs
+	 * with sendIPI(). sendIPI() is a no-op until this driver has started.
+	 * start() sends one IPI once the mailbox is live, so a signal posted
+	 * in the gap is delivered then.
+	 */
+	static void setIPIHandler(void (*handler)(void));
+	static bool sendIPI(void);
+
 	virtual IOService *probe(IOService *provider, SInt32 *score) APPLE_KEXT_OVERRIDE;
 
 	virtual bool init(OSDictionary *propTable) APPLE_KEXT_OVERRIDE;

@@ -1,4 +1,5 @@
 #include "BCM2837CPU.h"
+#include "BCM2837LocalIntc.h"
 
 #include <IOKit/IOLib.h>
 #include <IOKit/IOPlatformExpert.h>
@@ -72,6 +73,11 @@ void
 BCM2837CPU::initCPU(bool boot)
 {
 	if (!boot) {
+		// Resume (PE_cpu_machine_init(target, FALSE)). ml_arm_sleep() set
+		// SIGPdisabled again (osfmk/arm64/machine_routines.c:592); clear it
+		// the way Apple does on every init - see the DAR-375 comment below.
+		// Latent here: this port never sleeps (quiesceCPU()).
+		signalCPU(this);
 		return;
 	}
 
@@ -142,6 +148,45 @@ BCM2837CPU::initCPU(bool boot)
 	ipi_handler = ipiHandler;
 
 	sBCM2837CPUIC->enableCPUInterrupt(this);
+
+	/*
+	 * DAR-375: open this CPU for signals, or it never idles.
+	 *
+	 * Every CPU starts with cpu_signal = SIGPdisabled
+	 * (osfmk/arm64/cpu.c:738). The only thing that clears it is
+	 * cpu_signal_handler() -> cpu_signal_handler_internal(FALSE)
+	 * (osfmk/arm/cpu_common.c:541-562), and that is the IPI handler
+	 * ml_processor_register() just handed back
+	 * (osfmk/arm64/machine_routines.c:1255). On a real multi-core Apple SoC
+	 * the other cores' IPIs call it soon enough. Here cpu1-3 are parked
+	 * and this class sends no IPIs, so it never ran: cpu0 kept
+	 * SIGPdisabled for its whole uptime. cpu_idle() treats that as "idle
+	 * disallowed" and returns before WFI (osfmk/arm64/cpu.c:409-414), so
+	 * processor_idle() spun, ~22,000 loops/s at an idle shell. That was
+	 * QEMU's ~100% host CPU, and on a real Pi a core that never idles.
+	 * Confirmed from guest memory: idle_enable == 1,
+	 * cpu_data[0].cpu_signal == 0x80000000.
+	 *
+	 * Apple's boot-CPU path clears it by sending the CPU an IPI to itself
+	 * on every init, boot and resume alike: PE_cpu_machine_init(), "Send
+	 * myself an IPI to clear SIGPdisabled" (iokit/Kernel/arm/AppleARMSMP.cpp
+	 * :242-247). Do the same, through core 0's mailbox 0 (signalCPU()).
+	 * Apple then waits for ml_cpu_signal_is_enabled(). This cannot wait:
+	 * the mailbox is BCM2837LocalIntc's, and that driver only starts after
+	 * this CPU's interrupt controller is published below. So the IPI raised
+	 * here is a no-op at boot, and BCM2837LocalIntc::start() raises the one
+	 * that clears the flag, once the mailbox IRQ is live. Until then the
+	 * flag stays set, so a self-xcall keeps failing with KERN_FAILURE as it
+	 * always has, instead of succeeding with nothing to deliver it.
+	 *
+	 * Once the flag is clear, a self-xcall (SIGPxcall/SIGPxcallImm, the one
+	 * self-signal that checks it, cpu_common.c:429-435) succeeds and is
+	 * delivered by that same mailbox IPI.
+	 */
+	if (ipi_handler != NULL) {
+		BCM2837LocalIntc::setIPIHandler(ipi_handler);
+		signalCPU(this);
+	}
 
 	// Publish the controller only now that it's actually enabled - see
 	// the comment above at its allocation for why this moved here.
@@ -342,4 +387,31 @@ BCM2837CPU::free(void)
 		fCPUName = NULL;
 	}
 	super::free();
+}
+
+/*
+ * DAR-375. IOCPU::signalCPU() is a no-op (iokit/Kernel/IOCPU.cpp:460-463); a
+ * real Apple CPU class sends an IPI. The only CPU this class runs is the boot
+ * CPU (cpu1-3 are parked), so the only IPI it is ever asked for is one to
+ * itself: cpu_signal_internal() has posted the signal bits and xcall
+ * arguments and then called PE_cpu_signal() -> here
+ * (osfmk/arm/cpu_common.c:429-498). Raise a real IPI through core 0's
+ * mailbox 0 (BCM2837LocalIntc::sendIPI()). It is taken as an IRQ once this
+ * CPU unmasks IRQs, and BCM2837LocalIntc runs the IPI handler from
+ * interrupt context, as a real IPI would.
+ *
+ * Not called inline. An earlier version of this fix ran the handler right
+ * here, inside the sender. That runs a pended decrementer or an xcall in
+ * the middle of whatever posted it, which XNU never expects. While that
+ * version was in, one boot in about six panicked "RootDomain: not inside PM
+ * gate" on the PM workloop, a panic not seen in ~30 boots before it.
+ * Consistent with, though not proven to be, that inline delivery.
+ */
+void
+BCM2837CPU::signalCPU(IOCPU *target)
+{
+	if (target != this) {
+		return;
+	}
+	BCM2837LocalIntc::sendIPI();
 }
