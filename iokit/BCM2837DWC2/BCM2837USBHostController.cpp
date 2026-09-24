@@ -15,6 +15,8 @@
 #include <libkern/OSByteOrder.h>
 #include <pexpert/pexpert.h>
 
+OSDefineMetaClassAndStructors(BCM2837USBPortPolicy, IOUSBHubPolicyMaker);
+
 #define super IOUSBControllerV2
 OSDefineMetaClassAndStructors(BCM2837USBHostController, IOUSBControllerV2);
 
@@ -1997,6 +1999,19 @@ BCM2837USBHostController::PublishEnumeratedDevice(const DWC2USBDevice *dev)
 	    dev->deviceClass, (speed == kUSBDeviceSpeedHigh) ? "high" :
 	    ((speed == kUSBDeviceSpeedLow) ? "low" : "full"));
 
+	// The hub side of this device's port (DAR-372; see BCM2837USBPortPolicy).
+	// Before registerService(), so no driver can match and suspend the
+	// device before its hub parent exists.
+	BCM2837USBPortPolicy *policy = BCM2837USBPortPolicy::withDevice(nub);
+	if (policy != NULL) {
+		nub->SetHubParent(policy);      // retains it
+		policy->release();
+	} else {
+		IOLog("BCM2837USBHostController: no hub policy for address %u - "
+		    "SuspendDevice() will not send kIOUSBMessagePortHasBeenResumed "
+		    "(DAR-372)\n", dev->address);
+	}
+
 	// CreateDevice() attaches and starts the nub but deliberately does not
 	// register it for matching - CreateRootHubDevice() does that separately
 	// for the root hub. This is the equivalent step for a real device, and it
@@ -2016,5 +2031,95 @@ BCM2837USBHostController::PublishEnumeratedDevice(const DWC2USBDevice *dev)
 	// enumeration/hot-plug cycles.
 	nub->release();
 
+	return kIOReturnSuccess;
+}
+
+#pragma mark - BCM2837USBPortPolicy (DAR-372)
+
+BCM2837USBPortPolicy *
+BCM2837USBPortPolicy::withDevice(IOUSBDevice *device)
+{
+	BCM2837USBPortPolicy *me = new BCM2837USBPortPolicy;
+	if (me == NULL) {
+		return NULL;
+	}
+	if (!me->init()) {
+		me->release();
+		return NULL;
+	}
+	me->fDevice = device;
+	return me;
+}
+
+// Never started, so neither of these is ever called; they are pure in the
+// base class.
+bool
+BCM2837USBPortPolicy::ConfigureHubDriver(void)
+{
+	return false;
+}
+
+IOReturn
+BCM2837USBPortPolicy::HubPowerChange(unsigned long powerStateOrdinal)
+{
+#pragma unused (powerStateOrdinal)
+	return kIOReturnUnsupported;
+}
+
+IOReturn
+BCM2837USBPortPolicy::SuspendPort(UInt32 portNum, bool suspend)
+{
+#pragma unused (portNum)
+	if (!suspend) {
+		// Never suspended (see below): AppleUSBHubPort.cpp:1344-1351.
+		return kIOUSBDevicePortWasNotSuspended;
+	}
+
+	/*
+	 * The port stays up. Tell the clients, inline on this thread, the way
+	 * AppleUSBHub does when a suspend did not take: SuspendPort() calls
+	 * DoPortAction() directly (AppleUSBHub.cpp:5277), which calls
+	 * MessageDeviceClients(kIOUSBMessagePortHasBeenResumed) directly
+	 * (:3515-3522). A caller holding the USB workloop gate is fine: the
+	 * gate is recursive, and a client handler that needs it (e.g.
+	 * AppleUSBCDCECMData's SetAlternateInterface()) runs in the same context
+	 * the caller's own next request would.
+	 */
+	IOReturn status = kIOReturnSuccess;
+	fDevice->retain();
+	fDevice->messageClients(kIOUSBMessagePortHasBeenResumed, &status, sizeof(IOReturn));
+	fDevice->release();
+
+	return kIOReturnUnsupported;
+}
+
+IOReturn
+BCM2837USBPortPolicy::ResetPort(UInt32 portNum)
+{
+#pragma unused (portNum)
+	return kIOReturnSuccess;
+}
+
+IOReturn
+BCM2837USBPortPolicy::GetPortInformation(UInt32 portNum, UInt32 *info)
+{
+#pragma unused (portNum)
+	if (info != NULL) {
+		*info = 0;
+	}
+	return kIOReturnNoDevice;
+}
+
+UInt32
+BCM2837USBPortPolicy::RequestExtraPower(UInt32 portNum, UInt32 type, UInt32 requestedPower)
+{
+#pragma unused (portNum, type, requestedPower)
+	return 0;
+}
+
+IOReturn
+BCM2837USBPortPolicy::ReturnExtraPower(UInt32 portNum, UInt32 type, UInt32 returnedPower)
+{
+#pragma unused (portNum, type, returnedPower)
 	return kIOReturnSuccess;
 }
