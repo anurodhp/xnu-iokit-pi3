@@ -212,7 +212,12 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
 # Makefile's own SRCS list compiles (pw_nis.c included -- real body has
 # no actual NIS/RPC dependency, see setup_third_party.sh's own comment).
 PW_REAL_SRCS="pw.c pw_conf.c pw_user.c pw_group.c pw_log.c pw_nis.c pw_vpw.c \
-    grupd.c pwupd.c psdate.c bitmap.c cpdir.c rm_r.c strtounum.c pw_utils.c"
+    grupd.c psdate.c bitmap.c cpdir.c rm_r.c strtounum.c pw_utils.c"
+# pwupd.c is NOT compiled from $PWSRC here -- pw_pwupd_freebsd.c (below,
+# in EXTRA_FILES) is a real, otherwise-unmodified copy with one real
+# argv fix (DAR-353: pwd_mkdb's real "-C" vs. this project's actually-
+# shipped pwd_mkdb.macho's real "-c" -- see that file's own header for
+# the full citation).
 
 # EXTRA_FILES: same-tier real Apple/FreeBSD sources + this ticket's own
 # adapted/compat files (see this script's own header for each citation).
@@ -238,6 +243,7 @@ chpass_fork_compat.c
 ps_passwd_compat.c
 pw_pwent_grent_compat.c
 ../libinfo_custom/libinfo_custom.c
+pw_pwupd_freebsd.c
 pw_pw_util_freebsd.c
 pw_gr_util_freebsd.c
 pw_secure_path_freebsd.c
