@@ -32,10 +32,53 @@ OSDefineMetaClassAndStructors(BCM2837USBHostController, IOUSBControllerV2);
 // as the SETUP-stage "direction". Same definition here, same reason.
 #define kUSBSetup		kUSBNone
 
-// The queue engine's tick. 1ms is the USB full-speed frame time, so a pending
-// bulk IN gets one attempt per frame - the same cadence a real interrupt-
-// driven controller would service it at, without the interrupt.
+/*
+ * ===================== THE QUEUE ENGINE'S SCHEDULE (DAR-370) =================
+ *
+ * Until DAR-370 the engine ran on a fixed 1 ms tick for the whole uptime,
+ * because there is always at least one transfer queued: a HID interrupt IN,
+ * the CDC-ECM notification IN, the CDC-ECM bulk IN. It woke 1000 times a
+ * second whether or not anything was due. Now every endpoint carries its own
+ * nextDue time, and fPollTimer is armed for the earliest nextDue of the
+ * endpoints that have a transfer queued. With nothing queued it is not
+ * armed at all, and a new UIMCreate*Transfer arms it.
+ *
+ * How long an endpoint waits after an attempt that left its head transfer
+ * pending:
+ *
+ *   interrupt  bInterval, the rate the device asked to be polled at. The
+ *              family passes bInterval through untranslated (IOUSBPipeV2.cpp
+ *              :160 "_endpoint.interval = ed->bInterval"), and it means what
+ *              AppleUSBEHCI_UIM.cpp:2629-2643 decodes it as: 2^(bInterval-1)
+ *              microframes at high speed, bInterval frames (ms) at full or
+ *              low speed. HID keyboards ask for 8-10 ms, hubs up to 255 ms.
+ *   bulk IN    a NAK back-off capped at kBulkInBackoffMaxUS. This is a
+ *              policy, not a USB rule: a bulk endpoint has no interval.
+ *              A real EHCI walks its async schedule continuously in
+ *              hardware. The DWC2 can also retry a NAKed non-periodic IN
+ *              by itself (BCM2837DWC2.cpp, waitForChannelSettled()'s
+ *              comment), but only while a channel stays armed on that
+ *              endpoint, and this driver has one channel for every
+ *              endpoint (DAR-351). So an idle read is retried in software.
+ *              The wait doubles on each consecutive empty attempt, from
+ *              one frame up to the cap, and drops back to one frame as soon
+ *              as the endpoint moves data. Under load the cadence is the old
+ *              one; the cost is up to one cap of extra latency for the
+ *              first packet after an idle stretch.
+ *   others     one frame. Control stages and OUT data are short-lived and
+ *              finish in a few frames. Their timeouts below count attempts,
+ *              so these must keep the old per-frame cadence to keep the
+ *              old timeout durations.
+ *
+ * The base frame is still scaled by the QEMU cpu-factor (pollIntervalUS()
+ * below), and every wait is at least one base frame.
+ */
+
+// One scheduling frame. 1ms is the USB full-speed frame time.
 #define kPollIntervalUS		1000
+
+// Longest wait between attempts on an idle bulk IN. See the schedule above.
+#define kBulkInBackoffMaxUS	8000
 
 // QEMU-only poll-interval scaling (2026-09-15): kPollIntervalUS above is
 // correct and cheap on real hardware -- 1ms costs almost nothing on real
@@ -54,9 +97,47 @@ OSDefineMetaClassAndStructors(BCM2837USBHostController, IOUSBControllerV2);
 // behavior) and 10 under this project's own QEMU boot args, so reusing it
 // here cuts QEMU's polling rate 10x (10ms/100Hz) without a new boot-arg and
 // without touching real-hardware cadence at all.
+//
+// DAR-370 removed the fixed tick this paragraph describes, and the engine
+// no longer reads HFNUM when it runs. The scaling stays until a QEMU
+// measurement shows it is no longer needed.
 static inline UInt32 pollIntervalUS(void)
 {
 	return kPollIntervalUS * (UInt32)debug_cpu_performance_degradation_factor;
+}
+
+static inline uint64_t
+usToAbs(UInt32 us)
+{
+	uint64_t abs;
+	nanoseconds_to_absolutetime((uint64_t)us * 1000ULL, &abs);
+	return abs;
+}
+
+static inline uint64_t
+nowAbs(void)
+{
+	uint64_t now;
+	clock_get_uptime(&now);
+	return now;
+}
+
+/*
+ * bInterval -> microseconds, decoded as AppleUSBEHCI_UIM.cpp:2629-2643 does.
+ * speed is IOUSBFamily's kUSBDeviceSpeed*.
+ */
+static UInt32
+interruptPeriodUS(short speed, short pollingRate)
+{
+	if (pollingRate <= 0) {
+		return 0;
+	}
+	if (speed == kUSBDeviceSpeedHigh) {
+		// EHCI clamps an out-of-range exponent to 16; same here.
+		int exp = (pollingRate > 16) ? 16 : pollingRate;
+		return (UInt32)(125U << (exp - 1));
+	}
+	return (UInt32)pollingRate * 1000U;
 }
 
 // Ticks a transfer may make no progress before it is failed. Control and
@@ -64,6 +145,9 @@ static inline UInt32 pollIntervalUS(void)
 // forever. IN transfers get NONE on purpose: an outstanding bulk/interrupt
 // read with no data yet is not a fault, it is the entire point of the
 // asynchronous API, and timing one out would break every network driver.
+// These count attempts, not time. Control and bulk OUT endpoints are still
+// attempted every base frame, so the durations are unchanged by DAR-370. An
+// interrupt OUT is attempted every bInterval, so its ceiling is longer.
 #define kControlStageTimeoutTicks	1000
 #define kDataOutTimeoutTicks		5000
 
@@ -107,8 +191,13 @@ BCM2837USBHostController::init(OSDictionary *propTable)
 	fRootHubAddress = 0xFFFF;
 	fEngineRunning = false;
 	fInEngine = false;
-	fLastFrameNumber = 0;
+	fArmedDeadline = 0;
 	fFrameNumber64 = 0;
+	fFrameSampleTime = 0;
+	fEngineStats = false;
+	fEngineWakeups = 0;
+	fEngineAttempts = 0;
+	fEngineStatsSince = 0;
 	fRootHubIntPending = false;
 	bzero(&fRootHubIntCompletion, sizeof(fRootHubIntCompletion));
 
@@ -207,8 +296,19 @@ BCM2837USBHostController::UIMInitialize(IOService *provider)
 		return kIOReturnNoResources;
 	}
 
+	/*
+	 * usb-engine-stats=1: log engine wake-ups and transfer attempts per
+	 * second, about every 10 s. The log is written from an engine wake-up
+	 * that is already happening, so it adds no wake-ups of its own. This is
+	 * the counter DAR-370's acceptance asks for, next to ps state and TIME.
+	 */
+	uint32_t stats = 0;
+	fEngineStats = PE_parse_boot_argn("usb-engine-stats", &stats, sizeof(stats)) && stats != 0;
+
+	// Nothing is queued yet, so the engine starts parked. The first
+	// UIMCreate*Transfer arms it (enqueueTransfer() -> armEngine()).
 	fEngineRunning = true;
-	fPollTimer->setTimeoutUS(pollIntervalUS());
+	fArmedDeadline = 0;
 
 	IOLog("BCM2837USBHostController: UIM up on %s, %u enumerated device "
 	      "address(es) reserved\n", fDWC2->getName(), reserved);
@@ -224,6 +324,7 @@ BCM2837USBHostController::UIMFinalize(void)
 	if (fPollTimer != NULL) {
 		fPollTimer->cancelTimeout();
 	}
+	fArmedDeadline = 0;
 
 	while (fEndpoints != NULL) {
 		DWC2UIMEndpoint *ep = fEndpoints;
@@ -358,7 +459,7 @@ BCM2837USBHostController::returnTransfers(DWC2UIMEndpoint *ep, IOReturn status)
  * Endpoints deleted from inside a completion routine cannot be freed
  * immediately - processQueues() is walking the very list they are on. They are
  * marked retired instead (which makes findEndpoint() ignore them at once) and
- * unlinked at the top of the next tick.
+ * unlinked at the top of the engine's next pass.
  */
 void
 BCM2837USBHostController::reapRetiredEndpoints(void)
@@ -411,6 +512,13 @@ BCM2837USBHostController::enqueueTransfer(DWC2UIMEndpoint *ep, IOUSBCompletion c
 	}
 	ep->tail = xfer;
 
+	// Wake the engine when this endpoint is next due. Inside the engine,
+	// the rearmEngine() at the end of the pass picks it up instead.
+	if (!fInEngine) {
+		uint64_t now = nowAbs();
+		armEngine((ep->nextDue > now) ? ep->nextDue : now);
+	}
+
 	return kIOReturnSuccess;
 }
 
@@ -422,8 +530,10 @@ BCM2837USBHostController::enqueueTransfer(DWC2UIMEndpoint *ep, IOUSBCompletion c
  * outstanding.
  */
 bool
-BCM2837USBHostController::serviceTransfer(DWC2UIMEndpoint *ep)
+BCM2837USBHostController::serviceTransfer(DWC2UIMEndpoint *ep, bool *progressed)
 {
+	*progressed = false;
+
 	DWC2UIMTransfer *xfer = ep->head;
 	if (xfer == NULL) {
 		return false;
@@ -459,6 +569,7 @@ BCM2837USBHostController::serviceTransfer(DWC2UIMEndpoint *ep)
 	}
 
 	if (moved > 0) {
+		*progressed = true;
 		if (xfer->isIn && !xfer->useInlineData) {
 			if (xfer->memDesc == NULL ||
 			    xfer->memDesc->writeBytes(xfer->done, fStaging, moved) != moved) {
@@ -509,6 +620,9 @@ BCM2837USBHostController::serviceTransfer(DWC2UIMEndpoint *ep)
 	}
 
 finished:
+	// The device answered (data, a zero-length packet, or an error) rather
+	// than NAKing, which is what the bulk IN back-off cares about.
+	*progressed = true;
 	{
 		ep->head = xfer->next;
 		if (ep->head == NULL) {
@@ -541,44 +655,165 @@ BCM2837USBHostController::processQueues(void)
 
 	reapRetiredEndpoints();
 
-	// Keep a 32-bit frame counter extended to 64 bits. HFNUM wraps every
-	// 16384 frames (~16s at full speed), far more often than anything here
-	// samples it, so the wrap has to be accumulated rather than recomputed.
-	uint32_t frame = fDWC2->frameNumber();
-	if (frame < fLastFrameNumber) {
-		fFrameNumber64 += 0x4000;
-	}
-	fLastFrameNumber = frame;
+	uint64_t now = nowAbs();
 
 	for (DWC2UIMEndpoint *ep = fEndpoints; ep != NULL; ep = ep->next) {
-		if (ep->retired) {
+		if (ep->retired || ep->head == NULL || ep->nextDue > now) {
 			continue;
 		}
+		bool progressed = false;
 		for (int i = 0; i < kMaxTransfersPerTick; i++) {
 			if (ep->head == NULL) {
 				break;
 			}
-			if (!serviceTransfer(ep)) {
+			bool p;
+			fEngineAttempts++;
+			bool finished = serviceTransfer(ep, &p);
+			progressed |= p;
+			if (!finished) {
 				break;
 			}
 		}
+		scheduleNext(ep, now, progressed);
 	}
 
 	fInEngine = false;
+
+	rearmEngine();
+}
+
+/*
+ * Set ep->nextDue after an attempt. The rules are in "THE QUEUE ENGINE'S
+ * SCHEDULE" at the top of this file.
+ */
+void
+BCM2837USBHostController::scheduleNext(DWC2UIMEndpoint *ep, uint64_t now, bool progressed)
+{
+	UInt32 base = pollIntervalUS();
+	UInt32 waitUS = base;
+
+	if (ep->periodUS != 0) {
+		// Interrupt endpoint: keep to bInterval even when its queue is empty
+		// right now, because the client usually re-queues from its
+		// completion and that next read is due one interval later.
+		waitUS = (ep->periodUS > base) ? ep->periodUS : base;
+		ep->nextDue = now + usToAbs(waitUS);
+		return;
+	}
+
+	if (ep->head == NULL) {
+		// No interval to keep, so the next transfer queued on this endpoint
+		// can go straight away.
+		ep->nextDue = 0;
+		ep->backoffUS = 0;
+		return;
+	}
+
+	if (ep->transferType == kUSBBulk && ep->direction == kUSBIn) {
+		UInt32 cap = (kBulkInBackoffMaxUS > base) ? kBulkInBackoffMaxUS : base;
+		if (progressed || ep->backoffUS == 0) {
+			ep->backoffUS = base;
+		} else if (ep->backoffUS < cap) {
+			ep->backoffUS = (ep->backoffUS * 2 > cap) ? cap : ep->backoffUS * 2;
+		}
+		waitUS = ep->backoffUS;
+	}
+
+	ep->nextDue = now + usToAbs(waitUS);
+}
+
+/*
+ * Arm the engine for `deadline` unless it is already armed for something
+ * earlier. The deadline must not be 0: IOTimerEventSource::wakeAtTime()
+ * treats an abstime of 0 as "do not arm" (IOTimerEventSource.cpp:552).
+ */
+void
+BCM2837USBHostController::armEngine(uint64_t deadline)
+{
+	if (!fEngineRunning || fPollTimer == NULL || fInEngine) {
+		return;
+	}
+	if (fArmedDeadline != 0 && fArmedDeadline <= deadline) {
+		return;
+	}
+	fArmedDeadline = deadline;
+	// Re-arming a pending IOTimerEventSource replaces it: wakeAtTime() bumps
+	// calloutGeneration, and timeoutAndRelease() drops a callout whose
+	// generation is stale (IOTimerEventSource.cpp:182).
+	fPollTimer->wakeAtTime(deadline);
+}
+
+/*
+ * Arm the engine for the earliest endpoint that has work queued. If none
+ * has, park it: no timer until the next enqueueTransfer().
+ */
+void
+BCM2837USBHostController::rearmEngine(void)
+{
+	if (!fEngineRunning || fPollTimer == NULL) {
+		return;
+	}
+
+	bool any = false;
+	uint64_t earliest = 0;
+	for (DWC2UIMEndpoint *ep = fEndpoints; ep != NULL; ep = ep->next) {
+		if (ep->retired || ep->head == NULL) {
+			continue;
+		}
+		if (!any || ep->nextDue < earliest) {
+			earliest = ep->nextDue;
+			any = true;
+		}
+	}
+
+	if (!any) {
+		if (fArmedDeadline != 0) {
+			fPollTimer->cancelTimeout();
+			fArmedDeadline = 0;
+		}
+		return;
+	}
+
+	uint64_t now = nowAbs();
+	if (earliest < now) {
+		earliest = now;
+	}
+	fArmedDeadline = 0;     // replace whatever was armed, earlier or later
+	armEngine(earliest);
 }
 
 void
 BCM2837USBHostController::pollTimerFired(OSObject *owner, IOTimerEventSource *sender)
 {
+#pragma unused (sender)
 	BCM2837USBHostController *me = OSDynamicCast(BCM2837USBHostController, owner);
 	if (me == NULL) {
 		return;
 	}
 
+	// The armed deadline has been consumed; processQueues() re-arms.
+	me->fArmedDeadline = 0;
+	me->fEngineWakeups++;
+
 	me->processQueues();
 
-	if (me->fEngineRunning) {
-		sender->setTimeoutUS(pollIntervalUS());
+	if (me->fEngineStats) {
+		uint64_t now = nowAbs();
+		if (me->fEngineStatsSince == 0) {
+			me->fEngineStatsSince = now;
+		} else {
+			uint64_t ns;
+			absolutetime_to_nanoseconds(now - me->fEngineStatsSince, &ns);
+			if (ns >= 10ULL * NSEC_PER_SEC) {
+				uint64_t ms = ns / NSEC_PER_MSEC;
+				IOLog("BCM2837USBHostController: DAR-370 engine %u wakeups, %u attempts "
+				    "in %llu ms (%llu wakeups/s)\n", me->fEngineWakeups,
+				    me->fEngineAttempts, ms, (uint64_t)me->fEngineWakeups * 1000ULL / ms);
+				me->fEngineWakeups = 0;
+				me->fEngineAttempts = 0;
+				me->fEngineStatsSince = now;
+			}
+		}
 	}
 }
 
@@ -641,14 +876,24 @@ BCM2837USBHostController::UIMCreateInterruptEndpoint(short functionAddress, shor
     UInt8 direction, short speed, UInt16 maxPacketSize, short pollingRate,
     USBDeviceAddress highSpeedHub, int highSpeedPort)
 {
-#pragma unused (speed, pollingRate, highSpeedHub, highSpeedPort)
+#pragma unused (highSpeedHub, highSpeedPort)
 	// The root hub's status-change endpoint is simulated, not real silicon:
 	// there is no channel to program for it.
 	if (functionAddress == fRootHubAddress) {
 		return kIOReturnSuccess;
 	}
-	return (createEndpoint((UInt8)functionAddress, (UInt8)endpointNumber, direction,
-	    kUSBInterrupt, maxPacketSize) != NULL) ? kIOReturnSuccess : kIOUSBEndpointNotFound;
+	DWC2UIMEndpoint *ep = createEndpoint((UInt8)functionAddress, (UInt8)endpointNumber,
+	    direction, kUSBInterrupt, maxPacketSize);
+	if (ep == NULL) {
+		return kIOUSBEndpointNotFound;
+	}
+	// Re-creating an open endpoint is how SetPipePolicy() changes the
+	// interval (AppleUSBEHCI_UIM.cpp:2586-2588), so always take the new one.
+	ep->periodUS = interruptPeriodUS(speed, pollingRate);
+	IOLog("BCM2837USBHostController: interrupt endpoint %d.%d %s bInterval %d -> "
+	    "polled every %u us\n", functionAddress, endpointNumber,
+	    (direction == kUSBIn) ? "IN" : "OUT", pollingRate, ep->periodUS);
+	return kIOReturnSuccess;
 }
 
 /*
@@ -723,8 +968,13 @@ BCM2837USBHostController::UIMDeleteEndpoint(short functionNumber, short endpoint
 	}
 
 	returnTransfers(ep, kIOUSBTransactionReturned);
-	// Unlinked and freed on the next tick - see reapRetiredEndpoints().
+	// Unlinked and freed by reapRetiredEndpoints(): now, unless this is a
+	// completion running inside the engine, in which case at the engine's
+	// next pass. The engine can be parked, so "next pass" may be a while.
 	ep->retired = true;
+	if (!fInEngine) {
+		reapRetiredEndpoints();
+	}
 	return kIOReturnSuccess;
 }
 
@@ -943,16 +1193,59 @@ BCM2837USBHostController::GetBandwidthAvailable(void)
 	return 0;
 }
 
+/*
+ * HFNUM.FRNUM is 14 bits and counts SOFs, and SOFs are microframes on a
+ * high-speed root port (QEMU's model: hcd-dwc2.c sets usb_frame_time to
+ * 125 us for high speed, 1 ms otherwise). It wraps every 2 s at high speed.
+ * The old code extended it by counting wraps seen by the 1 ms engine tick.
+ * With the engine parked there is no tick, so each sample instead predicts
+ * the count from elapsed uptime and takes the value matching HFNUM that is
+ * closest to that prediction. Nothing in this kernel calls GetFrameNumber()
+ * today (a grep of the vendored IOUSBFamily/IOHIDFamily finds no caller).
+ */
+UInt64
+BCM2837USBHostController::sampleFrameNumber(void)
+{
+	uint64_t frame = fDWC2->frameNumber();
+	uint64_t now = nowAbs();
+
+	if (fFrameSampleTime == 0) {
+		fFrameNumber64 = frame;
+		fFrameSampleTime = now;
+		return fFrameNumber64;
+	}
+
+	uint64_t elapsedNS;
+	absolutetime_to_nanoseconds(now - fFrameSampleTime, &elapsedNS);
+	uint64_t unitNS = (fDWC2->rootPortSpeed() == kUSBSpeedHigh) ? 125000ULL : 1000000ULL;
+	uint64_t predicted = fFrameNumber64 + elapsedNS / unitNS;
+
+	const uint64_t span = (uint64_t)kHFNUM_MAX_FRNUM + 1;
+	uint64_t candidate = (predicted & ~(span - 1)) | frame;
+	if (candidate + span / 2 < predicted) {
+		candidate += span;
+	} else if (candidate > predicted + span / 2 && candidate >= span) {
+		candidate -= span;
+	}
+	if (candidate < fFrameNumber64) {
+		candidate = fFrameNumber64;
+	}
+
+	fFrameNumber64 = candidate;
+	fFrameSampleTime = now;
+	return candidate;
+}
+
 UInt64
 BCM2837USBHostController::GetFrameNumber(void)
 {
-	return fFrameNumber64 + fDWC2->frameNumber();
+	return sampleFrameNumber();
 }
 
 UInt32
 BCM2837USBHostController::GetFrameNumber32(void)
 {
-	return (UInt32)(fFrameNumber64 + fDWC2->frameNumber());
+	return (UInt32)sampleFrameNumber();
 }
 
 /*
@@ -961,8 +1254,10 @@ BCM2837USBHostController::GetFrameNumber32(void)
  * channel interrupts (DAR-136: interruptOccurred()/waitForChannelInt(),
  * GAHBCFG.GLBLINTRMSK set in its start()), but only to complete a transfer
  * that is already running. Starting transfers and moving completions up to
- * the family is this class's queue engine, driven by its 1 ms timer (see
- * DAR-370). So running the engine here is the correct equivalent, not a no-op.
+ * the family is this class's queue engine, driven by its timer (see "THE
+ * QUEUE ENGINE'S SCHEDULE"). So running the engine here is the correct
+ * equivalent, not a no-op. It services only endpoints that are due, as a
+ * timer wake-up would.
  */
 void
 BCM2837USBHostController::PollInterrupts(IOUSBCompletionAction safeAction)

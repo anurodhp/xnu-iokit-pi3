@@ -57,9 +57,13 @@
  * So this class implements a real queue. UIMCreate*Transfer appends to a
  * per-endpoint FIFO and returns. An IOTimerEventSource on the controller's own
  * IOUSBWorkLoop drains those FIFOs, giving each pending transfer one
- * non-blocking attempt per tick (BCM2837DWC2::transferStage() with a zero
- * retry budget returns immediately on NAK) and re-queueing anything that did
- * not finish. Partial progress is remembered per transfer, so a multi-chunk
+ * non-blocking attempt when its endpoint is due (BCM2837DWC2::transferStage()
+ * with a zero retry budget returns immediately on NAK) and re-queueing
+ * anything that did not finish. "Due" is per endpoint: an interrupt endpoint
+ * every bInterval, an idle bulk IN on a NAK back-off, everything else every
+ * frame. The timer is armed only for the earliest due endpoint and not at all
+ * when nothing is queued (DAR-370; before that it ticked every 1 ms for the
+ * whole uptime). Partial progress is remembered per transfer, so a multi-chunk
  * transfer that NAKs half way RESUMES rather than restarting - restarting
  * would re-send data with a stale data-toggle, which the device silently
  * drops as a duplicate (the same trap BCM2837DWC2::doTransferRetrying()'s own
@@ -153,6 +157,13 @@ struct DWC2UIMEndpoint
 	DWC2UIMTransfer     *head;
 	DWC2UIMTransfer     *tail;
 	bool                 retired;        // deleted while the engine was iterating
+
+	// Scheduling (DAR-370). The engine timer is armed for the earliest
+	// nextDue of any endpoint with a queued transfer, and not at all when
+	// none has one. See "THE QUEUE ENGINE'S SCHEDULE" in the .cpp.
+	UInt32               periodUS;       // interrupt: bInterval as microseconds; 0 = not periodic
+	UInt32               backoffUS;      // bulk IN: current NAK back-off step
+	uint64_t             nextDue;        // absolute time of the next attempt; 0 = due now
 };
 
 class BCM2837USBHostController : public IOUSBControllerV2
@@ -286,8 +297,17 @@ private:
 	UInt16               fRootHubAddress;
 	bool                 fEngineRunning;
 	bool                 fInEngine;      // re-entrancy guard for processQueues()
-	UInt32               fLastFrameNumber;
+	uint64_t             fArmedDeadline; // absolute time fPollTimer is armed for; 0 = parked
+
+	// GetFrameNumber()'s 64-bit extension of HFNUM. See sampleFrameNumber().
 	UInt64               fFrameNumber64;
+	uint64_t             fFrameSampleTime;
+
+	// Engine wake-up accounting for the usb-engine-stats boot-arg (DAR-370).
+	bool                 fEngineStats;
+	UInt32               fEngineWakeups;
+	UInt32               fEngineAttempts;
+	uint64_t             fEngineStatsSince;
 
 	// Root-hub interrupt (status change) pipe, endpoint 1. Nothing in this
 	// kernel opens it - AppleUSBHub is not vendored - but a queued read must
@@ -307,8 +327,12 @@ private:
 
 	// Returns true if the head transfer completed (successfully or not) and
 	// its completion has been delivered; false if it is still pending.
-	bool			serviceTransfer(DWC2UIMEndpoint *ep);
+	bool			serviceTransfer(DWC2UIMEndpoint *ep, bool *progressed);
 	void			processQueues(void);
+	void			scheduleNext(DWC2UIMEndpoint *ep, uint64_t now, bool progressed);
+	void			armEngine(uint64_t deadline);
+	void			rearmEngine(void);
+	UInt64			sampleFrameNumber(void);
 	static void		pollTimerFired(OSObject *owner, IOTimerEventSource *sender);
 
 	IOReturn		queueControlStage(short functionNumber, short endpointNumber,
