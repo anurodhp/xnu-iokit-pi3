@@ -572,7 +572,7 @@ mkdir -p third_party
 #     `third_party-patches/configd.patch`
 #     is no longer read by this script -- removed from the tree (unlike
 #     the historical-record patches above, nothing else in this repo
-#     documents it independently, e.g. no sdcard/README.md-style
+#     documents it independently, e.g. no sdcard/docs/sdcard-boot-notes.md-style
 #     regeneration note, so keeping a dead copy around had no value).
 #     NOTE: the fork's own `main` branch is a plain, unrelated mirror of
 #     upstream (currently at `configd-1405.100.8`, far newer than the

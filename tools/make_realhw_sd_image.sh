@@ -29,7 +29,7 @@
 #
 # Real, honest risk this project hasn't closed yet: this is the first
 # time the CURRENT from-source kernel (only ever booted on QEMU so far)
-# is combined with real Pi 3 silicon. sdcard/README.md's own "Known risk
+# is combined with real Pi 3 silicon. sdcard/docs/sdcard-boot-notes.md's own "Known risk
 # points" (real SDHCI serialization/error-recovery/clock-speed/power-ramp/
 # memory-barriers/GPIO-pinmux gaps, docs/backlog.md P0 items 1-6) are all
 # real-hardware-only risks QEMU cannot exercise -- this image is what
