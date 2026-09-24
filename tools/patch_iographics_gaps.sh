@@ -22,7 +22,8 @@
 # this project's DAR-313 convention. Idempotent: safe to re-run after a
 # fresh ./setup_third_party.sh.
 #
-# Run directly, or via tools/iographics_gap_audit.sh (which calls it).
+# Run directly, or via tools/iographics_gap_audit.sh (which runs it first
+# unless IOG_AUDIT_NO_PATCH=1).
 
 set -e
 
@@ -506,6 +507,33 @@ PYEOF
 fi
 if ! grep -q "IOFramebuffer::triggerEvent(" "$F"; then
 	echo "error: triggerEvent/clearEvent definitions did not apply" >&2
+	exit 1
+fi
+
+# ---------------------------------------------------------------------
+# 9. XXH64() -- IODisplay.cpp:662 hashes the EDID with XXH64() and
+#    IODisplay.cpp:441-442 formats the result into the display-prefs
+#    key, but the drop never includes xxhash.h (Apple vendors xxHash
+#    internally; every published tag lacks it). Include the real
+#    upstream, pinned in setup_third_party.sh (third_party/xxHash,
+#    v0.8.2), through compat/IOKit/graphics/IOGraphicsXXHash.h, which
+#    documents upstream's own kernel configuration (XXH_INLINE_ALL,
+#    XXH_NO_STDLIB, XXH_NO_XXH3) and supplies the seed-0 overload for
+#    Apple's 2-argument call. The caller must put third_party/xxHash and
+#    compat/xxhash_kernel (the <limits.h> redirect) on the include path
+#    (tools/iographics_gap_audit.sh does).
+# ---------------------------------------------------------------------
+F="$IOG/IODisplay.cpp"
+if ! grep -q "IOGraphicsXXHash.h" "$F"; then
+	MARKER='#include "GMetric.hpp"'
+	if [ "$(grep -cxF "$MARKER" "$F")" != 1 ]; then
+		echo "error: XXH64 include anchor not found exactly once in $F" >&2
+		exit 1
+	fi
+	LC_ALL=C sed -i '' "s|^$MARKER\$|$MARKER\n// Real upstream xxHash for XXH64() below -- see tools/patch_iographics_gaps.sh fix 9.\n#include <IOKit/graphics/IOGraphicsXXHash.h>|" "$F"
+fi
+if [ "$(grep -c "IOGraphicsXXHash.h" "$F")" != 1 ]; then
+	echo "error: XXH64 include did not apply exactly once" >&2
 	exit 1
 fi
 

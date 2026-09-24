@@ -574,6 +574,23 @@ mkdir -p third_party
 #     pinned tag, no patch applied) -- always clone `iokit-port`
 #     specifically, never `main`, for this repo.
 #
+#   - xxHash (DAR-331): IODisplay.cpp (part of the pinned IOGraphics-585
+#     drop, above) calls XXH64() to hash EDID data into a display-
+#     preferences key (IODisplay.cpp:441-442,662). xxHash is not Apple's
+#     code and Apple never published it as a standalone repo -- a
+#     third-party dependency Apple vendors internally, same situation as
+#     llvm-libcxx above. Real upstream per the source-priority rule:
+#     Cyan4973/xxHash (BSD 2-Clause). Pinned to `v0.8.2` (2023-07-21),
+#     NOT an era-matched v0.8.0: v0.8.2 is the first release with
+#     upstream's documented kernel/embedded mode (XXH_NO_STDLIB, plus
+#     XXH_NO_XXH3 to drop the <arm_neon.h> include) -- v0.8.0
+#     unconditionally includes <stdlib.h> and, on arm64, <arm_neon.h>,
+#     neither usable in a -nostdinc kernel TU. XXH64's output is fixed by
+#     the algorithm spec, so the version does not change the hash.
+#     Header-only (XXH_INLINE_ALL); no build script. Consumed through
+#     compat/IOKit/graphics/IOGraphicsXXHash.h, which documents the exact
+#     configuration and the 2-arg vs 3-arg XXH64 arity gap.
+#
 # name | clone_url | ref (branch or tag) | patch file (optional, relative to third_party-patches/)
 REPOS='
 xnu-7195|git@github.com:anurodhp/xnu-pi3-macos11.git|bcm2837-bringup|
@@ -590,6 +607,7 @@ AppleUSBCDCDriver|https://github.com/apple-oss-distributions/AppleUSBCDCDriver.g
 IONetworkingFamily|https://github.com/apple-oss-distributions/IONetworkingFamily.git|IONetworkingFamily-151.40.1|
 IOGraphics|https://github.com/apple-oss-distributions/IOGraphics.git|IOGraphics-585|
 IOHIDFamily|https://github.com/apple-oss-distributions/IOHIDFamily.git|IOHIDFamily-1633.81.2|
+xxHash|https://github.com/Cyan4973/xxHash.git|v0.8.2|
 msdosfs|https://github.com/apple-oss-distributions/msdosfs.git|msdosfs-435.60.1|
 dyld|git@github.com:anurodhp/dyld.git|iokit-port||https://github.com/apple-oss-distributions/dyld.git
 Libc|git@github.com:anurodhp/Libc.git|iokit-port||https://github.com/apple-oss-distributions/Libc.git

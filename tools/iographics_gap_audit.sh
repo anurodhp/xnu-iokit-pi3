@@ -167,6 +167,18 @@ IOG_INC=(
 	# of noise. See that header for why this is a safe completion and
 	# not a behavioural stub.
 	-include "$REPO_ROOT/compat/IOKit/graphics/IOGraphicsTypesPrivateMissing.h"
+	# The ABL (Adaptive-Backlight) telemetry macros IODisplay.cpp uses and
+	# the published IOBacklightDisplayTrace.h (an empty body) never
+	# defines -- in any of the 80 published tags. Trace sinks only; see
+	# that header for the per-call-site reasoning.
+	-include "$REPO_ROOT/compat/IOKit/graphics/IOBacklightDisplayTraceMissing.h"
+	# Real upstream xxHash (setup_third_party.sh pin) for IODisplay.cpp's
+	# XXH64(); reached through compat/IOKit/graphics/IOGraphicsXXHash.h,
+	# which tools/patch_iographics_gaps.sh (fix 9) includes there.
+	-I"$REPO_ROOT/third_party/xxHash"
+	# xxhash.h:2091 includes <limits.h>, which -nostdinc kernel builds do
+	# not have; redirect to <machine/limits.h>. See that file.
+	-I"$REPO_ROOT/compat/xxhash_kernel"
 	-I"$REPO_ROOT/compat"
 	-I"$XNU/iokit"
 	-I"$PCI"
@@ -209,8 +221,21 @@ if [ $# -gt 0 ]; then
 	fi
 fi
 
+# Apply the reproducible header/source fixes first (idempotent), so a
+# fresh ./setup_third_party.sh clone audits the same tree this script's
+# results describe. IOG_AUDIT_NO_PATCH=1 audits the pristine drop.
+if [ -z "${IOG_AUDIT_NO_PATCH:-}" ]; then
+	"$REPO_ROOT/tools/patch_iographics_gaps.sh" > /dev/null
+fi
+
 LOGDIR="$(mktemp -d /tmp/iographics_gap_audit.XXXXXX)"
-trap 'rm -rf "$LOGDIR"' EXIT
+# IOG_AUDIT_KEEP_LOGS=1 keeps the per-file compiler logs (full
+# diagnostics, not just the summary below) and prints where they are.
+if [ -n "${IOG_AUDIT_KEEP_LOGS:-}" ]; then
+	trap 'echo "logs kept in $LOGDIR"' EXIT
+else
+	trap 'rm -rf "$LOGDIR"' EXIT
+fi
 
 # Run the extracted command line through a generated script rather than
 # expanding it inline. xnu's CFLAGS contain defines whose values hold
@@ -219,6 +244,10 @@ trap 'rm -rf "$LOGDIR"' EXIT
 # which makes every file fail with the same three bogus errors no matter
 # what is in it. Letting bash parse the line as a line keeps the quoting.
 printf '#!/bin/bash\ncd %q\n%s "$@"\n' "$OBJDIR" "$CC_LINE" > "$LOGDIR/cc.sh"
+# IOG_AUDIT_CC_OUT=<path>: also save the generated compiler wrapper
+# there, for re-running one file by hand (e.g. with -H to see which
+# header path wins). Takes the same -I/-include flags as below.
+[ -n "${IOG_AUDIT_CC_OUT:-}" ] && cp "$LOGDIR/cc.sh" "$IOG_AUDIT_CC_OUT"
 
 echo "=== IOGraphics gap audit (real kernel iokit C++ flags) ==="
 echo "    source: $IOG  ($(cd "$IOG" && git describe --tags 2>/dev/null || echo 'unknown tag'))"
