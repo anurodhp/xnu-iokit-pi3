@@ -957,10 +957,12 @@ BCM2837USBHostController::GetFrameNumber32(void)
 
 /*
  * PollInterrupts() is how the family asks a controller to drain its hardware
- * interrupt state outside the normal interrupt path. This controller has no
- * interrupt path - BCM2837DWC2 deliberately leaves GAHBCFG.GLBLINTRMSK clear
- * and polls - so the queue engine IS the interrupt handler, and running it
- * here is the correct equivalent rather than a no-op.
+ * interrupt state outside the normal interrupt path. BCM2837DWC2 takes real
+ * channel interrupts (DAR-136: interruptOccurred()/waitForChannelInt(),
+ * GAHBCFG.GLBLINTRMSK set in its start()), but only to complete a transfer
+ * that is already running. Starting transfers and moving completions up to
+ * the family is this class's queue engine, driven by its 1 ms timer (see
+ * DAR-370). So running the engine here is the correct equivalent, not a no-op.
  */
 void
 BCM2837USBHostController::PollInterrupts(IOUSBCompletionAction safeAction)
@@ -1241,10 +1243,12 @@ BCM2837USBHostController::SetHubAddress(UInt16 wValue)
 
 /*
  * A real controller calls these off its port-change interrupt to tell the hub
- * driver that a port changed. BCM2837DWC2 masks global interrupts by design
- * and enumerates once at boot, and there is no hub driver here to notify, so
- * there is genuinely nothing to signal. This is a real limitation - USB
- * hot-plug does not work in this kernel - not a placeholder for missing code.
+ * driver that a port changed. BCM2837DWC2 enumerates once at boot and does not
+ * enable or handle port-change interrupts (HPRT0 PRTCONNDET/PRTENCHNG; its
+ * DAR-136 interrupt handler covers host-channel completion only), and there is
+ * no hub driver here to notify, so there is nothing to signal. This is a real
+ * limitation, not a placeholder: USB hot-plug does not work in this kernel
+ * (DAR-353).
  */
 void
 BCM2837USBHostController::UIMRootHubStatusChange(void)
