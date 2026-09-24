@@ -23,6 +23,7 @@
  */
 
 #include "BCM2837DWC2.h"
+#include "SMSC9514USBTransport.h"
 
 // Enough for a full configuration descriptor with several interfaces and
 // endpoints; the LAN9514's is far smaller.
@@ -48,6 +49,160 @@ BCM2837DWC2::findDeviceByInterfaceClass(uint8_t interfaceClass) const
 		}
 	}
 	return NULL;
+}
+
+// The table entry at `address`: in use only, or also one detached for
+// re-enumeration (its slot keeps the address).
+DWC2USBDevice *
+BCM2837DWC2::slotForAddress(uint8_t address, bool includeDetached)
+{
+	for (uint32_t i = 0; i < fNumDevices; i++) {
+		if (fDevices[i].address == address && (includeDetached || fDevices[i].inUse)) {
+			return &fDevices[i];
+		}
+	}
+	return NULL;
+}
+
+DWC2USBDevice *
+BCM2837DWC2::deviceByAddress(uint8_t address)
+{
+	return slotForAddress(address, false);
+}
+
+const DWC2USBDevice *
+BCM2837DWC2::findDevice(uint8_t address) const
+{
+	return const_cast<BCM2837DWC2 *>(this)->slotForAddress(address, false);
+}
+
+/*
+ * The boot-time publish rules (startUSBHostController()), shared with
+ * re-enumeration so a device that comes back different is filtered the same
+ * way.
+ */
+bool
+BCM2837DWC2::publishable(const DWC2USBDevice *dev) const
+{
+	if (dev == NULL || !dev->inUse) {
+		return false;
+	}
+	if (dev->deviceClass == 9 /* USB hub class */) {
+		IOLog("BCM2837DWC2: skipping hub at address %u (no hub driver "
+		      "vendored; enumerateBus already walked its ports)\n", dev->address);
+		return false;
+	}
+	if (fEthernetDriver != NULL &&
+	    SMSC9514USBTransport::findEthernetFunction(this) == dev) {
+		// Already hand-wired to SMSC9514Ethernet. Publishing a nub for it
+		// too would let a second driver open the same endpoints.
+		IOLog("BCM2837DWC2: address %u already claimed by SMSC9514Ethernet\n",
+		    dev->address);
+		return false;
+	}
+	return true;
+}
+
+IOReturn
+BCM2837DWC2::detachDevice(uint8_t address)
+{
+	DWC2USBDevice *dev = deviceByAddress(address);
+	if (dev == NULL) {
+		return kIOReturnNoDevice;
+	}
+	dev->inUse = false;
+	return kIOReturnSuccess;
+}
+
+IOReturn
+BCM2837DWC2::reenumerateDevice(uint8_t address, bool extraResetDelay,
+    const DWC2USBDevice **devOut)
+{
+	*devOut = NULL;
+
+	DWC2USBDevice *dev = slotForAddress(address, true);
+	if (dev == NULL) {
+		return kIOReturnNoDevice;
+	}
+	uint8_t parentHubAddr = dev->parentHubAddr;
+	uint8_t parentPort = dev->parentPort;
+
+	/*
+	 * One device at address 0 at a time, like AppleUSBHub's dev-zero lock
+	 * (AppleUSBHubPort::AddDevice, AppleUSBHubPort.cpp:728-754). Two
+	 * re-enumerations running together would both reset a port and both
+	 * leave a device answering at address 0.
+	 */
+	IOLockLock(fEnumLock);
+	dev->inUse = false;
+
+	IOReturn ret = kIOReturnNotResponding;
+	/*
+	 * Retry rather than give up on the first transient error, as
+	 * AppleUSBHubPort::AddDevice() does (its reset loop,
+	 * AppleUSBHubPort.cpp:855-869; and up to kMaxDevZeroRetries = 4
+	 * address-0 descriptor reads, :63, :3800). The count of three here is
+	 * this driver's own, the same one doTransfer() uses for XACTERR; it is
+	 * not Apple's number.
+	 */
+	for (int attempt = 0; attempt < 3 && ret != kIOReturnSuccess; attempt++) {
+		uint8_t speed = kUSBSpeedFull;
+		uint8_t splitHubAddr = 0, splitHubPort = 0;
+		if (parentHubAddr == 0) {
+			// On the root port. Nothing to do if nothing is connected
+			// (AppleUSBHubPort::AddDevice checks the same,
+			// AppleUSBHubPort.cpp:741-751). Resetting the root port resets
+			// the whole bus, so channel 0's synchronous transfers are held
+			// off for its duration (portReset() sleeps ~90 ms).
+			if (!(regRead(kDWC2_HPRT0) & kHPRT0_PRTCONNSTS)) {
+				ret = kIOReturnNoDevice;
+				break;
+			}
+			IOLockLock(fTransferLock);
+			bool ok = portReset();
+			IOLockUnlock(fTransferLock);
+			if (!ok) {
+				continue;
+			}
+			speed = fRootSpeed;
+		} else {
+			DWC2USBDevice *hub = deviceByAddress(parentHubAddr);
+			if (hub == NULL) {
+				ret = kIOReturnNoDevice;
+				break;
+			}
+			if (!resetHubPort(hub, parentPort, &speed, &splitHubAddr, &splitHubPort)) {
+				continue;
+			}
+		}
+		if (extraResetDelay) {
+			IOSleep(100);
+		}
+
+		DWC2USBDevice *out = NULL;
+		if (enumerateDevice(speed, parentHubAddr, parentPort, splitHubAddr, splitHubPort,
+		    &out, dev)) {
+			*devOut = out;
+			ret = kIOReturnSuccess;
+		} else {
+			IOLog("BCM2837DWC2: re-enumeration of device %u (hub %u port %u), "
+			    "attempt %d/3 failed\n", address, parentHubAddr, parentPort, attempt + 1);
+		}
+	}
+	if (ret != kIOReturnSuccess && parentHubAddr != 0) {
+		/*
+		 * The device may be left answering at address 0 on an enabled port,
+		 * where it would collide with the next device reset. Disable the
+		 * port before releasing the lock, as AppleUSBHubPort::AddDevice()
+		 * does on failure (AppleUSBHubPort.cpp:880-889).
+		 */
+		DWC2USBDevice *hub = deviceByAddress(parentHubAddr);
+		if (hub != NULL) {
+			hubClearPortFeature(hub, parentPort, kHubFeatPortEnable);
+		}
+	}
+	IOLockUnlock(fEnumLock);
+	return ret;
 }
 
 bool
@@ -211,13 +366,13 @@ BCM2837DWC2::parseConfiguration(DWC2USBDevice *dev, const uint8_t *cfg, uint32_t
 bool
 BCM2837DWC2::enumerateDevice(uint8_t speed, uint8_t parentHubAddr, uint8_t parentPort,
                              uint8_t splitHubAddr, uint8_t splitHubPort,
-                             DWC2USBDevice **outDev)
+                             DWC2USBDevice **outDev, DWC2USBDevice *reuse)
 {
-	if (fNumDevices >= kDWC2MaxDevices) {
+	if (reuse == NULL && fNumDevices >= kDWC2MaxDevices) {
 		IOLog("BCM2837DWC2: device table full\n");
 		return false;
 	}
-	if (fNextAddress > 127) {
+	if (reuse == NULL && fNextAddress > 127) {
 		IOLog("BCM2837DWC2: out of USB addresses\n");
 		return false;
 	}
@@ -286,7 +441,7 @@ BCM2837DWC2::enumerateDevice(uint8_t speed, uint8_t parentHubAddr, uint8_t paren
 		ep.maxPacket = maxPacket0;
 	}
 
-	uint8_t newAddress = fNextAddress;
+	uint8_t newAddress = (reuse != NULL) ? reuse->address : fNextAddress;
 	ret = controlRequest(&ep,
 	    kUSBReqDirOut | kUSBReqTypeStandard | kUSBReqRecipDevice,
 	    kUSBReqSetAddress, newAddress, 0, 0, NULL, NULL);
@@ -294,7 +449,9 @@ BCM2837DWC2::enumerateDevice(uint8_t speed, uint8_t parentHubAddr, uint8_t paren
 		IOLog("BCM2837DWC2: SET_ADDRESS(%u) failed (%#x)\n", newAddress, ret);
 		return false;
 	}
-	fNextAddress++;
+	if (reuse == NULL) {
+		fNextAddress++;
+	}
 
 	// USB 2.0 spec 9.2.6.3: the device gets 2ms to start answering at its
 	// new address. Nothing may be sent to it in that window.
@@ -316,9 +473,10 @@ BCM2837DWC2::enumerateDevice(uint8_t speed, uint8_t parentHubAddr, uint8_t paren
 
 	const USBDeviceDescriptor *dd = (const USBDeviceDescriptor *)buf;
 
-	DWC2USBDevice *dev = &fDevices[fNumDevices];
+	// Filled in completely before it is marked in use (at the end), so a
+	// reader never sees a half-written entry as a device.
+	DWC2USBDevice *dev = (reuse != NULL) ? reuse : &fDevices[fNumDevices];
 	bzero(dev, sizeof(*dev));
-	dev->inUse = true;
 	dev->address = newAddress;
 	dev->speed = speed;
 	dev->maxPacket0 = maxPacket0;
@@ -384,7 +542,10 @@ BCM2837DWC2::enumerateDevice(uint8_t speed, uint8_t parentHubAddr, uint8_t paren
 	    dev->bulkInEp, dev->bulkInMax, dev->bulkOutEp, dev->bulkOutMax,
 	    dev->intrInEp, dev->intrInMax);
 
-	fNumDevices++;
+	dev->inUse = true;
+	if (reuse == NULL) {
+		fNumDevices++;
+	}
 	if (outDev != NULL) {
 		*outDev = dev;
 	}
@@ -468,6 +629,133 @@ BCM2837DWC2::hubGetPortStatus(DWC2USBDevice *hub, uint8_t port,
 }
 
 /*
+ * Reset one hub port and report what came up on it: its speed, and the
+ * SPLIT routing a device there needs. Split out of hubEnumeratePorts() for
+ * DAR-373 so re-enumeration resets a port exactly as first enumeration does.
+ * Returns false if the port did not come back enabled.
+ */
+bool
+BCM2837DWC2::resetHubPort(DWC2USBDevice *hub, uint8_t port, uint8_t *speedOut,
+    uint8_t *splitHubAddrOut, uint8_t *splitHubPortOut)
+{
+	uint16_t status = 0, change = 0;
+
+	/*
+	 * DAR-373: this also resets a port that is already enabled
+	 * (re-enumeration), not only one that has just been connected. So:
+	 * nothing to do if nothing is connected (AppleUSBHubPort::AddDevice
+	 * checks the same before resetting); clear any stale C_PORT_RESET /
+	 * C_PORT_ENABLE so the change bits read after the reset are this
+	 * reset's; and remember whether the port was already enabled, because
+	 * then "RESET clear and ENABLE set" below proves nothing.
+	 */
+	if (!hubGetPortStatus(hub, port, &status, &change)) {
+		return false;
+	}
+	if (!(status & kPortStatusConnection)) {
+		IOLog("BCM2837DWC2: hub port %u: nothing connected, not resetting\n", port);
+		return false;
+	}
+	if (change & kPortChangeReset) {
+		hubClearPortFeature(hub, port, kHubFeatCPortReset);
+	}
+	if (change & kPortChangeEnable) {
+		hubClearPortFeature(hub, port, kHubFeatCPortEnable);
+	}
+	const bool wasEnabled = (status & kPortStatusEnable) != 0;
+
+	// USB 2.0 spec 7.1.7.3: let the connection settle before reset.
+	IOSleep(100);
+
+	if (!hubSetPortFeature(hub, port, kHubFeatPortReset)) {
+		IOLog("BCM2837DWC2: hub port %u reset failed\n", port);
+		return false;
+	}
+
+	// The hub drives reset itself and reports completion via
+	// C_PORT_RESET; poll rather than assuming a fixed duration.
+	bool resetDone = false;
+	for (int i = 0; i < 20; i++) {
+		IOSleep(10);
+		if (!hubGetPortStatus(hub, port, &status, &change)) {
+			break;
+		}
+		if (change & kPortChangeReset) {
+			resetDone = true;
+			break;
+		}
+		if (!wasEnabled && !(status & kPortStatusReset) && (status & kPortStatusEnable)) {
+			resetDone = true;
+			break;
+		}
+	}
+	if (!resetDone) {
+		IOLog("BCM2837DWC2: hub port %u reset did not complete "
+		      "(status %#x change %#x)\n", port, status, change);
+		return false;
+	}
+
+	hubClearPortFeature(hub, port, kHubFeatCPortReset);
+	/*
+	 * Reset recovery. USB 2.0 spec 7.1.7.5 (TRSTRCY) only mandates
+	 * 10ms, but real Linux (drivers/usb/core/hub.c, hub_port_reset())
+	 * unconditionally waits 50ms for every hub port it resets, root or
+	 * downstream, quirk table or not: `reset_recovery_time = 10 + 40`.
+	 * The +40ms is real-world margin Linux itself found the bare spec
+	 * minimum insufficient for, not something specific to any one
+	 * device. This was 20ms - under half that - and a real LAN9514's
+	 * downstream Ethernet function (0424:9514) failed every control
+	 * transfer to it, identically, 100% of the time
+	 * (docs/backlog.md's real-hardware log: XACTERR, byte-for-byte the
+	 * same register state on all 3 retries - deterministic, not the
+	 * transient noise a retry loop can paper over). The root port's
+	 * own 30ms recovery (BCM2837DWC2::portReset()) is left alone here:
+	 * it already enumerates this exact hub successfully, so there is
+	 * no evidence it needs raising, and this fix is scoped to what
+	 * failed.
+	 */
+	IOSleep(50);
+
+	if (!hubGetPortStatus(hub, port, &status, &change)) {
+		return false;
+	}
+	if (!(status & kPortStatusEnable)) {
+		IOLog("BCM2837DWC2: hub port %u not enabled after reset (%#x)\n",
+		    port, status);
+		return false;
+	}
+
+	uint8_t speed = kUSBSpeedFull;
+	if (status & kPortStatusHighSpeed) {
+		speed = kUSBSpeedHigh;
+	} else if (status & kPortStatusLowSpeed) {
+		speed = kUSBSpeedLow;
+	}
+
+	/*
+	 * SPLIT transactions are needed only when this hub runs at high
+	 * speed but the device below it does not - then the hub has to
+	 * translate, and the host must address it explicitly. A
+	 * full-speed hub relays at its own speed and needs no splits.
+	 */
+	uint8_t splitHubAddr = 0, splitHubPort = 0;
+	if (hub->speed == kUSBSpeedHigh && speed != kUSBSpeedHigh) {
+		splitHubAddr = hub->address;
+		splitHubPort = port;
+	}
+
+	IOLog("BCM2837DWC2: hub port %u: status %#x -> speed=%s split=%s\n",
+	    port, status,
+	    (speed == kUSBSpeedHigh) ? "high" : (speed == kUSBSpeedLow) ? "low" : "full",
+	    (splitHubAddr != 0) ? "yes" : "no");
+
+	*speedOut = speed;
+	*splitHubAddrOut = splitHubAddr;
+	*splitHubPortOut = splitHubPort;
+	return true;
+}
+
+/*
  * Power up every downstream port, then reset and enumerate whatever is
  * attached. This is the step that reaches the LAN9514's Ethernet function.
  */
@@ -521,90 +809,11 @@ BCM2837DWC2::hubEnumeratePorts(DWC2USBDevice *hub)
 			hubClearPortFeature(hub, port, kHubFeatCPortConnection);
 		}
 
-		// USB 2.0 spec 7.1.7.3: let the connection settle before reset.
-		IOSleep(100);
-
-		if (!hubSetPortFeature(hub, port, kHubFeatPortReset)) {
-			IOLog("BCM2837DWC2: hub port %u reset failed\n", port);
-			continue;
-		}
-
-		// The hub drives reset itself and reports completion via
-		// C_PORT_RESET; poll rather than assuming a fixed duration.
-		bool resetDone = false;
-		for (int i = 0; i < 20; i++) {
-			IOSleep(10);
-			if (!hubGetPortStatus(hub, port, &status, &change)) {
-				break;
-			}
-			if (change & kPortChangeReset) {
-				resetDone = true;
-				break;
-			}
-			if (!(status & kPortStatusReset) && (status & kPortStatusEnable)) {
-				resetDone = true;
-				break;
-			}
-		}
-		if (!resetDone) {
-			IOLog("BCM2837DWC2: hub port %u reset did not complete "
-			      "(status %#x change %#x)\n", port, status, change);
-			continue;
-		}
-
-		hubClearPortFeature(hub, port, kHubFeatCPortReset);
-		/*
-		 * Reset recovery. USB 2.0 spec 7.1.7.5 (TRSTRCY) only mandates
-		 * 10ms, but real Linux (drivers/usb/core/hub.c, hub_port_reset())
-		 * unconditionally waits 50ms for every hub port it resets, root or
-		 * downstream, quirk table or not: `reset_recovery_time = 10 + 40`.
-		 * The +40ms is real-world margin Linux itself found the bare spec
-		 * minimum insufficient for, not something specific to any one
-		 * device. This was 20ms - under half that - and a real LAN9514's
-		 * downstream Ethernet function (0424:9514) failed every control
-		 * transfer to it, identically, 100% of the time
-		 * (docs/backlog.md's real-hardware log: XACTERR, byte-for-byte the
-		 * same register state on all 3 retries - deterministic, not the
-		 * transient noise a retry loop can paper over). The root port's
-		 * own 30ms recovery (BCM2837DWC2::portReset()) is left alone here:
-		 * it already enumerates this exact hub successfully, so there is
-		 * no evidence it needs raising, and this fix is scoped to what
-		 * failed.
-		 */
-		IOSleep(50);
-
-		if (!hubGetPortStatus(hub, port, &status, &change)) {
-			continue;
-		}
-		if (!(status & kPortStatusEnable)) {
-			IOLog("BCM2837DWC2: hub port %u not enabled after reset (%#x)\n",
-			    port, status);
-			continue;
-		}
-
 		uint8_t speed = kUSBSpeedFull;
-		if (status & kPortStatusHighSpeed) {
-			speed = kUSBSpeedHigh;
-		} else if (status & kPortStatusLowSpeed) {
-			speed = kUSBSpeedLow;
-		}
-
-		/*
-		 * SPLIT transactions are needed only when this hub runs at high
-		 * speed but the device below it does not - then the hub has to
-		 * translate, and the host must address it explicitly. A
-		 * full-speed hub relays at its own speed and needs no splits.
-		 */
 		uint8_t splitHubAddr = 0, splitHubPort = 0;
-		if (hub->speed == kUSBSpeedHigh && speed != kUSBSpeedHigh) {
-			splitHubAddr = hub->address;
-			splitHubPort = port;
+		if (!resetHubPort(hub, port, &speed, &splitHubAddr, &splitHubPort)) {
+			continue;
 		}
-
-		IOLog("BCM2837DWC2: hub port %u: status %#x -> speed=%s split=%s\n",
-		    port, status,
-		    (speed == kUSBSpeedHigh) ? "high" : (speed == kUSBSpeedLow) ? "low" : "full",
-		    (splitHubAddr != 0) ? "yes" : "no");
 
 		DWC2USBDevice *child = NULL;
 		if (!enumerateDevice(speed, hub->address, port,

@@ -641,6 +641,10 @@ private:
 	 */
 	IOLock                  *fBSDRegisterLock;
 
+	// Serializes reenumerateDevice() (DAR-373): at most one device at
+	// address 0 at a time.
+	IOLock                  *fEnumLock;
+
 	// Bring-up scaffolding (see the long comment at the call site in
 	// start()): owned for as long as this controller is, so the Ethernet
 	// driver they back has a live transport past start() returning. NULL
@@ -908,6 +912,36 @@ public:
 	bool     makeEndpoint(const DWC2USBDevice *dev, uint8_t epAddr, DWC2Endpoint *ep) const;
 
 	const DWC2USBDevice *deviceAt(uint32_t index) const;
+
+	/*
+	 * Reset the port an enumerated device sits on and enumerate it again,
+	 * into the same table slot at the same address (DAR-373). This is the
+	 * bus half of IOUSBDevice::ReEnumerateDevice(), which on real macOS
+	 * AppleUSBHubPort::ReEnumeratePort() does: RemoveDevice(), then
+	 * AddDevice() resets the port and enumerates what is there. The caller
+	 * has already torn the old IOUSBDevice down. The slot is marked not in
+	 * use for the duration, and stays that way if this fails.
+	 * `extraResetDelay` is kUSBAddExtraResetTimeMask: 100 ms more after the
+	 * reset, as AppleUSBHubPort does (sets it at AppleUSBHubPort.cpp:1391-1399,
+	 * sleeps at :1791-1798).
+	 * Blocking. Must not be called on the UIM's workloop. Retries the
+	 * reset-and-enumerate up to three times. On success *dev is the
+	 * re-enumerated entry.
+	 */
+	IOReturn reenumerateDevice(uint8_t address, bool extraResetDelay,
+	                           const DWC2USBDevice **dev);
+
+	// Mark an enumerated device gone (inUse false) ahead of
+	// reenumerateDevice(), so nothing - the UIM's on-demand endpoint
+	// creation in particular - can address it while it is being torn down.
+	IOReturn detachDevice(uint8_t address);
+
+	// The in-use table entry at `address`, or NULL.
+	const DWC2USBDevice *findDevice(uint8_t address) const;
+
+	// Whether startUSBHostController()'s rules publish this device (not a
+	// hub, not claimed by SMSC9514Ethernet).
+	bool     publishable(const DWC2USBDevice *dev) const;
 	uint32_t deviceCount(void) const { return fNumDevices; }
 
 	// Find the first enumerated device whose interface class matches, e.g.
@@ -921,9 +955,12 @@ private:
 
 	// Control transfers against the default (address 0 / unconfigured)
 	// pipe of a device that has just been reset.
+	// `reuse` (DAR-373): re-enumerate into this existing table slot and give
+	// the device back its old address, rather than taking a new slot and
+	// address.
 	bool enumerateDevice(uint8_t speed, uint8_t parentHubAddr, uint8_t parentPort,
 	                     uint8_t splitHubAddr, uint8_t splitHubPort,
-	                     DWC2USBDevice **outDev);
+	                     DWC2USBDevice **outDev, DWC2USBDevice *reuse = NULL);
 	bool parseConfiguration(DWC2USBDevice *dev, const uint8_t *cfg, uint32_t cfgLen);
 
 	// Hub class requests (USB 2.0 spec chapter 11).
@@ -933,6 +970,10 @@ private:
 	bool hubGetPortStatus(DWC2USBDevice *hub, uint8_t port,
 	                      uint16_t *status, uint16_t *change);
 	bool hubEnumeratePorts(DWC2USBDevice *hub);
+	bool resetHubPort(DWC2USBDevice *hub, uint8_t port, uint8_t *speed,
+	                  uint8_t *splitHubAddr, uint8_t *splitHubPort);
+	DWC2USBDevice *deviceByAddress(uint8_t address);
+	DWC2USBDevice *slotForAddress(uint8_t address, bool includeDetached);
 };
 
 #endif /* _BCM2837_DWC2_H */

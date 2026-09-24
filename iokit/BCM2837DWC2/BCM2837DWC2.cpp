@@ -1835,6 +1835,11 @@ BCM2837DWC2::start(IOService *provider)
 		return false;
 	}
 
+	fEnumLock = IOLockAlloc();
+	if (fEnumLock == NULL) {
+		IOLog("BCM2837DWC2: IOLockAlloc (enum) failed\n");
+		return false;
+	}
 	fBSDRegisterLock = IOLockAlloc();
 	if (fBSDRegisterLock == NULL) {
 		IOLog("BCM2837DWC2: IOLockAlloc (BSD register) failed\n");
@@ -2234,22 +2239,7 @@ BCM2837DWC2::startUSBHostController(void)
 	uint32_t published = 0;
 	for (uint32_t i = 0; i < fNumDevices; i++) {
 		const DWC2USBDevice *dev = deviceAt(i);
-		if (dev == NULL || !dev->inUse) {
-			continue;
-		}
-		if (dev->deviceClass == 9 /* USB hub class */) {
-			IOLog("BCM2837DWC2: skipping hub at address %u (no hub driver "
-			      "vendored; enumerateBus already walked its ports)\n",
-			    dev->address);
-			continue;
-		}
-		if (fEthernetDriver != NULL &&
-		    SMSC9514USBTransport::findEthernetFunction(this) == dev) {
-			// Already hand-wired to SMSC9514Ethernet above. Publishing a nub
-			// for it too would let a second driver open the same endpoints on
-			// a controller that has exactly one hardware channel.
-			IOLog("BCM2837DWC2: address %u already claimed by SMSC9514Ethernet\n",
-			    dev->address);
+		if (!publishable(dev)) {
 			continue;
 		}
 		if (fUSBController->PublishEnumeratedDevice(dev) == kIOReturnSuccess) {
@@ -2405,6 +2395,10 @@ BCM2837DWC2::free(void)
 	if (fBSDRegisterLock != NULL) {
 		IOLockFree(fBSDRegisterLock);
 		fBSDRegisterLock = NULL;
+	}
+	if (fEnumLock != NULL) {
+		IOLockFree(fEnumLock);
+		fEnumLock = NULL;
 	}
 	super::free();
 }

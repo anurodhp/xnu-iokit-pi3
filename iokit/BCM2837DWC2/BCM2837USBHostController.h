@@ -238,15 +238,20 @@ struct DWC2UIMEndpoint
  *                       result (IOUSBDevice.cpp:4233-4246). The one difference
  *                       is that GetDeviceInformation() now continues past the
  *                       call and records "not internal" from that zero.
- *   ReEnumeratePort     base class, kIOReturnUnsupported. The interfaces
- *                       and pipe zero are torn down either way, and nothing
- *                       comes back. With no parent _ReEnumerateDevice()
- *                       returned kIOReturnNoDevice. It now returns success,
- *                       and its thread's ReEnumeratePort() failure is ignored
- *                       (IOUSBDevice.cpp ProcessPortReEnumerate()). So a
- *                       caller is no longer told that recovery failed. Real
- *                       re-enumeration (re-publish from BCM2837DWC2's table)
- *                       is DAR-373.
+ *   ReEnumeratePort     real (DAR-373), as AppleUSBHubPort::ReEnumeratePort()
+ *                       does it: RemoveDevice() then add the device again
+ *                       (AppleUSBHubPort.cpp:1378-1420).
+ *                       Remove: detach it from the USB plane, wait up to 10 s
+ *                       for it to stop being busy, then terminate it
+ *                       synchronously (:1074-1150).
+ *                       Add: BCM2837DWC2::reenumerateDevice() resets the port
+ *                       and enumerates the device into the same table slot at
+ *                       the same address. PublishEnumeratedDevice() then
+ *                       creates a new IOUSBDevice, with a new one of these as
+ *                       its hub parent.
+ *                       Before DAR-373 this was the base class's
+ *                       kIOReturnUnsupported: _ReEnumerateDevice() tore the
+ *                       device down and nothing brought it back.
  *   Request/ReturnExtraPower  0 mA and success, what IOUSBDevice computes
  *                       with no parent. The base class would dereference
  *                       _device, the hub's own IOUSBHubDevice, which does
@@ -255,23 +260,28 @@ struct DWC2UIMEndpoint
  * Never started or registered. It is a plain object that IOUSBDevice
  * retains as its hub parent, not a node in the service or power planes.
  */
+class BCM2837USBHostController;
+
 class BCM2837USBPortPolicy : public IOUSBHubPolicyMaker
 {
 	OSDeclareDefaultStructors(BCM2837USBPortPolicy);
 
 public:
-	static BCM2837USBPortPolicy *withDevice(IOUSBDevice *device);
+	static BCM2837USBPortPolicy *withDevice(BCM2837USBHostController *controller,
+	    IOUSBDevice *device);
 
 	virtual bool		ConfigureHubDriver(void) override;
 	virtual IOReturn	HubPowerChange(unsigned long powerStateOrdinal) override;
 	virtual IOReturn	SuspendPort(UInt32 portNum, bool suspend) override;
 	virtual IOReturn	ResetPort(UInt32 portNum) override;
 	virtual IOReturn	GetPortInformation(UInt32 portNum, UInt32 *info) override;
+	virtual IOReturn	ReEnumeratePort(UInt32 portNum, UInt32 options) override;
 	virtual UInt32		RequestExtraPower(UInt32 portNum, UInt32 type, UInt32 requestedPower) override;
 	virtual IOReturn	ReturnExtraPower(UInt32 portNum, UInt32 type, UInt32 returnedPower) override;
 
 private:
 	IOUSBDevice    *fDevice;      // not retained: it retains us (SetHubParent)
+	BCM2837USBHostController *fController;  // not retained: outlives every device it publishes
 };
 
 class BCM2837USBHostController : public IOUSBControllerV2
@@ -303,6 +313,17 @@ public:
 	 * thread (IOUSBController_Pipes.cpp:363-367).
 	 */
 	IOReturn	PublishEnumeratedDevice(const DWC2USBDevice *dev);
+
+	/*
+	 * The add half of BCM2837USBPortPolicy::ReEnumeratePort() (DAR-373):
+	 * re-enumerate the device at `address` on the bus, then publish it
+	 * again. Same thread rules as PublishEnumeratedDevice(); the caller has
+	 * already terminated the old nub.
+	 */
+	IOReturn	ReEnumerateAddress(UInt8 address, bool extraResetDelay);
+	// The first step of re-enumeration: mark the address gone in
+	// BCM2837DWC2's table before the old IOUSBDevice is torn down.
+	void		DetachAddress(UInt8 address);
 
 	// ---------------- UIM: initialisation ----------------
 	virtual IOReturn	UIMInitialize(IOService *provider) override;
@@ -419,6 +440,12 @@ private:
 	uint64_t             fEngineStatsSince;
 	UInt32               fAsyncEvents;       // async completions delivered by interrupt
 	UInt32               fAsyncPolled;       // ... found by the engine's poll instead
+
+	// usb-reenum-test boot-arg (DAR-373 verification): see UIMInitialize().
+	thread_call_t        fReenumTestCall;
+	UInt32               fReenumTestMask;
+	static void		reenumTestFired(thread_call_param_t owner, thread_call_param_t);
+	static IOReturn		purgeAddressGated(OSObject *owner, void *arg0, void *, void *, void *);
 
 	// Poked by BCM2837DWC2::interruptOccurred() when a parked channel halts.
 	// Runs asyncEventFired() on this controller's workloop.
