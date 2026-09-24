@@ -81,8 +81,16 @@
  *     reference_qemu_lan9514_never_emulated) and real-hardware time was not
  *     available this session (DAR-351).
  *   - Isochronous transfers are unimplemented and will not be: no consumer.
- *   - One transfer at a time on the single active channel, no queueing
- *     across channels, no cross-channel async completion callbacks.
+ *   - UPDATE (DAR-370): no longer strictly one channel. Channel 0 is still
+ *     the synchronous path for everything above (control, OUT, interrupt,
+ *     split, and all of SMSC9514Ethernet's traffic). But channels
+ *     1..kDWC2AsyncChannels can now each hold one parked, non-split bulk
+ *     IN transfer for the IOUSBFamily UIM, with completion by interrupt
+ *     (asyncStart() and friends, see the public header section). That is
+ *     the mechanism DAR-351's "second channel dedicated to RX" needs, but
+ *     SMSC9514Ethernet does not use it yet: its RX still polls channel 0.
+ *     Not done: periodic (interrupt-endpoint) scheduling in hardware, and
+ *     split transactions on a parked channel.
  */
 
 #ifndef _BCM2837_DWC2_H
@@ -467,6 +475,19 @@ struct DWC2USBDevice {
 
 #define kDWC2MaxDevices 8
 
+// GHWCFG2.NUM_HOST_CHAN is a 4-bit field (count - 1), so 16 is the most any
+// core can report. Real BCM2837 and the QEMU model both report 8.
+#define kDWC2MaxChannels 16
+
+// Channels lent out to parked asynchronous IN transfers (see asyncStart()).
+// Channel 0 always stays with the synchronous path. 4 is more than this
+// board has bulk IN endpoints (QEMU's usb-net has one, the LAN9514 one).
+#define kDWC2AsyncChannels 4
+
+// Per-channel DMA buffer for a parked transfer. Covers the UIM's own
+// 16 KB staging chunk, which is the most it ever asks for at once.
+#define kDWC2AsyncBufferSize (16 * 1024)
+
 // Forward-declared rather than #included here so that BCM2837DWC2.h - a
 // chip-agnostic host controller header - does not pull in the SMSC-specific
 // classes just to hold two owned pointers to them. Both are only ever
@@ -475,6 +496,7 @@ class SMSC9514USBTransport;
 class SMSC9514Ethernet;
 class IONetworkStack;
 class BCM2837USBHostController;
+class IOInterruptEventSource;
 
 class BCM2837DWC2 : public IOService
 {
@@ -534,18 +556,16 @@ private:
 	 * thread_wakeup_prim(), confirmed safe at interrupt level in xnu's
 	 * IOLocks.cpp, same as SDHCI's own comment documents).
 	 *
-	 * Scoped to ONE channel deliberately, matching this whole driver's
-	 * existing one-channel-at-a-time design (see the class header's own
-	 * "u-boot hardcodes one host channel... kept, for now" note) --
-	 * fPendingHcInt accumulates whatever HCINT bits interruptOccurred()/
-	 * the poll fallback in waitForChannelInt() have observed for
-	 * kDWC2Channel since the last consumer drained it, not a per-channel
-	 * array. Revisit alongside that same "nothing here issues concurrent
-	 * transfers yet" scope note if this ever grows past one channel.
+	 * Per channel since DAR-370: fPendingHcInt[chan] accumulates the HCINT
+	 * bits interruptOccurred() or the poll fallback in waitForChannelInt()
+	 * have seen for that channel since its last consumer drained it.
+	 * Waiters sleep on &fPendingHcInt[chan]. Channel 0 is the synchronous
+	 * path, and channels 1..kDWC2AsyncChannels are parked async IN
+	 * transfers (asyncStart()).
 	 */
 	IOLock                  *fInterruptLock;
 	IOSimpleLock            *fStatusLock;
-	uint32_t                 fPendingHcInt;
+	uint32_t                 fPendingHcInt[kDWC2MaxChannels];
 	uint32_t                 fRealInterruptHits;
 	uint32_t                 fPollFallbackHits;
 	bool                     fLoggedRealInterrupt;
@@ -585,6 +605,24 @@ private:
 	 * physical power cycle until the full fix lands.
 	 */
 	bool                     fChannelWedged;
+
+	/*
+	 * Parked asynchronous IN transfers (DAR-370). See asyncStart().
+	 * Everything here except fAsyncBusy and fAsyncNotify is touched only
+	 * from the one thread the async API's caller serializes on (the UIM's
+	 * workloop). interruptOccurred() reads fAsyncBusy[] and fAsyncNotify.
+	 * Both are published before the channel is enabled, with a barrier.
+	 */
+	IOBufferMemoryDescriptor *fAsyncDMABuffer;
+	uint8_t                  *fAsyncDMAVirt;
+	uint64_t                  fAsyncDMABusAddr;
+	uint32_t                  fAsyncChannelCount;  // usable async channels, 0 if none
+	volatile bool             fAsyncBusy[kDWC2MaxChannels];
+	bool                      fAsyncWedged[kDWC2MaxChannels];
+	uint32_t                  fAsyncLen[kDWC2MaxChannels];
+	IOInterruptEventSource * volatile fAsyncNotify;
+	uint32_t                  fAsyncStarts;
+	uint32_t                  fAsyncInterrupts;
 
 	/*
 	 * DAR-297: registerInterfaceWithBSD() can be reached from two
@@ -675,10 +713,23 @@ private:
 	bool portReset(void);
 
 	bool allocateDMABuffer(void);
+	bool allocateAsyncDMABuffer(void);
+	bool allocateContiguousDMA(uint32_t size, const char *what,
+	    IOBufferMemoryDescriptor **bmdOut, void **virtOut, uint64_t *busOut);
+	uint32_t channelInBytesDone(uint32_t chan, uint32_t xferLen) const;
+	uint8_t  channelNextPid(uint32_t chan) const;
+	void asyncRelease(uint32_t chan);
+	IOReturn asyncFinish(uint32_t chan, DWC2Endpoint *ep, uint32_t hcint,
+	    void *dst, uint32_t dstLen, uint32_t *actualLen);
 
 	// Wait out one already-armed chunk and decode the result. Takes no
 	// buffer or PID: doTransfer owns those and the multi-chunk loop.
 	IOReturn transferChunk(uint32_t xferLen, bool isIn, uint32_t *actualLen, uint32_t *hcintOut);
+
+	// Decode a halted channel's HCINT into an IOReturn and the byte count.
+	// Shared by transferChunk() (channel 0) and the async path.
+	IOReturn decodeChannelResult(uint32_t chan, uint32_t hcint, uint32_t xferLen,
+	    bool isIn, uint32_t *actualLen);
 
 	// Wait for a halt OR an un-halted NAK, and force a still-enabled channel
 	// down. See the implementations for why a NAKed non-periodic channel does
@@ -687,7 +738,7 @@ private:
 	bool waitForChannelSettled(uint32_t chan, uint32_t timeoutMS, uint32_t *hcintOut);
 	void haltChannel(uint32_t chan, uint32_t *hcintOut);
 
-	void channelInit(DWC2Endpoint *ep, bool isIn, bool useSplit);
+	void channelInit(uint32_t chan, DWC2Endpoint *ep, bool isIn, bool useSplit);
 
 	/*
 	 * The real workhorse; transfer() and controlTransfer() are both thin
@@ -774,8 +825,61 @@ public:
 	                       void *buffer, uint32_t len, uint32_t *actualLen,
 	                       uint32_t timeoutMS);
 
+	/*
+	 * --- Parked asynchronous IN transfers (DAR-370) ---
+	 *
+	 * transferStage() makes one attempt and gives up on a NAK. That is
+	 * right for control and OUT stages, but a bulk IN that is idle for
+	 * minutes then has to be re-asked by software, and the UIM used to do
+	 * that every frame. In buffer-DMA mode the core retries a NAKed
+	 * non-periodic transaction by itself for as long as the channel stays
+	 * enabled (waitForChannelSettled()'s comment; QEMU's model does the
+	 * same, third_party/qemu-zhuowei/hw/usb/hcd-dwc2.c:359-368 "for
+	 * ctrl/bulk, automatically retry on NAK"). Not yet confirmed on real
+	 * BCM2837 silicon for a parked channel.
+	 * With only CHHLTD unmasked in HCINTMSK, a NAK raises no interrupt,
+	 * and the channel halts with XFERCOMP when the data arrives.
+	 *
+	 * So an IN transfer can be parked on a channel of its own and left
+	 * there. asyncStart() arms it and returns the channel. The UIM can't
+	 * be called from interrupt context, so when a parked channel halts,
+	 * interruptOccurred() pokes the IOInterruptEventSource given to
+	 * setAsyncNotify(). That source runs on the UIM's workloop, which
+	 * calls asyncCollect(). asyncAbort() takes a parked transfer back.
+	 *
+	 * Only non-split, non-periodic IN transfers are eligible
+	 * (asyncEligible()). Periodic endpoints halt on every NAK, so parking
+	 * them would mean one interrupt per (micro)frame. Split transactions
+	 * need the SSPLIT/CSPLIT state machine in doTransfer(). Both stay on
+	 * channel 0.
+	 *
+	 * Serialization: every call here must come from one thread at a time.
+	 * The UIM makes all of them from its workloop. None of them take
+	 * fTransferLock, because they touch only their own channel's
+	 * registers, their own slice of fAsyncDMAVirt and HAINTMSK, and
+	 * nothing on channel 0 touches those.
+	 */
+	void     setAsyncNotify(IOInterruptEventSource *source);
+	bool     asyncEligible(const DWC2Endpoint *ep, bool isIn) const;
+	// Returns the channel number, or -1 if no channel is free (the caller
+	// falls back to transferStage()). Uses and later updates ep->toggle.
+	// *xferLen gets the chunk actually armed, at most kDWC2AsyncBufferSize.
+	int      asyncStart(DWC2Endpoint *ep, uint32_t len, uint32_t *xferLenOut);
+	// false: still parked. true: finished, the channel is free again,
+	// *status/*actualLen are set and up to dstLen bytes were copied to dst.
+	// *hcint is the halt's HCINT (latched NAKs removed), so a caller can
+	// tell a transient XACTERR from other errors and retry it.
+	bool     asyncCollect(int chan, DWC2Endpoint *ep, void *dst, uint32_t dstLen,
+	                      uint32_t *actualLen, IOReturn *status, uint32_t *hcint);
+	// Halt a parked transfer and free its channel. Bytes that had already
+	// arrived are copied out and reported, because the data toggle has
+	// already moved past them.
+	IOReturn asyncAbort(int chan, DWC2Endpoint *ep, void *dst, uint32_t dstLen,
+	                    uint32_t *actualLen);
+
 	// Current USB frame number, HFNUM.FRNUM (14 bits, wraps every 16384
-	// frames). The UIM extends this to 64 bits itself.
+	// SOFs: 16 s at full speed, 2 s at high speed, where SOFs are
+	// microframes). The UIM extends this to 64 bits itself.
 	uint32_t frameNumber(void) const;
 
 	// Raw HPRT0, for the UIM's root-hub GET_PORT_STATUS simulation. Returned

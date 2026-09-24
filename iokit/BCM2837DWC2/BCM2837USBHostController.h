@@ -99,6 +99,7 @@
 
 #include <IOKit/usb/IOUSBControllerV2.h>
 #include <IOKit/IOTimerEventSource.h>
+#include <IOKit/IOInterruptEventSource.h>
 
 #include "BCM2837DWC2.h"
 
@@ -125,12 +126,13 @@ struct DWC2UIMTransfer
 	bool                 useInlineData;
 	UInt32               length;
 	UInt32               done;
-	// Consecutive engine ticks this transfer has been attempted without
-	// moving a single byte. Reset by any progress. This is what separates
+	// Absolute time of the first attempt since this transfer last moved a
+	// byte; 0 = not stalled. Reset by any progress. This is what separates
 	// "the device is NAKing because it has nothing for us yet", which is
 	// normal and unbounded for an IN transfer, from "this transfer is wedged",
 	// which has to fail eventually for control and OUT transfers.
-	UInt32               stalledTicks;
+	uint64_t             stallStart;
+	UInt32               xactErrors;    // consecutive XACTERRs on a parked chunk
 	UInt8                pid;
 	bool                 usePid;       // control stage: drive `pid`, not the endpoint toggle
 	bool                 isIn;
@@ -164,6 +166,14 @@ struct DWC2UIMEndpoint
 	UInt32               periodUS;       // interrupt: bInterval as microseconds; 0 = not periodic
 	UInt32               backoffUS;      // bulk IN: current NAK back-off step
 	uint64_t             nextDue;        // absolute time of the next attempt; 0 = due now
+
+	// Parked on a DWC2 async channel (DAR-370): the channel number, or -1.
+	// While parked, the head transfer belongs to the hardware and the
+	// timer engine leaves this endpoint alone. asyncReq is the chunk the
+	// channel was armed for, which is what a short packet is measured
+	// against.
+	int                  asyncChan;
+	UInt32               asyncReq;
 };
 
 class BCM2837USBHostController : public IOUSBControllerV2
@@ -302,12 +312,20 @@ private:
 	// GetFrameNumber()'s 64-bit extension of HFNUM. See sampleFrameNumber().
 	UInt64               fFrameNumber64;
 	uint64_t             fFrameSampleTime;
+	IOSimpleLock        *fFrameLock;
 
 	// Engine wake-up accounting for the usb-engine-stats boot-arg (DAR-370).
 	bool                 fEngineStats;
 	UInt32               fEngineWakeups;
 	UInt32               fEngineAttempts;
 	uint64_t             fEngineStatsSince;
+	UInt32               fAsyncEvents;       // async completions delivered by interrupt
+	UInt32               fAsyncPolled;       // ... found by the engine's poll instead
+
+	// Poked by BCM2837DWC2::interruptOccurred() when a parked channel halts.
+	// Runs asyncEventFired() on this controller's workloop.
+	IOInterruptEventSource *fAsyncEvent;
+	bool                 fAsyncEventDeferred;  // doorbell rang inside an fInEngine section
 
 	// Root-hub interrupt (status change) pipe, endpoint 1. Nothing in this
 	// kernel opens it - AppleUSBHub is not vendored - but a queued read must
@@ -320,6 +338,15 @@ private:
 			    UInt8 direction, UInt8 transferType, UInt16 maxPacketSize);
 	void			reapRetiredEndpoints(void);
 	void			returnTransfers(DWC2UIMEndpoint *ep, IOReturn status);
+	void			completeHead(DWC2UIMEndpoint *ep, IOReturn status);
+
+	// Parked async bulk IN (DAR-370). See "PARKED BULK IN" in the .cpp.
+	bool			startAsync(DWC2UIMEndpoint *ep);
+	void			kickAsync(void);
+	void			leaveEngine(void);
+	void			collectAllAsync(void);
+	bool			collectAsync(DWC2UIMEndpoint *ep, bool abort);
+	static void		asyncEventFired(OSObject *owner, IOInterruptEventSource *sender, int count);
 
 	IOReturn		enqueueTransfer(DWC2UIMEndpoint *ep, IOUSBCompletion completion,
 			    IOMemoryDescriptor *memDesc, const void *inlineData, UInt32 length,
