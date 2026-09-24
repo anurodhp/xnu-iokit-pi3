@@ -408,10 +408,22 @@ scripting-language runtime as a goal in itself):
   unconditionally, for the `IOGPoint`/`IOGBounds` cursor-geometry types
   that `StdFBShmem_t` is declared in terms of. Every IOGraphics source
   that reaches `IOFramebuffer.h` stops there with a hard `file not
-  found` before any other gap is visible (found by compiling). Nothing
-  in `IOHIDFamily` is built, and the rest of that repo — the HID event
-  system, keyboard/pointer drivers, `IOHIDSystem` — stays as
-  inapplicable here as the rest of this bucket.
+  found` before any other gap is visible (found by compiling).
+  **Revisited 2026-09-24 (DAR-245):** now that HDMI output works, a USB
+  keyboard makes the board usable without a serial cable. The real
+  kernel path for that is USB HID → `IOUSBHIDDriver` (IOUSBFamily-560.4.2)
+  → `IOHIDDevice`/`IOHIDInterface` → `IOHIDEventDriver` → `IOHIDKeyboard`
+  legacy shim → `IOHIDSystem` → `cons_cinput()` (IOHIDSystem.cpp:2311-2317).
+  So the kernel half of `IOHIDFamily` is no longer "inapplicable". All 91
+  kernel sources in the kext target's Sources phase compile against the
+  real kernel flags (`tools/iohid_gap_audit.sh`), after
+  `tools/patch_iohid_gaps.sh` and `compat/iohid/`. Userspace HID
+  (`IOHIDManager`, `hidd`, event-system plugins) stays out of scope:
+  there is no window server. Two findings about the drop itself:
+  `AppleHIDUsageTables.h` is a license-only stub in every tag from 1090
+  to 2238 (the last real one is 1035.70.7), and 1633.81.2 is published
+  unifdef'd for macOS (1633.60.4 still has the `TARGET_OS_IPHONE` blocks),
+  which is why the keyboard-shim path survives an iPhoneOS-SDK build.
   This project's own `third_party/xnu-7195` already does the hard part:
   `pexpert/arm/pe_init.c`'s `bcm2837_video_init()` already queries the
   VideoCore GPU over the mailbox for a real HDMI framebuffer and

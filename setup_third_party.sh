@@ -149,8 +149,12 @@
 #     verified like IOPCIFamily: `distribution-macOS` at `macos-112`
 #     (release.json:105-106) names `IOHIDFamily-1633.81.2`, which is the
 #     tag pinned here -- resolved from the manifest, not picked by
-#     recency. Only `IOHIDSystem/IOKit/hidsystem/IOHIDTypes.h` is used;
-#     nothing in IOHIDFamily is compiled.
+#     recency. UPDATE 2026-09-24 (DAR-245): the kernel half is now being
+#     ported for USB keyboard input (see docs/apple-oss-catalog.md). All 91
+#     kext sources compile via tools/iohid_gap_audit.sh, which runs
+#     tools/patch_iohid_gaps.sh first. That script also fetches two OLDER
+#     tags on demand (1035.70.7 for AppleHIDUsageTables.h, 1633.60.4 for the
+#     FastPath user client), which is why this pin stays a plain clone.
 #   - hfs, IOStorageFamily, IOUSBFamily, IONetworkingFamily, msdosfs: unmodified Apple
 #     open-source reference sources, pinned to an exact tag, no patching.
 #     CORRECTED 2026-08-24: a full `distribution-macOS` `macos-112` manifest
