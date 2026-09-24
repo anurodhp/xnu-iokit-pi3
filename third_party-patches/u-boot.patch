@@ -198,3 +198,100 @@ index 7c36d420..5c0c5fbf 100644
 -- 
 2.50.1 (Apple Git-155)
 
+From 9a104b7748ad783b0c06317b1b871f5539cd8f19 Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@icloud.com>
+Date: Thu, 24 Sep 2026 09:44:35 -0400
+Subject: [PATCH 4/5] tools: build mkimage with current Apple ld (__DATA +
+ getsectiondata)
+
+The image-type pointer table was placed in a __TEXT section on Darwin.
+Current Apple ld rejects that ("Found illegal text-relocations"), and it
+now ignores the old -ld_classic workaround, so the host tools, and with
+them u-boot.bin, no longer built on this Mac. Move the table to __DATA
+and read it back with getsectiondata(&_mh_execute_header, ...). That
+call returns the ASLR-slid address; getsectdata() returns the unslid
+link address, which is wrong now that -no_pie is ignored as well.
+Verified: `tools/mkimage -T list` enumerates the table.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KoqmMnurgsRLRGacB3oUcc
+---
+ tools/imagetool.h | 14 ++++++++++++--
+ 1 file changed, 12 insertions(+), 2 deletions(-)
+
+diff --git a/tools/imagetool.h b/tools/imagetool.h
+index e1c778b0..d1a1fb29 100644
+--- a/tools/imagetool.h
++++ b/tools/imagetool.h
+@@ -265,17 +265,27 @@ int rockchip_copy_image(int fd, struct image_tool_params *mparams);
+  *  b) we need a API call to get the respective section symbols */
+ #if defined(__MACH__)
+ #include <mach-o/getsect.h>
++#include <mach-o/ldsyms.h>
+ 
++/*
++ * The table holds pointers, so it lives in __DATA: current Apple ld
++ * rejects text relocations outright ("Found illegal text-relocations",
++ * and -ld_classic is ignored). It is read back with getsectiondata()
++ * against this image's own header, which returns the ASLR-slid address;
++ * getsectdata() returns the unslid link-time address, which is wrong once
++ * the tool is PIE (and -no_pie is ignored on current macOS too).
++ */
+ #define INIT_SECTION(name)  do {					\
+ 		unsigned long name ## _len;				\
+-		char *__cat(pstart_, name) = getsectdata("__TEXT",	\
++		char *__cat(pstart_, name) = (char *)getsectiondata(	\
++			&_mh_execute_header, "__DATA",			\
+ 			#name, &__cat(name, _len));			\
+ 		char *__cat(pstop_, name) = __cat(pstart_, name) +	\
+ 			__cat(name, _len);				\
+ 		__cat(__start_, name) = (void *)__cat(pstart_, name);	\
+ 		__cat(__stop_, name) = (void *)__cat(pstop_, name);	\
+ 	} while (0)
+-#define SECTION(name)   __attribute__((section("__TEXT, " #name)))
++#define SECTION(name)   __attribute__((section("__DATA, " #name)))
+ 
+ struct image_type_params **__start_image_type, **__stop_image_type;
+ #else
+-- 
+2.54.0 (Apple Git-157)
+
+
+From 8b25a24de0bc580da52e72e12e22b4d66732f1b7 Mon Sep 17 00:00:00 2001
+From: Anurodh Pokharel <anurodhp@icloud.com>
+Date: Thu, 24 Sep 2026 09:44:35 -0400
+Subject: [PATCH 5/5] rpi3_xnu_defconfig: add hdmi_console=1 hid-legacy-shim=1
+ to bootargs
+
+Real-hardware counterparts of what runvm_hdmi.sh passes under QEMU:
+- hdmi_console=1: the kernel's own HDMI text console (DAR-331,
+  osfmk/arm/arm_init.c).
+- hid-legacy-shim=1: Apple's IOHIDEventService boot-arg that enables the
+  kernel keyboard shim, so a USB keyboard's keystrokes reach the console
+  through IOHIDSystem -> cons_cinput (DAR-245; off by default outside
+  single-user mode).
+
+Neither is verified on real hardware yet.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01KoqmMnurgsRLRGacB3oUcc
+---
+ configs/rpi3_xnu_defconfig | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/configs/rpi3_xnu_defconfig b/configs/rpi3_xnu_defconfig
+index 5c0c5fbf..a884a5bd 100644
+--- a/configs/rpi3_xnu_defconfig
++++ b/configs/rpi3_xnu_defconfig
+@@ -8,7 +8,7 @@ CONFIG_ENV_SIZE=0x4000
+ CONFIG_NR_DRAM_BANKS=1
+ CONFIG_DISTRO_DEFAULTS=y
+ CONFIG_OF_BOARD_SETUP=y
+-CONFIG_BOOTCOMMAND="setenv bootargs \"rd=disk0s2 serial=3\"; fatload mmc 0:1 0x04000000 kernel.development.bcm2837.unstripped; fatload mmc 0:1 0x06000000 rpi3.dtb; bootxnu 0x04000000 0x06000000"
++CONFIG_BOOTCOMMAND="setenv bootargs \"rd=disk0s2 serial=3 hdmi_console=1 hid-legacy-shim=1\"; fatload mmc 0:1 0x04000000 kernel.development.bcm2837.unstripped; fatload mmc 0:1 0x06000000 rpi3.dtb; bootxnu 0x04000000 0x06000000"
+ CONFIG_USE_PREBOOT=y
+ CONFIG_PREBOOT="usb start"
+ CONFIG_MISC_INIT_R=y
+-- 
+2.54.0 (Apple Git-157)
+
