@@ -352,6 +352,50 @@ if LC_ALL=C grep -q 'const const' "$F"; then
 	exit 1
 fi
 
+# 3. AppleUSBCDCECMData::receivePacket() drops a frame larger than
+#    fMax_Block_Size but has no lower bound, so a runt (shorter than an
+#    Ethernet header) is counted in inputPackets and handed up the stack.
+#    With IONetworkInterface's own DAR-374 guard (acceptInputFrame(), xnu
+#    fork) that no longer panics, but the driver would still claim the frame
+#    as received. Reject it next to the oversize check, counted the same way.
+#    Found when an 8-byte bulk-IN completion reached dlil as len -6 and
+#    panicked (DAR-374; DAR-371 was the QEMU model bug that produced it).
+F="$CDC_SRC/AppleUSBCDCECMData.cpp"
+if ! LC_ALL=C grep -q 'receivePacket - Runt frame, packet dropped' "$F"; then
+	python3 - "$F" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p, encoding='latin-1').read()
+anchor = """    if (size > fControlDriver->fMax_Block_Size)
+    {
+        XTRACE(this, 0, 0, "receivePacket - Packet size error, packet dropped");
+        if (fControlDriver->fInputErrsOK)
+            fpNetStats->inputErrors++;
+        return;
+    }
+"""
+add = """
+        // Too short to be an Ethernet frame (two addresses and a type).
+        // Added by tools/vendor_usb_into_xnu.sh, FIX 3 (DAR-374).
+    if (size < (2 * kIOEthernetAddressSize + 2))
+    {
+        XTRACE(this, 0, size, "receivePacket - Runt frame, packet dropped");
+        if (fControlDriver->fInputErrsOK)
+            fpNetStats->inputErrors++;
+        return;
+    }
+"""
+if s.count(anchor) != 1:
+    sys.exit("anchor count %d" % s.count(anchor))
+s = s.replace(anchor, anchor + add)
+open(p, 'w', encoding='latin-1').write(s)
+PY
+fi
+if ! LC_ALL=C grep -q 'receivePacket - Runt frame, packet dropped' "$F"; then
+	echo "error: AppleUSBCDCECMData.cpp runt-frame fix did not apply" >&2
+	exit 1
+fi
+
 # ---------------------------------------------------------------------
 # iokit/conf/files entries.
 #

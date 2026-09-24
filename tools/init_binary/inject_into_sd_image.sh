@@ -430,6 +430,17 @@ else
     echo "= tools/userland_staging/ifconfig.macho not built -- run build_ifconfig.sh first if wanted, skipping"
 fi
 
+if [ -f tools/userland_staging/netstat.macho ]; then
+    mkdir -p "$MNT/usr/sbin"
+    cp tools/userland_staging/netstat.macho "$MNT/usr/sbin/netstat"
+    chmod 755 "$MNT/usr/sbin/netstat"
+    echo "+ wrote $(wc -c < tools/userland_staging/netstat.macho) bytes to $MNT/usr/sbin/netstat"
+    echo "  (real, unmodified Apple netstat -- see"
+    echo "  tools/userland_staging/build_netstat.sh)"
+else
+    echo "= tools/userland_staging/netstat.macho not built -- run build_netstat.sh first if wanted, skipping"
+fi
+
 if [ -f tools/userland_staging/ping.macho ]; then
     mkdir -p "$MNT/sbin"
     cp tools/userland_staging/ping.macho "$MNT/sbin/ping"
