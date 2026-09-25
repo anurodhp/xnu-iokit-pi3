@@ -131,19 +131,49 @@ nowAbs(void)
 }
 
 /*
- * bInterval -> microseconds, decoded as AppleUSBEHCI_UIM.cpp:2629-2643 does.
+ * bInterval -> microseconds, decoded as AppleUSBEHCI_UIM.cpp:2629-2643 does,
+ * then limited the way its AllocateInterruptBandwidth() limits it
+ * (AppleUSBEHCI_UIM.cpp:5111-5133). EHCI's periodic schedule is
+ * kEHCIMaxPollingInterval = 32 frames deep (USBEHCI.h:109), so no endpoint
+ * is ever polled less often than every 32 ms, and a full/low-speed period is
+ * rounded down to a power of two.
+ *
+ * The cap is not cosmetic. A full-speed hub asks for bInterval 255, and
+ * AppleUSBHubPort::Resume() gives the hub's C_PORT_SUSPEND change 100 ms to
+ * arrive (AppleUSBHubPort.cpp WaitForSuspendCommand(&_portPMState, 100),
+ * which is a plain IOSleep() outside the gate). At 255 ms the change came
+ * too late: AppleUSBCDCECMData::enable() looked for its pipes while the
+ * interface was still at alternate setting 0, and the late
+ * kIOUSBMessagePortHasBeenResumed then read through the NULL fInPipe
+ * (DAR-353, QEMU `ifconfig en0 down; ifconfig en0 up`).
+ *
  * speed is IOUSBFamily's kUSBDeviceSpeed*. The caller has already rejected
  * pollingRate 0, as AppleUSBEHCI_UIM.cpp:2583-2584 does.
  */
+#define kEHCIMaxPollingIntervalMS	32
+
 static UInt32
 interruptPeriodUS(short speed, short pollingRate)
 {
 	if (speed == kUSBDeviceSpeedHigh) {
 		// EHCI clamps an out-of-range exponent to 16; same here.
 		int exp = (pollingRate > 16) ? 16 : pollingRate;
-		return (UInt32)(125U << (exp - 1));
+		UInt32 uframes = 1U << (exp - 1);
+		if (uframes > kEHCIMaxPollingIntervalMS * 8) {
+			uframes = kEHCIMaxPollingIntervalMS * 8;
+		}
+		return uframes * 125U;
 	}
-	return (UInt32)pollingRate * 1000U;
+	UInt32 frames;
+	if (pollingRate > kEHCIMaxPollingIntervalMS) {
+		frames = kEHCIMaxPollingIntervalMS;
+	} else {
+		frames = 1;
+		while ((frames << 1) <= (UInt32)pollingRate) {
+			frames <<= 1;
+		}
+	}
+	return frames * 1000U;
 }
 
 // How long a transfer may make no progress before it is failed. Control and
