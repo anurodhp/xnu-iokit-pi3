@@ -801,6 +801,11 @@ BCM2837USBHostController::serviceTransfer(DWC2UIMEndpoint *ep, bool *progressed)
 		if (status == kIOReturnNotResponding) {
 			// BCM2837DWC2 reports a real endpoint STALL this way.
 			status = kIOUSBPipeStalled;
+		} else if (status == kIOReturnDeviceError) {
+			// A transaction error that outlasted the retries (see
+			// BCM2837DWC2::doTransfer()): "not responding", as
+			// mungeEHCIStatus() reports it (AppleUSBEHCI_UIM.cpp:1223-1224).
+			status = kIOReturnNotResponding;
 		}
 		goto finished;
 	}

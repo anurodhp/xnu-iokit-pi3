@@ -983,6 +983,38 @@ BCM2837DWC2::transferChunk(uint32_t xferLen, bool isIn, uint32_t *actualLen, uin
 }
 
 /*
+ * Transfer-failure logging is rate limited: the console is polled serial on
+ * a single CPU, and a device that fails every poll (an unplugged keyboard, a
+ * dead TT) otherwise turns each 10 ms poll into a line that starves the
+ * system. At most kFailLogBurst lines per second; the count of dropped ones
+ * is reported when the next window opens. Unlocked on purpose - a lost
+ * increment only miscounts a diagnostic.
+ */
+bool
+BCM2837DWC2::failLogAllowed(void)
+{
+	static const uint32_t kFailLogBurst = 10;
+	uint64_t now = mach_absolute_time();
+	uint64_t window;
+	nanoseconds_to_absolutetime(NSEC_PER_SEC, &window);
+	if (fFailLogWindowStart == 0 || now - fFailLogWindowStart >= window) {
+		if (fFailLogSuppressed != 0) {
+			IOLog("BCM2837DWC2: %u transfer-failure message(s) suppressed\n",
+			    fFailLogSuppressed);
+		}
+		fFailLogWindowStart = now;
+		fFailLogCount = 0;
+		fFailLogSuppressed = 0;
+	}
+	if (fFailLogCount < kFailLogBurst) {
+		fFailLogCount++;
+		return true;
+	}
+	fFailLogSuppressed++;
+	return false;
+}
+
+/*
  * Decode what a halted channel reports. Split out of transferChunk() for
  * DAR-370 so the async path decodes a parked channel exactly the way the
  * synchronous path does.
@@ -1072,10 +1104,12 @@ BCM2837DWC2::decodeChannelResult(uint32_t chan, uint32_t hcint, uint32_t xferLen
 	} else if (hcint & kHCINT_DATATGLERR) {
 		reason = "DATATGLERR (data toggle mismatch)";
 	}
-	IOLog("BCM2837DWC2: transfer failed on channel %u: %s (HCINT=%#x HCCHAR=%#x "
-	      "HCSPLT=%#x HCTSIZ=%#x xferLen=%u)\n",
-	    chan, reason, hcint, regRead(hcOffset(chan, kDWC2_HCCHAR)),
-	    regRead(hcOffset(chan, kDWC2_HCSPLT)), hctsiz, xferLen);
+	if (failLogAllowed()) {
+		IOLog("BCM2837DWC2: transfer failed on channel %u: %s (HCINT=%#x HCCHAR=%#x "
+		      "HCSPLT=%#x HCTSIZ=%#x xferLen=%u)\n",
+		    chan, reason, hcint, regRead(hcOffset(chan, kDWC2_HCCHAR)),
+		    regRead(hcOffset(chan, kDWC2_HCSPLT)), hctsiz, xferLen);
+	}
 
 	return kIOReturnIOError;
 }
@@ -1240,10 +1274,26 @@ BCM2837DWC2::doTransfer(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
 			if (!(ret == kIOReturnIOError && (hcint & kHCINT_XACTERR))) {
 				break;
 			}
-			if (attempt + 1 < 3) {
+			if (attempt + 1 < 3 && failLogAllowed()) {
 				IOLog("BCM2837DWC2: XACTERR on attempt %u/3, retrying\n",
 				    attempt + 1);
 			}
+		}
+
+		/*
+		 * Out of retries, report it the way Apple's EHCI UIM does after its
+		 * own Cerr=3 hardware retries (mungeEHCIStatus(),
+		 * AppleUSBEHCI_UIM.cpp:1216-1225): kIOUSBHighSpeedSplitError for a
+		 * split transaction, "not responding" otherwise. kIOReturnDeviceError
+		 * stands for the latter because kIOReturnNotResponding already means
+		 * STALL on this interface; the UIM translates it. Either way
+		 * IOUSBHIDDriver::InterruptReadHandler() (IOUSBHIDDriver.cpp:1670-
+		 * 1671) then runs its dead-device check instead of re-arming forever,
+		 * which a generic kIOReturnIOError did - an unplugged keyboard
+		 * flooded the console.
+		 */
+		if (ret == kIOReturnIOError && (hcint & kHCINT_XACTERR)) {
+			ret = doSplit ? kIOUSBHighSpeedSplitError : kIOReturnDeviceError;
 		}
 
 		if (ret == kIOReturnSuccess && xferLen > 0 && isIn) {

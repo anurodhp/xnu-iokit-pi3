@@ -601,6 +601,10 @@ private:
 	 * again. Until then every transfer fails fast instead of storming.
 	 */
 	bool                     fChannelWedged;
+	// failLogAllowed()'s window (rate-limits transfer-failure logging).
+	uint64_t                 fFailLogWindowStart;
+	uint32_t                 fFailLogCount;
+	uint32_t                 fFailLogSuppressed;
 
 	/*
 	 * DAR-352: recovery from a confirmed channel-0 wedge. haltChannel()
@@ -931,6 +935,7 @@ public:
 	// Fill `ep` so it addresses `dev`'s endpoint `epAddr` (bit 7 = IN;
 	// 0 = the default control endpoint). Returns false if that endpoint is
 	// not one this device reported.
+	bool     failLogAllowed(void);
 	bool     makeEndpoint(const DWC2USBDevice *dev, uint8_t epAddr, DWC2Endpoint *ep) const;
 	bool     makeEndpointFromDescriptor(const DWC2USBDevice *dev, uint8_t epAddr,
 	    uint32_t epType, uint16_t maxPacket, DWC2Endpoint *ep) const;
