@@ -1825,12 +1825,56 @@ if [ ! -f "$MNT/etc/master.passwd" ]; then
         exit 1
     fi
     printf 'root:%s:0:0::0:0::/:/bin/sh\n' "$ROOTHASH" > "$MNT/etc/master.passwd"
-    printf 'root:*:0:\n' > "$MNT/etc/group"
+    : > "$MNT/etc/group"
     chmod 600 "$MNT/etc/master.passwd"
     chmod 644 "$MNT/etc/group"
-    echo "+ wrote $MNT/etc/master.passwd and $MNT/etc/group (root:darwin, uid/gid 0)"
+    echo "+ wrote $MNT/etc/master.passwd (root:darwin, uid/gid 0); base groups follow"
 else
     echo "+ $MNT/etc/master.passwd already exists -- leaving accounts as-is"
+fi
+
+# Apple's base BSD groups, exactly as a real Mac's /etc/group has them
+# (macOS 11 /etc/group; the underscore-prefixed service groups are left
+# out, as are member names for accounts this image does not have, e.g.
+# mail's _teamsserver). gid 0 is "wheel" on a Mac, not "root": Apple's
+# pwd_mkdb refuses to run without it (SHADOW_GROUP "wheel",
+# third_party/system_cmds/pwd_mkdb.tproj/pwd_mkdb.c:77, :154-155), which
+# made every pw(8) useradd/usermod/userdel fail (DAR-341), and
+# libinfo_smoketest.c:74 already expects getgrnam("wheel") == 0.
+#
+# Also migrates images provisioned before this: an old "root:*:0:" gid-0
+# entry is renamed to wheel, and any base group missing by name and gid
+# is appended. Idempotent.
+if [ -f "$MNT/etc/group" ]; then
+    if grep -q '^root:\*:0:' "$MNT/etc/group" && ! grep -q '^wheel:' "$MNT/etc/group"; then
+        sed -i '' 's/^root:\*:0:.*$/wheel:*:0:root/' "$MNT/etc/group"
+        echo "+ renamed gid 0 in $MNT/etc/group from root to wheel (Apple's name)"
+    fi
+    while IFS=: read -r gname gpw ggid gmem; do
+        if ! awk -F: -v n="$gname" -v g="$ggid" '$1==n || $3==g {f=1} END {exit !f}' "$MNT/etc/group"; then
+            printf '%s:%s:%s:%s\n' "$gname" "$gpw" "$ggid" "$gmem" >> "$MNT/etc/group"
+            echo "+ added group $gname ($ggid) to $MNT/etc/group"
+        fi
+    done <<'GROUPS'
+nobody:*:-2:
+nogroup:*:-1:
+wheel:*:0:root
+daemon:*:1:root
+kmem:*:2:root
+sys:*:3:root
+tty:*:4:root
+operator:*:5:root
+mail:*:6:
+bin:*:7:
+procview:*:8:root
+procmod:*:9:root
+owner:*:10:
+everyone:*:12:
+group:*:16:
+staff:*:20:root
+utmp:*:45:
+admin:*:80:root
+GROUPS
 fi
 
 # The "sshd" privilege-separation account (DAR-183). sshd.c:1877 does a
