@@ -893,6 +893,21 @@ else
     echo "= tools/userland_staging/chronyd.macho not built -- run tools/userland_staging/build_chrony.sh first if wanted, skipping"
 fi
 
+# DAR-330: fake-hwclock. The Pi 3 has no RTC, so every boot starts at
+# 1970 until chronyd syncs; the resulting multi-decade step under running
+# daemons broke sshd sessions (DAR-377). Restores the last saved time at
+# boot (forward only) and saves it every 15 min and on launchd's SIGTERM.
+mkdir -p "$MNT/usr/libexec" "$MNT/Library/LaunchDaemons" "$MNT/var/db" "$MNT/var/log"
+cp tools/userland_staging/fake-hwclock.sh "$MNT/usr/libexec/fake-hwclock"
+chmod 755 "$MNT/usr/libexec/fake-hwclock"
+cp tools/userland_staging/org.puredarwin.fake-hwclock.plist \
+    "$MNT/Library/LaunchDaemons/org.puredarwin.fake-hwclock.plist"
+chmod 644 "$MNT/Library/LaunchDaemons/org.puredarwin.fake-hwclock.plist"
+# Seed with the image's build time so even a first boot starts in the
+# right decade.
+[ -f "$MNT/var/db/fake-hwclock" ] || date +%s > "$MNT/var/db/fake-hwclock"
+echo "+ wrote fake-hwclock + org.puredarwin.fake-hwclock.plist (DAR-330)"
+
 if [ -n "$SKIP_SMOKETESTS" ]; then
     echo "= sc_client_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
 elif [ -f tools/userland_staging/sc_client_smoketest.macho ]; then

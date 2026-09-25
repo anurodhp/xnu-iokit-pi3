@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+	DAR-330: fake-hwclock. At load, restores the last saved time (only ever
+	forward), then saves the time every 15 minutes and once more on
+	SIGTERM, which launchd sends on an orderly shutdown. See
+	/usr/libexec/fake-hwclock (tools/userland_staging/fake-hwclock.sh).
+	KeepAlive keeps the saver running; the load step is idempotent, so a
+	relaunch never moves the clock backwards. Output goes to a file for
+	the reason every project plist documents (DAR-257/DAR-167).
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>org.puredarwin.fake-hwclock</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/sh</string>
+		<string>/usr/libexec/fake-hwclock</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/var/log/fake-hwclock.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/fake-hwclock.log</string>
+</dict>
+</plist>
