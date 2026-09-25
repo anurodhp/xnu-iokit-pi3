@@ -240,6 +240,23 @@ SMSC9514FamilyTransport::bulkOut(const void *buf, uint32_t len)
 	IOLockLock(fTxLock);
 	bcopy(buf, fTxMD->getBytesNoCopy(), len);
 	IOReturn ret = fBulkOut->Write(fTxMD, kTxNoDataTimeoutMS, kTxCompletionTimeoutMS, len);
+	/*
+	 * A timed-out or stalled Write leaves the pipe halted, and every later
+	 * Write then fails with kIOUSBPipeStalled until the halt is cleared --
+	 * one transient timeout took transmit down for good (real Pi,
+	 * 2026-09-25: one kIOReturnTimeout, then 120+ kIOUSBPipeStalled).
+	 * Clear it (with the device-side CLEAR_FEATURE) and retry once, as
+	 * AppleUSBCDCECMData does for its data pipe (clearPipeStall() then
+	 * Write again, AppleUSBCDCECMData.cpp:2317-2319). This runs on the
+	 * sender's thread, never the USB workloop, so the synchronous
+	 * ClearPipeStall(true) is allowed here.
+	 */
+	if (ret == kIOUSBPipeStalled || ret == kIOReturnTimeout) {
+		IOLog("SMSC9514FamilyTransport: bulk OUT %s, clearing the pipe and retrying\n",
+		    (ret == kIOReturnTimeout) ? "timed out" : "stalled");
+		fBulkOut->ClearPipeStall(true);
+		ret = fBulkOut->Write(fTxMD, kTxNoDataTimeoutMS, kTxCompletionTimeoutMS, len);
+	}
 	IOLockUnlock(fTxLock);
 	if (ret != kIOReturnSuccess) {
 		IOLog("SMSC9514FamilyTransport: bulk OUT of %u bytes failed (%#x)\n", len, ret);
