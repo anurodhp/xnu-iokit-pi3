@@ -29,6 +29,7 @@ XNU="../../third_party/xnu-7195"
 PTHREAD="../../third_party/libpthread"
 SHELL_CMDS="../../third_party/shell_cmds"
 TEXT_CMDS="../../third_party/text_cmds"
+TEXT_CMDS_BINTRANS="../../third_party/text_cmds_bintrans"
 FILE_CMDS="../../third_party/file_cmds"
 GNUDIFF="../../third_party/gnudiff/diffutils"
 LIBARCHIVE_ROOT="../../third_party/libarchive"
@@ -1717,6 +1718,19 @@ CMD_LIST=(
     # proven libkern/crypto/corecrypto_md5.c (see that file's own header
     # for why real Apple/FreeBSD sources aren't usable here).
     "md5:$TEXT_CMDS/md5/md5.c:md5_commoncrypto_shim.c|md5_rfc1321_core.c"
+    # base64: Apple's real bintrans (text_cmds-165.0.4 -- see
+    # setup_third_party.sh's text_cmds_bintrans note for why that is a
+    # second, post-macos-112 pin). One multi-call binary; getprogname()
+    # "base64" selects Apple's classic base64 (apple_base64.c, the macOS
+    # `base64 [-Ddh] [-b num] [-i in] [-o out]` interface under
+    # __APPLE__). main() also references the uuencode/uudecode/qp coders,
+    # so those real files link too. They call b64_ntop()/b64_pton(), which
+    # <resolv.h> maps to libresolv's res_9_b64_*: compiled here from
+    # Apple's real libresolv base64.c, since libresolv.dylib is not on the
+    # simple commands' link line. freopen.c/_flock_stub.c, setmode.c and
+    # the libinfo getpwnam() (uudecode's ~user output paths) are the same
+    # real sources fold/mkdir/id already link for the same symbols.
+    "base64:$TEXT_CMDS_BINTRANS/bintrans/bintrans.c:$TEXT_CMDS_BINTRANS/bintrans/apple_base64.c|$TEXT_CMDS_BINTRANS/bintrans/uuencode.c|$TEXT_CMDS_BINTRANS/bintrans/uudecode.c|$TEXT_CMDS_BINTRANS/bintrans/qp.c|../../third_party/libresolv/base64.c|$LIBC/stdlib/FreeBSD/getopt_long.c|$LIBC/stdio/FreeBSD/freopen.c|$LIBC/stdio/FreeBSD/_flock_stub.c|$LIBC/gen/FreeBSD/setmode.c|ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c"
 )
 
 built=0
@@ -1735,6 +1749,11 @@ for spec in "${CMD_LIST[@]}"; do
     # dropped in here would silently keep shadowing the real one for
     # every later command too.
     rm -f "$OUT/cmd_pre_include"/*
+
+    # ONLY_CMDS="a b": build just those (quick iteration; unset = all).
+    if [ -n "${ONLY_CMDS:-}" ] && [[ " $ONLY_CMDS " != *" $name "* ]]; then
+        continue
+    fi
 
     real_main="${name}_cmd_real_main"
     obj="$OUT/simple_obj/${name}.o"

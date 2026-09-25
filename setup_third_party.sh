@@ -611,6 +611,15 @@ mkdir -p third_party
 #     tools/vendor_iographics_into_xnu.sh and
 #     compat/IOKit/graphics/IOGraphicsLZVN.c for the 4-argument wrapper.
 #
+# text_cmds_bintrans: a second, deliberately post-macos-112 checkout of
+#     text_cmds, used ONLY for bintrans/ -> /usr/bin/base64. Apple's
+#     macOS 11 manifest pin (text_cmds-106 above) has no base64 source, and
+#     no text_cmds tag does before text_cmds-165.0.4 (checked 118,
+#     138.100.3, 154). bintrans/ there carries Apple's own classic base64
+#     (apple_base64.c, compiled under __APPLE__ with the macOS
+#     `base64 [-Ddh] [-b num] [-i in] [-o out]` interface). Kept separate so
+#     the macOS 11 text_cmds used by every other command is not moved.
+#     See docs/apple-oss-catalog.md.
 # name | clone_url | ref (branch or tag) | (reserved, must be empty) | upstream_url (optional)
 # The 4th field used to name a third_party-patches/ file to `git am`. That
 # mechanism is retired (see the header); a non-empty value is an error.
@@ -650,6 +659,7 @@ bash|git@github.com:anurodhp/bash.git|iokit-port||https://github.com/apple-oss-d
 shell_cmds|https://github.com/apple-oss-distributions/shell_cmds.git|shell_cmds-216.60.1|
 file_cmds|https://github.com/apple-oss-distributions/file_cmds.git|file_cmds-321.40.3|
 text_cmds|https://github.com/apple-oss-distributions/text_cmds.git|text_cmds-106|
+text_cmds_bintrans|https://github.com/apple-oss-distributions/text_cmds.git|text_cmds-165.0.4|
 adv_cmds|https://github.com/apple-oss-distributions/adv_cmds.git|adv_cmds-176|
 system_cmds|https://github.com/apple-oss-distributions/system_cmds.git|system_cmds-880.60.2|
 basic_cmds|https://github.com/apple-oss-distributions/basic_cmds.git|basic_cmds-55|
