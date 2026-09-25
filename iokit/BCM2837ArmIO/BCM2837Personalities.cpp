@@ -687,8 +687,10 @@ BCM2837RegisterBuiltinPersonalities(void)
 		smscUSB->release();
 	}
 
-	uint32_t appleHub = 0;
-	if (PE_parse_boot_argn("usb-apple-hub", &appleHub, sizeof(appleHub)) && appleHub) {
+	// Default on, as BCM2837DWC2::start(); usb-apple-hub=0 turns it off.
+	uint32_t appleHub = 1;
+	PE_parse_boot_argn("usb-apple-hub", &appleHub, sizeof(appleHub));
+	if (appleHub != 0) {
 		for (uint32_t sub = 0; sub <= 1; sub++) {
 			OSDictionary *hub = makePersonality("IOUSBDevice", "AppleUSBHub", NULL, -1);
 			if (hub == NULL) {

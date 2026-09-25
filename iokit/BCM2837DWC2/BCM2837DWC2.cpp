@@ -2018,9 +2018,10 @@ BCM2837DWC2::start(IOService *provider)
 	 * enumerator for the same ports. The port stays powered so the root
 	 * hub's first status read reports the connection.
 	 */
-	uint32_t appleHub = 0;
-	fAppleHub = PE_parse_boot_argn("usb-apple-hub", &appleHub, sizeof(appleHub)) &&
-	    appleHub != 0;
+	// Default on; usb-apple-hub=0 selects the legacy one-shot enumerator.
+	uint32_t appleHub = 1;
+	PE_parse_boot_argn("usb-apple-hub", &appleHub, sizeof(appleHub));
+	fAppleHub = (appleHub != 0);
 	if (fAppleHub) {
 		IOLog("BCM2837DWC2: usb-apple-hub: AppleUSBHub enumerates the bus "
 		      "(DAR-353); skipping boot-time enumeration\n");
