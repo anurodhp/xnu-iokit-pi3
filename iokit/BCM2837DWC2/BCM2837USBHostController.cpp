@@ -2094,6 +2094,69 @@ BCM2837USBHostController::purgeAddressGated(OSObject *owner, void *arg0, void *,
 	return kIOReturnSuccess;
 }
 
+IOReturn
+BCM2837USBHostController::purgeAllGated(OSObject *owner, void *, void *, void *, void *)
+{
+	BCM2837USBHostController *me = (BCM2837USBHostController *)owner;
+	for (DWC2UIMEndpoint *ep = me->fEndpoints; ep != NULL; ep = ep->next) {
+		if (ep->retired) {
+			continue;
+		}
+		ep->retired = true;
+		me->collectAsync(ep, true);
+		me->returnTransfers(ep, kIOUSBTransactionReturned);
+	}
+	if (!me->fInEngine) {
+		me->reapRetiredEndpoints();
+	}
+	return kIOReturnSuccess;
+}
+
+void
+BCM2837USBHostController::RemoveAllDevices(void)
+{
+	// Collect first: terminating changes the client list being walked.
+	OSArray *devices = OSArray::withCapacity(8);
+	if (devices == NULL) {
+		return;
+	}
+	OSIterator *it = getClientIterator();
+	if (it != NULL) {
+		OSObject *obj;
+		while ((obj = it->getNextObject()) != NULL) {
+			if (OSDynamicCast(IOUSBDevice, obj) != NULL &&
+			    OSDynamicCast(IOUSBRootHubDevice, obj) == NULL) {
+				devices->setObject(obj);
+			}
+		}
+		it->release();
+	}
+
+	// As BCM2837USBPortPolicy::ReEnumeratePort() removes one device (Apple's
+	// RemoveDevice(), AppleUSBHubPort.cpp:1074-1150): detach the address so
+	// nothing can recreate an endpoint for it, leave the USB plane, wait
+	// while busy, terminate synchronously.
+	for (unsigned int i = 0; i < devices->getCount(); i++) {
+		IOUSBDevice *dev = OSDynamicCast(IOUSBDevice, devices->getObject(i));
+		fDWC2->detachDevice(dev->GetAddress());
+		const IORegistryPlane *usbPlane = dev->getPlane(kIOUSBPlane);
+		if (usbPlane != NULL) {
+			dev->detachAll(usbPlane);
+		}
+		for (UInt32 retries = 100; dev->getBusyState() && retries > 0; retries--) {
+			IOSleep(100);
+		}
+		dev->terminate(kIOServiceRequired | kIOServiceSynchronous);
+	}
+	IOLog("BCM2837USBHostController: removed %u device(s) for controller recovery\n",
+	    devices->getCount());
+	devices->release();
+
+	if (_commandGate != NULL) {
+		_commandGate->runAction(purgeAllGated);
+	}
+}
+
 void
 BCM2837USBHostController::DetachAddress(UInt8 address)
 {

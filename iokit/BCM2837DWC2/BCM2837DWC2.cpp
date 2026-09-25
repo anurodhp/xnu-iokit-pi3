@@ -917,6 +917,7 @@ BCM2837DWC2::haltChannel(uint32_t chan, uint32_t *hcintOut)
 			    chan, regRead(hcOffset(chan, kDWC2_HCCHAR)));
 		} else if (!halted) {
 			fChannelWedged = true;
+			scheduleRecovery();
 			IOLog("BCM2837DWC2: haltChannel: channel %u CONFIRMED WEDGED after %u "
 			      "retries (HCCHAR=%#x) - every future transfer will fail immediately "
 			      "(kIOReturnNotAttached) rather than retry against dead hardware; a "
@@ -1840,6 +1841,7 @@ BCM2837DWC2::start(IOService *provider)
 		IOLog("BCM2837DWC2: IOLockAlloc (enum) failed\n");
 		return false;
 	}
+	fRecoveryCall = thread_call_allocate(recoveryFired, this);
 	fBSDRegisterLock = IOLockAlloc();
 	if (fBSDRegisterLock == NULL) {
 		IOLog("BCM2837DWC2: IOLockAlloc (BSD register) failed\n");
@@ -2145,6 +2147,25 @@ BCM2837DWC2::start(IOService *provider)
 
 	startUSBHostController();
 
+	/*
+	 * dwc2-test-wedge=<seconds> (DAR-352 verification only): after that
+	 * delay, mark channel 0 wedged exactly as haltChannel() does on a
+	 * forced halt that never completes, which runs the real recovery path.
+	 * The wedge itself came from real-hardware timing and cannot be made to
+	 * happen in QEMU.
+	 */
+	uint32_t testWedge = 0;
+	if (PE_parse_boot_argn("dwc2-test-wedge", &testWedge, sizeof(testWedge)) &&
+	    testWedge != 0) {
+		fTestWedgeCall = thread_call_allocate(testWedgeFired, this);
+		if (fTestWedgeCall != NULL) {
+			uint64_t deadline;
+			clock_interval_to_deadline(testWedge, kSecondScale, &deadline);
+			thread_call_enter_delayed(fTestWedgeCall, deadline);
+			IOLog("BCM2837DWC2: dwc2-test-wedge in %u s\n", testWedge);
+		}
+	}
+
 	registerService();
 	return true;
 }
@@ -2236,6 +2257,16 @@ BCM2837DWC2::startUSBHostController(void)
 	 * either do nothing or set up a second, competing enumerator for the same
 	 * ports on a single-channel controller.
 	 */
+	uint32_t published = publishEnumeratedDevices();
+
+	IOLog("BCM2837DWC2: IOUSBController up, %u device nub(s) published\n", published);
+}
+
+// Publish every enumerated device boot's rules allow (publishable()).
+// Shared by startUSBHostController() and recoverController().
+uint32_t
+BCM2837DWC2::publishEnumeratedDevices(void)
+{
 	uint32_t published = 0;
 	for (uint32_t i = 0; i < fNumDevices; i++) {
 		const DWC2USBDevice *dev = deviceAt(i);
@@ -2246,8 +2277,141 @@ BCM2837DWC2::startUSBHostController(void)
 			published++;
 		}
 	}
+	return published;
+}
 
-	IOLog("BCM2837DWC2: IOUSBController up, %u device nub(s) published\n", published);
+#pragma mark - Controller recovery (DAR-352)
+
+/*
+ * A forced halt that never completes (haltChannel()) leaves channel 0
+ * unusable; fChannelWedged stops the retry storm, but until DAR-352 only a
+ * power cycle brought USB back. Recovery is the boot sequence again:
+ *
+ *   1. remove every published device (their drivers see termination, as
+ *      on an unplug) and take back whatever the UIM still has queued or
+ *      parked on channels 1-4;
+ *   2. with the global interrupt masked and both locks held, core soft
+ *      reset and host re-init (coreInit(), hostInit() - exactly start()'s
+ *      calls) and clear the wedge flags;
+ *   3. root port power, connect and reset (start()'s calls again);
+ *   4. enumerateBus() and republish with boot's rules.
+ *
+ * A core soft reset drops every device's address, which is why 1 and 4 are
+ * not optional. Runs on fRecoveryCall, never inline: the wedge is detected
+ * in haltChannel() with fTransferLock held, and recovery takes that lock
+ * and blocks. At most kMaxRecoveries per boot, so hardware that wedges
+ * again straight away does not loop forever.
+ *
+ * NOT covered: the hand-wired SMSC9514Ethernet on real hardware. It holds
+ * its DWC2Endpoints from start() and has no re-attach path, and the LAN9514
+ * loses its register setup in the USB reset, so its networking stays down
+ * after a recovery until a reboot (DAR-352 item 3). Logged explicitly.
+ */
+#define kMaxRecoveries 3
+
+void
+BCM2837DWC2::scheduleRecovery(void)
+{
+	if (fRecoveryCall != NULL && !fRecovering && fRecoveries < kMaxRecoveries) {
+		thread_call_enter(fRecoveryCall);
+	}
+}
+
+void
+BCM2837DWC2::recoveryFired(thread_call_param_t owner, thread_call_param_t)
+{
+	((BCM2837DWC2 *)owner)->recoverController();
+}
+
+void
+BCM2837DWC2::testWedgeFired(thread_call_param_t owner, thread_call_param_t)
+{
+	BCM2837DWC2 *me = (BCM2837DWC2 *)owner;
+	IOLog("BCM2837DWC2: dwc2-test-wedge: marking channel 0 wedged, as "
+	      "haltChannel() does when a forced halt never completes\n");
+	IOLockLock(me->fTransferLock);
+	me->fChannelWedged = true;
+	me->scheduleRecovery();
+	IOLockUnlock(me->fTransferLock);
+}
+
+/*
+ * Steps 2 and 3. Called with fEnumLock held (no re-enumeration may run
+ * concurrently); takes fTransferLock itself so no synchronous transfer runs
+ * against a resetting core.
+ */
+bool
+BCM2837DWC2::reinitController(void)
+{
+	IOLockLock(fTransferLock);
+
+	regModify(kDWC2_GAHBCFG, kGAHBCFG_GLBLINTRMSK, 0);
+
+	bool ok = coreInit() && hostInit();
+	if (ok) {
+		IOInterruptState istate = IOSimpleLockLockDisableInterrupt(fStatusLock);
+		for (uint32_t c = 0; c < kDWC2MaxChannels; c++) {
+			fPendingHcInt[c] = 0;
+		}
+		IOSimpleLockUnlockEnableInterrupt(fStatusLock, istate);
+		for (uint32_t c = 0; c < kDWC2MaxChannels; c++) {
+			fAsyncBusy[c] = false;
+			fAsyncWedged[c] = false;
+		}
+		fChannelWedged = false;
+		regModify(kDWC2_GAHBCFG, 0, kGAHBCFG_GLBLINTRMSK);
+	}
+
+	IOLockUnlock(fTransferLock);
+
+	if (!ok) {
+		IOLog("BCM2837DWC2: recovery: core/host re-init failed\n");
+		return false;
+	}
+	if (!portPowerOn() || !portWaitForConnect(1000) || !portReset()) {
+		IOLog("BCM2837DWC2: recovery: root port did not come back (HPRT0=%#x)\n",
+		    regRead(kDWC2_HPRT0));
+		return false;
+	}
+	return true;
+}
+
+void
+BCM2837DWC2::recoverController(void)
+{
+	if (fRecovering || fRecoveries >= kMaxRecoveries) {
+		return;
+	}
+	fRecovering = true;
+	fRecoveries++;
+	IOLog("BCM2837DWC2: recovery %u/%u: channel 0 wedged - resetting the "
+	      "controller and re-enumerating the bus (DAR-352)\n",
+	    fRecoveries, (uint32_t)kMaxRecoveries);
+
+	// 1. Remove the published devices and drain the UIM.
+	if (fUSBController != NULL) {
+		fUSBController->RemoveAllDevices();
+	}
+	if (fEthernetDriver != NULL) {
+		IOLog("BCM2837DWC2: recovery: SMSC9514Ethernet cannot be re-bound after "
+		      "a controller reset (DAR-352 item 3) - its networking stays down "
+		      "until a reboot\n");
+	}
+
+	// 2-4.
+	IOLockLock(fEnumLock);
+	bool ok = reinitController();
+	uint32_t found = ok ? enumerateBus() : 0;
+	IOLockUnlock(fEnumLock);
+
+	uint32_t published = 0;
+	if (ok && fUSBController != NULL) {
+		published = publishEnumeratedDevices();
+	}
+	IOLog("BCM2837DWC2: recovery %u %s: %u device(s) enumerated, %u republished\n",
+	    fRecoveries, ok ? "done" : "FAILED - USB stays down", found, published);
+
+	fRecovering = false;
 }
 
 /*
@@ -2395,6 +2559,16 @@ BCM2837DWC2::free(void)
 	if (fBSDRegisterLock != NULL) {
 		IOLockFree(fBSDRegisterLock);
 		fBSDRegisterLock = NULL;
+	}
+	if (fTestWedgeCall != NULL) {
+		thread_call_cancel_wait(fTestWedgeCall);
+		thread_call_free(fTestWedgeCall);
+		fTestWedgeCall = NULL;
+	}
+	if (fRecoveryCall != NULL) {
+		thread_call_cancel_wait(fRecoveryCall);
+		thread_call_free(fRecoveryCall);
+		fRecoveryCall = NULL;
 	}
 	if (fEnumLock != NULL) {
 		IOLockFree(fEnumLock);

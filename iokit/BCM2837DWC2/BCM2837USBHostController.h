@@ -325,6 +325,13 @@ public:
 	// BCM2837DWC2's table before the old IOUSBDevice is torn down.
 	void		DetachAddress(UInt8 address);
 
+	/*
+	 * DAR-352 controller recovery, step 1: remove every published device
+	 * (not the root hub simulation) and retire every endpoint, taking back
+	 * parked async channels. Same thread rules as PublishEnumeratedDevice().
+	 */
+	void		RemoveAllDevices(void);
+
 	// ---------------- UIM: initialisation ----------------
 	virtual IOReturn	UIMInitialize(IOService *provider) override;
 	virtual IOReturn	UIMFinalize(void) override;
@@ -446,6 +453,7 @@ private:
 	UInt32               fReenumTestMask;
 	static void		reenumTestFired(thread_call_param_t owner, thread_call_param_t);
 	static IOReturn		purgeAddressGated(OSObject *owner, void *arg0, void *, void *, void *);
+	static IOReturn		purgeAllGated(OSObject *owner, void *, void *, void *, void *);
 
 	// Poked by BCM2837DWC2::interruptOccurred() when a parked channel halts.
 	// Runs asyncEventFired() on this controller's workloop.

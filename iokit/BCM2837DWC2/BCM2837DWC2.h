@@ -607,6 +607,16 @@ private:
 	bool                     fChannelWedged;
 
 	/*
+	 * DAR-352: recovery from a confirmed channel-0 wedge. haltChannel()
+	 * only schedules it (it runs with fTransferLock held); the work runs
+	 * on fRecoveryCall. See recoverController().
+	 */
+	thread_call_t            fRecoveryCall;
+	volatile bool            fRecovering;
+	uint32_t                 fRecoveries;
+	thread_call_t            fTestWedgeCall;     // dwc2-test-wedge boot-arg
+
+	/*
 	 * Parked asynchronous IN transfers (DAR-370). See asyncStart().
 	 * Everything here except fAsyncBusy and fAsyncNotify is touched only
 	 * from the one thread the async API's caller serializes on (the UIM's
@@ -717,6 +727,14 @@ private:
 	bool portReset(void);
 
 	bool allocateDMABuffer(void);
+
+	// DAR-352 controller recovery.
+	void scheduleRecovery(void);
+	void recoverController(void);
+	bool reinitController(void);
+	uint32_t publishEnumeratedDevices(void);
+	static void recoveryFired(thread_call_param_t owner, thread_call_param_t);
+	static void testWedgeFired(thread_call_param_t owner, thread_call_param_t);
 	bool allocateAsyncDMABuffer(void);
 	bool allocateContiguousDMA(uint32_t size, const char *what,
 	    IOBufferMemoryDescriptor **bmdOut, void **virtOut, uint64_t *busOut);
