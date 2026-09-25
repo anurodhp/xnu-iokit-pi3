@@ -218,6 +218,27 @@ XNU_SRC="../../third_party/xnu-7195"
     -idirafter "$XNU_SRC/osfmk" -idirafter "$XNU_SRC/libkern" \
     libsystem_pthread_atfork_compat.c -o "$OUT/libsystem_pthread/atfork_compat.o"
 
+# DAR-225: fills the main thread's stackaddr/stackbottom from the kernel's
+# apple[] main_stack= string (see the file's own header). Needs the real
+# struct pthread_s, so same libpthread CFLAGS/include set as atfork_compat.o.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -Wno-nullability-completeness -Wno-availability -Wno-deprecated-declarations \
+    -D__LIBC__ -D__POSIX_LIB__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_NON_CANCELABLE=1 \
+    -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 -D__PTHREAD_BUILDING_PTHREAD__=1 -D__PTHREAD_EXPOSE_INTERNALS__ \
+    -DOS_ATOMIC_CONFIG_MEMORY_ORDER_DEPENDENCY=1 -DPRIVATE=1 \
+    -D_os_xbs_chrooted=0 \
+    -D__API_UNAVAILABLE_PLATFORM_bridgeos=ios,unavailable \
+    '-D__API_AVAILABLE_PLATFORM_bridgeos(x)=ios,introduced=x' \
+    -I . \
+    -I "$PTHREAD_SRC" -I "$PTHREAD_SRC/src" -I "$PTHREAD_SRC/src/resolver" \
+    -I "$PTHREAD_SRC/private" -I "$PTHREAD_SRC/include" -I "$PTHREAD_SRC/kern" \
+    -I "$PLATFORM_SRC/internal" -I "$PLATFORM_SRC/private" -I "$PLATFORM_SRC/include" \
+    -I "$OUT/compat_include" \
+    -I "$MALLOC_SRC/private" \
+    -I "$XNU_SRC/libsyscall" -I "$XNU_SRC/libsyscall/mach" -I "$XNU_SRC/bsd" \
+    -idirafter "$XNU_SRC/osfmk" -idirafter "$XNU_SRC/libkern" \
+    libsystem_pthread_main_stack_compat.c -o "$OUT/libsystem_pthread/main_stack_compat.o"
+
 # Real gap: see libsystem_pthread_dylib_bootstrap_compat.c's own comment --
 # nothing ever called pthread_main_thread_bootstrap() for a real, dynamic-
 # executable (dyld-linked) consumer of this dylib; every static consumer's
@@ -331,6 +352,7 @@ rm -f "$OUT/system/libsystem_pthread.dylib"
     "$OUT/libsystem_pthread/sched_yield_trap.o" "$OUT/libsystem_pthread/sched_yield.o" \
     "$OUT/libsystem_pthread/atfork_compat.o" \
     "$OUT/libsystem_pthread/dylib_bootstrap_compat.o" \
+    "$OUT/libsystem_pthread/main_stack_compat.o" \
     "$OUT/libsystem_pthread/cond_wait_public.o" \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_malloc.dylib"
 

@@ -1,3 +1,9 @@
+/* CORRECTED (DAR-225, 2026-09-25): this constructor never runs. dyld-940
+ * marks every /usr/lib/system/lib* dylib initialized without running its
+ * initializers (third_party/dyld/dyld/DyldAPIs.cpp:3325-3333), confirmed
+ * with a temporary status global that stayed 0 on a QEMU boot. The
+ * bootstrap described below actually happens in libSystem.B.dylib's
+ * constructor (libsystem_dyld_initializer_compat.c). */
 /* Real gap found booting launchd.macho (a real, dynamically-linked
  * executable) as PID 1: nothing ever calls pthread_main_thread_bootstrap()
  * (pthread_main_thread_bootstrap.c) for a dylib-linked process. That

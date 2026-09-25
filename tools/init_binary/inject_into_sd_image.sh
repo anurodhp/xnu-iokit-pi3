@@ -1048,6 +1048,21 @@ else
     echo "= pthread_cond_smoketest.macho not built -- run tools/userland_staging/build_pthread_cond_smoketest.sh first if wanted, skipping"
 fi
 
+if [ -n "$SKIP_SMOKETESTS" ]; then
+    echo "= pthread_main_stack_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
+elif [ -f tools/userland_staging/libc_build/pthread_main_stack_smoketest.macho ]; then
+    mkdir -p "$MNT/usr/local/bin"
+    cp tools/userland_staging/libc_build/pthread_main_stack_smoketest.macho \
+        "$MNT/usr/local/bin/pthread_main_stack_smoketest"
+    chmod 755 "$MNT/usr/local/bin/pthread_main_stack_smoketest"
+    echo "+ wrote pthread_main_stack_smoketest to $MNT/usr/local/bin/"
+    echo "  (DAR-225 main-thread pthread_get_stackaddr_np() check. Run by hand"
+    echo "  from the root shell; prints a single PASS/FAIL line."
+    echo "  tools/userland_staging/build_pthread_main_stack_smoketest.sh)"
+else
+    echo "= pthread_main_stack_smoketest.macho not built -- run tools/userland_staging/build_pthread_main_stack_smoketest.sh first if wanted, skipping"
+fi
+
 for v in "" "_broken"; do
     src="tools/userland_staging/libc_build/sigaction_tramp_smoketest${v}.macho"
     if [ -f "$src" ]; then

@@ -155,8 +155,21 @@ extern int task_get_special_port(__iokit_mach_port_t task, int which_port,
                                  __iokit_mach_port_t *special_port);
 #define __IOKIT_TASK_BOOTSTRAP_PORT 4   /* osfmk/mach/task_special_ports.h */
 
+/* DAR-225: the main thread's stackaddr/stackbottom come from apple[]'s
+ * main_stack= string. dyld-940 passes apple[] as every initializer's 4th
+ * argument (third_party/dyld/dyld/DyldProcessConfig.h:67,
+ * Loader.cpp:1273), and real libSystem_initializer hands it to
+ * __pthread_init() (third_party/Libsystem/init.c:221). It has to be done
+ * here, not in libsystem_pthread.dylib: dyld marks every
+ * /usr/lib/system/lib* dylib initialized without running its initializers
+ * (third_party/dyld/dyld/DyldAPIs.cpp:3325-3333). */
+extern int pthread_main_thread_init_stack(const char *apple[]);
+
 __attribute__((constructor))
-static void libsystem_call_dyld_initializer(void) {
+static void libsystem_call_dyld_initializer(int argc, const char *argv[],
+                                            const char *envp[],
+                                            const char *apple[]) {
+    (void)argc; (void)argv; (void)envp;
     /* Order matters: mach_init() must run before _dyld_initializer(),
      * not after -- _dyld_initializer() itself (real, unmodified dyld
      * source) does real VM/allocator work while registering the
@@ -164,6 +177,7 @@ static void libsystem_call_dyld_initializer(void) {
      * mach_vm_map before a call placed after it ever gets a turn. */
     mach_init();
     pthread_main_thread_bootstrap();
+    pthread_main_thread_init_stack(apple);
     _dyld_initializer();
 
     /* Last: needs mach_init()'s mach_task_self_/_task_reply_port AND
