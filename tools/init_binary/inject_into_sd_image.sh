@@ -598,6 +598,12 @@ if [ -f tools/userland_staging/pw.macho ]; then
     echo "+ wrote $(wc -c < tools/userland_staging/pw.macho) bytes to $MNT/usr/sbin/pw"
     echo "  (real, unmodified FreeBSD pw(8) -- DAR-341, see"
     echo "  tools/userland_staging/build_pw.sh)"
+    # pw(8)'s compiled-in defaults are FreeBSD's (/home, /bin/sh); this
+    # file points new accounts at /Users/<name> with /bin/bash instead.
+    mkdir -p "$MNT/etc"
+    cp tools/userland_staging/pw.conf "$MNT/etc/pw.conf"
+    chmod 644 "$MNT/etc/pw.conf"
+    echo "+ wrote $MNT/etc/pw.conf (home=/Users, defaultshell=bash)"
 else
     echo "= tools/userland_staging/pw.macho not built -- run build_pw.sh first if wanted, skipping"
 fi
