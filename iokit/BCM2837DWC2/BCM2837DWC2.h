@@ -601,6 +601,8 @@ private:
 	 * again. Until then every transfer fails fast instead of storming.
 	 */
 	bool                     fChannelWedged;
+	// usb-apple-hub boot-arg (DAR-353): AppleUSBHub enumerates, not us.
+	bool                     fAppleHub;
 	// failLogAllowed()'s window (rate-limits transfer-failure logging).
 	uint64_t                 fFailLogWindowStart;
 	uint32_t                 fFailLogCount;
@@ -965,6 +967,7 @@ public:
 	// reenumerateDevice(), which refuse (kIOReturnAborted) if a controller
 	// recovery ran in between.
 	uint32_t recoveryGeneration(void) const { return fRecoveryGen; }
+	bool     appleHubMode(void) const { return fAppleHub; }
 
 	// Keep `address` out of enumeration's address allocation. The UIM calls
 	// this with its root-hub simulation's address (SetHubAddress()), which

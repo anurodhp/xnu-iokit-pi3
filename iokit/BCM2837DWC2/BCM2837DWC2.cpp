@@ -2009,7 +2009,22 @@ BCM2837DWC2::start(IOService *provider)
 		return false;
 	}
 
-	if (!portWaitForConnect(1000)) {
+	/*
+	 * usb-apple-hub=1 (DAR-353): AppleUSBHub, matched on the family's root
+	 * hub device, owns the bus - it resets the root port and enumerates
+	 * everything downstream itself, through the UIM, with hot-plug. This
+	 * driver then only brings the core up and starts the controller; its
+	 * own one-shot enumeration below would be a second, competing
+	 * enumerator for the same ports. The port stays powered so the root
+	 * hub's first status read reports the connection.
+	 */
+	uint32_t appleHub = 0;
+	fAppleHub = PE_parse_boot_argn("usb-apple-hub", &appleHub, sizeof(appleHub)) &&
+	    appleHub != 0;
+	if (fAppleHub) {
+		IOLog("BCM2837DWC2: usb-apple-hub: AppleUSBHub enumerates the bus "
+		      "(DAR-353); skipping boot-time enumeration\n");
+	} else if (!portWaitForConnect(1000)) {
 		/*
 		 * Nothing plugged in. On a real Pi 3 the LAN9514 is soldered on
 		 * and this should not happen; under QEMU it just means no
@@ -2024,21 +2039,23 @@ BCM2837DWC2::start(IOService *provider)
 		return true;
 	}
 
-	if (!portReset()) {
-		IOLog("BCM2837DWC2: root port reset failed\n");
-		registerService();
-		return true;
+	if (!fAppleHub) {
+		if (!portReset()) {
+			IOLog("BCM2837DWC2: root port reset failed\n");
+			registerService();
+			return true;
+		}
+
+		static const char *speedNames[] = { "high", "full", "low", "reserved" };
+		IOLog("BCM2837DWC2: root port enabled, %s-speed device attached (HPRT0=%#x)\n",
+		    speedNames[fRootSpeed & 3], regRead(kDWC2_HPRT0));
+
+		// Walk the bus. A failure here leaves a working but empty controller
+		// rather than failing to start - the difference matters for
+		// diagnosis, since "controller up, enumeration failed" and
+		// "controller dead" have completely different causes.
+		enumerateBus();
 	}
-
-	static const char *speedNames[] = { "high", "full", "low", "reserved" };
-	IOLog("BCM2837DWC2: root port enabled, %s-speed device attached (HPRT0=%#x)\n",
-	    speedNames[fRootSpeed & 3], regRead(kDWC2_HPRT0));
-
-	// Walk the bus. A failure here leaves a working but empty controller
-	// rather than failing to start - the difference matters for diagnosis,
-	// since "controller up, enumeration failed" and "controller dead" have
-	// completely different causes.
-	enumerateBus();
 
 	/*
 	 * Resolve (and log) the board's real Ethernet identity from the
@@ -2261,7 +2278,9 @@ BCM2837DWC2::start(IOService *provider)
 void
 BCM2837DWC2::startUSBHostController(void)
 {
-	if (fNumDevices == 0) {
+	// With usb-apple-hub (DAR-353) nothing is enumerated here by design:
+	// the controller's root hub is what AppleUSBHub enumerates from.
+	if (fNumDevices == 0 && !fAppleHub) {
 		// Nothing enumerated - a controller with no devices to publish would
 		// still start cleanly, but there is nothing for it to do and saying
 		// so beats a silent no-op.
@@ -2441,7 +2460,12 @@ BCM2837DWC2::reinitController(void)
 	// on real hardware, which recovery does not unbind) may run a transfer
 	// against a bus in reset. reenumerateDevice() holds the lock around
 	// portReset() for the same reason.
-	bool portOK = portPowerOn() && portWaitForConnect(1000) && portReset();
+	// Under usb-apple-hub (DAR-353) the port is AppleUSBHub's: just power
+	// it, and let the connection change the core reset produces reach the
+	// hub through the root hub's status pipe, so the hub removes the old
+	// devices and resets and re-enumerates the port itself.
+	bool portOK = fAppleHub ? portPowerOn() :
+	    (portPowerOn() && portWaitForConnect(1000) && portReset());
 	if (portOK) {
 		fChannelWedged = false;
 	}
@@ -2469,8 +2493,18 @@ BCM2837DWC2::recoverController(void)
 	    fRecoveries, (uint32_t)kMaxRecoveries);
 
 	// 1. Remove the published devices and drain the UIM.
+	// With AppleUSBHub owning the bus (usb-apple-hub, DAR-353) the devices
+	// are its children, not ours: the core reset below drops the root
+	// port, AppleUSBHub sees the connection change and removes and
+	// re-enumerates them itself, the way a Mac recovers a reset port.
 	if (fUSBController != NULL) {
-		fUSBController->RemoveAllDevices();
+		if (fAppleHub) {
+			// The core reset below forgets every parked async channel;
+			// the UIM's endpoints must forget them too.
+			fUSBController->PurgeAllEndpoints();
+		} else {
+			fUSBController->RemoveAllDevices();
+		}
 	}
 	if (fEthernetDriver != NULL) {
 		IOLog("BCM2837DWC2: recovery: SMSC9514Ethernet cannot be re-bound after "
@@ -2481,7 +2515,7 @@ BCM2837DWC2::recoverController(void)
 	// 2-4.
 	IOLockLock(fEnumLock);
 	bool ok = reinitController();
-	uint32_t found = ok ? enumerateBus() : 0;
+	uint32_t found = (ok && !fAppleHub) ? enumerateBus() : 0;
 	// Bump again now the table is rebuilt: an operation that snapshotted
 	// the generation after the first bump (above) but before the rebuild
 	// still names the old table, and must not act on the new one.
@@ -2489,11 +2523,19 @@ BCM2837DWC2::recoverController(void)
 	IOLockUnlock(fEnumLock);
 
 	uint32_t published = 0;
-	if (ok && fUSBController != NULL) {
+	if (ok && fUSBController != NULL && !fAppleHub) {
 		published = publishEnumeratedDevices();
 	}
-	IOLog("BCM2837DWC2: recovery %u %s: %u device(s) enumerated, %u republished\n",
-	    fRecoveries, ok ? "done" : "FAILED", found, published);
+	if (ok && fUSBController != NULL && fAppleHub) {
+		fUSBController->RootPortReconnected();
+	}
+	if (fAppleHub) {
+		IOLog("BCM2837DWC2: recovery %u %s: root port connection change reported; "
+		      "AppleUSBHub re-enumerates\n", fRecoveries, ok ? "done" : "FAILED");
+	} else {
+		IOLog("BCM2837DWC2: recovery %u %s: %u device(s) enumerated, %u republished\n",
+		    fRecoveries, ok ? "done" : "FAILED", found, published);
+	}
 
 	fRecovering = false;
 

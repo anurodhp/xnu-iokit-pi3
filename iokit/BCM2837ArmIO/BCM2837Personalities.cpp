@@ -58,6 +58,7 @@
 #include <IOKit/IOLib.h>
 #include <libkern/c++/OSUnserialize.h>
 #include <mach/kmod.h>
+#include <pexpert/pexpert.h>
 
 // score < 0 means "don't set IOProbeScore, use kIODefaultProbeScore".
 // nameMatch == NULL means "don't set IONameMatch, match by class alone" -
@@ -653,6 +654,33 @@ BCM2837RegisterBuiltinPersonalities(void)
 	if (cdcEcmData != NULL) {
 		personalities->setObject(cdcEcmData);
 		cdcEcmData->release();
+	}
+
+	/*
+	 * AppleUSBHub (DAR-353): Apple's hub driver, for hot-plug. Its two
+	 * personalities are AppleUSBHub.plist's AppleUSBHub0/AppleUSBHub1
+	 * (third_party/IOUSBFamily/AppleUSBHub/AppleUSBHub.plist): IOUSBDevice
+	 * with bDeviceClass 9, bDeviceSubClass 0 or 1.
+	 *
+	 * Opt-in via the usb-apple-hub boot-arg while it is brought up. It
+	 * matches the family's root hub device too, and from there resets the
+	 * root port and enumerates the whole bus itself - so it must not run
+	 * alongside BCM2837DWC2's own boot-time enumeration, which that
+	 * boot-arg also turns off (BCM2837DWC2::start()).
+	 */
+	uint32_t appleHub = 0;
+	if (PE_parse_boot_argn("usb-apple-hub", &appleHub, sizeof(appleHub)) && appleHub) {
+		for (uint32_t sub = 0; sub <= 1; sub++) {
+			OSDictionary *hub = makePersonality("IOUSBDevice", "AppleUSBHub", NULL, -1);
+			if (hub == NULL) {
+				continue;
+			}
+			if (addNumberProperty(hub, "bDeviceClass", 9) &&
+			    addNumberProperty(hub, "bDeviceSubClass", sub)) {
+				personalities->setObject(hub);
+			}
+			hub->release();
+		}
 	}
 
 	addIOGraphicsPersonalities(personalities);

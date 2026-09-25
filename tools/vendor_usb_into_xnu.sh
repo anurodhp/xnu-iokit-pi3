@@ -72,8 +72,9 @@ PCI_HDR="$XNU/iokit/IOKit/pci"
 SER_HDR="$XNU/iokit/IOKit/serial"
 ACPI_HDR="$XNU/iokit/IOKit/acpi"
 CDC_SRC="$XNU/iokit/Drivers/AppleUSBCDC"
+HUB_SRC="$XNU/iokit/Drivers/AppleUSBHub"
 
-mkdir -p "$USB_SRC" "$USB_HDR" "$PCI_HDR" "$SER_HDR" "$ACPI_HDR" "$CDC_SRC"
+mkdir -p "$USB_SRC" "$USB_HDR" "$PCI_HDR" "$SER_HDR" "$ACPI_HDR" "$CDC_SRC" "$HUB_SRC"
 
 # Refuse to overwrite a vendored file that has uncommitted edits on the
 # xnu-tree side -- someone may have been debugging there and a blind copy
@@ -179,6 +180,23 @@ copy_into "$CDC_SRC" \
 	"$CDC/AppleUSBCDCECM/ControlDriver/Headers/AppleUSBCDCECMControl.h" \
 	"$CDC/AppleUSBCDCECM/DataDriver/Headers/AppleUSBCDCECMData.h" \
 	"$CDC/AppleUSBCDCECM/DataDriver/Headers/linkup.h"
+
+# --- AppleUSBHub (DAR-353) --------------------------------------------
+# Apple's hub driver: port status-change handling, reset, enumeration and
+# detach through the family - i.e. USB hot-plug. Only matched when the
+# usb-apple-hub boot-arg is set (see BCM2837Personalities.cpp).
+# AppleUSBHSHubUserClient is left out: nothing in this kernel opens a hub
+# user client, and AppleUSBHub only names the class in a property string
+# (IOUserClientClass), which needs no definition until something asks.
+# USBTracepoints.h is included as "USBTracepoints.h", so it has to sit
+# alongside the sources.
+copy_into "$HUB_SRC" \
+	"$FAMILY/AppleUSBHub/Classes/AppleUSBHub.cpp" \
+	"$FAMILY/AppleUSBHub/Classes/AppleUSBHubPort.cpp" \
+	"$FAMILY/AppleUSBHub/Headers/AppleUSBHub.h" \
+	"$FAMILY/AppleUSBHub/Headers/AppleUSBHubPort.h" \
+	"$FAMILY/IOUSBFamily/Headers/USBTracepoints.h" \
+	compat/usb/AppleUSBHubMissingDefinitions.cpp
 
 if [ ${#diverged[@]} -ne 0 ]; then
 	echo "error: these vendored files differ from their third_party/ source" >&2
@@ -396,6 +414,23 @@ if ! LC_ALL=C grep -q 'receivePacket - Runt frame, packet dropped' "$F"; then
 	exit 1
 fi
 
+# 4. AppleUSBHub.cpp: three `switch (direction)` on a UInt32 (the
+#    ChangeOutstandingIO/ChangeRaisedPowerState/ChangeOutstandingResumes
+#    gated helpers, each decoding a (uintptr_t) param into UInt32) carry a
+#    `case -1:` label. Legal C++03, a hard error under C++11 narrowing
+#    (-Wc++11-narrowing: "case value evaluates to -1, which cannot be
+#    narrowed to type 'UInt32'"). The callers pass (void*)-1, so
+#    (UInt32)-1 is the value they meant.
+F="$HUB_SRC/AppleUSBHub.cpp"
+if LC_ALL=C grep -q '^		case -1:$' "$F"; then
+	LC_ALL=C sed -i '' 's|^		case -1:$|		case (UInt32)-1:	/* was -1; see tools/vendor_usb_into_xnu.sh FIX 4 */|' "$F"
+fi
+if LC_ALL=C grep -q '^		case -1:' "$F" || \
+   [ "$(LC_ALL=C grep -c 'case (UInt32)-1:' "$F")" -ne 3 ]; then
+	echo "error: AppleUSBHub.cpp case -1 fix did not apply (expected 3)" >&2
+	exit 1
+fi
+
 # ---------------------------------------------------------------------
 # iokit/conf/files entries.
 #
@@ -424,9 +459,21 @@ else
 	echo "= $CONF already has the USB block"
 fi
 
+HUB_MARKER="# --- AppleUSBHub (IOUSBFamily), vendored by tools/vendor_usb_into_xnu.sh (DAR-353) ---"
+if ! LC_ALL=C grep -q "^$HUB_MARKER$" "$CONF"; then
+	{
+		echo ""
+		echo "$HUB_MARKER"
+		for f in AppleUSBHub.cpp AppleUSBHubPort.cpp AppleUSBHubMissingDefinitions.cpp; do
+			printf 'iokit/Drivers/AppleUSBHub/%s\t\toptional iokitcpp\n' "$f"
+		done
+	} >> "$CONF"
+	echo "+ added AppleUSBHub entries to $CONF"
+fi
+
 # Verify every vendored .cpp/.c really is listed.
 missing=()
-for f in "$USB_SRC"/*.cpp "$CDC_SRC"/*.cpp "$CDC_SRC"/*.c; do
+for f in "$USB_SRC"/*.cpp "$CDC_SRC"/*.cpp "$CDC_SRC"/*.c "$HUB_SRC"/*.cpp; do
 	[ -e "$f" ] || continue
 	rel="${f#$XNU/}"
 	LC_ALL=C grep -q "^$rel[[:space:]]" "$CONF" || missing+=("$rel")
