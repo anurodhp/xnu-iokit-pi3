@@ -262,6 +262,14 @@ struct DWC2UIMEndpoint
  */
 class BCM2837USBHostController;
 
+// What the family says about a device when it opens one of its endpoints
+// (see familyEndpointGeometry() in the .cpp).
+struct DWC2EndpointGeometry {
+	UInt8            speed;          // kUSBDeviceSpeed*
+	USBDeviceAddress highSpeedHub;   // TT hub for a full/low-speed device, else 0
+	int              highSpeedPort;
+};
+
 class BCM2837USBPortPolicy : public IOUSBHubPolicyMaker
 {
 	OSDeclareDefaultStructors(BCM2837USBPortPolicy);
@@ -472,7 +480,8 @@ private:
 
 	DWC2UIMEndpoint    *findEndpoint(UInt8 functionNumber, UInt8 endpointNumber, UInt8 direction);
 	DWC2UIMEndpoint    *createEndpoint(UInt8 functionNumber, UInt8 endpointNumber,
-			    UInt8 direction, UInt8 transferType, UInt16 maxPacketSize);
+			    UInt8 direction, UInt8 transferType, UInt16 maxPacketSize,
+			    const DWC2EndpointGeometry *geometry = NULL);
 	void			reapRetiredEndpoints(void);
 	void			returnTransfers(DWC2UIMEndpoint *ep, IOReturn status);
 	void			completeHead(DWC2UIMEndpoint *ep, IOReturn status);

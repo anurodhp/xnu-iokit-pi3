@@ -486,9 +486,59 @@ BCM2837USBHostController::findEndpoint(UInt8 functionNumber, UInt8 endpointNumbe
  * The DWC2-level descriptor is built by BCM2837DWC2::makeEndpoint(), which is
  * the one place that knows this board's split-transaction rules.
  */
+/*
+ * Build the DWC2-level endpoint from what the family passed in
+ * UIMCreate*Endpoint(): address, speed, and the high-speed hub/port whose
+ * transaction translator a full/low-speed device sits behind.
+ * IOUSBControllerV2::DoCreateEP() (IOUSBControllerV2.cpp:504-558) supplies
+ * the last two from _highSpeedHub[]/_highSpeedPort[], which CreateDevice()
+ * and ConfigureDeviceZero() (:643-690, :695-733) fill in - so this works
+ * for any device the family enumerates, including address 0, and does not
+ * need BCM2837DWC2's own device table. This is the information Apple's EHCI
+ * UIM builds its queue heads from (AppleUSBEHCI_UIM.cpp:1832
+ * UIMCreateBulkEndpoint(), :2549 UIMCreateInterruptEndpoint()).
+ */
+static bool
+familyEndpointGeometry(const DWC2EndpointGeometry *g, UInt8 functionNumber,
+    UInt8 endpointNumber, UInt8 direction, UInt8 transferType,
+    UInt16 maxPacketSize, DWC2Endpoint *dep)
+{
+	if (g == NULL || maxPacketSize == 0) {
+		return false;
+	}
+	uint8_t epType;
+	switch (transferType) {
+	case kUSBControl:   epType = kHCCHAR_EPTYPE_CONTROL; break;
+	case kUSBBulk:      epType = kHCCHAR_EPTYPE_BULK; break;
+	case kUSBInterrupt: epType = kHCCHAR_EPTYPE_INTR; break;
+	default:            return false;
+	}
+	uint8_t speed;
+	switch (g->speed) {
+	case kUSBDeviceSpeedLow:  speed = kUSBSpeedLow; break;
+	case kUSBDeviceSpeedFull: speed = kUSBSpeedFull; break;
+	case kUSBDeviceSpeedHigh: speed = kUSBSpeedHigh; break;
+	default:                  return false;   // no SuperSpeed on DWC2
+	}
+	bzero(dep, sizeof(*dep));
+	dep->devAddr = functionNumber;
+	dep->epNum = endpointNumber;
+	dep->epIsIn = (epType == kHCCHAR_EPTYPE_CONTROL) ? false : (direction == kUSBIn);
+	dep->epType = epType;
+	dep->maxPacket = maxPacketSize;
+	dep->speed = speed;
+	dep->toggle = kHCPID_DATA0;
+	if (speed != kUSBSpeedHigh) {
+		dep->splitHubAddr = (uint8_t)g->highSpeedHub;
+		dep->splitHubPort = (uint8_t)g->highSpeedPort;
+	}
+	return true;
+}
+
 DWC2UIMEndpoint *
 BCM2837USBHostController::createEndpoint(UInt8 functionNumber, UInt8 endpointNumber,
-    UInt8 direction, UInt8 transferType, UInt16 maxPacketSize)
+    UInt8 direction, UInt8 transferType, UInt16 maxPacketSize,
+    const DWC2EndpointGeometry *geometry)
 {
 	DWC2UIMEndpoint *ep = findEndpoint(functionNumber, endpointNumber, direction);
 	if (ep != NULL) {
@@ -498,14 +548,16 @@ BCM2837USBHostController::createEndpoint(UInt8 functionNumber, UInt8 endpointNum
 		if (maxPacketSize != 0) {
 			ep->dep.maxPacket = maxPacketSize;
 		}
+		// Address 0 is reused for every device the family enumerates, each
+		// with its own speed and TT (ConfigureDeviceZero()). With nothing
+		// queued, take the new device's geometry wholesale.
+		DWC2Endpoint fresh;
+		if (geometry != NULL && ep->head == NULL &&
+		    familyEndpointGeometry(geometry, functionNumber, endpointNumber,
+		    direction, transferType, maxPacketSize, &fresh)) {
+			ep->dep = fresh;
+		}
 		return ep;
-	}
-
-	const DWC2USBDevice *dev = fDWC2->findDevice(functionNumber);
-	if (dev == NULL) {
-		IOLog("BCM2837USBHostController: no enumerated device at address %u "
-		      "(endpoint %u)\n", functionNumber, endpointNumber);
-		return NULL;
 	}
 
 	ep = (DWC2UIMEndpoint *)IOMalloc(sizeof(DWC2UIMEndpoint));
@@ -519,15 +571,28 @@ BCM2837USBHostController::createEndpoint(UInt8 functionNumber, UInt8 endpointNum
 		epAddress |= 0x80;
 	}
 
-	uint32_t hcType = (transferType == kUSBInterrupt) ? kHCCHAR_EPTYPE_INTR :
-	    ((transferType == kUSBBulk) ? kHCCHAR_EPTYPE_BULK : 0xFFFFFFFFU);
-	if (!fDWC2->makeEndpoint(dev, epAddress, &ep->dep) &&
-	    !fDWC2->makeEndpointFromDescriptor(dev, epAddress, hcType, maxPacketSize,
-	    &ep->dep)) {
-		IOLog("BCM2837USBHostController: device %u has no endpoint 0x%02x\n",
-		    functionNumber, epAddress);
-		IOFree(ep, sizeof(*ep));
-		return NULL;
+	if (!familyEndpointGeometry(geometry, functionNumber, endpointNumber, direction,
+	    transferType, maxPacketSize, &ep->dep)) {
+		// On-demand creation (a transfer on an endpoint the family never
+		// opened here) has no geometry: fall back to what BCM2837DWC2
+		// recorded when it enumerated the device at boot.
+		const DWC2USBDevice *dev = fDWC2->findDevice(functionNumber);
+		if (dev == NULL) {
+			IOLog("BCM2837USBHostController: no enumerated device at address %u "
+			      "(endpoint %u)\n", functionNumber, endpointNumber);
+			IOFree(ep, sizeof(*ep));
+			return NULL;
+		}
+		uint32_t hcType = (transferType == kUSBInterrupt) ? kHCCHAR_EPTYPE_INTR :
+		    ((transferType == kUSBBulk) ? kHCCHAR_EPTYPE_BULK : 0xFFFFFFFFU);
+		if (!fDWC2->makeEndpoint(dev, epAddress, &ep->dep) &&
+		    !fDWC2->makeEndpointFromDescriptor(dev, epAddress, hcType, maxPacketSize,
+		    &ep->dep)) {
+			IOLog("BCM2837USBHostController: device %u has no endpoint 0x%02x\n",
+			    functionNumber, epAddress);
+			IOFree(ep, sizeof(*ep));
+			return NULL;
+		}
 	}
 
 	// The family's view of maxPacketSize wins when it supplied one: it comes
@@ -1236,16 +1301,12 @@ IOReturn
 BCM2837USBHostController::UIMCreateControlEndpoint(UInt8 functionNumber, UInt8 endpointNumber,
     UInt16 maxPacketSize, UInt8 speed, USBDeviceAddress highSpeedHub, int highSpeedPort)
 {
-#pragma unused (speed, highSpeedHub, highSpeedPort)
-	// Split-transaction routing comes from BCM2837DWC2's own device table via
-	// makeEndpoint(), which recorded the real hub address and port during
-	// enumeration; the family's highSpeedHub/highSpeedPort say the same thing
-	// and are deliberately not used as a second, divergeable source.
 	if (functionNumber == fRootHubAddress) {
 		return kIOReturnSuccess;
 	}
+	DWC2EndpointGeometry g = { speed, highSpeedHub, highSpeedPort };
 	return (createEndpoint(functionNumber, endpointNumber, kUSBAnyDirn, kUSBControl,
-	    maxPacketSize) != NULL) ? kIOReturnSuccess : kIOUSBEndpointNotFound;
+	    maxPacketSize, &g) != NULL) ? kIOReturnSuccess : kIOUSBEndpointNotFound;
 }
 
 IOReturn
@@ -1261,12 +1322,12 @@ BCM2837USBHostController::UIMCreateBulkEndpoint(UInt8 functionNumber, UInt8 endp
     UInt8 direction, UInt8 speed, UInt16 maxPacketSize,
     USBDeviceAddress highSpeedHub, int highSpeedPort)
 {
-#pragma unused (speed, highSpeedHub, highSpeedPort)
 	if (functionNumber == fRootHubAddress) {
 		return kIOReturnBadArgument;
 	}
+	DWC2EndpointGeometry g = { speed, highSpeedHub, highSpeedPort };
 	return (createEndpoint(functionNumber, endpointNumber, direction, kUSBBulk,
-	    maxPacketSize) != NULL) ? kIOReturnSuccess : kIOUSBEndpointNotFound;
+	    maxPacketSize, &g) != NULL) ? kIOReturnSuccess : kIOUSBEndpointNotFound;
 }
 
 IOReturn
@@ -1282,7 +1343,6 @@ BCM2837USBHostController::UIMCreateInterruptEndpoint(short functionAddress, shor
     UInt8 direction, short speed, UInt16 maxPacketSize, short pollingRate,
     USBDeviceAddress highSpeedHub, int highSpeedPort)
 {
-#pragma unused (highSpeedHub, highSpeedPort)
 	// The root hub's status-change endpoint is simulated, not real silicon:
 	// there is no channel to program for it.
 	if (functionAddress == fRootHubAddress) {
@@ -1292,8 +1352,9 @@ BCM2837USBHostController::UIMCreateInterruptEndpoint(short functionAddress, shor
 	if (pollingRate == 0) {
 		return kIOReturnBadArgument;
 	}
+	DWC2EndpointGeometry g = { (UInt8)speed, highSpeedHub, highSpeedPort };
 	DWC2UIMEndpoint *ep = createEndpoint((UInt8)functionAddress, (UInt8)endpointNumber,
-	    direction, kUSBInterrupt, maxPacketSize);
+	    direction, kUSBInterrupt, maxPacketSize, &g);
 	if (ep == NULL) {
 		return kIOUSBEndpointNotFound;
 	}
