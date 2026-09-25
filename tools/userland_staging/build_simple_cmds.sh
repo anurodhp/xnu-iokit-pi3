@@ -742,8 +742,11 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
 # (`_errc`/`_errx`/`_verr`/`_verrc`/`_verrx`/`_vwarn`/`_vwarnc`/`_vwarnx`/
 # `_warnc`/`_warnx`/`_err_set_exit`/`_err_set_exit_b`/`_err_set_file`,
 # confirmed via `xcrun dyld_info -exports`), so common_err.o now gets the
-# same private-extern-preserving narrow treatment as common_findfp.o
-# below (see that block's own comment) rather than linking wholesale.
+# same private-extern-preserving narrow treatment rather than linking
+# wholesale. (common_findfp.o used to get it too; DAR-379 found that this
+# narrowing does NOT make the commands bind to libsystem_c.dylib -- a
+# private-extern symbol still resolves inside the final link. Harmless for
+# err.c's stateless functions; it was not for findfp.c's FILE table.)
 # The other 2 (`__err`/`__warn`, i.e. C `_err()`/`_warn()`) stay fully
 # exported on purpose: real Apple's own err.c makes public `err()`/
 # `warn()` a `__weak_reference(_err, err)`/`__weak_reference(_warn, warn)`
@@ -808,19 +811,25 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
 # and `___collate_collating_symbol`/`___collate_equiv_class`/
 # `___collate_range_cmp` (collate.c, needed by diff's fnmatch wrapper).
 #
-# findfp.c ALSO stays, for the same real reason, discovered the same
-# way: 6 commands (tail/fold/expand/unexpand/hexdump/nl) link
-# Libc/stdio/FreeBSD/freopen.c as a per-command extra, and real Apple's
-# freopen() calls `__sfprelease()` -- which is `__private_extern__` in
-# real findfp.c (confirmed via `nm -m`: libsystem_c.dylib's own copy is
-# "non-external (was a private external)" too), so no image can reach
-# another's copy. Unlike collate.c/ldpart.c, findfp.c's OTHER 9 symbols
-# (___sF/___sfp/___sglue/___sdidinit/__cleanup/___sinit/___stdinp/
-# ___stdoutp/___stderrp) really are fully public and really are
-# libsystem_c.dylib's job -- so findfp.c gets the same narrowing
-# treatment as table.c/none.c below, rather than being linked wholesale
-# the way it was before this pass.
-COMMON_EXTRA="$LIBC/gen/FreeBSD/err.c $LIBC/stdlib/FreeBSD/getopt.c simple_cmds_read_compat.c libc_locale_globals_compat.c simple_cmds_libsystem_c_gap_compat.c cp_mv_syscalls.c $LIBC/locale/FreeBSD/table.c $LIBC/locale/FreeBSD/none.c $LIBC/locale/FreeBSD/ldpart.c $LIBC/locale/FreeBSD/collate.c $LIBC/locale/FreeBSD/collcmp.c $LIBC/stdio/FreeBSD/findfp.c"
+# findfp.c REMOVED 2026-09-25 (DAR-379). It used to stay because
+# tail/fold/expand/unexpand/hexdump/nl/base64 linked their own
+# Libc/stdio/FreeBSD/freopen.c (libsystem_c.dylib did not export the
+# `_freopen$UNIX2003` name <stdio.h> asks for), and freopen() needs
+# findfp.c's `__private_extern__` __sfprelease(). findfp.c's public
+# symbols were "narrowed" with `ld -r -unexported_symbol`, meant to make
+# them bind to libsystem_c.dylib. They did not: that only makes a symbol
+# private-extern, and a private-extern symbol still resolves between the
+# objects of one final link. Every command's own `stdout`/`stdin`/`stderr`
+# (___stdoutp etc) bound to its private __sF, which libsystem_c's exit()
+# -> __cleanup never walks. Output a command wrote through its own
+# `stdout` (fwrite/fputs: head, base64) sat in a fully-buffered private
+# FILE and was lost whenever stdout was a pipe or a file. printf/putchar/
+# wprintf (wc, fold) were unaffected, because inside libsystem_c
+# `stdout` is libsystem_c's own; cat's default path write(2)s directly.
+# build_libsystem_c.sh now aliases `_freopen$UNIX2003` to its real
+# freopen.o, as on a Mac, so no command links freopen.c,
+# _flock_stub.c or findfp.c any more.
+COMMON_EXTRA="$LIBC/gen/FreeBSD/err.c $LIBC/stdlib/FreeBSD/getopt.c simple_cmds_read_compat.c libc_locale_globals_compat.c simple_cmds_libsystem_c_gap_compat.c cp_mv_syscalls.c $LIBC/locale/FreeBSD/table.c $LIBC/locale/FreeBSD/none.c $LIBC/locale/FreeBSD/ldpart.c $LIBC/locale/FreeBSD/collate.c $LIBC/locale/FreeBSD/collcmp.c"
 # cp_mv_syscalls.c promoted from a cp/mv-only CMD_LIST extra source to a
 # common object (2026-08-28): its real lchown()/setattrlist()/waitpid()
 # turned out to be needed by many more commands once the dynamic-link
@@ -855,28 +864,6 @@ done
 # no-op (the symbols are already private), so this is safe to run every
 # build even though common_table.o/common_none.o are cached across runs.
 ./narrow_rune_locale.sh "$OUT/simple_obj" common_
-
-# Narrow common_findfp.o's 9 fully-public stdio FILE-table symbols the
-# same way (static-linking cleanup, Phase 2a, 2026-08-30) -- see
-# COMMON_EXTRA's own comment on findfp.c above. __sfprelease (private
-# extern) and anything else findfp.c defines survive untouched via
-# -keep_private_externs, same mechanism narrow_rune_locale.sh uses.
-# _f_prealloc ADDED 2026-09-04 (DAR-196): a 10th fully-public findfp.c
-# symbol, missed in the original 2026-08-30 pass -- real, genuine
-# libsystem_c.dylib export (confirmed via `xcrun dyld_info -exports`),
-# same narrowing treatment as the other 9.
-FINDFP_OBJ="$OUT/simple_obj/common_findfp.o"
-if [ -f "$FINDFP_OBJ" ]; then
-    XCODE12_LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
-    "$XCODE12_LD" -r -arch arm64 -keep_private_externs \
-        -unexported_symbol ___sF -unexported_symbol ___sfp \
-        -unexported_symbol ___sglue -unexported_symbol ___sdidinit \
-        -unexported_symbol __cleanup -unexported_symbol ___sinit \
-        -unexported_symbol ___stdinp -unexported_symbol ___stdoutp \
-        -unexported_symbol ___stderrp -unexported_symbol _f_prealloc \
-        "$FINDFP_OBJ" -o "$FINDFP_OBJ.narrowed"
-    mv -f "$FINDFP_OBJ.narrowed" "$FINDFP_OBJ"
-fi
 
 # Narrow common_err.o's 13 fully-public, state-free err(3) family
 # symbols the same way (DAR-196, 2026-09-04) -- see COMMON_EXTRA's own
@@ -1305,7 +1292,7 @@ CMD_LIST=(
     "cat:$TEXT_CMDS/cat/cat.c:cat_socket_stub.c"
     "wc:$TEXT_CMDS/wc/wc.c:"
     "head:$TEXT_CMDS/head/head.c:"
-    "tail:$TEXT_CMDS/tail/tail.c:$TEXT_CMDS/tail/forward.c|$TEXT_CMDS/tail/reverse.c|$TEXT_CMDS/tail/misc.c|$TEXT_CMDS/tail/read.c|$LIBC/stdio/FreeBSD/_flock_stub.c|$LIBC/stdio/FreeBSD/freopen.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/gen/FreeBSD/usleep.c|simple_cmds_nanosleep_compat.c|simple_cmds_mmap_compat.c"
+    "tail:$TEXT_CMDS/tail/tail.c:$TEXT_CMDS/tail/forward.c|$TEXT_CMDS/tail/reverse.c|$TEXT_CMDS/tail/misc.c|$TEXT_CMDS/tail/read.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/gen/FreeBSD/usleep.c|simple_cmds_nanosleep_compat.c|simple_cmds_mmap_compat.c"
     "mkdir:$FILE_CMDS/mkdir/mkdir.c:$XNU/libsyscall/wrappers/unix03/chmod.c|$LIBC/util/mkpath_np.c|$LIBC/gen/FreeBSD/setmode.c|simple_cmds_sigprocmask_compat.c"
     # DAR-142 (2026-09-15): touch -h's lutimes() symlink case is now
     # real, unmodified Libc/emulated/lutimes.c (was
@@ -1353,10 +1340,10 @@ CMD_LIST=(
     # the Phase 4.6 item 3 POSIX-regex wall this sweep is scoped to stop
     # at, not attempt piecemeal.
     "rev:$TEXT_CMDS/rev/rev.c:"
-    "fold:$TEXT_CMDS/fold/fold.c:$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/stdio/FreeBSD/freopen.c|$LIBC/stdio/FreeBSD/_flock_stub.c"
+    "fold:$TEXT_CMDS/fold/fold.c:$LIBC/stdlib/FreeBSD/atoi.c"
     "paste:$TEXT_CMDS/paste/paste.c:"
-    "expand:$TEXT_CMDS/expand/expand.c:$LIBC/stdio/FreeBSD/freopen.c|$LIBC/stdio/FreeBSD/_flock_stub.c"
-    "unexpand:$TEXT_CMDS/unexpand/unexpand.c:$LIBC/stdio/FreeBSD/freopen.c|$LIBC/stdio/FreeBSD/_flock_stub.c"
+    "expand:$TEXT_CMDS/expand/expand.c:"
+    "unexpand:$TEXT_CMDS/unexpand/unexpand.c:"
     "comm:$TEXT_CMDS/comm/comm.c:"
     "colrm:$TEXT_CMDS/colrm/colrm.c:"
     "lam:$TEXT_CMDS/lam/lam.c:"
@@ -1381,7 +1368,7 @@ CMD_LIST=(
     "kill:$SHELL_CMDS/kill/kill.c:$LIBC/gen/FreeBSD/siglist.c"
     "tee:$SHELL_CMDS/tee/tee.c:$LIBC/gen/FreeBSD/signal.c"
     "mktemp:$SHELL_CMDS/mktemp/mktemp.c:$LIBC/stdio/FreeBSD/mktemp.c|$LIBC/gen/FreeBSD/arc4random.c|block3_last_resort_compat.c"
-    "hexdump:$SHELL_CMDS/hexdump/hexdump.c:$SHELL_CMDS/hexdump/hexsyntax.c|$SHELL_CMDS/hexdump/conv.c|$SHELL_CMDS/hexdump/display.c|$SHELL_CMDS/hexdump/parse.c|$SHELL_CMDS/hexdump/odsyntax.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/stdlib/FreeBSD/strtoul.c|$LIBC/stdio/FreeBSD/freopen.c|$LIBC/stdio/FreeBSD/_flock_stub.c|hexdump_bcmp_compat.c"
+    "hexdump:$SHELL_CMDS/hexdump/hexdump.c:$SHELL_CMDS/hexdump/hexsyntax.c|$SHELL_CMDS/hexdump/conv.c|$SHELL_CMDS/hexdump/display.c|$SHELL_CMDS/hexdump/parse.c|$SHELL_CMDS/hexdump/odsyntax.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/stdlib/FreeBSD/strtoll.c|$LIBC/stdlib/FreeBSD/strtoul.c|hexdump_bcmp_compat.c"
     "stat:$FILE_CMDS/stat/stat.c:$LIBC/gen/strtofflags.c|ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c|simple_cmds_time_compat.c|$LIBC/sys/gettimeofday.c|ps_commpage_gettimeofday_stub.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c"
     "cksum:$FILE_CMDS/cksum/cksum.c:$FILE_CMDS/cksum/crc.c|$FILE_CMDS/cksum/crc32.c|$FILE_CMDS/cksum/sum1.c|$FILE_CMDS/cksum/sum2.c|$FILE_CMDS/cksum/print.c"
     "pathchk:$FILE_CMDS/pathchk/pathchk.c:"
@@ -1485,7 +1472,7 @@ CMD_LIST=(
     # fchmod-class extras (grepped first, not guessed: no file-rewrite
     # path in this program at all, it only ever reads stdin/its input
     # file and writes stdout).
-    "nl:$TEXT_CMDS/nl/nl.c:$LIBC/stdio/FreeBSD/freopen.c|$LIBC/stdio/FreeBSD/_flock_stub.c|$LIBC/stdlib/FreeBSD/strtoul.c"
+    "nl:$TEXT_CMDS/nl/nl.c:$LIBC/stdlib/FreeBSD/strtoul.c"
     # xargs: real, unmodified shell_cmds/xargs.c + strnsubst.c. First
     # simple_cmds.sh binary to spawn real child processes (real vfork()/
     # waitpid(), already built for mv's cross-filesystem-rename fallback
@@ -1727,10 +1714,11 @@ CMD_LIST=(
     # so those real files link too. They call b64_ntop()/b64_pton(), which
     # <resolv.h> maps to libresolv's res_9_b64_*: compiled here from
     # Apple's real libresolv base64.c, since libresolv.dylib is not on the
-    # simple commands' link line. freopen.c/_flock_stub.c, setmode.c and
-    # the libinfo getpwnam() (uudecode's ~user output paths) are the same
-    # real sources fold/mkdir/id already link for the same symbols.
-    "base64:$TEXT_CMDS_BINTRANS/bintrans/bintrans.c:$TEXT_CMDS_BINTRANS/bintrans/apple_base64.c|$TEXT_CMDS_BINTRANS/bintrans/uuencode.c|$TEXT_CMDS_BINTRANS/bintrans/uudecode.c|$TEXT_CMDS_BINTRANS/bintrans/qp.c|../../third_party/libresolv/base64.c|$LIBC/stdlib/FreeBSD/getopt_long.c|$LIBC/stdio/FreeBSD/freopen.c|$LIBC/stdio/FreeBSD/_flock_stub.c|$LIBC/gen/FreeBSD/setmode.c|ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c"
+    # simple commands' link line. setmode.c and the libinfo getpwnam()
+    # (uudecode's ~user output paths) are the same real sources mkdir/id
+    # already link for the same symbols. freopen() comes from
+    # libsystem_c.dylib (DAR-379).
+    "base64:$TEXT_CMDS_BINTRANS/bintrans/bintrans.c:$TEXT_CMDS_BINTRANS/bintrans/apple_base64.c|$TEXT_CMDS_BINTRANS/bintrans/uuencode.c|$TEXT_CMDS_BINTRANS/bintrans/uudecode.c|$TEXT_CMDS_BINTRANS/bintrans/qp.c|../../third_party/libresolv/base64.c|$LIBC/stdlib/FreeBSD/getopt_long.c|$LIBC/gen/FreeBSD/setmode.c|ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c"
 )
 
 built=0
@@ -2421,10 +2409,10 @@ for spec in "${CMD_LIST[@]}"; do
     # link line below avoids it.
     #
     # getcwd.o dropped 2026-08-30 (static-linking cleanup, Phase 2a) --
-    # see COMMON_EXTRA's own comment. ldpart.o/collate.o/collcmp.o/
-    # findfp.o (now narrowed) stay: real per-command extras need symbols
-    # only they provide.
-    locale_extra_objs="$OUT/simple_obj/common_libc_locale_globals_compat.o $OUT/simple_obj/common_table.o $OUT/simple_obj/common_none.o $OUT/simple_obj/common_ldpart.o $OUT/simple_obj/common_collate.o $OUT/simple_obj/common_collcmp.o $OUT/simple_obj/common_findfp.o"
+    # see COMMON_EXTRA's own comment. ldpart.o/collate.o/collcmp.o
+    # stay: real per-command extras need symbols only they provide.
+    # findfp.o dropped 2026-09-25 (DAR-379, see COMMON_EXTRA's comment).
+    locale_extra_objs="$OUT/simple_obj/common_libc_locale_globals_compat.o $OUT/simple_obj/common_table.o $OUT/simple_obj/common_none.o $OUT/simple_obj/common_ldpart.o $OUT/simple_obj/common_collate.o $OUT/simple_obj/common_collcmp.o"
 
     # Real dynamic link (2026-08-28) -- no -static/-e start (see
     # LINK_DYLIBS's own header comment near LINK_COMMON for what this

@@ -922,6 +922,16 @@ rm -f "$OUT/system/libsystem_c.dylib"
     -Wl,-alias,_fwrite,'_fwrite$UNIX2003' \
     -Wl,-alias,_fstatfs,'_fstatfs$INODE64' \
     -Wl,-alias,_fopen,'_fopen$UNIX2003' \
+    `# DAR-379: freopen gets the same $UNIX2003 spelling as fopen/fdopen.` \
+    `# third_party/Libc/include/stdio.h:179-180 declares it` \
+    `# __DARWIN_ALIAS(freopen), so every command compiled with this` \
+    `# project's -D__DARWIN_UNIX03=1 references _freopen$UNIX2003. With` \
+    `# no such export here, build_simple_cmds.sh linked its own freopen.c` \
+    `# and, for __sfprelease (__private_extern__, Libc/stdio/FreeBSD/` \
+    `# findfp.c), its own findfp.c -- a second, private FILE table that` \
+    `# exit() never flushed. Base _freopen is local to this link` \
+    `# ($EXTRACT/freopen.o from libc_stdio.a).` \
+    -Wl,-alias,_freopen,'_freopen$UNIX2003' \
     -Wl,-alias,_fstatat,'_fstatat$INODE64' \
     -Wl,-alias,_closedir,'_closedir$UNIX2003' \
     -Wl,-alias,_opendir,'_opendir$INODE64$UNIX2003' \
