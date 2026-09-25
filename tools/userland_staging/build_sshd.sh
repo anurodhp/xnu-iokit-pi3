@@ -554,7 +554,21 @@ compile "$LIBC/gen/FreeBSD/popen.c" "${FBSD_INC[@]}" -include libc_build_prototy
 # clock_gettime(3) -- misc.c's monotime()/monotime_tv(), i.e. every
 # rekey/keepalive/login-grace timer sshd has. The ONLY dylib exporting it
 # today is libunwind.dylib, which is plainly not its owner.
-compile "$LIBC/gen/clock_gettime.c"
+#
+# -include chrony_mach_boottime_decl.h is load-bearing (DAR-377): the
+# iPhoneOS 14.4 SDK's mach/mach_time.h has no mach_boottime_usec()
+# prototype (xnu declares it only in osfmk/mach/mach_time.h:82, PRIVATE),
+# and this file's -Wno-implicit-function-declaration let clock_gettime.c
+# call it as an implicit `int` function. The uint64_t boot time came back
+# truncated to 32 bits and sign-extended, so CLOCK_MONOTONIC was only
+# right while boottime was below 2^31 us, i.e. on a Pi still at 1970.
+# Once fake-hwclock or chronyd stepped the clock to 2026, monotime() read
+# about -1.8e13, a channel's notbefore deadline became a ~1.8e13 s
+# pselect() timeout, and the kernel's timespec check rejected it:
+# "wait_until_can_do_something: ppoll: Invalid argument", and every
+# session was dropped. Same prototype-only fix build_chrony.sh already
+# applies to this same file.
+compile "$LIBC/gen/clock_gettime.c" -include chrony_mach_boottime_decl.h
 # __strlcat_chk -- the real _FORTIFY_SOURCE wrapper behind every
 # strlcat() in kex.c/match.c/misc.c/servconf.c/loginrec.o. Pairs with
 # $OUT/chk_fail.o (built by build_libmalloc.sh), listed at link time.
