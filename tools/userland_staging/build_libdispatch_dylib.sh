@@ -692,30 +692,10 @@ for f in ___mach_eventlink_signal ___mach_eventlink_wait_until ___mach_eventlink
         "$OUT/pthread_syscall_gen/$f.s" -o "$OUT/dispatch_dylib_extract/${f}_trap.o"
 done
 
-# pthread_get_stackaddr_np: real, narrow extraction of pthread.c's own
-# function (see pthread_get_stackaddr_np_compat.c's own header for the
-# full real rationale on why the cross-thread liveness check is narrowed
-# away safely, not skipped carelessly). Self-contained -- zero new deps.
-PTHREAD_FOR_GAPS="../../third_party/libpthread"
-PLATFORM_FOR_GAPS="../../third_party/libplatform"
-MALLOC_FOR_GAPS="../../third_party/libmalloc"
-CFLAGS_PTHREAD_GAP=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    -Wno-nullability-completeness -Wno-availability -Wno-deprecated-declarations \
-    -D__LIBC__ -D__POSIX_LIB__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_NON_CANCELABLE=1 \
-    -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 -D__PTHREAD_BUILDING_PTHREAD__=1 -D__PTHREAD_EXPOSE_INTERNALS__ \
-    -DOS_ATOMIC_CONFIG_MEMORY_ORDER_DEPENDENCY=1 -DPRIVATE=1 -DVARIANT_STATIC=1 \
-    -D_os_xbs_chrooted=0 \
-    -D__API_UNAVAILABLE_PLATFORM_bridgeos=ios,unavailable \
-    -D__API_AVAILABLE_PLATFORM_bridgeos\(x\)=ios,introduced=x \
-    -DSPI_AVAILABLE\(...\)= -D__SPI_AVAILABLE\(...\)= \
-    -I . \
-    -I "$PTHREAD_FOR_GAPS" -I "$PTHREAD_FOR_GAPS/src" -I "$PTHREAD_FOR_GAPS/src/resolver" -I "$PTHREAD_FOR_GAPS/private" -I "$PTHREAD_FOR_GAPS/include" -I "$PTHREAD_FOR_GAPS/kern" \
-    -I "$PLATFORM_FOR_GAPS/internal" -I "$PLATFORM_FOR_GAPS/private" -I "$PLATFORM_FOR_GAPS/include" \
-    -I "$OUT/compat_include" \
-    -I "$MALLOC_FOR_GAPS/private" \
-    -I "$XNU_FOR_GAPS/libsyscall" -I "$XNU_FOR_GAPS/libsyscall/mach" -I "$XNU_FOR_GAPS/bsd" -I "$XNU_FOR_GAPS/libsyscall/wrappers/spawn" \
-    -idirafter "$XNU_FOR_GAPS/osfmk" -idirafter "$XNU_FOR_GAPS/libkern")
-"$CLANG" "${CFLAGS_PTHREAD_GAP[@]}" pthread_get_stackaddr_np_compat.c -o "$OUT/dispatch_dylib_extract/pthread_get_stackaddr_np_compat.o"
+# pthread_get_stackaddr_np used to be compiled into this dylib here
+# (pthread_get_stackaddr_np_compat.c). DAR-110 moved it to its real home,
+# libsystem_pthread.dylib, which this dylib links; see
+# build_libsystem_pthread.sh.
 
 # Real gap found+fixed 2026-08-28 booting launchd as PID 1 with
 # libdispatch.dylib loaded alongside it: libmalloc.a bundles its own

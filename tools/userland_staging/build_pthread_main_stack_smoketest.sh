@@ -36,8 +36,7 @@ fi
 for f in system/libsystem_c.dylib system/libsystem_pthread.dylib \
          system/libsystem_malloc.dylib system/libsystem_kernel.dylib \
          system/libsystem_platform.dylib \
-         system/libdyld.dylib system/libSystem.B.dylib \
-         system/libdispatch.dylib; do
+         system/libdyld.dylib system/libSystem.B.dylib; do
     if [ ! -f "$OUT/$f" ]; then
         echo "error: $OUT/$f not found -- run the libSystem tier build scripts first" >&2
         exit 1
@@ -59,9 +58,6 @@ rm -f "$OUT/pthread_main_stack_smoketest.macho"
     "$CSU/start.s" "$CSU/crt.c" \
     "$OUT/pthread_main_stack_smoketest.o" \
     "$OUT/system/libsystem_kernel.dylib" \
-    `# pthread_get_stackaddr_np: libdispatch.dylib's own copy, the one` \
-    `# _dispatch_clear_stack() actually calls` \
-    "$OUT/system/libdispatch.dylib" \
     "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_pthread.dylib" \
     "$OUT/system/libsystem_malloc.dylib" \
     "$OUT/system/libsystem_platform.dylib" \
