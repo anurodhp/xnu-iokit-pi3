@@ -1553,7 +1553,7 @@ fi
 # /usr/bin, on a real system). Generic loop instead of one if-block per
 # command -- this list only grows as more tiers land.
 mkdir -p "$MNT/bin"
-for cmd in true false yes pwd basename dirname echo printf hostname logname cat wc head tail mkdir touch rm which env sleep printenv cut uniq ln id cp mv rev fold paste expand unexpand comm colrm lam rs rmdir mkfifo mknod chflags seq jot test kill tee mktemp hexdump stat cksum pathchk du chmod chown nice renice nohup chroot apply vis unvis grep sed nl xargs ed ls find date gzip compress diff tar less df killall getty md5; do
+for cmd in true false yes pwd basename dirname echo printf hostname logname cat wc head tail mkdir touch rm which env sleep printenv cut uniq ln id cp mv rev fold paste expand unexpand comm colrm lam rs rmdir mkfifo mknod chflags seq jot test kill tee mktemp hexdump stat cksum pathchk du chmod chown nice renice nohup chroot apply vis unvis grep sed nl xargs ed ls find date gzip compress diff tar less df killall getty md5 sync; do
     if [ -f "tools/userland_staging/${cmd}.macho" ]; then
         cp "tools/userland_staging/${cmd}.macho" "$MNT/bin/${cmd}"
         chmod 755 "$MNT/bin/${cmd}"
@@ -1563,16 +1563,18 @@ for cmd in true false yes pwd basename dirname echo printf hostname logname cat 
     fi
 done
 
-# base64(1): built by build_simple_cmds.sh like the loop above, but a Mac
-# ships it at /usr/bin/base64, not /bin.
+# base64(1) and awk(1): built by build_simple_cmds.sh like the loop above,
+# but a Mac ships them in /usr/bin, not /bin.
 mkdir -p "$MNT/usr/bin"
-if [ -f tools/userland_staging/base64.macho ]; then
-    cp tools/userland_staging/base64.macho "$MNT/usr/bin/base64"
-    chmod 755 "$MNT/usr/bin/base64"
-    echo "+ wrote $(wc -c < tools/userland_staging/base64.macho) bytes to $MNT/usr/bin/base64"
-else
-    echo "= tools/userland_staging/base64.macho not built -- run build_simple_cmds.sh first if wanted, skipping"
-fi
+for cmd in base64 awk; do
+    if [ -f "tools/userland_staging/$cmd.macho" ]; then
+        cp "tools/userland_staging/$cmd.macho" "$MNT/usr/bin/$cmd"
+        chmod 755 "$MNT/usr/bin/$cmd"
+        echo "+ wrote $(wc -c < "tools/userland_staging/$cmd.macho") bytes to $MNT/usr/bin/$cmd"
+    else
+        echo "= tools/userland_staging/$cmd.macho not built -- run build_simple_cmds.sh first if wanted, skipping"
+    fi
+done
 
 # whoami(1) (Tier B, docs/roadmap.md "Command priority reorganized"):
 # no standalone real source exists anywhere in the macos-112 manifest

@@ -30,6 +30,8 @@ PTHREAD="../../third_party/libpthread"
 SHELL_CMDS="../../third_party/shell_cmds"
 TEXT_CMDS="../../third_party/text_cmds"
 TEXT_CMDS_BINTRANS="../../third_party/text_cmds_bintrans"
+SYSTEM_CMDS="../../third_party/system_cmds"
+AWK_SRC="../../third_party/awk/src"
 FILE_CMDS="../../third_party/file_cmds"
 GNUDIFF="../../third_party/gnudiff/diffutils"
 LIBARCHIVE_ROOT="../../third_party/libarchive"
@@ -1718,6 +1720,19 @@ CMD_LIST=(
     # (uudecode's ~user output paths) are the same real sources mkdir/id
     # already link for the same symbols. freopen() comes from
     # libsystem_c.dylib (DAR-379).
+    # awk(1): Apple's real awk (the One True AWK, awk-27.40.1). The yacc
+    # output (awkgram.tab.c) and maketab's proctab.c ship pre-generated in
+    # the repo, so no yacc/maketab step runs here. system()/popen()
+    # (awk's system() builtin and `cmd | getline` / `print | cmd` pipes)
+    # come from ed_popen_system_compat.c for the reason its own header
+    # gives: Apple's popen.c/system.c need posix_spawn, not ported here.
+    # run.c's error unwinding uses setjmp/longjmp: ed's setjmp core
+    # (ed_setjmp_compat.c + $OUT/ed_setjmp_raw.o, see the ed entry);
+    # compat_mode() and atof() are real Libc sources other entries link.
+    "awk:$AWK_SRC/main.c:$AWK_SRC/lex.c|$AWK_SRC/parse.c|$AWK_SRC/lib.c|$AWK_SRC/tran.c|$AWK_SRC/b.c|$AWK_SRC/run.c|$AWK_SRC/awkgram.tab.c|$AWK_SRC/proctab.c|ed_popen_system_compat.c|ed_setjmp_compat.c|$LIBC/gen/get_compat.c|$LIBC/stdlib/FreeBSD/atof.c"
+    # sync(8): Apple's real system_cmds/sync.tproj (one sync(2) call); a
+    # Mac installs it at /bin/sync.
+    "sync:$SYSTEM_CMDS/sync.tproj/sync.c:"
     "base64:$TEXT_CMDS_BINTRANS/bintrans/bintrans.c:$TEXT_CMDS_BINTRANS/bintrans/apple_base64.c|$TEXT_CMDS_BINTRANS/bintrans/uuencode.c|$TEXT_CMDS_BINTRANS/bintrans/uudecode.c|$TEXT_CMDS_BINTRANS/bintrans/qp.c|../../third_party/libresolv/base64.c|$LIBC/stdlib/FreeBSD/getopt_long.c|$LIBC/gen/FreeBSD/setmode.c|ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c"
 )
 
@@ -1787,6 +1802,11 @@ for spec in "${CMD_LIST[@]}"; do
             # NO_BZIP2_SUPPORT/NO_XZ_SUPPORT (see this command's own
             # CMD_LIST comment).
             cmd_cflags="-DNO_BZIP2_SUPPORT -DNO_XZ_SUPPORT -DSTDC -DNO_DUMMY_DECL -D__LITTLE_ENDIAN=1 -DGZIP_APPLE_VERSION=\"1.0\" -DCONFIG_GZIP_COMPRESSED -I $OUT/zlib_glue"
+            ;;
+        awk)
+            # run.c's system() builtin: same __IOS_PROHIBITED availability
+            # annotation as ed below, same override.
+            cmd_cflags="-include ed_availability_override.h"
             ;;
         ed)
             # ed.c's real `!cmd` shell-escape calls system(3), marked
@@ -2146,6 +2166,10 @@ for spec in "${CMD_LIST[@]}"; do
             # `mktemp` command itself already established).
             extra_libs="$OUT/ed_setjmp_raw.o $OUT/system/libremovefile.dylib $OUT/system/libcopyfile.dylib"
             common_read_compat=""
+            ;;
+        awk)
+            # ed's AAPCS64 setjmp/longjmp core, as in the ed) case above.
+            extra_libs="$OUT/ed_setjmp_raw.o"
             ;;
         compress)
             # libc_regex.a: real rpmatch() (compress -f's real y/n

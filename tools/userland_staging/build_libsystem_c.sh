@@ -932,6 +932,11 @@ rm -f "$OUT/system/libsystem_c.dylib"
     `# exit() never flushed. Base _freopen is local to this link` \
     `# ($EXTRACT/freopen.o from libc_stdio.a).` \
     -Wl,-alias,_freopen,'_freopen$UNIX2003' \
+    `# strtod_l gets its $UNIX2003 spelling too: Libc/include/xlocale/` \
+    `# _stdlib.h declares it __DARWIN_ALIAS(strtod_l), so Libc's own` \
+    `# atof.c (linked by awk) references _strtod_l$UNIX2003. Base` \
+    `# _strtod_l is already this dylib's own export.` \
+    -Wl,-alias,_strtod_l,'_strtod_l$UNIX2003' \
     -Wl,-alias,_fstatat,'_fstatat$INODE64' \
     -Wl,-alias,_closedir,'_closedir$UNIX2003' \
     -Wl,-alias,_opendir,'_opendir$INODE64$UNIX2003' \

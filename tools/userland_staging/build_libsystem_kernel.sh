@@ -435,7 +435,7 @@ MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 for s in _geteuid _getegid _getuid _getgid _pread _pwrite _fileport_makefd _fileport_makeport \
     _socket _writev ___chmod ___connect_nocancel ___recvmsg_nocancel ___sendmsg_nocancel \
     ___select_nocancel ___sendto_nocancel ___recvfrom_nocancel _fpathconf _kevent _kqueue ___sigaction \
-    _setegid _seteuid _getgroups _setitimer _flock; do
+    _setegid _seteuid _getgroups _setitimer _flock _sync; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
         -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
         -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
@@ -814,6 +814,10 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/sys_setegid.o" "$OUT/libsystem_kernel/sys_seteuid.o" \
     "$OUT/libsystem_kernel/sys_getgroups.o" "$OUT/libsystem_kernel/sys_setitimer.o" \
     "$OUT/libsystem_kernel/sys_flock.o" \
+    `# sync(2): generated stub, #36 (bsd/kern/syscalls.master:89, no` \
+    `# NO_SYSCALL_STUB marker). Real Apple exports it from` \
+    `# libsystem_kernel; sync(8) (system_cmds/sync.tproj) needs it.` \
+    "$OUT/libsystem_kernel/sys_sync.o" \
     "$MACH_IPC_EXTRACT"/*.o
 
 echo "wrote $OUT/system/libsystem_kernel.dylib"
