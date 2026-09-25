@@ -668,6 +668,25 @@ BCM2837RegisterBuiltinPersonalities(void)
 	 * alongside BCM2837DWC2's own boot-time enumeration, which that
 	 * boot-arg also turns off (BCM2837DWC2::start()).
 	 */
+	/*
+	 * SMSC9514USBDriver (DAR-353 stage 3): the LAN9514's Ethernet function
+	 * as an ordinary IOUSBDevice, matched by vendor/product the way a vendor
+	 * USB Ethernet driver matches on a Mac. Only AppleUSBHub publishes that
+	 * device (with usb-apple-hub); the legacy path hand-wires
+	 * SMSC9514Ethernet and never publishes it (BCM2837DWC2::publishable()),
+	 * so this personality is inert there. 0x0424/0xec00: SMSC's vendor ID
+	 * and the LAN9512/LAN9514 Ethernet PID (Linux smsc95xx.c's device
+	 * table, USB_DEVICE(0x0424, 0xec00)).
+	 */
+	OSDictionary *smscUSB = makePersonality("IOUSBDevice", "SMSC9514USBDriver", NULL, -1);
+	if (smscUSB != NULL) {
+		if (addNumberProperty(smscUSB, "idVendor", 0x0424) &&
+		    addNumberProperty(smscUSB, "idProduct", 0xec00)) {
+			personalities->setObject(smscUSB);
+		}
+		smscUSB->release();
+	}
+
 	uint32_t appleHub = 0;
 	if (PE_parse_boot_argn("usb-apple-hub", &appleHub, sizeof(appleHub)) && appleHub) {
 		for (uint32_t sub = 0; sub <= 1; sub++) {
