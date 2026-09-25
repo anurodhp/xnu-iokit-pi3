@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+	DAR-341: build /etc/pwd.db + /etc/spwd.db once, on first boot.
+
+	pw(8) updates the password databases incrementally: its pw_mkdb()
+	runs `pwd_mkdb -u <user>` (tools/userland_staging/pw_pw_util_freebsd.c,
+	pw_mkdb()), which needs an existing pwd.db/spwd.db to update and
+	fails with "pwd_mkdb: /etc/pwd.db: No such file or directory"
+	otherwise - FreeBSD's installer builds them, and so must we. They
+	cannot be built when the image is made: the image is provisioned on a
+	Mac, and macOS's own /usr/sbin/pwd_mkdb no longer writes .db files
+	(it only regenerates /etc/passwd; checked 2026-09-25). So the target's
+	real pwd_mkdb builds them here, only when spwd.db is missing, and the
+	job then exits (RunAtLoad, no KeepAlive).
+
+	-p also regenerates /etc/passwd from /etc/master.passwd, as on any BSD.
+	Output goes to a file for the reason every project plist documents
+	(DAR-257/DAR-167): launchd never wires an unconfigured job's stdio to
+	/dev/console.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>org.puredarwin.pwd_mkdb</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/sh</string>
+		<string>-c</string>
+		<string>test -f /etc/spwd.db || exec /usr/sbin/pwd_mkdb -p /etc/master.passwd</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/var/log/pwd_mkdb.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/pwd_mkdb.log</string>
+</dict>
+</plist>

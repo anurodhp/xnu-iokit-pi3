@@ -41,81 +41,226 @@
 #define MASTER_PASSWD_PATH "/etc/master.passwd" /* real path, matches tools/init_binary/init.c's own #define */
 #define GROUP_PATH "/etc/group"
 
-static int pw_loaded;
-static int gr_loaded;
+/*
+ * Reload when the file changed (DAR-341). Loading once per process served
+ * a stale table to any program that rewrites the account files and then
+ * looks the result up in the same process: pw(8) useradd wrote the new
+ * account and pwd_mkdb'd it, then its own GETPWNAM() (FreeBSD
+ * usr.sbin/pw/pw_user.c:1460-1462) failed with "user disappeared during
+ * update". Real Apple Libinfo revalidates its flat-file cache the same way
+ * -- stat() the file and compare its mtime, reloading on any change
+ * (third_party/Libinfo/lookup.subproj/file_module.c:319-339, :440-444).
+ * The inode and size are compared too: HFS+ keeps modification times in
+ * whole seconds (contentModDate is a u_int32_t,
+ * third_party/hfs/core/hfs_format.h:405), so a rewrite within the same
+ * second as the first load would otherwise go unnoticed, and pwd_mkdb
+ * installs the new file by rename (a new inode).
+ *
+ * stat64 (#338, bsd/kern/syscalls.master:518) is issued raw, like
+ * libinfo_custom's own reads, so this adds no link dependency to the
+ * dozen tools that share this file. On this arm64 target struct stat is
+ * already the 64-bit-inode layout stat64 fills.
+ */
+#include <sys/stat.h>
+
+struct li_file_stamp {
+    int loaded;
+    long sec, nsec;
+    unsigned long long ino;
+    long long size;
+};
+
+static int li_raw_stat(const char *path, struct stat *sb) {
+    register long x0 asm("x0") = (long)path;
+    register long x1 asm("x1") = (long)sb;
+    register long x16 asm("x16") = 338; /* SYS_stat64 */
+    long is_error;
+    asm volatile("svc #0x80\n"
+                 "cset %1, cs"
+                 : "+r"(x0), "=r"(is_error)
+                 : "r"(x1), "r"(x16)
+                 : "memory", "cc");
+    return is_error ? -1 : 0;
+}
+
+/* 1 if `path` must be (re)loaded: never loaded, or changed since. */
+static int li_file_changed(const char *path, struct li_file_stamp *st) {
+    struct stat sb;
+    if (li_raw_stat(path, &sb) != 0) {
+        return !st->loaded; /* cannot stat: load once, as before */
+    }
+    if (st->loaded && st->sec == (long)sb.st_mtimespec.tv_sec &&
+        st->nsec == (long)sb.st_mtimespec.tv_nsec &&
+        st->ino == (unsigned long long)sb.st_ino &&
+        st->size == (long long)sb.st_size) {
+        return 0;
+    }
+    st->sec = (long)sb.st_mtimespec.tv_sec;
+    st->nsec = (long)sb.st_mtimespec.tv_nsec;
+    st->ino = (unsigned long long)sb.st_ino;
+    st->size = (long long)sb.st_size;
+    return 1;
+}
+
+static struct li_file_stamp pw_stamp;
+static struct li_file_stamp gr_stamp;
+
+/* Also used by pw_pwent_grent_compat.c's setpwent()/setgrent(), which
+ * share libinfo_custom's one passwd table and one group table. Returns 1
+ * if the table was reloaded (earlier results now point at new data --
+ * getpwent(3)'s "may be overwritten by subsequent calls"). */
+int li_compat_pw_refresh(void) {
+    if (!li_file_changed(MASTER_PASSWD_PATH, &pw_stamp)) {
+        return 0;
+    }
+    li_pw_load(MASTER_PASSWD_PATH); /* real, honest: leaves the table empty on failure, not fabricated */
+    pw_stamp.loaded = 1;
+    return 1;
+}
+
+int li_compat_gr_refresh(void) {
+    if (!li_file_changed(GROUP_PATH, &gr_stamp)) {
+        return 0;
+    }
+    li_gr_load(GROUP_PATH);
+    gr_stamp.loaded = 1;
+    return 1;
+}
 
 static void ensure_pw_loaded(void) {
-    if (!pw_loaded) {
-        li_pw_load(MASTER_PASSWD_PATH); /* real, honest: leaves the table empty on failure, not fabricated */
-        pw_loaded = 1;
-    }
+    (void)li_compat_pw_refresh();
 }
 
 static void ensure_gr_loaded(void) {
-    if (!gr_loaded) {
-        li_gr_load(GROUP_PATH);
-        gr_loaded = 1;
+    (void)li_compat_gr_refresh();
+}
+
+/*
+ * Every lookup returns a fresh copy (DAR-341). Real Apple getpwnam()
+ * builds a new item from the database on each call and returns that,
+ * releasing the previous one (si_user_byname() + LI_set_thread_item(),
+ * third_party/Libinfo/lookup.subproj/libinfo.c:205-216; getgrnam() the
+ * same, :402-410). Returning a pointer into the one shared table instead
+ * let a caller's in-place edits leak into later lookups: FreeBSD pw(8)'s
+ * pw_update() pw_dup()s the edited entry and then calls GETPWNAM() again
+ * for the OLD one (usr.sbin/pw/pwupd.c, pw_update()), got the edited
+ * struct back, and pw_copy()'s pw_equal() check failed with "entry
+ * inconsistent" on every usermod/userdel. Each function has its own
+ * result storage, like Libinfo's per-category thread items.
+ */
+#include <string.h>
+
+/* One entry's strings. A line can be no longer than libinfo_custom's
+ * whole-file buffer; 4096 bytes is far beyond any real account line and
+ * a longer one fails the lookup rather than truncating it. */
+#define LI_LINE_MAX_COMPAT 4096
+
+struct li_compat_pwres {
+    struct passwd pw;
+    char str[LI_LINE_MAX_COMPAT];
+};
+
+struct li_compat_grres {
+    struct group gr;
+    char *mem[LI_GROUP_MAX_MEMBERS + 1];
+    char str[LI_LINE_MAX_COMPAT];
+};
+
+static char *li_compat_put(char **cur, char *end, const char *s) {
+    size_t n;
+    char *d;
+    if (s == NULL) {
+        s = "";
     }
+    n = strlen(s) + 1;
+    if ((size_t)(end - *cur) < n) {
+        return NULL;
+    }
+    d = *cur;
+    memcpy(d, s, n);
+    *cur += n;
+    return d;
+}
+
+/* Copy a table entry into caller-owned result storage; NULL if absent or
+ * (impossibly, the table lines are bounded) too long. */
+static struct passwd *li_compat_pw_copy(const struct li_passwd *src, struct li_compat_pwres *res) {
+    const struct passwd *spw = (const struct passwd *)src;
+    char *cur = res->str, *end = res->str + sizeof(res->str);
+    if (src == NULL) {
+        return NULL;
+    }
+    res->pw = *spw;   /* li_passwd is ABI-identical to struct passwd */
+    if ((res->pw.pw_name = li_compat_put(&cur, end, spw->pw_name)) == NULL ||
+        (res->pw.pw_passwd = li_compat_put(&cur, end, spw->pw_passwd)) == NULL ||
+        (res->pw.pw_class = li_compat_put(&cur, end, spw->pw_class)) == NULL ||
+        (res->pw.pw_gecos = li_compat_put(&cur, end, spw->pw_gecos)) == NULL ||
+        (res->pw.pw_dir = li_compat_put(&cur, end, spw->pw_dir)) == NULL ||
+        (res->pw.pw_shell = li_compat_put(&cur, end, spw->pw_shell)) == NULL) {
+        return NULL;
+    }
+    return &res->pw;
+}
+
+static struct group *li_compat_gr_copy(const struct li_group *src, struct li_compat_grres *res) {
+    char *cur = res->str, *end = res->str + sizeof(res->str);
+    int i;
+    if (src == NULL) {
+        return NULL;
+    }
+    res->gr.gr_gid = (gid_t)src->gr_gid;
+    if ((res->gr.gr_name = li_compat_put(&cur, end, src->gr_name)) == NULL ||
+        (res->gr.gr_passwd = li_compat_put(&cur, end, src->gr_passwd)) == NULL) {
+        return NULL;
+    }
+    for (i = 0; i < LI_GROUP_MAX_MEMBERS && src->gr_mem[i] != NULL; i++) {
+        if ((res->mem[i] = li_compat_put(&cur, end, src->gr_mem[i])) == NULL) {
+            return NULL;
+        }
+    }
+    res->mem[i] = NULL;
+    res->gr.gr_mem = res->mem;
+    return &res->gr;
 }
 
 struct passwd *getpwnam(const char *name) {
+    static struct li_compat_pwres res;
     ensure_pw_loaded();
-    return (struct passwd *)li_getpwnam(name);
+    return li_compat_pw_copy(li_getpwnam(name), &res);
 }
 
 struct passwd *getpwuid(uid_t uid) {
+    static struct li_compat_pwres res;
     ensure_pw_loaded();
-    return (struct passwd *)li_getpwuid((li_uid_t)uid);
+    return li_compat_pw_copy(li_getpwuid((li_uid_t)uid), &res);
 }
 
-/* Real struct li_group is NOT byte-layout-compatible with real struct
- * group (documented in libinfo_custom.h -- gr_mem is a fixed inline
- * array here, a real char** there), so no pointer cast is safe. But
- * li_group's own header documents gr_mem[0..gr_nmem-1] plus a real
- * NULL terminator at gr_mem[gr_nmem] as a real, safe *iteration*
- * convention even though the surrounding struct layout differs -- so
- * &ligr->gr_mem[0] can be used directly as a real, valid char** for
- * struct group's gr_mem field. Builds a real (not fabricated) struct
- * group, field values copied from the real li_group entry, valid for
- * as long as that li_group entry is (the static table li_gr_load()
- * fills, valid for the process lifetime -- same lifetime real getgrgid's
- * own static-buffer contract has anyway). */
-static struct group grbuf;
+/* getpwent()/getgrent() (pw_pwent_grent_compat.c) walk the table by
+ * index; they get copies too, in their own storage. */
+struct passwd *li_compat_pwent_at(int idx) {
+    static struct li_compat_pwres res;
+    return li_compat_pw_copy(li_pw_at(idx), &res);
+}
 
+struct group *li_compat_grent_at(int idx) {
+    static struct li_compat_grres res;
+    return li_compat_gr_copy(li_gr_at(idx), &res);
+}
+
+/* struct li_group is not layout-compatible with struct group (see
+ * libinfo_custom.h), which the field-by-field copy above handles. */
 struct group *getgrgid(gid_t gid) {
-    struct li_group *ligr;
+    static struct li_compat_grres res;
     ensure_gr_loaded();
-    ligr = li_getgrgid((li_gid_t)gid);
-    if (ligr == NULL) {
-        return NULL;
-    }
-    grbuf.gr_name = ligr->gr_name;
-    grbuf.gr_passwd = ligr->gr_passwd;
-    grbuf.gr_gid = (gid_t)ligr->gr_gid;
-    grbuf.gr_mem = &ligr->gr_mem[0];
-    return &grbuf;
+    return li_compat_gr_copy(li_getgrgid((li_gid_t)gid), &res);
 }
 
+/* Also used by tar(1)'s archive_write_disk_posix.c /
+ * archive_read_disk_set_standard_lookup.c (by name, unlike ps). */
 struct group *getgrnam(const char *name) {
-    struct li_group *ligr;
+    static struct li_compat_grres res;
     ensure_gr_loaded();
-    ligr = li_getgrnam(name);
-    if (ligr == NULL) {
-        return NULL;
-    }
-    /* Same real li_group -> struct group field-copy as getgrgid() above
-     * (not byte-layout-compatible, see that function's own comment) --
-     * genuinely implemented 2026-08-21 for tar(1)'s real archive_write_
-     * disk_posix.c/archive_read_disk_set_standard_lookup.c, which do
-     * call this by name (unlike ps/print.c, which only ever looks up by
-     * numeric id) -- shares grbuf with getgrgid() intentionally, same
-     * single-lookup-at-a-time real getgrnam(3)/getgrgid(3) static-buffer
-     * contract every libc implementation has. */
-    grbuf.gr_name = ligr->gr_name;
-    grbuf.gr_passwd = ligr->gr_passwd;
-    grbuf.gr_gid = (gid_t)ligr->gr_gid;
-    grbuf.gr_mem = &ligr->gr_mem[0];
-    return &grbuf;
+    return li_compat_gr_copy(li_getgrnam(name), &res);
 }
 
 /* Real prototypes, matching the Xcode-12 iPhoneOS SDK's own pwd.h/grp.h

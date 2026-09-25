@@ -51,15 +51,27 @@ static int pwent_loaded;
 static int pwent_cursor;
 static int grent_loaded;
 static int grent_cursor;
-static struct group grent_buf;
+
+/*
+ * ps_passwd_compat.c (linked alongside) owns the one load of each table
+ * and reloads it when the file changed (DAR-341; see its comment). Going
+ * through it here, instead of a second private load-once flag, keeps
+ * getpwnam() and getpwent() on the same, current data. A reload happens
+ * only on set*ent(), i.e. when a walk is restarted, never in the middle of
+ * one.
+ */
+int li_compat_pw_refresh(void);
+int li_compat_gr_refresh(void);
+/* Fresh copies, never pointers into the shared table (DAR-341; see
+ * ps_passwd_compat.c). */
+struct passwd *li_compat_pwent_at(int idx);
+struct group *li_compat_grent_at(int idx);
 
 void
 setpwent(void)
 {
-	if (!pwent_loaded) {
-		li_pw_load(MASTER_PASSWD_PATH);
-		pwent_loaded = 1;
-	}
+	(void)li_compat_pw_refresh();
+	pwent_loaded = 1;
 	pwent_cursor = 0;
 }
 
@@ -72,24 +84,22 @@ endpwent(void)
 struct passwd *
 getpwent(void)
 {
-	struct li_passwd *lipw;
+	struct passwd *pw;
 
 	if (!pwent_loaded)
 		setpwent();
-	lipw = li_pw_at(pwent_cursor);
-	if (lipw == 0)
+	pw = li_compat_pwent_at(pwent_cursor);
+	if (pw == 0)
 		return (0);
 	pwent_cursor++;
-	return (struct passwd *)lipw;
+	return (pw);
 }
 
 void
 setgrent(void)
 {
-	if (!grent_loaded) {
-		li_gr_load(GROUP_PATH);
-		grent_loaded = 1;
-	}
+	(void)li_compat_gr_refresh();
+	grent_loaded = 1;
 	grent_cursor = 0;
 }
 
@@ -102,17 +112,13 @@ endgrent(void)
 struct group *
 getgrent(void)
 {
-	struct li_group *ligr;
+	struct group *gr;
 
 	if (!grent_loaded)
 		setgrent();
-	ligr = li_gr_at(grent_cursor);
-	if (ligr == 0)
+	gr = li_compat_grent_at(grent_cursor);
+	if (gr == 0)
 		return (0);
 	grent_cursor++;
-	grent_buf.gr_name = ligr->gr_name;
-	grent_buf.gr_passwd = ligr->gr_passwd;
-	grent_buf.gr_gid = (gid_t)ligr->gr_gid;
-	grent_buf.gr_mem = &ligr->gr_mem[0];
-	return (&grent_buf);
+	return (gr);
 }

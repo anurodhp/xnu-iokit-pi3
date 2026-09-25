@@ -502,6 +502,14 @@ if [ -f tools/userland_staging/pwd_mkdb.macho ]; then
     echo "  (real, unmodified Apple pwd_mkdb -- DAR-174, see"
     echo "  tools/userland_staging/build_pwd_mkdb.sh; first real consumer of"
     echo "  this project's own new Berkeley DB port, build_libc_db.sh)"
+    # DAR-341: one-shot first-boot job that builds pwd.db/spwd.db, which
+    # pw(8)'s incremental `pwd_mkdb -u` needs; see the plist's header for
+    # why the image builder cannot do it on the Mac.
+    mkdir -p "$MNT/Library/LaunchDaemons"
+    cp tools/userland_staging/org.puredarwin.pwd_mkdb.plist \
+        "$MNT/Library/LaunchDaemons/org.puredarwin.pwd_mkdb.plist"
+    chmod 644 "$MNT/Library/LaunchDaemons/org.puredarwin.pwd_mkdb.plist"
+    echo "+ wrote org.puredarwin.pwd_mkdb.plist (first-boot pwd.db/spwd.db build)"
 else
     echo "= tools/userland_staging/pwd_mkdb.macho not built -- run build_pwd_mkdb.sh first if wanted, skipping"
 fi
@@ -1539,6 +1547,17 @@ for cmd in true false yes pwd basename dirname echo printf hostname logname cat 
         echo "= tools/userland_staging/${cmd}.macho not built -- run build_simple_cmds.sh first if wanted, skipping"
     fi
 done
+
+# base64(1): built by build_simple_cmds.sh like the loop above, but a Mac
+# ships it at /usr/bin/base64, not /bin.
+mkdir -p "$MNT/usr/bin"
+if [ -f tools/userland_staging/base64.macho ]; then
+    cp tools/userland_staging/base64.macho "$MNT/usr/bin/base64"
+    chmod 755 "$MNT/usr/bin/base64"
+    echo "+ wrote $(wc -c < tools/userland_staging/base64.macho) bytes to $MNT/usr/bin/base64"
+else
+    echo "= tools/userland_staging/base64.macho not built -- run build_simple_cmds.sh first if wanted, skipping"
+fi
 
 # whoami(1) (Tier B, docs/roadmap.md "Command priority reorganized"):
 # no standalone real source exists anywhere in the macos-112 manifest
