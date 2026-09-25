@@ -17,9 +17,12 @@
  * only path to the wire (docs/usb-support-plan.md's "hub-in-the-path" note,
  * which flagged this precisely so it would not be rediscovered mid-way).
  *
- * Scope is deliberately one hub deep. Cascaded hubs, hot-plug and
- * re-enumeration are not implemented: this board has exactly one hub,
- * soldered down, present at boot.
+ * Cascaded hubs are walked (hubEnumeratePorts() recurses, up to USB's five
+ * tiers), because devices plugged into the Pi's USB ports can themselves be
+ * hubs - an Apple wired keyboard is one. Per-device re-enumeration exists
+ * (reenumerateDevice(), DAR-373) and so does whole-controller recovery
+ * (DAR-352). Hot-plug does not (DAR-353): the bus is walked at boot and on
+ * recovery only.
  */
 
 #include "BCM2837DWC2.h"
@@ -104,28 +107,29 @@ BCM2837DWC2::publishable(const DWC2USBDevice *dev) const
 }
 
 IOReturn
-BCM2837DWC2::detachDevice(uint8_t address)
+BCM2837DWC2::detachDevice(uint8_t address, uint32_t recoveryGen)
 {
+	IOLockLock(fEnumLock);
+	IOReturn ret = kIOReturnSuccess;
 	DWC2USBDevice *dev = deviceByAddress(address);
-	if (dev == NULL) {
-		return kIOReturnNoDevice;
+	if (recoveryGen != fRecoveryGen) {
+		// A controller recovery ran since the caller started: the table was
+		// rebuilt and this address may now belong to a new device.
+		ret = kIOReturnAborted;
+	} else if (dev == NULL) {
+		ret = kIOReturnNoDevice;
+	} else {
+		dev->inUse = false;
 	}
-	dev->inUse = false;
-	return kIOReturnSuccess;
+	IOLockUnlock(fEnumLock);
+	return ret;
 }
 
 IOReturn
 BCM2837DWC2::reenumerateDevice(uint8_t address, bool extraResetDelay,
-    const DWC2USBDevice **devOut)
+    uint32_t recoveryGen, const DWC2USBDevice **devOut)
 {
 	*devOut = NULL;
-
-	DWC2USBDevice *dev = slotForAddress(address, true);
-	if (dev == NULL) {
-		return kIOReturnNoDevice;
-	}
-	uint8_t parentHubAddr = dev->parentHubAddr;
-	uint8_t parentPort = dev->parentPort;
 
 	/*
 	 * One device at address 0 at a time, like AppleUSBHub's dev-zero lock
@@ -134,6 +138,21 @@ BCM2837DWC2::reenumerateDevice(uint8_t address, bool extraResetDelay,
 	 * leave a device answering at address 0.
 	 */
 	IOLockLock(fEnumLock);
+
+	// Looked up under the lock, and only if no controller recovery ran
+	// since the caller began (see fRecoveryGen): recovery rebuilds the table
+	// under this same lock.
+	if (recoveryGen != fRecoveryGen) {
+		IOLockUnlock(fEnumLock);
+		return kIOReturnAborted;
+	}
+	DWC2USBDevice *dev = slotForAddress(address, true);
+	if (dev == NULL) {
+		IOLockUnlock(fEnumLock);
+		return kIOReturnNoDevice;
+	}
+	uint8_t parentHubAddr = dev->parentHubAddr;
+	uint8_t parentPort = dev->parentPort;
 	dev->inUse = false;
 
 	IOReturn ret = kIOReturnNotResponding;
@@ -371,6 +390,9 @@ BCM2837DWC2::enumerateDevice(uint8_t speed, uint8_t parentHubAddr, uint8_t paren
 	if (reuse == NULL && fNumDevices >= kDWC2MaxDevices) {
 		IOLog("BCM2837DWC2: device table full\n");
 		return false;
+	}
+	if (reuse == NULL && fReservedAddress != 0 && fNextAddress == fReservedAddress) {
+		fNextAddress++;     // the UIM's root-hub simulation owns it
 	}
 	if (reuse == NULL && fNextAddress > 127) {
 		IOLog("BCM2837DWC2: out of USB addresses\n");
@@ -735,13 +757,22 @@ BCM2837DWC2::resetHubPort(DWC2USBDevice *hub, uint8_t port, uint8_t *speedOut,
 	/*
 	 * SPLIT transactions are needed only when this hub runs at high
 	 * speed but the device below it does not - then the hub has to
-	 * translate, and the host must address it explicitly. A
-	 * full-speed hub relays at its own speed and needs no splits.
+	 * translate, and the host must address it explicitly.
+	 *
+	 * A full-speed hub cannot translate. It relays at its own speed, so a
+	 * device below it shares that hub's own routing: if the full-speed hub
+	 * is itself reached through a high-speed hub's transaction translator,
+	 * so is everything under it, via the same TT hub and port (USB 2.0
+	 * 11.14, transaction translator). Matters now that enumeration walks
+	 * hubs behind hubs (hubEnumeratePorts()).
 	 */
 	uint8_t splitHubAddr = 0, splitHubPort = 0;
 	if (hub->speed == kUSBSpeedHigh && speed != kUSBSpeedHigh) {
 		splitHubAddr = hub->address;
 		splitHubPort = port;
+	} else if (hub->speed != kUSBSpeedHigh && hub->splitHubAddr != 0) {
+		splitHubAddr = hub->splitHubAddr;
+		splitHubPort = hub->splitHubPort;
 	}
 
 	IOLog("BCM2837DWC2: hub port %u: status %#x -> speed=%s split=%s\n",
@@ -760,7 +791,7 @@ BCM2837DWC2::resetHubPort(DWC2USBDevice *hub, uint8_t port, uint8_t *speedOut,
  * attached. This is the step that reaches the LAN9514's Ethernet function.
  */
 bool
-BCM2837DWC2::hubEnumeratePorts(DWC2USBDevice *hub)
+BCM2837DWC2::hubEnumeratePorts(DWC2USBDevice *hub, uint32_t tier)
 {
 	USBHubDescriptor desc;
 	if (!hubGetDescriptor(hub, &desc)) {
@@ -811,6 +842,13 @@ BCM2837DWC2::hubEnumeratePorts(DWC2USBDevice *hub)
 
 		uint8_t speed = kUSBSpeedFull;
 		uint8_t splitHubAddr = 0, splitHubPort = 0;
+		// Checked before the reset: a reset device answers at address 0,
+		// and one that then cannot be given an address is left there.
+		if (fNumDevices >= kDWC2MaxDevices) {
+			IOLog("BCM2837DWC2: device table full (%u) - not resetting hub %u "
+			      "port %u\n", (uint32_t)kDWC2MaxDevices, hub->address, port);
+			continue;
+		}
 		if (!resetHubPort(hub, port, &speed, &splitHubAddr, &splitHubPort)) {
 			continue;
 		}
@@ -863,7 +901,29 @@ BCM2837DWC2::hubEnumeratePorts(DWC2USBDevice *hub)
 			    regRead(kDWC2_HPRT0), regRead(kDWC2_GINTSTS),
 			    regRead(kDWC2_HFIR),
 			    frameBefore, frameAfter);
+			// Leave nothing answering at address 0 on an enabled port, where
+			// it would collide with the next device reset; as
+			// AppleUSBHubPort::AddDevice() does on failure
+			// (AppleUSBHubPort.cpp:880-889).
+			hubClearPortFeature(hub, port, kHubFeatPortEnable);
 			continue;
+		}
+
+		/*
+		 * A hub behind a hub: walk its ports too. Before this only the
+		 * root device's own ports were walked, so anything behind a second
+		 * hub was never enumerated - on a real Pi 3 that included the
+		 * keyboard function of an Apple wired keyboard (05ac:1005 is the
+		 * keyboard's built-in hub, on LAN9514 port 2). USB 2.0 (4.1.1)
+		 * allows at most five hub tiers below the root port.
+		 */
+		if (child->deviceClass == 9) {
+			if (tier < 5) {
+				hubEnumeratePorts(child, tier + 1);
+			} else {
+				IOLog("BCM2837DWC2: hub at address %u is past the 5-tier limit, "
+				      "not walking its ports\n", child->address);
+			}
 		}
 	}
 
@@ -893,7 +953,7 @@ BCM2837DWC2::enumerateBus(void)
 	// Hub class is 9 (USB 2.0 spec 11.23). On this board the root-port
 	// device is expected to BE a hub - that is what the LAN9514 presents.
 	if (root->deviceClass == 9) {
-		if (!hubEnumeratePorts(root)) {
+		if (!hubEnumeratePorts(root, 1)) {
 			IOLog("BCM2837DWC2: hub enumeration failed\n");
 		}
 	} else {

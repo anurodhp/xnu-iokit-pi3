@@ -862,10 +862,10 @@ BCM2837DWC2::waitForChannelSettled(uint32_t chan, uint32_t timeoutMS, uint32_t *
  * fChannelWedged check (see that function), so this is the only place
  * that needs to notice and record the wedge.
  *
- * This retries the halt; it does not recover the controller. A confirmed
- * wedge here means real hardware recovery (core reset + host re-init +
- * root-port re-bring-up + bus re-enumeration) is needed, which is scoped
- * in DAR-352 but not implemented - the board still needs a physical
+ * This retries the halt. A confirmed channel-0 wedge here schedules
+ * recoverController() (core reset + host re-init + root-port re-bring-up +
+ * bus re-enumeration, DAR-352); until that runs, the board would otherwise
+ * have needed a physical
  * power cycle after this fires. What this DOES fix: without it, every
  * later transfer attempt (chiefly the RX poll timer, running forever)
  * silently re-discovers the same stuck state every timeout period,
@@ -919,9 +919,9 @@ BCM2837DWC2::haltChannel(uint32_t chan, uint32_t *hcintOut)
 			fChannelWedged = true;
 			scheduleRecovery();
 			IOLog("BCM2837DWC2: haltChannel: channel %u CONFIRMED WEDGED after %u "
-			      "retries (HCCHAR=%#x) - every future transfer will fail immediately "
-			      "(kIOReturnNotAttached) rather than retry against dead hardware; a "
-			      "physical power cycle is required to recover USB (DAR-352)\n",
+			      "retries (HCCHAR=%#x) - transfers fail immediately "
+			      "(kIOReturnNotAttached) until controller recovery (DAR-352) "
+			      "resets the core\n",
 			    chan, kHaltRetries, regRead(hcOffset(chan, kDWC2_HCCHAR)));
 		}
 	} else {
@@ -2312,7 +2312,8 @@ BCM2837DWC2::publishEnumeratedDevices(void)
 void
 BCM2837DWC2::scheduleRecovery(void)
 {
-	if (fRecoveryCall != NULL && !fRecovering && fRecoveries < kMaxRecoveries) {
+	if (fRecoveryCall != NULL && !fStopping && !fRecovering &&
+	    fRecoveries < kMaxRecoveries) {
 		thread_call_enter(fRecoveryCall);
 	}
 }
@@ -2358,17 +2359,26 @@ BCM2837DWC2::reinitController(void)
 			fAsyncBusy[c] = false;
 			fAsyncWedged[c] = false;
 		}
-		fChannelWedged = false;
 		regModify(kDWC2_GAHBCFG, 0, kGAHBCFG_GLBLINTRMSK);
 	}
-
-	IOLockUnlock(fTransferLock);
-
 	if (!ok) {
+		IOLockUnlock(fTransferLock);
 		IOLog("BCM2837DWC2: recovery: core/host re-init failed\n");
 		return false;
 	}
-	if (!portPowerOn() || !portWaitForConnect(1000) || !portReset()) {
+
+	// Root-port bring-up still under fTransferLock, with channel 0 still
+	// marked wedged: nothing (in particular the hand-wired SMSC9514Ethernet
+	// on real hardware, which recovery does not unbind) may run a transfer
+	// against a bus in reset. reenumerateDevice() holds the lock around
+	// portReset() for the same reason.
+	bool portOK = portPowerOn() && portWaitForConnect(1000) && portReset();
+	if (portOK) {
+		fChannelWedged = false;
+	}
+	IOLockUnlock(fTransferLock);
+
+	if (!portOK) {
 		IOLog("BCM2837DWC2: recovery: root port did not come back (HPRT0=%#x)\n",
 		    regRead(kDWC2_HPRT0));
 		return false;
@@ -2384,6 +2394,7 @@ BCM2837DWC2::recoverController(void)
 	}
 	fRecovering = true;
 	fRecoveries++;
+	OSIncrementAtomic((volatile SInt32 *)&fRecoveryGen);
 	IOLog("BCM2837DWC2: recovery %u/%u: channel 0 wedged - resetting the "
 	      "controller and re-enumerating the bus (DAR-352)\n",
 	    fRecoveries, (uint32_t)kMaxRecoveries);
@@ -2402,6 +2413,10 @@ BCM2837DWC2::recoverController(void)
 	IOLockLock(fEnumLock);
 	bool ok = reinitController();
 	uint32_t found = ok ? enumerateBus() : 0;
+	// Bump again now the table is rebuilt: an operation that snapshotted
+	// the generation after the first bump (above) but before the rebuild
+	// still names the old table, and must not act on the new one.
+	OSIncrementAtomic((volatile SInt32 *)&fRecoveryGen);
 	IOLockUnlock(fEnumLock);
 
 	uint32_t published = 0;
@@ -2409,9 +2424,22 @@ BCM2837DWC2::recoverController(void)
 		published = publishEnumeratedDevices();
 	}
 	IOLog("BCM2837DWC2: recovery %u %s: %u device(s) enumerated, %u republished\n",
-	    fRecoveries, ok ? "done" : "FAILED - USB stays down", found, published);
+	    fRecoveries, ok ? "done" : "FAILED", found, published);
 
 	fRecovering = false;
+
+	// A wedge during this recovery (e.g. one of enumerateBus()'s own control
+	// transfers) found fRecovering set and could not schedule another; a
+	// failed recovery likewise leaves channel 0 wedged. Try again while
+	// attempts remain.
+	if (!ok || fChannelWedged) {
+		if (fRecoveries < kMaxRecoveries) {
+			scheduleRecovery();
+		} else {
+			IOLog("BCM2837DWC2: recovery attempts exhausted (%u) - USB stays "
+			      "down until a reboot\n", (uint32_t)kMaxRecoveries);
+		}
+	}
 }
 
 /*
@@ -2468,6 +2496,16 @@ BCM2837DWC2::interfacePublished(void *target, void *ref, IOService *newService,
 void
 BCM2837DWC2::stop(IOService *provider)
 {
+	// DAR-352: no recovery may start, or still be running, against what the
+	// rest of stop() is about to release.
+	fStopping = true;
+	if (fTestWedgeCall != NULL) {
+		thread_call_cancel_wait(fTestWedgeCall);
+	}
+	if (fRecoveryCall != NULL) {
+		thread_call_cancel_wait(fRecoveryCall);
+	}
+
 	// Undo start()'s manual attach()+start() of the Ethernet scaffolding
 	// child, mirroring what IOService::terminate() would have done had
 	// this gone through normal matching (stop() then detach()) - there was

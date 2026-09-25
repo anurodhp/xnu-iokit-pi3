@@ -473,7 +473,7 @@ struct DWC2USBDevice {
 	uint16_t intrInMax;
 };
 
-#define kDWC2MaxDevices 8
+#define kDWC2MaxDevices 16
 
 // GHWCFG2.NUM_HOST_CHAN is a 4-bit field (count - 1), so 16 is the most any
 // core can report. Real BCM2837 and the QEMU model both report 8.
@@ -596,13 +596,9 @@ private:
 	 * `= false` in start() either) rather than an explicit init line, for
 	 * consistency with those sibling fields.
 	 *
-	 * This does NOT recover the controller - that needs a real core
-	 * reset + host re-init + root-port re-bring-up + bus re-enumeration,
-	 * scoped but not implemented (DAR-352's own "full fix"). This is only
-	 * the "stop hammering, fail cleanly" half: it keeps the rest of the
-	 * board (console, unrelated subsystems) responsive after a wedge
-	 * instead of an endless retry storm, but real recovery still needs a
-	 * physical power cycle until the full fix lands.
+	 * Setting it also schedules recovery (recoverController(): core reset,
+	 * host re-init, root-port bring-up, re-enumeration), which clears it
+	 * again. Until then every transfer fails fast instead of storming.
 	 */
 	bool                     fChannelWedged;
 
@@ -613,8 +609,16 @@ private:
 	 */
 	thread_call_t            fRecoveryCall;
 	volatile bool            fRecovering;
+	volatile bool            fStopping;          // stop() has begun: no new recovery
 	uint32_t                 fRecoveries;
+	// Bumped at the start of every recovery. A re-enumeration that started
+	// before one (BCM2837USBPortPolicy::ReEnumeratePort()) sees the change
+	// and abandons its stale work instead of touching the rebuilt table.
+	volatile uint32_t        fRecoveryGen;
 	thread_call_t            fTestWedgeCall;     // dwc2-test-wedge boot-arg
+	// The UIM's root-hub simulation address; enumeration never hands it to a
+	// real device (see reserveAddress()).
+	uint8_t                  fReservedAddress;
 
 	/*
 	 * Parked asynchronous IN transfers (DAR-370). See asyncStart().
@@ -947,12 +951,24 @@ public:
 	 * re-enumerated entry.
 	 */
 	IOReturn reenumerateDevice(uint8_t address, bool extraResetDelay,
-	                           const DWC2USBDevice **dev);
+	                           uint32_t recoveryGen, const DWC2USBDevice **dev);
+
+	// See fRecoveryGen. A caller that snapshots this before starting a
+	// multi-step operation passes it back to detachDevice() and
+	// reenumerateDevice(), which refuse (kIOReturnAborted) if a controller
+	// recovery ran in between.
+	uint32_t recoveryGeneration(void) const { return fRecoveryGen; }
+
+	// Keep `address` out of enumeration's address allocation. The UIM calls
+	// this with its root-hub simulation's address (SetHubAddress()), which
+	// was chosen after boot enumeration; a recovery re-enumeration must not
+	// hand it to a real device.
+	void     reserveAddress(uint8_t address) { fReservedAddress = address; }
 
 	// Mark an enumerated device gone (inUse false) ahead of
 	// reenumerateDevice(), so nothing - the UIM's on-demand endpoint
 	// creation in particular - can address it while it is being torn down.
-	IOReturn detachDevice(uint8_t address);
+	IOReturn detachDevice(uint8_t address, uint32_t recoveryGen);
 
 	// The in-use table entry at `address`, or NULL.
 	const DWC2USBDevice *findDevice(uint8_t address) const;
@@ -987,7 +1003,8 @@ private:
 	bool hubClearPortFeature(DWC2USBDevice *hub, uint8_t port, uint16_t feature);
 	bool hubGetPortStatus(DWC2USBDevice *hub, uint8_t port,
 	                      uint16_t *status, uint16_t *change);
-	bool hubEnumeratePorts(DWC2USBDevice *hub);
+	// `tier` is the hub's depth below the root port (the root-port hub is 1).
+	bool hubEnumeratePorts(DWC2USBDevice *hub, uint32_t tier);
 	bool resetHubPort(DWC2USBDevice *hub, uint8_t port, uint8_t *speed,
 	                  uint8_t *splitHubAddr, uint8_t *splitHubPort);
 	DWC2USBDevice *deviceByAddress(uint8_t address);

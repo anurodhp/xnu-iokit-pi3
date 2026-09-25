@@ -320,10 +320,14 @@ public:
 	 * again. Same thread rules as PublishEnumeratedDevice(); the caller has
 	 * already terminated the old nub.
 	 */
-	IOReturn	ReEnumerateAddress(UInt8 address, bool extraResetDelay);
+	IOReturn	ReEnumerateAddress(UInt8 address, bool extraResetDelay,
+			    uint32_t recoveryGen);
 	// The first step of re-enumeration: mark the address gone in
 	// BCM2837DWC2's table before the old IOUSBDevice is torn down.
-	void		DetachAddress(UInt8 address);
+	// recoveryGen: see BCM2837DWC2::recoveryGeneration().
+	IOReturn	DetachAddress(UInt8 address, uint32_t recoveryGen);
+	uint32_t	recoveryGeneration(void) const;
+	void		RemoveNub(IOUSBDevice *dev);
 
 	/*
 	 * DAR-352 controller recovery, step 1: remove every published device

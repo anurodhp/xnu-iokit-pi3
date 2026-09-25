@@ -1961,6 +1961,9 @@ IOReturn
 BCM2837USBHostController::SetHubAddress(UInt16 wValue)
 {
 	fRootHubAddress = wValue;
+	// The root hub simulation answers at this address; keep enumeration
+	// from handing it to a real device.
+	fDWC2->reserveAddress((uint8_t)wValue);
 	return kIOReturnSuccess;
 }
 
@@ -2015,8 +2018,18 @@ BCM2837USBHostController::PublishEnumeratedDevice(const DWC2USBDevice *dev)
 	 * from here, but the family publishes these as registry properties and
 	 * uses them for its own bookkeeping, so they must be right either way.
 	 */
+	// IOUSBControllerV2::CreateDevice() (IOUSBControllerV2.cpp:659-678)
+	// takes the parent hub and derives the transaction translator from
+	// _highSpeedHub[hub] - set only for hubs it created itself. Hubs here
+	// are never published, so that lookup is always 0 and a device behind a
+	// full-speed hub would get that hub as its TT. Pass the TT this driver
+	// already resolved (splitHubAddr/Port, the high-speed hub whose
+	// translator it uses) when there is one; CreateDevice() then records it
+	// as-is through the same "first non high speed device" branch.
+	USBDeviceAddress ttHub = dev->splitHubAddr ? dev->splitHubAddr : dev->parentHubAddr;
+	int ttPort = dev->splitHubAddr ? dev->splitHubPort : dev->parentPort;
 	IOReturn err = CreateDevice(nub, dev->address, (UInt8)dev->maxPacket0, speed,
-	    kUSB500mAAvailable, dev->parentHubAddr, dev->parentPort);
+	    kUSB500mAAvailable, ttHub, ttPort);
 	if (err != kIOReturnSuccess) {
 		IOLog("BCM2837USBHostController: CreateDevice(addr %u) failed (0x%x)\n",
 		    dev->address, err);
@@ -2132,21 +2145,11 @@ BCM2837USBHostController::RemoveAllDevices(void)
 		it->release();
 	}
 
-	// As BCM2837USBPortPolicy::ReEnumeratePort() removes one device (Apple's
-	// RemoveDevice(), AppleUSBHubPort.cpp:1074-1150): detach the address so
-	// nothing can recreate an endpoint for it, leave the USB plane, wait
-	// while busy, terminate synchronously.
+	uint32_t gen = fDWC2->recoveryGeneration();
 	for (unsigned int i = 0; i < devices->getCount(); i++) {
 		IOUSBDevice *dev = OSDynamicCast(IOUSBDevice, devices->getObject(i));
-		fDWC2->detachDevice(dev->GetAddress());
-		const IORegistryPlane *usbPlane = dev->getPlane(kIOUSBPlane);
-		if (usbPlane != NULL) {
-			dev->detachAll(usbPlane);
-		}
-		for (UInt32 retries = 100; dev->getBusyState() && retries > 0; retries--) {
-			IOSleep(100);
-		}
-		dev->terminate(kIOServiceRequired | kIOServiceSynchronous);
+		fDWC2->detachDevice(dev->GetAddress(), gen);
+		RemoveNub(dev);
 	}
 	IOLog("BCM2837USBHostController: removed %u device(s) for controller recovery\n",
 	    devices->getCount());
@@ -2157,14 +2160,38 @@ BCM2837USBHostController::RemoveAllDevices(void)
 	}
 }
 
+/*
+ * Remove one published device, as Apple's RemoveDevice() does
+ * (AppleUSBHubPort.cpp:1074-1150): leave the USB plane, wait while busy,
+ * terminate synchronously. The caller has already detached its address.
+ * Shared by BCM2837USBPortPolicy::ReEnumeratePort() and RemoveAllDevices().
+ */
 void
-BCM2837USBHostController::DetachAddress(UInt8 address)
+BCM2837USBHostController::RemoveNub(IOUSBDevice *dev)
 {
-	fDWC2->detachDevice(address);
+	const IORegistryPlane *usbPlane = dev->getPlane(kIOUSBPlane);
+	if (usbPlane != NULL) {
+		dev->detachAll(usbPlane);
+	}
+	for (UInt32 retries = 100; dev->getBusyState() && retries > 0; retries--) {
+		IOSleep(100);
+	}
+	if (dev->getBusyState()) {
+		IOLog("BCM2837USBHostController: device %u still busy after 10 s, "
+		    "terminating anyway\n", dev->GetAddress());
+	}
+	dev->terminate(kIOServiceRequired | kIOServiceSynchronous);
 }
 
 IOReturn
-BCM2837USBHostController::ReEnumerateAddress(UInt8 address, bool extraResetDelay)
+BCM2837USBHostController::DetachAddress(UInt8 address, uint32_t recoveryGen)
+{
+	return fDWC2->detachDevice(address, recoveryGen);
+}
+
+IOReturn
+BCM2837USBHostController::ReEnumerateAddress(UInt8 address, bool extraResetDelay,
+    uint32_t recoveryGen)
 {
 	// The old device was detached (DetachAddress()) before it was torn down,
 	// so createEndpoint() could not recreate an endpoint for it meanwhile.
@@ -2174,7 +2201,7 @@ BCM2837USBHostController::ReEnumerateAddress(UInt8 address, bool extraResetDelay
 	}
 
 	const DWC2USBDevice *dev = NULL;
-	IOReturn ret = fDWC2->reenumerateDevice(address, extraResetDelay, &dev);
+	IOReturn ret = fDWC2->reenumerateDevice(address, extraResetDelay, recoveryGen, &dev);
 	if (ret != kIOReturnSuccess || dev == NULL) {
 		return (ret != kIOReturnSuccess) ? ret : kIOReturnNoDevice;
 	}
@@ -2322,13 +2349,17 @@ BCM2837USBPortPolicy::ReEnumeratePort(UInt32 portNum, UInt32 options)
 #pragma unused (portNum)
 	IOUSBDevice *old = fDevice;
 	BCM2837USBHostController *controller = fController;
-	if (old == NULL || controller->isInactive()) {
+	if (old == NULL || old->isInactive() || controller->isInactive()) {
 		// AppleUSBHubPort::ReEnumeratePort() starts the same way
 		// (AppleUSBHubPort.cpp:1381-1384, "if ( IsInactive() ) return
 		// kIOReturnNotPermitted").
 		return kIOReturnNotPermitted;
 	}
 	UInt8 address = old->GetAddress();
+	// A controller recovery (DAR-352) that starts after this point rebuilds
+	// the device table; DetachAddress()/ReEnumerateAddress() then refuse
+	// rather than act on whatever device now has this address.
+	uint32_t gen = controller->recoveryGeneration();
 
 	// Terminating the device finalizes it, and its finalize() releases its
 	// hub parent - this object. Keep both alive until this returns.
@@ -2340,26 +2371,20 @@ BCM2837USBPortPolicy::ReEnumeratePort(UInt32 portNum, UInt32 options)
 	// completion during teardown then gets kIOUSBEndpointNotFound, instead
 	// of a new endpoint whose completion would later be delivered to the
 	// freed driver.
-	controller->DetachAddress(address);
+	if (controller->DetachAddress(address, gen) == kIOReturnAborted) {
+		// Recovery owns the old device's removal now.
+		fDevice = NULL;
+		old->release();
+		release();
+		return kIOReturnAborted;
+	}
 
 	// Like RemoveDevice() NULLing _portDevice (AppleUSBHubPort.cpp:1082-
 	// 1086): once removal starts, this port has no device, so nothing here
 	// dereferences the old one after it may have been freed.
 	fDevice = NULL;
 
-	// RemoveDevice(), AppleUSBHubPort.cpp:1074-1150.
-	const IORegistryPlane *usbPlane = old->getPlane(kIOUSBPlane);
-	if (usbPlane != NULL) {
-		old->detachAll(usbPlane);
-	}
-	for (UInt32 retries = 100; old->getBusyState() && retries > 0; retries--) {
-		IOSleep(100);
-	}
-	if (old->getBusyState()) {
-		IOLog("BCM2837USBHostController: device %u still busy after 10 s, "
-		    "terminating anyway (re-enumerate)\n", address);
-	}
-	old->terminate(kIOServiceRequired | kIOServiceSynchronous);
+	controller->RemoveNub(old);
 	old->release();
 
 	// AppleUSBHubPort bails out here if it was stopped meanwhile
@@ -2372,7 +2397,7 @@ BCM2837USBPortPolicy::ReEnumeratePort(UInt32 portNum, UInt32 options)
 
 	// The add half.
 	IOReturn ret = controller->ReEnumerateAddress(address,
-	    (options & kUSBAddExtraResetTimeMask) != 0);
+	    (options & kUSBAddExtraResetTimeMask) != 0, gen);
 	if (ret != kIOReturnSuccess) {
 		IOLog("BCM2837USBHostController: re-enumeration of device %u failed "
 		    "(0x%x)\n", address, ret);
@@ -2394,4 +2419,10 @@ BCM2837USBPortPolicy::ReturnExtraPower(UInt32 portNum, UInt32 type, UInt32 retur
 {
 #pragma unused (portNum, type, returnedPower)
 	return kIOReturnSuccess;
+}
+
+uint32_t
+BCM2837USBHostController::recoveryGeneration(void) const
+{
+	return fDWC2->recoveryGeneration();
 }
