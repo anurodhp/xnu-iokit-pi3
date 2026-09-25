@@ -1035,6 +1035,25 @@ BCM2837DWC2::decodeChannelResult(uint32_t chan, uint32_t hcint, uint32_t xferLen
 	}
 
 	/*
+	 * A start-split the hub ACKed halts with CHHLTD|ACK and no XFERCOMP.
+	 * That is the hub accepting the job, not a failure: doTransfer()'s
+	 * split state machine sees the ACK and issues the CSPLIT, exactly as
+	 * u-boot's chunk_msg() does (third_party/u-boot/drivers/usb/host/
+	 * dwc2.c, the `else if (do_split)` branch after transfer_chunk()).
+	 * Return an error so no byte count is taken from it, but do not log:
+	 * on real hardware every poll of a low-speed keyboard behind the Apple
+	 * keyboard's hub hit this, and one serial line per 10 ms poll starved
+	 * the single-CPU boot before launchd ran.
+	 */
+	uint32_t hcsplt = regRead(hcOffset(chan, kDWC2_HCSPLT));
+	if ((hcsplt & kHCSPLT_SPLTENA) && !(hcsplt & kHCSPLT_COMPSPLT) &&
+	    (hcint & kHCINT_ACK) &&
+	    !(hcint & (kHCINT_XACTERR | kHCINT_BBLERR | kHCINT_AHBERR |
+	    kHCINT_DATATGLERR))) {
+		return kIOReturnIOError;
+	}
+
+	/*
 	 * Everything else genuinely is an I/O error, but which one matters for
 	 * diagnosis and kIOReturnIOError alone throws that away. Decode the
 	 * remaining HCINT bits by name (AHBERR/BBLERR/XACTERR/DATATGLERR are

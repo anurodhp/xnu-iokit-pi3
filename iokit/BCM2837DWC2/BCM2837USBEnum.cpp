@@ -265,6 +265,35 @@ BCM2837DWC2::makeEndpoint(const DWC2USBDevice *dev, uint8_t epAddr, DWC2Endpoint
 	return ep->maxPacket != 0;
 }
 
+/*
+ * An endpoint enumeration did not record (it keeps one of each kind, from
+ * the first interface) - e.g. the Apple keyboard's second HID interface,
+ * ep 0x82. The family hands the UIM the endpoint's type and wMaxPacketSize
+ * from the device's own descriptor, and that is all Apple's UIMs build an
+ * endpoint from (AppleUSBEHCI_UIM.cpp:2549 UIMCreateInterruptEndpoint() /
+ * :1832 UIMCreateBulkEndpoint() take them as arguments).
+ */
+bool
+BCM2837DWC2::makeEndpointFromDescriptor(const DWC2USBDevice *dev, uint8_t epAddr,
+    uint32_t epType, uint16_t maxPacket, DWC2Endpoint *ep) const
+{
+	if (dev == NULL || ep == NULL || epAddr == 0 || maxPacket == 0 ||
+	    (epType != kHCCHAR_EPTYPE_BULK && epType != kHCCHAR_EPTYPE_INTR)) {
+		return false;
+	}
+	bzero(ep, sizeof(*ep));
+	ep->devAddr = dev->address;
+	ep->speed = dev->speed;
+	ep->splitHubAddr = dev->splitHubAddr;
+	ep->splitHubPort = dev->splitHubPort;
+	ep->toggle = kHCPID_DATA0;
+	ep->epNum = epAddr & 0x0F;
+	ep->epIsIn = (epAddr & 0x80) != 0;
+	ep->epType = epType;
+	ep->maxPacket = maxPacket;
+	return true;
+}
+
 #pragma mark - Configuration descriptor parsing
 
 /*

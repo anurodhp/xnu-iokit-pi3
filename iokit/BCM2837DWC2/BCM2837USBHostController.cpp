@@ -519,7 +519,11 @@ BCM2837USBHostController::createEndpoint(UInt8 functionNumber, UInt8 endpointNum
 		epAddress |= 0x80;
 	}
 
-	if (!fDWC2->makeEndpoint(dev, epAddress, &ep->dep)) {
+	uint32_t hcType = (transferType == kUSBInterrupt) ? kHCCHAR_EPTYPE_INTR :
+	    ((transferType == kUSBBulk) ? kHCCHAR_EPTYPE_BULK : 0xFFFFFFFFU);
+	if (!fDWC2->makeEndpoint(dev, epAddress, &ep->dep) &&
+	    !fDWC2->makeEndpointFromDescriptor(dev, epAddress, hcType, maxPacketSize,
+	    &ep->dep)) {
 		IOLog("BCM2837USBHostController: device %u has no endpoint 0x%02x\n",
 		    functionNumber, epAddress);
 		IOFree(ep, sizeof(*ep));

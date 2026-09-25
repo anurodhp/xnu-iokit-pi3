@@ -932,6 +932,8 @@ public:
 	// 0 = the default control endpoint). Returns false if that endpoint is
 	// not one this device reported.
 	bool     makeEndpoint(const DWC2USBDevice *dev, uint8_t epAddr, DWC2Endpoint *ep) const;
+	bool     makeEndpointFromDescriptor(const DWC2USBDevice *dev, uint8_t epAddr,
+	    uint32_t epType, uint16_t maxPacket, DWC2Endpoint *ep) const;
 
 	const DWC2USBDevice *deviceAt(uint32_t index) const;
 
