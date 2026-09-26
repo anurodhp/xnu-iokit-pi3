@@ -497,6 +497,19 @@ MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 # ___getlogin/___setlogin (same change): the raw traps behind real
 # Libc/gen/FreeBSD/getlogin.c and Libc/gen/setlogin.c, which
 # build_libsystem_c.sh now compiles.
+# DAR-387 (Xvfb, xkbcomp, libXfont2): _chdir #12, _readlink #58,
+# _fchown #123, _getpgrp #81, _getppid #39, _setgid #181, _setuid #23 and
+# _setpgid #82 are plain generated stubs (bsd/kern/syscalls.master). #124
+# fchmod, #194 getrlimit, #195 setrlimit and #65 msync are
+# NO_SYSCALL_STUB, so the generator emits the raw ___fchmod/___getrlimit/
+# ___setrlimit/___msync traps; ___msync.s itself carries
+# `.set _msync, ___msync`, and the other three get Apple's
+# wrappers/unix03/{fchmod,getrlimit,setrlimit}.c below.
+# Several of these
+# names were already exported by dylibs that are not their owner
+# (libncurses, libcopyfile, libSystemConfiguration, libCoreFoundation,
+# libdispatch for _mach_continuous_time);
+# those copies are left alone here.
 for s in _geteuid _getegid _getuid _getgid _pread _pwrite _fileport_makefd _fileport_makeport \
     _socket _writev ___chmod ___connect_nocancel ___recvmsg_nocancel ___sendmsg_nocancel \
     ___select_nocancel ___sendto_nocancel ___recvfrom_nocancel _fpathconf _kevent _kqueue ___sigaction \
@@ -506,7 +519,9 @@ for s in _geteuid _getegid _getuid _getgid _pread _pwrite _fileport_makefd _file
     _semget _semop ___semctl _msgget _msgsnd _msgrcv ___msgctl \
     ___msgsnd_nocancel ___msgrcv_nocancel ___semsys ___msgsys ___shmsys \
     ___sem_open ___shm_open \
-    ___socketpair ___getattrlist ___setlogin; do
+    ___socketpair ___getattrlist ___setlogin \
+    _chdir _readlink _fchown _getpgrp _getppid _setgid _setuid _setpgid \
+    ___fchmod ___getrlimit ___setrlimit ___msync; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
         -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
         -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
@@ -710,6 +725,53 @@ done
     -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -idirafter "$XNU/bsd" -I "$LIBC/include" -I "$LIBC/darwin" \
     -I "$XNU/libsyscall/wrappers" \
     "$XNU/libsyscall/wrappers/setpriority.c" -o "$OUT/libsystem_kernel/setpriority_wrap.o"
+# fchmod/getrlimit/setrlimit (DAR-387): Apple's wrappers/unix03/ over the
+# raw traps from the stub loop, compiled like chmod.c above. fchmod.c
+# retries without S_ISUID/S_ISGID on EPERM; getrlimit.c/setrlimit.c OR in
+# _RLIMIT_POSIX_FLAG (getrlimit.c:36-43).
+for w in fchmod getrlimit setrlimit; do
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+        -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+        -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" -I "$OUT/compat_include" \
+        -I "$OUT/malloc_mig" -I "$XNU/libsyscall/wrappers" \
+        "$XNU/libsyscall/wrappers/unix03/$w.c" -o "$OUT/libsystem_kernel/${w}_wrap.o"
+done
+# mach_boottime_usec/mach_continuous_time/mach_continuous_approximate_time/
+# mach_approximate_time (DAR-387): Apple's own libsyscall wrappers, which is
+# where macOS exports them. Libc/gen/clock_gettime.c needs them; until now
+# build_sshd.sh and build_chrony.sh each compiled private copies of both.
+# (clock_gettime itself is not in libsystem_c yet: its clock_settime()
+# needs Libc/sys/settimeofday.c, which calls notify_post(), and
+# libsystem_notify.dylib already links libsystem_c.dylib. DAR-410.) They read the commpage through
+# <machine/cpu_capabilities.h>, whose content in this checkout is
+# osfmk/arm/cpu_capabilities.h, and all of it sits behind `#ifdef PRIVATE`
+# (its line 28), so -DPRIVATE and a forwarding header are needed, as in
+# build_sshd.sh.
+mkdir -p "$OUT/libsystem_kernel/compat_include/machine"
+printf '#include <arm/cpu_capabilities.h>\n' > "$OUT/libsystem_kernel/compat_include/machine/cpu_capabilities.h"
+# mach_continuous_time.c and mach_approximate_time.c call
+# mach_absolute_time(), whose Apple home is this dylib too
+# (libsyscall/wrappers/mach_absolute_time.s). Here only
+# libsystem_platform.dylib exported it (build_libsystem_platform.sh), which
+# this dylib cannot link (libsystem_kernel is the acyclic base, see the
+# geteuid comment above), so the same Apple .s is assembled here as well.
+# The libsystem_platform copy is a non-owner duplicate, left in place.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$OUT/libsystem_kernel/compat_include" -DPRIVATE=1 \
+    "$XNU/libsyscall/wrappers/mach_absolute_time.s" -o "$OUT/libsystem_kernel/mach_absolute_time.o"
+# ___thread_selfusage: the raw trap behind clock_gettime(CLOCK_THREAD_CPUTIME_ID)
+# (Libc/gen/clock_gettime.c:124), Apple's libsyscall/custom/__thread_selfusage.s;
+# exported here, its Apple owner, for when clock_gettime moves (DAR-410).
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
+    "$XNU/libsyscall/custom/__thread_selfusage.s" -o "$OUT/libsystem_kernel/thread_selfusage_trap.o"
+for w in mach_boottime mach_continuous_time mach_approximate_time; do
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+        -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+        -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" \
+        -I "$OUT/libsystem_kernel/compat_include" \
+        "$XNU/libsyscall/wrappers/$w.c" -o "$OUT/libsystem_kernel/${w}.o"
+done
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" -I "$OUT/compat_include" \
@@ -857,6 +919,11 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     `# libsystem_kernel_recvfrom_compat.c) is genuinely local to this` \
     `# link, same nonlocal-base requirement as every other alias here.` \
     -Wl,-alias,_recv,'_recv$UNIX2003' \
+    `# DAR-387: getrlimit/setrlimit $UNIX2003 spellings. libsystem_c's` \
+    `# compiles (-D__DARWIN_UNIX03=1) reference _getrlimit$UNIX2003 from` \
+    `# Libc/gen/FreeBSD/sysconf.c; bases are this link's own` \
+    `# wrappers/unix03/{getrlimit,setrlimit}.c objects.` \
+    -Wl,-alias,_getrlimit,'_getrlimit$UNIX2003' -Wl,-alias,_setrlimit,'_setrlimit$UNIX2003' \
     `# _nanosleep$UNIX2003 added 2026-08-31 ("needs a new home" batch):` \
     `# real Apple genuinely exports both the plain and $UNIX2003 names` \
     `# from libsystem_kernel.dylib (the SDK's own <time.h> __DARWIN_ALIAS_C` \
@@ -944,6 +1011,19 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     `# exports both from libsystem_kernel. (___getlogin is linked with` \
     `# DAR-346's socket/login traps above.)` \
     "$OUT/libsystem_kernel/sys___reboot.o" "$OUT/libsystem_kernel/reboot_wrap.o" \
+    `# DAR-387: see the stub loop's and the wrappers' comments.` \
+    "$OUT/libsystem_kernel/sys_chdir.o" "$OUT/libsystem_kernel/sys_readlink.o" \
+    "$OUT/libsystem_kernel/sys_fchown.o" "$OUT/libsystem_kernel/sys_getpgrp.o" \
+    "$OUT/libsystem_kernel/sys_getppid.o" "$OUT/libsystem_kernel/sys_setgid.o" \
+    "$OUT/libsystem_kernel/sys_setuid.o" "$OUT/libsystem_kernel/sys_setpgid.o" \
+    "$OUT/libsystem_kernel/sys___fchmod.o" "$OUT/libsystem_kernel/sys___getrlimit.o" \
+    "$OUT/libsystem_kernel/sys___setrlimit.o" "$OUT/libsystem_kernel/sys___msync.o" \
+    "$OUT/libsystem_kernel/fchmod_wrap.o" "$OUT/libsystem_kernel/getrlimit_wrap.o" \
+    "$OUT/libsystem_kernel/setrlimit_wrap.o" \
+    "$OUT/libsystem_kernel/mach_boottime.o" "$OUT/libsystem_kernel/mach_continuous_time.o" \
+    "$OUT/libsystem_kernel/mach_approximate_time.o" \
+    "$OUT/libsystem_kernel/mach_absolute_time.o" \
+    "$OUT/libsystem_kernel/thread_selfusage_trap.o" \
     `# setsid(2) (#147, plain stub) and setpriority(2) (raw #96 + Apple's` \
     `# wrappers/setpriority.c), for shutdown(8). Real Apple exports both` \
     `# from libsystem_kernel.` \

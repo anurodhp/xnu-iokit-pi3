@@ -331,6 +331,26 @@ rm -f "$OUT/crt_externs_raw.o" "$OUT/program_vars_compat_raw.o"
 "$CLANG" $SIGLIST_CFLAGS -I "$LIBC/fbsdcompat" -I "$LIBC/darwin" \
     "$LIBC/gen/FreeBSD/getlogin.c" -o "$EXTRACT/getlogin.o"
 "$CLANG" $SIGLIST_CFLAGS "$LIBC/gen/setlogin.c" -o "$EXTRACT/setlogin.o"
+# DAR-387 (Xvfb): Libc's own getpeereid() and raise(), which no
+# libsystem_* dylib exported. (Libc/gen/clock_gettime.c is not here yet;
+# see DAR-410 and build_libsystem_kernel.sh's mach time comment.)
+"$CLANG" $SIGLIST_CFLAGS -Werror=implicit-function-declaration \
+    "$LIBC/gen/FreeBSD/getpeereid.c" -o "$EXTRACT/getpeereid.o"
+"$CLANG" $SIGLIST_CFLAGS -Werror=implicit-function-declaration \
+    "$LIBC/gen/raise.c" -o "$EXTRACT/raise.o"
+# DAR-387: Apple's real sysconf() (Libc/gen/FreeBSD/sysconf.c) replaces
+# libc_stdio_env_shims.c's stand-in in this dylib. The stand-in answered -1
+# for everything but _SC_STREAM_MAX/_SC_ARG_MAX, so sysconf(_SC_OPEN_MAX)
+# was -1 and Xvfb's xtrans closed every socket it opened (xtrans
+# Xtranssock.c:410-418, "fd >= sysconf(_SC_OPEN_MAX)"). The real one needs
+# getrlimit(), which libsystem_kernel.dylib exports since DAR-387. The shim
+# object is rebuilt with LIBC_ENV_SHIM_NO_SYSCONF: no sysconf of its own, and
+# its getdtablesize() makes the real syscall #89 so it agrees with
+# sysconf(_SC_OPEN_MAX). The static libc_stdio.a is unchanged.
+"$CLANG" $SIGLIST_CFLAGS -Werror=implicit-function-declaration \
+    "$LIBC/gen/FreeBSD/sysconf.c" -o "$EXTRACT/sysconf.o"
+"$CLANG" $SIGLIST_CFLAGS -DLIBC_ENV_SHIM_NO_SYSCONF -Wno-unused-function \
+    libc_stdio_env_shims.c -o "$EXTRACT/libc_stdio_env_shims.o"
 # os_assumes: the 7 real extern functions third_party/Libc/os/assumes.h's
 # macros call (see os_assumes_compat.c's own header for why the real
 # assumes.c body is curated rather than compiled). Moved here 2026-08-29
@@ -989,6 +1009,17 @@ rm -f "$OUT/system/libsystem_c.dylib"
     -Wl,-alias,_fwrite,'_fwrite$UNIX2003' \
     -Wl,-alias,_fstatfs,'_fstatfs$INODE64' \
     -Wl,-alias,_fopen,'_fopen$UNIX2003' \
+    `# DAR-387: the public flockfile family. Apple's Libc names the bodies in` \
+    `# stdio/FreeBSD/_flock_stub.c flockfile/ftrylockfile/funlockfile` \
+    `# through fbsdcompat/_fbsd_compat_.h:71,72,76 (#define _flockfile` \
+    `# flockfile, ...), a header this build does not force-include, and` \
+    `# its __weak_reference lines (_flock_stub.c:53-56) are empty` \
+    `# (fbsdcompat/sys/cdefs.h:71). So only the _-prefixed bodies were` \
+    `# exported, and libxkbfile (maprules.c:126, HAVE_UNLOCKED_STDIO)` \
+    `# failed to link. Bases are local to this link.` \
+    -Wl,-alias,__flockfile,_flockfile \
+    -Wl,-alias,__ftrylockfile,_ftrylockfile \
+    -Wl,-alias,__funlockfile,_funlockfile \
     `# DAR-379: freopen gets the same $UNIX2003 spelling as fopen/fdopen.` \
     `# third_party/Libc/include/stdio.h:179-180 declares it` \
     `# __DARWIN_ALIAS(freopen), so every command compiled with this` \

@@ -1,3 +1,8 @@
+/* DAR-387 note: libsystem_c.dylib builds this file with
+ * LIBC_ENV_SHIM_NO_SYSCONF. It then exports Apple's real
+ * Libc/gen/FreeBSD/sysconf.c (getrlimit exists in libsystem_kernel now),
+ * and getdtablesize() below makes the real syscall. The original rationale
+ * that follows applies only to the static libc_stdio.a (pwtool). */
 /* Minimal, honestly-scoped stand-ins for the rlimit/fd-table accessors
  * third_party/Libc/stdio/FreeBSD/findfp.c calls - real behavior would need
  * a real getrlimit(2) plumbed through, which this target's raw-syscall
@@ -79,6 +84,13 @@ static int stdio_env_shim_sysctl(int *name, unsigned int namelen, void *oldp,
     return (int)x0;
 }
 
+/* LIBC_ENV_SHIM_NO_SYSCONF (DAR-387): build_libsystem_c.sh rebuilds this
+ * object without this stand-in for libsystem_c.dylib, which exports Apple's
+ * real third_party/Libc/gen/FreeBSD/sysconf.c instead now that getrlimit()
+ * exists (libsystem_kernel). This stand-in answers -1 for _SC_OPEN_MAX,
+ * which made Xvfb's xtrans close every listening socket it opened
+ * (Xtranssock.c:410-418). The static libc_stdio.a keeps it. */
+#ifndef LIBC_ENV_SHIM_NO_SYSCONF
 long sysconf(int name) {
     if (name == _SC_STREAM_MAX) {
         return FOPEN_MAX;
@@ -97,7 +109,32 @@ long sysconf(int name) {
     }
     return -1;
 }
+#endif /* LIBC_ENV_SHIM_NO_SYSCONF */
 
+#ifndef LIBC_ENV_SHIM_NO_SYSCONF
 int getdtablesize(void) {
     return FOPEN_MAX;
 }
+#else
+/* libsystem_c.dylib's getdtablesize() (DAR-387): the kernel's own answer,
+ * syscall #89 (xnu bsd/kern/syscalls.master:142), which returns
+ * MIN(RLIMIT_NOFILE, maxfilesperproc) (bsd/kern/kern_descrip.c:564-568).
+ * On Apple this is a plain stub in libsystem_kernel; it stays exported here
+ * because bash, configd, cron, login and libSystemConfiguration already
+ * bind it to libsystem_c. It must agree with the real sysconf(_SC_OPEN_MAX)
+ * this dylib now exports, or close-all-fds loops miss descriptors. */
+int getdtablesize(void) {
+    register long x0 asm("x0") = 0;
+    register long x16 asm("x16") = 89; /* SYS_getdtablesize */
+    long is_error;
+    asm volatile("svc #0x80\n"
+                 "cset %1, cs"
+                 : "+r"(x0), "=r"(is_error)
+                 : "r"(x16)
+                 : "memory", "cc", "x1");
+    if (is_error) {
+        return cerror_nocancel((int)x0);
+    }
+    return (int)x0;
+}
+#endif
