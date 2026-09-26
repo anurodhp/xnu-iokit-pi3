@@ -87,6 +87,7 @@ extern int  _mach_fork_child(void);
 extern void _malloc_fork_prepare(void);
 extern void _malloc_fork_parent(void);
 extern void _malloc_fork_child(void);
+extern void _libc_fork_child(void); /* this dylib, third_party/Libc/sys/_libc_fork_child.c */
 
 /* Real Libsystem init.c order (same verbatim order this project's own
  * launchd fork_compat.c already established from real Libsystem-
@@ -113,6 +114,10 @@ static void libSystem_atfork_child(void)
 	(void)_mach_fork_child();
 	_pthread_atfork_child();
 	_malloc_fork_child();
+	/* DAR-130: real order, third_party/Libsystem/init.c:375-377 --
+	 * _libc_fork_child() comes right after _malloc_fork_child()
+	 * ("_arc4_fork_child calls malloc"). */
+	_libc_fork_child();
 	_pthread_atfork_child_handlers();
 }
 

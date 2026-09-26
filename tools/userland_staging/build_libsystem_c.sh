@@ -818,6 +818,13 @@ done
 # a symbol from it) unlike launchd's own richer private copy.
 "$CLANG" $SIGLIST_CFLAGS libsystem_c_fork_compat.c -o "$EXTRACT/fork_compat.o"
 
+# DAR-130: real _libc_fork_child() (third_party/Libc/sys/_libc_fork_child.c),
+# called from fork()'s child side above. Its three callees:
+# _arc4_fork_child (arc4random.o, already here), __environ_lock_fork_child
+# (environ_lock_compat.c) and _init_clock_port (libsystem_c_clock_port_compat.c).
+"$CLANG" $SIGLIST_CFLAGS "$LIBC/sys/_libc_fork_child.c" -o "$EXTRACT/libc_fork_child.o"
+"$CLANG" $SIGLIST_CFLAGS libsystem_c_clock_port_compat.c -o "$EXTRACT/clock_port_compat.o"
+
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libsystem_c.dylib"
 # ___progname: a real per-PROCESS global that lives in the main
