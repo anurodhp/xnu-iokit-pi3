@@ -151,6 +151,41 @@ PLATCFLAGS_VARIANT_STATIC="$CFLAGS -DVARIANT_STATIC=1"
     -o "$OUT/libsystem_platform/apple_platform/memmove.o"
 echo "apple_platform: bzero.o/memmove.o recompiled with -DVARIANT_STATIC=1 (real public memcpy/memset/memmove/bzero/__bzero wrappers, DAR-13)"
 
+
+# setjmp(3) family (DAR-383, 2026-09-26): real, unmodified libplatform
+# src/setjmp/arm64/setjmp.s (_setjmp/_longjmp/_sigsetjmp/_siglongjmp and
+# the non-signal __setjmp/__longjmp core) plus src/setjmp/generic/
+# sigtramp.c for the _sigunaltstack() that setjmp.s's _longjmp calls --
+# libsystem_platform is where real Apple ships both. Before this no dylib
+# in the tree exported setjmp/longjmp at all (ed/vim link a private C
+# reimplementation, ed_setjmp_compat.c); libICE (via xtrans's
+# Xtransutil.c:386-398 SIGALRM guard) is the first dylib to need them.
+#   - asm_help.h (ENTRY_POINT/CALL_EXTERNAL) is not vendored in any
+#     third_party checkout; it comes from the host macOS SDK's
+#     usr/include/architecture/arm/asm_help.h via -idirafter, the same
+#     MACSDK fallback build_libsystem_kernel.sh uses for libsyscall's
+#     custom/*.s. os/tsd.h (_OS_PTR_MUNGE_TOKEN) is xnu's own
+#     libsyscall/os/tsd.h, already on CFLAGS' -I path.
+#   - ___sigaltstack / ___sigreturn: raw traps from libsystem_kernel.dylib
+#     (build_libsystem_kernel.sh, same DAR-383 change).
+#   - _sigprocmask lives in libsystem_c.dylib, which links THIS dylib, so
+#     it is deferred with -Wl,-U below -- the same cycle-avoiding
+#     deferral libsystem_kernel.dylib already makes for abort/memcpy
+#     (build_libsystem_kernel.sh's link comment): nothing here loads
+#     libsystem_platform.dylib without libSystem.B.dylib, which
+#     re-exports libsystem_c.
+#   - sigtramp.c also defines _sigtramp and __in_sigtramp. This tree's
+#     real signal trampoline is libsystem_kernel.dylib's __sigtramp
+#     (libsystem_kernel_sigtramp_compat.c, DAR-164), so those two are
+#     unexported in the link below rather than becoming a second owner.
+MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+if [ ! -f "$MACSDK/usr/include/architecture/arm/asm_help.h" ]; then
+    echo "error: $MACSDK/usr/include/architecture/arm/asm_help.h not found (needed for libplatform's setjmp.s)" >&2
+    exit 1
+fi
+"$CLANG" $CFLAGS -idirafter "$MACSDK/usr/include" \
+    "$PLATFORM/src/setjmp/arm64/setjmp.s" -o "$OUT/libsystem_platform/setjmp.o"
+"$CLANG" $CFLAGS "$PLATFORM/src/setjmp/generic/sigtramp.c" -o "$OUT/libsystem_platform/sigtramp.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c libplatform_mach_traps.s -o "$OUT/libsystem_platform/libplatform_mach_traps.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -DPRIVATE=1 \
     -I "$OUT/compat_include" -idirafter "$XNU/osfmk" \
@@ -185,11 +220,15 @@ rm -f "$OUT/system/libsystem_platform.dylib"
     `# ticket's real scope. See this file's own header comment above the` \
     `# VARIANT_STATIC=1 compiles for the full rationale.` \
     -Wl,-unexported_symbol,_memmove -Wl,-unexported_symbol,_bzero -Wl,-unexported_symbol,___bzero \
+    `# DAR-383 setjmp family: see the setjmp.s compile's comment above.` \
+    -Wl,-U,_sigprocmask \
+    -Wl,-unexported_symbol,__sigtramp -Wl,-unexported_symbol,___in_sigtramp \
     -o "$OUT/system/libsystem_platform.dylib" \
     "$OUT/libsystem_platform/apple_platform"/*.o \
     "$OUT/libsystem_platform/libplatform_mach_traps.o" "$OUT/libsystem_platform/mach_absolute_time.o" \
     "$OUT/libsystem_platform/mach_timebase_info.o" "$OUT/libsystem_platform/libplatform_syscalls.o" \
     "$OUT/libsystem_platform/libplatform_thread_self.o" \
+    "$OUT/libsystem_platform/setjmp.o" "$OUT/libsystem_platform/sigtramp.o" \
     "$OUT/system/libsystem_kernel.dylib"
 
 echo "wrote $OUT/system/libsystem_platform.dylib"

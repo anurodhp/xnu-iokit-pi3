@@ -28,7 +28,7 @@ static volatile int shared_counter = 0;
 static volatile int child_done = 0;
 
 /* Real second-thread entry point. File-scope, not a nested function -
- * this target is fully static/freestanding with no dyld, and GNU nested
+ * GNU nested
  * functions need a runtime trampoline (a small blob of code written to
  * the stack and executed from there) that this project has no reason to
  * trust/support here; a plain top-level function avoids the question

@@ -151,6 +151,10 @@ for d in sc_headers sc_iokit_headers sc_dispatch_compat sc_compat_include compat
         exit 1
     fi
 done
+if [ ! -f "$OUT/system/libiokituser.dylib" ]; then
+    echo "error: $OUT/system/libiokituser.dylib not found -- run build_libiokituser_dylib.sh first" >&2
+    exit 1
+fi
 if [ ! -f "$OUT/system/libSystemConfiguration.dylib" ]; then
     echo "error: $OUT/system/libSystemConfiguration.dylib not found -- run build_libsystemconfiguration_client.sh first" >&2
     exit 1
@@ -336,12 +340,8 @@ rm -f configd.macho
     `# into libSystemConfiguration.dylib), so the linker pulls in the real` \
     `# ip_plugin.o/eventmon.o/linkconfig.o/prefsmon.o (and their real` \
     `# object-file dependents) from this archive to satisfy them.` \
-    `# load_InterfaceNamer is STILL resolved by the stub (kept -- ifnamer.c` \
-    `# hits a real, separate IOKitLib.h/lockdown.h wall, NOT the` \
-    `# SCNetworkConfiguration family -- see configd_builtin_plugins_stub.c's` \
-    `# own header comment and DAR-240's Linear comment for the new ticket` \
-    `# filed for it), so this archive's own ifnamer.o member is correctly` \
-    `# never pulled in.` \
+    `# load_InterfaceNamer now comes from the real ifnamer.o too (DAR-251` \
+    `# ported IOKitLib into libiokituser.dylib, linked below).` \
     "$OUT/libconfigd_plugins.a" \
     `# DAR-170 (2026-09-04, this session): real IPConfiguration --` \
     `# load_IPConfiguration/start_IPConfiguration/prime_IPConfiguration` \
@@ -406,6 +406,14 @@ rm -f configd.macho
     "$OUT/system/libremovefile.dylib" \
     "$OUT/system/libCoreFoundation.dylib" \
     "$OUT/system/libSystemConfiguration.dylib" \
+    `# DAR-251/DAR-240: real IOKitLib API for InterfaceNamer's ifnamer.o.` \
+    "$OUT/system/libiokituser.dylib" \
+    `# ifnamer.c weak-imports MobileLockdown's host-trust API` \
+    `# (configd_plugin_compat/lockdown.h); nothing on this port defines it,` \
+    `# so haveLockdown() returns FALSE, Apple's own no-MobileLockdown path.` \
+    -Wl,-U,_lockdown_is_host_trusted \
+    -Wl,-U,_kLockdownNotificationHostAttached -Wl,-U,_kLockdownNotificationHostDetached \
+    -Wl,-U,_kLockdownNotificationTrustedHostAttached -Wl,-U,_kLockdownNotificationTrustedPTPAttached \
     `# libxpc.dylib listed HERE, before libdyld.dylib, 2026-09-04 (DAR-242):`\
     `# real fix for configd.tproj:main() binding _vproc_swap_integer to`\
     `# libdyld.dylib's honest-but-fake "always not managed" stub`\

@@ -113,6 +113,10 @@ link_one() {
         echo "error: $m has no LC_LOAD_DYLINKER /usr/lib/dyld" >&2
         exit 1
     }
+    otool -l "$m" | grep -q "cmd LC_LOAD_DYLIB" || {
+        echo "error: no LC_LOAD_DYLIB -- links no dylib at all, not a real dynamic executable" >&2
+        exit 1
+    }
     otool -l "$m" | grep -q "cmd LC_MAIN" || {
         echo "error: $m has no LC_MAIN" >&2
         exit 1

@@ -78,6 +78,9 @@ from upstream at any time. Examples: `hfs`, `IOStorageFamily`,
 `AppleUSBCDCDriver`, `libmalloc`, `libplatform`, `Libm`, `Libnotify`,
 the `*_cmds` repos, `ncurses`, `OpenSSH`, `vim`, `lzfse`, `xxHash`, and
 the sparse `llvm-project`/`freebsd-src`/`sudo` clones.
+The 17 X.org client-library pins added for DAR-383 (`xorgproto`, `xtrans`,
+`xcb-proto`, `libXau` … `libXft`, freedesktop.org release tags) are in this
+group too.
 
 A plain `git log --not --remotes` over these reports large "unpushed"
 counts. That's an artifact of shallow/tag clones (release-tag history

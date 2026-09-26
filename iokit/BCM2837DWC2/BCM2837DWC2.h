@@ -660,6 +660,15 @@ private:
 	 * interrupt state either of those already serialize.
 	 */
 	IOLock                  *fBSDRegisterLock;
+	/*
+	 * Interfaces IORegisterNetworkInterface() could not name, retained and
+	 * retried by registry entry ID from fBSDRetryCall once they are fully
+	 * registered. Protected by fBSDRegisterLock. See
+	 * registerInterfaceWithBSD().
+	 */
+	OSSet                   *fBSDPending;
+	thread_call_t            fBSDRetryCall;
+	uint32_t                 fBSDRetries;
 
 	// Serializes reenumerateDevice() (DAR-373): at most one device at
 	// address 0 at a time.
@@ -745,6 +754,8 @@ private:
 	uint32_t publishEnumeratedDevices(void);
 	static void recoveryFired(thread_call_param_t owner, thread_call_param_t);
 	static void testWedgeFired(thread_call_param_t owner, thread_call_param_t);
+	static void bsdRetryFired(thread_call_param_t owner, thread_call_param_t);
+	void retryPendingBSDNames(void);
 	bool allocateAsyncDMABuffer(void);
 	bool allocateContiguousDMA(uint32_t size, const char *what,
 	    IOBufferMemoryDescriptor **bmdOut, void **virtOut, uint64_t *busOut);

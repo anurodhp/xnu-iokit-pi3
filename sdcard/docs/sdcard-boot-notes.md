@@ -130,6 +130,18 @@ something is wrong with XNU itself.
   actual aarch64 target code) - without it the build fails before ever
   reaching `u-boot.bin`.
 
+  **2026-09-25: extra boot-args live in `uEnv.txt` on the FAT
+  partition.** `bootcmd` sets the built-in bootargs above, then loads
+  `uEnv.txt` from `mmc 0:1` if the file exists, runs `env import -t` on
+  it, and appends `${extra_bootargs}`. For example, a one-line
+  `uEnv.txt` of `extra_bootargs=dwc2-test-wedge=60` adds that boot-arg
+  (DAR-352's forced-wedge test). Delete the file, or leave the value
+  empty, to go back to the built-in set. This is how to change real
+  hardware boot-args: edit the file with the card in the Mac. Typing at
+  the u-boot prompt over serial is not the supported path. Changing the
+  built-in set still means editing `configs/rpi3_xnu_defconfig` and
+  rebuilding (below).
+
   **[2026-08-21] `.config` is now reproducible for real** -- it used to
   be a gitignored, undocumented-in-any-patch file manually edited
   out-of-band (a real gap this note used to just describe in prose, not

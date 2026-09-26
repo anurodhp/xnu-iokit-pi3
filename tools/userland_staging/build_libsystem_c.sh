@@ -296,6 +296,41 @@ for f in snprintf_chk vsnprintf_chk strlcpy_chk memmove_chk stpncpy_chk strncat_
 done
 "$CLANG" $SIGLIST_CFLAGS "$LIBC/stdlib/FreeBSD/setenv.c" -o "$EXTRACT/setenv.o"
 "$CLANG" $SIGLIST_CFLAGS "$LIBC/stdlib/FreeBSD/putenv.c" -o "$EXTRACT/putenv.o"
+
+# DAR-251: syslog()/vsyslog()/openlog()/closelog()/setlogmask() had no
+# canonical owner -- only private copies of this same real
+# Libc/gen/oldsyslog.c (getty, login, launchctl, libopenpam, libcopyfile).
+# Real Apple ships syslog(3) from libsystem_asl.dylib, which this port does
+# not build yet; until it does, libsystem_c is the owner. IOKitLib.c's
+# IOCFSerialize/IOCFUnserialize (libiokituser.dylib) is the first consumer.
+"$CLANG" $SIGLIST_CFLAGS "$LIBC/gen/oldsyslog.c" -o "$EXTRACT/oldsyslog.o"
+
+# DAR-251: _NSGetArgv()/_NSGetArgc()/_NSGetProgname()/
+# _NSGetMachExecuteHeader() -- real Libc/sys/crt_externs.c, the dynamic
+# (__DYNAMIC__) variant real Apple builds into libsystem_c, filled from
+# dyld's ProgramVars by libSystem.B's constructor through
+# libsystem_c_program_vars_compat.c (see its header). Nothing exported
+# these before (only libopenpam.dylib had a private _NSGetArgv); oldsyslog.c
+# above needs _NSGetArgv. _NSGetEnviron is left to nsgetenviron.o below
+# (this project's environ handling predates this), so it is not exported
+# from here.
+"$CLANG" $SIGLIST_CFLAGS -D__DYNAMIC__ "$LIBC/sys/crt_externs.c" -o "$OUT/crt_externs_raw.o"
+"$CLANG" $SIGLIST_CFLAGS libsystem_c_program_vars_compat.c -o "$OUT/program_vars_compat_raw.o"
+"$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld" -r -arch arm64 \
+    -exported_symbol __NSGetArgv -exported_symbol __NSGetArgc \
+    -exported_symbol __NSGetProgname -exported_symbol __NSGetMachExecuteHeader \
+    -exported_symbol ___libc_program_vars_init \
+    "$OUT/crt_externs_raw.o" "$OUT/program_vars_compat_raw.o" \
+    -o "$EXTRACT/crt_externs.o"
+rm -f "$OUT/crt_externs_raw.o" "$OUT/program_vars_compat_raw.o"
+
+# DAR-346: real getlogin()/getlogin_r() and setlogin() -- Libc's own home
+# for both. setlogin.c clears getlogin.c's cached __logname under
+# __logname_mutex, so the two must live in the same image. Their raw
+# traps (___getlogin/___setlogin) are in libsystem_kernel.dylib.
+"$CLANG" $SIGLIST_CFLAGS -I "$LIBC/fbsdcompat" -I "$LIBC/darwin" \
+    "$LIBC/gen/FreeBSD/getlogin.c" -o "$EXTRACT/getlogin.o"
+"$CLANG" $SIGLIST_CFLAGS "$LIBC/gen/setlogin.c" -o "$EXTRACT/setlogin.o"
 # os_assumes: the 7 real extern functions third_party/Libc/os/assumes.h's
 # macros call (see os_assumes_compat.c's own header for why the real
 # assumes.c body is curated rather than compiled). Moved here 2026-08-29
@@ -448,6 +483,31 @@ rm -f "$EXTRACT/getenv_real_raw.o"
 # own comment (moved here from libdyld_compat_misc.c during migration
 # step 5, real Apple's own architecture: __cxa_atexit lives in Libc).
 "$CLANG" $SIGLIST_CFLAGS libsystem_c_cxa_atexit_compat.c -o "$EXTRACT/cxa_atexit_compat.o"
+
+# signal(3) / _signal_nobind (DAR-383, X11 client libraries: xtrans's
+# Xtransutil.c:386 GetPeerNetworkId, compiled into libICE, installs a
+# SIGALRM handler with it). Real Apple's home is libsystem_c: Libc's own
+# gen/FreeBSD/signal.c, compiled unmodified. No dylib exported signal()
+# before this (vim/netstat/ed each compile or extract a private copy).
+# -include fbsdcompat/_fbsd_compat_.h is Apple's own mechanism for
+# FreeBSD-derived Libc sources: its line 129 `#define _sigaction
+# sigaction` maps signal.c:64's private-namespace _sigaction() call onto
+# this dylib's real sigaction() (Libc/sys/sigaction.c, DAR-164), and
+# signal.c:69's _sigaction_nobind() is that same file's real export.
+"$CLANG" $SIGLIST_CFLAGS -include "$LIBC/fbsdcompat/_fbsd_compat_.h" \
+    "$LIBC/gen/FreeBSD/signal.c" -o "$EXTRACT/signal.o"
+
+# atof(3)/atof_l and strtoull(3)/strtoull_l (DAR-384, font/2D stack:
+# libpng's png.c calls atof; fontconfig's fcxml.c/fcname.c call
+# strtoull). Real Apple's home is libsystem_c: Libc's own
+# stdlib/FreeBSD/atof.c and strtoull.c, compiled unmodified. Before this
+# no dylib exported atof (awk links its own private atof.c), and
+# strtoull only as libc++.dylib's private copy. atof.c's strtod_l call
+# resolves to this dylib's _strtod_l$UNIX2003 alias (see the -Wl,-alias
+# list below); strtoull.c's isspace_l/__current_locale are this dylib's
+# own.
+"$CLANG" $SIGLIST_CFLAGS "$LIBC/stdlib/FreeBSD/atof.c" -o "$EXTRACT/atof.o"
+"$CLANG" $SIGLIST_CFLAGS "$LIBC/stdlib/FreeBSD/strtoull.c" -o "$EXTRACT/strtoull.o"
 
 # Real gaps found booting launchd as PID 1 (docs/backlog.md item d10):
 # ICU's own dylibs reference ___chkstk_darwin/strstr/os_log's real
@@ -825,6 +885,13 @@ done
 # a symbol from it) unlike launchd's own richer private copy.
 "$CLANG" $SIGLIST_CFLAGS libsystem_c_fork_compat.c -o "$EXTRACT/fork_compat.o"
 
+# DAR-130: real _libc_fork_child() (third_party/Libc/sys/_libc_fork_child.c),
+# called from fork()'s child side above. Its three callees:
+# _arc4_fork_child (arc4random.o, already here), __environ_lock_fork_child
+# (environ_lock_compat.c) and _init_clock_port (libsystem_c_clock_port_compat.c).
+"$CLANG" $SIGLIST_CFLAGS "$LIBC/sys/_libc_fork_child.c" -o "$EXTRACT/libc_fork_child.o"
+"$CLANG" $SIGLIST_CFLAGS libsystem_c_clock_port_compat.c -o "$EXTRACT/clock_port_compat.o"
+
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libsystem_c.dylib"
 # ___progname: a real per-PROCESS global that lives in the main
@@ -952,6 +1019,14 @@ rm -f "$OUT/system/libsystem_c.dylib"
     `# atof.c (linked by awk) references _strtod_l$UNIX2003. Base` \
     `# _strtod_l is already this dylib's own export.` \
     -Wl,-alias,_strtod_l,'_strtod_l$UNIX2003' \
+    `# ttyname_r likewise: unistd.h declares it __DARWIN_ALIAS, so Libc's` \
+    `# gen/utmpx-darwin.c (linked by reboot, DAR-334) references` \
+    `# _ttyname_r$UNIX2003. Base _ttyname_r is this dylib's own export.` \
+    -Wl,-alias,_ttyname_r,'_ttyname_r$UNIX2003' \
+    `# waitpid likewise (sys/wait.h __DARWIN_ALIAS_C): shutdown(8)'s popen` \
+    `# (ed_popen_system_compat.c) references _waitpid$UNIX2003. Base` \
+    `# _waitpid is this dylib's own export.` \
+    -Wl,-alias,_waitpid,'_waitpid$UNIX2003' \
     -Wl,-alias,_fstatat,'_fstatat$INODE64' \
     -Wl,-alias,_closedir,'_closedir$UNIX2003' \
     -Wl,-alias,_opendir,'_opendir$INODE64$UNIX2003' \

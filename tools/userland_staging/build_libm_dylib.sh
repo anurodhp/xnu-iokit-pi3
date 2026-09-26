@@ -113,6 +113,44 @@ fi
 # in-archive, needs complex-number support or scalblnf().
 rm -f "$EXTRACT/complex.o" "$EXTRACT/scalblnf.o"
 
+# Real FreeBSD msun (third_party/freebsd-src, release/13.2.0,
+# lib/msun/src; setup_third_party.sh's freebsd-src sparse list) for five
+# functions no dylib here exported and Apple's pinned Libm-2026 has only
+# as ARM32 assembly (Source/ARM/{ceilf,sinf,cosf,frexp,hypot}.s): ceilf,
+# sinf, cosf, frexp and hypot. DAR-384 (font/2D stack): cairo calls all
+# five (cairo-matrix.c, cairo-arc.c, cairo-ft-font.c, ...). This is the
+# "dedicated FreeBSD msun pin" libm_freebsd_fallback.c's header says a
+# broader port should use, instead of more transcription.
+#   - Compiled unmodified, from a copy of lib/msun/src without its own
+#     math.h: every msun file does `#include "math.h"`, and FreeBSD's
+#     math.h (machine/_limits.h, FreeBSD cdefs) cannot build against the
+#     Darwin SDK. Without it the quoted include falls through to the SDK's
+#     <math.h>, which declares the same C99 functions.
+#   - -include libm_msun_compat.h: the few FreeBSD cdefs/_types spellings
+#     msun needs, each cited to its FreeBSD header line in that file.
+#   - s_sinf.c/s_cosf.c #include k_sinf.c, k_cosf.c and e_rem_pio2f.c
+#     (INLINE_KERNEL_*), whose large-argument path calls
+#     __kernel_rem_pio2 -- libm.a's own k_rem_pio2_freeBSD.o (Apple's copy
+#     of the same FreeBSD file), already in this link.
+#   - s_frexp.c and e_hypot.c also emit their long double aliases (frexpl,
+#     hypotl): long double is double on Darwin arm64 (LDBL_MANT_DIG 53).
+#     e_hypot.c:73 calls fabsl, exported below as an alias of fabs
+#     (libm_freebsd_fallback.o, in this link), as Apple's libm does.
+MSUN="../../third_party/freebsd-src/lib/msun/src"
+if [ ! -f "$MSUN/s_sinf.c" ]; then
+    echo "error: $MSUN not found -- run setup_third_party.sh (freebsd-src sparse checkout needs lib/msun/src)" >&2
+    exit 1
+fi
+MSUN_COPY="$OUT/libm_dylib/msun_src"
+rm -rf "$MSUN_COPY"
+mkdir -p "$MSUN_COPY"
+cp "$MSUN"/*.c "$MSUN/math_private.h" "$MSUN_COPY/"
+for f in s_ceilf s_sinf s_cosf s_frexp e_hypot; do
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+        -Wno-nullability-completeness -include libm_msun_compat.h \
+        "$MSUN_COPY/$f.c" -o "$EXTRACT/msun_$f.o"
+done
+
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libsystem_m.dylib"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
@@ -122,6 +160,7 @@ rm -f "$OUT/system/libsystem_m.dylib"
     -Wl,-fixup_chains \
     -o "$OUT/system/libsystem_m.dylib" \
     "$EXTRACT"/*.o \
+    -Wl,-alias,_fabs,_fabsl \
     "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_malloc.dylib" \
     "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
