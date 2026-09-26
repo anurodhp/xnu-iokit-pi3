@@ -451,6 +451,19 @@ else
     echo "= tools/userland_staging/ifconfig.macho not built -- run build_ifconfig.sh first if wanted, skipping"
 fi
 
+# X11 client-library smoketest (DAR-383). The X dylibs themselves are
+# installed by the generic libc_build/system/*.dylib loop below, at their
+# /usr/X11/lib install names.
+if [ -f tools/userland_staging/x11_smoketest.macho ]; then
+    mkdir -p "$MNT/usr/X11/bin"
+    cp tools/userland_staging/x11_smoketest.macho "$MNT/usr/X11/bin/x11_smoketest"
+    chmod 755 "$MNT/usr/X11/bin/x11_smoketest"
+    echo "+ wrote $(wc -c < tools/userland_staging/x11_smoketest.macho) bytes to $MNT/usr/X11/bin/x11_smoketest"
+    echo "  (tools/userland_staging/build_x11_smoketest.sh)"
+else
+    echo "= tools/userland_staging/x11_smoketest.macho not built -- run build_x11_smoketest.sh first if wanted, skipping"
+fi
+
 if [ -f tools/userland_staging/netstat.macho ]; then
     mkdir -p "$MNT/usr/sbin"
     cp tools/userland_staging/netstat.macho "$MNT/usr/sbin/netstat"
@@ -750,14 +763,17 @@ if [ -f tools/userland_staging/dyld.macho ] && [ -f tools/userland_staging/dyld_
             libdyld.dylib|libSystem.B.dylib) continue ;;
         esac
         install_name="$(otool -D "$d" 2>/dev/null | tail -1)"
+        # /usr/X11/lib/*: the X11 client libraries (DAR-383), installed
+        # under Apple's own 10.5-10.7 X11 prefix -- see
+        # tools/userland_staging/x11_common.sh's header.
         case "$install_name" in
-            /usr/lib/*) : ;;
+            /usr/lib/*|/usr/X11/lib/*) : ;;
             *)
                 echo "error: $d has no real LC_ID_DYLIB install_name (otool -D returned '$install_name') -- refusing to guess a destination path" >&2
                 exit 1
                 ;;
         esac
-        dest="$MNT/usr/lib${install_name#/usr/lib}"
+        dest="$MNT$install_name"
         mkdir -p "$(dirname "$dest")"
         cp "$d" "$dest"
         chmod 755 "$dest"
