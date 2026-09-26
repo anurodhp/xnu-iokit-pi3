@@ -391,17 +391,9 @@ cat > "$OUT/launchd_syscall_obj/fork_compat.c" <<'EOF'
  *                             corecrypto as an apple-oss-distributions repo
  *                             at all (docs/backlog.md's crypto item); there
  *                             is no such image in this port to notify.
- *   _libc_fork_child       -- third_party/Libc/sys/_libc_fork_child.c exists,
- *                             but its three callees do not all: _arc4_fork_child
- *                             is real and compiled into libsystem_c.dylib (as a
- *                             non-exported local), while _init_clock_port
- *                             (Libc/gen/nanosleep.c) and __environ_lock_fork_child
- *                             (Libc/stdlib/FreeBSD/getenv.c) are absent from the
- *                             built dylib -- those files aren't in this port's
- *                             libsystem_c yet. Wiring this up is a real, separate
- *                             follow-on, not a one-liner here: the whole thing
- *                             has to be compiled INTO libsystem_c.dylib to see
- *                             its own private callees.
+ *   (_libc_fork_child is no longer in this list: DAR-130 compiled the
+ *    real third_party/Libc/sys/_libc_fork_child.c and its three callees
+ *    into libsystem_c.dylib, and it is called below.)
  *   _asl_fork_child        -- no real asl/syslog client library in this port
  *                             (docs/daemon-roadmap.md's syslogd/ASL section).
  *   _notify_fork_child     -- REAL AND BUILT (libsystem_notify.dylib), but
@@ -455,6 +447,7 @@ extern int  _mach_fork_child(void);
 extern void _malloc_fork_prepare(void);
 extern void _malloc_fork_parent(void);
 extern void _malloc_fork_child(void);
+extern void _libc_fork_child(void);   /* libsystem_c.dylib (DAR-130) */
 extern void dispatch_atfork_prepare(void);
 extern void dispatch_atfork_parent(void);
 extern void dispatch_atfork_child(void);
@@ -490,7 +483,8 @@ static void libSystem_atfork_child(void)
 	(void)_mach_fork_child();
 	_pthread_atfork_child();
 	_malloc_fork_child();
-	/* cc_atfork_child(), _libc_fork_child(): absent. */
+	/* cc_atfork_child(): absent. */
+	_libc_fork_child();
 	/* _dyld_fork_child(): not called, see header. */
 	dispatch_atfork_child();
 	/* _libcoreservices_fork_child(), _asl_fork_child(),

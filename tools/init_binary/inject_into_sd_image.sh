@@ -691,9 +691,9 @@ if grep -nE '^[^#]*[[:space:]]cp[[:space:]].*_smoketest' tools/init_binary/injec
     exit 1
 fi
 
-install_smoketest tools/userland_staging/pthread_smoketest.macho "bin/pthread_smoketest" \
-    "= tools/userland_staging/pthread_smoketest.macho not built -- run tools/userland_staging/build_libpthread.sh first if wanted, skipping" \
-    "  (real libpthread.a smoketest -- now includes a real pthread_create()" \
+install_smoketest tools/userland_staging/libc_build/pthread_smoketest.macho "bin/pthread_smoketest" \
+    "= tools/userland_staging/libc_build/pthread_smoketest.macho not built -- run tools/userland_staging/build_pthread_smoketest.sh first if wanted, skipping" \
+    "  (libpthread smoketest, dynamic against libsystem_pthread.dylib (DAR-127) -- real pthread_create()" \
     "  second thread + contended pthread_mutex under ulock, 2026-08-24)"
 
 if [ -f tools/userland_staging/dyld.macho ] && [ -f tools/userland_staging/dyld_test_exec.macho ]; then
@@ -1005,6 +1005,18 @@ install_smoketest tools/userland_staging/libc_build/pthread_cond_smoketest.macho
     "  pthread_cond_wait on far 0x26. Run by hand from the root shell" \
     "  post-boot; prints a single PASS/FAIL line. tools/userland_staging/" \
     "  build_pthread_cond_smoketest.sh)"
+
+install_smoketest tools/userland_staging/libc_build/fork_atfork_smoketest.macho "usr/local/bin/fork_atfork_smoketest" \
+    "= fork_atfork_smoketest.macho not built -- run tools/userland_staging/build_fork_atfork_smoketest.sh first if wanted, skipping" \
+    "  (DAR-130 fork() child-side _libc_fork_child() check. Run by hand" \
+    "  from the root shell; prints a single PASS/FAIL line." \
+    "  tools/userland_staging/build_fork_atfork_smoketest.sh)"
+
+install_smoketest tools/userland_staging/libc_build/pthread_main_stack_smoketest.macho "usr/local/bin/pthread_main_stack_smoketest" \
+    "= pthread_main_stack_smoketest.macho not built -- run tools/userland_staging/build_pthread_main_stack_smoketest.sh first if wanted, skipping" \
+    "  (DAR-225 main-thread pthread_get_stackaddr_np() check. Run by hand" \
+    "  from the root shell; prints a single PASS/FAIL line." \
+    "  tools/userland_staging/build_pthread_main_stack_smoketest.sh)"
 
 for v in "" "_broken"; do
     install_smoketest "tools/userland_staging/libc_build/sigaction_tramp_smoketest${v}.macho" \
