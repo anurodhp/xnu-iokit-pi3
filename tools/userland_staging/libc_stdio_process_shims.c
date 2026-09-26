@@ -13,10 +13,14 @@
  * (not stdio/, out of this tier's file list), so this is a real,
  * minimal, from-scratch implementation of the same contract: run the
  * cleanup hook if one is registered, then a real, never-returning
- * exit(2) syscall. Not a stub - this IS the correct exit() behavior for
- * a process with no atexit()/atfork chain (neither is ported yet
- * either), and __cleanup's real assignment above means real stdio
+ * exit(2) syscall. __cleanup's real assignment above means real stdio
  * buffers genuinely get flushed on exit, not skipped.
+ *
+ * NOT complete since DAR-383 (2026-09-26): libsystem_c now exports a real
+ * atexit() (libsystem_c_cxa_atexit_compat.c), and this exit() still never
+ * calls __cxa_finalize(NULL), so registered handlers do not run. Real
+ * Libc's exit() runs __cxa_finalize(NULL) before __cleanup. Tracked as
+ * DAR-129.
  */
 
 /* Real exit(2) syscall number (bsd/kern/syscalls.master #1, AUE_EXIT),

@@ -87,13 +87,16 @@ void __cxa_finalize(void *dso) {
  * atexit() registers an ATEXIT_FN_STD entry with fn_arg = NULL and, on
  * TARGET_OS_IPHONE (this SDK), fn_dso = NULL (the dladdr() branch at
  * :156-161 is compiled out); __cxa_finalize() runs it as
- * fn->fn_ptr.std_func() (:280-281), and only a __cxa_finalize(NULL) --
- * whose dso-NULL entries match any dso argument there too -- ever runs a
- * NULL-dso entry. This table stores void (*)(void *) + arg, so the std
- * function travels as the arg of a trampoline that calls it with no
- * arguments, giving exactly that call; dso = 0 gives exactly that
- * matching (__cxa_finalize above runs dso-0 entries for any argument,
- * the same as a NULL fn_dso in Libc's own loop).
+ * fn->fn_ptr.std_func() (:280-281). This table stores
+ * void (*)(void *) + arg, so the std function travels as the arg of a
+ * trampoline that calls it with no arguments, giving exactly that call.
+ *
+ * Not the same matching as Libc: this table's __cxa_finalize above runs a
+ * dso-0 entry only for __cxa_finalize(0) (its test is `entry.dso == dso
+ * || dso == 0`). Libc's __cxa_finalize_ranges() (atexit.c:246-257) also
+ * runs an ATEXIT_FN_STD entry on an image unload when the function's
+ * address lies inside the unloaded image. Nothing here unloads images or
+ * calls __cxa_finalize(dso), so the difference is not reachable today.
  *
  * KNOWN, PRE-EXISTING GAP (not introduced here): this port's exit()
  * (libc_stdio_process_shims.c) calls only __cleanup (stdio flush) and
