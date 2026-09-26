@@ -446,11 +446,23 @@ MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 # link/listen/accept/getsockopt only as incidental private copies
 # (libncurses.dylib, libCoreFoundation.dylib); libXau, libxcb, libX11,
 # libICE and libXt reference them (tools/userland_staging/build_libX*.sh).
+# Font/2D stack (DAR-384, 2026-09-26): utimes #138, shmat #262, shmdt
+# #264, shmget #265 are plain generated stubs (bsd/kern/syscalls.master);
+# shmctl #263 is NO_SYSCALL_STUB, and, like ___listen/___accept, the
+# generated ___shmctl.s carries the public `.set _shmctl, ___shmctl` alias
+# itself on arm64 (read from the generated .s; the arm64 syscall.map
+# entry is `_shmctl ___shmctl`). Real Apple exports all five from
+# libsystem_kernel; no dylib here exported any of them. fontconfig's
+# fccache.c calls utimes() to touch a cache directory; cairo's xlib
+# backend (cairo-xlib-surface-shm.c) uses the SysV shm calls for
+# MIT-SHM images (tools/userland_staging/build_fontconfig.sh,
+# build_cairo.sh).
 for s in _geteuid _getegid _getuid _getgid _pread _pwrite _fileport_makefd _fileport_makeport \
     _socket _writev ___chmod ___connect_nocancel ___recvmsg_nocancel ___sendmsg_nocancel \
     ___select_nocancel ___sendto_nocancel ___recvfrom_nocancel _fpathconf _kevent _kqueue ___sigaction \
     _setegid _seteuid _getgroups _setitimer _flock _sync ___reboot ___getlogin _setsid ___setpriority _dup2 \
-    _link _pathconf _readv _poll _getsockopt _shutdown _umask ___listen ___accept; do
+    _link _pathconf _readv _poll _getsockopt _shutdown _umask ___listen ___accept \
+    _utimes _shmat _shmdt _shmget ___shmctl; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
         -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
         -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
@@ -893,6 +905,10 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/sys_getsockopt.o" "$OUT/libsystem_kernel/sys_shutdown.o" \
     "$OUT/libsystem_kernel/sys_umask.o" "$OUT/libsystem_kernel/sys___listen.o" \
     "$OUT/libsystem_kernel/sys___accept.o" \
+    `# Font/2D stack (DAR-384): see the stub loop's comment.` \
+    "$OUT/libsystem_kernel/sys_utimes.o" "$OUT/libsystem_kernel/sys_shmat.o" \
+    "$OUT/libsystem_kernel/sys_shmdt.o" "$OUT/libsystem_kernel/sys_shmget.o" \
+    "$OUT/libsystem_kernel/sys___shmctl.o" \
     "$OUT/libsystem_kernel/__sigaltstack_trap.o" "$OUT/libsystem_kernel/__sigreturn_trap.o" \
     "$MACH_IPC_EXTRACT"/*.o
 

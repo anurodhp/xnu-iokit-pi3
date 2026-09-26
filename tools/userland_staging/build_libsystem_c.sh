@@ -447,6 +447,18 @@ rm -f "$EXTRACT/getenv_real_raw.o"
 "$CLANG" $SIGLIST_CFLAGS -include "$LIBC/fbsdcompat/_fbsd_compat_.h" \
     "$LIBC/gen/FreeBSD/signal.c" -o "$EXTRACT/signal.o"
 
+# atof(3)/atof_l and strtoull(3)/strtoull_l (DAR-384, font/2D stack:
+# libpng's png.c calls atof; fontconfig's fcxml.c/fcname.c call
+# strtoull). Real Apple's home is libsystem_c: Libc's own
+# stdlib/FreeBSD/atof.c and strtoull.c, compiled unmodified. Before this
+# no dylib exported atof (awk links its own private atof.c), and
+# strtoull only as libc++.dylib's private copy. atof.c's strtod_l call
+# resolves to this dylib's _strtod_l$UNIX2003 alias (see the -Wl,-alias
+# list below); strtoull.c's isspace_l/__current_locale are this dylib's
+# own.
+"$CLANG" $SIGLIST_CFLAGS "$LIBC/stdlib/FreeBSD/atof.c" -o "$EXTRACT/atof.o"
+"$CLANG" $SIGLIST_CFLAGS "$LIBC/stdlib/FreeBSD/strtoull.c" -o "$EXTRACT/strtoull.o"
+
 # Real gaps found booting launchd as PID 1 (docs/backlog.md item d10):
 # ICU's own dylibs reference ___chkstk_darwin/strstr/os_log's real
 # never-open-sourced-engine stubs directly, expected from libSystem.
