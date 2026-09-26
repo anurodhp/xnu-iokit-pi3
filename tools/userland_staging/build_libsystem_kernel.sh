@@ -354,9 +354,17 @@ mkdir -p "$OUT/libsystem_kernel/mach_port_mig"
     mach_port_wrappers_real.c -o "$OUT/libsystem_kernel/mach_port_wrappers_raw.o"
 "$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld" -r -arch arm64 \
     -exported_symbol _mach_port_set_attributes \
+    -exported_symbol _mach_port_get_refs \
     "$OUT/libsystem_kernel/mach_port_wrappers_raw.o" \
     -o "$OUT/libsystem_kernel/mach_port_set_attributes.o"
 rm -f "$OUT/libsystem_kernel/mach_port_wrappers_raw.o"
+
+# mig_reply_setup() (DAR-251): IOKitLib.c (libiokituser.dylib) calls it,
+# and nothing owned it. Real libsyscall/mach source, one function, linked
+# whole. (mach_port_get_refs, IOKitLib's other gap, comes from
+# mach_port_wrappers_real.c above.)
+"$CLANG" "${CFLAGS_MACH_PORT[@]}" \
+    "$XNU/libsyscall/mach/mig_reply_setup.c" -o "$OUT/libsystem_kernel/mig_reply_setup.o"
 
 MACH_IPC_EXTRACT="$OUT/libsystem_kernel/mach_ipc_extracted"
 rm -rf "$MACH_IPC_EXTRACT"
@@ -453,16 +461,32 @@ MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 # itself on arm64 (read from the generated .s; the arm64 syscall.map
 # entry is `_shmctl ___shmctl`). Real Apple exports all five from
 # libsystem_kernel; no dylib here exported any of them. fontconfig's
-# fccache.c calls utimes() to touch a cache directory; cairo's xlib
-# backend (cairo-xlib-surface-shm.c) uses the SysV shm calls for
-# MIT-SHM images (tools/userland_staging/build_fontconfig.sh,
-# build_cairo.sh).
+# fccache.c calls utimes() to touch a cache directory (works: #138 is
+# unconditional in the kernel). cairo's xlib backend
+# (cairo-xlib-surface-shm.c) probes the SysV shm calls for MIT-SHM images,
+# but THIS KERNEL HAS NO SYSV SHM: config/MASTER.arm64.bcm2837's BSD_BASE
+# lacks sysv_shm, so #262-265 are nosys, which raises SIGSYS
+# (bsd/kern/subr_xxx.c:183-188) before returning ENOSYS. The first cairo
+# xlib surface against an MIT-SHM server would be killed -- see DAR-407.
+# ___accept/___listen/___socketpair/___getattrlist added 2026-09-25
+# (DAR-346): all four are NO_SYSCALL_STUB in syscalls.master, and
+# create-syscalls.pl emits them under the private names with the public
+# name as an alias inside the stub (`.set _accept, ___accept`), exactly
+# as Platforms/iPhoneOS/arm64/syscall.map maps them. On arm64 real Apple
+# has no C wrapper on top: libsyscall builds with -DNO_SYSCALL_LEGACY
+# (Libsyscall.xcconfig:27), so wrappers/legacy/{accept,listen,socketpair}.c
+# (the EOPNOTSUPP->ENOTSUP versions) are not compiled. sshd used to carry
+# its own raw copies (sshd_syscalls.c).
+# ___getlogin/___setlogin (same change): the raw traps behind real
+# Libc/gen/FreeBSD/getlogin.c and Libc/gen/setlogin.c, which
+# build_libsystem_c.sh now compiles.
 for s in _geteuid _getegid _getuid _getgid _pread _pwrite _fileport_makefd _fileport_makeport \
     _socket _writev ___chmod ___connect_nocancel ___recvmsg_nocancel ___sendmsg_nocancel \
     ___select_nocancel ___sendto_nocancel ___recvfrom_nocancel _fpathconf _kevent _kqueue ___sigaction \
     _setegid _seteuid _getgroups _setitimer _flock _sync ___reboot ___getlogin _setsid ___setpriority _dup2 \
     _link _pathconf _readv _poll _getsockopt _shutdown _umask ___listen ___accept \
-    _utimes _shmat _shmdt _shmget ___shmctl; do
+    _utimes _shmat _shmdt _shmget ___shmctl \
+    ___socketpair ___getattrlist ___setlogin; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
         -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
         -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
@@ -861,6 +885,9 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/sys___recvmsg_nocancel.o" "$OUT/libsystem_kernel/sys___sendmsg_nocancel.o" \
     "$OUT/libsystem_kernel/sys___select_nocancel.o" "$OUT/libsystem_kernel/sys___sendto_nocancel.o" \
     "$OUT/libsystem_kernel/sys___recvfrom_nocancel.o" \
+    "$OUT/libsystem_kernel/sys___accept.o" "$OUT/libsystem_kernel/sys___listen.o" \
+    "$OUT/libsystem_kernel/sys___socketpair.o" "$OUT/libsystem_kernel/sys___getattrlist.o" \
+    "$OUT/libsystem_kernel/sys___getlogin.o" "$OUT/libsystem_kernel/sys___setlogin.o" \
     "$OUT/libsystem_kernel/sys_fpathconf.o" "$OUT/libsystem_kernel/nanosleep_compat.o" \
     "$OUT/libsystem_kernel/sys_kevent.o" "$OUT/libsystem_kernel/sys_kqueue.o" \
     "$OUT/libsystem_kernel/pipe_trap.o" "$OUT/libsystem_kernel/pipe_forwarder.o" \
@@ -874,6 +901,7 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/cf_mach_port_syscalls.o" "$OUT/libsystem_kernel/mach_port_traps.o" \
     "$OUT/libsystem_kernel/thread_get_special_reply_port_trap.o" \
     "$OUT/libsystem_kernel/mach_portUser.o" "$OUT/libsystem_kernel/mach_port_set_attributes.o" \
+    "$OUT/libsystem_kernel/mig_reply_setup.o" \
     "$OUT/libsystem_kernel/sys___sigaction.o" "$OUT/libsystem_kernel/sigtramp_compat.o" \
     "$OUT/libsystem_kernel/proc_pidinfo_compat.o" \
     "$OUT/libsystem_kernel/voucher_funcptr_compat.o" \
@@ -885,12 +913,10 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     `# libsystem_kernel; sync(8) (system_cmds/sync.tproj) needs it.` \
     "$OUT/libsystem_kernel/sys_sync.o" \
     `# reboot(2) (DAR-334): raw ___reboot (#55, NO_SYSCALL_STUB,` \
-    `# syscalls.master:108) plus Apple's wrappers/reboot.c. ___getlogin` \
-    `# (#49, NO_SYSCALL_STUB, :102) is the raw trap Libc's` \
-    `# gen/FreeBSD/getlogin.c:49,66 calls. Real Apple exports all three` \
-    `# from libsystem_kernel.` \
+    `# syscalls.master:108) plus Apple's wrappers/reboot.c. Real Apple` \
+    `# exports both from libsystem_kernel. (___getlogin is linked with` \
+    `# DAR-346's socket/login traps above.)` \
     "$OUT/libsystem_kernel/sys___reboot.o" "$OUT/libsystem_kernel/reboot_wrap.o" \
-    "$OUT/libsystem_kernel/sys___getlogin.o" \
     `# setsid(2) (#147, plain stub) and setpriority(2) (raw #96 + Apple's` \
     `# wrappers/setpriority.c), for shutdown(8). Real Apple exports both` \
     `# from libsystem_kernel.` \
@@ -903,8 +929,8 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/sys_link.o" "$OUT/libsystem_kernel/sys_pathconf.o" \
     "$OUT/libsystem_kernel/sys_readv.o" "$OUT/libsystem_kernel/sys_poll.o" \
     "$OUT/libsystem_kernel/sys_getsockopt.o" "$OUT/libsystem_kernel/sys_shutdown.o" \
-    "$OUT/libsystem_kernel/sys_umask.o" "$OUT/libsystem_kernel/sys___listen.o" \
-    "$OUT/libsystem_kernel/sys___accept.o" \
+    "$OUT/libsystem_kernel/sys_umask.o" \
+    `# (___listen/___accept are linked with DAR-346's traps above.)` \
     `# Font/2D stack (DAR-384): see the stub loop's comment.` \
     "$OUT/libsystem_kernel/sys_utimes.o" "$OUT/libsystem_kernel/sys_shmat.o" \
     "$OUT/libsystem_kernel/sys_shmdt.o" "$OUT/libsystem_kernel/sys_shmget.o" \

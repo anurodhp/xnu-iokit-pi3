@@ -9,9 +9,9 @@
  * (iokit/BCM2837PlatformExpert/, only reset and halt, DAR-334), so
  * IOPMrootDomain has no platform path into a sleep state.
  *
- * (Not "IOKitLib is impossible": libiokituser.dylib carries the iokit MIG
- * client, and launchctl_iokit_compat.c already builds IOMasterPort()/
- * IORegistryEntryFromPath() on it. What is missing is anything to sleep.)
+ * (Not "IOKitLib is missing": libiokituser.dylib carries the real IOKitLib
+ * since DAR-251. What is missing is anything to sleep. These local
+ * definitions take precedence over libiokituser's in this one binary.)
  *
  * So IOMasterPort() fails with a message saying so, and shutdown.c then
  * skips the sleep (it only proceeds when IOMasterPort() succeeds). The other

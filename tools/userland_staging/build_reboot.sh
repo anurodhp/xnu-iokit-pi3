@@ -16,11 +16,11 @@
 #     reboot3_compat.c for the citations. reboot3_compat.h declares it.
 #   - kextd's reboot lock (reserve_reboot, kextmanager.h) compiles out on
 #     this iPhoneOS-SDK target (reboot.c:64-66, :79-80, :157-162).
-#   - getlogin(), getopt(), signal(), err(): Libc sources compiled here,
-#     the way build_login.sh does; libsystem_c.dylib does not export them
-#     in this project (it exports only the __err/__warn internals).
-#     getlogin() calls the raw ___getlogin that libsystem_kernel.dylib
-#     exports (build_libsystem_kernel.sh, DAR-334).
+#   - getopt(), signal(), err(): Libc sources compiled here, the way
+#     build_login.sh does; libsystem_c.dylib does not export them in this
+#     project (it exports only the __err/__warn internals). getlogin()
+#     binds to libsystem_c.dylib, which compiles Libc's own getlogin.c
+#     over libsystem_kernel's ___getlogin (DAR-346).
 #   - openlog()/syslog() (Libc gen/oldsyslog.c) and pututxline() (Libc
 #     gen/NetBSD/utmpx.c + gen/utmpx-darwin.c + this project's ASL compat
 #     files): the same set build_login.sh compiles, for the same reason --
@@ -89,7 +89,6 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
 FILES="
 $REBOOT/reboot.c
 reboot3_compat.c
-$LIBC/gen/FreeBSD/getlogin.c
 $LIBC/stdlib/FreeBSD/getopt.c
 $LIBC/gen/FreeBSD/signal.c
 $LIBC/gen/FreeBSD/err.c

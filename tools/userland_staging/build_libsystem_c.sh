@@ -296,6 +296,41 @@ for f in snprintf_chk vsnprintf_chk strlcpy_chk memmove_chk stpncpy_chk strncat_
 done
 "$CLANG" $SIGLIST_CFLAGS "$LIBC/stdlib/FreeBSD/setenv.c" -o "$EXTRACT/setenv.o"
 "$CLANG" $SIGLIST_CFLAGS "$LIBC/stdlib/FreeBSD/putenv.c" -o "$EXTRACT/putenv.o"
+
+# DAR-251: syslog()/vsyslog()/openlog()/closelog()/setlogmask() had no
+# canonical owner -- only private copies of this same real
+# Libc/gen/oldsyslog.c (getty, login, launchctl, libopenpam, libcopyfile).
+# Real Apple ships syslog(3) from libsystem_asl.dylib, which this port does
+# not build yet; until it does, libsystem_c is the owner. IOKitLib.c's
+# IOCFSerialize/IOCFUnserialize (libiokituser.dylib) is the first consumer.
+"$CLANG" $SIGLIST_CFLAGS "$LIBC/gen/oldsyslog.c" -o "$EXTRACT/oldsyslog.o"
+
+# DAR-251: _NSGetArgv()/_NSGetArgc()/_NSGetProgname()/
+# _NSGetMachExecuteHeader() -- real Libc/sys/crt_externs.c, the dynamic
+# (__DYNAMIC__) variant real Apple builds into libsystem_c, filled from
+# dyld's ProgramVars by libSystem.B's constructor through
+# libsystem_c_program_vars_compat.c (see its header). Nothing exported
+# these before (only libopenpam.dylib had a private _NSGetArgv); oldsyslog.c
+# above needs _NSGetArgv. _NSGetEnviron is left to nsgetenviron.o below
+# (this project's environ handling predates this), so it is not exported
+# from here.
+"$CLANG" $SIGLIST_CFLAGS -D__DYNAMIC__ "$LIBC/sys/crt_externs.c" -o "$OUT/crt_externs_raw.o"
+"$CLANG" $SIGLIST_CFLAGS libsystem_c_program_vars_compat.c -o "$OUT/program_vars_compat_raw.o"
+"$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld" -r -arch arm64 \
+    -exported_symbol __NSGetArgv -exported_symbol __NSGetArgc \
+    -exported_symbol __NSGetProgname -exported_symbol __NSGetMachExecuteHeader \
+    -exported_symbol ___libc_program_vars_init \
+    "$OUT/crt_externs_raw.o" "$OUT/program_vars_compat_raw.o" \
+    -o "$EXTRACT/crt_externs.o"
+rm -f "$OUT/crt_externs_raw.o" "$OUT/program_vars_compat_raw.o"
+
+# DAR-346: real getlogin()/getlogin_r() and setlogin() -- Libc's own home
+# for both. setlogin.c clears getlogin.c's cached __logname under
+# __logname_mutex, so the two must live in the same image. Their raw
+# traps (___getlogin/___setlogin) are in libsystem_kernel.dylib.
+"$CLANG" $SIGLIST_CFLAGS -I "$LIBC/fbsdcompat" -I "$LIBC/darwin" \
+    "$LIBC/gen/FreeBSD/getlogin.c" -o "$EXTRACT/getlogin.o"
+"$CLANG" $SIGLIST_CFLAGS "$LIBC/gen/setlogin.c" -o "$EXTRACT/setlogin.o"
 # os_assumes: the 7 real extern functions third_party/Libc/os/assumes.h's
 # macros call (see os_assumes_compat.c's own header for why the real
 # assumes.c body is curated rather than compiled). Moved here 2026-08-29
@@ -834,6 +869,13 @@ done
 # libdispatch.dylib reexports THIS dylib, so this dylib cannot also need
 # a symbol from it) unlike launchd's own richer private copy.
 "$CLANG" $SIGLIST_CFLAGS libsystem_c_fork_compat.c -o "$EXTRACT/fork_compat.o"
+
+# DAR-130: real _libc_fork_child() (third_party/Libc/sys/_libc_fork_child.c),
+# called from fork()'s child side above. Its three callees:
+# _arc4_fork_child (arc4random.o, already here), __environ_lock_fork_child
+# (environ_lock_compat.c) and _init_clock_port (libsystem_c_clock_port_compat.c).
+"$CLANG" $SIGLIST_CFLAGS "$LIBC/sys/_libc_fork_child.c" -o "$EXTRACT/libc_fork_child.o"
+"$CLANG" $SIGLIST_CFLAGS libsystem_c_clock_port_compat.c -o "$EXTRACT/clock_port_compat.o"
 
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libsystem_c.dylib"

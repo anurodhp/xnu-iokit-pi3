@@ -13,20 +13,29 @@
  * `__swift_unavailable_on("Use posix_spawn APIs or NSTask instead.",
  * "Process spawning is unavailable")` -- a policy choice about the iOS
  * App Store sandbox, not a claim that system(3) can't function on this
- * architecture). ed.c's real `!cmd` shell-escape trips this the moment
- * system() is actually CALLED (not just declared) under this SDK
- * target -- same "unavailable the moment it's used, not just seen"
- * shape as the regcomp gap.
+ * architecture). Calling system() (not just declaring it) under this
+ * SDK target is then an error -- same "unavailable the moment it's used,
+ * not just seen" shape as the regcomp gap.
+ *
+ * Shared by every build that calls such a function (DAR-345 merged the
+ * per-binary copies): ed's `!cmd` shell escape and less (build_simple_cmds.sh),
+ * and ssh's clientloop.c:384 `PermitLocalCommand` (build_sshd.sh), which
+ * link Apple's real Libc/stdlib/FreeBSD/system.c. pw's
+ * pw_compat_include/stdlib.h does the same neutralization inline because
+ * it also renames system() around an #include_next.
  *
  * Fix: neutralize just `__IOS_PROHIBITED` to a no-op, by force-
  * #include'ing Availability.h ourselves first (already the ultimate
  * source of the real definition, tripping its own header guard) and
  * redefining that one macro. Every other real availability annotation
- * in every other header stays fully intact. Force-included ahead of
- * ed's own sources in this loop's cmd_cflags case for `ed`.
+ * in every other header stays fully intact. Used via `-include`.
+ *
+ * A plain -D__IOS_PROHIBITED= on the command line would not work:
+ * Availability.h defines the macro with an unguarded #define, which
+ * overwrites any -D.
  */
-#ifndef _ED_AVAILABILITY_OVERRIDE_H_
-#define _ED_AVAILABILITY_OVERRIDE_H_
+#ifndef _IOS_PROHIBITED_OVERRIDE_H_
+#define _IOS_PROHIBITED_OVERRIDE_H_
 
 #include <Availability.h>
 
@@ -35,4 +44,4 @@
 #endif
 #define __IOS_PROHIBITED /* nothing -- see header comment */
 
-#endif /* _ED_AVAILABILITY_OVERRIDE_H_ */
+#endif /* _IOS_PROHIBITED_OVERRIDE_H_ */

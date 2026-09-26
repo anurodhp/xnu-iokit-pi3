@@ -69,6 +69,10 @@ otool -l "$M" | grep -A2 "cmd LC_LOAD_DYLINKER" | grep -q "/usr/lib/dyld" || {
     echo "error: no LC_LOAD_DYLINKER /usr/lib/dyld -- not a real dynamic executable" >&2
     exit 1
 }
+otool -l "$M" | grep -q "cmd LC_LOAD_DYLIB" || {
+    echo "error: no LC_LOAD_DYLIB -- links no dylib at all, not a real dynamic executable" >&2
+    exit 1
+}
 otool -l "$M" | grep -q "cmd LC_MAIN" || {
     echo "error: no LC_MAIN -- see build_simple_cmds.sh's LINK_DYLIBS comment" >&2
     exit 1

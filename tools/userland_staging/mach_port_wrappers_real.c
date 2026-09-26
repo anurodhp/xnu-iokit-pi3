@@ -105,3 +105,20 @@ mach_port_set_attributes(
 
 	return rv;
 }
+
+/* Verbatim from xnu-7195 libsyscall/mach/mach_port.c:142-153 (DAR-251:
+ * IOKitLib.c needs it, and build_libsystem_kernel.sh exports it next to
+ * mach_port_set_attributes). */
+kern_return_t
+mach_port_get_refs(
+	ipc_space_t task,
+	mach_port_name_t name,
+	mach_port_right_t right,
+	mach_port_urefs_t *refs)
+{
+	kern_return_t rv;
+
+	rv = _kernelrpc_mach_port_get_refs(task, name, right, refs);
+
+	return rv;
+}
