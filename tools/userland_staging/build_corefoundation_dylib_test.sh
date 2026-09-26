@@ -61,6 +61,10 @@ otool -l "$OUT/cf_dylib_smoketest.macho" | grep -A2 "cmd LC_LOAD_DYLINKER" | gre
     echo "error: no LC_LOAD_DYLINKER /usr/lib/dyld -- not a real dynamic executable" >&2
     exit 1
 }
+otool -l "$OUT/cf_dylib_smoketest.macho" | grep -q "cmd LC_LOAD_DYLIB" || {
+    echo "error: no LC_LOAD_DYLIB -- links no dylib at all, not a real dynamic executable" >&2
+    exit 1
+}
 otool -L "$OUT/cf_dylib_smoketest.macho" | grep -q "libCoreFoundation.dylib" || {
     echo "error: no LC_LOAD_DYLIB on libCoreFoundation.dylib" >&2
     exit 1
