@@ -243,4 +243,4 @@
 	}
 
 NOT_YET_PORTED(QoSMarking)
-NOT_YET_PORTED(InterfaceNamer)
+/* InterfaceNamer: real since DAR-251 (ifnamer.o + libiokituser.dylib). */

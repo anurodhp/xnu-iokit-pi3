@@ -1048,6 +1048,17 @@ else
     echo "= pthread_cond_smoketest.macho not built -- run tools/userland_staging/build_pthread_cond_smoketest.sh first if wanted, skipping"
 fi
 
+if [ -n "$SKIP_SMOKETESTS" ]; then
+    echo "= iokitlib_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
+elif [ -f tools/userland_staging/libc_build/iokitlib_smoketest.macho ]; then
+    mkdir -p "$MNT/usr/local/bin"
+    cp tools/userland_staging/libc_build/iokitlib_smoketest.macho "$MNT/usr/local/bin/iokitlib_smoketest"
+    chmod 755 "$MNT/usr/local/bin/iokitlib_smoketest"
+    echo "+ wrote iokitlib_smoketest to $MNT/usr/local/bin/ (DAR-251 IOKitLib API check, prints PASS/FAIL)"
+else
+    echo "= iokitlib_smoketest.macho not built -- run tools/userland_staging/build_iokitlib_smoketest.sh first if wanted, skipping"
+fi
+
 for v in "" "_broken"; do
     src="tools/userland_staging/libc_build/sigaction_tramp_smoketest${v}.macho"
     if [ -f "$src" ]; then

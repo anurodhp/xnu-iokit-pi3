@@ -155,8 +155,22 @@ extern int task_get_special_port(__iokit_mach_port_t task, int which_port,
                                  __iokit_mach_port_t *special_port);
 #define __IOKIT_TASK_BOOTSTRAP_PORT 4   /* osfmk/mach/task_special_ports.h */
 
+/* DAR-251: dyld-940 passes its ProgramVars as every initializer's 5th
+ * argument (third_party/dyld/dyld/DyldProcessConfig.h:67); real
+ * libSystem_initializer hands it to _libc_initializer() ->
+ * _program_vars_init() (Libsystem/init.c:224, Libc/sys/_libc_init.c:55),
+ * which is what makes libsystem_c's _NSGetArgv()/_NSGetProgname()/etc
+ * return the real values. See libsystem_c_program_vars_compat.c. */
+struct ProgramVars;
+extern void __libc_program_vars_init(const struct ProgramVars *vars);
+
 __attribute__((constructor))
-static void libsystem_call_dyld_initializer(void) {
+static void libsystem_call_dyld_initializer(int argc, const char *argv[],
+                                            const char *envp[],
+                                            const char *apple[],
+                                            const struct ProgramVars *vars) {
+    (void)argc; (void)argv; (void)envp; (void)apple;
+    __libc_program_vars_init(vars);
     /* Order matters: mach_init() must run before _dyld_initializer(),
      * not after -- _dyld_initializer() itself (real, unmodified dyld
      * source) does real VM/allocator work while registering the

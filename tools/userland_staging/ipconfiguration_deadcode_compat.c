@@ -333,12 +333,13 @@ IOAllowPowerChange(io_connect_t kernelPort, intptr_t notificationID)
 	return kIOReturnUnsupported;
 }
 
-CFRunLoopSourceRef
-IONotificationPortGetRunLoopSource(IONotificationPortRef notify)
-{
-	(void)notify;
-	return NULL;
-}
+/* IONotificationPortGetRunLoopSource() used to be stood in here too
+ * (returning NULL). DAR-251 ported the real IOKitLib.c into
+ * libiokituser.dylib, and this archive member's local copy then shadowed
+ * it inside configd.macho: InterfaceNamer's
+ * CFRunLoopAddSource(..., IONotificationPortGetRunLoopSource(S_notify), ...)
+ * (ifnamer.c:3832) crashed configd on a NULL source. Removed so the real
+ * one binds. */
 
 IOReturn
 IOPMCancelScheduledPowerEvent(CFDateRef time_to_wake, CFStringRef my_id,

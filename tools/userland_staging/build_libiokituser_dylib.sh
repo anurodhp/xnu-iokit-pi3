@@ -95,6 +95,68 @@ fi
 (cd "$EXTRACT" && rm -f \
     mach_portUser.o mach_port_wrappers_real.o mach_port_extra_traps.o)
 
+# DAR-251: the high-level IOKitLib API (IOServiceGetMatchingService,
+# IORegistryEntryFromPath, IONotificationPortCreate, ...) plus the CF
+# serialize/unserialize it uses -- real, unmodified IOKitUser sources, the
+# user half of Apple's IOKit.framework. This dylib used to carry only the
+# MIG transport (iokitmig64.o) because IOKitLib.c needs CoreFoundation,
+# libdispatch and libxpc, none of which existed when build_iokituser.sh
+# was written. configd's InterfaceNamer plugin (DAR-240) is the first
+# consumer. Only built into this dylib, not libiokituser.a.
+for d in libCoreFoundation libdispatch libinfo libsystem_blocks; do
+    if [ ! -f "$OUT/system/$d.dylib" ]; then
+        echo "error: $OUT/system/$d.dylib not found -- build it first" >&2
+        exit 1
+    fi
+done
+T="../../third_party"
+IOKITUSER_ABS="$(cd "$T/IOKitUser" && pwd)"
+XNU_IOKIT_ABS="$(cd "$T/xnu-7195/iokit/IOKit" && pwd)"
+# <IOKit/...> layout of the real framework: IOKitUser's own headers first,
+# then xnu's iokit/IOKit headers for the rest (IOTypes.h, IOReturn.h, ...),
+# the same split real Apple installs.
+IOKH="$OUT/iokitlib_headers/IOKit"
+rm -rf "$OUT/iokitlib_headers"
+mkdir -p "$IOKH"
+for f in "$IOKITUSER_ABS"/*.h; do ln -s "$f" "$IOKH/"; done
+for f in "$XNU_IOKIT_ABS"/*.h; do [ -e "$IOKH/$(basename "$f")" ] || ln -s "$f" "$IOKH/"; done
+for d in "$XNU_IOKIT_ABS"/*/; do d="${d%/}"; [ -e "$IOKH/$(basename "$d")" ] || ln -s "$d" "$IOKH/"; done
+# <device/device_types.h> must be xnu's, not the SDK's: IOKIT_SERVER_VERSION
+# is defined only in its `#if PRIVATE` block (xnu-7195
+# osfmk/device/device_types.h:77-79), which the public SDK copy strips.
+# Without it, IOCFSerialize.c:736 and IOKitLib.c:701 compile out the binary
+# serializer while IOKitLib.c:104 still defaults to
+# kIOCFSerializeToBinary, so every IOService* matching call returned
+# kIOReturnUnsupported (found by iokitlib_smoketest).
+mkdir -p "$OUT/iokitlib_headers/device"
+ln -s "$(cd "$T/xnu-7195/osfmk/device" && pwd)/device_types.h" "$OUT/iokitlib_headers/device/device_types.h"
+# IOCFSerialize.c's binary path includes the kernel's serializer format
+# header by its private SDK path.
+mkdir -p "$OUT/iokitlib_headers/System/libkern"
+ln -s "$(cd "$T/xnu-7195/libkern/libkern" && pwd)/OSSerializeBinary.h" \
+    "$OUT/iokitlib_headers/System/libkern/OSSerializeBinary.h"
+# DISPATCH_MACH_SPI=1 is from IOKitUser-Embedded.xcconfig.
+# libsyscall/mach goes -idirafter: its private string.h would otherwise
+# shadow the SDK's and hide strncpy/strlen/strlcpy.
+IOKITLIB_CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -O0 -fno-stack-protector \
+    -Wno-nullability-completeness -Wno-deprecated-declarations \
+    -DPRIVATE=1 -DIOKIT=1 -DDISPATCH_MACH_SPI=1 \
+    -D__API_UNAVAILABLE_PLATFORM_bridgeos=bridgeos,unavailable \
+    '-D__API_AVAILABLE_PLATFORM_bridgeos(x)=ios,introduced=x' \
+    -I "$OUT/iokitlib_headers" -I "$OUT/compat_include" -I "$OUT/cf_headers" -I "$OUT/iokituser_mig" \
+    -I "$T/IOKitUser" -I "$OUT/sc_dispatch_compat" -I "$T/libdispatch" \
+    -I "$T/PureDarwin/src/Libraries/XPC/libxpc/include" \
+    -I "$T/PureDarwin/src/Libraries/CrashReporterClient/include" \
+    -I "$T/libplatform/private" -I "$T/libplatform/include" \
+    -I "$T/xnu-7195/iokit" -I "$T/xnu-7195/libkern" \
+    -idirafter "$T/xnu-7195/osfmk" -idirafter "$T/xnu-7195/libsyscall/mach" -idirafter "$T/xnu-7195/bsd")
+# IOCFURLAccess.c (the legacy IOURLCreateDataAndPropertiesFromResource
+# API) is left out: nothing here calls it, and it needs fsync/umask/
+# getdirentries wrappers no dylib exports yet.
+for f in IOKitLib IOCFSerialize IOCFUnserialize.tab; do
+    "$CLANG" "${IOKITLIB_CFLAGS[@]}" "$T/IOKitUser/$f.c" -o "$EXTRACT/$f.o"
+done
+
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libiokituser.dylib"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
@@ -104,6 +166,8 @@ rm -f "$OUT/system/libiokituser.dylib"
     -Wl,-fixup_chains \
     -o "$OUT/system/libiokituser.dylib" \
     "$EXTRACT"/*.o \
+    "$OUT/system/libCoreFoundation.dylib" "$OUT/system/libdispatch.dylib" \
+    "$OUT/system/libinfo.dylib" "$OUT/system/libsystem_blocks.dylib" \
     "$OUT/system/libxpc.dylib" \
     "$OUT/system/libsystem_c.dylib" "$OUT/system/libsystem_malloc.dylib" \
     "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_kernel.dylib" \
@@ -118,7 +182,7 @@ otool -hv "$OUT/system/libiokituser.dylib" | grep -q " DYLIB " || {
 }
 echo "declared -Wl,-U deferrals (expect: none for this library):"
 xcrun dyld_info -fixups "$OUT/system/libiokituser.dylib" 2>/dev/null | grep '<flat-namespace>' | awk '{print "  " $NF}'
-UNEXPECTED=$(xcrun dyld_info -fixups "$OUT/system/libiokituser.dylib" 2>/dev/null | grep -v -E '<flat-namespace>|<weak-def-coalesce>' | grep 'bind' | grep -v -E 'libsystem_c/|libsystem_malloc/|libsystem_platform/|libsystem_kernel/|libsystem_pthread/|libxpc/' || true)
+UNEXPECTED=$(xcrun dyld_info -fixups "$OUT/system/libiokituser.dylib" 2>/dev/null | grep -v -E '<flat-namespace>|<weak-def-coalesce>' | grep 'bind' | grep -v -E 'libsystem_c/|libsystem_malloc/|libsystem_platform/|libsystem_kernel/|libsystem_pthread/|libxpc/|libCoreFoundation/|libdispatch/|libinfo/|libsystem_blocks/' || true)
 if [ -n "$UNEXPECTED" ]; then
     echo "error: real, unexpected non-sibling bind targets found:" >&2
     echo "$UNEXPECTED" >&2
