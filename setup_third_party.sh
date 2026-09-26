@@ -620,6 +620,20 @@ mkdir -p third_party
 #     `base64 [-Ddh] [-b num] [-i in] [-o out]` interface). Kept separate so
 #     the macOS 11 text_cmds used by every other command is not moved.
 #     See docs/apple-oss-catalog.md.
+# X.org client libraries (DAR-383, X11GS 2, 2026-09-26): not Apple code
+#     at all -- Apple's own X11 (10.5-10.7) and XQuartz were built from
+#     these same freedesktop.org sources, and none of them is an
+#     apple-oss-distributions repo, so this is the source-priority rule's
+#     real-upstream fallback. Each is pinned to the exact release tag the
+#     nixpkgs PureDarwin builds from (nixos-26.05, rev 8f0500b9, pinned in
+#     PureDarwin's flake.lock; versions read from nixpkgs'
+#     pkgs/by-name/*/package.nix at that rev and each tag confirmed with
+#     `git ls-remote`). Cloned unmodified -- nothing is forked; if one ever
+#     needs a change it becomes an anurodhp/* fork first. Built by
+#     tools/userland_staging/build_xorg_headers.sh and build_lib{Xau,
+#     Xdmcp,xcb,X11,Xext,Xrender,Xfixes,Xrandr,Xcursor,ICE,SM,Xt,Xmu}.sh.
+#     libXft-2.3.9 is pinned too but NOT built yet: it needs freetype +
+#     fontconfig (DAR-384).
 # name | clone_url | ref (branch or tag) | (reserved, must be empty) | upstream_url (optional)
 # The 4th field used to name a third_party-patches/ file to `git am`. That
 # mechanism is retired (see the header); a non-empty value is an error.
@@ -694,6 +708,23 @@ configd|git@github.com:anurodhp/configd.git|iokit-port||https://github.com/apple
 PowerManagement|https://github.com/apple-oss-distributions/PowerManagement.git|PowerManagement-1132.81.1|
 chrony|git@github.com:anurodhp/chrony.git|iokit-port||https://github.com/mlichvar/chrony.git
 vim|https://github.com/apple-oss-distributions/vim.git|vim-91.80.1|
+xorgproto|https://gitlab.freedesktop.org/xorg/proto/xorgproto.git|xorgproto-2025.1|
+xtrans|https://gitlab.freedesktop.org/xorg/lib/libxtrans.git|xtrans-1.6.0|
+xcb-proto|https://gitlab.freedesktop.org/xorg/proto/xcbproto.git|xcb-proto-1.17.0|
+libXau|https://gitlab.freedesktop.org/xorg/lib/libxau.git|libXau-1.0.12|
+libXdmcp|https://gitlab.freedesktop.org/xorg/lib/libxdmcp.git|libXdmcp-1.1.5|
+libxcb|https://gitlab.freedesktop.org/xorg/lib/libxcb.git|libxcb-1.17.0|
+libX11|https://gitlab.freedesktop.org/xorg/lib/libx11.git|libX11-1.8.13|
+libXext|https://gitlab.freedesktop.org/xorg/lib/libxext.git|libXext-1.3.7|
+libXrender|https://gitlab.freedesktop.org/xorg/lib/libxrender.git|libXrender-0.9.12|
+libXfixes|https://gitlab.freedesktop.org/xorg/lib/libxfixes.git|libXfixes-6.0.2|
+libXrandr|https://gitlab.freedesktop.org/xorg/lib/libxrandr.git|libXrandr-1.5.5|
+libXcursor|https://gitlab.freedesktop.org/xorg/lib/libxcursor.git|libXcursor-1.2.3|
+libICE|https://gitlab.freedesktop.org/xorg/lib/libice.git|libICE-1.1.2|
+libSM|https://gitlab.freedesktop.org/xorg/lib/libsm.git|libSM-1.2.6|
+libXt|https://gitlab.freedesktop.org/xorg/lib/libxt.git|libXt-1.3.1|
+libXmu|https://gitlab.freedesktop.org/xorg/lib/libxmu.git|libXmu-1.3.1|
+libXft|https://gitlab.freedesktop.org/xorg/lib/libxft.git|libXft-2.3.9|
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch upstream_url; do
