@@ -112,9 +112,18 @@ def main():
     ap.add_argument("--user", default="root")
     ap.add_argument("--password", default="darwin")
     ap.add_argument("--lock-timeout", type=float, default=600)
+    ap.add_argument("--allow-panic", action="store_true",
+                    help="do not fail on a kernel panic. By default any "
+                         "'panic(' fails the run: since DAR-334 a panic "
+                         "resets the machine (BCM2837PlatformExpert::"
+                         "haltRestart), and the next boot's output could "
+                         "otherwise satisfy --expect and hide it.")
     args = ap.parse_args()
 
     expect = [(p, re.compile(p)) for p in args.expect]
+    if not args.allow_panic and not any(
+            "panic" in p for p in args.expect_fail):
+        args.expect_fail.append(r"panic\(")
     expect_fail = [(p, re.compile(p)) for p in args.expect_fail]
     pending_cmds = list(args.cmd)
     need_login = args.login

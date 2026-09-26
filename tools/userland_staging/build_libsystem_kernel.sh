@@ -435,7 +435,7 @@ MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 for s in _geteuid _getegid _getuid _getgid _pread _pwrite _fileport_makefd _fileport_makeport \
     _socket _writev ___chmod ___connect_nocancel ___recvmsg_nocancel ___sendmsg_nocancel \
     ___select_nocancel ___sendto_nocancel ___recvfrom_nocancel _fpathconf _kevent _kqueue ___sigaction \
-    _setegid _seteuid _getgroups _setitimer _flock _sync; do
+    _setegid _seteuid _getgroups _setitimer _flock _sync ___reboot ___getlogin _setsid ___setpriority _dup2; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
         -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
         -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
@@ -598,6 +598,24 @@ done
     -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" -I "$OUT/compat_include" \
     -I "$OUT/malloc_mig" -I "$XNU/libsyscall/wrappers" \
     "$XNU/libsyscall/wrappers/unix03/chmod.c" -o "$OUT/libsystem_kernel/chmod_wrap.o"
+# reboot(2)/reboot_np() (DAR-334): Apple's own libsyscall wrapper
+# (wrappers/reboot.c:28-40) over the raw __reboot trap. syscalls.master:108
+# marks #55 NO_SYSCALL_STUB, so the generator emits only ___reboot (built
+# in the stub loop above) and the public reboot() comes from this file.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+    -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -idirafter "$XNU/bsd" -I "$LIBC/include" -I "$LIBC/darwin" \
+    -I "$XNU/libsyscall/wrappers" \
+    "$XNU/libsyscall/wrappers/reboot.c" -o "$OUT/libsystem_kernel/reboot_wrap.o"
+# setpriority(2) (DAR-334, shutdown(8)): Apple's wrappers/setpriority.c over
+# the raw __setpriority (#96, NO_SYSCALL_STUB, syscalls.master:149). Its
+# PRIO_DARWIN_THREAD branch calls libsystem_pthread's _pthread_clear_qos_tsd,
+# which resolves at load like this dylib's other pthread references.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+    -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -idirafter "$XNU/bsd" -I "$LIBC/include" -I "$LIBC/darwin" \
+    -I "$XNU/libsyscall/wrappers" \
+    "$XNU/libsyscall/wrappers/setpriority.c" -o "$OUT/libsystem_kernel/setpriority_wrap.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" -I "$OUT/compat_include" \
@@ -709,6 +727,11 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     `# is libsystem_malloc.dylib's sys_semwait_signal.o, always loaded` \
     `# alongside this dylib (same class of deferral as the 3 just above).` \
     -Wl,-U,___semwait_signal \
+    `# _pthread_clear_qos_tsd: Apple's wrappers/setpriority.c (DAR-334)` \
+    `# calls it on its PRIO_DARWIN_THREAD branch. It lives in` \
+    `# libsystem_pthread.dylib, which links this dylib -- same cycle, same` \
+    `# deferral as abort/memcpy/pthread_tsd_shim_bootstrap above.` \
+    -Wl,-U,__pthread_clear_qos_tsd \
     `# BSD socket family additions, 2026-08-31 (static-linking cleanup,` \
     `# dylib-vs-dylib duplicate-symbol pass). chmod/connect/recvmsg/` \
     `# writev's $UNIX2003 aliases are created HERE (base is genuinely` \
@@ -818,6 +841,21 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     `# NO_SYSCALL_STUB marker). Real Apple exports it from` \
     `# libsystem_kernel; sync(8) (system_cmds/sync.tproj) needs it.` \
     "$OUT/libsystem_kernel/sys_sync.o" \
+    `# reboot(2) (DAR-334): raw ___reboot (#55, NO_SYSCALL_STUB,` \
+    `# syscalls.master:108) plus Apple's wrappers/reboot.c. ___getlogin` \
+    `# (#49, NO_SYSCALL_STUB, :102) is the raw trap Libc's` \
+    `# gen/FreeBSD/getlogin.c:49,66 calls. Real Apple exports all three` \
+    `# from libsystem_kernel.` \
+    "$OUT/libsystem_kernel/sys___reboot.o" "$OUT/libsystem_kernel/reboot_wrap.o" \
+    "$OUT/libsystem_kernel/sys___getlogin.o" \
+    `# setsid(2) (#147, plain stub) and setpriority(2) (raw #96 + Apple's` \
+    `# wrappers/setpriority.c), for shutdown(8). Real Apple exports both` \
+    `# from libsystem_kernel.` \
+    "$OUT/libsystem_kernel/sys_setsid.o" \
+    "$OUT/libsystem_kernel/sys___setpriority.o" "$OUT/libsystem_kernel/setpriority_wrap.o" \
+    `# dup2(2) (#90, plain stub), for shutdown(8)'s popen(). Real Apple` \
+    `# exports it from libsystem_kernel.` \
+    "$OUT/libsystem_kernel/sys_dup2.o" \
     "$MACH_IPC_EXTRACT"/*.o
 
 echo "wrote $OUT/system/libsystem_kernel.dylib"

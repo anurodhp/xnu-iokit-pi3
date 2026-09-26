@@ -419,6 +419,27 @@ else
     echo "= tools/userland_staging/ps.macho not built -- run build_ps.sh first if wanted, skipping"
 fi
 
+# reboot(8)/halt(8)/shutdown(8) (DAR-334), all in /sbin as on a Mac. reboot
+# and halt are one binary (reboot.c picks halt from argv[0]); both, and
+# shutdown -r/-h, hand the request to launchd's reboot2().
+if [ -f tools/userland_staging/reboot.macho ]; then
+    mkdir -p "$MNT/sbin"
+    for name in reboot halt; do
+        cp tools/userland_staging/reboot.macho "$MNT/sbin/$name"
+        chmod 755 "$MNT/sbin/$name"
+    done
+    echo "+ wrote reboot.macho to $MNT/sbin/reboot and $MNT/sbin/halt (DAR-334)"
+else
+    echo "= tools/userland_staging/reboot.macho not built -- run build_reboot.sh first if wanted, skipping"
+fi
+if [ -f tools/userland_staging/shutdown.macho ]; then
+    cp tools/userland_staging/shutdown.macho "$MNT/sbin/shutdown"
+    chmod 755 "$MNT/sbin/shutdown"
+    echo "+ wrote shutdown.macho to $MNT/sbin/shutdown (DAR-334)"
+else
+    echo "= tools/userland_staging/shutdown.macho not built -- run build_reboot.sh first if wanted, skipping"
+fi
+
 if [ -f tools/userland_staging/ifconfig.macho ]; then
     mkdir -p "$MNT/sbin"
     cp tools/userland_staging/ifconfig.macho "$MNT/sbin/ifconfig"

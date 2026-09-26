@@ -937,6 +937,14 @@ rm -f "$OUT/system/libsystem_c.dylib"
     `# atof.c (linked by awk) references _strtod_l$UNIX2003. Base` \
     `# _strtod_l is already this dylib's own export.` \
     -Wl,-alias,_strtod_l,'_strtod_l$UNIX2003' \
+    `# ttyname_r likewise: unistd.h declares it __DARWIN_ALIAS, so Libc's` \
+    `# gen/utmpx-darwin.c (linked by reboot, DAR-334) references` \
+    `# _ttyname_r$UNIX2003. Base _ttyname_r is this dylib's own export.` \
+    -Wl,-alias,_ttyname_r,'_ttyname_r$UNIX2003' \
+    `# waitpid likewise (sys/wait.h __DARWIN_ALIAS_C): shutdown(8)'s popen` \
+    `# (ed_popen_system_compat.c) references _waitpid$UNIX2003. Base` \
+    `# _waitpid is this dylib's own export.` \
+    -Wl,-alias,_waitpid,'_waitpid$UNIX2003' \
     -Wl,-alias,_fstatat,'_fstatat$INODE64' \
     -Wl,-alias,_closedir,'_closedir$UNIX2003' \
     -Wl,-alias,_opendir,'_opendir$INODE64$UNIX2003' \
