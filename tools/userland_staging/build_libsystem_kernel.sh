@@ -354,9 +354,17 @@ mkdir -p "$OUT/libsystem_kernel/mach_port_mig"
     mach_port_wrappers_real.c -o "$OUT/libsystem_kernel/mach_port_wrappers_raw.o"
 "$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld" -r -arch arm64 \
     -exported_symbol _mach_port_set_attributes \
+    -exported_symbol _mach_port_get_refs \
     "$OUT/libsystem_kernel/mach_port_wrappers_raw.o" \
     -o "$OUT/libsystem_kernel/mach_port_set_attributes.o"
 rm -f "$OUT/libsystem_kernel/mach_port_wrappers_raw.o"
+
+# mig_reply_setup() (DAR-251): IOKitLib.c (libiokituser.dylib) calls it,
+# and nothing owned it. Real libsyscall/mach source, one function, linked
+# whole. (mach_port_get_refs, IOKitLib's other gap, comes from
+# mach_port_wrappers_real.c above.)
+"$CLANG" "${CFLAGS_MACH_PORT[@]}" \
+    "$XNU/libsyscall/mach/mig_reply_setup.c" -o "$OUT/libsystem_kernel/mig_reply_setup.o"
 
 MACH_IPC_EXTRACT="$OUT/libsystem_kernel/mach_ipc_extracted"
 rm -rf "$MACH_IPC_EXTRACT"
@@ -824,6 +832,7 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/cf_mach_port_syscalls.o" "$OUT/libsystem_kernel/mach_port_traps.o" \
     "$OUT/libsystem_kernel/thread_get_special_reply_port_trap.o" \
     "$OUT/libsystem_kernel/mach_portUser.o" "$OUT/libsystem_kernel/mach_port_set_attributes.o" \
+    "$OUT/libsystem_kernel/mig_reply_setup.o" \
     "$OUT/libsystem_kernel/sys___sigaction.o" "$OUT/libsystem_kernel/sigtramp_compat.o" \
     "$OUT/libsystem_kernel/proc_pidinfo_compat.o" \
     "$OUT/libsystem_kernel/voucher_funcptr_compat.o" \

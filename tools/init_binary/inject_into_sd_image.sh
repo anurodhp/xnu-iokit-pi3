@@ -1018,6 +1018,10 @@ install_smoketest tools/userland_staging/libc_build/pthread_main_stack_smoketest
     "  from the root shell; prints a single PASS/FAIL line." \
     "  tools/userland_staging/build_pthread_main_stack_smoketest.sh)"
 
+install_smoketest tools/userland_staging/libc_build/iokitlib_smoketest.macho "usr/local/bin/iokitlib_smoketest" \
+    "= iokitlib_smoketest.macho not built -- run tools/userland_staging/build_iokitlib_smoketest.sh first if wanted, skipping" \
+    "  (DAR-251 IOKitLib API check, prints PASS/FAIL)"
+
 for v in "" "_broken"; do
     install_smoketest "tools/userland_staging/libc_build/sigaction_tramp_smoketest${v}.macho" \
         "usr/local/bin/sigaction_tramp_smoketest${v}" \
