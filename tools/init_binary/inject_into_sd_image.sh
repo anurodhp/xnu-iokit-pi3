@@ -655,15 +655,15 @@ fi
 
 if [ -n "$SKIP_SMOKETESTS" ]; then
     echo "= pthread_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
-elif [ -f tools/userland_staging/pthread_smoketest.macho ]; then
+elif [ -f tools/userland_staging/libc_build/pthread_smoketest.macho ]; then
     mkdir -p "$MNT/bin"
-    cp tools/userland_staging/pthread_smoketest.macho "$MNT/bin/pthread_smoketest"
+    cp tools/userland_staging/libc_build/pthread_smoketest.macho "$MNT/bin/pthread_smoketest"
     chmod 755 "$MNT/bin/pthread_smoketest"
-    echo "+ wrote $(wc -c < tools/userland_staging/pthread_smoketest.macho) bytes to $MNT/bin/pthread_smoketest"
-    echo "  (real libpthread.a smoketest -- now includes a real pthread_create()"
+    echo "+ wrote $(wc -c < tools/userland_staging/libc_build/pthread_smoketest.macho) bytes to $MNT/bin/pthread_smoketest"
+    echo "  (libpthread smoketest, dynamic against libsystem_pthread.dylib (DAR-127) -- real pthread_create()"
     echo "  second thread + contended pthread_mutex under ulock, 2026-08-24)"
 else
-    echo "= tools/userland_staging/pthread_smoketest.macho not built -- run tools/userland_staging/build_libpthread.sh first if wanted, skipping"
+    echo "= tools/userland_staging/libc_build/pthread_smoketest.macho not built -- run tools/userland_staging/build_pthread_smoketest.sh first if wanted, skipping"
 fi
 
 if [ -f tools/userland_staging/dyld.macho ] && [ -f tools/userland_staging/dyld_test_exec.macho ]; then
