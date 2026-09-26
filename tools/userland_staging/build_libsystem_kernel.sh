@@ -432,10 +432,25 @@ MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 # since notifyd's stderr (where dyld's own halt()/console() output
 # really goes) is never wired to /dev/console for a launchd MachServices
 # job or a bare interactive-shell exec alike.
+# X11 client libraries (DAR-383, 2026-09-26): link #9, pathconf #191,
+# readv #120, poll #230, getsockopt #118, shutdown #134, umask #60 are
+# plain generated stubs (bsd/kern/syscalls.master, no NO_SYSCALL_STUB
+# marker); listen #106 and accept #30 ARE NO_SYSCALL_STUB, and on this
+# UNIX-conformance-only arm64 target the generator's ___listen.s/
+# ___accept.s themselves carry the public `.set _listen, ___listen` /
+# `.set _accept, ___accept` aliases (read from the generated .s, not
+# assumed) -- libsyscall/wrappers/legacy/{listen,accept}.c are
+# #ifndef NO_SYSCALL_LEGACY code that real Apple does not build for
+# arm64 either. Real Apple exports all nine from libsystem_kernel. Before
+# this, no dylib exported pathconf/readv/poll/shutdown/umask at all, and
+# link/listen/accept/getsockopt only as incidental private copies
+# (libncurses.dylib, libCoreFoundation.dylib); libXau, libxcb, libX11,
+# libICE and libXt reference them (tools/userland_staging/build_libX*.sh).
 for s in _geteuid _getegid _getuid _getgid _pread _pwrite _fileport_makefd _fileport_makeport \
     _socket _writev ___chmod ___connect_nocancel ___recvmsg_nocancel ___sendmsg_nocancel \
     ___select_nocancel ___sendto_nocancel ___recvfrom_nocancel _fpathconf _kevent _kqueue ___sigaction \
-    _setegid _seteuid _getgroups _setitimer _flock _sync ___reboot ___getlogin _setsid ___setpriority _dup2; do
+    _setegid _seteuid _getgroups _setitimer _flock _sync ___reboot ___getlogin _setsid ___setpriority _dup2 \
+    _link _pathconf _readv _poll _getsockopt _shutdown _umask ___listen ___accept; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
         -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
         -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
@@ -561,6 +576,22 @@ done
     -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
     -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
     "$XNU/libsyscall/custom/__ptrace.s" -o "$OUT/libsystem_kernel/ptrace_trap.o"
+
+# sigaltstack(2)/sigreturn(2) raw traps (DAR-383): both NO_SYSCALL_STUB
+# (bsd/kern/syscalls.master:53 and :184), so, like __pipe/__ptrace above,
+# real Apple hand-writes them: libsyscall/custom/__sigaltstack.s and
+# __sigreturn.s, exporting ___sigaltstack / ___sigreturn. Needed by
+# libplatform's real setjmp family, now built into
+# libsystem_platform.dylib (see build_libsystem_platform.sh):
+# setjmp/arm64/setjmp.s's _setjmp calls ___sigaltstack, and
+# setjmp/generic/sigtramp.c's _sigunaltstack (called by _longjmp) calls
+# ___sigreturn. Real Apple exports both from libsystem_kernel.
+for t in __sigaltstack __sigreturn; do
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -arch arm64 \
+        -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
+        -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
+        "$XNU/libsyscall/custom/${t}.s" -o "$OUT/libsystem_kernel/${t}_trap.o"
+done
 # __pipe.s (above) only exports the private-indirection name `___pipe`
 # (real Apple naming convention, same as __lchown/__platform_sigaction);
 # the real public `_pipe` name needs a thin C forwarder on top -- reused
@@ -856,6 +887,13 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     `# dup2(2) (#90, plain stub), for shutdown(8)'s popen(). Real Apple` \
     `# exports it from libsystem_kernel.` \
     "$OUT/libsystem_kernel/sys_dup2.o" \
+    `# X11 client libraries (DAR-383): see the stub loop's comment.` \
+    "$OUT/libsystem_kernel/sys_link.o" "$OUT/libsystem_kernel/sys_pathconf.o" \
+    "$OUT/libsystem_kernel/sys_readv.o" "$OUT/libsystem_kernel/sys_poll.o" \
+    "$OUT/libsystem_kernel/sys_getsockopt.o" "$OUT/libsystem_kernel/sys_shutdown.o" \
+    "$OUT/libsystem_kernel/sys_umask.o" "$OUT/libsystem_kernel/sys___listen.o" \
+    "$OUT/libsystem_kernel/sys___accept.o" \
+    "$OUT/libsystem_kernel/__sigaltstack_trap.o" "$OUT/libsystem_kernel/__sigreturn_trap.o" \
     "$MACH_IPC_EXTRACT"/*.o
 
 echo "wrote $OUT/system/libsystem_kernel.dylib"

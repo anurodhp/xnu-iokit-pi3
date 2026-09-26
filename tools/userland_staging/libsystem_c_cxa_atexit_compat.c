@@ -78,3 +78,33 @@ void __cxa_finalize(void *dso) {
         }
     }
 }
+
+/* atexit(3) (DAR-383, 2026-09-26: libXau's AuFileName.c:80 is the first
+ * dylib in this tree to call it; before this no dylib exported atexit at
+ * all -- launchd.macho carries its own private copy).
+ *
+ * Real Apple semantics, third_party/Libc/stdlib/FreeBSD/atexit.c:146-166:
+ * atexit() registers an ATEXIT_FN_STD entry with fn_arg = NULL and, on
+ * TARGET_OS_IPHONE (this SDK), fn_dso = NULL (the dladdr() branch at
+ * :156-161 is compiled out); __cxa_finalize() runs it as
+ * fn->fn_ptr.std_func() (:280-281), and only a __cxa_finalize(NULL) --
+ * whose dso-NULL entries match any dso argument there too -- ever runs a
+ * NULL-dso entry. This table stores void (*)(void *) + arg, so the std
+ * function travels as the arg of a trampoline that calls it with no
+ * arguments, giving exactly that call; dso = 0 gives exactly that
+ * matching (__cxa_finalize above runs dso-0 entries for any argument,
+ * the same as a NULL fn_dso in Libc's own loop).
+ *
+ * KNOWN, PRE-EXISTING GAP (not introduced here): this port's exit()
+ * (libc_stdio_process_shims.c) calls only __cleanup (stdio flush) and
+ * then the raw exit trap -- it never calls __cxa_finalize(NULL), so no
+ * atexit()/__cxa_atexit() handler runs at process exit today, exactly as
+ * for every C++ static destructor already registered through this file.
+ * Registration itself is real and correct. */
+static void atexit_std_trampoline(void *func) {
+    ((void (*)(void))func)();
+}
+
+int atexit(void (*func)(void)) {
+    return __cxa_atexit(atexit_std_trampoline, (void *)func, 0);
+}

@@ -434,6 +434,19 @@ rm -f "$EXTRACT/getenv_real_raw.o"
 # step 5, real Apple's own architecture: __cxa_atexit lives in Libc).
 "$CLANG" $SIGLIST_CFLAGS libsystem_c_cxa_atexit_compat.c -o "$EXTRACT/cxa_atexit_compat.o"
 
+# signal(3) / _signal_nobind (DAR-383, X11 client libraries: xtrans's
+# Xtransutil.c:386 GetPeerNetworkId, compiled into libICE, installs a
+# SIGALRM handler with it). Real Apple's home is libsystem_c: Libc's own
+# gen/FreeBSD/signal.c, compiled unmodified. No dylib exported signal()
+# before this (vim/netstat/ed each compile or extract a private copy).
+# -include fbsdcompat/_fbsd_compat_.h is Apple's own mechanism for
+# FreeBSD-derived Libc sources: its line 129 `#define _sigaction
+# sigaction` maps signal.c:64's private-namespace _sigaction() call onto
+# this dylib's real sigaction() (Libc/sys/sigaction.c, DAR-164), and
+# signal.c:69's _sigaction_nobind() is that same file's real export.
+"$CLANG" $SIGLIST_CFLAGS -include "$LIBC/fbsdcompat/_fbsd_compat_.h" \
+    "$LIBC/gen/FreeBSD/signal.c" -o "$EXTRACT/signal.o"
+
 # Real gaps found booting launchd as PID 1 (docs/backlog.md item d10):
 # ICU's own dylibs reference ___chkstk_darwin/strstr/os_log's real
 # never-open-sourced-engine stubs directly, expected from libSystem.
