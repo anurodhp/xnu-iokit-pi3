@@ -440,10 +440,23 @@ MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 # since notifyd's stderr (where dyld's own halt()/console() output
 # really goes) is never wired to /dev/console for a launchd MachServices
 # job or a bare interactive-shell exec alike.
+# ___accept/___listen/___socketpair/___getattrlist added 2026-09-25
+# (DAR-346): all four are NO_SYSCALL_STUB in syscalls.master, and
+# create-syscalls.pl emits them under the private names with the public
+# name as an alias inside the stub (`.set _accept, ___accept`), exactly
+# as Platforms/iPhoneOS/arm64/syscall.map maps them. On arm64 real Apple
+# has no C wrapper on top: libsyscall builds with -DNO_SYSCALL_LEGACY
+# (Libsyscall.xcconfig:27), so wrappers/legacy/{accept,listen,socketpair}.c
+# (the EOPNOTSUPP->ENOTSUP versions) are not compiled. sshd used to carry
+# its own raw copies (sshd_syscalls.c).
+# ___getlogin/___setlogin (same change): the raw traps behind real
+# Libc/gen/FreeBSD/getlogin.c and Libc/gen/setlogin.c, which
+# build_libsystem_c.sh now compiles.
 for s in _geteuid _getegid _getuid _getgid _pread _pwrite _fileport_makefd _fileport_makeport \
     _socket _writev ___chmod ___connect_nocancel ___recvmsg_nocancel ___sendmsg_nocancel \
     ___select_nocancel ___sendto_nocancel ___recvfrom_nocancel _fpathconf _kevent _kqueue ___sigaction \
-    _setegid _seteuid _getgroups _setitimer _flock _sync; do
+    _setegid _seteuid _getgroups _setitimer _flock _sync \
+    ___accept ___listen ___socketpair ___getattrlist ___getlogin ___setlogin; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
         -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
         -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
@@ -803,6 +816,9 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/sys___recvmsg_nocancel.o" "$OUT/libsystem_kernel/sys___sendmsg_nocancel.o" \
     "$OUT/libsystem_kernel/sys___select_nocancel.o" "$OUT/libsystem_kernel/sys___sendto_nocancel.o" \
     "$OUT/libsystem_kernel/sys___recvfrom_nocancel.o" \
+    "$OUT/libsystem_kernel/sys___accept.o" "$OUT/libsystem_kernel/sys___listen.o" \
+    "$OUT/libsystem_kernel/sys___socketpair.o" "$OUT/libsystem_kernel/sys___getattrlist.o" \
+    "$OUT/libsystem_kernel/sys___getlogin.o" "$OUT/libsystem_kernel/sys___setlogin.o" \
     "$OUT/libsystem_kernel/sys_fpathconf.o" "$OUT/libsystem_kernel/nanosleep_compat.o" \
     "$OUT/libsystem_kernel/sys_kevent.o" "$OUT/libsystem_kernel/sys_kqueue.o" \
     "$OUT/libsystem_kernel/pipe_trap.o" "$OUT/libsystem_kernel/pipe_forwarder.o" \

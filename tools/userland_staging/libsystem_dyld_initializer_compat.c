@@ -164,12 +164,22 @@ extern int task_get_special_port(__iokit_mach_port_t task, int which_port,
 struct ProgramVars;
 extern void __libc_program_vars_init(const struct ProgramVars *vars);
 
+/* DAR-225: the main thread's stackaddr/stackbottom come from apple[]'s
+ * main_stack= string. dyld-940 passes apple[] as every initializer's 4th
+ * argument (third_party/dyld/dyld/DyldProcessConfig.h:67,
+ * Loader.cpp:1273), and real libSystem_initializer hands it to
+ * __pthread_init() (third_party/Libsystem/init.c:221). It has to be done
+ * here, not in libsystem_pthread.dylib: dyld marks every
+ * /usr/lib/system/lib* dylib initialized without running its initializers
+ * (third_party/dyld/dyld/DyldAPIs.cpp:3325-3333). */
+extern int pthread_main_thread_init_stack(const char *apple[]);
+
 __attribute__((constructor))
 static void libsystem_call_dyld_initializer(int argc, const char *argv[],
                                             const char *envp[],
                                             const char *apple[],
                                             const struct ProgramVars *vars) {
-    (void)argc; (void)argv; (void)envp; (void)apple;
+    (void)argc; (void)argv; (void)envp;
     __libc_program_vars_init(vars);
     /* Order matters: mach_init() must run before _dyld_initializer(),
      * not after -- _dyld_initializer() itself (real, unmodified dyld
@@ -178,6 +188,7 @@ static void libsystem_call_dyld_initializer(int argc, const char *argv[],
      * mach_vm_map before a call placed after it ever gets a turn. */
     mach_init();
     pthread_main_thread_bootstrap();
+    pthread_main_thread_init_stack(apple);
     _dyld_initializer();
 
     /* Last: needs mach_init()'s mach_task_self_/_task_reply_port AND

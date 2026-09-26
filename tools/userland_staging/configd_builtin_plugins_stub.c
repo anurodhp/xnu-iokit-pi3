@@ -213,7 +213,21 @@
  *   libSystemConfiguration.dylib, and eventmon.o's own undefined-symbol
  *   list now shows `_os_log_pack_size_impl` in its place.
  *
- *   HONEST CAVEAT: this pass did not run a QEMU boot (per this ticket's
+ *   VERIFIED 2026-09-25 (DAR-267 closed): a QEMU boot of configd built
+ *   with a constructor that sets `_sc_debug = 1` (linked directly on
+ *   configd.macho's link line -- inside libconfigd.a an unreferenced
+ *   constructor is never pulled in) runs every plugin load() through its
+ *   debug SC_log() calls, including eventmon.c:834's
+ *   `CFBundleGetIdentifier(bundle)`, for KernelEventMonitor,
+ *   LinkConfiguration and PreferencesMonitor. No crash, configd stays up,
+ *   en0 keeps its lease. The value it prints equals plugin_support.c:397's
+ *   "adding %@" bundle-ID pointer, so the bundle and its identifier are
+ *   both real (%@ renders as %p here, see sc_log_pack_compat.c). A
+ *   DYLD_INSERT_LIBRARIES dylib set through the configd plist's
+ *   EnvironmentVariables did NOT take effect, so use the link-line
+ *   constructor for this kind of test.
+ *
+ *   Original caveat, kept for history: this pass did not run a QEMU boot (per this ticket's
  *   own instructions -- another agent may be using QEMU concurrently).
  *   The double-evaluation bug is real and independently worth fixing
  *   (Apple-parity deviation, doubles real work -- including a full extra

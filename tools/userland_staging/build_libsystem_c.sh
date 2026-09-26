@@ -323,6 +323,14 @@ done
     "$OUT/crt_externs_raw.o" "$OUT/program_vars_compat_raw.o" \
     -o "$EXTRACT/crt_externs.o"
 rm -f "$OUT/crt_externs_raw.o" "$OUT/program_vars_compat_raw.o"
+
+# DAR-346: real getlogin()/getlogin_r() and setlogin() -- Libc's own home
+# for both. setlogin.c clears getlogin.c's cached __logname under
+# __logname_mutex, so the two must live in the same image. Their raw
+# traps (___getlogin/___setlogin) are in libsystem_kernel.dylib.
+"$CLANG" $SIGLIST_CFLAGS -I "$LIBC/fbsdcompat" -I "$LIBC/darwin" \
+    "$LIBC/gen/FreeBSD/getlogin.c" -o "$EXTRACT/getlogin.o"
+"$CLANG" $SIGLIST_CFLAGS "$LIBC/gen/setlogin.c" -o "$EXTRACT/setlogin.o"
 # os_assumes: the 7 real extern functions third_party/Libc/os/assumes.h's
 # macros call (see os_assumes_compat.c's own header for why the real
 # assumes.c body is curated rather than compiled). Moved here 2026-08-29
@@ -836,6 +844,13 @@ done
 # libdispatch.dylib reexports THIS dylib, so this dylib cannot also need
 # a symbol from it) unlike launchd's own richer private copy.
 "$CLANG" $SIGLIST_CFLAGS libsystem_c_fork_compat.c -o "$EXTRACT/fork_compat.o"
+
+# DAR-130: real _libc_fork_child() (third_party/Libc/sys/_libc_fork_child.c),
+# called from fork()'s child side above. Its three callees:
+# _arc4_fork_child (arc4random.o, already here), __environ_lock_fork_child
+# (environ_lock_compat.c) and _init_clock_port (libsystem_c_clock_port_compat.c).
+"$CLANG" $SIGLIST_CFLAGS "$LIBC/sys/_libc_fork_child.c" -o "$EXTRACT/libc_fork_child.o"
+"$CLANG" $SIGLIST_CFLAGS libsystem_c_clock_port_compat.c -o "$EXTRACT/clock_port_compat.o"
 
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libsystem_c.dylib"
