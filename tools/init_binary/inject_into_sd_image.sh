@@ -102,7 +102,7 @@ fi
 # mount outright; fsck_hfs replays it and the retry succeeds.
 if ! diskutil mount "$SLICE"; then
     echo "= $SLICE would not mount (dirty journal from a killed/panicked guest) -- running fsck_hfs"
-    fsck_hfs -fy "/dev/r${SLICE#/dev/}" || true
+    fsck_hfs -fy "/dev/r${SLICE#/dev/}"
     diskutil mount "$SLICE"
 fi
 MNT=$(diskutil info "$SLICE" | awk -F': +' '/Mount Point/{print $2}')
@@ -123,7 +123,7 @@ fi
 if mount | grep -qE "on ${MNT} .*read-only"; then
     echo "= $MNT mounted read-only (dirty journal, almost certainly a prior guest panic) -- running fsck_hfs"
     diskutil unmount "$SLICE" >/dev/null 2>&1 || true
-    fsck_hfs -fy "/dev/r${SLICE#/dev/}" || true
+    fsck_hfs -fy "/dev/r${SLICE#/dev/}"
     diskutil mount "$SLICE"
     MNT=$(diskutil info "$SLICE" | awk -F': +' '/Mount Point/{print $2}')
     if mount | grep -qE "on ${MNT} .*read-only"; then
@@ -653,18 +653,48 @@ else
     echo "= tools/ulock_kthread_test/ulock_kthread_test.macho not built -- run tools/ulock_kthread_test/build.py first if wanted, skipping"
 fi
 
-if [ -n "$SKIP_SMOKETESTS" ]; then
-    echo "= pthread_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
-elif [ -f tools/userland_staging/pthread_smoketest.macho ]; then
-    mkdir -p "$MNT/bin"
-    cp tools/userland_staging/pthread_smoketest.macho "$MNT/bin/pthread_smoketest"
-    chmod 755 "$MNT/bin/pthread_smoketest"
-    echo "+ wrote $(wc -c < tools/userland_staging/pthread_smoketest.macho) bytes to $MNT/bin/pthread_smoketest"
-    echo "  (real libpthread.a smoketest -- now includes a real pthread_create()"
-    echo "  second thread + contended pthread_mutex under ulock, 2026-08-24)"
-else
-    echo "= tools/userland_staging/pthread_smoketest.macho not built -- run tools/userland_staging/build_libpthread.sh first if wanted, skipping"
+# install_smoketest SRC DEST MISSING_MSG [NOTE...] (DAR-348)
+#
+# The one way this script installs a QEMU-only *_smoketest binary. It
+# honours SKIP_SMOKETESTS (real-hardware images; smoketests are dev
+# diagnostics, not userland), copies SRC to $MNT/DEST mode 755, and echoes
+# each NOTE. It always returns 0 (this script runs under set -e) and sets
+# SMOKETEST_INSTALLED=1 only when it actually installed the file, for a
+# caller with extra setup to test.
+# Every smoketest used to repeat this guard by hand (18 copies), which made
+# a forgotten guard easy; the self-check below now rejects any other copy
+# of a *_smoketest binary in this file.
+install_smoketest() {
+    local src="$1" dest="$2" missing="$3"
+    shift 3
+    SMOKETEST_INSTALLED=0
+    if [ -n "$SKIP_SMOKETESTS" ]; then
+        echo "= $(basename "$src") skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
+        return 0
+    fi
+    if [ ! -f "$src" ]; then
+        echo "$missing"
+        return 0
+    fi
+    mkdir -p "$(dirname "$MNT/$dest")"
+    cp "$src" "$MNT/$dest"
+    chmod 755 "$MNT/$dest"
+    echo "+ wrote $(wc -c < "$src") bytes to /$dest"
+    local note
+    for note in "$@"; do
+        echo "$note"
+    done
+    SMOKETEST_INSTALLED=1
+}
+if grep -nE '^[^#]*[[:space:]]cp[[:space:]].*_smoketest' tools/init_binary/inject_into_sd_image.sh | grep -v 'install_smoketest' >&2; then
+    echo "error: the line(s) above copy a *_smoketest binary directly; use install_smoketest so SKIP_SMOKETESTS is honoured" >&2
+    exit 1
 fi
+
+install_smoketest tools/userland_staging/pthread_smoketest.macho "bin/pthread_smoketest" \
+    "= tools/userland_staging/pthread_smoketest.macho not built -- run tools/userland_staging/build_libpthread.sh first if wanted, skipping" \
+    "  (real libpthread.a smoketest -- now includes a real pthread_create()" \
+    "  second thread + contended pthread_mutex under ulock, 2026-08-24)"
 
 if [ -f tools/userland_staging/dyld.macho ] && [ -f tools/userland_staging/dyld_test_exec.macho ]; then
     mkdir -p "$MNT/usr/lib" "$MNT/bin"
@@ -914,151 +944,72 @@ chmod 644 "$MNT/Library/LaunchDaemons/org.puredarwin.fake-hwclock.plist"
 [ -f "$MNT/var/db/fake-hwclock" ] || date +%s > "$MNT/var/db/fake-hwclock"
 echo "+ wrote fake-hwclock + org.puredarwin.fake-hwclock.plist (DAR-330)"
 
-if [ -n "$SKIP_SMOKETESTS" ]; then
-    echo "= sc_client_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
-elif [ -f tools/userland_staging/sc_client_smoketest.macho ]; then
-    mkdir -p "$MNT/usr/local/bin"
-    cp tools/userland_staging/sc_client_smoketest.macho \
-        "$MNT/usr/local/bin/sc_client_smoketest"
-    chmod 755 "$MNT/usr/local/bin/sc_client_smoketest"
-    echo "+ wrote sc_client_smoketest to $MNT/usr/local/bin/"
-    echo "  (real libSystemConfiguration.dylib client -- SCDynamicStoreCreate()"
-    echo "  against the real configd; tools/userland_staging/"
-    echo "  build_libsystemconfiguration_client.sh. Installed as of DAR-300, which"
-    echo "  is what made it loadable: it used to need a CFURL flat-namespace"
-    echo "  definition it did not carry, and linked against a dyld_stub_binder"
-    echo "  this project's libSystem does not export.)"
-else
-    echo "= sc_client_smoketest.macho not built -- run tools/userland_staging/build_libsystemconfiguration_client.sh first if wanted, skipping"
-fi
+install_smoketest tools/userland_staging/sc_client_smoketest.macho "usr/local/bin/sc_client_smoketest" \
+    "= sc_client_smoketest.macho not built -- run tools/userland_staging/build_libsystemconfiguration_client.sh first if wanted, skipping" \
+    "  (real libSystemConfiguration.dylib client -- SCDynamicStoreCreate()" \
+    "  against the real configd; tools/userland_staging/" \
+    "  build_libsystemconfiguration_client.sh. Installed as of DAR-300, which" \
+    "  is what made it loadable: it used to need a CFURL flat-namespace" \
+    "  definition it did not carry, and linked against a dyld_stub_binder" \
+    "  this project's libSystem does not export.)"
 
-if [ -n "$SKIP_SMOKETESTS" ]; then
-    echo "= notifyd_roundtrip_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
-elif [ -f tools/userland_staging/libc_build/notifyd_roundtrip_smoketest.macho ]; then
-    mkdir -p "$MNT/usr/local/bin"
-    cp tools/userland_staging/libc_build/notifyd_roundtrip_smoketest.macho \
-        "$MNT/usr/local/bin/notifyd_roundtrip_smoketest"
-    chmod 755 "$MNT/usr/local/bin/notifyd_roundtrip_smoketest"
-    echo "+ wrote notifyd_roundtrip_smoketest to $MNT/usr/local/bin/"
-    echo "  (DAR-167 real end-to-end verification client, run by hand from the root"
-    echo "  shell post-boot -- tools/userland_staging/build_notifyd_smoketest.sh)"
-else
-    echo "= notifyd_roundtrip_smoketest.macho not built -- run tools/userland_staging/build_notifyd_smoketest.sh first if wanted, skipping"
-fi
+install_smoketest tools/userland_staging/libc_build/notifyd_roundtrip_smoketest.macho "usr/local/bin/notifyd_roundtrip_smoketest" \
+    "= notifyd_roundtrip_smoketest.macho not built -- run tools/userland_staging/build_notifyd_smoketest.sh first if wanted, skipping" \
+    "  (DAR-167 real end-to-end verification client, run by hand from the root" \
+    "  shell post-boot -- tools/userland_staging/build_notifyd_smoketest.sh)"
 
-if [ -n "$SKIP_SMOKETESTS" ]; then
-    echo "= res_init_dnsinfo_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
-elif [ -f tools/userland_staging/libc_build/res_init_dnsinfo_smoketest.macho ]; then
-    mkdir -p "$MNT/usr/local/bin"
-    cp tools/userland_staging/libc_build/res_init_dnsinfo_smoketest.macho \
-        "$MNT/usr/local/bin/res_init_dnsinfo_smoketest"
-    chmod 755 "$MNT/usr/local/bin/res_init_dnsinfo_smoketest"
-    echo "+ wrote res_init_dnsinfo_smoketest to $MNT/usr/local/bin/"
-    echo "  (DAR-285: proves the STOCK libresolv path -- dns_configuration_copy()"
-    echo "  and res_init() -- really sees the DNS server configd publishes after a"
-    echo "  real DHCP lease. Run by hand from the root shell post-boot, AFTER"
-    echo "  'ipconfig set en0 DHCP' has completed; before a lease exists it"
-    echo "  correctly reports no configuration. Built by"
-    echo "  tools/userland_staging/build_res_init_dnsinfo_smoketest.sh)"
-else
-    echo "= res_init_dnsinfo_smoketest.macho not built -- run tools/userland_staging/build_res_init_dnsinfo_smoketest.sh first if wanted, skipping"
-fi
+install_smoketest tools/userland_staging/libc_build/res_init_dnsinfo_smoketest.macho "usr/local/bin/res_init_dnsinfo_smoketest" \
+    "= res_init_dnsinfo_smoketest.macho not built -- run tools/userland_staging/build_res_init_dnsinfo_smoketest.sh first if wanted, skipping" \
+    "  (DAR-285: proves the STOCK libresolv path -- dns_configuration_copy()" \
+    "  and res_init() -- really sees the DNS server configd publishes after a" \
+    "  real DHCP lease. Run by hand from the root shell post-boot, AFTER" \
+    "  'ipconfig set en0 DHCP' has completed; before a lease exists it" \
+    "  correctly reports no configuration. Built by" \
+    "  tools/userland_staging/build_res_init_dnsinfo_smoketest.sh)"
 
-if [ -n "$SKIP_SMOKETESTS" ]; then
-    echo "= dns_getaddrinfo_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
-elif [ -f tools/userland_staging/libc_build/dns_getaddrinfo_smoketest.macho ]; then
-    mkdir -p "$MNT/usr/local/bin"
-    cp tools/userland_staging/libc_build/dns_getaddrinfo_smoketest.macho \
-        "$MNT/usr/local/bin/dns_getaddrinfo_smoketest"
-    chmod 755 "$MNT/usr/local/bin/dns_getaddrinfo_smoketest"
-    echo "+ wrote dns_getaddrinfo_smoketest to $MNT/usr/local/bin/"
-    echo "  (DAR-182: real end-to-end DNS query over a real socket via real"
-    echo "  getaddrinfo()/gethostbyname2() from libinfo.dylib, resolving through"
-    echo "  the static /etc/resolv.conf this script writes (nameserver 10.0.2.3,"
-    echo "  QEMU's usermode DNS proxy) since no real DHCP lease exists. Run by"
-    echo "  hand from the root shell post-boot. Built by"
-    echo "  tools/userland_staging/build_dns_getaddrinfo_smoketest.sh)"
-else
-    echo "= dns_getaddrinfo_smoketest.macho not built -- run tools/userland_staging/build_dns_getaddrinfo_smoketest.sh first if wanted, skipping"
-fi
+install_smoketest tools/userland_staging/libc_build/dns_getaddrinfo_smoketest.macho "usr/local/bin/dns_getaddrinfo_smoketest" \
+    "= dns_getaddrinfo_smoketest.macho not built -- run tools/userland_staging/build_dns_getaddrinfo_smoketest.sh first if wanted, skipping" \
+    "  (DAR-182: real end-to-end DNS query over a real socket via real" \
+    "  getaddrinfo()/gethostbyname2() from libinfo.dylib, resolving through" \
+    "  the static /etc/resolv.conf this script writes (nameserver 10.0.2.3," \
+    "  QEMU's usermode DNS proxy) since no real DHCP lease exists. Run by" \
+    "  hand from the root shell post-boot. Built by" \
+    "  tools/userland_staging/build_dns_getaddrinfo_smoketest.sh)"
 
-if [ -n "$SKIP_SMOKETESTS" ]; then
-    echo "= libedit_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
-elif [ -f tools/userland_staging/libedit_smoketest.macho ]; then
-    mkdir -p "$MNT/usr/local/bin"
-    cp tools/userland_staging/libedit_smoketest.macho \
-        "$MNT/usr/local/bin/libedit_smoketest"
-    chmod 755 "$MNT/usr/local/bin/libedit_smoketest"
-    echo "+ wrote libedit_smoketest to $MNT/usr/local/bin/"
-    echo "  (DAR-286: replays scutil.c's own real libedit setup sequence and"
-    echo "  reports which branch scutil would take -- keep the editor, or tear it"
-    echo "  down and fall back to fgets(). Also does a real el_gets() read from a"
-    echo "  real file. Run by hand from the root shell post-boot. Built by"
-    echo "  tools/userland_staging/build_libedit.sh)"
-else
-    echo "= libedit_smoketest.macho not built -- run tools/userland_staging/build_libedit.sh first if wanted, skipping"
-fi
+install_smoketest tools/userland_staging/libedit_smoketest.macho "usr/local/bin/libedit_smoketest" \
+    "= libedit_smoketest.macho not built -- run tools/userland_staging/build_libedit.sh first if wanted, skipping" \
+    "  (DAR-286: replays scutil.c's own real libedit setup sequence and" \
+    "  reports which branch scutil would take -- keep the editor, or tear it" \
+    "  down and fall back to fgets(). Also does a real el_gets() read from a" \
+    "  real file. Run by hand from the root shell post-boot. Built by" \
+    "  tools/userland_staging/build_libedit.sh)"
 
-if [ -n "$SKIP_SMOKETESTS" ]; then
-    echo "= tsd_vm_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
-elif [ -f tools/userland_staging/libc_build/tsd_vm_smoketest.macho ]; then
-    mkdir -p "$MNT/usr/local/bin"
-    cp tools/userland_staging/libc_build/tsd_vm_smoketest.macho \
-        "$MNT/usr/local/bin/tsd_vm_smoketest"
-    chmod 755 "$MNT/usr/local/bin/tsd_vm_smoketest"
-    echo "+ wrote tsd_vm_smoketest to $MNT/usr/local/bin/"
-    echo "  (DAR-258 fresh-thread TSD hygiene + mmap(MAP_ANON) zero-fill check,"
-    echo "  run by hand from the root shell post-boot --"
-    echo "  tools/userland_staging/build_tsd_vm_smoketest.sh)"
-else
-    echo "= tsd_vm_smoketest.macho not built -- run tools/userland_staging/build_tsd_vm_smoketest.sh first if wanted, skipping"
-fi
+install_smoketest tools/userland_staging/libc_build/tsd_vm_smoketest.macho "usr/local/bin/tsd_vm_smoketest" \
+    "= tsd_vm_smoketest.macho not built -- run tools/userland_staging/build_tsd_vm_smoketest.sh first if wanted, skipping" \
+    "  (DAR-258 fresh-thread TSD hygiene + mmap(MAP_ANON) zero-fill check," \
+    "  run by hand from the root shell post-boot --" \
+    "  tools/userland_staging/build_tsd_vm_smoketest.sh)"
 
-if [ -n "$SKIP_SMOKETESTS" ]; then
-    echo "= tlv_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
-elif [ -f tools/userland_staging/libc_build/tlv_smoketest.macho ]; then
-    mkdir -p "$MNT/usr/local/bin"
-    cp tools/userland_staging/libc_build/tlv_smoketest.macho \
-        "$MNT/usr/local/bin/tlv_smoketest"
-    chmod 755 "$MNT/usr/local/bin/tlv_smoketest"
-    echo "+ wrote tlv_smoketest to $MNT/usr/local/bin/"
-    echo "  (DAR-279 real arm64 __thread / Thread-Local Variable check --"
-    echo "  initial-content copy, per-thread separation, persistence across"
-    echo "  another thread's use. Run by hand from the root shell post-boot;"
-    echo "  prints a single PASS/FAIL line. tools/userland_staging/"
-    echo "  build_tlv_smoketest.sh)"
-else
-    echo "= tlv_smoketest.macho not built -- run tools/userland_staging/build_tlv_smoketest.sh first if wanted, skipping"
-fi
+install_smoketest tools/userland_staging/libc_build/tlv_smoketest.macho "usr/local/bin/tlv_smoketest" \
+    "= tlv_smoketest.macho not built -- run tools/userland_staging/build_tlv_smoketest.sh first if wanted, skipping" \
+    "  (DAR-279 real arm64 __thread / Thread-Local Variable check --" \
+    "  initial-content copy, per-thread separation, persistence across" \
+    "  another thread's use. Run by hand from the root shell post-boot;" \
+    "  prints a single PASS/FAIL line. tools/userland_staging/" \
+    "  build_tlv_smoketest.sh)"
 
-if [ -n "$SKIP_SMOKETESTS" ]; then
-    echo "= pthread_cond_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
-elif [ -f tools/userland_staging/libc_build/pthread_cond_smoketest.macho ]; then
-    mkdir -p "$MNT/usr/local/bin"
-    cp tools/userland_staging/libc_build/pthread_cond_smoketest.macho \
-        "$MNT/usr/local/bin/pthread_cond_smoketest"
-    chmod 755 "$MNT/usr/local/bin/pthread_cond_smoketest"
-    echo "+ wrote pthread_cond_smoketest to $MNT/usr/local/bin/"
-    echo "  (DAR-280 real mutex + condition-variable handoff check -- the"
-    echo "  exact textbook pattern that used to SIGSEGV inside"
-    echo "  pthread_cond_wait on far 0x26. Run by hand from the root shell"
-    echo "  post-boot; prints a single PASS/FAIL line. tools/userland_staging/"
-    echo "  build_pthread_cond_smoketest.sh)"
-else
-    echo "= pthread_cond_smoketest.macho not built -- run tools/userland_staging/build_pthread_cond_smoketest.sh first if wanted, skipping"
-fi
+install_smoketest tools/userland_staging/libc_build/pthread_cond_smoketest.macho "usr/local/bin/pthread_cond_smoketest" \
+    "= pthread_cond_smoketest.macho not built -- run tools/userland_staging/build_pthread_cond_smoketest.sh first if wanted, skipping" \
+    "  (DAR-280 real mutex + condition-variable handoff check -- the" \
+    "  exact textbook pattern that used to SIGSEGV inside" \
+    "  pthread_cond_wait on far 0x26. Run by hand from the root shell" \
+    "  post-boot; prints a single PASS/FAIL line. tools/userland_staging/" \
+    "  build_pthread_cond_smoketest.sh)"
 
 for v in "" "_broken"; do
-    src="tools/userland_staging/libc_build/sigaction_tramp_smoketest${v}.macho"
-    if [ -f "$src" ]; then
-        mkdir -p "$MNT/usr/local/bin"
-        cp "$src" "$MNT/usr/local/bin/sigaction_tramp_smoketest${v}"
-        chmod 755 "$MNT/usr/local/bin/sigaction_tramp_smoketest${v}"
-        echo "+ wrote sigaction_tramp_smoketest${v} to $MNT/usr/local/bin/"
-    else
-        echo "= sigaction_tramp_smoketest${v}.macho not built -- run"
-        echo "  tools/userland_staging/build_sigaction_tramp_smoketest.sh first if wanted, skipping"
-    fi
+    install_smoketest "tools/userland_staging/libc_build/sigaction_tramp_smoketest${v}.macho" \
+        "usr/local/bin/sigaction_tramp_smoketest${v}" \
+        "= sigaction_tramp_smoketest${v}.macho not built -- run tools/userland_staging/build_sigaction_tramp_smoketest.sh first if wanted, skipping"
 done
 # Both variants on purpose (DAR-262): the "_broken" one is linked against
 # sigaction_broken_shim_compat.c, a checked-in copy of the pre-fix
@@ -1076,37 +1027,19 @@ done
 # (sigaction_tramp_smoketest, no suffix) is the one to put in an
 # automated sequence; it exits 0 and is safe to chain.
 
-if [ -n "$SKIP_SMOKETESTS" ]; then
-    echo "= mach_port_construct_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
-elif [ -f tools/userland_staging/libc_build/mach_port_construct_smoketest.macho ]; then
-    mkdir -p "$MNT/usr/local/bin"
-    cp tools/userland_staging/libc_build/mach_port_construct_smoketest.macho \
-        "$MNT/usr/local/bin/mach_port_construct_smoketest"
-    chmod 755 "$MNT/usr/local/bin/mach_port_construct_smoketest"
-    echo "+ wrote mach_port_construct_smoketest to $MNT/usr/local/bin/"
-    echo "  (DAR-261 mach_port_construct/insert_right/MPO_QLIMIT probe plus the"
-    echo "  argv-driven abort() sub-modes abort-main/abort-assert/abort-thread/"
-    echo "  raw-kill, run by hand from the root shell post-boot --"
-    echo "  tools/userland_staging/build_mach_port_construct_smoketest.sh)"
-else
-    echo "= mach_port_construct_smoketest.macho not built -- run tools/userland_staging/build_mach_port_construct_smoketest.sh first if wanted, skipping"
-fi
+install_smoketest tools/userland_staging/libc_build/mach_port_construct_smoketest.macho "usr/local/bin/mach_port_construct_smoketest" \
+    "= mach_port_construct_smoketest.macho not built -- run tools/userland_staging/build_mach_port_construct_smoketest.sh first if wanted, skipping" \
+    "  (DAR-261 mach_port_construct/insert_right/MPO_QLIMIT probe plus the" \
+    "  argv-driven abort() sub-modes abort-main/abort-assert/abort-thread/" \
+    "  raw-kill, run by hand from the root shell post-boot --" \
+    "  tools/userland_staging/build_mach_port_construct_smoketest.sh)"
 
-if [ -n "$SKIP_SMOKETESTS" ]; then
-    echo "= dispatch_machport_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
-elif [ -f tools/userland_staging/libc_build/dispatch_machport_smoketest.macho ]; then
-    mkdir -p "$MNT/usr/local/bin"
-    cp tools/userland_staging/libc_build/dispatch_machport_smoketest.macho \
-        "$MNT/usr/local/bin/dispatch_machport_smoketest"
-    chmod 755 "$MNT/usr/local/bin/dispatch_machport_smoketest"
-    echo "+ wrote dispatch_machport_smoketest to $MNT/usr/local/bin/"
-    echo "  (DAR-266/DAR-268 EVFILT_MACHPORT dispatch-source probe, argv modes"
-    echo "  mt/proc/recv-create/recv-resume/recv-block/recv-deliver/notify/all,"
-    echo "  run by hand from the root shell post-boot --"
-    echo "  tools/userland_staging/build_dispatch_machport_smoketest.sh)"
-else
-    echo "= dispatch_machport_smoketest.macho not built -- run tools/userland_staging/build_dispatch_machport_smoketest.sh first if wanted, skipping"
-fi
+install_smoketest tools/userland_staging/libc_build/dispatch_machport_smoketest.macho "usr/local/bin/dispatch_machport_smoketest" \
+    "= dispatch_machport_smoketest.macho not built -- run tools/userland_staging/build_dispatch_machport_smoketest.sh first if wanted, skipping" \
+    "  (DAR-266/DAR-268 EVFILT_MACHPORT dispatch-source probe, argv modes" \
+    "  mt/proc/recv-create/recv-resume/recv-block/recv-deliver/notify/all," \
+    "  run by hand from the root shell post-boot --" \
+    "  tools/userland_staging/build_dispatch_machport_smoketest.sh)"
 
 if [ -f tools/userland_staging/configd.macho ]; then
     mkdir -p "$MNT/usr/libexec" "$MNT/Library/LaunchDaemons"
@@ -1412,56 +1345,29 @@ if [ -f tools/userland_staging/libc_build/libobjc.A.dylib ]; then
     echo "  (DAR-236 -- full real objc4 runtime, real Apple product name/path,"
     echo "  tools/userland_staging/build_objc4.sh; not yet wired into"
     echo "  configd.macho/IPMonitor.m/QoSMarking.m, that's DAR-170's job)"
-    if [ -f tools/userland_staging/objc4_smoketest.macho ]; then
-        cp tools/userland_staging/objc4_smoketest.macho "$MNT/bin/objc4_smoketest"
-        chmod 755 "$MNT/bin/objc4_smoketest"
-        echo "+ wrote $(wc -c < tools/userland_staging/objc4_smoketest.macho) bytes to $MNT/bin/objc4_smoketest"
-        echo "  (real minimal Objective-C smoketest -- one @interface/@implementation,"
-        echo "  real objc_msgSend dispatch, see tools/userland_staging/objc4_smoketest.m)"
-    fi
+    install_smoketest tools/userland_staging/objc4_smoketest.macho "bin/objc4_smoketest" \
+        "= tools/userland_staging/objc4_smoketest.macho not built -- run tools/userland_staging/build_objc4.sh first if wanted, skipping" \
+        "  (real minimal Objective-C smoketest -- one @interface/@implementation," \
+        "  real objc_msgSend dispatch, see tools/userland_staging/objc4_smoketest.m)"
 else
     echo "= tools/userland_staging/libc_build/libobjc.A.dylib not built -- run tools/userland_staging/build_objc4.sh first if wanted, skipping"
 fi
 
-if [ -n "$SKIP_SMOKETESTS" ]; then
-    echo "= libcxxabi_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
-elif [ -f tools/userland_staging/libcxxabi_smoketest.macho ]; then
-    mkdir -p "$MNT/bin"
-    cp tools/userland_staging/libcxxabi_smoketest.macho "$MNT/bin/libcxxabi_smoketest"
-    chmod 755 "$MNT/bin/libcxxabi_smoketest"
-    echo "+ wrote $(wc -c < tools/userland_staging/libcxxabi_smoketest.macho) bytes to $MNT/bin/libcxxabi_smoketest"
-    echo "  (real LLVM libc++abi smoketest -- dynamic_cast/RTTI/operator"
-    echo "  new+delete OK; real throw/catch reported non-fatally, see"
-    echo "  tools/userland_staging/llvm_libcxxabi_smoketest.cpp)"
-else
-    echo "= tools/userland_staging/libcxxabi_smoketest.macho not built -- run tools/userland_staging/build_llvm_libcxxabi.sh first if wanted, skipping"
-fi
+install_smoketest tools/userland_staging/libcxxabi_smoketest.macho "bin/libcxxabi_smoketest" \
+    "= tools/userland_staging/libcxxabi_smoketest.macho not built -- run tools/userland_staging/build_llvm_libcxxabi.sh first if wanted, skipping" \
+    "  (real LLVM libc++abi smoketest -- dynamic_cast/RTTI/operator" \
+    "  new+delete OK; real throw/catch reported non-fatally, see" \
+    "  tools/userland_staging/llvm_libcxxabi_smoketest.cpp)"
 
-if [ -n "$SKIP_SMOKETESTS" ]; then
-    echo "= libcxx_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
-elif [ -f tools/userland_staging/libcxx_smoketest.macho ]; then
-    mkdir -p "$MNT/bin"
-    cp tools/userland_staging/libcxx_smoketest.macho "$MNT/bin/libcxx_smoketest"
-    chmod 755 "$MNT/bin/libcxx_smoketest"
-    echo "+ wrote $(wc -c < tools/userland_staging/libcxx_smoketest.macho) bytes to $MNT/bin/libcxx_smoketest"
-    echo "  (real LLVM libc++ smoketest -- std::vector/sort/string/"
-    echo "  shared_ptr, see tools/userland_staging/llvm_libcxx_smoketest.cpp)"
-else
-    echo "= tools/userland_staging/libcxx_smoketest.macho not built -- run tools/userland_staging/build_llvm_libcxx.sh first if wanted, skipping"
-fi
+install_smoketest tools/userland_staging/libcxx_smoketest.macho "bin/libcxx_smoketest" \
+    "= tools/userland_staging/libcxx_smoketest.macho not built -- run tools/userland_staging/build_llvm_libcxx.sh first if wanted, skipping" \
+    "  (real LLVM libc++ smoketest -- std::vector/sort/string/" \
+    "  shared_ptr, see tools/userland_staging/llvm_libcxx_smoketest.cpp)"
 
-if [ -n "$SKIP_SMOKETESTS" ]; then
-    echo "= kqueue_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
-elif [ -f tools/userland_staging/libc_build/kqueue_smoketest.macho ]; then
-    mkdir -p "$MNT/bin"
-    cp tools/userland_staging/libc_build/kqueue_smoketest.macho "$MNT/bin/kqueue_smoketest"
-    chmod 755 "$MNT/bin/kqueue_smoketest"
-    echo "+ wrote $(wc -c < tools/userland_staging/libc_build/kqueue_smoketest.macho) bytes to $MNT/bin/kqueue_smoketest"
-    echo "  (real kqueue()/kevent() EVFILT_TIMER round-trip -- Phase 6.6"
-    echo "  libdispatch prereq, see tools/userland_staging/kqueue_smoketest.c)"
-else
-    echo "= tools/userland_staging/libc_build/kqueue_smoketest.macho not built -- run tools/userland_staging/build_kqueue_smoketest.sh first if wanted, skipping"
-fi
+install_smoketest tools/userland_staging/libc_build/kqueue_smoketest.macho "bin/kqueue_smoketest" \
+    "= tools/userland_staging/libc_build/kqueue_smoketest.macho not built -- run tools/userland_staging/build_kqueue_smoketest.sh first if wanted, skipping" \
+    "  (real kqueue()/kevent() EVFILT_TIMER round-trip -- Phase 6.6" \
+    "  libdispatch prereq, see tools/userland_staging/kqueue_smoketest.c)"
 
 # DAR-200: the real EVFILT_READ / EVFILT_PROC / select()-on-a-kqueue-fd
 # test (tools/userland_staging/kqueue_socket_smoketest.c, built by
@@ -1470,27 +1376,20 @@ fi
 # there is currently no login prompt to run it from by hand (that being
 # DAR-200's own second symptom) but it is still a diagnostic, not part
 # of the real boot.
-if [ -n "$SKIP_SMOKETESTS" ]; then
-    echo "= kqueue_socket_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
-elif [ -f tools/userland_staging/libc_build/kqueue_socket_smoketest.macho ]; then
-    mkdir -p "$MNT/bin"
-    cp tools/userland_staging/libc_build/kqueue_socket_smoketest.macho "$MNT/bin/kqueue_socket_smoketest"
-    chmod 755 "$MNT/bin/kqueue_socket_smoketest"
-    echo "+ wrote $(wc -c < tools/userland_staging/libc_build/kqueue_socket_smoketest.macho) bytes to $MNT/bin/kqueue_socket_smoketest"
-    echo "  (real select()-on-a-kqueue-fd + EVFILT_READ/AF_UNIX + EVFILT_PROC"
-    echo "  test, DAR-200 -- see tools/userland_staging/kqueue_socket_smoketest.c)"
+install_smoketest tools/userland_staging/libc_build/kqueue_socket_smoketest.macho "bin/kqueue_socket_smoketest" \
+    "= tools/userland_staging/libc_build/kqueue_socket_smoketest.macho not built -- run tools/userland_staging/build_kqueue_socket_smoketest.sh first if wanted, skipping" \
+    "  (real select()-on-a-kqueue-fd + EVFILT_READ/AF_UNIX + EVFILT_PROC" \
+    "  test, DAR-200 -- see tools/userland_staging/kqueue_socket_smoketest.c)"
+if [ "$SMOKETEST_INSTALLED" = 1 ]; then
     if [ "${KQUEUE_SOCKET_SMOKETEST:-0}" = "1" ]; then
         mkdir -p "$MNT/Library/LaunchDaemons"
         cp tools/userland_staging/org.puredarwin.kqueue-socket-smoketest.plist \
             "$MNT/Library/LaunchDaemons/org.puredarwin.kqueue-socket-smoketest.plist"
         chmod 644 "$MNT/Library/LaunchDaemons/org.puredarwin.kqueue-socket-smoketest.plist"
-        echo "+ wrote org.puredarwin.kqueue-socket-smoketest.plist to $MNT/Library/LaunchDaemons/ (KQUEUE_SOCKET_SMOKETEST=1)"
     else
         rm -f "$MNT/Library/LaunchDaemons/org.puredarwin.kqueue-socket-smoketest.plist"
         echo "= org.puredarwin.kqueue-socket-smoketest.plist NOT installed (set KQUEUE_SOCKET_SMOKETEST=1 to run it at boot)"
     fi
-else
-    echo "= tools/userland_staging/libc_build/kqueue_socket_smoketest.macho not built -- run tools/userland_staging/build_kqueue_socket_smoketest.sh first if wanted, skipping"
 fi
 
 # KQUEUE_SOCKET_SMOKETEST_AS_PID1=1: install the smoketest as the process
@@ -1511,13 +1410,17 @@ fi
 # instead of real launchd -- exactly the "stale artifact hides the real
 # state" failure this repo's own postmortems keep hitting.
 if [ "${KQUEUE_SOCKET_SMOKETEST_AS_PID1:-0}" = "1" ]; then
+    if [ -n "$SKIP_SMOKETESTS" ]; then
+        echo "error: KQUEUE_SOCKET_SMOKETEST_AS_PID1=1 and SKIP_SMOKETESTS are contradictory (a real-hardware image with a smoketest as PID 1)" >&2
+        exit 1
+    fi
     if [ ! -f tools/userland_staging/libc_build/kqueue_socket_smoketest.macho ]; then
         echo "error: KQUEUE_SOCKET_SMOKETEST_AS_PID1=1 but kqueue_socket_smoketest.macho is not built -- run tools/userland_staging/build_kqueue_socket_smoketest.sh first" >&2
         exit 1
     fi
     mkdir -p "$MNT/usr/appleinternal/sbin"
-    cp tools/userland_staging/libc_build/kqueue_socket_smoketest.macho \
-        "$MNT/usr/appleinternal/sbin/launchd.development"
+    # Explicit opt-in dev flag, rejected with SKIP_SMOKETESTS above.
+    cp tools/userland_staging/libc_build/kqueue_socket_smoketest.macho "$MNT/usr/appleinternal/sbin/launchd.development" # install_smoketest-exempt
     chmod 755 "$MNT/usr/appleinternal/sbin/launchd.development"
     echo "+ installed kqueue_socket_smoketest as PID 1 at /usr/appleinternal/sbin/launchd.development (KQUEUE_SOCKET_SMOKETEST_AS_PID1=1)"
     echo "  !! real launchd is NOT PID 1 in this image until this script is re-run without that variable"
@@ -1526,31 +1429,15 @@ elif [ -f "$MNT/usr/appleinternal/sbin/launchd.development" ]; then
     echo "= removed stale /usr/appleinternal/sbin/launchd.development -- real /sbin/launchd is PID 1 again"
 fi
 
-if [ -n "$SKIP_SMOKETESTS" ]; then
-    echo "= libinfo_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
-elif [ -f tools/userland_staging/libinfo_smoketest.macho ]; then
-    mkdir -p "$MNT/bin"
-    cp tools/userland_staging/libinfo_smoketest.macho "$MNT/bin/libinfo_smoketest"
-    chmod 755 "$MNT/bin/libinfo_smoketest"
-    echo "+ wrote $(wc -c < tools/userland_staging/libinfo_smoketest.macho) bytes to $MNT/bin/libinfo_smoketest"
-    echo "  (real Libinfo si_module files-only lookups -- DAR-181, see"
-    echo "  tools/userland_staging/libinfo_smoketest.c; needs /usr/lib/libinfo.dylib)"
-else
-    echo "= tools/userland_staging/libinfo_smoketest.macho not built -- run tools/userland_staging/build_libinfo.sh first if wanted, skipping"
-fi
+install_smoketest tools/userland_staging/libinfo_smoketest.macho "bin/libinfo_smoketest" \
+    "= tools/userland_staging/libinfo_smoketest.macho not built -- run tools/userland_staging/build_libinfo.sh first if wanted, skipping" \
+    "  (real Libinfo si_module files-only lookups -- DAR-181, see" \
+    "  tools/userland_staging/libinfo_smoketest.c; needs /usr/lib/libinfo.dylib)"
 
-if [ -n "$SKIP_SMOKETESTS" ]; then
-    echo "= cf_dylib_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
-elif [ -f tools/userland_staging/libc_build/cf_dylib_smoketest.macho ]; then
-    mkdir -p "$MNT/bin"
-    cp tools/userland_staging/libc_build/cf_dylib_smoketest.macho "$MNT/bin/cf_dylib_smoketest"
-    chmod 755 "$MNT/bin/cf_dylib_smoketest"
-    echo "+ wrote $(wc -c < tools/userland_staging/libc_build/cf_dylib_smoketest.macho) bytes to $MNT/bin/cf_dylib_smoketest"
-    echo "  (real libCoreFoundation.dylib constructor/init-order proof -- DAR-195,"
-    echo "  see tools/userland_staging/cf_dylib_smoketest.c; needs /usr/lib/libCoreFoundation.dylib)"
-else
-    echo "= tools/userland_staging/libc_build/cf_dylib_smoketest.macho not built -- run tools/userland_staging/build_corefoundation_dylib_test.sh first if wanted, skipping"
-fi
+install_smoketest tools/userland_staging/libc_build/cf_dylib_smoketest.macho "bin/cf_dylib_smoketest" \
+    "= tools/userland_staging/libc_build/cf_dylib_smoketest.macho not built -- run tools/userland_staging/build_corefoundation_dylib_test.sh first if wanted, skipping" \
+    "  (real libCoreFoundation.dylib constructor/init-order proof -- DAR-195," \
+    "  see tools/userland_staging/cf_dylib_smoketest.c; needs /usr/lib/libCoreFoundation.dylib)"
 
 # Real Phase 4 step 3 "remaining commands" tiers (docs/roadmap.md) --
 # each build_*_cmds.sh script writes one <name>.macho per real command
@@ -1621,17 +1508,8 @@ fi
 # killing its caller, and a fork() child that forks again crashing. Kept
 # on the image as a permanent regression test -- both bugs are invisible
 # to a link-time or nm-level check and only show up at runtime.
-if [ -n "$SKIP_SMOKETESTS" ]; then
-    echo "= fork_alarm_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
-elif [ -f tools/userland_staging/libc_build/fork_alarm_smoketest.macho ]; then
-    mkdir -p "$MNT/usr/local/bin"
-    cp tools/userland_staging/libc_build/fork_alarm_smoketest.macho \
-        "$MNT/usr/local/bin/fork_alarm_smoketest"
-    chmod 755 "$MNT/usr/local/bin/fork_alarm_smoketest"
-    echo "+ wrote $(wc -c < tools/userland_staging/libc_build/fork_alarm_smoketest.macho) bytes to $MNT/usr/local/bin/fork_alarm_smoketest (DAR-336/DAR-337)"
-else
-    echo "= fork_alarm_smoketest.macho not built -- run build_fork_alarm_smoketest.sh first if wanted, skipping"
-fi
+install_smoketest tools/userland_staging/libc_build/fork_alarm_smoketest.macho "usr/local/bin/fork_alarm_smoketest" \
+    "= fork_alarm_smoketest.macho not built -- run build_fork_alarm_smoketest.sh first if wanted, skipping"
 
 # --- OpenSSH (DAR-183, Phase 7b) --------------------------------------
 # Real OpenSSH 9.3p1 out of the FreeBSD pin (third_party/freebsd-src/
