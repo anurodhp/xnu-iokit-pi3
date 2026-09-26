@@ -634,6 +634,33 @@ mkdir -p third_party
 #     Xdmcp,xcb,X11,Xext,Xrender,Xfixes,Xrandr,Xcursor,ICE,SM,Xt,Xmu}.sh.
 #     libXft-2.3.9 is pinned too but NOT built yet: it needs freetype +
 #     fontconfig (DAR-384).
+# Font/2D stack (DAR-384, X11GS 3, 2026-09-26):
+#   zlib, expat -- Apple's own, apple-oss-distributions zlib-76 (upstream
+#       zlib 1.2.11) and expat-26 (upstream expat 2.2.8): the exact
+#       commits distribution-macOS's macos-112 manifest pins (its zlib and
+#       expat submodules are 805f40328df8... and 37469d253ca9..., which
+#       `git ls-remote` resolves to these two tags). Built into
+#       /usr/lib/libz.1.dylib and /usr/lib/libexpat.1.dylib, where macOS 11
+#       has them (tools/userland_staging/build_zlib.sh, build_expat.sh).
+#   freetype, fontconfig, libpng, pixman, cairo, mkfontscale, libfontenc
+#       -- not Apple code (Apple's own 10.5-10.7 X11 shipped the same
+#       upstream projects in /usr/X11/lib), so the source-priority rule's
+#       real-upstream fallback, at the release tags nixpkgs nixos-26.05
+#       (rev 8f0500b9, PureDarwin's flake.lock pin) ships: freetype 2.14.3,
+#       fontconfig 2.17.1, libpng 1.6.58, pixman 0.46.4, cairo 1.18.4,
+#       mkfontscale 1.2.3, libfontenc 1.1.9 (versions read from nixpkgs'
+#       package.nix files at that rev; every tag confirmed with
+#       `git ls-remote`). Unmodified, nothing forked. nixpkgs' five
+#       post-release FreeType security patches are not carried (see
+#       build_freetype.sh). mkfontscale/libfontenc are built for the HOST
+#       only, to write fonts.scale/fonts.dir at image-build time
+#       (build_fonts.sh).
+#   DejaVu fonts -- the upstream release tarball, not the git tag: the
+#       tag (version_2_37, the nixpkgs version) holds only FontForge .sfd
+#       sources, and building the TTFs needs fontforge + perl Font::TTF,
+#       which this host does not have. The tarball is the DejaVu project's
+#       own build of that tag, fetched below and checked against its
+#       SHA-256.
 # name | clone_url | ref (branch or tag) | (reserved, must be empty) | upstream_url (optional)
 # The 4th field used to name a third_party-patches/ file to `git am`. That
 # mechanism is retired (see the header); a non-empty value is an error.
@@ -725,6 +752,15 @@ libSM|https://gitlab.freedesktop.org/xorg/lib/libsm.git|libSM-1.2.6|
 libXt|https://gitlab.freedesktop.org/xorg/lib/libxt.git|libXt-1.3.1|
 libXmu|https://gitlab.freedesktop.org/xorg/lib/libxmu.git|libXmu-1.3.1|
 libXft|https://gitlab.freedesktop.org/xorg/lib/libxft.git|libXft-2.3.9|
+zlib|https://github.com/apple-oss-distributions/zlib.git|zlib-76|
+expat|https://github.com/apple-oss-distributions/expat.git|expat-26|
+freetype|https://gitlab.freedesktop.org/freetype/freetype.git|VER-2-14-3|
+fontconfig|https://gitlab.freedesktop.org/fontconfig/fontconfig.git|2.17.1|
+libpng|https://github.com/pnggroup/libpng.git|v1.6.58|
+pixman|https://gitlab.freedesktop.org/pixman/pixman.git|pixman-0.46.4|
+cairo|https://gitlab.freedesktop.org/cairo/cairo.git|1.18.4|
+mkfontscale|https://gitlab.freedesktop.org/xorg/app/mkfontscale.git|mkfontscale-1.2.3|
+libfontenc|https://gitlab.freedesktop.org/xorg/lib/libfontenc.git|libfontenc-1.1.9|
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch upstream_url; do
@@ -1014,6 +1050,16 @@ fi
 #     yet built (no build_su.sh exists yet), tracked here so a fresh
 #     clone's checkout matches what later su(1) work will need instead of
 #     silently depending on an unrecorded local sparse-checkout add.
+#   - lib/msun/src/* (DAR-384): FreeBSD's msun, the fdlibm-derived libm
+#     Apple's own Libm C sources come from. Apple's pinned Libm-2026 has
+#     many functions only as ARM32 assembly (Source/ARM/*.s), so
+#     build_libm_dylib.sh compiles the msun files for the ones this
+#     project's libsystem_m.dylib lacked (ceilf/sinf/cosf/frexp/hypot for
+#     cairo). An existing checkout does not pick this path up on its own
+#     (this script skips existing dirs): add `/lib/msun/src/*` to
+#     third_party/freebsd-src/.git/info/sparse-checkout and run
+#     `git -C third_party/freebsd-src read-tree -mu HEAD`, or re-clone
+#     with --force.
 # Pinned to release/13.2.0 (2023-04), a real tagged FreeBSD release.
 FREEBSD_REF="release/13.2.0"
 FREEBSD_DEST="third_party/freebsd-src"
@@ -1027,11 +1073,11 @@ if [ -d "$FREEBSD_DEST" ]; then
     fi
 fi
 if [ -n "$FREEBSD_DEST" ]; then
-    echo "+ sparse-cloning freebsd-src @ $FREEBSD_REF (rijndael, sha2, md5c.c/md5.h, lib/libutil pw_util.c+flopen.c+login_cap.c+.h+login_crypt.c+gr_util.c+_secure_path.c, lib/libc/gen pw_scan.c+.h, crypto/openssh + secure/ ssh build glue, usr.sbin/pw, usr.bin/su)"
+    echo "+ sparse-cloning freebsd-src @ $FREEBSD_REF (rijndael, sha2, md5c.c/md5.h, lib/libutil pw_util.c+flopen.c+login_cap.c+.h+login_crypt.c+gr_util.c+_secure_path.c, lib/libc/gen pw_scan.c+.h, crypto/openssh + secure/ ssh build glue, usr.sbin/pw, usr.bin/su, lib/msun/src)"
     git clone --filter=blob:none --no-checkout --depth 1 --branch "$FREEBSD_REF" \
         https://github.com/freebsd/freebsd-src.git "$FREEBSD_DEST"
     git -C "$FREEBSD_DEST" sparse-checkout init --no-cone
-    printf '/sys/crypto/rijndael/*\n/sys/crypto/sha2/*\n/sys/kern/md5c.c\n/sys/sys/md5.h\n/lib/libutil/pw_util.c\n/lib/libutil/flopen.c\n/lib/libc/gen/pw_scan.c\n/lib/libc/gen/pw_scan.h\n/lib/libutil/login_cap.c\n/lib/libutil/login_cap.h\n/lib/libutil/login_crypt.c\n/lib/libutil/gr_util.c\n/lib/libutil/_secure_path.c\n/crypto/openssh/*\n/secure/ssh.mk\n/secure/lib/libssh/*\n/secure/usr.sbin/sshd/*\n/secure/usr.bin/ssh/*\n/secure/usr.bin/ssh-keygen/*\n/usr.sbin/pw/*\n/usr.bin/su/*\n' \
+    printf '/sys/crypto/rijndael/*\n/sys/crypto/sha2/*\n/sys/kern/md5c.c\n/sys/sys/md5.h\n/lib/libutil/pw_util.c\n/lib/libutil/flopen.c\n/lib/libc/gen/pw_scan.c\n/lib/libc/gen/pw_scan.h\n/lib/libutil/login_cap.c\n/lib/libutil/login_cap.h\n/lib/libutil/login_crypt.c\n/lib/libutil/gr_util.c\n/lib/libutil/_secure_path.c\n/crypto/openssh/*\n/secure/ssh.mk\n/secure/lib/libssh/*\n/secure/usr.sbin/sshd/*\n/secure/usr.bin/ssh/*\n/secure/usr.bin/ssh-keygen/*\n/usr.sbin/pw/*\n/usr.bin/su/*\n/lib/msun/src/*\n' \
         > "$FREEBSD_DEST/.git/info/sparse-checkout"
     git -C "$FREEBSD_DEST" checkout "$FREEBSD_REF"
 fi
@@ -1087,6 +1133,36 @@ if [ -n "$SUDO_DEST" ]; then
     echo "+ cloning sudo @ $SUDO_REF (real sudo-project/sudo upstream, not Apple/FreeBSD -- see this script's own comment above)"
     git clone --filter=blob:none --depth 1 --branch "$SUDO_REF" \
         https://github.com/sudo-project/sudo.git "$SUDO_DEST"
+fi
+
+# DejaVu fonts 2.37 (DAR-384): the DejaVu project's own TTF release
+# tarball for tag version_2_37 (see the font/2D stack note above the REPOS
+# list for why not the git tag). Verified by SHA-256 before unpacking.
+DEJAVU_VER="2.37"
+DEJAVU_SHA256="fa9ca4d13871dd122f61258a80d01751d603b4d3ee14095d65453b4e846e17d7"
+DEJAVU_DEST="third_party/dejavu-fonts-ttf-$DEJAVU_VER"
+if [ -d "$DEJAVU_DEST" ]; then
+    if [ "$FORCE" = "1" ]; then
+        echo "+ removing existing $DEJAVU_DEST (--force)"
+        rm -rf "$DEJAVU_DEST"
+    else
+        echo "= $DEJAVU_DEST already exists, skipping (use --force to re-fetch)"
+        DEJAVU_DEST=""
+    fi
+fi
+if [ -n "$DEJAVU_DEST" ]; then
+    echo "+ fetching dejavu-fonts-ttf-$DEJAVU_VER.tar.bz2"
+    DEJAVU_TMP="$(mktemp -d)"
+    curl -fsSL -o "$DEJAVU_TMP/dejavu.tar.bz2" \
+        "https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_${DEJAVU_VER//./_}/dejavu-fonts-ttf-$DEJAVU_VER.tar.bz2"
+    got="$(shasum -a 256 "$DEJAVU_TMP/dejavu.tar.bz2" | awk '{print $1}')"
+    if [ "$got" != "$DEJAVU_SHA256" ]; then
+        echo "error: dejavu-fonts-ttf-$DEJAVU_VER.tar.bz2 SHA-256 is $got, expected $DEJAVU_SHA256" >&2
+        rm -rf "$DEJAVU_TMP"
+        exit 1
+    fi
+    tar -xjf "$DEJAVU_TMP/dejavu.tar.bz2" -C third_party
+    rm -rf "$DEJAVU_TMP"
 fi
 
 echo "done -- third_party/ populated. See docs/roadmap.md and README.md for what to build next."

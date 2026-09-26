@@ -494,11 +494,19 @@ scripting-language runtime as a goal in itself):
   diagnostic tools eventually, but no current roadmap item calls for
   them — natural Phase 6c/Tier-C candidates once basic `ping`/`netstat`/
   `arp`/`route` from the already-pinned `network_cmds` land first).
-- **Misc format/data libraries not currently needed**: `expat`,
+- **`zlib` and `expat` — NOW PINNED** (2026-09-26, DAR-384, font/2D
+  stack): `zlib-76` and `expat-26`, exact `macos-112` manifest matches
+  (the manifest's submodule commits `805f40328df8...` and
+  `37469d253ca9...` are what `git ls-remote` gives for those two tags).
+  Built as `/usr/lib/libz.1.dylib` (upstream zlib 1.2.11) and
+  `/usr/lib/libexpat.1.dylib` (upstream expat 2.2.8) by
+  `build_zlib.sh`/`build_expat.sh`, for libpng/FreeType/cairo and
+  fontconfig. u-boot's vendored zlib core is still what the older
+  commands (gzip, file, tar) compile in.
+- **Misc format/data libraries not currently needed**:
   `libxslt`, `BerkeleyDB`,
   `iodbc`, `libpcap` (only useful once `tcpdump` is wanted), `bzip2`,
-  `zip` (zlib itself is already vendored via `third_party/u-boot`'s copy
-  and working), `xar`, `hunspell`, `CrackLib`.
+  `zip`, `xar`, `hunspell`, `CrackLib`.
 - **`objc4` — NOW PINNED** (2026-09-04, `objc4-818.2`, exact `macos-112`
   manifest match, verified via `git rev-list` against the manifest's real
   submodule commit `62b60ba0e56440e265ca576cc9f197e9af54c1bd`). This
