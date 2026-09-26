@@ -1806,7 +1806,7 @@ for spec in "${CMD_LIST[@]}"; do
         awk)
             # run.c's system() builtin: same __IOS_PROHIBITED availability
             # annotation as ed below, same override.
-            cmd_cflags="-include ed_availability_override.h"
+            cmd_cflags="-include ios_prohibited_override.h"
             ;;
         ed)
             # ed.c's real `!cmd` shell-escape calls system(3), marked
@@ -1814,10 +1814,10 @@ for spec in "${CMD_LIST[@]}"; do
             # annotation, not a functional restriction on this non-App-
             # Store target) by this project's vendored stdlib.h under
             # the uniform -target arm64-apple-ios14.4 this whole build
-            # uses -- see ed_availability_override.h's own header
+            # uses -- see ios_prohibited_override.h's own header
             # comment for the full story (same class of gap, same class
             # of fix, as Phase 4.6 item 3's regex_availability_override.h).
-            cmd_cflags="-include ed_availability_override.h"
+            cmd_cflags="-include ios_prohibited_override.h"
             ;;
         ls)
             # ls.c/print.c real `#include <termcap.h>`: reuse the real
@@ -1879,7 +1879,7 @@ for spec in "${CMD_LIST[@]}"; do
             # project header every other command already gets `size_t`
             # from) supplies exactly that, matching this script's own
             # existing `-include libc_build_prototypes.h`/`-include
-            # ed_availability_override.h` precedent for narrow
+            # ios_prohibited_override.h` precedent for narrow
             # environment gaps -- not a source modification.
             # LONG_WIDTH=64: real flsl.c (freebsd_extra, see its own
             # generation comment above) is current FreeBSD source using
@@ -1938,7 +1938,7 @@ for spec in "${CMD_LIST[@]}"; do
             ;;
         less)
             # Real, unmodified less/main.c and friends need:
-            #  - -include ed_availability_override.h: real, unmodified
+            #  - -include ios_prohibited_override.h: real, unmodified
             #    lsystem.c calls system(3) for its own `!cmd` shell-
             #    escape -- same real __IOS_PROHIBITED App-Store-policy
             #    annotation (not a functional restriction) ed(1)'s own
@@ -1959,7 +1959,7 @@ for spec in "${CMD_LIST[@]}"; do
             #    checkout's own real autotools output, same "real
             #    generated config, not re-run configure" pattern as
             #    gnudiff's config.h).
-            cmd_cflags="-include ed_availability_override.h -I ../../third_party/bash/bash-3.2/lib/termcap -I $LESSROOT -I $LESS"
+            cmd_cflags="-include ios_prohibited_override.h -I ../../third_party/bash/bash-3.2/lib/termcap -I $LESSROOT -I $LESS"
             ;;
         md5)
             # Real md5.c/commoncrypto.h's own `#include <CommonCrypto/
