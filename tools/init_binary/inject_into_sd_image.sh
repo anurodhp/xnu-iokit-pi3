@@ -451,18 +451,50 @@ else
     echo "= tools/userland_staging/ifconfig.macho not built -- run build_ifconfig.sh first if wanted, skipping"
 fi
 
+# install_smoketest SRC DEST MISSING_MSG [NOTE...] (DAR-348)
+#
+# The one way this script installs a QEMU-only *_smoketest binary. It
+# honours SKIP_SMOKETESTS (real-hardware images; smoketests are dev
+# diagnostics, not userland), copies SRC to $MNT/DEST mode 755, and echoes
+# each NOTE. It always returns 0 (this script runs under set -e) and sets
+# SMOKETEST_INSTALLED=1 only when it actually installed the file, for a
+# caller with extra setup to test.
+# Every smoketest used to repeat this guard by hand (18 copies), which made
+# a forgotten guard easy; the self-check below now rejects any other copy
+# of a *_smoketest binary in this file.
+install_smoketest() {
+    local src="$1" dest="$2" missing="$3"
+    shift 3
+    SMOKETEST_INSTALLED=0
+    if [ -n "$SKIP_SMOKETESTS" ]; then
+        echo "= $(basename "$src") skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
+        return 0
+    fi
+    if [ ! -f "$src" ]; then
+        echo "$missing"
+        return 0
+    fi
+    mkdir -p "$(dirname "$MNT/$dest")"
+    cp "$src" "$MNT/$dest"
+    chmod 755 "$MNT/$dest"
+    echo "+ wrote $(wc -c < "$src") bytes to /$dest"
+    local note
+    for note in "$@"; do
+        echo "$note"
+    done
+    SMOKETEST_INSTALLED=1
+}
+if grep -nE '^[^#]*[[:space:]]cp[[:space:]].*_smoketest' tools/init_binary/inject_into_sd_image.sh | grep -v 'install_smoketest' >&2; then
+    echo "error: the line(s) above copy a *_smoketest binary directly; use install_smoketest so SKIP_SMOKETESTS is honoured" >&2
+    exit 1
+fi
+
 # X11 client-library smoketest (DAR-383). The X dylibs themselves are
 # installed by the generic libc_build/system/*.dylib loop below, at their
 # /usr/X11/lib install names.
-if [ -f tools/userland_staging/x11_smoketest.macho ]; then
-    mkdir -p "$MNT/usr/X11/bin"
-    cp tools/userland_staging/x11_smoketest.macho "$MNT/usr/X11/bin/x11_smoketest"
-    chmod 755 "$MNT/usr/X11/bin/x11_smoketest"
-    echo "+ wrote $(wc -c < tools/userland_staging/x11_smoketest.macho) bytes to $MNT/usr/X11/bin/x11_smoketest"
-    echo "  (tools/userland_staging/build_x11_smoketest.sh)"
-else
-    echo "= tools/userland_staging/x11_smoketest.macho not built -- run build_x11_smoketest.sh first if wanted, skipping"
-fi
+install_smoketest tools/userland_staging/x11_smoketest.macho "usr/X11/bin/x11_smoketest" \
+    "= tools/userland_staging/x11_smoketest.macho not built -- run build_x11_smoketest.sh first if wanted, skipping" \
+    "  (tools/userland_staging/build_x11_smoketest.sh)"
 
 # Font/2D stack (DAR-384). The dylibs (libz, libexpat, freetype, libpng,
 # pixman, fontconfig, cairo, libXft) go in through the generic
@@ -497,17 +529,9 @@ if [ -d "$FS_STAGE/bin" ]; then
     done
     echo "+ wrote fontconfig tools to $MNT/usr/X11/bin ($(ls "$FS_STAGE"/bin/fc-*.macho | wc -l | tr -d ' ') of them)"
 fi
-if [ -n "$SKIP_SMOKETESTS" ]; then
-    echo "= cairo_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image)"
-elif [ -f tools/userland_staging/cairo_smoketest.macho ]; then
-    mkdir -p "$MNT/usr/X11/bin"
-    cp tools/userland_staging/cairo_smoketest.macho "$MNT/usr/X11/bin/cairo_smoketest"
-    chmod 755 "$MNT/usr/X11/bin/cairo_smoketest"
-    echo "+ wrote $(wc -c < tools/userland_staging/cairo_smoketest.macho) bytes to $MNT/usr/X11/bin/cairo_smoketest"
-    echo "  (tools/userland_staging/build_cairo_smoketest.sh)"
-else
-    echo "= tools/userland_staging/cairo_smoketest.macho not built -- run build_cairo_smoketest.sh first if wanted, skipping"
-fi
+install_smoketest tools/userland_staging/cairo_smoketest.macho "usr/X11/bin/cairo_smoketest" \
+    "= tools/userland_staging/cairo_smoketest.macho not built -- run build_cairo_smoketest.sh first if wanted, skipping" \
+    "  (tools/userland_staging/build_cairo_smoketest.sh)"
 
 if [ -f tools/userland_staging/netstat.macho ]; then
     mkdir -p "$MNT/usr/sbin"
@@ -730,44 +754,6 @@ if [ -f tools/ulock_kthread_test/ulock_kthread_test.macho ]; then
     echo "  run it from the shell, see tools/ulock_kthread_test/ulock_kthread_test.c)"
 else
     echo "= tools/ulock_kthread_test/ulock_kthread_test.macho not built -- run tools/ulock_kthread_test/build.py first if wanted, skipping"
-fi
-
-# install_smoketest SRC DEST MISSING_MSG [NOTE...] (DAR-348)
-#
-# The one way this script installs a QEMU-only *_smoketest binary. It
-# honours SKIP_SMOKETESTS (real-hardware images; smoketests are dev
-# diagnostics, not userland), copies SRC to $MNT/DEST mode 755, and echoes
-# each NOTE. It always returns 0 (this script runs under set -e) and sets
-# SMOKETEST_INSTALLED=1 only when it actually installed the file, for a
-# caller with extra setup to test.
-# Every smoketest used to repeat this guard by hand (18 copies), which made
-# a forgotten guard easy; the self-check below now rejects any other copy
-# of a *_smoketest binary in this file.
-install_smoketest() {
-    local src="$1" dest="$2" missing="$3"
-    shift 3
-    SMOKETEST_INSTALLED=0
-    if [ -n "$SKIP_SMOKETESTS" ]; then
-        echo "= $(basename "$src") skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
-        return 0
-    fi
-    if [ ! -f "$src" ]; then
-        echo "$missing"
-        return 0
-    fi
-    mkdir -p "$(dirname "$MNT/$dest")"
-    cp "$src" "$MNT/$dest"
-    chmod 755 "$MNT/$dest"
-    echo "+ wrote $(wc -c < "$src") bytes to /$dest"
-    local note
-    for note in "$@"; do
-        echo "$note"
-    done
-    SMOKETEST_INSTALLED=1
-}
-if grep -nE '^[^#]*[[:space:]]cp[[:space:]].*_smoketest' tools/init_binary/inject_into_sd_image.sh | grep -v 'install_smoketest' >&2; then
-    echo "error: the line(s) above copy a *_smoketest binary directly; use install_smoketest so SKIP_SMOKETESTS is honoured" >&2
-    exit 1
 fi
 
 install_smoketest tools/userland_staging/libc_build/pthread_smoketest.macho "bin/pthread_smoketest" \
