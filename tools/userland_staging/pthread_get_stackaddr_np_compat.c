@@ -1,3 +1,8 @@
+/* DAR-110: built into libsystem_pthread.dylib (build_libsystem_pthread.sh),
+ * the real home of both functions below. It used to be compiled only into
+ * libdispatch.dylib, which left pthread_get_stackaddr_np exported by the
+ * wrong image and pthread_get_stacksize_np exported by none.
+ */
 /* Real, narrow extraction of third_party/libpthread/src/pthread.c's
  * own pthread_get_stackaddr_np() (that whole file is deliberately never
  * compiled by this project's build_libpthread.sh -- see that script's
@@ -40,10 +45,33 @@
  * exit) -- so there is no use-after-free risk from skipping the
  * liveness check, unlike real Apple's own environment where pthread_t
  * structs and their stacks genuinely can be reclaimed and reused. */
+#include <errno.h>
 #include "types_internal.h"
 
 void *
 pthread_get_stackaddr_np(pthread_t t)
 {
 	return t->stackaddr;
+}
+
+/* pthread.c:77. */
+#define DEFAULT_STACK_SIZE (size_t)(512 * 1024)
+
+/* third_party/libpthread/src/pthread.c:952-1011, narrowed the same way as
+ * pthread_get_stackaddr_np() above and for the same reasons (no
+ * _pthread_validate_thread_and_list_lock(): created threads are not on
+ * __pthread_head here). The TARGET_OS_OSX rlimit branch is compiled out
+ * on this iOS target in real Apple too, which leaves the size as
+ * stackaddr - stackbottom, with real Apple's DEFAULT_STACK_SIZE fallback
+ * when it is unknown (<rdar://problem/42588315>). */
+size_t
+pthread_get_stacksize_np(pthread_t t)
+{
+	size_t size;
+
+	if (t == NULL) {
+		return ESRCH; // XXX bug?
+	}
+	size = (size_t)((char *)t->stackaddr - (char *)t->stackbottom);
+	return size ? size : DEFAULT_STACK_SIZE;
 }
