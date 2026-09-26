@@ -25,21 +25,27 @@ int
 main(void)
 {
 	int i;
+	/* Progress goes to unbuffered stderr, so a hang shows where it is
+	 * even when stdout is redirected to a file. */
+	fprintf(stderr, "asl_smoketest: start\n");
 	aslclient c = asl_open("asl_smoketest", "com.apple.console", 0);
 	aslmsg m = asl_new(ASL_TYPE_MSG);
 
-	printf("asl_smoketest: asl_open=%p asl_new=%p\n", (void *)c, (void *)m);
+	fprintf(stderr, "asl_smoketest: asl_open=%p asl_new=%p\n", (void *)c, (void *)m);
 	asl_set(m, ASL_KEY_LEVEL, "5");
 	asl_set(m, ASL_KEY_MSG, "DAR121 cf-sequence asl_send");
-	printf("asl_smoketest: asl_send=%d\n", asl_send(c, m));
+	fprintf(stderr, "asl_smoketest: asl_send=%d\n", asl_send(c, m));
 	asl_free(m);
 	asl_close(c);
 
-	for (i = 0; i < 64; i++)
+	for (i = 0; i < 64; i++) {
 		asl_log(NULL, NULL, ASL_LEVEL_NOTICE, "DAR121 asl_log %d", i);
-	printf("asl_smoketest: 64 asl_log calls returned\n");
+		if (i < 3 || (i % 16) == 15)
+			fprintf(stderr, "asl_smoketest: asl_log %d returned\n", i);
+	}
+	fprintf(stderr, "asl_smoketest: 64 asl_log calls returned\n");
 
 	syslog(LOG_NOTICE, "DAR121 syslog");
-	printf("asl_smoketest: done\n");
+	fprintf(stderr, "asl_smoketest: done\n");
 	return 0;
 }

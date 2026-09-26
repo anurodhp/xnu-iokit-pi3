@@ -340,6 +340,21 @@ done
 # dereferences NULL directly. Fixed by pointing environ at a real
 # static one-element `{ NULL }` array instead -- a real, minimal,
 # correctly-shaped empty environment, not a stub.
+#
+# DAR-310 (2026-09-25): the "this project's dyld doesn't implement that
+# yet" note above was wrong. Real dyld-940 does write the kernel's envp,
+# just not HERE: third_party/dyld/dyld/dyldMain.cpp:674 stores it through
+# `state.vars->environPtr`, i.e. libdyld.dylib's own `environ`. Nothing
+# copied it into this storage, so getenv()/setenv()/_NSGetEnviron() saw
+# an empty environment in every dynamically-linked process (and syslogd
+# never found __LAUNCHD_FD). The fix is NOT here: a constructor in this
+# dylib never runs, because dyld's runAllInitializersForMain()
+# (third_party/dyld/dyld/DyldAPIs.cpp:3316) marks every
+# /usr/lib/system/lib* image initialized without running it -- real
+# libSystem_initializer drives them itself. It lives in
+# libsystem_dyld_initializer_compat.c (libSystem.B.dylib's initializer),
+# which points this storage at dyld's envp via _NSGetEnviron(), the same
+# effect as real Libc's _program_vars_init().
 cat > "$OUT/environ_storage_compat.c" <<'EOF'
 static char *empty_environ[1] = { 0 };
 char **environ = empty_environ;
