@@ -146,6 +146,13 @@ SIBLING_DYLIBS=(libsystem_c libsystem_malloc libsystem_platform libsystem_kernel
 # idiom-1 regex needs a literal "run build_X.sh first" per script), which
 # is how build_launchd_core.sh ended up scheduled after this script
 # despite this real requirement. Rephrased into individual checks.
+# DAR-121: real syslog-385 ASL client for __CFLogCStringLegacy()'s
+# asl_open/asl_new/asl_set/asl_send/asl_free/asl_close (CFUtilities.c).
+# These used to bind to a no-op shim inside libinfo.dylib.
+if [ ! -f "$OUT/system/libsystem_asl.dylib" ]; then
+    echo "error: $OUT/system/libsystem_asl.dylib not found -- run build_libsystem_asl_dylib.sh first" >&2
+    exit 1
+fi
 if [ ! -f "$OUT/liblaunchd_core.a" ]; then
     echo "error: $OUT/liblaunchd_core.a not found -- run build_launchd_core.sh first (this dylib pulls a handful of real, narrow, non-duplicated objects out of it -- see the extraction step below)" >&2
     exit 1
@@ -456,7 +463,12 @@ rm -f "$OUT/system/libCoreFoundation.dylib"
     "$OUT/system/libc++.dylib" "$OUT/system/libxml2.dylib" \
     "$OUT/system/libresolv.dylib" "$OUT/system/libcopyfile.dylib" "$OUT/system/libremovefile.dylib" \
     "$OUT/system/libopenpam.dylib" "$OUT/system/libdyld.dylib" \
-    "$OUT/system/libxpc.dylib" "$OUT/system/libinfo.dylib" \
+    "$OUT/system/libxpc.dylib" \
+    `# libsystem_asl after libopenpam/libcopyfile on purpose: those two` \
+    `# also export syslog(3), and moving CF's syslog binds is not this` \
+    `# change's job. Only the asl_* binds (no other exporter) move here.` \
+    "$OUT/system/libsystem_asl.dylib" \
+    "$OUT/system/libinfo.dylib" \
     2>"$OUT/libcorefoundation_dylib_link.err" \
     && echo "wrote $OUT/system/libCoreFoundation.dylib" \
     || { echo "libCoreFoundation.dylib link found real undefined symbols:" >&2; grep '^  "' "$OUT/libcorefoundation_dylib_link.err" | sed 's/,.*//' | sort -u >&2; exit 1; }
@@ -473,7 +485,7 @@ xcrun dyld_info -fixups "$OUT/system/libCoreFoundation.dylib" 2>/dev/null | grep
 # "libicui18n/_ucal_open") -- confirmed by actually inspecting the real
 # output, not assumed, so the icu entries below allow an optional
 # "\.[0-9]+" between the lib basename and the slash.
-UNEXPECTED=$(xcrun dyld_info -fixups "$OUT/system/libCoreFoundation.dylib" 2>/dev/null | grep -v -E '<flat-namespace>|<weak-def-coalesce>' | grep 'bind' | grep -v -E 'libsystem_c/|libsystem_malloc/|libsystem_platform/|libsystem_kernel/|libsystem_pthread/|libsystem_notify/|libsystem_m/|libdispatch/|libicuuc(\.[0-9]+)?/|libicui18n(\.[0-9]+)?/|libicudata(\.[0-9]+)?/|libc\+\+/|libxml2/|libresolv/|libcopyfile/|libremovefile/|libopenpam/|libdyld/|libxpc/|libinfo/' || true)
+UNEXPECTED=$(xcrun dyld_info -fixups "$OUT/system/libCoreFoundation.dylib" 2>/dev/null | grep -v -E '<flat-namespace>|<weak-def-coalesce>' | grep 'bind' | grep -v -E 'libsystem_c/|libsystem_malloc/|libsystem_platform/|libsystem_kernel/|libsystem_pthread/|libsystem_notify/|libsystem_m/|libdispatch/|libicuuc(\.[0-9]+)?/|libicui18n(\.[0-9]+)?/|libicudata(\.[0-9]+)?/|libc\+\+/|libxml2/|libresolv/|libcopyfile/|libremovefile/|libopenpam/|libdyld/|libxpc/|libsystem_asl/|libinfo/' || true)
 if [ -n "$UNEXPECTED" ]; then
     echo "error: real, unexpected non-sibling bind targets found:" >&2
     echo "$UNEXPECTED" >&2

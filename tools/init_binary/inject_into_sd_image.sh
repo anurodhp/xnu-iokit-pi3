@@ -1521,6 +1521,19 @@ elif [ -f "$MNT/usr/appleinternal/sbin/launchd.development" ]; then
 fi
 
 if [ -n "$SKIP_SMOKETESTS" ]; then
+    echo "= asl_smoketest.macho skipped (SKIP_SMOKETESTS set)"
+elif [ -f tools/userland_staging/asl_smoketest.macho ]; then
+    mkdir -p "$MNT/bin"
+    cp tools/userland_staging/asl_smoketest.macho "$MNT/bin/asl_smoketest"
+    chmod 755 "$MNT/bin/asl_smoketest"
+    echo "+ wrote $(wc -c < tools/userland_staging/asl_smoketest.macho) bytes to $MNT/bin/asl_smoketest"
+    echo "  (real syslog-385 ASL client -> syslogd dbserver.c -- DAR-121, see"
+    echo "  tools/userland_staging/asl_smoketest.c; needs /usr/lib/system/libsystem_asl.dylib)"
+else
+    echo "= tools/userland_staging/asl_smoketest.macho not built -- run tools/userland_staging/build_libsystem_asl_dylib.sh first if wanted, skipping"
+fi
+
+if [ -n "$SKIP_SMOKETESTS" ]; then
     echo "= libinfo_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image; smoketests are QEMU-only dev diagnostics, not real userland)"
 elif [ -f tools/userland_staging/libinfo_smoketest.macho ]; then
     mkdir -p "$MNT/bin"

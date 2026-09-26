@@ -91,6 +91,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <os/log.h>
 
 struct os_log_pack_s {
@@ -132,6 +133,9 @@ extern "C" {
 #endif
 void   os_log_with_args(os_log_t log, os_log_type_t type, const char *format,
                          va_list args, void *addr);
+/* DAR-121: syslog-385's asl.c/syslog.c guard their os_log path with
+ * this; libsystem_asl_compat.c answers false (no os_log backend here). */
+bool   os_log_shim_enabled(void *addr);
 /* DAR-267: real, argument-free implementation -- always returns
  * sizeof(struct os_log_pack_s), see this header's own top comment. The
  * macro below is what every real call site (SCPrivate.h's SC_log(),
