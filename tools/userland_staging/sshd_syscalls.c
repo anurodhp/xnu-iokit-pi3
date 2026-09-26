@@ -19,6 +19,14 @@
  * NOT included here, deliberately, because a real one already exists and
  * is reused on the link line instead: getrlimit (NO_SYSCALL_STUB #194,
  * xargs_getrlimit_compat.c).
+ *
+ * DAR-346 moved accept/listen/socketpair/getattrlist to
+ * libsystem_kernel.dylib (Apple's own generated stubs, see
+ * build_libsystem_kernel.sh) and setlogin to libsystem_c.dylib (real
+ * Libc/gen/setlogin.c), their real homes. What is left here has no shared
+ * owner yet: settimeofday's real wrapper (Libc/sys/settimeofday.c) calls
+ * notify_post(), which lives above libsystem_c, and fchmod/rename/
+ * __posix_spawn have not been moved.
  */
 
 typedef unsigned long size_t;
@@ -92,39 +100,6 @@ static inline long syscall4(long num, long a0, long a1, long a2, long a3) {
     return x0;
 }
 
-/* 30 AUE_ACCEPT ALL { int accept(int s, caddr_t name, socklen_t *anamelen)
- *                     NO_SYSCALL_STUB; }
- * sshd.c's server_accept_loop() and channels.c's four
- * channel_post_*_listener() handlers. */
-#define SYS_accept 30
-int accept(int s, void *name, socklen_t *anamelen) {
-    return (int)syscall3(SYS_accept, s, (long)name, (long)anamelen);
-}
-
-/* 106 AUE_LISTEN ALL { int listen(int s, int backlog) NO_SYSCALL_STUB; }
- * sshd.c's listen_on_addrs(), channels.c's remote-forward listeners. */
-#define SYS_listen 106
-int listen(int s, int backlog) {
-    return (int)syscall2(SYS_listen, s, backlog);
-}
-
-/* 135 AUE_SOCKETPAIR ALL { int socketpair(int domain, int type,
- *                          int protocol, int *rsv) NO_SYSCALL_STUB; }
- * monitor.c's privsep monitor<->child socket pair, and session.c. */
-#define SYS_socketpair 135
-int socketpair(int domain, int type, int protocol, int *rsv) {
-    return (int)syscall4(SYS_socketpair, domain, type, protocol, (long)rsv);
-}
-
-/* 50 AUE_SETLOGIN ALL { int setlogin(char *namebuf) NO_SYSCALL_STUB; }
- * session.c's do_setusercontext() (real BSD login-name-in-the-kernel
- * setting, the same call real login(1) makes -- this project's own
- * login.macho reaches it through liblaunchd_syscalls.a's copy). */
-#define SYS_setlogin 50
-int setlogin(const char *namebuf) {
-    return (int)syscall1(SYS_setlogin, (long)namebuf);
-}
-
 /* 124 AUE_FCHMOD ALL { int fchmod(int fd, int mode) NO_SYSCALL_STUB; }
  * sftp-server.c's process_fsetstat(), sshpty.c's pty_setowner(). */
 #define SYS_fchmod 124
@@ -159,13 +134,17 @@ int statfs(const char *path, void *buf) {
     return (int)syscall2(SYS_statfs64, (long)path, (long)buf);
 }
 
-/* 220 AUE_GETATTRLIST ALL { int getattrlist(const char *path,
- *     struct attrlist *alist, void *attributeBuffer, size_t bufferSize,
- *     u_long options) NO_SYSCALL_STUB; }
- * Apple's own Libc realpath.c/getcwd.c use it to resolve a path's real
- * name; libcopyfile.dylib exports a copy, but that dylib is not its
- * owner and is not otherwise on sshd's link line. */
-#define SYS_getattrlist 220
+/* 122 AUE_SETTIMEOFDAY ALL { int settimeofday(struct timeval *tv,
+ *     struct timezone *tzp) NO_SYSCALL_STUB; }
+ * Not called by sshd itself -- it comes in with Apple's real
+ * clock_gettime.c, which defines clock_settime() in the same translation
+ * unit as the clock_gettime() misc.c's monotime() needs. Real wrapper
+ * rather than a stub so that TU is honestly complete. */
+#define SYS_settimeofday 122
+int settimeofday(const void *tv, const void *tzp) {
+    return (int)syscall2(SYS_settimeofday, (long)tv, (long)tzp);
+}
+
 static inline long syscall5(long num, long a0, long a1, long a2, long a3, long a4) {
     register long x0 asm("x0") = a0;
     register long x1 asm("x1") = a1;
@@ -183,22 +162,6 @@ static inline long syscall5(long num, long a0, long a1, long a2, long a3, long a
         return cerror_nocancel((int)x0);
     }
     return x0;
-}
-int getattrlist(const char *path, void *alist, void *attributeBuffer,
-                size_t bufferSize, unsigned long options) {
-    return (int)syscall5(SYS_getattrlist, (long)path, (long)alist,
-                         (long)attributeBuffer, (long)bufferSize, (long)options);
-}
-
-/* 122 AUE_SETTIMEOFDAY ALL { int settimeofday(struct timeval *tv,
- *     struct timezone *tzp) NO_SYSCALL_STUB; }
- * Not called by sshd itself -- it comes in with Apple's real
- * clock_gettime.c, which defines clock_settime() in the same translation
- * unit as the clock_gettime() misc.c's monotime() needs. Real wrapper
- * rather than a stub so that TU is honestly complete. */
-#define SYS_settimeofday 122
-int settimeofday(const void *tv, const void *tzp) {
-    return (int)syscall2(SYS_settimeofday, (long)tv, (long)tzp);
 }
 
 /* 244 AUE_POSIX_SPAWN ALL { int posix_spawn(pid_t *pid, const char *path,
