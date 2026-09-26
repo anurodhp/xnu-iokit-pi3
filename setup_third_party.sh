@@ -655,6 +655,18 @@ mkdir -p third_party
 #       build_freetype.sh). mkfontscale/libfontenc are built for the HOST
 #       only, to write fonts.scale/fonts.dir at image-build time
 #       (build_fonts.sh).
+# X server (DAR-387, X11GS 4, 2026-09-26): xorg-server 21.1.24 (built as
+#     Xvfb only), libXfont2 2.0.7, libxkbfile 1.1.3, xkbcomp 1.5.0 and
+#     xkeyboard-config 2.47 -- the versions nixpkgs nixos-26.05 rev 8f0500b9
+#     ships (pkgs/by-name/*/package.nix at that rev), same source-priority
+#     reasoning as the X.org block above; every tag confirmed with
+#     `git ls-remote`. Cloned unmodified. libfontenc (pinned above for the
+#     host tools) is also built for the target here, for libXfont2.
+#     X test clients (DAR-383/387): xdpyinfo 1.4.0, xwd 1.0.9, xev 1.2.6,
+#     same nixpkgs rev, tags confirmed with `git ls-remote`; built by
+#     tools/userland_staging/build_x11_clients.sh.
+#     libXi 1.8.2 and libXtst 1.2.5 (same rev) for xdpyinfo, whose
+#     configure.ac:41 requires xtst (libXtst itself needs xi).
 #   DejaVu fonts -- the upstream release tarball, not the git tag: the
 #       tag (version_2_37, the nixpkgs version) holds only FontForge .sfd
 #       sources, and building the TTFs needs fontforge + perl Font::TTF,
@@ -761,6 +773,16 @@ pixman|https://gitlab.freedesktop.org/pixman/pixman.git|pixman-0.46.4|
 cairo|https://gitlab.freedesktop.org/cairo/cairo.git|1.18.4|
 mkfontscale|https://gitlab.freedesktop.org/xorg/app/mkfontscale.git|mkfontscale-1.2.3|
 libfontenc|https://gitlab.freedesktop.org/xorg/lib/libfontenc.git|libfontenc-1.1.9|
+xserver|https://gitlab.freedesktop.org/xorg/xserver.git|xorg-server-21.1.24|
+libXfont2|https://gitlab.freedesktop.org/xorg/lib/libxfont.git|libXfont2-2.0.7|
+libxkbfile|https://gitlab.freedesktop.org/xorg/lib/libxkbfile.git|libxkbfile-1.1.3|
+xkbcomp|https://gitlab.freedesktop.org/xorg/app/xkbcomp.git|xkbcomp-1.5.0|
+xkeyboard-config|https://gitlab.freedesktop.org/xkeyboard-config/xkeyboard-config.git|xkeyboard-config-2.47|
+xdpyinfo|https://gitlab.freedesktop.org/xorg/app/xdpyinfo.git|xdpyinfo-1.4.0|
+xwd|https://gitlab.freedesktop.org/xorg/app/xwd.git|xwd-1.0.9|
+xev|https://gitlab.freedesktop.org/xorg/app/xev.git|xev-1.2.6|
+libXi|https://gitlab.freedesktop.org/xorg/lib/libxi.git|libXi-1.8.2|
+libXtst|https://gitlab.freedesktop.org/xorg/lib/libxtst.git|libXtst-1.2.5|
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch upstream_url; do

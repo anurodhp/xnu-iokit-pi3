@@ -530,6 +530,29 @@ if [ -d "$FS_STAGE/bin" ]; then
     done
     echo "+ wrote fontconfig tools to $MNT/usr/X11/bin ($(ls "$FS_STAGE"/bin/fc-*.macho | wc -l | tr -d ' ') of them)"
 fi
+# X server (DAR-387, X11GS 4): Xvfb and xkbcomp in /usr/X11/bin and the XKB
+# keymap database in /usr/X11/share/xkeyboard-config-2 (with its
+# /usr/X11/share/X11/xkb symlink), staged by build_xvfb.sh,
+# build_xkbcomp.sh and build_xkeyboard_config.sh. The server's own dylibs
+# (libXfont2, libfontenc, libxkbfile) are installed by the generic
+# libc_build/system/*.dylib loop below. ditto keeps the xkb symlink.
+XS_STAGE=tools/userland_staging/libc_build/x11/server/root
+if [ -x "$XS_STAGE/usr/X11/bin/Xvfb" ]; then
+    need_kb=$(du -sk "$XS_STAGE" | awk '{print $1}')
+    free_kb=$(df -k "$MNT" | awk 'NR==2{print $4}')
+    if [ "$free_kb" -lt $((need_kb + 51200)) ]; then
+        echo "error: $MNT has ${free_kb} KB free; the X server tree needs ${need_kb} KB (+50 MB headroom)" >&2
+        exit 1
+    fi
+    ditto "$XS_STAGE" "$MNT/"
+    # xkb/ddxLoad.c falls back to /tmp when this is not writable; created
+    # here as well because build_xkeyboard_config.sh rebuilds that tree.
+    mkdir -p "$MNT/usr/X11/share/xkeyboard-config-2/compiled"
+    chmod 755 "$MNT/usr/X11/share/xkeyboard-config-2/compiled"
+    echo "+ wrote X server tree ($need_kb KB: /usr/X11/bin/{Xvfb,xkbcomp}, /usr/X11/share/xkeyboard-config-2, /usr/X11/share/X11/xkb)"
+else
+    echo "= $XS_STAGE/usr/X11/bin/Xvfb not built -- run build_xvfb.sh (and build_xkbcomp.sh, build_xkeyboard_config.sh) first if wanted, skipping"
+fi
 install_smoketest tools/userland_staging/cairo_smoketest.macho "usr/X11/bin/cairo_smoketest" \
     "= tools/userland_staging/cairo_smoketest.macho not built -- run build_cairo_smoketest.sh first if wanted, skipping" \
     "  (tools/userland_staging/build_cairo_smoketest.sh)"

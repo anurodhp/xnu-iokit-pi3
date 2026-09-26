@@ -17,7 +17,10 @@
  *      xcb_connect() must report a connection error rather than crash;
  *    - if argv[1] names a display that DOES answer (X11GS 4's Xvfb), the
  *      ticket's full path runs: XOpenDisplay, XCreateSimpleWindow,
- *      XMapWindow, XFlush, plus one query per extension library.
+ *      XMapWindow, XFlush, plus one query per extension library; and
+ *      (DAR-387) an XFillRectangle read back through XGetImage and again
+ *      through an MIT-SHM XShmGetImage, which exercises the kernel's SysV
+ *      shm (DAR-407) end to end.
  *
  * Every X dylib built by DAR-383 is referenced (the table below), so
  * loading this binary makes dyld resolve all of their binds for real.
@@ -45,6 +48,9 @@
 #include <X11/Xdmcp.h>
 #include <X11/extensions/Xext.h>
 #include <X11/extensions/shape.h>
+#include <X11/extensions/XShm.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
 #include <X11/extensions/Xrender.h>
 #include <X11/extensions/Xfixes.h>
 #include <X11/extensions/Xrandr.h>
@@ -96,6 +102,14 @@ static void atexit_probe(void) { }
 #define CHECK(cond, ...) do { if (cond) { printf("  ok   "); } else { printf("  FAIL "); failures++; } \
     printf(__VA_ARGS__); printf("\n"); } while (0)
 
+static int x_error_code;
+static int record_x_error(Display *d, XErrorEvent *e)
+{
+    (void)d;
+    x_error_code = e->error_code;
+    return 0;
+}
+
 static int run_with_server(Display *dpy)
 {
     int scr = DefaultScreen(dpy);
@@ -117,6 +131,74 @@ static int run_with_server(Display *dpy)
            XRRQueryExtension(dpy, &ev, &er) ? "yes" : "no");
     if (XRRQueryVersion(dpy, &maj, &min))
         printf("  info RANDR %d.%d\n", maj, min);
+
+    /* DAR-387: draw and read back. A red rectangle through the core
+     * protocol, then XGetImage checks a pixel inside it and one of the
+     * white background outside it. The red pixel value is built from the
+     * default visual's masks (Xvfb's 24-bit TrueColor). */
+    Visual *vis = DefaultVisual(dpy, scr);
+    unsigned long red = vis->red_mask;
+    unsigned long white = WhitePixel(dpy, scr);
+    GC gc = XCreateGC(dpy, w, 0, NULL);
+    XSetForeground(dpy, gc, red);
+    XFillRectangle(dpy, w, gc, 20, 20, 50, 30);
+    XSync(dpy, False);
+    XImage *img = XGetImage(dpy, w, 0, 0, 100, 60, AllPlanes, ZPixmap);
+    CHECK(img != NULL, "XGetImage of the window");
+    if (img) {
+        unsigned long in = XGetPixel(img, 40, 30), out = XGetPixel(img, 5, 5);
+        CHECK((in & 0xffffff) == (red & 0xffffff),
+              "XFillRectangle drew red (pixel 0x%06lx, want 0x%06lx)", in & 0xffffff, red & 0xffffff);
+        CHECK((out & 0xffffff) == (white & 0xffffff),
+              "background stayed white (pixel 0x%06lx)", out & 0xffffff);
+        XDestroyImage(img);
+    }
+
+    /* MIT-SHM (DAR-407's SysV shm, end to end): read the same pixel back
+     * through a shared-memory XImage the server writes into. */
+    if (XShmQueryExtension(dpy)) {
+        XShmSegmentInfo si;
+        XImage *simg = XShmCreateImage(dpy, vis, DefaultDepth(dpy, scr), ZPixmap, NULL, &si, 100, 60);
+        CHECK(simg != NULL, "XShmCreateImage");
+        if (simg) {
+            si.shmid = shmget(IPC_PRIVATE, (size_t)simg->bytes_per_line * simg->height, IPC_CREAT | 0600);
+            si.shmaddr = simg->data = (si.shmid >= 0) ? shmat(si.shmid, NULL, 0) : (char *)-1;
+            si.readOnly = False;
+            CHECK(si.shmid >= 0 && si.shmaddr != (char *)-1, "shmget/shmat for the XShm image (id %d)", si.shmid);
+            if (si.shmid >= 0 && si.shmaddr != (char *)-1) {
+                /* IPC_RMID only after the server has attached: xnu refuses
+                 * shmat() on a segment already marked removed
+                 * (bsd/kern/sysv_shm.c:261, SHMSEG_REMOVED). A temporary
+                 * error handler keeps a failed attach from exiting through
+                 * Xlib's default handler before the segment is removed. */
+                XErrorHandler prev = XSetErrorHandler(record_x_error);
+                x_error_code = 0;
+                Bool ok = XShmAttach(dpy, &si);
+                XSync(dpy, False);
+                XSetErrorHandler(prev);
+                shmctl(si.shmid, IPC_RMID, NULL);
+                ok = ok && x_error_code == 0;
+                CHECK(ok, "XShmAttach (X error %d)", x_error_code);
+                if (ok && XShmGetImage(dpy, w, simg, 0, 0, AllPlanes)) {
+                    unsigned long px = XGetPixel(simg, 40, 30);
+                    CHECK((px & 0xffffff) == (red & 0xffffff),
+                          "XShmGetImage read the red pixel (0x%06lx)", px & 0xffffff);
+                } else {
+                    CHECK(0, "XShmGetImage");
+                }
+                if (ok) {
+                    XShmDetach(dpy, &si);
+                    XSync(dpy, False);
+                }
+                shmdt(si.shmaddr);
+            }
+            simg->data = NULL;
+            XDestroyImage(simg);
+        }
+    } else {
+        CHECK(0, "MIT-SHM extension present");
+    }
+    XFreeGC(dpy, gc);
     XDestroyWindow(dpy, w);
     XCloseDisplay(dpy);
     return 0;
