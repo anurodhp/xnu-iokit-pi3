@@ -80,7 +80,7 @@
  * optimization level" the way real Apple's asm-opaque setjmp is. Do not
  * build ed at -O1 or higher without first adding `returns_twice` to a
  * compat override of this SDK's <setjmp.h> declarations (the same
- * force-`-include` pattern ed_availability_override.h already uses) --
+ * force-`-include` pattern ios_prohibited_override.h already uses) --
  * skipping that step would be a real, silent miscompilation risk, not
  * a cosmetic one. */
 extern int __ed_setjmp_raw(void *buf) __attribute__((returns_twice));

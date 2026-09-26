@@ -427,7 +427,7 @@ for f in ssh readconf clientloop sshtty sshconnect sshconnect2 mux; do
         # "SDK-annotation, not a real gap" call build_bootp_dhcp_engine.sh
         # already documents for its own __API_UNAVAILABLE_PLATFORM_*
         # overrides.
-        compile "$SRCTREE/$f.c" -include sshd_ios_prohibited_override.h
+        compile "$SRCTREE/$f.c" -include ios_prohibited_override.h
         ;;
     *)
         compile "$SRCTREE/$f.c"
