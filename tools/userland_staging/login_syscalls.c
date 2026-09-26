@@ -136,8 +136,31 @@ uint32_t notify_post(const char *name) {
  * control) -- same real arm64 XNU ABI quirk it documents (raw fork()
  * returns the child's pid in x0 to BOTH parent and child; x1 is the
  * only real parent/child discriminator, 0=parent, 1=child), reused
- * verbatim here rather than reintroduced. */
+ * verbatim here rather than reintroduced.
+ *
+ * DAR-221: that copy predated bash's own DAR-220 fix and so also lacked
+ * the child-side step of third_party/xnu-7195/libsyscall/custom/
+ * __fork.s's arm64 path:
+ *
+ *     // Child
+ *     MI_GET_ADDRESS(x9, __current_pid)  // Get address of cached "current pid"
+ *     mov  w0, #0
+ *     str  w0, [x9]                      // Clear cached current pid
+ *
+ * getpid() here is the caching ___getpid (custom/__getpid.s): it returns
+ * `__current_pid` when it is > 0 and only traps when it is 0. Since
+ * DAR-314 login is dynamic, so both that getpid and its cache live in
+ * libsystem_malloc.dylib (`xcrun dyld_info -fixups login.macho` shows
+ * `bind libsystem_malloc/_getpid`; `nm -m libsystem_malloc.dylib` shows
+ * `__current_pid` as an exported __DATA symbol) -- the asm-label extern
+ * below binds to that same datum. Without the clear, getpid() in the
+ * child returns the parent's pid. login.c's child (third_party/
+ * system_cmds/login.tproj/login.c:818) calls no getpid() before its
+ * execve() today, so this was latent, not observed. */
 pid_t fork(void) {
+    /* asm label, not name mangling: the very `__current_pid` datum
+     * ___getpid caches into. */
+    extern volatile int login_cached_current_pid asm("__current_pid");
     register long x0 asm("x0") = 0;
     register long x1 asm("x1") = 0;
     register long x16 asm("x16") = 2; /* SYS_fork, see syscalls.master */
@@ -151,7 +174,11 @@ pid_t fork(void) {
         extern long cerror_nocancel(int err);
         return (pid_t)cerror_nocancel((int)x0);
     }
-    return (pid_t)(x1 ? 0 : x0); /* child (x1==1) sees pid 0, real fork() contract */
+    if (x1) { /* child (x1==1) */
+        login_cached_current_pid = 0; /* real __fork.s's own child-side step */
+        return (pid_t)0;              /* real fork() contract */
+    }
+    return (pid_t)x0;
 }
 
 /* alarm(): same real, honest, already-established no-op as
