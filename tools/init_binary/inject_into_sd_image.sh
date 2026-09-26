@@ -1540,6 +1540,16 @@ for cmd in true false yes pwd basename dirname echo printf hostname logname cat 
     fi
 done
 
+# /bin/sort: a stale leftover in older base images (qemu/hfs_root_test.img).
+# No script here builds sort (it is not in the loop above; the real source,
+# third_party/text_cmds/sort, is not ported yet), and the leftover copy
+# aborts at dyld load (`Symbol not found: _pthread_cond_wait$UNIX2003`).
+# Remove it unless a real build of it is being installed.
+if [ ! -f tools/userland_staging/sort.macho ] && [ -e "$MNT/bin/sort" ]; then
+    rm -f "$MNT/bin/sort"
+    echo "= removed stale /bin/sort (not built by any script here; aborted at dyld load)"
+fi
+
 # base64(1) and awk(1): built by build_simple_cmds.sh like the loop above,
 # but a Mac ships them in /usr/bin, not /bin.
 mkdir -p "$MNT/usr/bin"
