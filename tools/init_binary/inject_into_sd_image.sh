@@ -464,6 +464,51 @@ else
     echo "= tools/userland_staging/x11_smoketest.macho not built -- run build_x11_smoketest.sh first if wanted, skipping"
 fi
 
+# Font/2D stack (DAR-384). The dylibs (libz, libexpat, freetype, libpng,
+# pixman, fontconfig, cairo, libXft) go in through the generic
+# libc_build/system/*.dylib loop below. Here: the staged data tree
+# (build_fontconfig.sh: /etc/fonts, /usr/X11/share/fontconfig,
+# /usr/X11/share/xml/fontconfig, /var/cache/fontconfig; build_fonts.sh:
+# /usr/share/fonts with the DejaVu TTFs + fonts.scale/fonts.dir), the
+# fc-* tools, and cairo_smoketest. ditto keeps /etc/fonts/conf.d's
+# relative symlinks as symlinks. The fontconfig cache is NOT prebuilt:
+# the first client (or `fc-cache`) writes it on the target.
+FS_STAGE=tools/userland_staging/libc_build/fontstack
+if [ -d "$FS_STAGE/root" ]; then
+    need_kb=$(du -sk "$FS_STAGE/root" | awk '{print $1}')
+    free_kb=$(df -k "$MNT" | awk 'NR==2{print $4}')
+    if [ "$free_kb" -lt $((need_kb + 51200)) ]; then
+        echo "error: $MNT has ${free_kb} KB free; the font/2D data tree needs ${need_kb} KB (+50 MB headroom)" >&2
+        exit 1
+    fi
+    ditto "$FS_STAGE/root" "$MNT/"
+    chmod 755 "$MNT/var/cache/fontconfig"
+    echo "+ wrote font/2D data tree ($need_kb KB: /etc/fonts, /usr/share/fonts, /usr/X11/share/{fontconfig,xml}, /var/cache/fontconfig; $free_kb KB was free)"
+else
+    echo "= $FS_STAGE/root not staged -- run build_fontconfig.sh and build_fonts.sh first if wanted, skipping"
+fi
+if [ -d "$FS_STAGE/bin" ]; then
+    mkdir -p "$MNT/usr/X11/bin"
+    for t in "$FS_STAGE"/bin/fc-*.macho; do
+        [ -f "$t" ] || continue
+        name="$(basename "$t" .macho)"
+        cp "$t" "$MNT/usr/X11/bin/$name"
+        chmod 755 "$MNT/usr/X11/bin/$name"
+    done
+    echo "+ wrote fontconfig tools to $MNT/usr/X11/bin ($(ls "$FS_STAGE"/bin/fc-*.macho | wc -l | tr -d ' ') of them)"
+fi
+if [ -n "$SKIP_SMOKETESTS" ]; then
+    echo "= cairo_smoketest.macho skipped (SKIP_SMOKETESTS set -- real-hardware image)"
+elif [ -f tools/userland_staging/cairo_smoketest.macho ]; then
+    mkdir -p "$MNT/usr/X11/bin"
+    cp tools/userland_staging/cairo_smoketest.macho "$MNT/usr/X11/bin/cairo_smoketest"
+    chmod 755 "$MNT/usr/X11/bin/cairo_smoketest"
+    echo "+ wrote $(wc -c < tools/userland_staging/cairo_smoketest.macho) bytes to $MNT/usr/X11/bin/cairo_smoketest"
+    echo "  (tools/userland_staging/build_cairo_smoketest.sh)"
+else
+    echo "= tools/userland_staging/cairo_smoketest.macho not built -- run build_cairo_smoketest.sh first if wanted, skipping"
+fi
+
 if [ -f tools/userland_staging/netstat.macho ]; then
     mkdir -p "$MNT/usr/sbin"
     cp tools/userland_staging/netstat.macho "$MNT/usr/sbin/netstat"
