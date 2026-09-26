@@ -1458,6 +1458,11 @@ install_smoketest tools/userland_staging/libc_build/kqueue_smoketest.macho "bin/
     "  (real kqueue()/kevent() EVFILT_TIMER round-trip -- Phase 6.6" \
     "  libdispatch prereq, see tools/userland_staging/kqueue_smoketest.c)"
 
+install_smoketest tools/userland_staging/libc_build/sysv_ipc_smoketest.macho "bin/sysv_ipc_smoketest" \
+    "= tools/userland_staging/libc_build/sysv_ipc_smoketest.macho not built -- run tools/userland_staging/build_sysv_ipc_smoketest.sh first if wanted, skipping" \
+    "  (SysV shm/sem/msg round-trip incl. cairo's MIT-SHM probe order --" \
+    "  DAR-407, see tools/userland_staging/sysv_ipc_smoketest.c)"
+
 # DAR-200: the real EVFILT_READ / EVFILT_PROC / select()-on-a-kqueue-fd
 # test (tools/userland_staging/kqueue_socket_smoketest.c, built by
 # build_kqueue_socket_smoketest.sh). Always installed as /bin/ if built;

@@ -464,10 +464,27 @@ MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 # fccache.c calls utimes() to touch a cache directory (works: #138 is
 # unconditional in the kernel). cairo's xlib backend
 # (cairo-xlib-surface-shm.c) probes the SysV shm calls for MIT-SHM images,
-# but THIS KERNEL HAS NO SYSV SHM: config/MASTER.arm64.bcm2837's BSD_BASE
-# lacks sysv_shm, so #262-265 are nosys, which raises SIGSYS
-# (bsd/kern/subr_xxx.c:183-188) before returning ENOSYS. The first cairo
-# xlib surface against an MIT-SHM server would be killed -- see DAR-407.
+# Until DAR-407 (2026-09-26) the kernel had no SysV IPC at all:
+# config/MASTER.arm64.bcm2837's BSD_BASE lacked sysv_shm, so #262-265 were
+# nosys, which raises SIGSYS (bsd/kern/subr_xxx.c:183-188). DAR-407 added
+# sysv_sem/sysv_msg/sysv_shm there, matching config/MASTER.arm64.MacOSX:23.
+# SysV sem/msg (DAR-407, same change): the kernel now implements #251-261
+# (bsd/kern/syscalls.master:364-400), so export the matching wrappers the
+# way real Libsyscall does. _semget #255, _semop #256, _msgget #259,
+# _msgsnd #260, _msgrcv #261 are plain generated stubs; ___msgsnd_nocancel/
+# ___msgrcv_nocancel are the $NOCANCEL traps (syscall.map:22-23).
+# ___semctl #254, ___msgctl #258, ___semsys #251, ___msgsys #252,
+# ___shmsys #253 are NO_SYSCALL_STUB raw traps; ___msgctl.s carries
+# `.set _msgctl, ___msgctl` itself (syscall.map:68). The public variadic
+# semctl()/semsys()/msgsys()/shmsys() are Apple's own
+# libsyscall/wrappers/varargs_wrappers.s (arm64 passes variadic args on
+# the stack, so a plain stub would read garbage), compiled whole below.
+# xnu-7195's copy of that file had a real bug -- _msgsys ended at
+# POP_FRAME with no ARM64_STACK_EPILOG, so it fell through into _semsys;
+# the fork carries upstream's one-line fix (third_party/xnu-latest's
+# varargs_wrappers.s:89), and sysv_ipc_smoketest.c exercises msgsys().
+# That file also defines sem_open()/shm_open() over ___sem_open #268 /
+# ___shm_open #266, so those two raw traps are generated here too.
 # ___accept/___listen/___socketpair/___getattrlist added 2026-09-25
 # (DAR-346): all four are NO_SYSCALL_STUB in syscalls.master, and
 # create-syscalls.pl emits them under the private names with the public
@@ -486,12 +503,22 @@ for s in _geteuid _getegid _getuid _getgid _pread _pwrite _fileport_makefd _file
     _setegid _seteuid _getgroups _setitimer _flock _sync ___reboot ___getlogin _setsid ___setpriority _dup2 \
     _link _pathconf _readv _poll _getsockopt _shutdown _umask ___listen ___accept \
     _utimes _shmat _shmdt _shmget ___shmctl \
+    _semget _semop ___semctl _msgget _msgsnd _msgrcv ___msgctl \
+    ___msgsnd_nocancel ___msgrcv_nocancel ___semsys ___msgsys ___shmsys \
+    ___sem_open ___shm_open \
     ___socketpair ___getattrlist ___setlogin; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
         -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
         -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
         "$SYSGEN/${s}.s" -o "$OUT/libsystem_kernel/sys${s}.o"
 done
+# Apple's own variadic-ABI shims (see the DAR-407 comment above the loop):
+# semctl, semsys, msgsys, shmsys, sem_open, shm_open.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
+    -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
+    "$XNU/libsyscall/wrappers/varargs_wrappers.s" \
+    -o "$OUT/libsystem_kernel/varargs_wrappers.o"
 
 # ___sigaction (DAR-164, real gap found root-causing syslogd/pd-console-
 # login's post-exec abort): the raw sigaction(2) trap (#46, plain
@@ -935,6 +962,16 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/sys_utimes.o" "$OUT/libsystem_kernel/sys_shmat.o" \
     "$OUT/libsystem_kernel/sys_shmdt.o" "$OUT/libsystem_kernel/sys_shmget.o" \
     "$OUT/libsystem_kernel/sys___shmctl.o" \
+    `# SysV sem/msg + varargs shims (DAR-407): see the stub loop's comment.` \
+    "$OUT/libsystem_kernel/sys_semget.o" "$OUT/libsystem_kernel/sys_semop.o" \
+    "$OUT/libsystem_kernel/sys___semctl.o" "$OUT/libsystem_kernel/sys_msgget.o" \
+    "$OUT/libsystem_kernel/sys_msgsnd.o" "$OUT/libsystem_kernel/sys_msgrcv.o" \
+    "$OUT/libsystem_kernel/sys___msgctl.o" \
+    "$OUT/libsystem_kernel/sys___msgsnd_nocancel.o" "$OUT/libsystem_kernel/sys___msgrcv_nocancel.o" \
+    "$OUT/libsystem_kernel/sys___semsys.o" "$OUT/libsystem_kernel/sys___msgsys.o" \
+    "$OUT/libsystem_kernel/sys___shmsys.o" \
+    "$OUT/libsystem_kernel/sys___sem_open.o" "$OUT/libsystem_kernel/sys___shm_open.o" \
+    "$OUT/libsystem_kernel/varargs_wrappers.o" \
     "$OUT/libsystem_kernel/__sigaltstack_trap.o" "$OUT/libsystem_kernel/__sigreturn_trap.o" \
     "$MACH_IPC_EXTRACT"/*.o
 
