@@ -507,7 +507,10 @@ MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 # wrappers/unix03/{fchmod,getrlimit,setrlimit}.c below.
 # _csops #169 and _csops_audittoken #170 (DAR-391: code-signing status and
 # entitlement queries, syscalls.master:260-261) are plain stubs too; libxpc
-# exported a non-owner _csops. Several of these
+# exported a non-owner _csops.
+# _sigprocmask #48 (DAR-404, syscalls.master:101) is a plain stub as well.
+# It used to be built into libsystem_c, so libsystem_platform's setjmp.s
+# (which calls it) had to defer it flat-namespace to avoid a link cycle. Several of these
 # names were already exported by dylibs that are not their owner
 # (libncurses, libcopyfile, libSystemConfiguration, libCoreFoundation,
 # libdispatch for _mach_continuous_time);
@@ -523,7 +526,7 @@ for s in _geteuid _getegid _getuid _getgid _pread _pwrite _fileport_makefd _file
     ___sem_open ___shm_open \
     ___socketpair ___getattrlist ___setlogin \
     _chdir _readlink _fchown _getpgrp _getppid _setgid _setuid _setpgid \
-    ___fchmod ___getrlimit ___setrlimit ___msync _csops _csops_audittoken; do
+    ___fchmod ___getrlimit ___setrlimit ___msync _csops _csops_audittoken _sigprocmask; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
         -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
         -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
@@ -1026,6 +1029,7 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/mach_approximate_time.o" \
     "$OUT/libsystem_kernel/mach_absolute_time.o" \
     "$OUT/libsystem_kernel/sys_csops.o" "$OUT/libsystem_kernel/sys_csops_audittoken.o" \
+    "$OUT/libsystem_kernel/sys_sigprocmask.o" \
     "$OUT/libsystem_kernel/thread_selfusage_trap.o" \
     `# setsid(2) (#147, plain stub) and setpriority(2) (raw #96 + Apple's` \
     `# wrappers/setpriority.c), for shutdown(8). Real Apple exports both` \

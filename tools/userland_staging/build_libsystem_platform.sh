@@ -168,12 +168,12 @@ echo "apple_platform: bzero.o/memmove.o recompiled with -DVARIANT_STATIC=1 (real
 #     libsyscall/os/tsd.h, already on CFLAGS' -I path.
 #   - ___sigaltstack / ___sigreturn: raw traps from libsystem_kernel.dylib
 #     (build_libsystem_kernel.sh, same DAR-383 change).
-#   - _sigprocmask lives in libsystem_c.dylib, which links THIS dylib, so
-#     it is deferred with -Wl,-U below -- the same cycle-avoiding
-#     deferral libsystem_kernel.dylib already makes for abort/memcpy
-#     (build_libsystem_kernel.sh's link comment): nothing here loads
-#     libsystem_platform.dylib without libSystem.B.dylib, which
-#     re-exports libsystem_c.
+#   - _sigprocmask comes from libsystem_kernel.dylib, which this dylib
+#     links (DAR-404). It is a plain generated stub, syscall #48
+#     (bsd/kern/syscalls.master:101), and that is where Apple builds it.
+#     It was in libsystem_c before, so it had to be deferred with -Wl,-U,
+#     which gave a <flat-namespace> bind that resolved to the main
+#     executable's private copy first.
 #   - sigtramp.c also defines _sigtramp and __in_sigtramp. This tree's
 #     real signal trampoline is libsystem_kernel.dylib's __sigtramp
 #     (libsystem_kernel_sigtramp_compat.c, DAR-164), so those two are
@@ -221,7 +221,6 @@ rm -f "$OUT/system/libsystem_platform.dylib"
     `# VARIANT_STATIC=1 compiles for the full rationale.` \
     -Wl,-unexported_symbol,_memmove -Wl,-unexported_symbol,_bzero -Wl,-unexported_symbol,___bzero \
     `# DAR-383 setjmp family: see the setjmp.s compile's comment above.` \
-    -Wl,-U,_sigprocmask \
     -Wl,-unexported_symbol,__sigtramp -Wl,-unexported_symbol,___in_sigtramp \
     -o "$OUT/system/libsystem_platform.dylib" \
     "$OUT/libsystem_platform/apple_platform"/*.o \

@@ -837,7 +837,11 @@ SYSCFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -I $XNU/libsyscall/cust
 # triple-underscore raw/public split the way ___wait4_nocancel below
 # needs) -- exec.c's own real `_execve(...)` calls resolve to this
 # directly, no alias needed.
-for s in _access _ftruncate _mkdir _mkdirat _sigprocmask _read _execve; do
+# _sigprocmask moved to libsystem_kernel.dylib 2026-09-27 (DAR-404): #48
+# is a plain generated stub (syscalls.master:101), which Apple builds into
+# libsystem_kernel, and libsystem_platform's setjmp needs it from there.
+# libsystem_c_syscall_compat.c's __sigprocmask now binds to that copy.
+for s in _access _ftruncate _mkdir _mkdirat _read _execve; do
     "$CLANG" $SYSCFLAGS "$TMPGEN/${s}.s" -o "$EXTRACT/sys${s}.o"
 done
 # __wait4/__wait4_nocancel added 2026-09-17 (DAR-292): real waitpid.c
