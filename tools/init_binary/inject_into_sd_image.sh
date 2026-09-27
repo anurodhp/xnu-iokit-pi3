@@ -531,10 +531,12 @@ if [ -d "$FS_STAGE/bin" ]; then
     echo "+ wrote fontconfig tools to $MNT/usr/X11/bin ($(ls "$FS_STAGE"/bin/fc-*.macho | wc -l | tr -d ' ') of them)"
 fi
 # X servers (DAR-387/389, X11GS 4/7): Xvfb, Xorg, xkbcomp and the test
-# clients in /usr/X11/bin, the puredarwingop video driver in
-# /usr/X11/lib/xorg/modules/drivers, /etc/X11/xorg.conf, and the XKB keymap
+# clients in /usr/X11/bin, the puredarwingop video driver and (DAR-391) the
+# iohid input driver under
+# /usr/X11/lib/xorg/modules/{drivers,input}, /etc/X11/xorg.conf, and the XKB keymap
 # database in /usr/X11/share/xkeyboard-config-2 (with its
 # /usr/X11/share/X11/xkb symlink). Staged by build_xserver.sh,
+# build_xf86_input_iohid.sh,
 # build_xf86_video_puredarwingop.sh, build_x11_clients.sh, build_xkbcomp.sh
 # and build_xkeyboard_config.sh. The servers' own dylibs (libXfont2,
 # libfontenc, libxkbfile, libxcvt, ...) are installed by the generic

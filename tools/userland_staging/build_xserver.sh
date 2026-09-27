@@ -262,4 +262,18 @@ build_server() {
 }
 build_server hw/vfb/Xvfb Xvfb
 build_server hw/xfree86/Xorg Xorg "$OUT/system/libxcvt.dylib"
+# Xorg's input driver xf86-input-iohid (DAR-391) opens IOHIDFamily user
+# clients from inside this process, and both check the task's entitlements:
+# IOHIDEventServiceUserClient type 'esuc' wants
+# com.apple.hid.system.user-access-service, IOHIDSystem's server connection
+# (type 0, used to take keys from the text console) wants
+# com.apple.hid.system.server-access. The kernel reads entitlements only from
+# a CS_SIGNED process (xnu kern_cs.c:1463-1469), which the amfi_standin MACF
+# policy grants to any ad-hoc signature (DAR-391; real signing is DAR-414).
+codesign -s - -f --entitlements x11_config/Xorg.entitlements "$STAGE/usr/X11/bin/Xorg" 2>&1 \
+    | grep -v "replacing existing signature" || true
+for e in com.apple.hid.system.server-access com.apple.hid.system.user-access-service; do
+    codesign -d --entitlements - "$STAGE/usr/X11/bin/Xorg" 2>/dev/null | grep -q "$e" || {
+        echo "error: Xorg is not signed with $e" >&2; exit 1; }
+done
 mkdir -p "$STAGE/usr/X11/share/xkeyboard-config-2/compiled"
