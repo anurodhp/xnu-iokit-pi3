@@ -250,6 +250,12 @@ else
 fi
 
 # launchctl.macho is DELIBERATELY NOT installed onto the boot image.
+# (2026-09-27 update, DAR-411/DAR-420: the boot hang below no longer
+# reproduced on QEMU, but running the real `bootstrap -S System` here is
+# still wrong. This port's launchd starts its daemons BEFORE launchctl
+# would run, so launchctl's empty_dir(/var/run) deletes their live sockets
+# (/var/run/syslog, chronyd.sock). DAR-420 tracks the Apple-order fix.
+# /tmp and /var/run are emptied by pd_launchd_boot.c meanwhile.)
 # Tried real 2026-09-02 (DAR-195's own consumer-migration verification)
 # -- it builds clean and links with zero real gaps (gap_audit.sh clean,
 # every phantom-libdispatch-bound symbol this session found real, closed
