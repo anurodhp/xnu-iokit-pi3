@@ -702,11 +702,7 @@ done
 #  - thread_policy/thread_policy_set/thread_set_policy:
 #    libsyscall/mach/thread_act.c, over the _kernelrpc_* MIG routines
 #    already in thread_actUser.o.
-#  - NOT here yet: abort_with_reason (libsyscall/wrappers/terminate_with_reason.c).
-#    That file needs getpid and os_fault_with_payload, whose only exporters
-#    today are libsystem_malloc and libsystem_notify, which sit above this
-#    dylib. Re-homing them is DAR-423; until then libsystem_pthread keeps
-#    its abort_with_reason stand-in.
+#  - abort_with_reason and getpid: see the DAR-423 block below.
 # Start clean: PT416_OBJS below is a glob, so an object this block no
 # longer builds must not survive into the link.
 rm -f "$OUT"/libsystem_kernel/pt416*.o
@@ -755,6 +751,41 @@ mkdir -p "$PT416_HDR/mach"
 "$CLANG" $CFLAGS -I "$PT416_HDR" -I "$XNU/libsyscall" -I "$XNU/libsyscall/mach" \
     "$XNU/libsyscall/mach/thread_act.c" -o "$OUT/libsystem_kernel/pt416_thread_act.o"
 PT416_OBJS=$(ls "$OUT"/libsystem_kernel/pt416*.o | grep -v "_all\.o$")
+
+# DAR-423: getpid, fork, os_fault_with_payload and the terminate/abort-
+# with-reason family, all libsystem_kernel exports on Apple.
+#  - ___getpid (with _getpid and the arm64 .globl __current_pid pid cache)
+#    and ___fork, generated from libsyscall/custom/__getpid.s and
+#    __fork.s. They must be linked into the same image, because __fork.s
+#    updates __current_pid through a local adrp/lo12 pair
+#    (MI_GET_ADDRESS, custom/__fork.s:144). Before DAR-423 both lived in
+#    libsystem_malloc for that reason (build_libsystem_malloc.sh's old
+#    header), and every getpid() caller bound libsystem_malloc.
+#  - _os_fault_with_payload (#529) and ___terminate_with_payload/
+#    ___abort_with_payload (#520/#521), plain generated stubs
+#    (bsd/kern/syscalls.master:841 and nearby).
+#  - libsyscall/wrappers/terminate_with_reason.c: abort_with_reason,
+#    abort_with_payload, terminate_with_reason/payload, and
+#    __darwin_check_fd_set_overflow.
+# The stand-ins these replace are gone from libsystem_malloc,
+# libsystem_notify (os_fault_with_payload), libsystem_pthread
+# (abort_with_reason) and libsystem_c (__darwin_check_fd_set_overflow).
+rm -f "$OUT"/libsystem_kernel/d423*.o
+for s in ___getpid ___fork _os_fault_with_payload ___terminate_with_payload ___abort_with_payload; do
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+        -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
+        -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
+        "$SYSGEN/${s}.s" -o "$OUT/libsystem_kernel/d423${s}.o"
+done
+"$CLANG" $CFLAGS -I "$XNU/libsyscall" -I "$XNU/libsyscall/wrappers" -I "$XNU/bsd" -idirafter "$XNU/libkern" \
+    "$XNU/libsyscall/wrappers/terminate_with_reason.c" -o "$OUT/libsystem_kernel/d423_terminate_with_reason.o"
+# terminate_with_reason.c's __darwin_check_fd_set_overflow calls
+# pthread_current_stack_contains_np, which Apple resolves inside this dylib
+# through a _libc_funcptr.c thunk; see
+# libsystem_kernel_stack_contains_funcptr_compat.c.
+"$CLANG" $CFLAGS libsystem_kernel_stack_contains_funcptr_compat.c \
+    -o "$OUT/libsystem_kernel/d423_stack_contains_funcptr.o"
+D423_OBJS=$(ls "$OUT"/libsystem_kernel/d423*.o)
 
 # __pipe.s (above) only exports the private-indirection name `___pipe`
 # (real Apple naming convention, same as __lchown/__platform_sigaction);
@@ -1112,6 +1143,7 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/sys_csops.o" "$OUT/libsystem_kernel/sys_csops_audittoken.o" \
     "$OUT/libsystem_kernel/sys_sigprocmask.o" \
     $PT416_OBJS \
+    $D423_OBJS \
     "$OUT/libsystem_kernel/thread_selfusage_trap.o" \
     `# setsid(2) (#147, plain stub) and setpriority(2) (raw #96 + Apple's` \
     `# wrappers/setpriority.c), for shutdown(8). Real Apple exports both` \

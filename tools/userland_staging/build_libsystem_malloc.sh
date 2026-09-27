@@ -106,7 +106,7 @@ MEMBERS="bitarray.o magazine_large.o magazine_malloc.o magazine_medium.o magazin
     magazine_small.o magazine_tiny.o malloc_printf.o vm.o simple_string_io.o \
     memcpy_chk.o memset_chk.o chk_fail.o \
     libmalloc_sleep_shim.o \
-    sys_getpid.o sys_mprotect.o sys_kill.o sys_write.o sys_madvise.o sys_kdebug_trace.o \
+    sys_mprotect.o sys_kill.o sys_write.o sys_madvise.o sys_kdebug_trace.o \
     sys_exit.o sys_semwait_signal.o"
 rm -rf "$OUT/libsystem_malloc/extracted"
 mkdir -p "$OUT/libsystem_malloc/extracted"
@@ -258,79 +258,12 @@ XCODE12_LD="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
     -o "$OUT/libsystem_malloc/extracted/pthread_tsd_shim.o.narrowed"
 mv -f "$OUT/libsystem_malloc/extracted/pthread_tsd_shim.o.narrowed" "$OUT/libsystem_malloc/extracted/pthread_tsd_shim.o"
 
-# __fork raw trap (DAR-292, 2026-09-17): the other half of this
-# project's real canonical-owner fix for fork()/waitpid()/execlp()
-# (docs/daemon-roadmap.md's "Static-vs-dylib architecture debt"
-# section). Real xnu-7195 libsyscall/custom/__fork.s's own asm updates
-# `__current_pid` through a direct arm64 adrp/lo12 pair (MI_GET_ADDRESS),
-# which needs a LOCAL definition in the same final image -- confirmed by
-# a real trial link that failed with exactly that error (see
-# build_libedit.sh's own header for the verbatim `ld: fixup error`
-# output, and DAR-292's own ticket text). sys_getpid.o (extracted above,
-# from libmalloc.a) already carries the one real, working
-# `__current_pid` this project has ever gotten a dylib to publish --
-# confirmed via `nm -gU`, and confirmed load-bearing by 18 real shipped
-# .macho binaries (bash/configd/cron/crontab/date/diff/getty/jot/
-# killall/less/login/notifyd/passwd/ping/sed/syslogd/tar/vipw) that
-# already bind their own `_getpid` calls specifically against
-# libsystem_malloc.dylib. Real Apple's own layout puts __fork/__getpid
-# together in libsystem_kernel.dylib instead (both are libsyscall/
-# custom/ members, always compiled into libsystem_kernel.dylib on real
-# macOS) -- checked and rejected for THIS pass specifically because
-# moving __current_pid there now would force an immediate, mandatory
-# relink of all 18 of those binaries just to keep them booting, which is
-# real, unbounded ripple a small pilot conversion (DAR-292's own scope
-# note) should not force. Placing __fork here instead costs nothing
-# those 18 binaries currently have (none of them call fork() through a
-# dylib bind today; all 84 fork-calling binaries still carry their own
-# private static copy, untouched by this change) and satisfies the
-# real locality constraint by construction: __fork.s only REFERENCES
-# __current_pid (never defines it), so compiling it into the SAME ld64
-# invocation as sys_getpid.o -- regardless of which object provides the
-# definition -- resolves both against exactly one real symbol.
-# Migrating the whole raw-syscall tier this dylib already carries
-# (_kill/_mprotect/_write/_getpid/_madvise/_kdebug_trace, now _fork) to
-# match real Apple's libsystem_kernel.dylib split exactly remains real,
-# separate follow-on debt -- same shape as the already-flagged
-# "___kill vs libxpc's own separate copy" deferral in
-# docs/static-linking-cleanup-plan.md's session notes.
-#
-# Deliberately NOT extracted from the shared libmalloc.a archive (unlike
-# sys_getpid.o above): that archive is also linked, as a static archive,
-# by ~30 unrelated build_*.sh scripts (bsm/copyfile/corefoundation/dyld/
-# iokituser/launchd_mig/libc_*/libedit/libdispatch/libclosure/libiconv/
-# libm/libnotify*/libmach_ipc/libresolv/libpthread/libxpc*/llvm_libcxx*/
-# openpam/ncurses/removefile/uname among them) -- some of those already
-# carry their OWN private `___fork`/`sys____fork.o` (e.g. liblaunchd_
-# syscalls.a's own copy, build_launchd_syscalls.sh), and widening
-# libmalloc.a's own member set with a second `___fork` risks a real
-# "duplicate symbol" link error the moment any of those pulls both
-# archives into the same static link. Compiling it fresh, here, in this
-# dylib script's own scratch dir keeps the change scoped to exactly the
-# one image this ticket's pilot pass is converting.
-FORKXNU="../../third_party/xnu-7195"
-FORKGEN="$(mktemp -d)"
-ARCHS=arm64 perl "$FORKXNU/libsyscall/xcodescripts/create-syscalls.pl" \
-    "$FORKXNU/bsd/kern/syscalls.master" \
-    "$FORKXNU/libsyscall/custom" \
-    "$FORKXNU/libsyscall/Platforms" \
-    iPhoneOS \
-    "$FORKGEN" >/dev/null
-# ___fork.s's own SYS.h pulls in <mach/arm64/asm.h> -- absent from the
-# pinned iPhoneOS SDK under that exact path (same real gap
-# build_launchd_syscalls.sh/build_libsystem_kernel.sh already hit and
-# worked around with a one-line forwarding header, not re-derived here).
-mkdir -p "$OUT/libsystem_malloc/asm_compat/mach/arm64"
-cat > "$OUT/libsystem_malloc/asm_compat/mach/arm64/asm.h" <<'EOF'
-#include <arm64/asm.h>
-EOF
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
-    -I "$OUT/libsystem_malloc/asm_compat" \
-    -I "$FORKXNU/libsyscall/custom" -I "$FORKXNU/libsyscall/mach" \
-    -idirafter "$FORKXNU/osfmk" \
-    "$FORKGEN/___fork.s" -o "$OUT/libsystem_malloc/extracted/sys___fork.o"
-rm -rf "$FORKGEN"
-MEMBERS="$MEMBERS sys___fork.o"
+# getpid/__current_pid (sys_getpid.o) and the __fork raw trap used to live
+# here (DAR-292): __fork.s updates __current_pid through a local
+# adrp/lo12 pair, so both had to be in one image, and moving the pair to
+# libsystem_kernel meant relinking every getpid() caller. DAR-423 did that
+# move and relink: both are libsystem_kernel's now, as on Apple
+# (build_libsystem_kernel.sh), and this dylib binds getpid from there.
 
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libsystem_malloc.dylib"

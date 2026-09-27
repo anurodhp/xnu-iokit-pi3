@@ -111,7 +111,7 @@ fi
 # this dylib binds them from there.
 MEMBERS="pthread_atfork.o pthread_cond.o pthread_cwd.o pthread_mutex.o pthread_rwlock.o pthread_tsd.o \
     pthread_main_thread_bootstrap.o pthread_tsd_platform_bootstrap.o \
-    pthread_compat_extras.o pthread_abort_with_reason_compat.o \
+    pthread_compat_extras.o \
     pthread_guard_compat.o pthread_simple_getenv.o pthread_platform_memcmp.o pthread_gettimeofday.o \
     pthread_mmap_compat.o pthread___mmap.o \
     pthread___munmap.o \

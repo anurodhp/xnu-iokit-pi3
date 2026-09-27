@@ -64,6 +64,9 @@
  * needs the fuller dispatch-aware order should follow launchd's own
  * pattern, not this file's.
  *
+ * (DAR-423, 2026-09-27: __fork, getpid and __current_pid are now in
+ * libsystem_kernel.dylib, their Apple home, and this dylib binds
+ * libsystem_kernel/___fork. The next paragraph is history.)
  * __fork ITSELF: real xnu-7195 libsyscall/custom/__fork.s, compiled
  * directly into the SIBLING libsystem_malloc.dylib (build_libsystem_
  * malloc.sh, same DAR-292 change), specifically because that raw asm

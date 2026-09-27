@@ -1,5 +1,6 @@
 /* Real creat/shm_open/usleep raw syscall wrappers + real, honest
- * os_fault_with_payload/os_variant_has_internal_diagnostics stand-ins --
+ * os_variant_has_internal_diagnostics stand-in (os_fault_with_payload was one
+ * too, until DAR-423 moved it to libsystem_kernel's real syscall stub) --
  * libsystem_notify.dylib's own real source calls these but this
  * project's checkout has no compiled source wired in for any of them
  * (confirmed via `nm -g` across every .a in libc_build/, see
@@ -30,6 +31,8 @@
  * that file's own namespace.h/un-namespace.h macro-renaming headers
  * (project-internal Libc build machinery not otherwise wired up here).
  *
+ * (DAR-423: os_fault_with_payload below is history; it is libsystem_kernel's
+ * real #529 stub now.)
  * os_fault_with_payload/os_variant_has_internal_diagnostics: real
  * internal Apple diagnostic/crash-reporting helpers, no real header or
  * source anywhere in this checkout's pinned repos. Real, honest
@@ -125,17 +128,9 @@ int creat(const char *path, mode_t mode) {
  * exposed these names, unlike this file's other real Darwin-specific
  * types (mode_t etc) which genuinely do depend on that. */
 #include <stdint.h>
-int os_fault_with_payload(uint32_t reason_namespace, uint64_t reason_code,
-    void *payload, uint32_t payload_size, const char *reason_string,
-    uint64_t reason_flags) {
-	(void)reason_namespace;
-	(void)reason_code;
-	(void)payload;
-	(void)payload_size;
-	(void)reason_string;
-	(void)reason_flags;
-	return 0;
-}
+/* os_fault_with_payload() used to be a no-op stand-in here. Since DAR-423
+ * it is libsystem_kernel's generated syscall stub (#529,
+ * bsd/kern/syscalls.master:841), as on Apple. */
 
 /* Real gap, found 2026-09-14: real Apple's os/variant_private.h (already
  * on this project's -I path) declares this returning `bool`, not `int`
