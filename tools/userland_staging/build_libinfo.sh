@@ -168,13 +168,14 @@
 #     for a system with no purgeable-VM support) -- same shape as this
 #     project's own asl_client_compat.c precedent for a similar
 #     "real SPI, no real backing subsystem here" gap.
-#   - asl_log(): libinfo.c's one real ASL call site (a group-enumeration
-#     deprecation warning) needed this one function added to the
-#     existing shared asl_client_compat.c shim (build_login.sh/
-#     build_launchd_core.sh's real ASL client stand-in) -- it had every
-#     other real ASL entry point already, just not this one. Real
-#     signature match against third_party/syslog/libsystem_asl.tproj/
-#     include/asl.h, not guessed.
+#   - asl_*(): REMOVED (DAR-121). libinfo.c's only ASL call site
+#     (lookup.subproj/libinfo.c:669-681, a group-enumeration notice) is
+#     inside `#if DS_AVAILABLE` (:653-:686), which this build never
+#     defines -- so nothing here ever called ASL. asl_client_compat.c
+#     used to be compiled into this dylib anyway, which made it export
+#     no-op asl_open/asl_new/asl_set/asl_send/asl_free/asl_close/asl_log;
+#     CoreFoundation bound those. Real syslog-385 ASL now lives in
+#     libsystem_asl.dylib (build_libsystem_asl_dylib.sh).
 #   - ___initgroups: NO LONGER DEFERRED (2026-09-02, DAR-181 smoketest
 #     verification). This is the raw double-underscore BSD syscall #243
 #     trap (syscalls.master NO_SYSCALL_STUB) that real Apple
@@ -338,7 +339,6 @@ compile_one "$LIBINFO/gen.subproj/vars.c"
 compile_one "$LIBINFO/gen.subproj/if_nameindex.c"
 
 echo "compiling this project's own real, narrow compat shims..."
-compile_one asl_client_compat.c
 compile_one libinfo_malloc_zone_compat.c
 
 echo "libinfo: $ok compiled, $fail gaps (see $OUT/libinfo_obj/*.err for full detail)"

@@ -169,6 +169,10 @@ if [ ! -f "$OUT/system/libinfo.dylib" ]; then
     echo "error: $OUT/system/libinfo.dylib not found -- run build_libinfo.sh first" >&2
     exit 1
 fi
+if [ ! -f "$OUT/system/libbsm.dylib" ]; then
+    echo "error: $OUT/system/libbsm.dylib not found -- run build_bsm_dylib.sh first" >&2
+    exit 1
+fi
 if [ ! -f "$OUT/system/libncurses.dylib" ]; then
     echo "error: $OUT/system/libncurses.dylib not found -- run build_ncurses_dylib.sh first" >&2
     exit 1
@@ -203,6 +207,47 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-buil
 mkdir -p "$OUT/syslogd_obj"
 ok=0
 fail=0
+
+# DAR-121: real dbserver.c -- the com.apple.system.logger MIG server.
+# Before this, syslogd checked the service in (launch_config()) but
+# syslogd_dbserver_compat.c's database_server() was a no-op, so nothing
+# ever received on it. Real libsystem_asl.dylib's asl_send() is a MIG
+# simpleroutine with no timeout (aslcommon/asl_ipc.defs:51); against an
+# undrained port every client blocks once the queue fills. Server stubs
+# regenerated from the real, unmodified asl_ipc.defs.
+MIG="$(which mig)"
+if [ -z "$MIG" ] || [ ! -x "$MIG" ]; then
+    echo "error: mig tool not found" >&2
+    exit 1
+fi
+MIGOUT="$OUT/syslogd_obj/mig"
+mkdir -p "$MIGOUT"
+"$MIG" -arch arm64 -I"$SYSLOG/aslcommon" \
+    -header "$MIGOUT/asl_ipc.h" -user /dev/null \
+    -server "$MIGOUT/asl_ipcServer.c" -sheader "$MIGOUT/asl_ipcServer.h" \
+    "$SYSLOG/aslcommon/asl_ipc.defs"
+# dbserver.c calls xpc_copy_entitlement_for_token() (dbserver.c:1212) and
+# fileport_makeport() (:1576) without including their headers itself; in
+# Apple's build both arrive transitively through the real <xpc/private.h>.
+# This project's syslog_compat_headers/xpc/private.h does not pull them
+# in, so name the two real headers that declare them: XNU's
+# bsd/sys/fileport.h and PureDarwin libxpc's xpc/launchd.h (whose
+# implementation is the one libxpc.dylib exports).
+if "$CLANG" "${CFLAGS[@]}" -I "$MIGOUT" -include sys/fileport.h -include xpc/launchd.h \
+    "$SYSLOG/syslogd.tproj/dbserver.c" -o "$OUT/syslogd_obj/dbserver.o" 2>"$OUT/syslogd_obj/dbserver.err"; then
+    ok=$((ok + 1))
+    rm -f "$OUT/syslogd_obj/dbserver.err"
+else
+    fail=$((fail + 1))
+    echo "  gap: syslogd.tproj/dbserver -- $(grep -m1 'error:' "$OUT/syslogd_obj/dbserver.err")"
+fi
+if "$CLANG" "${CFLAGS[@]}" -I "$MIGOUT" "$MIGOUT/asl_ipcServer.c" -o "$OUT/syslogd_obj/asl_ipcServer.o" 2>"$OUT/syslogd_obj/asl_ipcServer.err"; then
+    ok=$((ok + 1))
+    rm -f "$OUT/syslogd_obj/asl_ipcServer.err"
+else
+    fail=$((fail + 1))
+    echo "  gap: asl_ipcServer -- $(grep -m1 'error:' "$OUT/syslogd_obj/asl_ipcServer.err")"
+fi
 for f in klog_in bsd_in bsd_out udp_in daemon syslogd asl_action remote; do
     out="$OUT/syslogd_obj/${f}.o"
     if "$CLANG" "${CFLAGS[@]}" "$SYSLOG/syslogd.tproj/$f.c" -o "$out" 2>"$OUT/syslogd_obj/${f}.err"; then
@@ -578,6 +623,7 @@ rm -f syslogd.macho
     "$OUT/syslogd_obj/asl_legacy1.o" "$OUT/syslogd_obj/asl_object.o" "$OUT/syslogd_obj/asl_core.o" \
     "$OUT/syslogd_obj/asl_file.o" "$OUT/syslogd_obj/asl_store.o" \
     "$OUT/syslogd_obj/asl_string.o" "$OUT/syslogd_obj/asl_util.o" \
+    "$OUT/syslogd_obj/dbserver.o" "$OUT/syslogd_obj/asl_ipcServer.o" \
     "$OUT/syslogd_obj/syslogd_dbserver_compat.o" "$OUT/syslogd_obj/syslogd_getaddrinfo_compat.o" \
     "$OUT/syslogd_obj/syslogd_oslog_compat.o" "$OUT/syslogd_obj/syslogd_remote_stub.o" \
     `# syslogd_alloc_once_compat.o REMOVED 2026-09-03 (DAR-217 follow-up):` \
@@ -643,6 +689,10 @@ rm -f syslogd.macho
     `# libinfo.dylib's own si_module framework (already confirmed via` \
     `# nm -gU), not linked here before now.` \
     "$OUT/system/libinfo.dylib" \
+    `# _audit_token_to_au32: real dbserver.c (DAR-121) reads the sender's` \
+    `# uid/gid/pid from each message's audit trailer; real owner is` \
+    `# OpenBSM, libbsm.dylib (build_bsm_dylib.sh).` \
+    "$OUT/system/libbsm.dylib" \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
     -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
     -Wl,-alias,_getattrlist,'_getattrlist$UNIX2003' \
