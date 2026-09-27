@@ -667,6 +667,9 @@ mkdir -p third_party
 #     tools/userland_staging/build_x11_clients.sh.
 #     libXi 1.8.2 and libXtst 1.2.5 (same rev) for xdpyinfo, whose
 #     configure.ac:41 requires xtst (libXtst itself needs xi).
+#     libxcvt 0.1.3 (same rev, tag confirmed with `git ls-remote`): the Xorg
+#     server's modeline library (DAR-389), required by xserver meson.build
+#     when -Dxorg=true.
 #   DejaVu fonts -- the upstream release tarball, not the git tag: the
 #       tag (version_2_37, the nixpkgs version) holds only FontForge .sfd
 #       sources, and building the TTFs needs fontforge + perl Font::TTF,
@@ -783,6 +786,7 @@ xwd|https://gitlab.freedesktop.org/xorg/app/xwd.git|xwd-1.0.9|
 xev|https://gitlab.freedesktop.org/xorg/app/xev.git|xev-1.2.6|
 libXi|https://gitlab.freedesktop.org/xorg/lib/libxi.git|libXi-1.8.2|
 libXtst|https://gitlab.freedesktop.org/xorg/lib/libxtst.git|libXtst-1.2.5|
+libxcvt|https://gitlab.freedesktop.org/xorg/lib/libxcvt.git|libxcvt-0.1.3|
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch upstream_url; do

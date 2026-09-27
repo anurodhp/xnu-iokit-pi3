@@ -530,11 +530,14 @@ if [ -d "$FS_STAGE/bin" ]; then
     done
     echo "+ wrote fontconfig tools to $MNT/usr/X11/bin ($(ls "$FS_STAGE"/bin/fc-*.macho | wc -l | tr -d ' ') of them)"
 fi
-# X server (DAR-387, X11GS 4): Xvfb and xkbcomp in /usr/X11/bin and the XKB
-# keymap database in /usr/X11/share/xkeyboard-config-2 (with its
-# /usr/X11/share/X11/xkb symlink), staged by build_xvfb.sh,
-# build_xkbcomp.sh and build_xkeyboard_config.sh. The server's own dylibs
-# (libXfont2, libfontenc, libxkbfile) are installed by the generic
+# X servers (DAR-387/389, X11GS 4/7): Xvfb, Xorg, xkbcomp and the test
+# clients in /usr/X11/bin, the puredarwingop video driver in
+# /usr/X11/lib/xorg/modules/drivers, /etc/X11/xorg.conf, and the XKB keymap
+# database in /usr/X11/share/xkeyboard-config-2 (with its
+# /usr/X11/share/X11/xkb symlink). Staged by build_xserver.sh,
+# build_xf86_video_puredarwingop.sh, build_x11_clients.sh, build_xkbcomp.sh
+# and build_xkeyboard_config.sh. The servers' own dylibs (libXfont2,
+# libfontenc, libxkbfile, libxcvt, ...) are installed by the generic
 # libc_build/system/*.dylib loop below. ditto keeps the xkb symlink.
 XS_STAGE=tools/userland_staging/libc_build/x11/server/root
 if [ -x "$XS_STAGE/usr/X11/bin/Xvfb" ]; then
@@ -549,9 +552,9 @@ if [ -x "$XS_STAGE/usr/X11/bin/Xvfb" ]; then
     # here as well because build_xkeyboard_config.sh rebuilds that tree.
     mkdir -p "$MNT/usr/X11/share/xkeyboard-config-2/compiled"
     chmod 755 "$MNT/usr/X11/share/xkeyboard-config-2/compiled"
-    echo "+ wrote X server tree ($need_kb KB: /usr/X11/bin/{Xvfb,xkbcomp}, /usr/X11/share/xkeyboard-config-2, /usr/X11/share/X11/xkb)"
+    echo "+ wrote X server tree ($need_kb KB: /usr/X11/bin/{Xvfb,Xorg,xkbcomp,...}, /usr/X11/lib/xorg/modules, /etc/X11/xorg.conf, /usr/X11/share/xkeyboard-config-2)"
 else
-    echo "= $XS_STAGE/usr/X11/bin/Xvfb not built -- run build_xvfb.sh (and build_xkbcomp.sh, build_xkeyboard_config.sh) first if wanted, skipping"
+    echo "= $XS_STAGE/usr/X11/bin/Xvfb not built -- run build_xserver.sh (and build_xkbcomp.sh, build_xkeyboard_config.sh) first if wanted, skipping"
 fi
 install_smoketest tools/userland_staging/cairo_smoketest.macho "usr/X11/bin/cairo_smoketest" \
     "= tools/userland_staging/cairo_smoketest.macho not built -- run build_cairo_smoketest.sh first if wanted, skipping" \
@@ -1113,6 +1116,9 @@ install_smoketest tools/userland_staging/libc_build/pthread_main_stack_smoketest
 install_smoketest tools/userland_staging/libc_build/iokitlib_smoketest.macho "usr/local/bin/iokitlib_smoketest" \
     "= iokitlib_smoketest.macho not built -- run tools/userland_staging/build_iokitlib_smoketest.sh first if wanted, skipping" \
     "  (DAR-251 IOKitLib API check, prints PASS/FAIL)"
+install_smoketest tools/userland_staging/libc_build/pdgop_smoketest.macho "usr/local/bin/pdgop_smoketest" \
+    "= pdgop_smoketest.macho not built -- run tools/userland_staging/build_pdgop_smoketest.sh first if wanted, skipping" \
+    "  (DAR-358 PDGOP framebuffer mapping + colour bars; needs hdmi_console=1)"
 
 for v in "" "_broken"; do
     install_smoketest "tools/userland_staging/libc_build/sigaction_tramp_smoketest${v}.macho" \

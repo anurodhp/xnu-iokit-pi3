@@ -111,5 +111,11 @@ fs_link_exe() {
     otool -l "$exe" | grep -q "cmd LC_MAIN" || { echo "error: $exe: no LC_MAIN" >&2; bad=1; }
     [ "$bad" -eq 0 ] || exit 1
     echo "wrote $exe"
-    ./bind_target_audit.sh "$exe" "$@"
+    # The audit takes images only; linker flags and static archives in
+    # "$@" (build_xserver.sh's -Wl,-force_load pairs) are not passed on.
+    local a audit_args=()
+    for a in "$@"; do
+        case "$a" in *.dylib) audit_args+=("$a") ;; esac
+    done
+    ./bind_target_audit.sh "$exe" ${audit_args[@]+"${audit_args[@]}"}
 }

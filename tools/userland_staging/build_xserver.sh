@@ -1,14 +1,23 @@
 #!/bin/bash
-# Builds Xvfb (staged as libc_build/x11/server/root/usr/X11/bin/Xvfb) from
-# real, unmodified xorg-server-21.1.24 (third_party/xserver). DAR-387,
-# X11GS 4: the X server core (dix, os, fb, mi, Xext, render, xkb, ...) with
-# the virtual framebuffer DDX, before any real video or input driver.
+# Builds the X servers Xvfb and Xorg (staged as
+# libc_build/x11/server/root/usr/X11/bin/{Xvfb,Xorg}) from real, unmodified
+# xorg-server-21.1.24 (third_party/xserver), from one meson configuration.
+#   Xvfb (DAR-387, X11GS 4): the server core (dix, os, fb, mi, Xext, render,
+#        xkb, ...) with the virtual framebuffer DDX.
+#   Xorg (DAR-389, X11GS 7): the same core with the hw/xfree86 DDX, which
+#        loads video drivers (build_xf86_video_puredarwingop.sh) as MH_BUNDLE
+#        modules linked with -bundle_loader against this Xorg. That is what
+#        meson's own recipe does (hw/xfree86/dixmods/meson.build: modules are
+#        `link_with: e`, the Xorg executable). fb, ddc, i2c, ramdac and the
+#        VidMode extension are linked into Xorg itself (hw/xfree86/
+#        meson.build:52-67), and on Darwin the OS layer is xserver's stub
+#        os-support (hw/xfree86/os-support/meson.build:141-153).
 #
 # How it is built. xorg-server only has a meson build, and its config
 # headers (dix-config.h, xkb-config.h, version-config.h, ...) come from
 # meson's feature probes. So this runs xserver's own meson.build as a cross
 # build for this project's toolchain (Xcode 12 clang, iPhoneOS 14.4 SDK,
-# arm64-apple-ios14.4) and lets ninja compile every object Xvfb needs. The
+# arm64-apple-ios14.4) and lets ninja compile every object the servers need. The
 # final link is done here instead of by meson: -nostdlib against this
 # project's libc_build/system/*.dylib with each owner listed, then
 # bind_target_audit.sh, like every other executable (fontstack_common.sh
@@ -40,7 +49,9 @@
 #     three-line includes.h standing in for OpenSSH's (see below). There is
 #     no CommonCrypto CC_SHA1 in this system for the Apple-native choice.
 #
-# Options (meson_options.txt; ticket DAR-387): Xvfb only; no GLX, glamor,
+# Options (meson_options.txt; tickets DAR-387/389): Xvfb and Xorg
+# (-Dxorg=true; int10, vgahw, dga, pciaccess and the inputtest driver off,
+# fallback_input_driver empty since no input driver is built yet); no GLX, glamor,
 # DRI, udev, hal, systemd-logind, pciaccess, XDMCP or docs. listen_unix and
 # listen_local keep their defaults (true), so DISPLAY=:0 works through
 # /tmp/.X11-unix/X0. mitshm=true: Xext/shm.c probes the SysV shm syscalls
@@ -49,6 +60,7 @@
 # /usr/X11/share/X11/xkb and xkb_bin_dir /usr/X11/bin match
 # build_xkeyboard_config.sh and build_xkbcomp.sh; xkb_output_dir keeps its
 # default, xkb_dir/compiled (meson.build:127-129), created in staging here;
+# log_dir /var/log instead of the prefix default /usr/X11/var/log;
 # default_font_path /usr/share/fonts is where build_fonts.sh installs fonts;
 # the server appends libXfont2's "built-ins" (the core "fixed"/"cursor"
 # fonts it needs to start) itself (dix/dixfonts.c:1714-1729).
@@ -71,7 +83,7 @@ x11_require_staged X11/Xtrans/Xtrans.h build_xorg_headers.sh
 x11_require_staged X11/fonts/libxfont2.h build_libXfont2.sh
 x11_require_staged X11/extensions/XKBfile.h build_libxkbfile.sh
 x11_require_staged pixman-1/pixman.h build_pixman.sh
-for d in libXfont2 libxkbfile libpixman-1 libXau libfontenc libfreetype libz libsystem_m; do
+for d in libXfont2 libxkbfile libpixman-1 libXau libfontenc libfreetype libz libsystem_m libxcvt; do
     [ -f "$OUT/system/$d.dylib" ] || { echo "error: $OUT/system/$d.dylib not found -- build it first" >&2; exit 1; }
 done
 x11_require_sys_dylibs
@@ -106,6 +118,7 @@ simple_pc pixman-1 0.46.4 "-I$INC/pixman-1"
 simple_pc xkbfile 1.1.3 "-I$INC"
 simple_pc xfont2 2.0.7 "-I$INC"
 simple_pc xau 1.0.12 "-I$INC"
+simple_pc libxcvt 0.1.3 "-I$INC"
 
 # --- libmd (SHA-1) ----------------------------------------------------
 # OpenSSH's openbsd-compat sources include its generated includes.h; the
@@ -116,7 +129,7 @@ simple_pc xau 1.0.12 "-I$INC"
 # bzero pointer (explicit_bzero.c:30-50).
 cp "$SSHCOMPAT/sha1.h" "$GEN/md/include/sha1.h"
 cat > "$GEN/md/includes.h" <<'EOF'
-/* Stand-in for OpenSSH's generated includes.h (build_xvfb.sh). */
+/* Stand-in for OpenSSH's generated includes.h (build_xserver.sh). */
 #include <sys/types.h>
 #include <string.h>
 #include "sha1.h"
@@ -168,12 +181,14 @@ TC="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin"
 
 meson setup "$BUILD" "$SRC" --cross-file "$GEN/cross.ini" \
     --prefix=/usr/X11 --buildtype=plain \
-    -Dxorg=false -Dxvfb=true -Dxephyr=false -Dxnest=false -Dxwin=false -Dxquartz=false \
+    -Dxorg=true -Dxvfb=true -Dxephyr=false -Dxnest=false -Dxwin=false -Dxquartz=false \
     -Dglamor=false -Dglx=false -Ddri1=false -Ddri2=false -Ddri3=false -Ddrm=false \
     -Dudev=false -Dudev_kms=false -Dhal=false -Dsystemd_logind=false -Dpciaccess=false \
     -Dxdmcp=false -Dxdm-auth-1=false -Dsecure-rpc=false -Dxselinux=false -Ddtrace=false \
     -Dlibunwind=false -Dsuid_wrapper=false -Dint10=false -Dvgahw=false \
     -Dlinux_apm=false -Dlinux_acpi=false -Dagp=false -Ddga=false \
+    -Dfallback_input_driver= -Dxf86-input-inputtest=false \
+    -Dlog_dir=/var/log \
     -Ddocs=false -Ddevel-docs=false -Ddocs-pdf=false \
     -Dinput_thread=false -Dmitshm=true -Dsha1=libmd \
     -Dxkb_dir=/usr/X11/share/X11/xkb -Dxkb_bin_dir=/usr/X11/bin \
@@ -182,47 +197,69 @@ meson setup "$BUILD" "$SRC" --cross-file "$GEN/cross.ini" \
 grep -q '#define _XSERVER64 1' "$BUILD/include/dix-config.h" || {
     echo "error: generated dix-config.h lacks _XSERVER64 (see this script's header)" >&2; exit 1; }
 
-# --- compile ------------------------------------------------------------
-# Xvfb's link inputs, read from ninja's own link command for hw/vfb/Xvfb
-# (its objects and the libxserver_*.a archives), then built by ninja.
-# Only dylibs Xvfb binds are listed (it has no binds to libxkbfile,
-# libfontenc, freetype or zlib: the server runs xkbcomp as a separate
-# program, and libXfont2 links the font libraries itself).
-# ninja's -l flags from that command are -ldl -lm -lmd: libdyld,
-# libsystem_m and the libmd.a above, all on the link line below. The
-# network and file calls go to the dylibs that own them in this tree
-# (the same owners build_libX11.sh uses): inet_ntop/inet_pton and
-# friends in libresolv, getaddrinfo and the passwd lookups in libinfo,
-# rename in libremovefile. libdispatch: os/client.c:155-157, xserver's own
-# __APPLE__ path, uses dispatch_once().
-INPUTS=$(cd "$BUILD" && ninja -t commands hw/vfb/Xvfb | tail -1 | tr ' ' '\n' | grep -v '^-' | grep -E '\.(o|a)$')
-[ "$(echo "$INPUTS" | wc -l)" -ge 20 ] || { echo "error: could not read Xvfb's link inputs from build.ninja" >&2; exit 1; }
-(cd "$BUILD" && ninja $INPUTS) > "$GEN/ninja.log" 2>&1 || {
-    grep -E 'error:|FAILED' "$GEN/ninja.log" | head -40 >&2; exit 1; }
-# An implicit declaration truncates a pointer return on arm64 (DAR-377's
-# class of bug), so any is fatal.
-IMPLICIT=$(grep -E 'implicit declaration|implicitly declaring' "$GEN/ninja.log" | sort -u || true)
-if [ -n "$IMPLICIT" ]; then
-    echo "$IMPLICIT" >&2
-    echo "error: implicit function declarations in the Xvfb build (above)" >&2; exit 1
-fi
+# --- compile and link ---------------------------------------------------
+# Each server's link inputs are read from ninja's own link command for its
+# target: its objects, its plain archives, and (for Xorg, whose libraries
+# are meson link_whole) the -Wl,-force_load <archive> pairs, kept as
+# force-loads. ninja then builds exactly those inputs, and the link is done
+# here. ninja's -l flags for both are -ldl -lm -lmd: libdyld, libsystem_m
+# and the libmd.a above. The network and file calls go to the dylibs that
+# own them in this tree (the same owners build_libX11.sh uses):
+# inet_ntop/inet_pton and friends in libresolv, getaddrinfo and the passwd
+# lookups in libinfo, rename in libremovefile. libdispatch: os/client.c:
+# 155-157, xserver's own __APPLE__ path, uses dispatch_once(). Only dylibs
+# a server binds are listed: neither binds libxkbfile, libfontenc,
+# freetype or zlib (the server runs xkbcomp as a separate program, and
+# libXfont2 links the font libraries itself). meson's Xorg link also passes
+# -Wl,-export_dynamic; that only keeps symbols alive under LTO, which this
+# build does not use, and an ld64 executable exports its globals anyway
+# (Xorg's 1888 exports are what the driver binds, checked by
+# build_xf86_video_puredarwingop.sh).
+SERVER_DYLIBS=("$OUT/system/libXfont2.dylib" "$OUT/system/libpixman-1.dylib" "$OUT/system/libXau.dylib"
+    "$OUT/system/libsystem_m.dylib" "$OUT/system/libresolv.dylib" "$OUT/system/libinfo.dylib"
+    "$OUT/system/libremovefile.dylib" "$OUT/system/libdispatch.dylib")
 
-# --- link ---------------------------------------------------------------
-mkdir -p "$GEN/link"
-rm -f "$GEN/link"/*
-# Copied under a flat, visible name: mi/miinitext.c's object is
-# hw/vfb/Xvfb.p/.._.._mi_miinitext.c.o, a dotfile that fs_link_exe's *.o
-# glob would skip (InitExtensions and friends would go missing).
-for o in $(echo "$INPUTS" | grep '\.o$'); do
-    cp "$BUILD/$o" "$GEN/link/$(basename "$o" | sed 's/^[._]*//')"
-done
-[ "$(ls "$GEN/link" | wc -l)" -eq "$(echo "$INPUTS" | grep -c '\.o$')" ] || {
-    echo "error: two Xvfb objects flattened to the same name in $GEN/link" >&2; exit 1; }
-ARCHIVES=$(echo "$INPUTS" | grep '\.a$' | sed "s|^|$BUILD/|")
-fs_link_exe "$STAGE/usr/X11/bin/Xvfb" "$GEN/link" \
-    $ARCHIVES "$GEN/md/libmd.a" \
-    "$OUT/system/libXfont2.dylib" "$OUT/system/libpixman-1.dylib" "$OUT/system/libXau.dylib" \
-    "$OUT/system/libsystem_m.dylib" \
-    "$OUT/system/libresolv.dylib" "$OUT/system/libinfo.dylib" "$OUT/system/libremovefile.dylib" \
-    "$OUT/system/libdispatch.dylib"
+# build_server <ninja target> <name> [extra dylibs...]
+build_server() {
+    local target="$1" name="$2"
+    shift 2
+    local cmd inputs objs archives forceload
+    cmd=$(cd "$BUILD" && ninja -t commands "$target" | tail -1 | tr ' ' '\n')
+    objs=$(echo "$cmd" | grep -v '^-' | grep '\.o$' || true)
+    # meson writes a link_whole archive as two arguments, "-Wl,-force_load"
+    # then the path; every other .a is a plain archive.
+    forceload=$(echo "$cmd" | awk 'prev == "-Wl,-force_load" && /\.a$/ { print } { prev = $0 }')
+    archives=$(echo "$cmd" | awk 'prev != "-Wl,-force_load" && !/^-/ && /\.a$/ { print } { prev = $0 }')
+    [ "$(echo "$objs" | grep -c .)" -ge 1 ] && [ "$(echo "$archives $forceload" | wc -w)" -ge 10 ] || {
+        echo "error: could not read $name's link inputs from build.ninja" >&2; exit 1; }
+    (cd "$BUILD" && ninja $objs $archives $forceload) > "$GEN/ninja-$name.log" 2>&1 || {
+        grep -E 'error:|FAILED' "$GEN/ninja-$name.log" | head -40 >&2; exit 1; }
+    # An implicit declaration truncates a pointer return on arm64 (DAR-377's
+    # class of bug), so any is fatal.
+    local implicit
+    implicit=$(grep -E 'implicit declaration|implicitly declaring' "$GEN/ninja-$name.log" | sort -u || true)
+    if [ -n "$implicit" ]; then
+        echo "$implicit" >&2
+        echo "error: implicit function declarations in the $name build (above)" >&2; exit 1
+    fi
+    local linkdir="$GEN/link-$name"
+    rm -rf "$linkdir"
+    mkdir -p "$linkdir"
+    # Copied under a flat, visible name: mi/miinitext.c's object is
+    # <target>.p/.._.._mi_miinitext.c.o, a dotfile that fs_link_exe's *.o
+    # glob would skip (InitExtensions and friends would go missing).
+    local o
+    for o in $objs; do
+        cp "$BUILD/$o" "$linkdir/$(basename "$o" | sed 's/^[._]*//')"
+    done
+    [ "$(ls "$linkdir" | wc -l)" -eq "$(echo "$objs" | wc -w)" ] || {
+        echo "error: two $name objects flattened to the same name in $linkdir" >&2; exit 1; }
+    local a extra=()
+    for a in $forceload; do extra+=("-Wl,-force_load,$BUILD/$a"); done
+    for a in $archives; do extra+=("$BUILD/$a"); done
+    fs_link_exe "$STAGE/usr/X11/bin/$name" "$linkdir" \
+        "${extra[@]}" "$GEN/md/libmd.a" "${SERVER_DYLIBS[@]}" "$@"
+}
+build_server hw/vfb/Xvfb Xvfb
+build_server hw/xfree86/Xorg Xorg "$OUT/system/libxcvt.dylib"
 mkdir -p "$STAGE/usr/X11/share/xkeyboard-config-2/compiled"

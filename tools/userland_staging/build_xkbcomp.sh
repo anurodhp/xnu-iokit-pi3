@@ -10,7 +10,7 @@
 # bison 2.3 in yacc mode).
 # DFLT_XKB_CONFIG_ROOT: Makefile.am AM_CPPFLAGS, from configure.ac:63-68's
 # default ${datadir}/X11/xkb = /usr/X11/share/X11/xkb under this port's
-# /usr/X11 prefix. build_xvfb.sh points the server's XKB base at the same
+# /usr/X11 prefix. build_xserver.sh points the server's XKB base at the same
 # directory, and build_xkeyboard_config.sh installs the data there.
 # config: x11_config/xkbcomp/config.h.
 set -e

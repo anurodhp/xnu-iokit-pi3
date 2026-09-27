@@ -502,6 +502,19 @@ rm -f "$EXTRACT/getenv_real_raw.o"
 "$CLANG" $SIGLIST_CFLAGS -include "$LIBC/fbsdcompat/_fbsd_compat_.h" \
     "$LIBC/gen/FreeBSD/signal.c" -o "$EXTRACT/signal.o"
 
+# scandir(3)/alphasort(3) and fnmatch(3) (DAR-389, Xorg: its config parser's
+# OpenConfigDir scans xorg.conf.d with scandir/alphasort, hw/xfree86/parser/
+# scan.c, and xf86Xinput.c's MatchProduct/MatchDevicePath use fnmatch).
+# Libc's own gen/FreeBSD files, compiled unmodified the way signal.c is
+# above (-include _fbsd_compat_.h, Apple's mechanism for FreeBSD sources).
+# fnmatch.c needs Libc's locale internals (xlocale_private.h, collate.h),
+# which this dylib already carries (__collate_*); SIGLIST_CFLAGS already
+# has the fbsdcompat/locale include paths.
+"$CLANG" $SIGLIST_CFLAGS -include "$LIBC/fbsdcompat/_fbsd_compat_.h" -Werror=implicit-function-declaration \
+    "$LIBC/gen/FreeBSD/scandir.c" -o "$EXTRACT/scandir.o"
+"$CLANG" $SIGLIST_CFLAGS -include "$LIBC/fbsdcompat/_fbsd_compat_.h" -Werror=implicit-function-declaration \
+    "$LIBC/gen/FreeBSD/fnmatch.c" -o "$EXTRACT/fnmatch.o"
+
 # atof(3)/atof_l and strtoull(3)/strtoull_l (DAR-384, font/2D stack:
 # libpng's png.c calls atof; fontconfig's fcxml.c/fcname.c call
 # strtoull). Real Apple's home is libsystem_c: Libc's own
@@ -998,6 +1011,11 @@ rm -f "$OUT/system/libsystem_c.dylib"
     -Wl,-alias,_read,'_read$UNIX2003' \
     -Wl,-alias,'_mmap$UNIX2003',_mmap \
     -Wl,-alias,'_munmap$UNIX2003',_munmap \
+    `# DAR-389: this script's -D__DARWIN_UNIX03/64-bit-inode flags give` \
+    `# scandir.o/fnmatch.o suffixed names; arm64 callers (Xorg) and Apple's` \
+    `# own arm64 libsystem_c use the plain ones. Bases are local objects.` \
+    -Wl,-alias,'_scandir$INODE64',_scandir -Wl,-alias,'_alphasort$INODE64',_alphasort \
+    -Wl,-alias,'_fnmatch$UNIX2003',_fnmatch \
     -Wl,-alias,_pthread_testcancel,'_pthread_testcancel$UNIX2003' \
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \

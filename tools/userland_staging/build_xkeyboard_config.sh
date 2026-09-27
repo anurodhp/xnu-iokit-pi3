@@ -13,7 +13,7 @@
 # Options: prefix /usr/X11 (this port's X11 prefix, x11_common.sh), so the
 # data lands in /usr/X11/share/xkeyboard-config-2 with upstream's legacy
 # /usr/X11/share/X11/xkb symlink to it (meson.build:124-130), the directory
-# xkbcomp (build_xkbcomp.sh) and the server (build_xvfb.sh) use.
+# xkbcomp (build_xkbcomp.sh) and the server (build_xserver.sh) use.
 # nls=false: translations of the rule descriptions only (po/); nothing
 # here reads them. compat-rules keeps its default (true).
 # Needs meson >= 0.61 + ninja + python3 >= 3.11, or >= 3.9 with the strenum
