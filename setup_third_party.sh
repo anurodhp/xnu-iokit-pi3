@@ -121,6 +121,15 @@
 #     mismatch for dynamically allocated keys, src/pthread_tsd.c). That
 #     commit had lived only on a local `bcm2837-bringup` branch with no
 #     fork remote, so a fresh clone silently dropped the fix.
+#   - IOGraphics: 2026-09-27 (DAR-355): cloned from this project's own
+#     fork (git@github.com:anurodhp/IOGraphics.git, branch iokit-port).
+#     iokit-port = the manifest-pinned `IOGraphics-585` tag (9d031bd) plus
+#     ten commits, one per compile-gap fix that
+#     tools/patch_iographics_gaps.sh (DAR-331) used to apply in place to
+#     the gitignored checkout. Each commit message carries that fix's
+#     citations. The script is retired, and
+#     tools/vendor_iographics_into_xnu.sh now fails fast if the checkout
+#     lacks the fixes.
 #   - IOPCIFamily: added 2026-09-08 (DAR-244), headers only. There is no
 #     PCI bus on BCM2837 and this project will never have one -- the pin
 #     exists because IOUSBFamily's IOUSBControllerV3.h declares an
@@ -700,7 +709,7 @@ IOPCIFamily|https://github.com/apple-oss-distributions/IOPCIFamily.git|IOPCIFami
 IOSerialFamily|https://github.com/apple-oss-distributions/IOSerialFamily.git|IOSerialFamily-93.200.2|
 AppleUSBCDCDriver|https://github.com/apple-oss-distributions/AppleUSBCDCDriver.git|AppleUSBCDCDriver-4303.2.1|
 IONetworkingFamily|https://github.com/apple-oss-distributions/IONetworkingFamily.git|IONetworkingFamily-151.40.1|
-IOGraphics|https://github.com/apple-oss-distributions/IOGraphics.git|IOGraphics-585|
+IOGraphics|git@github.com:anurodhp/IOGraphics.git|iokit-port||https://github.com/apple-oss-distributions/IOGraphics.git
 IOHIDFamily|https://github.com/apple-oss-distributions/IOHIDFamily.git|IOHIDFamily-1633.81.2|
 xxHash|https://github.com/Cyan4973/xxHash.git|v0.8.2|
 lzfse|https://github.com/lzfse/lzfse.git|lzfse-1.0|

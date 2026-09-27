@@ -36,6 +36,7 @@ The main repo itself is `anurodhp/xnu-iokit-pi3`.
 | `libdispatch` | `anurodhp/libdispatch` | `iokit-port` | apple-oss-distributions |
 | `Libinfo` | `anurodhp/Libinfo` | `iokit-port` | apple-oss-distributions |
 | `libpthread` | `anurodhp/libpthread` | `iokit-port` | apple-oss-distributions |
+| `IOGraphics` | `anurodhp/IOGraphics` | `iokit-port` | apple-oss-distributions |
 | `Csu` | `anurodhp/Csu` | `bcm2837-bringup` | apple-oss-distributions |
 | `bash` | `anurodhp/bash` | `iokit-port` | apple-oss-distributions |
 | `cron` | `anurodhp/cron` | `iokit-port` | apple-oss-distributions |
@@ -65,7 +66,6 @@ files were deleted.
 |---|---|---|
 | `IOHIDFamily` | patched in place by `tools/patch_iohid_gaps.sh` (DAR-245) | DAR-356 |
 | `IOUSBFamily` | fixes applied to staged copies by `build_iousbfamily.sh` / `patch_iohid_gaps.sh` fix 6/6b; the checkout itself is clean | DAR-356 |
-| `IOGraphics` | patched in place by `tools/patch_iographics_gaps.sh` (DAR-331) | DAR-355 |
 
 ---
 

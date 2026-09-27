@@ -452,7 +452,11 @@ scripting-language runtime as a goal in itself):
   `IOFramebufferPrivate` members, missing `GTraceBuffer` internals, 24
   missing `DBG_IOG_*` ktrace codes). Checked `IOGraphics-530.66`, `-585`
   and `-600`: same class of gap in all three, so the manifest pin is not
-  the problem and there is no complete tag to move to.
+  the problem and there is no complete tag to move to. The source fixes
+  are commits on the fork `anurodhp/IOGraphics`, branch `iokit-port`:
+  `IOGraphics-585` plus one commit per fix (DAR-355, 2026-09-27). That
+  fork is what `setup_third_party.sh` clones. They were previously
+  applied in place by the now-retired `tools/patch_iographics_gaps.sh`.
 - **Enterprise/network auth & directory services** (`Heimdal`,
   `OpenLDAP`, `KerberosHelper`, `MITKerberosShim`, `Security`,
   `security_certificates`, `security_authtrampoline`, `SecurityTokend`,

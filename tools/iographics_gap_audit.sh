@@ -176,7 +176,7 @@ IOG_INC=(
 	-include "$REPO_ROOT/compat/IOKit/graphics/IOBacklightDisplayTraceMissing.h"
 	# Real upstream xxHash (setup_third_party.sh pin) for IODisplay.cpp's
 	# XXH64(); reached through compat/IOKit/graphics/IOGraphicsXXHash.h,
-	# which tools/patch_iographics_gaps.sh (fix 9) includes there.
+	# which IODisplay.cpp includes on the anurodhp/IOGraphics fork.
 	-I"$REPO_ROOT/third_party/xxHash"
 	# xxhash.h:2091 includes <limits.h>, which -nostdinc kernel builds do
 	# not have; redirect to <machine/limits.h>. See that file.
@@ -223,11 +223,14 @@ if [ $# -gt 0 ]; then
 	fi
 fi
 
-# Apply the reproducible header/source fixes first (idempotent), so a
-# fresh ./setup_third_party.sh clone audits the same tree this script's
-# results describe. IOG_AUDIT_NO_PATCH=1 audits the pristine drop.
-if [ -z "${IOG_AUDIT_NO_PATCH:-}" ]; then
-	"$REPO_ROOT/tools/patch_iographics_gaps.sh" > /dev/null
+# The header/source fixes are commits on the anurodhp/IOGraphics fork
+# (branch iokit-port, DAR-355), which setup_third_party.sh clones. They
+# are no longer patched in place (tools/patch_iographics_gaps.sh is
+# retired). To audit the pristine Apple drop, check out the IOGraphics-585
+# tag in that checkout and switch back to iokit-port afterwards.
+if ! grep -q "void sysAssertGated(void);" "$REPO_ROOT/third_party/IOGraphics/IOGraphicsFamily/IOKit/graphics/IOFramebufferPrivate.h"; then
+	echo "note: third_party/IOGraphics lacks this project's fixes (not the" >&2
+	echo "      anurodhp/IOGraphics iokit-port fork?) -- auditing it as-is." >&2
 fi
 
 LOGDIR="$(mktemp -d /tmp/iographics_gap_audit.XXXXXX)"
