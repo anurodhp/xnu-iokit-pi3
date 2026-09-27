@@ -109,10 +109,13 @@ fi
 # pthread___ulock_wait2.o, pthread___thread_selfid.o) are gone: those
 # symbols are libsystem_kernel's generated stubs now, as on Apple, and
 # this dylib binds them from there.
+# pthread_simple_getenv.o and pthread_platform_memcmp.o went too (step
+# 1a-ii): _simple_getenv and _platform_memcmp are libsystem_platform's,
+# from libplatform's src/simple/getenv.c and src/string/generic/memcmp.c.
 MEMBERS="pthread_atfork.o pthread_cond.o pthread_cwd.o pthread_mutex.o pthread_rwlock.o pthread_tsd.o \
     pthread_main_thread_bootstrap.o pthread_tsd_platform_bootstrap.o \
     pthread_compat_extras.o \
-    pthread_guard_compat.o pthread_simple_getenv.o pthread_platform_memcmp.o pthread_gettimeofday.o \
+    pthread_guard_compat.o pthread_gettimeofday.o \
     pthread_mmap_compat.o pthread___mmap.o \
     pthread___munmap.o \
     pthread_thread_ops_compat.o pthread_clear_qos_tsd_compat.o"

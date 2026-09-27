@@ -84,7 +84,9 @@ skip=0
 for f in "$PLATFORM/src/os/lock.c" "$PLATFORM/src/os/atomic.c" "$PLATFORM/src/atomics/arm64/OSAtomic.c" \
          "$PLATFORM/src/os/alloc_once.c" "$PLATFORM/src/string/generic/memset_pattern.c" \
          "$PLATFORM/src/string/generic/strcmp.c" \
-         "$PLATFORM/src/string/generic/strlen.c" "$PLATFORM/src/string/generic/strchr.c"; do
+         "$PLATFORM/src/string/generic/strlen.c" "$PLATFORM/src/string/generic/strchr.c" \
+         "$PLATFORM/src/simple/getenv.c" "$PLATFORM/src/string/generic/strlcpy.c" \
+         "$PLATFORM/src/os/semaphore.c" "$PLATFORM/src/string/generic/memcmp.c"; do
     base=$(basename "$f" .c)
     out="$OUT/libsystem_platform/apple_platform/${base}.o"
     if "$CLANG" $CFLAGS "$f" -o "$out" 2>"$OUT/libsystem_platform/apple_platform/${base}.err"; then
