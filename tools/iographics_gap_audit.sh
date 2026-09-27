@@ -226,8 +226,10 @@ fi
 # The header/source fixes are commits on the anurodhp/IOGraphics fork
 # (branch iokit-port, DAR-355), which setup_third_party.sh clones. They
 # are no longer patched in place (tools/patch_iographics_gaps.sh is
-# retired). To audit the pristine Apple drop, check out the IOGraphics-585
-# tag in that checkout and switch back to iokit-port afterwards.
+# retired). To audit the pristine Apple drop, check out the fork's base
+# commit 9d031bd (upstream tag IOGraphics-585; the fork itself has no tag by
+# that name, so use the hash or `git fetch upstream tag IOGraphics-585`),
+# then switch back to iokit-port afterwards.
 if ! grep -q "void sysAssertGated(void);" "$REPO_ROOT/third_party/IOGraphics/IOGraphicsFamily/IOKit/graphics/IOFramebufferPrivate.h"; then
 	echo "note: third_party/IOGraphics lacks this project's fixes (not the" >&2
 	echo "      anurodhp/IOGraphics iokit-port fork?) -- auditing it as-is." >&2

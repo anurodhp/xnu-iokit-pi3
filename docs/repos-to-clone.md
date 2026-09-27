@@ -63,7 +63,12 @@ upstream tag with a dirty tree. To switch one over in place without
 changing any file:
 `git remote rename origin upstream && git remote add origin
 git@github.com:anurodhp/<repo>.git && git fetch origin && git checkout
--B iokit-port origin/iokit-port`. Re-cloning also works.
+-f -B iokit-port origin/iokit-port && git clean -fd`. The `-f` and the
+`git clean` are needed for IOGraphics and IOHIDFamily. Their dirty and
+untracked files already equal the fork's content, but a plain checkout
+refuses to overwrite them and leaves the repo half-switched: remotes
+renamed, still on the old tag. Re-cloning (`rm -rf third_party/<repo>`,
+then `setup_third_party.sh`) also works.
 
 u-boot and dtc-AppleDeviceTree were the last two repos with leftover
 patch files. On 2026-09-24 both forks' `HEAD^{tree}` was confirmed
