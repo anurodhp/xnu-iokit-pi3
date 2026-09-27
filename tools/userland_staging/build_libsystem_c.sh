@@ -699,7 +699,9 @@ LOCALTIME_FLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -fno-stack-chec
 # home as strcpy_chk.o/etc above -- the one real exporter closes all
 # three at once (see build_libxpc_dylib.sh's and build_ncurses_dylib.sh's
 # own updated comments for their halves of this fix).
-(cd "$EXTRACT" && ar x "../../libxpc_syscalls2.a" darwin_check_fd_set_overflow_compat.o)
+# (DAR-423, 2026-09-27: no longer taken. __darwin_check_fd_set_overflow is
+# libsystem_kernel's now, from libsyscall/wrappers/terminate_with_reason.c,
+# its home on Apple.)
 
 # sleep()/_sleep: new file, not extracted from an existing archive --
 # see libsystem_c_sleep_compat.c's own header for the full real-owner

@@ -242,6 +242,10 @@ done
 # real Apple's own third_party/xnu-7195/libsyscall/custom/__getpid.s
 # confirms this is by design: __getpid() and __fork() are meant to be
 # compiled into the SAME image so this addressing mode can reach the pid
+# (DAR-423, 2026-09-27: libsystem_kernel.dylib DOES now export _getpid,
+# ___fork and __current_pid, and libsystem_malloc no longer does. The
+# private copies here are the follow-up in DAR-425. The text below
+# predates that.)
 # cache directly, without a dylib-crossing GOT load. This project's real
 # canonical home for that pairing would be libsystem_kernel.dylib (which
 # owns __fork's own sibling raw traps) -- but that dylib does not

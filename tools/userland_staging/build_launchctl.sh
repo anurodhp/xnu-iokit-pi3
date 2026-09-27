@@ -501,6 +501,9 @@ mkdir -p "$OUT/launchctl_copyfile_extract"
 # Real fix, self-contained (this script builds its own copy rather than
 # depending on build_launchd.sh having already run and left one behind):
 # narrow $OUT/sys_getpid.o (real Apple gen/BSD/getpid.c, built by
+# (DAR-423, 2026-09-27: libsystem_malloc.dylib no longer exports _getpid;
+# libsystem_kernel.dylib does. See DAR-425 for retiring these private
+# copies.)
 # build_libmalloc.sh) via `ld -r -unexported_symbol` down to just the
 # real, needed __current_pid data symbol, demoting _getpid/___getpid to
 # private-extern so libsystem_malloc.dylib's own real _getpid still wins

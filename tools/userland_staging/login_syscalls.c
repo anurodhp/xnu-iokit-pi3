@@ -147,6 +147,9 @@ uint32_t notify_post(const char *name) {
  *     mov  w0, #0
  *     str  w0, [x9]                      // Clear cached current pid
  *
+ * (DAR-423, 2026-09-27: the getpid/__current_pid pair below now lives in
+ * libsystem_kernel.dylib, not libsystem_malloc.dylib; login binds it
+ * through libSystem's re-export. The mechanism described is unchanged.)
  * getpid() here is the caching ___getpid (custom/__getpid.s): it returns
  * `__current_pid` when it is > 0 and only traps when it is 0. Since
  * DAR-314 login is dynamic, so both that getpid and its cache live in
