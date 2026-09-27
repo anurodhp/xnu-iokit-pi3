@@ -823,7 +823,10 @@ if [ ! -f "$OUT/libopenpam.a" ]; then
     echo "error: $OUT/libopenpam.a not found -- run build_openpam.sh first" >&2
     exit 1
 fi
-(cd "$EXTRACT" && ar x "../../libopenpam.a" time.o gettimeofday.o ls_fenv_compat.o ps_commpage_gettimeofday_stub.o simple_cmds_time_compat.o)
+# simple_cmds_time_compat.o (a hand-written ___gettimeofday trap) is no
+# longer taken: since DAR-416 step 1a ___gettimeofday is libsystem_kernel's,
+# built from libsyscall/custom/__gettimeofday.s as on Apple.
+(cd "$EXTRACT" && ar x "../../libopenpam.a" time.o gettimeofday.o ls_fenv_compat.o ps_commpage_gettimeofday_stub.o)
 
 # Real gap: real access()/fstatat()/ftruncate()/mkdirat()/rmdir()/
 # unlink()/sigprocmask() raw syscall stubs -- same real create-
