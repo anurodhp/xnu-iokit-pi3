@@ -35,6 +35,7 @@ The main repo itself is `anurodhp/xnu-iokit-pi3`.
 | `Libc` | `anurodhp/Libc` | `iokit-port` | apple-oss-distributions |
 | `libdispatch` | `anurodhp/libdispatch` | `iokit-port` | apple-oss-distributions |
 | `Libinfo` | `anurodhp/Libinfo` | `iokit-port` | apple-oss-distributions |
+| `libpthread` | `anurodhp/libpthread` | `iokit-port` | apple-oss-distributions |
 | `Csu` | `anurodhp/Csu` | `bcm2837-bringup` | apple-oss-distributions |
 | `bash` | `anurodhp/bash` | `iokit-port` | apple-oss-distributions |
 | `cron` | `anurodhp/cron` | `iokit-port` | apple-oss-distributions |
@@ -62,7 +63,6 @@ files were deleted.
 
 | Checkout | What's local | Ticket |
 |---|---|---|
-| `libpthread` | commit `58a80c8` (DAR-257 TSD fix) on local branch `bcm2837-bringup`, **on no remote**; the script clones plain upstream, so a fresh clone loses it | DAR-354 (High) |
 | `IOHIDFamily` | patched in place by `tools/patch_iohid_gaps.sh` (DAR-245) | DAR-356 |
 | `IOUSBFamily` | fixes applied to staged copies by `build_iousbfamily.sh` / `patch_iohid_gaps.sh` fix 6/6b; the checkout itself is clean | DAR-356 |
 | `IOGraphics` | patched in place by `tools/patch_iographics_gaps.sh` (DAR-331) | DAR-355 |

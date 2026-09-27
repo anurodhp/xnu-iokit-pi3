@@ -113,6 +113,14 @@
 #     upstream -- the same two real fixes now live as real committed
 #     history on that branch, same pattern as Libc/dyld/libdispatch
 #     above.
+#   - libpthread: 2026-09-27 (DAR-354): cloned from this project's own
+#     fork (git@github.com:anurodhp/libpthread.git, branch iokit-port)
+#     instead of upstream. iokit-port = the manifest-pinned
+#     `libpthread-454.80.2` tag (b4bdbdd) plus one commit, 58a80c8
+#     (DAR-257: pthread_getspecific()/pthread_setspecific() TSD storage
+#     mismatch for dynamically allocated keys, src/pthread_tsd.c). That
+#     commit had lived only on a local `bcm2837-bringup` branch with no
+#     fork remote, so a fresh clone silently dropped the fix.
 #   - IOPCIFamily: added 2026-09-08 (DAR-244), headers only. There is no
 #     PCI bus on BCM2837 and this project will never have one -- the pin
 #     exists because IOUSBFamily's IOUSBControllerV3.h declares an
@@ -699,7 +707,7 @@ lzfse|https://github.com/lzfse/lzfse.git|lzfse-1.0|
 msdosfs|https://github.com/apple-oss-distributions/msdosfs.git|msdosfs-435.60.1|
 dyld|git@github.com:anurodhp/dyld.git|iokit-port||https://github.com/apple-oss-distributions/dyld.git
 Libc|git@github.com:anurodhp/Libc.git|iokit-port||https://github.com/apple-oss-distributions/Libc.git
-libpthread|https://github.com/apple-oss-distributions/libpthread.git|libpthread-454.80.2|
+libpthread|git@github.com:anurodhp/libpthread.git|iokit-port||https://github.com/apple-oss-distributions/libpthread.git
 libplatform|https://github.com/apple-oss-distributions/libplatform.git|libplatform-254.80.2|
 Libsystem|https://github.com/apple-oss-distributions/Libsystem.git|Libsystem-1292.60.1|
 libdispatch|git@github.com:anurodhp/libdispatch.git|iokit-port||https://github.com/apple-oss-distributions/libdispatch.git
