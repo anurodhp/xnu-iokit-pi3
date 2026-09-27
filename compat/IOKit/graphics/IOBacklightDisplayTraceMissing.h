@@ -35,8 +35,8 @@
  * IOGraphics' own gGTrace (IOGraphicsKTrace.h:55) -- routing them there
  * with invented IDs would corrupt that buffer's decoding. This project
  * ships no decoder for either (same documented gap as the no-op
- * gTraceData/agdcTraceData breadcrumbs in tools/patch_iographics_gaps.sh
- * fix 3). So ABLTRACE_RAW evaluates and discards its arguments; the
+ * gTraceData/agdcTraceData breadcrumbs on the anurodhp/IOGraphics fork,
+ * commit 288df1c; DAR-355). So ABLTRACE_RAW evaluates and discards its arguments; the
  * staticABL_GT_* packing code in IODisplay.cpp still compiles as Apple
  * wrote it.
  *

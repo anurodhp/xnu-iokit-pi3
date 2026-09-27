@@ -11,8 +11,9 @@
  * IOHIDEventServiceKeys_Private.h in 1633 carries 8 of the dozens of
  * keys the sources use.
  *
- * AppleHIDUsageTables.h itself is NOT handled here. tools/patch_iohid_gaps.sh
- * replaces the stub with Apple's last real published version
+ * AppleHIDUsageTables.h itself is NOT handled here. The anurodhp/IOHIDFamily
+ * fork (iokit-port, DAR-356) replaces the stub with Apple's last real
+ * published version
  * (IOHIDFamily-1035.70.7, 268 lines), so everything that tag defines
  * comes from Apple's own file.
  *

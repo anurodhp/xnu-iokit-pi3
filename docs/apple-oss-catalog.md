@@ -422,7 +422,9 @@ scripting-language runtime as a goal in itself):
   hub types into the shell on both the HDMI console and serial, and the
   same keystrokes do nothing without boot-arg `hid-legacy-shim=1` (Apple's
   own switch for the kernel keyboard shim; `runvm_hdmi.sh` passes it). The
-  sources needed `tools/patch_iohid_gaps.sh` and `compat/iohid/`;
+  sources needed source fixes, now commits on the fork
+  `anurodhp/IOHIDFamily` (branch `iokit-port`, DAR-356), plus
+  `compat/iohid/`;
   `tools/iohid_gap_audit.sh` is the fast compile check. Userspace HID
   (`IOHIDManager`, `hidd`, event-system plugins) stays out of scope:
   there is no window server. Two findings about the drop itself:
@@ -452,7 +454,11 @@ scripting-language runtime as a goal in itself):
   `IOFramebufferPrivate` members, missing `GTraceBuffer` internals, 24
   missing `DBG_IOG_*` ktrace codes). Checked `IOGraphics-530.66`, `-585`
   and `-600`: same class of gap in all three, so the manifest pin is not
-  the problem and there is no complete tag to move to.
+  the problem and there is no complete tag to move to. The source fixes
+  are commits on the fork `anurodhp/IOGraphics`, branch `iokit-port`:
+  `IOGraphics-585` plus one commit per fix (DAR-355, 2026-09-27). That
+  fork is what `setup_third_party.sh` clones. They were previously
+  applied in place by the now-retired `tools/patch_iographics_gaps.sh`.
 - **Enterprise/network auth & directory services** (`Heimdal`,
   `OpenLDAP`, `KerberosHelper`, `MITKerberosShim`, `Security`,
   `security_certificates`, `security_authtrampoline`, `SecurityTokend`,

@@ -81,8 +81,11 @@ ln -s "$USB/IOUSBHIDDriver/Headers/IOUSBHIDDriver.h" "$STAGE/IOKit/usb/IOUSBHIDD
 ln -s "$USB/IOUSBCompositeDriver/Headers/IOUSBCompositeDriver.h" "$STAGE/IOKit/usb/IOUSBCompositeDriver.h"
 ln -s "$REPO_ROOT/generated/HIDDriverKit" "$STAGE/HIDDriverKit"
 
-# Source fixes first (idempotent), so a fresh clone audits the tree the
-# results describe. IOHID_AUDIT_NO_PATCH=1 audits the pristine drop.
+# IOHIDFamily's source fixes are commits on the anurodhp/IOHIDFamily fork
+# (iokit-port, DAR-356). This step only stages the fixed IOUSBHIDDriver.cpp
+# copy, and fails if the IOHIDFamily checkout is not the fork.
+# IOHID_AUDIT_NO_PATCH=1 skips it; the build/iohid/src/IOUSBHIDDriver.cpp
+# already staged, if any, is then used as-is.
 if [ -z "${IOHID_AUDIT_NO_PATCH:-}" ]; then
 	./tools/patch_iohid_gaps.sh >/dev/null
 fi

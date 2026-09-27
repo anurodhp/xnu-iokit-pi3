@@ -113,6 +113,23 @@
 #     upstream -- the same two real fixes now live as real committed
 #     history on that branch, same pattern as Libc/dyld/libdispatch
 #     above.
+#   - libpthread: 2026-09-27 (DAR-354): cloned from this project's own
+#     fork (git@github.com:anurodhp/libpthread.git, branch iokit-port)
+#     instead of upstream. iokit-port = the manifest-pinned
+#     `libpthread-454.80.2` tag (b4bdbdd) plus one commit, 58a80c8
+#     (DAR-257: pthread_getspecific()/pthread_setspecific() TSD storage
+#     mismatch for dynamically allocated keys, src/pthread_tsd.c). That
+#     commit had lived only on a local `bcm2837-bringup` branch with no
+#     fork remote, so a fresh clone silently dropped the fix.
+#   - IOGraphics: 2026-09-27 (DAR-355): cloned from this project's own
+#     fork (git@github.com:anurodhp/IOGraphics.git, branch iokit-port).
+#     iokit-port = the manifest-pinned `IOGraphics-585` tag (9d031bd) plus
+#     ten commits, one per compile-gap fix that
+#     tools/patch_iographics_gaps.sh (DAR-331) used to apply in place to
+#     the gitignored checkout. Each commit message carries that fix's
+#     citations. The script is retired, and
+#     tools/vendor_iographics_into_xnu.sh now fails fast if the checkout
+#     lacks the fixes.
 #   - IOPCIFamily: added 2026-09-08 (DAR-244), headers only. There is no
 #     PCI bus on BCM2837 and this project will never have one -- the pin
 #     exists because IOUSBFamily's IOUSBControllerV3.h declares an
@@ -152,10 +169,16 @@
 #     tag pinned here -- resolved from the manifest, not picked by
 #     recency. UPDATE 2026-09-24 (DAR-245): the kernel half is now being
 #     ported for USB keyboard input (see docs/apple-oss-catalog.md). All 91
-#     kext sources compile via tools/iohid_gap_audit.sh, which runs
-#     tools/patch_iohid_gaps.sh first. That script also fetches two OLDER
-#     tags on demand (1035.70.7 for AppleHIDUsageTables.h, 1633.60.4 for the
-#     FastPath user client), which is why this pin stays a plain clone.
+#     kext sources compile via tools/iohid_gap_audit.sh.
+#     2026-09-27 (DAR-356): cloned from this project's own fork
+#     (git@github.com:anurodhp/IOHIDFamily.git, branch iokit-port).
+#     iokit-port = `IOHIDFamily-1633.81.2` (4a76dd9) plus five commits,
+#     one per source fix that tools/patch_iohid_gaps.sh (fixes 1-5) used to
+#     apply in place. Two of them bring in files from OLDER tags as
+#     ordinary commits: AppleHIDUsageTables.h from 1035.70.7 and the
+#     FastPath user client from 1633.60.4. So a fresh clone no longer
+#     fetches extra tags. patch_iohid_gaps.sh now only stages the fixed
+#     IOUSBHIDDriver.cpp copy (IOUSBFamily, fixes 6/6b).
 #   - hfs, IOStorageFamily, IOUSBFamily, IONetworkingFamily, msdosfs: unmodified Apple
 #     open-source reference sources, pinned to an exact tag, no patching.
 #     CORRECTED 2026-08-24: a full `distribution-macOS` `macos-112` manifest
@@ -692,14 +715,14 @@ IOPCIFamily|https://github.com/apple-oss-distributions/IOPCIFamily.git|IOPCIFami
 IOSerialFamily|https://github.com/apple-oss-distributions/IOSerialFamily.git|IOSerialFamily-93.200.2|
 AppleUSBCDCDriver|https://github.com/apple-oss-distributions/AppleUSBCDCDriver.git|AppleUSBCDCDriver-4303.2.1|
 IONetworkingFamily|https://github.com/apple-oss-distributions/IONetworkingFamily.git|IONetworkingFamily-151.40.1|
-IOGraphics|https://github.com/apple-oss-distributions/IOGraphics.git|IOGraphics-585|
-IOHIDFamily|https://github.com/apple-oss-distributions/IOHIDFamily.git|IOHIDFamily-1633.81.2|
+IOGraphics|git@github.com:anurodhp/IOGraphics.git|iokit-port||https://github.com/apple-oss-distributions/IOGraphics.git
+IOHIDFamily|git@github.com:anurodhp/IOHIDFamily.git|iokit-port||https://github.com/apple-oss-distributions/IOHIDFamily.git
 xxHash|https://github.com/Cyan4973/xxHash.git|v0.8.2|
 lzfse|https://github.com/lzfse/lzfse.git|lzfse-1.0|
 msdosfs|https://github.com/apple-oss-distributions/msdosfs.git|msdosfs-435.60.1|
 dyld|git@github.com:anurodhp/dyld.git|iokit-port||https://github.com/apple-oss-distributions/dyld.git
 Libc|git@github.com:anurodhp/Libc.git|iokit-port||https://github.com/apple-oss-distributions/Libc.git
-libpthread|https://github.com/apple-oss-distributions/libpthread.git|libpthread-454.80.2|
+libpthread|git@github.com:anurodhp/libpthread.git|iokit-port||https://github.com/apple-oss-distributions/libpthread.git
 libplatform|https://github.com/apple-oss-distributions/libplatform.git|libplatform-254.80.2|
 Libsystem|https://github.com/apple-oss-distributions/Libsystem.git|Libsystem-1292.60.1|
 libdispatch|git@github.com:anurodhp/libdispatch.git|iokit-port||https://github.com/apple-oss-distributions/libdispatch.git

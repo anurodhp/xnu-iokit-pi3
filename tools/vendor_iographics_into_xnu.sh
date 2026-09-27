@@ -36,10 +36,14 @@
 # __PRIVATE_SPI__ went kernel-wide (Makefile.template:21) and needed a
 # paragraph defending that; this avoids needing one.
 #
-# SOURCE FIXES are not in this script: tools/patch_iographics_gaps.sh
-# holds them (each cited) and is run first, so the vendored copies are of
-# the already-patched checkout. tools/iographics_gap_audit.sh compiles the
-# same patched tree with the same flags and is the fast pre-check.
+# SOURCE FIXES are not in this script. They are commits on this
+# project's fork, anurodhp/IOGraphics branch iokit-port (IOGraphics-585
+# plus one commit per fix, each with its citation in the commit message;
+# DAR-355), which setup_third_party.sh clones. They used to be applied in
+# place by tools/patch_iographics_gaps.sh, which is now retired. This
+# script only checks that the checkout is the fork.
+# tools/iographics_gap_audit.sh compiles the same tree with the same flags
+# and is the fast pre-check.
 #
 # NOT HANDLED HERE, and needed for the family to actually run:
 #   - IOGraphicsFamilyModuleStart() (IOFramebuffer.cpp:1978) is the kext's
@@ -57,8 +61,8 @@
 #     the bottom of this script fails the vendoring if that ever changes.
 #
 # IMPORTANT: the copies under third_party/xnu-7195 are GENERATED. Fix
-# Apple's source in tools/patch_iographics_gaps.sh, our headers under
-# compat/, never the vendored copy.
+# Apple's source with a commit on anurodhp/IOGraphics (iokit-port) and
+# our headers under compat/. Never edit the vendored copy.
 #
 # Run directly, or let tools/build_xnu_7195.sh call it (it does).
 # Idempotent.
@@ -95,8 +99,17 @@ if ! grep -q "XXH_NO_STDLIB" "$XXH/xxhash.h"; then
 	exit 1
 fi
 
-# Patch Apple's sources first; everything below copies the patched tree.
-"$REPO_ROOT/tools/patch_iographics_gaps.sh" > /dev/null
+# Apple's sources must already carry our fixes, i.e. come from the
+# anurodhp/IOGraphics fork (DAR-355). Check the first and last fix
+# commits' markers so a plain upstream clone fails here, not with a
+# dozen compile errors later.
+if ! grep -q "void sysAssertGated(void);" "$IOG/IOGraphicsFamily/IOKit/graphics/IOFramebufferPrivate.h" ||
+   ! grep -q "IOReturn IOFramebuffer::diagnoseReport(" "$IOG/IOGraphicsFamily/IOFramebuffer.cpp"; then
+	echo "error: $IOG lacks this project's fixes -- it is not the" >&2
+	echo "       anurodhp/IOGraphics iokit-port fork. Re-clone it:" >&2
+	echo "       rm -rf $IOG && ./setup_third_party.sh" >&2
+	exit 1
+fi
 
 G="$XNU/iokit/Graphics"
 G_FAM="$G/IOGraphicsFamily"
@@ -169,7 +182,7 @@ copy_into "$H_HID" "$HID/IOHIDSystem/IOKit/hidsystem/IOHIDTypes.h"
 copy_into "$H_ACPI" compat/IOKit/acpi/IOACPIPlatformExpert.h
 
 # Our gap headers. IOGraphicsXXHash.h is reached as
-# <IOKit/graphics/IOGraphicsXXHash.h> (patch_iographics_gaps.sh fix 9);
+# <IOKit/graphics/IOGraphicsXXHash.h> (included by IODisplay.cpp on the fork);
 # the other two are force-included, see the Makefile.template block.
 copy_into "$H_GFX" compat/IOKit/graphics/IOGraphicsXXHash.h
 copy_into "$G_COMPAT" \
@@ -193,7 +206,7 @@ if [ ${#diverged[@]} -ne 0 ]; then
 	for f in "${diverged[@]}"; do
 		echo "         git -C $XNU diff -- $f" >&2
 	done
-	echo "       Move the fix into tools/patch_iographics_gaps.sh or compat/, then re-run." >&2
+	echo "       Move the fix into anurodhp/IOGraphics (iokit-port) or compat/, then re-run." >&2
 	exit 1
 fi
 
