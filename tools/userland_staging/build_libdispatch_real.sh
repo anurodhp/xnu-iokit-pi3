@@ -314,9 +314,13 @@ done
 # in this dylib's own dependency stack) and real semaphore_signal/
 # semaphore_wait (already curated via that same script's existing
 # semaphore_wrap.o extraction).
-CFLAGS_OS_SEMAPHORE=("${CFLAGS[@]}" -I "$OUT/compat_include" -idirafter "$XNU/libkern")
-"$CLANG" "${CFLAGS_OS_SEMAPHORE[@]}" "$PLATFORM/src/os/semaphore.c" -o "$OUT/dispatch_obj/os_semaphore.o"
-echo "compiled: 21/21 core+data+event+lock+yield+os_semaphore dispatch files (zero errors)"
+# (DAR-416 step 1a-ii, 2026-09-27: libplatform's os/semaphore.c is no longer
+# compiled into libdispatch. It is libsystem_platform's now, its Apple home
+# (build_libsystem_platform.sh), and lock.c binds _os_semaphore_* there.
+# The history above explains why it was here. The rm keeps a stale object
+# from an older build out of the archive below.)
+rm -f "$OUT/dispatch_obj/os_semaphore.o"
+echo "compiled: 20/20 core+data+event+lock+yield dispatch files (zero errors)"
 
 # Real gap, same "always-run init reference, not the whole real file"
 # class as os_semaphore.o above, found immediately after fixing it:
@@ -348,6 +352,7 @@ echo "compiled: real block.cpp (C++11, no ObjC)"
 echo "compiled: real protocolUser.c/protocolServer.c"
 
 rm -f "$OUT/libdispatch_real.a"
+rm -f "$OUT/libdispatch_real.a"   # ar rcs into an existing archive keeps members no longer built
 ar rcs "$OUT/libdispatch_real.a" "$OUT"/dispatch_obj/*.o "$OUT"/dispatch_obj/event/*.o
 echo "wrote $OUT/libdispatch_real.a ($(ls "$OUT"/dispatch_obj/*.o "$OUT"/dispatch_obj/event/*.o | wc -l | tr -d ' ') objects)"
 
