@@ -155,6 +155,33 @@ extern int task_get_special_port(__iokit_mach_port_t task, int which_port,
                                  __iokit_mach_port_t *special_port);
 #define __IOKIT_TASK_BOOTSTRAP_PORT 4   /* osfmk/mach/task_special_ports.h */
 
+/* DAR-310 (2026-09-25): every dynamically-linked process saw an EMPTY
+ * environment. dyld does write the kernel's envp -- dyldMain.cpp:674
+ * stores it through state.vars->environPtr, which is libdyld.dylib's own
+ * `environ` -- but getenv()/setenv()/_NSGetEnviron() live in
+ * libsystem_c.dylib and use THAT dylib's `environ` (build_libsystem_c.sh,
+ * environ_storage_compat.c: a static empty array). Nothing copied one
+ * into the other. Real symptom: launchd put __LAUNCHD_FD into the spawned
+ * job's envp, syslogd's launch_msg(LAUNCH_KEY_CHECKIN) could not find it,
+ * and syslogd exited "launchd checkin failed" on every start.
+ *
+ * Real Apple does this in libSystem_initializer, which dyld calls with
+ * (argc, argv, envp, apple, vars) (third_party/dyld/dyld/Loader.cpp:1273):
+ * Libsystem/init.c:224 passes envp/vars to _libc_initializer()
+ * (Libc/sys/_libc_init.c:50), whose _program_vars_init()
+ * (Libc/sys/crt_externs.c:94) points libc's environ at the process's
+ * real environment. Same effect here via libsystem_c's exported
+ * _NSGetEnviron() (== &its environ). It cannot be a constructor inside
+ * libsystem_c.dylib: see the pthread_main_thread_bootstrap note above --
+ * dyld never runs /usr/lib/system/lib* initializers
+ * (DyldAPIs.cpp:3316, runAllInitializersForMain). Done first, so
+ * everything later in this initializer and every other image's
+ * initializer sees the real environment. Complements DAR-251 below:
+ * _program_vars_init() fills _NSGetArgv()/_NSGetProgname() but, in this
+ * port, not _NSGetEnviron(), which build_libsystem_c.sh keeps on
+ * libsystem_c's own `environ` storage. */
+extern char ***_NSGetEnviron(void);
+
 /* DAR-251: dyld-940 passes its ProgramVars as every initializer's 5th
  * argument (third_party/dyld/dyld/DyldProcessConfig.h:67); real
  * libSystem_initializer hands it to _libc_initializer() ->
@@ -179,7 +206,9 @@ static void libsystem_call_dyld_initializer(int argc, const char *argv[],
                                             const char *envp[],
                                             const char *apple[],
                                             const struct ProgramVars *vars) {
-    (void)argc; (void)argv; (void)envp;
+    (void)argc; (void)argv;
+    if (envp != 0)
+        *_NSGetEnviron() = (char **)envp;
     __libc_program_vars_init(vars);
     /* Order matters: mach_init() must run before _dyld_initializer(),
      * not after -- _dyld_initializer() itself (real, unmodified dyld

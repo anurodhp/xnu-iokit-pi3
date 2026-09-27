@@ -984,7 +984,15 @@ rm -f "$OUT/launchd.macho"
     "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/system/libCoreFoundation.dylib" \
     "$OUT/system/libxpc.dylib" "$OUT/system/libbsm.dylib" \
-    "$OUT/system/libdispatch.dylib" "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
+    "$OUT/system/libdispatch.dylib" \
+    `# libsystem_c.dylib BEFORE libdyld.dylib (DAR-310): both export` \
+    `# _environ, and getenv()/setenv() use libsystem_c's. With libdyld` \
+    `# first, core.c:4601's setenv(LAUNCHD_TRUSTED_FD_ENV) wrote one copy` \
+    `# and core.c:4901's posix_spawn(..., environ) read the other, so no` \
+    `# job ever received __LAUNCHD_FD and every launch_msg(CHECKIN)` \
+    `# failed -- syslogd's "launchd checkin failed" exit loop.` \
+    "$OUT/system/libsystem_c.dylib" \
+    "$OUT/system/libdyld.dylib" "$OUT/system/libSystem.B.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
     "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libremovefile.dylib" \
     "$OUT/system/libsystem_c.dylib" \

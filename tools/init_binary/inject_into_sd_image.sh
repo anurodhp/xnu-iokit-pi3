@@ -1557,6 +1557,11 @@ elif [ -f "$MNT/usr/appleinternal/sbin/launchd.development" ]; then
     echo "= removed stale /usr/appleinternal/sbin/launchd.development -- real /sbin/launchd is PID 1 again"
 fi
 
+install_smoketest tools/userland_staging/asl_smoketest.macho "bin/asl_smoketest" \
+    "= tools/userland_staging/asl_smoketest.macho not built -- run tools/userland_staging/build_libsystem_asl_dylib.sh first if wanted, skipping" \
+    "  (real syslog-385 ASL client -> syslogd dbserver.c -- DAR-121, see" \
+    "  tools/userland_staging/asl_smoketest.c; needs /usr/lib/system/libsystem_asl.dylib)"
+
 install_smoketest tools/userland_staging/libinfo_smoketest.macho "bin/libinfo_smoketest" \
     "= tools/userland_staging/libinfo_smoketest.macho not built -- run tools/userland_staging/build_libinfo.sh first if wanted, skipping" \
     "  (real Libinfo si_module files-only lookups -- DAR-181, see" \
