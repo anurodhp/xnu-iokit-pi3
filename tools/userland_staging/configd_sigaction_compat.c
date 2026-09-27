@@ -43,11 +43,12 @@
  *      SA_VALIDATE_SIGRETURN_FROM_SIGTRAMP
  *   -> __sigaction() raw trap
  *
- * Both of those real files are already compiled into this project's
- * libsystem_c.dylib (build_libsystem_c.sh:146-162, Libc_sys_sigaction.o
- * and libplatform_sigaction.o), and `_sigtramp` is already a real export
- * of libsystem_kernel.dylib -- so the correct implementation was present
- * all along and simply was not being reached from here.
+ * Both of those real files are already built into this project's
+ * libSystem: sys/sigaction.c into libsystem_c.dylib, and libplatform's
+ * sigaction.c together with its real _sigtramp into libsystem_platform.dylib
+ * (DAR-405; before that the trampoline was a libsystem_kernel compat copy).
+ * So the correct implementation was present all along and simply was not
+ * being reached from here.
  *
  * Forwarding to the public `sigaction()` is therefore both the minimal
  * fix and the exact Apple-parity one. It also matches what this project

@@ -173,6 +173,8 @@ mkdir -p "$EXTRACT"
 (cd "$EXTRACT" && ar x "../../libc_gen.a")
 (cd "$EXTRACT" && ar x "../../libc_stdio.a")
 (cd "$EXTRACT" && ar x "../../libc_locale_for_stdio.a")
+# (Since DAR-405, 2026-09-27, only Libc_sys_sigaction.o is taken here; the
+# history below describes the older two-object arrangement.)
 # Libc_sys_sigaction.o/libplatform_sigaction.o (DAR-164, real gap found
 # root-causing syslogd/pd-console-login's post-exec abort -- see
 # build_libsystem_kernel.sh's own updated comment for the full real
@@ -186,10 +188,13 @@ mkdir -p "$EXTRACT"
 # Both objects are already real and built (extracted here from
 # libncurses.a, same real source, same real selective-extraction pattern
 # build_launchd_core.sh's own launchd_libc_extras_obj already established
-# for this exact pair) -- not recompiled. Needs the raw ___sigaction trap
-# + __sigtramp trampoline, both real exports of the sibling
-# libsystem_kernel.dylib linked below by this same fix.
-(cd "$EXTRACT" && ar x "../../libncurses.a" Libc_sys_sigaction.o libplatform_sigaction.o)
+# for this exact pair) -- not recompiled. sigaction() calls
+# ___platform_sigaction, which libsystem_platform.dylib now exports along
+# with the real _sigtramp it installs (DAR-405); the raw ___sigaction
+# trap is libsystem_kernel.dylib's.
+# libplatform_sigaction.o is no longer taken (DAR-405): __platform_sigaction
+# now comes from libsystem_platform, next to the real _sigtramp it installs.
+(cd "$EXTRACT" && ar x "../../libncurses.a" Libc_sys_sigaction.o)
 # cerror_stub.o dropped 2026-08-30 (static-linking cleanup, Phase 1d):
 # it defines a plain, MUTABLE `int errno` global plus __error/cerror/
 # cerror_nocancel/_pthread_exit_if_canceled (see cerror_stub.c's own

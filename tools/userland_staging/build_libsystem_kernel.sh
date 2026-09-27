@@ -546,8 +546,7 @@ done
 # real canonical home per real Apple architecture. Real Libc/sys/
 # sigaction.c (wired into libsystem_c.dylib by this same fix, see
 # build_libsystem_c.sh's own updated comment) calls libplatform's
-# __platform_sigaction(), which calls this raw trap plus __sigtramp
-# (compiled just below) directly by name -- confirmed via a real QEMU
+# __platform_sigaction(), which calls this raw trap directly by name -- confirmed via a real QEMU
 # boot: syslogd.macho and pd-console-login (the first real fork()+exec()'d
 # non-launchd dyld processes this port has ever booted, DAR-163) each
 # abort() immediately post-exec with dyld's own real fatal error
@@ -557,11 +556,14 @@ done
 # abort_with_payload() probe (bsd/kern/kern_exit.c), not guessed. Both
 # reexport this dylib transitively (libSystem.B.dylib and libdispatch.dylib
 # each real-reexport libsystem_c.dylib, confirmed via otool -l), so this
-# dylib owning the raw trap + trampoline and libsystem_c.dylib owning the
+# dylib owning the raw trap and libsystem_c.dylib owning the
 # public sigaction()/_sigaction_nobind() wrappers matches real Apple's
 # actual split and closes both binaries' bindings with one real fix.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
-    libsystem_kernel_sigtramp_compat.c -o "$OUT/libsystem_kernel/sigtramp_compat.o"
+# The trampoline is NOT here any more (DAR-405, 2026-09-27): the old
+# libsystem_kernel_sigtramp_compat.c passed an SA_SIGINFO handler
+# (sig, infostyle, sig). libplatform's real _sigtramp
+# (src/setjmp/generic/sigtramp.c) and __platform_sigaction now live
+# together in libsystem_platform, as on Apple (build_libsystem_platform.sh).
 
 # proc_pidinfo() (DAR-164, real gap found root-causing syslogd's
 # post-exec abort, same investigation as ___sigaction/__sigtramp above):
@@ -1001,7 +1003,7 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/thread_get_special_reply_port_trap.o" \
     "$OUT/libsystem_kernel/mach_portUser.o" "$OUT/libsystem_kernel/mach_port_set_attributes.o" \
     "$OUT/libsystem_kernel/mig_reply_setup.o" \
-    "$OUT/libsystem_kernel/sys___sigaction.o" "$OUT/libsystem_kernel/sigtramp_compat.o" \
+    "$OUT/libsystem_kernel/sys___sigaction.o" \
     "$OUT/libsystem_kernel/proc_pidinfo_compat.o" \
     "$OUT/libsystem_kernel/voucher_funcptr_compat.o" \
     "$OUT/libsystem_kernel/sys_setegid.o" "$OUT/libsystem_kernel/sys_seteuid.o" \

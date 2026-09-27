@@ -83,7 +83,8 @@ int lchown(const char *path, uid_t owner, gid_t group) {
  * comment's old prior text) predate DAR-164/DAR-153 (fdc375d, 4bbd009),
  * which gave `sigaction`/`_sigaction_nobind` a real canonical home in
  * libsystem_c.dylib -- a real trampoline pairing down to
- * libsystem_kernel.dylib's own `__sigaction`/`__sigtramp` (confirmed via
+ * libsystem_kernel.dylib's own `__sigaction` and (since DAR-405)
+ * libsystem_platform.dylib's real `_sigtramp` (confirmed via
  * `xcrun dyld_info -exports`), strictly more correct than this file's old
  * no-sa_tramp raw trap. cp_mv_syscalls.c is a COMMON_EXTRA object linked
  * into every build_simple_cmds.sh binary (not just cp/mv), so the old

@@ -211,7 +211,9 @@ asm(
     "  mov x21, x5\n"      /* token */
     "  mov x22, x0\n"      /* catcher */
     "  mov x0, x2\n"       /* sig */
-    "  blr x22\n"
+    "  mov x1, x3\n"       /* siginfo_t * (DAR-405: SA_SIGINFO handlers */
+    "  mov x2, x4\n"       /* ucontext *   get (sig, info, uctx), as in */
+    "  blr x22\n"          /* libplatform sigtramp.c; unix_signal.c:166-171) */
     "  mov x0, x20\n"      /* sigreturn(uctx, infostyle, token) */
     "  mov x1, x19\n"
     "  mov x2, x21\n"

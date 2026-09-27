@@ -35,6 +35,22 @@
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
+#include <mach/mach_time.h>
+
+/* Seconds on the monotonic clock. The waits below must not use time(NULL):
+ * alarm() runs on the monotonic clock (ITIMER_REAL is armed from
+ * microuptime() via tvtoabstime(), xnu bsd/kern/kern_time.c:432-439), but
+ * the wall clock is stepped soon after boot (fake-hwclock, then chronyd).
+ * A step during a wait ended the 10 s window at once and reported "no
+ * SIGALRM" (DAR-405 QEMU runs, 2026-09-27: 1 of 6 runs, always the first
+ * after boot). */
+static long mono_s(void)
+{
+	static mach_timebase_info_data_t tb;
+	if (tb.denom == 0)
+		mach_timebase_info(&tb);
+	return (long)(mach_absolute_time() * tb.numer / tb.denom / 1000000000ull);
+}
 
 static volatile sig_atomic_t alarm_fired;
 static volatile sig_atomic_t alarm_sig;
@@ -62,7 +78,7 @@ static int
 test_alarm(void)
 {
 	struct sigaction sa, osa;
-	time_t t0, t1;
+	long t0, t1;
 	unsigned int prev;
 
 	say("alarm: step 1 -- installing SIGALRM handler via sigaction(2)");
@@ -89,19 +105,19 @@ test_alarm(void)
 	prev = alarm(2);
 	say("alarm: step 6 -- alarm(2) returned %u, timer armed", prev);
 
-	t0 = time(NULL);
-	say("alarm: step 7 -- waiting for SIGALRM (t0=%ld)", (long)t0);
+	t0 = mono_s();
+	say("alarm: step 7 -- waiting for SIGALRM (t0=%ld)", t0);
 	while (!alarm_fired) {
 		struct timespec ts = { 0, 100 * 1000 * 1000 };
 		nanosleep(&ts, NULL);
-		if (time(NULL) - t0 > 10) {
+		if (mono_s() - t0 > 10) {
 			say("alarm: FAIL no SIGALRM after 10s (timer never fired)");
 			return 1;
 		}
 	}
-	t1 = time(NULL);
+	t1 = mono_s();
 	say("alarm: step 8 -- SIGALRM delivered (sig=%d) after %ld s",
-	    (int)alarm_sig, (long)(t1 - t0));
+	    (int)alarm_sig, t1 - t0);
 	if (t1 - t0 < 1) {
 		say("alarm: SUSPECT timer fired immediately -- tvtoabstime/timebase");
 	}
@@ -299,7 +315,7 @@ test_alarm_in_child(void)
 	}
 	if (pid == 0) {
 		struct sigaction sa;
-		time_t t0;
+		long t0;
 
 		say("alarmfork: step 2 -- in child pid %d, installing handler",
 		    (int)getpid());
@@ -315,11 +331,11 @@ test_alarm_in_child(void)
 		    "(this is what sshd does)");
 		alarm(2);
 		say("alarmfork: step 4 -- alarm(2) returned, waiting");
-		t0 = time(NULL);
+		t0 = mono_s();
 		while (!alarm_fired) {
 			struct timespec ts = { 0, 100 * 1000 * 1000 };
 			nanosleep(&ts, NULL);
-			if (time(NULL) - t0 > 10) {
+			if (mono_s() - t0 > 10) {
 				say("alarmfork: FAIL no SIGALRM after 10s");
 				_exit(2);
 			}

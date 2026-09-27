@@ -125,6 +125,8 @@ rm -f "$EXTRACT"/______third_party_Libc_stdlib_FreeBSD_atoi_c.o \
 # -- but left this dylib's own pre-existing, independently-compiled
 # copies of the same real sources in place, so 5 symbols shipped with
 # two live definitions each (dup_symbol_audit.sh FAIL).
+# (DAR-405, 2026-09-27: ___platform_sigaction and the trampoline have
+# since moved to libsystem_platform.dylib; libsystem_c keeps _sigaction.)
 #
 # Removal (not narrowing) is correct for these two specific objects:
 # confirmed via `nm -m` that they define NOTHING else at all --

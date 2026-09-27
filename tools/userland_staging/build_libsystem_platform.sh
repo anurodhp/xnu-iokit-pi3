@@ -174,10 +174,14 @@ echo "apple_platform: bzero.o/memmove.o recompiled with -DVARIANT_STATIC=1 (real
 #     It was in libsystem_c before, so it had to be deferred with -Wl,-U,
 #     which gave a <flat-namespace> bind that resolved to the main
 #     executable's private copy first.
-#   - sigtramp.c also defines _sigtramp and __in_sigtramp. This tree's
-#     real signal trampoline is libsystem_kernel.dylib's __sigtramp
-#     (libsystem_kernel_sigtramp_compat.c, DAR-164), so those two are
-#     unexported in the link below rather than becoming a second owner.
+#   - sigaction.c (__platform_sigaction, DAR-405): Libc's sigaction()
+#     in libsystem_c calls it. It installs sigtramp.c's _sigtramp as
+#     sa_tramp (sigaction.c:50-62), so the trampoline the kernel enters
+#     is the real one, which calls SA_SIGINFO handlers with
+#     (sig, siginfo, uctx) and maintains __in_sigtramp (sigtramp.c).
+#     Both are libplatform sources, and Apple ships them together in
+#     libsystem_platform. _sigtramp and __in_sigtramp stay unexported
+#     (OS_NOEXPORT in sigtramp.c); __platform_sigaction is exported.
 MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 if [ ! -f "$MACSDK/usr/include/architecture/arm/asm_help.h" ]; then
     echo "error: $MACSDK/usr/include/architecture/arm/asm_help.h not found (needed for libplatform's setjmp.s)" >&2
@@ -186,6 +190,7 @@ fi
 "$CLANG" $CFLAGS -idirafter "$MACSDK/usr/include" \
     "$PLATFORM/src/setjmp/arm64/setjmp.s" -o "$OUT/libsystem_platform/setjmp.o"
 "$CLANG" $CFLAGS "$PLATFORM/src/setjmp/generic/sigtramp.c" -o "$OUT/libsystem_platform/sigtramp.o"
+"$CLANG" $CFLAGS -D_DARWIN_C_SOURCE "$PLATFORM/src/setjmp/generic/sigaction.c" -o "$OUT/libsystem_platform/sigaction.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c libplatform_mach_traps.s -o "$OUT/libsystem_platform/libplatform_mach_traps.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -DPRIVATE=1 \
     -I "$OUT/compat_include" -idirafter "$XNU/osfmk" \
@@ -228,6 +233,7 @@ rm -f "$OUT/system/libsystem_platform.dylib"
     "$OUT/libsystem_platform/mach_timebase_info.o" "$OUT/libsystem_platform/libplatform_syscalls.o" \
     "$OUT/libsystem_platform/libplatform_thread_self.o" \
     "$OUT/libsystem_platform/setjmp.o" "$OUT/libsystem_platform/sigtramp.o" \
+    "$OUT/libsystem_platform/sigaction.o" \
     "$OUT/system/libsystem_kernel.dylib"
 
 echo "wrote $OUT/system/libsystem_platform.dylib"

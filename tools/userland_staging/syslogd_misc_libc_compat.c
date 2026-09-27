@@ -6,8 +6,9 @@
  * unlink, setsockopt, sendto, pututxline) written when syslogd's own
  * static libc stack genuinely had no other source for them. All 23 are
  * now real exports of a dylib syslogd.macho actually loads --
- * ___sigaction/__sigtramp from libsystem_kernel.dylib (DAR-164's
- * sigtramp_compat.o, written to fix this exact process), atol/strtoll/
+ * ___sigaction from libsystem_kernel.dylib and the trampoline from
+ * libsystem_platform.dylib (DAR-405 replaced DAR-164's libsystem_kernel
+ * sigtramp_compat.o with libplatform's real _sigtramp), atol/strtoll/
  * strtoul/unlink/gmtime_r/localtime_r/mktime/timegm/ctime_r from
  * libsystem_c.dylib (the last five via the real Apple/FreeBSD
  * stdtime/FreeBSD/localtime.c now merged in -- a real, TZ-database-

@@ -83,6 +83,8 @@
 #include <unistd.h>
 #include <string.h>
 #include <fcntl.h>
+#include <stdint.h>
+#include <sys/ucontext.h>
 
 static int g_out = 2;
 static int g_fail;
@@ -184,6 +186,26 @@ static void mask_probing_handler(int signo)
 	} else {
 		g_mask_held = -1;
 	}
+}
+
+/* TEST 4 (DAR-405): an SA_SIGINFO handler must receive (sig, siginfo_t *,
+ * ucontext *). The kernel enters the trampoline with x2 = sig, x3 = siginfo,
+ * x4 = ucontext (bsd/dev/arm/unix_signal.c:166-171), and libplatform's
+ * _sigtramp passes them on (src/setjmp/generic/sigtramp.c). The old compat
+ * trampoline passed (sig, infostyle, sig), so `info` was a small integer
+ * here. Pointers are range-checked before use, so that case reports FAIL
+ * rather than faulting. */
+static volatile int g_si_signo = -1, g_si_pid = -1, g_si_ok = 0;
+static void siginfo_handler(int signo, siginfo_t *info, void *uctx)
+{
+	g_hits++;
+	g_last_signo = signo;
+	g_si_ok = 0;
+	if ((uintptr_t)info < 0x100000 || (uintptr_t)uctx < 0x100000)
+		return;
+	g_si_signo = info->si_signo;
+	g_si_pid = info->si_pid;
+	g_si_ok = ((ucontext_t *)uctx)->uc_mcontext != NULL;
 }
 
 /* Common body: install however the caller wants, raise, and verify all
@@ -307,6 +329,39 @@ static int test_mask_honoured(void)
 	return 0;
 }
 
+static int test_siginfo(void)
+{
+	struct sigaction nact;
+	int rc;
+
+	diag("\n=== TEST 4: SA_SIGINFO handler gets (sig, siginfo_t *, "
+	     "ucontext *) (DAR-405) ===\n");
+	memset(&nact, 0, sizeof(nact));
+	nact.sa_sigaction = siginfo_handler;
+	sigemptyset(&nact.sa_mask);
+	nact.sa_flags = SA_SIGINFO;
+	if (sigaction(SIGUSR1, &nact, NULL) == -1) {
+		diag("[T4] FAIL: sigaction(SIGUSR1, SA_SIGINFO) returned -1\n");
+		return 1;
+	}
+	rc = run_delivery_check("[T4]", SIGUSR1);
+	if (rc != 0) return rc;
+	if (!g_si_ok) {
+		diag("[T4] FAIL: siginfo_t * or ucontext * is not a valid "
+		     "pointer (or uc_mcontext is NULL) -- the trampoline did not "
+		     "pass x3/x4\n");
+		return 1;
+	}
+	if (g_si_signo != SIGUSR1 || g_si_pid != (int)getpid()) {
+		diag_num("[T4] FAIL: info->si_signo = ", g_si_signo);
+		diag_num("[T4]       info->si_pid   = ", g_si_pid);
+		return 1;
+	}
+	diag("[T4] PASS: info->si_signo and si_pid are right, and ucontext "
+	     "has an mcontext\n");
+	return 0;
+}
+
 int main(void)
 {
 	int fd = open("/dev/console", O_WRONLY);
@@ -317,6 +372,7 @@ int main(void)
 	g_fail += test_signal3();
 	g_fail += test_sigaction();
 	g_fail += test_mask_honoured();
+	g_fail += test_siginfo();
 
 	if (g_fail == 0) {
 		diag("\nsigaction_tramp_smoketest: ALL PASS\n");
