@@ -169,10 +169,16 @@
 #     tag pinned here -- resolved from the manifest, not picked by
 #     recency. UPDATE 2026-09-24 (DAR-245): the kernel half is now being
 #     ported for USB keyboard input (see docs/apple-oss-catalog.md). All 91
-#     kext sources compile via tools/iohid_gap_audit.sh, which runs
-#     tools/patch_iohid_gaps.sh first. That script also fetches two OLDER
-#     tags on demand (1035.70.7 for AppleHIDUsageTables.h, 1633.60.4 for the
-#     FastPath user client), which is why this pin stays a plain clone.
+#     kext sources compile via tools/iohid_gap_audit.sh.
+#     2026-09-27 (DAR-356): cloned from this project's own fork
+#     (git@github.com:anurodhp/IOHIDFamily.git, branch iokit-port).
+#     iokit-port = `IOHIDFamily-1633.81.2` (4a76dd9) plus five commits,
+#     one per source fix that tools/patch_iohid_gaps.sh (fixes 1-5) used to
+#     apply in place. Two of them bring in files from OLDER tags as
+#     ordinary commits: AppleHIDUsageTables.h from 1035.70.7 and the
+#     FastPath user client from 1633.60.4. So a fresh clone no longer
+#     fetches extra tags. patch_iohid_gaps.sh now only stages the fixed
+#     IOUSBHIDDriver.cpp copy (IOUSBFamily, fixes 6/6b).
 #   - hfs, IOStorageFamily, IOUSBFamily, IONetworkingFamily, msdosfs: unmodified Apple
 #     open-source reference sources, pinned to an exact tag, no patching.
 #     CORRECTED 2026-08-24: a full `distribution-macOS` `macos-112` manifest
@@ -710,7 +716,7 @@ IOSerialFamily|https://github.com/apple-oss-distributions/IOSerialFamily.git|IOS
 AppleUSBCDCDriver|https://github.com/apple-oss-distributions/AppleUSBCDCDriver.git|AppleUSBCDCDriver-4303.2.1|
 IONetworkingFamily|https://github.com/apple-oss-distributions/IONetworkingFamily.git|IONetworkingFamily-151.40.1|
 IOGraphics|git@github.com:anurodhp/IOGraphics.git|iokit-port||https://github.com/apple-oss-distributions/IOGraphics.git
-IOHIDFamily|https://github.com/apple-oss-distributions/IOHIDFamily.git|IOHIDFamily-1633.81.2|
+IOHIDFamily|git@github.com:anurodhp/IOHIDFamily.git|iokit-port||https://github.com/apple-oss-distributions/IOHIDFamily.git
 xxHash|https://github.com/Cyan4973/xxHash.git|v0.8.2|
 lzfse|https://github.com/lzfse/lzfse.git|lzfse-1.0|
 msdosfs|https://github.com/apple-oss-distributions/msdosfs.git|msdosfs-435.60.1|

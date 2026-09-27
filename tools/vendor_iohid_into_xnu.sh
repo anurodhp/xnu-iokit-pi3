@@ -39,8 +39,12 @@
 #   dext loading, so no personality could ever instantiate them. They compile
 #   (the audit checks), and adding them back is one line if dexts ever exist.
 #
-# SOURCE FIXES are in tools/patch_iohid_gaps.sh, which runs first; the
-# copies under third_party/xnu-7195 are GENERATED and are overwritten.
+# SOURCE FIXES: IOHIDFamily's are commits on the fork anurodhp/IOHIDFamily
+# (branch iokit-port, DAR-356), which setup_third_party.sh clones.
+# IOUSBHIDDriver.cpp's are applied to a staged copy by
+# tools/patch_iohid_gaps.sh, which runs first and also checks that the
+# IOHIDFamily checkout is the fork. The copies under third_party/xnu-7195
+# are GENERATED and are overwritten.
 #
 # Run directly, or let tools/build_xnu_7195.sh call it. Idempotent.
 
@@ -63,7 +67,8 @@ for f in "$HID/IOHIDFamily/IOHIDDevice.cpp" "$HID/IOHIDSystem/IOHIDSystem.cpp" \
 	fi
 done
 
-# Patch Apple's sources (and stage the patched IOUSBHIDDriver.cpp) first,
+# Check the IOHIDFamily checkout is the fork and stage the patched
+# IOUSBHIDDriver.cpp first,
 # and make sure the generated HIDDriverKit headers match the pinned .iig.
 "$REPO_ROOT/tools/patch_iohid_gaps.sh" > /dev/null
 if [ ! -f generated/HIDDriverKit/IOHIDDevice.h ] || \
@@ -157,7 +162,7 @@ if [ ${#diverged[@]} -ne 0 ]; then
 	echo "error: these vendored files differ from their source AND have" >&2
 	echo "       uncommitted edits in the XNU tree. Refusing to overwrite:" >&2
 	for f in "${diverged[@]}"; do echo "         git -C $XNU diff -- $f" >&2; done
-	echo "       Move the fix into tools/patch_iohid_gaps.sh or compat/iohid/, then re-run." >&2
+	echo "       Move the fix into anurodhp/IOHIDFamily (iokit-port), tools/patch_iohid_gaps.sh (IOUSBHIDDriver) or compat/iohid/, then re-run." >&2
 	exit 1
 fi
 

@@ -37,6 +37,7 @@ The main repo itself is `anurodhp/xnu-iokit-pi3`.
 | `Libinfo` | `anurodhp/Libinfo` | `iokit-port` | apple-oss-distributions |
 | `libpthread` | `anurodhp/libpthread` | `iokit-port` | apple-oss-distributions |
 | `IOGraphics` | `anurodhp/IOGraphics` | `iokit-port` | apple-oss-distributions |
+| `IOHIDFamily` | `anurodhp/IOHIDFamily` | `iokit-port` | apple-oss-distributions |
 | `Csu` | `anurodhp/Csu` | `bcm2837-bringup` | apple-oss-distributions |
 | `bash` | `anurodhp/bash` | `iokit-port` | apple-oss-distributions |
 | `cron` | `anurodhp/cron` | `iokit-port` | apple-oss-distributions |
@@ -53,6 +54,17 @@ Apple as `origin` and the fork as `fork`, so push with `git push fork
 before pushing. A fresh `setup_third_party.sh` clone always has the fork
 as `origin` and the upstream as `upstream`.
 
+`libpthread`, `IOGraphics` and `IOHIDFamily` were moved to forks on
+2026-09-27 (DAR-354/355/356). Each fork branch was checked to match the
+live checkout's content exactly (`diff -rq`). Checkouts made before that
+date still have Apple as their only remote: libpthread is on a local
+`bcm2837-bringup` branch, and IOGraphics/IOHIDFamily sit at a detached
+upstream tag with a dirty tree. To switch one over in place without
+changing any file:
+`git remote rename origin upstream && git remote add origin
+git@github.com:anurodhp/<repo>.git && git fetch origin && git checkout
+-B iokit-port origin/iokit-port`. Re-cloning also works.
+
 u-boot and dtc-AppleDeviceTree were the last two repos with leftover
 patch files. On 2026-09-24 both forks' `HEAD^{tree}` was confirmed
 identical to "upstream base + `git am` of the patch", and the patch
@@ -64,8 +76,7 @@ files were deleted.
 
 | Checkout | What's local | Ticket |
 |---|---|---|
-| `IOHIDFamily` | patched in place by `tools/patch_iohid_gaps.sh` (DAR-245) | DAR-356 |
-| `IOUSBFamily` | fixes applied to staged copies by `build_iousbfamily.sh` / `patch_iohid_gaps.sh` fix 6/6b; the checkout itself is clean | DAR-356 |
+| `IOUSBFamily` | fixes applied to staged copies by `build_iousbfamily.sh` / `patch_iohid_gaps.sh` fix 6/6b; the checkout itself is clean; no `anurodhp/IOUSBFamily` fork exists yet | DAR-421 (Urgent) |
 
 ---
 

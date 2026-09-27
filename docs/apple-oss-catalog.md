@@ -422,7 +422,9 @@ scripting-language runtime as a goal in itself):
   hub types into the shell on both the HDMI console and serial, and the
   same keystrokes do nothing without boot-arg `hid-legacy-shim=1` (Apple's
   own switch for the kernel keyboard shim; `runvm_hdmi.sh` passes it). The
-  sources needed `tools/patch_iohid_gaps.sh` and `compat/iohid/`;
+  sources needed source fixes, now commits on the fork
+  `anurodhp/IOHIDFamily` (branch `iokit-port`, DAR-356), plus
+  `compat/iohid/`;
   `tools/iohid_gap_audit.sh` is the fast compile check. Userspace HID
   (`IOHIDManager`, `hidd`, event-system plugins) stays out of scope:
   there is no window server. Two findings about the drop itself:
