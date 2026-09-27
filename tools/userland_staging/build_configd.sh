@@ -321,6 +321,22 @@ if [ ! -f "$OUT/libconfigd_ipconfiguration.a" ]; then
     echo "error: $OUT/libconfigd_ipconfiguration.a not found -- run build_ipconfiguration_plugin.sh first" >&2
     exit 1
 fi
+# Stale-archive guard (DAR-417 investigation, 2026-09-27). This archive
+# is only ever rebuilt by build_ipconfiguration_plugin.sh. On 2026-09-27 a
+# Sep 21 copy still carried the IONotificationPortGetRunLoopSource() stub
+# that returns NULL, which DAR-251 had already deleted from
+# ipconfiguration_deadcode_compat.c on Sep 26. Relinking configd pulled
+# that member back in, and it shadowed libiokituser's real one:
+# InterfaceNamer then crashed in CFRunLoopAddSource(NULL source) on every
+# boot. This is the same stale-input hazard build_launchd.sh guards against
+# for liblaunchd_core.a.
+for f in build_ipconfiguration_plugin.sh cf_filedescriptor_compat.c dhcp_iopm_gap_compat.c \
+         ipconfiguration_deadcode_compat.c ipconfiguration_symptom_compat.c sysdir_compat.c; do
+    if [ "$f" -nt "$OUT/libconfigd_ipconfiguration.a" ]; then
+        echo "error: $f is newer than $OUT/libconfigd_ipconfiguration.a -- run build_ipconfiguration_plugin.sh first" >&2
+        exit 1
+    fi
+done
 
 rm -f configd.macho
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \

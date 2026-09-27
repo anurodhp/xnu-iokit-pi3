@@ -124,19 +124,9 @@ int getattrlist(const char *path, void *alist, void *attributeBuffer,
 	                         (long)attributeBuffer, (long)bufferSize, options);
 }
 
-/* usleep(): real standard libc shape (BSD usleep(3) is a thin wrapper
- * over nanosleep(2), not its own raw syscall -- real, exported
- * `_nanosleep` confirmed via `nm -gU libc_build/system/
- * libsystem_kernel.dylib`). */
-struct sc_timespec { long tv_sec; long tv_nsec; };
-extern int nanosleep(const struct sc_timespec *rqtp, struct sc_timespec *rmtp);
-int usleep(unsigned int useconds) asm("_usleep$UNIX2003");
-int usleep(unsigned int useconds) {
-	struct sc_timespec ts;
-	ts.tv_sec = useconds / 1000000;
-	ts.tv_nsec = (long)(useconds % 1000000) * 1000L;
-	return nanosleep(&ts, (void *)0);
-}
+/* usleep() used to be defined here. Since DAR-419 it is Libc's real
+ * gen/FreeBSD/usleep.c in libsystem_c.dylib (both _usleep and
+ * _usleep$UNIX2003), its owner on Apple. */
 
 /* pthread_setcanceltype(): real POSIX thread-cancellation state setter.
  * Same real, documented gap class as getty_syscalls.c's own

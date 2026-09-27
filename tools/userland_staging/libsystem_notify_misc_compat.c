@@ -21,7 +21,9 @@
  * here as a thin real wrapper over the real, already-available open(),
  * same real semantics, no raw trap needed.
  *
- * usleep: real third_party/Libc/gen/FreeBSD/usleep.c's own body is a
+ * usleep (REMOVED 2026-09-27, DAR-419 -- now libsystem_c's real
+ * gen/FreeBSD/usleep.c; the note below is history): real
+ * third_party/Libc/gen/FreeBSD/usleep.c's own body is a
  * thin wrapper around nanosleep() (already a real, defined export
  * elsewhere in this project's dylib graph, confirmed via `nm
  * launchd.macho`) -- reproduced the same real way rather than fighting
@@ -107,12 +109,8 @@ int creat(const char *path, mode_t mode) {
     return open(path, 0x0001 /* O_WRONLY */ | 0x0200 /* O_CREAT */ | 0x0400 /* O_TRUNC */, mode);
 }
 
-int usleep(unsigned int useconds) {
-    struct real_timespec ts;
-    ts.tv_sec = useconds / 1000000;
-    ts.tv_nsec = (useconds % 1000000) * 1000;
-    return nanosleep(&ts, 0);
-}
+/* usleep() used to be defined here. Since DAR-419 it is Libc's real
+ * gen/FreeBSD/usleep.c in libsystem_c.dylib, its owner on Apple. */
 
 /* Real signature: matches third_party/xnu-7195/BUILD.hdrs/dst/usr/local/
  * include/os/reason_private.h's own real declaration exactly (uint32_t/

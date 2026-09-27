@@ -757,6 +757,16 @@ LOCALTIME_FLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -fno-stack-chec
 # exception no longer applies -- so this is now the one real owner, same
 # as the rest of the family above.
 "$CLANG" $SIGLIST_CFLAGS "$LIBC/stdtime/FreeBSD/asctime.c" -o "$EXTRACT/asctime.o"
+# usleep (DAR-419): Libc's gen/FreeBSD/usleep.c, a nanosleep() wrapper.
+# libsystem_c is its home on Apple. Before this, only libsystem_notify
+# (_usleep) and libSystemConfiguration (_usleep$UNIX2003) exported
+# hand-written copies, so a program binding usleep got it from whichever
+# unrelated dylib it happened to link. Both spellings are exported here
+# (the alias is on the link line), and those two copies are gone.
+# _fbsd_compat_.h is Apple's own mapping of _nanosleep to nanosleep
+# (fbsdcompat/_fbsd_compat_.h:86).
+"$CLANG" $SIGLIST_CFLAGS -include "$LIBC/fbsdcompat/_fbsd_compat_.h" \
+    "$LIBC/gen/FreeBSD/usleep.c" -o "$EXTRACT/usleep.o"
 
 # uuid_unparse/uuid_unparse_lower/uuid_unparse_upper/uuid_copy/uuid_parse/
 # uuid_pack: real duplicate-ownership investigation 2026-08-31
@@ -1026,6 +1036,7 @@ rm -f "$OUT/system/libsystem_c.dylib"
     -Wl,-alias,___kill,'_kill$UNIX2003' \
     -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
     -Wl,-alias,_write,'_write$UNIX2003' \
+    -Wl,-alias,'_usleep$UNIX2003',_usleep \
     -Wl,-alias,_open,'_open$UNIX2003' \
     -Wl,-alias,_close,'_close$UNIX2003' \
     -Wl,-alias,_fcntl,'_fcntl$UNIX2003' \
