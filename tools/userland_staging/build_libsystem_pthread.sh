@@ -103,14 +103,19 @@ fi
 # static copy of libpthread.a. Real Apple exports every one of these
 # from libsystem_pthread.dylib -- this is where they belong, and moving
 # them here is what lets libdispatch stop bundling the archive at all.
+# DAR-416 step 1a: the hand-written syscall stubs that used to be members
+# here (pthread_bsdthread_{create,register,terminate}_syscall.o,
+# pthread_psynch_syscalls.o, pthread___pthread_{chdir,fchdir}.o,
+# pthread___ulock_wait2.o, pthread___thread_selfid.o) are gone: those
+# symbols are libsystem_kernel's generated stubs now, as on Apple, and
+# this dylib binds them from there.
 MEMBERS="pthread_atfork.o pthread_cond.o pthread_cwd.o pthread_mutex.o pthread_rwlock.o pthread_tsd.o \
-    pthread_main_thread_bootstrap.o pthread_bsdthread_create_syscall.o pthread_tsd_platform_bootstrap.o \
-    pthread_bsdthread_register_syscall.o pthread_bsdthread_terminate_syscall.o \
-    pthread_psynch_syscalls.o pthread_compat_extras.o pthread_abort_with_reason_compat.o \
+    pthread_main_thread_bootstrap.o pthread_tsd_platform_bootstrap.o \
+    pthread_compat_extras.o pthread_abort_with_reason_compat.o \
     pthread_guard_compat.o pthread_simple_getenv.o pthread_platform_memcmp.o pthread_gettimeofday.o \
-    pthread___pthread_chdir.o pthread___pthread_fchdir.o pthread_mmap_compat.o pthread___mmap.o \
-    pthread___munmap.o pthread___ulock_wait2.o \
-    pthread_thread_ops_compat.o pthread___thread_selfid.o pthread_clear_qos_tsd_compat.o"
+    pthread_mmap_compat.o pthread___mmap.o \
+    pthread___munmap.o \
+    pthread_thread_ops_compat.o pthread_clear_qos_tsd_compat.o"
 rm -rf "$OUT/libsystem_pthread/extracted"
 mkdir -p "$OUT/libsystem_pthread/extracted"
 (cd "$OUT/libsystem_pthread/extracted" && ar x "../../libpthread.a" $MEMBERS)
@@ -181,7 +186,9 @@ MEMBERS="$MEMBERS $QOS_MEMBERS"
 # header comments for the real swtch_pri(-59) trap + one-liner
 # rationale) -- compiled fresh here rather than pulled from libunwind.a,
 # which isn't a dylib dependency of this one.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c libunwind_sched_yield.s -o "$OUT/libsystem_pthread/sched_yield_trap.o"
+# swtch_pri itself (sched_yield_trap.o) is libsystem_kernel's since
+# DAR-416 step 1a (Apple's mach_traps.s); sched_yield.o binds it there.
+rm -f "$OUT/libsystem_pthread/sched_yield_trap.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     libunwind_sched_yield.c -o "$OUT/libsystem_pthread/sched_yield.o"
 
@@ -349,7 +356,7 @@ rm -f "$OUT/system/libsystem_pthread.dylib"
     -Wl,-U,___isthreaded \
     -o "$OUT/system/libsystem_pthread.dylib" \
     $(for m in $MEMBERS; do echo "$OUT/libsystem_pthread/extracted/$m"; done) \
-    "$OUT/libsystem_pthread/sched_yield_trap.o" "$OUT/libsystem_pthread/sched_yield.o" \
+    "$OUT/libsystem_pthread/sched_yield.o" \
     "$OUT/libsystem_pthread/atfork_compat.o" \
     "$OUT/libsystem_pthread/dylib_bootstrap_compat.o" \
     "$OUT/libsystem_pthread/main_stack_compat.o" \

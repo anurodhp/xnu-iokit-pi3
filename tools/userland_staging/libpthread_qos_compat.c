@@ -112,10 +112,9 @@ static inline long syscall3(long num, long a0, long a1, long a2) {
     return x0;
 }
 
-#define SYS_bsdthread_ctl 478
-uint32_t __bsdthread_ctl(uintptr_t cmd, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3) {
-    return (uint32_t)syscall4(SYS_bsdthread_ctl, (long)cmd, (long)arg1, (long)arg2, (long)arg3);
-}
+/* __bsdthread_ctl (#478) is libsystem_kernel's generated stub since
+ * DAR-416 step 1a; it used to be defined here. */
+extern uint32_t __bsdthread_ctl(uintptr_t cmd, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3);
 
 /* REMOVED 2026-08-30 (static-linking cleanup, dylib-vs-dylib duplicate-
  * state pass): this block used to hand-roll `_os_alloc_once()` +

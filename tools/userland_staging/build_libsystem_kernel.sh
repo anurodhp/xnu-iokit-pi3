@@ -677,6 +677,85 @@ for t in __sigaltstack __sigreturn; do
         -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
         "$XNU/libsyscall/custom/${t}.s" -o "$OUT/libsystem_kernel/${t}_trap.o"
 done
+# DAR-416 step 1a: the syscall stubs, traps and Mach wrappers that real
+# libpthread (pthread.c, pthread_cancelable.c, qos.c) calls. On Apple all
+# of them are libsystem_kernel exports. Until now some were hand-written
+# into libsystem_pthread's compat objects (bsdthread_*, psynch_*,
+# __pthread_[f]chdir, __ulock_wait2, __thread_selfid, swtch_pri) and the
+# rest existed nowhere. build_libsystem_pthread.sh drops its copies.
+#  - generated plain stubs (bsd/kern/syscalls.master): #328 __pthread_kill,
+#    #330 __sigwait, #331 __disable_threadsignal, #332 __pthread_markcancel,
+#    #333 __pthread_canceled, #336 __proc_info, #202 __sysctl, #367/#368
+#    __workq_open/__workq_kernreturn, #423 __semwait_signal_nocancel,
+#    #360/#366/#478/#361 __bsdthread_create/register/ctl/terminate,
+#    #301-#308,#312 __psynch_*, #348/#349 __pthread_[f]chdir, #329
+#    __pthread_sigmask, #544 __ulock_wait2, #530 __kqueue_workloop_ctl.
+#  - __gettimeofday/__thread_selfid: libsyscall/custom/*.s, which the
+#    generator defers to, as for __pipe above.
+#  - __thread_set_tsd_base: libsyscall/custom/custom.s.
+#  - swtch_pri (trap -59, osfmk/mach/syscall_sw.h:140): Apple's
+#    libsyscall/mach/mach_traps.s, narrowed with ld -r to that one symbol,
+#    because this port's other traps come from hand-written .s files that
+#    already export the rest (a full switch to mach_traps.s is separate).
+#  - mach_thread_self: libsyscall/mach/mach_legacy.c:48, narrowed the same
+#    way, since mach_host_self_real.c already provides its mach_host_self.
+#  - thread_policy/thread_policy_set/thread_set_policy:
+#    libsyscall/mach/thread_act.c, over the _kernelrpc_* MIG routines
+#    already in thread_actUser.o.
+#  - NOT here yet: abort_with_reason (libsyscall/wrappers/terminate_with_reason.c).
+#    That file needs getpid and os_fault_with_payload, whose only exporters
+#    today are libsystem_malloc and libsystem_notify, which sit above this
+#    dylib. Re-homing them is DAR-423; until then libsystem_pthread keeps
+#    its abort_with_reason stand-in.
+# Start clean: PT416_OBJS below is a glob, so an object this block no
+# longer builds must not survive into the link.
+rm -f "$OUT"/libsystem_kernel/pt416*.o
+for s in ___disable_threadsignal ___proc_info ___pthread_canceled ___pthread_kill \
+    ___pthread_markcancel ___semwait_signal_nocancel ___sigwait ___sysctl \
+    ___workq_kernreturn ___workq_open ___bsdthread_create ___bsdthread_ctl \
+    ___bsdthread_register ___bsdthread_terminate ___psynch_cvbroad ___psynch_cvclrprepost \
+    ___psynch_cvsignal ___psynch_cvwait ___psynch_mutexdrop ___psynch_mutexwait \
+    ___psynch_rw_rdlock ___psynch_rw_unlock ___psynch_rw_wrlock ___pthread_chdir \
+    ___pthread_fchdir ___pthread_sigmask ___ulock_wait2 ___kqueue_workloop_ctl \
+    ___gettimeofday; do
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+        -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
+        -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
+        "$SYSGEN/${s}.s" -o "$OUT/libsystem_kernel/pt416${s}.o"
+done
+for t in __thread_selfid custom; do
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -arch arm64 \
+        -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
+        -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
+        "$XNU/libsyscall/custom/${t}.s" -o "$OUT/libsystem_kernel/pt416_${t}.o"
+done
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -DPRIVATE=1 \
+    -I "$XNU/osfmk" -I "$XNU/libsyscall/mach" -idirafter "$MACSDK/usr/include" \
+    "$XNU/libsyscall/mach/mach_traps.s" -o "$OUT/libsystem_kernel/pt416_mach_traps_all.o"
+"$CLANG" $CFLAGS -I "$XNU/libsyscall" -include "$XNU/osfmk/mach/mach_traps.h" "$XNU/libsyscall/mach/mach_legacy.c" \
+    -o "$OUT/libsystem_kernel/pt416_mach_legacy_all.o"
+LD_R="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+"$LD_R" -r -arch arm64 -exported_symbol _swtch_pri \
+    "$OUT/libsystem_kernel/pt416_mach_traps_all.o" -o "$OUT/libsystem_kernel/pt416_swtch_pri.o"
+"$LD_R" -r -arch arm64 -exported_symbol _mach_thread_self \
+    "$OUT/libsystem_kernel/pt416_mach_legacy_all.o" -o "$OUT/libsystem_kernel/pt416_mach_thread_self.o"
+# thread_act.c includes <mach/thread_act_internal.h>, the MIG header Apple
+# generates without -DLIBSYSCALL_INTERFACE so it declares the _kernelrpc_
+# routines (libsyscall/xcodescripts/mach_install_mig.sh:171-179, with
+# thread_act.defs in MIGS_INTERNAL at :97-100). Apple runs it with a
+# 32-bit MACHINE_ARCH (:49, for vm_map_internal.h's sake); this uses
+# -arch arm64, which for thread_act.defs changes nothing but the
+# prototypes' pointer widths, already arm64 here.
+PT416_HDR="$PWD/$OUT/libsystem_kernel/pt416_internal_hdr"
+PT416_XNU="$(cd "$XNU" && pwd)"
+mkdir -p "$PT416_HDR/mach"
+(cd "$PT416_HDR" && "$(which mig)" -novouchers -arch arm64 -I"$PT416_XNU/osfmk" \
+    -header "$PT416_HDR/mach/thread_act_internal.h" -user /dev/null -server /dev/null \
+    "$PT416_XNU/osfmk/mach/thread_act.defs" >/dev/null)
+"$CLANG" $CFLAGS -I "$PT416_HDR" -I "$XNU/libsyscall" -I "$XNU/libsyscall/mach" \
+    "$XNU/libsyscall/mach/thread_act.c" -o "$OUT/libsystem_kernel/pt416_thread_act.o"
+PT416_OBJS=$(ls "$OUT"/libsystem_kernel/pt416*.o | grep -v "_all\.o$")
+
 # __pipe.s (above) only exports the private-indirection name `___pipe`
 # (real Apple naming convention, same as __lchown/__platform_sigaction);
 # the real public `_pipe` name needs a thin C forwarder on top -- reused
@@ -1032,6 +1111,7 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/mach_absolute_time.o" \
     "$OUT/libsystem_kernel/sys_csops.o" "$OUT/libsystem_kernel/sys_csops_audittoken.o" \
     "$OUT/libsystem_kernel/sys_sigprocmask.o" \
+    $PT416_OBJS \
     "$OUT/libsystem_kernel/thread_selfusage_trap.o" \
     `# setsid(2) (#147, plain stub) and setpriority(2) (raw #96 + Apple's` \
     `# wrappers/setpriority.c), for shutdown(8). Real Apple exports both` \

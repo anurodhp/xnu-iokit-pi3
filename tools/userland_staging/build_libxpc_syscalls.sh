@@ -118,6 +118,11 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     exit 1
 fi
 
+# Start clean: the archive below globs xpc_syscall_obj/*.o, so an object
+# this script no longer builds would otherwise stay in the archive forever
+# (DAR-416: a stale sys____proc_info.o kept a second ___proc_info owner).
+rm -rf "$OUT/xpc_syscall_obj"
+rm -f "$OUT/libxpc_syscalls.a"
 mkdir -p "$OUT/xpc_syscall_obj" "$OUT/sys_asm_compat/mach/arm64"
 cat > "$OUT/sys_asm_compat/mach/arm64/asm.h" <<'EOF'
 #include <arm64/asm.h>
@@ -133,7 +138,9 @@ ARCHS=arm64 perl "$XNU/libsyscall/xcodescripts/create-syscalls.pl" \
     iPhoneOS \
     "$TMP" >/dev/null
 ASMFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -arch arm64 -I"$OUT/sys_asm_compat" -I"$XNU/libsyscall/custom" -I"$XNU/libsyscall/mach" -I"$XNU/osfmk")
-for s in ___kill ___connect_nocancel ___select ___select_nocancel ___recvmsg_nocancel ___sendmsg_nocancel _socket _fileport_makefd _fileport_makeport ___proc_info ___proc_info_extended_id; do
+# ___proc_info (#336) left this list for DAR-416 step 1a: libsystem_kernel
+# exports it now, as on Apple, so a second copy here would be a second owner.
+for s in ___kill ___connect_nocancel ___select ___select_nocancel ___recvmsg_nocancel ___sendmsg_nocancel _socket _fileport_makefd _fileport_makeport ___proc_info_extended_id; do
     "$CLANG" "${ASMFLAGS[@]}" "$TMP/${s}.s" -o "$OUT/xpc_syscall_obj/sys_${s}.o"
 done
 rm -rf "$TMP"

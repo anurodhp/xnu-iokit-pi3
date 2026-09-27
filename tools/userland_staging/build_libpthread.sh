@@ -88,6 +88,10 @@
 # off) - a real, valid Apple configuration (just not the one an
 # env-var/registration-tuned real boot would pick), not an invented one.
 #
+# (DAR-416 step 1a, 2026-09-27: libsystem_pthread.dylib no longer ships
+# these hand-written stubs; libsystem_kernel exports the generated ones,
+# as on Apple. They remain in this static libpthread.a only for the static
+# smoketests and dyld that still link it.)
 # Real, NO_SYSCALL_STUB raw syscalls hand-written for this tier (Apple
 # hand-writes these in libpthread's own internal sources, not this
 # project's third_party/libpthread checkout's public headers - same

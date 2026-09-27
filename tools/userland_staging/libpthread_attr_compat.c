@@ -198,10 +198,9 @@ static inline long syscall3_sigmask(long num, long a0, long a1, long a2) {
     return x0;
 }
 
-#define SYS___pthread_sigmask 329
-int __pthread_sigmask(int how, const sigset_t *set, sigset_t *oset) {
-    return (int)syscall3_sigmask(SYS___pthread_sigmask, how, (long)set, (long)oset);
-}
+/* __pthread_sigmask (#329) is libsystem_kernel's generated stub since
+ * DAR-416 step 1a (build_libsystem_kernel.sh); it used to be defined here. */
+extern int __pthread_sigmask(int how, const sigset_t *set, sigset_t *oset);
 
 int
 pthread_sigmask(int how, const sigset_t *set, sigset_t *oset)
@@ -287,10 +286,9 @@ static inline long syscall4_workloop(long num, long a0, long a1, long a2, long a
     return x0;
 }
 
-#define SYS_kqueue_workloop_ctl 530
-int __kqueue_workloop_ctl(uintptr_t cmd, uint64_t options, void *addr, size_t sz) {
-    return (int)syscall4_workloop(SYS_kqueue_workloop_ctl, (long)cmd, (long)options, (long)addr, (long)sz);
-}
+/* __kqueue_workloop_ctl (#530) is libsystem_kernel's generated stub since
+ * DAR-416 step 1a; it used to be defined here. */
+extern int __kqueue_workloop_ctl(uintptr_t cmd, uint64_t options, void *addr, size_t sz);
 
 int
 _pthread_workloop_create(uint64_t workloop_id, uint64_t options, pthread_attr_t *attr)
