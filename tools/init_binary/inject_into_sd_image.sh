@@ -1119,6 +1119,9 @@ install_smoketest tools/userland_staging/libc_build/iokitlib_smoketest.macho "us
 install_smoketest tools/userland_staging/libc_build/pdgop_smoketest.macho "usr/local/bin/pdgop_smoketest" \
     "= pdgop_smoketest.macho not built -- run tools/userland_staging/build_pdgop_smoketest.sh first if wanted, skipping" \
     "  (DAR-358 PDGOP framebuffer mapping + colour bars; needs hdmi_console=1)"
+install_smoketest tools/userland_staging/libc_build/hid_event_smoketest.macho "usr/local/bin/hid_event_smoketest" \
+    "= hid_event_smoketest.macho not built -- run tools/userland_staging/build_hid_event_smoketest.sh first if wanted, skipping" \
+    "  (DAR-391 keyboard/pointer events from IOHIDEventServiceUserClient)"
 
 for v in "" "_broken"; do
     install_smoketest "tools/userland_staging/libc_build/sigaction_tramp_smoketest${v}.macho" \

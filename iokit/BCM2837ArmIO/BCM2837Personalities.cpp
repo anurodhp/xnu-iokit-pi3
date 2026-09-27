@@ -318,6 +318,16 @@ addIOGraphicsPersonalities(OSArray *personalities)
  *                        GD/Keypad). Its IOMatchDefer is inert here:
  *                        NO_KEXTD compiles the defer path out
  *                        (IOService.cpp:3969).
+ *   IOHIDEventDriver     Info-IOHIDEventDriverSafeBoot.plist "HID Pointing/
+ *                        Consumer/System Control Driver" (IOHIDInterface,
+ *                        DeviceUsagePairs GD/Mouse, GD/MultiAxis,
+ *                        GD/SystemControl and the Button, Consumer,
+ *                        Telephony, Digitizer and Camera pages). DAR-391:
+ *                        mice (QEMU usb-mouse, real USB mice) get an
+ *                        IOHIDEventService for pointer events. It is the one
+ *                        pointer personality this IOHIDFamily tag
+ *                        (1633.81.2) ships; Info-IOHIDEventDriver.plist has
+ *                        only keyboard, buttons and sensor.
  *   IOUSBCompositeDriver IOUSBFamily-560.4.2 IOUSBCompositeDriver.plist
  *                        "IOUSBComposite" (IOUSBDevice, bDeviceClass 0 /
  *                        bDeviceSubClass 0: class defined per interface, which is
@@ -410,6 +420,55 @@ static const char kIOHIDPersonalitiesXML[] =
     "<string>IOUSBHIDDriver</string><key>IOProviderClass</key><string>IOUSBInterface</string>"
     "<key>bInterfaceClass</key><integer>3</integer><key>bInterfaceSubClass</key><integer>1"
     "</integer></dict>"
+    "<dict><key>DeviceUsagePairs</key><array><dict><key>DeviceUsage</key><integer>2</integer>"
+    "<key>DeviceUsagePage</key><integer>1</integer></dict><dict><key>DeviceUsage</key><intege"
+    "r>8</integer><key>DeviceUsagePage</key><integer>1</integer></dict><dict><key>DeviceUsage"
+    "</key><integer>128</integer><key>DeviceUsagePage</key><integer>1</integer></dict><dict><"
+    "key>DeviceUsagePage</key><integer>11</integer></dict><dict><key>DeviceUsagePage</key><in"
+    "teger>12</integer></dict><dict><key>DeviceUsagePage</key><integer>13</integer></dict><di"
+    "ct><key>DeviceUsagePage</key><integer>16</integer></dict><dict><key>DeviceUsagePage</key"
+    "><integer>144</integer></dict></array><key>HIDAccelCurves</key><array><dict><key>HIDAcce"
+    "lGainLinear</key><integer>65536</integer><key>HIDAccelIndex</key><integer>0</integer><ke"
+    "y>HIDAccelTangentSpeedLinear</key><integer>524288</integer></dict><dict><key>HIDAccelGai"
+    "nCubic</key><integer>5243</integer><key>HIDAccelGainLinear</key><integer>60293</integer>"
+    "<key>HIDAccelGainParabolic</key><integer>26214</integer><key>HIDAccelIndex</key><integer"
+    ">8192</integer><key>HIDAccelTangentSpeedLinear</key><integer>537395</integer><key>HIDAcc"
+    "elTangentSpeedParabolicRoot</key><integer>1245184</integer></dict><dict><key>HIDAccelGai"
+    "nCubic</key><integer>6554</integer><key>HIDAccelGainLinear</key><integer>60948</integer>"
+    "<key>HIDAccelGainParabolic</key><integer>36045</integer><key>HIDAccelIndex</key><integer"
+    ">32768</integer><key>HIDAccelTangentSpeedLinear</key><integer>543949</integer><key>HIDAc"
+    "celTangentSpeedParabolicRoot</key><integer>1179648</integer></dict><dict><key>HIDAccelGa"
+    "inCubic</key><integer>7864</integer><key>HIDAccelGainLinear</key><integer>61604</integer"
+    "><key>HIDAccelGainParabolic</key><integer>46531</integer><key>HIDAccelIndex</key><intege"
+    "r>45056</integer><key>HIDAccelTangentSpeedLinear</key><integer>550502</integer><key>HIDA"
+    "ccelTangentSpeedParabolicRoot</key><integer>1114112</integer></dict><dict><key>HIDAccelG"
+    "ainCubic</key><integer>9830</integer><key>HIDAccelGainLinear</key><integer>62259</intege"
+    "r><key>HIDAccelGainParabolic</key><integer>57672</integer><key>HIDAccelIndex</key><integ"
+    "er>57344</integer><key>HIDAccelTangentSpeedLinear</key><integer>557056</integer><key>HID"
+    "AccelTangentSpeedParabolicRoot</key><integer>1048576</integer></dict><dict><key>HIDAccel"
+    "GainCubic</key><integer>11796</integer><key>HIDAccelGainLinear</key><integer>62915</inte"
+    "ger><key>HIDAccelGainParabolic</key><integer>69468</integer><key>HIDAccelIndex</key><int"
+    "eger>65536</integer><key>HIDAccelTangentSpeedLinear</key><integer>563610</integer><key>H"
+    "IDAccelTangentSpeedParabolicRoot</key><integer>983040</integer></dict><dict><key>HIDAcce"
+    "lGainCubic</key><integer>14418</integer><key>HIDAccelGainLinear</key><integer>63570</int"
+    "eger><key>HIDAccelGainParabolic</key><integer>81920</integer><key>HIDAccelIndex</key><in"
+    "teger>98304</integer><key>HIDAccelTangentSpeedLinear</key><integer>570163</integer><key>"
+    "HIDAccelTangentSpeedParabolicRoot</key><integer>917504</integer></dict><dict><key>HIDAcc"
+    "elGainCubic</key><integer>17695</integer><key>HIDAccelGainLinear</key><integer>64225</in"
+    "teger><key>HIDAccelGainParabolic</key><integer>95027</integer><key>HIDAccelIndex</key><i"
+    "nteger>131072</integer><key>HIDAccelTangentSpeedLinear</key><integer>576717</integer><ke"
+    "y>HIDAccelTangentSpeedParabolicRoot</key><integer>851968</integer></dict><dict><key>HIDA"
+    "ccelGainCubic</key><integer>21627</integer><key>HIDAccelGainLinear</key><integer>64881</"
+    "integer><key>HIDAccelGainParabolic</key><integer>108790</integer><key>HIDAccelIndex</key"
+    "><integer>163840</integer><key>HIDAccelTangentSpeedLinear</key><integer>583270</integer>"
+    "<key>HIDAccelTangentSpeedParabolicRoot</key><integer>786432</integer></dict><dict><key>H"
+    "IDAccelGainCubic</key><integer>26214</integer><key>HIDAccelGainLinear</key><integer>6553"
+    "6</integer><key>HIDAccelGainParabolic</key><integer>123208</integer><key>HIDAccelIndex</"
+    "key><integer>196608</integer><key>HIDAccelTangentSpeedLinear</key><integer>589824</integ"
+    "er><key>HIDAccelTangentSpeedParabolicRoot</key><integer>786432</integer></dict></array><"
+    "key>HIDDefaultBehavior</key><string></string><key>IOClass</key><string>IOHIDEventDriver<"
+    "/string><key>IOMatchDefer</key><true/><key>IOProviderClass</key><string>IOHIDInterface</"
+    "string></dict>"
     "<dict><key>IOClass</key><string>IOUSBCompositeDriver</string>"
     "<key>IOProviderClass</key><string>IOUSBDevice</string>"
     "<key>bDeviceClass</key><integer>0</integer>"
