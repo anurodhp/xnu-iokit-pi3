@@ -1123,6 +1123,11 @@ install_smoketest tools/userland_staging/libc_build/pthread_cond_smoketest.macho
     "  post-boot; prints a single PASS/FAIL line. tools/userland_staging/" \
     "  build_pthread_cond_smoketest.sh)"
 
+install_smoketest tools/userland_staging/libc_build/ffi_smoketest.macho "usr/local/bin/ffi_smoketest" \
+    "= ffi_smoketest.macho not built -- run tools/userland_staging/build_ffi_smoketest.sh first if wanted, skipping" \
+    "  (DAR-388 libffi: ffi_call plus a trampoline-table closure. Run by hand;" \
+    "  prints PASS/FAIL. tools/userland_staging/build_ffi_smoketest.sh)"
+
 install_smoketest tools/userland_staging/libc_build/pthread_lifecycle_smoketest.macho "usr/local/bin/pthread_lifecycle_smoketest" \
     "= pthread_lifecycle_smoketest.macho not built -- run tools/userland_staging/build_pthread_lifecycle_smoketest.sh first if wanted, skipping" \
     "  (DAR-416 real libpthread: pthread_join/exit/detach/cancel/kill and" \
