@@ -1147,6 +1147,12 @@ install_smoketest tools/userland_staging/libc_build/ffi_smoketest.macho "usr/loc
     "  (DAR-388 libffi: ffi_call plus a trampoline-table closure. Run by hand;" \
     "  prints PASS/FAIL. tools/userland_staging/build_ffi_smoketest.sh)"
 
+install_smoketest tools/userland_staging/libc_build/libm_accuracy_smoketest.macho "usr/local/bin/libm_accuracy_smoketest" \
+    "= libm_accuracy_smoketest.macho not built -- run tools/userland_staging/build_libm_accuracy_smoketest.sh first if wanted, skipping" \
+    "  (DAR-447 libsystem_m's FreeBSD msun sin/cos/tan/atan/atan2/log vs correctly" \
+    "  rounded values, <= 1 ulp. Run by hand; prints PASS/FAIL." \
+    "  tools/userland_staging/build_libm_accuracy_smoketest.sh)"
+
 install_smoketest tools/userland_staging/libc_build/foundation_smoketest.macho "usr/local/bin/foundation_smoketest" \
     "= foundation_smoketest.macho not built -- run tools/userland_staging/build_foundation_smoketest.sh first if wanted, skipping" \
     "  (DAR-388 gnustep-base on objc4: strings, collections, exceptions," \

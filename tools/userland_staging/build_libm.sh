@@ -52,8 +52,12 @@
 #       stamp helper, non-essential, not investigated further.
 #     - e_rem_pio2_freeBSD.c: real "implicit declaration of
 #       '__kernel_rem_pio2'" (a missing prototype, not a missing
-#       symbol -- k_rem_pio2_freeBSD.c, which DEFINES it, compiles fine
-#       and is included below). Only needed for full-range sin/cos/tan
+#       symbol -- k_rem_pio2_freeBSD.c DEFINES it). Neither is built
+#       any more (DAR-447): k_rem_pio2_freeBSD.c/k_tan_freeBSD.c are the
+#       old fdlibm six-argument __kernel_rem_pio2 ABI
+#       (k_rem_pio2_freeBSD.c:156), which the FreeBSD msun 13.2 callers
+#       build_libm_dylib.sh compiles do not use; the msun k_rem_pio2.c/
+#       k_tan.c are built there instead. Only needed for full-range sin/cos/tan
 #       argument reduction; this real Libm tag has no portable C sin/
 #       cos/tan entry points at all (real Apple source for those is
 #       ARM32-assembly-only, same as fabs/trunc/pow), so nothing in this
@@ -127,7 +131,7 @@ BULK_FILES="acos_freeBSD acosh_freeBSD asin_freeBSD asinh_freeBSD atanh_freeBSD 
     cbrt complex copysignf cosh_freeBSD erf erfc erfcf erff exp_freeBSD \
     exp2_freeBSD expm1_freeBSD fdim fdimf fegetfltrounds fenv fma_freeBSD \
     fmaf fpclassify fpclassifyf ilogb ilogbf j0y0_freeBSD j1y1_freeBSD \
-    jnyn_freeBSD k_rem_pio2_freeBSD k_tan_freeBSD lgamma lgammaf llrint \
+    jnyn_freeBSD lgamma lgammaf llrint \
     llround log logb logbf math_errhandling nearbyint nextafter \
     nextafterf nexttoward nexttowardf remainder remainderf remquo \
     remquof rint scalb scalbln scalblnf signgam sinh_freeBSD sqrt sqrtf \

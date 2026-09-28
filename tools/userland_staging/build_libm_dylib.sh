@@ -129,9 +129,13 @@ rm -f "$EXTRACT/complex.o" "$EXTRACT/scalblnf.o"
 #   - -include libm_msun_compat.h: the few FreeBSD cdefs/_types spellings
 #     msun needs, each cited to its FreeBSD header line in that file.
 #   - s_sinf.c/s_cosf.c #include k_sinf.c, k_cosf.c and e_rem_pio2f.c
-#     (INLINE_KERNEL_*), whose large-argument path calls
-#     __kernel_rem_pio2 -- libm.a's own k_rem_pio2_freeBSD.o (Apple's copy
-#     of the same FreeBSD file), already in this link.
+#     (INLINE_KERNEL_*), and s_sin.c/s_cos.c/s_tan.c #include e_rem_pio2.c;
+#     their large-argument path calls __kernel_rem_pio2, msun's own
+#     k_rem_pio2.c below. (Until DAR-447 it was libm.a's Apple
+#     k_rem_pio2_freeBSD.o, which is NOT the same file: it is the old
+#     fdlibm six-argument ABI, k_rem_pio2_freeBSD.c:156, while msun 13.2
+#     calls five arguments, math_private.h:887. sin(1e9) came out 0.736
+#     instead of 0.546 and sin(1e22) crashed.)
 #   - s_frexp.c and e_hypot.c also emit their long double aliases (frexpl,
 #     hypotl): long double is double on Darwin arm64 (LDBL_MANT_DIG 53).
 #     e_hypot.c:73 calls fabsl, exported below as an alias of fabs
@@ -149,7 +153,14 @@ cp "$MSUN"/*.c "$MSUN/math_private.h" "$MSUN_COPY/"
 # math). msun's own float pow, same shape as s_sinf/s_cosf above; it
 # calls fabsf and scalbnf, which s_fabsf.c/s_scalbnf.c provide.
 # e_atan2f.c + s_atanf.c: atan2f (wmaker's src/ geometry), same source.
-for f in s_ceilf s_sinf s_cosf s_frexp e_hypot e_powf s_fabsf s_scalbnf e_atan2f s_atanf; do
+# DAR-447: sin, cos, tan, atan, atan2, log, ceil, floor and round, which
+# libsystem_c.dylib used to export as hand-written approximations
+# (libsystem_c_gap_compat.c, off by up to ~7e12 ulp), with msun's
+# k_sin/k_cos/k_tan/k_rem_pio2 kernels; and floorf/rintf (gnustep-gui,
+# DAR-390). libm_accuracy_smoketest.c checks them on the target.
+for f in s_ceilf s_sinf s_cosf s_frexp e_hypot e_powf s_fabsf s_scalbnf e_atan2f s_atanf \
+         s_sin s_cos s_tan k_sin k_cos k_tan k_rem_pio2 s_atan e_atan2 e_log s_ceil s_floor s_round \
+         s_floorf s_rintf; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
         -Wno-nullability-completeness -include libm_msun_compat.h \
         "$MSUN_COPY/$f.c" -o "$EXTRACT/msun_$f.o"
