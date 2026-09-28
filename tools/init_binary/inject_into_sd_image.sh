@@ -1123,6 +1123,13 @@ install_smoketest tools/userland_staging/libc_build/pthread_cond_smoketest.macho
     "  post-boot; prints a single PASS/FAIL line. tools/userland_staging/" \
     "  build_pthread_cond_smoketest.sh)"
 
+install_smoketest tools/userland_staging/libc_build/pthread_lifecycle_smoketest.macho "usr/local/bin/pthread_lifecycle_smoketest" \
+    "= pthread_lifecycle_smoketest.macho not built -- run tools/userland_staging/build_pthread_lifecycle_smoketest.sh first if wanted, skipping" \
+    "  (DAR-416 real libpthread: pthread_join/exit/detach/cancel/kill and" \
+    "  posix_spawn. Run by hand from the root shell post-boot; prints a" \
+    "  single PASS/FAIL line. tools/userland_staging/" \
+    "  build_pthread_lifecycle_smoketest.sh)"
+
 install_smoketest tools/userland_staging/libc_build/fork_atfork_smoketest.macho "usr/local/bin/fork_atfork_smoketest" \
     "= fork_atfork_smoketest.macho not built -- run tools/userland_staging/build_fork_atfork_smoketest.sh first if wanted, skipping" \
     "  (DAR-130 fork() child-side _libc_fork_child() check. Run by hand" \
