@@ -32,9 +32,8 @@ void _Exit(int status) { _exit(status); }
 int fls(int mask) {
 	return mask == 0 ? 0 : (int)(32 - __builtin_clz((unsigned int)mask));
 }
-int flsl(long mask) {
-	return mask == 0 ? 0 : (int)(64 - __builtin_clzl((unsigned long)mask));
-}
+/* flsl() is exported by libsystem_c.dylib, its Apple home; libobjc binds
+ * it there. fls() has no exporter in this tree yet. */
 
 /* malloc_zone_*(): real Darwin malloc-zone API. This project's curated
  * libsystem_malloc.dylib exports real, working malloc()/calloc()/free()/
@@ -116,27 +115,14 @@ void backtrace_symbols_fd(void *const *buffer, int size, int fd) {
 	(void)fd;
 }
 
-/* thread_get_state(): real Mach trap, used only by objc-cache.mm's
- * _get_pc_for_thread() -- a purely diagnostic helper (formats a PC into
- * an error/instrumentation message when a thread is found stuck inside
- * a cache-mutation critical section during collection). This project
- * has no real MIG client stub for thread_act.defs's thread_get_state
- * routine yet (a real, legitimate, separately-scoped future port, same
- * class as restartable.defs). The real caller already treats a non-
- * KERN_SUCCESS result as an honest, defined "couldn't get PC" case
- * (returns PC_SENTINEL) -- so an honest KERN_FAILURE here is the
- * correct real answer for "not implemented yet", not a fabricated PC
- * value. */
-kern_return_t
-thread_get_state(thread_t target_thread, thread_state_flavor_t flavor,
-                  thread_state_t old_state, mach_msg_type_number_t *old_stateCnt)
-{
-	(void)target_thread;
-	(void)flavor;
-	(void)old_state;
-	(void)old_stateCnt;
-	return KERN_FAILURE;
-}
+/* thread_get_state() used to be a KERN_FAILURE stand-in here. Since
+ * DAR-416, libsystem_kernel.dylib builds Apple's real
+ * libsyscall/mach/thread_act.c over MIG user code for thread_act.defs
+ * (build_libsystem_kernel.sh) and exports _thread_get_state, its Apple
+ * home, so libobjc binds that (DAR-236, 2026-09-28). The stand-in made
+ * objc-cache.mm's _get_pc_for_thread() always return PC_SENTINEL, so
+ * _collecting_in_critical() always reported a thread in a critical
+ * section and old method caches were never freed. */
 
 /* getSharedCachePreoptimizedProtocol(): declared unconditionally in
  * objc-private.h, but only ever DEFINED in objc-opt.mm's real
