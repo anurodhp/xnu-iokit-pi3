@@ -47,6 +47,7 @@ The main repo itself is `anurodhp/xnu-iokit-pi3`.
 | `chrony` | `anurodhp/chrony` | `iokit-port` | mlichvar/chrony |
 | `PureDarwin` | `anurodhp/PureDarwin` | `iokit-launchd-port` | PureDarwin/PureDarwin |
 | `swift-corelibs-foundation` | `anurodhp/swift-corelibs-foundation` | `corefoundation-port` | apple/swift-corelibs-foundation |
+| `gnustep-base` | `anurodhp/libs-base` | `iokit-port` | gnustep/libs-base (off `base-1_31_1`; objc4 port, DAR-388) |
 
 On-disk remote naming varies. Repos converted from patch files keep
 Apple as `origin` and the fork as `fork`, so push with `git push fork
@@ -69,6 +70,11 @@ untracked files already equal the fork's content, but a plain checkout
 refuses to overwrite them and leaves the repo half-switched: remotes
 renamed, still on the old tag. Re-cloning (`rm -rf third_party/<repo>`,
 then `setup_third_party.sh`) also works.
+
+Status 2026-09-28: the main checkout's libpthread, IOGraphics and
+IOHIDFamily are all switched now (branch `iokit-port` tracking remote
+`fork`; Apple stays `origin`). gnustep-base was forked the same day
+(remote `fork`, upstream gnustep as `origin`).
 
 u-boot and dtc-AppleDeviceTree were the last two repos with leftover
 patch files. On 2026-09-24 both forks' `HEAD^{tree}` was confirmed

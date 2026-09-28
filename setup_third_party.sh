@@ -704,8 +704,9 @@ mkdir -p third_party
 #     commit 491d23ac598f == tag libffi-27 (checked 2026-09-28). Cloned
 #     unmodified; built by tools/userland_staging/build_libffi.sh.
 #     gnustep-make 2.9.3 and gnustep-base 1.31.1 (DAR-388): upstream
-#     gnustep/tools-make tag make-2_9_3 and gnustep/libs-base tag
-#     base-1_31_1. GNUstep is the user's chosen GUI layer (DAR-381), and
+#     gnustep/tools-make tag make-2_9_3, and our fork anurodhp/libs-base
+#     branch iokit-port (off upstream tag base-1_31_1), which carries the
+#     port to Apple's objc4 runtime. GNUstep is the user's chosen GUI layer (DAR-381), and
 #     Apple ships no GNUstep, so upstream is the source.
 #   DejaVu fonts -- the upstream release tarball, not the git tag: the
 #       tag (version_2_37, the nixpkgs version) holds only FontForge .sfd
@@ -827,7 +828,7 @@ libxcvt|https://gitlab.freedesktop.org/xorg/lib/libxcvt.git|libxcvt-0.1.3|
 wmaker|https://github.com/window-maker/wmaker.git|wmaker-0.96.0|
 libffi|https://github.com/apple-oss-distributions/libffi.git|libffi-27|
 gnustep-make|https://github.com/gnustep/tools-make.git|make-2_9_3|
-gnustep-base|https://github.com/gnustep/libs-base.git|base-1_31_1|
+gnustep-base|git@github.com:anurodhp/libs-base.git|iokit-port||https://github.com/gnustep/libs-base.git
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch upstream_url; do

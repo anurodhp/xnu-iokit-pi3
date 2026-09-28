@@ -627,5 +627,5 @@ Apple ships neither of these, and GNUstep is the chosen GUI layer
 | repo | pin | notes |
 |---|---|---|
 | `gnustep-make` | `gnustep/tools-make` `make-2_9_3` | built with the `apple-gnu-gnu` combo, i.e. on objc4 (DAR-382) |
-| `gnustep-base` | `gnustep/libs-base` `base-1_31_1` | cross configure answers: `build_gnustep_config_probes.sh --run` |
+| `gnustep-base` | fork `anurodhp/libs-base` `iokit-port` (off `base-1_31_1`) | cross configure answers: `build_gnustep_config_probes.sh --run` |
 | `wmaker` | `window-maker/wmaker` `wmaker-0.96.0` | DAR-424 |
