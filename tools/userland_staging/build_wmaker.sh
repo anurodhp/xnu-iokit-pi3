@@ -48,6 +48,12 @@ x11_require_staged X11/Xmu/Xmu.h build_libXmu.sh
 x11_require_sys_dylibs
 
 CFG="$X11_CONFIG_DIR/wmaker"
+# WINGs/wconfig.h:23's #include "../config.h" is searched in the source
+# tree first. An in-tree ./configure would leave config.h (and a
+# wrlib/wraster.h) there that silently shadows ours, so refuse.
+for f in "$SRC/config.h" "$SRC/wrlib/wraster.h" "$SRC/WINGs/WINGs/WINGsP.h"; do
+    [ -e "$f" ] && { echo "error: $f exists (in-tree configure?) and would shadow the generated one -- remove it" >&2; exit 1; }
+done
 GEN="$X11_ROOT/obj/wmaker_gen"
 rm -rf "$GEN"
 mkdir -p "$GEN/WINGs"
@@ -162,7 +168,7 @@ rm -rf "$PKGDATA" "$PKGCONF" "$STAGE/share/WINGs"
 mkdir -p "$PKGDATA" "$PKGCONF" "$STAGE/share/WINGs"
 # WindowMaker/Makefile.am: GENERATED_MENUS via sed (#wprefs#, #wmdatadir#),
 # dist_prefsdata_DATA (incl. $(NONGENERATED_MENUS)) copied as-is.
-# wpexecbindir = wprefs_bindir = ${bindir} (configure.ac:890).
+# wpexecbindir = wprefs_bindir = ${bindir} (configure.ac:895).
 for m in $(am_data "$WMD/Makefile.am" GENERATED_MENUS); do
     sed -e "s:#wprefs#:$X11_PREFIX/bin/WPrefs:" -e "s:#wmdatadir#:$X11_PREFIX/share/WindowMaker:" \
         "$WMD/$m.in" > "$PKGDATA/$m"
@@ -180,7 +186,7 @@ for sub in Backgrounds Icons Pixmaps Styles Themes; do
     done
 done
 # WindowMaker/Defaults/Makefile.am: ICONEXT=xpm (no libtiff,
-# configure.ac:833-835), pkgdatadir/pixmapdir per config-paths.h.
+# configure.ac:830-832), pkgdatadir/pixmapdir per config-paths.h.
 sed -e "s:#extension#:xpm:" "$WMD/Defaults/WMWindowAttributes.in" > "$PKGCONF/WMWindowAttributes"
 sed -e "s:#pkgdatadir#:$X11_PREFIX/share/WindowMaker:" -e "s:#pixmapdir#:$X11_PREFIX/share/pixmaps:" \
     "$WMD/Defaults/WindowMaker.in" > "$PKGCONF/WindowMaker"

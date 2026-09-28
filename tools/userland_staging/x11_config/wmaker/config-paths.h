@@ -4,7 +4,7 @@
  * x11_common.sh):
  *   datadir    = /usr/X11/share
  *   sysconfdir = /usr/X11/etc
- *   pkgconfdir = ${sysconfdir}/${PACKAGE_TARNAME} (configure.ac:922)
+ *   pkgconfdir = ${sysconfdir}/${PACKAGE_TARNAME} (configure.ac:925)
  *   pixmapdir  = ${datadir}/pixmaps (configure.ac:873)
  */
 

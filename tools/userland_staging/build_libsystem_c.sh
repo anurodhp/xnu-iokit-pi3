@@ -548,7 +548,7 @@ rm -f "$EXTRACT/getenv_real_raw.o"
 # too. Apple's owner for fts is libsystem_c; libremovefile.dylib carries
 # its own private $INODE64-only copy (DAR-429).
 # -DPLATFORM_iPhoneOS: Apple's own switch for building Libc for iOS. It
-# makes xnu's bsd/sys/cdefs.h:529-534 define __DARWIN_ONLY_UNIX_CONFORMANCE,
+# makes xnu's bsd/sys/cdefs.h:530-535 define __DARWIN_ONLY_UNIX_CONFORMANCE,
 # __DARWIN_ONLY_64_BIT_INO_T and __DARWIN_ONLY_VERS_1050, so these files
 # reference and export the plain arm64 names (socketpair, fdopen,
 # fts_open) that arm64 SDK clients bind. The rest of this dylib predates
@@ -1159,6 +1159,10 @@ rm -f "$OUT/system/libsystem_c.dylib"
     -Wl,-alias,_regcomp,'_regcomp$UNIX2003' \
     -Wl,-alias,_fdopen,'_fdopen$UNIX2003' \
     `# DAR-424: popen.c (VARIANT_DARWINEXTSN) binds the $DARWIN_EXTSN name.` \
+    `# DEVIATION: the base is this dylib's fdopen, built without` \
+    `# VARIANT_DARWINEXTSN (build_libc_stdio.sh:166), so it counts streams` \
+    `# (Libc/stdio/FreeBSD/fdopen.c:33-40); Apple's popen$DARWIN_EXTSN is` \
+    `# uncounted. popen() can hit EMFILE earlier, as fopen/fdopen already can.` \
     -Wl,-alias,_fdopen,'_fdopen$DARWIN_EXTSN' \
     `# DAR-424: popen.c defines only _popen$DARWIN_EXTSN; SDK clients bind _popen.` \
     -Wl,-alias,'_popen$DARWIN_EXTSN',_popen \

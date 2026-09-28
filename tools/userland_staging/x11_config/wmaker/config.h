@@ -52,10 +52,11 @@
 /* WM_FUNC_OPEN_NOFOLLOW (m4/windowmaker.m4:295): O_NOFOLLOW is in
  * <fcntl.h>, so configure defines nothing. */
 
-/* strlcat/strlcpy found in libc without -lbsd (configure.ac:414-422);
- * configure.ac:416 and :421 both define HAVE_STRLCAT (sic). */
+/* strlcat/strlcpy found in libc without -lbsd (configure.ac:414-422).
+ * configure.ac:416 and :421 both define HAVE_STRLCAT (sic) and never
+ * HAVE_STRLCPY, so WUtil uses its bundled wstrlcpy (WINGs/string.c:303),
+ * exactly as a real configure run would. */
 #define HAVE_STRLCAT 1
-#define HAVE_STRLCPY 1
 
 /* sys/inotify.h (configure.ac:445) is Linux-only: HAVE_INOTIFY undefined. */
 
@@ -75,7 +76,6 @@
 #define HAVE_STRING_H 1
 #define HAVE_STRINGS_H 1
 #define HAVE_STDLIB_H 1
-#define HAVE_SYS_SELECT_H 1
 #define STDC_HEADERS 1
 
 /* AC_C_CONST / AC_C_INLINE: C99 compiler, nothing to define.
