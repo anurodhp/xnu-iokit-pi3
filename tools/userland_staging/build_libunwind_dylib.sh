@@ -142,9 +142,34 @@ rm -f "$OUT/system/libunwind.dylib"
     -o "$OUT/system/libunwind.dylib" \
     "$EXTRACT"/*.o \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" \
-    "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" "$OUT/system/libsystem_c.dylib"
+    "$OUT/system/libsystem_malloc.dylib" "$OUT/system/libsystem_pthread.dylib" "$OUT/system/libsystem_c.dylib" \
+    libdyld_for_libunwind.tbd
 
 echo "wrote $OUT/system/libunwind.dylib"
+# DAR-236 (2026-09-28): libunwind finds each image's __unwind_info/
+# __eh_frame through libdyld's _dyld_find_unwind_sections(). It used to
+# get a hidden stub that always returned "not found" (libcxx_dylib_compat.c),
+# so no C++/Objective-C exception was ever caught in any process. Apple's
+# libunwind.dylib plain-links libdyld
+# (third_party/libunwind/libunwind/src/CMakeLists.txt:113, -ldyld). Here
+# libdyld.dylib links libc++.dylib, which links this dylib, so libdyld
+# cannot be built first; libdyld_for_libunwind.tbd is a link-time stub
+# naming only the three symbols libunwind imports, with libdyld's real
+# install name. The resulting load command and binds are the same as
+# linking the real dylib. When libdyld.dylib exists, check that it really
+# exports each of them, so the stub cannot drift.
+if [ -f "$OUT/system/libdyld.dylib" ]; then
+    for sym in __dyld_find_unwind_sections __dyld_register_func_for_remove_image _dladdr; do
+        nm -gUj "$OUT/system/libdyld.dylib" | grep -qx "$sym" || {
+            echo "error: libdyld.dylib no longer exports $sym (libdyld_for_libunwind.tbd is stale)" >&2
+            exit 1
+        }
+    done
+fi
+xcrun dyld_info -fixups "$OUT/system/libunwind.dylib" | grep -q 'libdyld.*__dyld_find_unwind_sections' || {
+    echo "error: libunwind.dylib does not bind _dyld_find_unwind_sections to libdyld" >&2
+    exit 1
+}
 otool -hv "$OUT/system/libunwind.dylib" | grep -q " DYLIB " || {
     echo "error: filetype is not DYLIB" >&2
     exit 1
