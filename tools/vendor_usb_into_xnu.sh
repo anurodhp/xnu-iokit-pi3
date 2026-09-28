@@ -26,8 +26,11 @@
 #
 # IMPORTANT: the copies under third_party/xnu-7195 are GENERATED. Do not
 # hand-edit them -- rerunning this script overwrites them. A real local
-# fix belongs in the FIXES section below (so it is reproducible and
-# reviewable), the same way tools/build_iousbfamily.sh keeps its one fix.
+# fix to IOUSBFamily (including AppleUSBHub) belongs on this project's
+# fork, anurodhp/IOUSBFamily branch iokit-port (DAR-421), which is what
+# third_party/IOUSBFamily is cloned from; this script copies its files
+# unmodified. AppleUSBCDCDriver's fixes are still applied in the FIXES
+# section below.
 # The script refuses to clobber a vendored file that has uncommitted edits
 # in the xnu tree, for the same reason tools/sync_iokit_drivers.sh does:
 # that check already caught a real correction that would otherwise have
@@ -63,6 +66,31 @@ if [ ! -s "$FAMILY/IOUSBFamily/Classes/IOUSBController.cpp" ]; then
 	echo "error: IOUSBController.cpp is EMPTY -- third_party/IOUSBFamily is" >&2
 	echo "       pinned to a tag that publishes zero-byte sources (630.4.5" >&2
 	echo "       does). Re-pin to IOUSBFamily-560.4.2." >&2
+	exit 1
+fi
+# The IOUSBFamily checkout must be the anurodhp/IOUSBFamily fork. Check the
+# result of every USB fix commit, so a plain upstream clone (or a stale
+# checkout) fails here instead of vendoring unfixed sources. Four of them
+# would only break the kernel build; the sysctl one (IOUSBController.cpp)
+# compiles and links clean and then panics the kernel ~26s into boot, so
+# nothing later would catch it. grep -a with LC_ALL=C: the sources carry
+# latin-1 bytes; see the FIXES note below.
+usb_fork_missing=()
+LC_ALL=C grep -aq 'UInt32[[:space:]]*info = NULL;' "$FAMILY/IOUSBFamily/Classes/IOUSBDevice.cpp" &&
+	usb_fork_missing+=("IOUSBDevice.cpp: UInt32 info = NULL")
+LC_ALL=C grep -aq 'return false;.*was NULL' "$FAMILY/IOUSBFamily/Classes/IOUSBPipe.cpp" ||
+	usb_fork_missing+=("IOUSBPipe.cpp: InitToEndpoint return false")
+LC_ALL=C grep -aq '^[[:space:]]*virtual UInt32.*GetErrataBits' "$FAMILY/IOUSBFamily/Headers/IOUSBControllerV3.h" &&
+	usb_fork_missing+=("IOUSBControllerV3.h: GetErrataBits declaration")
+LC_ALL=C grep -aqE '^[[:space:]]*sysctl_(un)?register_oid \( &sysctl__debug_USB \);' "$FAMILY/IOUSBFamily/Classes/IOUSBController.cpp" &&
+	usb_fork_missing+=("IOUSBController.cpp: debug.USB sysctl double registration")
+[ "$(LC_ALL=C grep -ac 'case (UInt32)-1:' "$FAMILY/AppleUSBHub/Classes/AppleUSBHub.cpp" 2>/dev/null)" = 3 ] ||
+	usb_fork_missing+=("AppleUSBHub.cpp: case (UInt32)-1 x3")
+if [ ${#usb_fork_missing[@]} -ne 0 ]; then
+	echo "error: $FAMILY lacks this project's fixes -- it is not the" >&2
+	echo "       anurodhp/IOUSBFamily iokit-port fork. Missing:" >&2
+	printf '         %s\n' "${usb_fork_missing[@]}" >&2
+	echo "       Re-clone it: rm -rf $FAMILY && ./setup_third_party.sh" >&2
 	exit 1
 fi
 
@@ -205,156 +233,36 @@ if [ ${#diverged[@]} -ne 0 ]; then
 	for f in "${diverged[@]}"; do
 		echo "         git -C $XNU diff -- $f" >&2
 	done
-	echo "       Move the fix into this script's FIXES section, then re-run." >&2
+	echo "       Move the fix into anurodhp/IOUSBFamily (iokit-port) or, for" >&2
+	echo "       AppleUSBCDCDriver, this script's FIXES section, then re-run." >&2
 	exit 1
 fi
 
 # ---------------------------------------------------------------------
-# FIXES -- the only edits made to Apple's published source, each a real
-# bug under C++11+ rules rather than a porting compromise. Both assert on
-# their own target and re-check afterwards, so a re-pin that changes the
-# line fails loudly instead of silently not applying.
+# FIXES -- the only edits made to Apple's published AppleUSBCDCDriver
+# source, each asserting on its own target and re-checking afterwards, so
+# a re-pin that changes the line fails loudly instead of silently not
+# applying.
+#
+# IOUSBFamily's fixes that used to be here (1 IOUSBDevice.cpp `info =
+# NULL`, 1b IOUSBPipe.cpp bool `return NULL`, 1c IOUSBControllerV3.h's
+# undefined GetErrataBits override, 1d IOUSBController.cpp's double sysctl
+# registration, 4 AppleUSBHub.cpp's `case -1:`) are commits on
+# anurodhp/IOUSBFamily iokit-port now, each with its evidence in the
+# commit message (DAR-421); the in-source comments cite the fork. Two
+# lessons from them, kept here: 1b
+# compiles under tools/build_iousbfamily.sh (Xcode 12, NULL is __null)
+# and still failed the real kernel build (live Xcode, NULL is nullptr),
+# so that script is a fast syntax gate, not a proxy for the kernel build;
+# and 1d was not a compile error at all but a boot panic caused purely by
+# building a kext into the kernel, which changes which init machinery
+# runs.
 #
 # LC_ALL=C is load-bearing on every grep/sed here: Apple's 2012 sources
 # carry a latin-1 (c) byte that makes BSD sed abort with "RE error:
 # illegal byte sequence" and makes grep treat the file as binary and
 # match nothing.
 # ---------------------------------------------------------------------
-
-# 1. IOUSBDevice.cpp: `UInt32 info = NULL;` -- an out-parameter for
-#    GetPortInformation(), overwritten before every read. Legal in C++03,
-#    a hard error under -std=gnu++14 (cannot initialize 'UInt32' from
-#    'nullptr_t').
-F="$USB_SRC/IOUSBDevice.cpp"
-if LC_ALL=C grep -q 'UInt32[[:space:]]*info = NULL;' "$F"; then
-	LC_ALL=C sed -i '' \
-		's|UInt32\([[:space:]]*\)info = NULL;|UInt32\1info = 0;\t/* was NULL; see tools/vendor_usb_into_xnu.sh */|' "$F"
-fi
-if LC_ALL=C grep -q 'UInt32[[:space:]]*info = NULL;' "$F"; then
-	echo "error: IOUSBDevice.cpp NULL fix did not apply" >&2
-	exit 1
-fi
-
-# 1b. IOUSBPipe.cpp: `bool IOUSBPipe::InitToEndpoint(...)` -- one of the
-#     file's four deprecated no-op stubs -- ends `return NULL;`. `false`
-#     is plainly what it means.
-#
-#     Worth noting WHY this one is here and not in
-#     tools/build_iousbfamily.sh's fix list: that script compiles with
-#     Xcode 12 at -std=gnu++14, where NULL is __null and converts to bool
-#     silently. The real kernel build uses the LIVE Xcode against xnu's
-#     own C++ dialect, where NULL is nullptr and copy-initialising a bool
-#     from std::nullptr_t is a hard error:
-#
-#       error: cannot initialize return object of type 'bool' with an
-#              rvalue of type 'std::nullptr_t'
-#
-#     So a file can compile perfectly under build_iousbfamily.sh and
-#     still fail the kernel build. The standalone script is a fast
-#     syntax gate, NOT a proxy for the real build -- do not treat a clean
-#     19/19 there as proof the kernel will link.
-#
-#     Checked for other instances of the same pattern across every
-#     vendored USB/CDC source (a bool-returning function with `return
-#     NULL;`): this is the only one.
-F="$USB_SRC/IOUSBPipe.cpp"
-if LC_ALL=C grep -q 'IOUSBPipe::InitToEndpoint' "$F"; then
-	LC_ALL=C sed -i '' \
-		'/IOUSBPipe::InitToEndpoint, obsolete method 1 called/,/^}/ s|    return NULL;|    return false;\t/* was NULL; see tools/vendor_usb_into_xnu.sh */|' "$F"
-fi
-if ! LC_ALL=C grep -q 'return false;.*was NULL' "$F"; then
-	echo "error: IOUSBPipe.cpp bool-return fix did not apply" >&2
-	exit 1
-fi
-
-# 1c. IOUSBControllerV3.h declares an override that NOTHING DEFINES:
-#
-#       // we override this one to add some stuff which requires the _device iVar
-#       virtual UInt32 GetErrataBits(UInt16 vendorID, UInt16 deviceID, UInt16 revisionID);
-#
-#     There is no IOUSBControllerV3::GetErrataBits anywhere in
-#     IOUSBFamily-560.4.2 -- checked every file in the repo, not just the
-#     vendored subset. The only definitions are
-#     IOUSBController::GetErrataBits (IOUSBController_Errata.cpp:131, the
-#     real errata-table lookup) and AppleUSBXHCI's own, on a different
-#     class. The declaration is vestigial: Apple's comment describes an
-#     override that was never published.
-#
-#     It only bites at the kernel link, because a vtable is emitted just
-#     once (in the TU holding the key function) and LTO is what
-#     materialises it:
-#
-#       Undefined symbols for architecture arm64:
-#         "IOUSBControllerV3::GetErrataBits(unsigned short, unsigned short,
-#          unsigned short)", referenced from:
-#             vtable for IOUSBControllerV3 in justlto.o
-#
-#     Per-file compiles never reference the vtable, so both
-#     tools/build_iousbfamily.sh AND the per-object nm sweep came back
-#     clean -- a missing *virtual* definition is invisible to both.
-#
-#     Deleting the declaration is the fix, not writing a body: with it
-#     gone, IOUSBControllerV3 inherits IOUSBController::GetErrataBits,
-#     which is real, published, and does the actual lookup. Inventing an
-#     override would mean inventing behaviour Apple never shipped source
-#     for. On this board it returns no errata anyway -- the lookup keys
-#     off PCI vendor/device/revision IDs, and there is no PCI bus.
-#     Applied to both vendored copies of the header.
-for F in "$USB_HDR/IOUSBControllerV3.h" "$USB_SRC/IOUSBControllerV3.h"; do
-	if LC_ALL=C grep -q 'virtual UInt32.*GetErrataBits' "$F"; then
-		LC_ALL=C sed -i '' \
-			's|^\(.*virtual UInt32.*GetErrataBits.*\)$|/* declaration removed by tools/vendor_usb_into_xnu.sh -- no definition exists in IOUSBFamily-560.4.2; inherit IOUSBController::GetErrataBits */\n// \1|' "$F"
-	fi
-	if LC_ALL=C grep -q '^[[:space:]]*virtual UInt32.*GetErrataBits' "$F"; then
-		echo "error: IOUSBControllerV3.h GetErrataBits removal did not apply to $F" >&2
-		exit 1
-	fi
-done
-
-# 1d. IOUSBController.cpp double-registers its debug sysctl, which
-#     PANICS THE KERNEL AT BOOT once this code is built in rather than
-#     loaded as a kext:
-#
-#       panic(cpu 0 caller ...): "attempting to register a sysctl at
-#                                 previously registered slot : 154"
-#       ... __GLOBAL__sub_I_IOUSBController.cpp
-#
-#     The file declares `SYSCTL_PROC(_debug, OID_AUTO, USB, ...)` AND
-#     calls sysctl_register_oid(&sysctl__debug_USB) from the constructor
-#     of its static `gUSBStackGlobals` (USBGlobals::USBGlobals), with the
-#     matching unregister in the destructor.
-#
-#     For a kext that is correct and necessary: a kext's SYSCTL_PROC
-#     linker-set entry is not in the kernel's own `__sysctl_set`, so
-#     nothing registers it automatically and the constructor must.
-#     Compiled INTO the kernel the entry lands in `__sysctl_set`,
-#     bsd/kern/kern_newsysctl.c:400's sysctl_register_set("__sysctl_set")
-#     registers it during boot, and the constructor then registers the
-#     same oid a second time -- which :242 panics on by design.
-#
-#     This is the first fix here that is NOT a compile error. It is a
-#     pure kext-vs-built-in behavioural difference, invisible to every
-#     compile-time and link-time check, and it kills the machine roughly
-#     26 seconds into boot. Worth remembering as a category: vendoring a
-#     kext into the kernel changes which init machinery runs, not just
-#     how the code is compiled.
-#
-#     Fix: drop the manual register/unregister and let the kernel's own
-#     linker-set registration do it. The sysctl still exists and still
-#     works; only the redundant second registration goes away.
-F="$USB_SRC/IOUSBController.cpp"
-if LC_ALL=C grep -q '^	sysctl_register_oid ( &sysctl__debug_USB );' "$F"; then
-	LC_ALL=C sed -i '' \
-		's|^	sysctl_register_oid ( \&sysctl__debug_USB );|	/* removed by tools/vendor_usb_into_xnu.sh: built into the kernel, so\n	 * SYSCTL_PROC already registered this via __sysctl_set; registering\n	 * it again panics (kern_newsysctl.c:242). */|' "$F"
-fi
-if LC_ALL=C grep -q '^	sysctl_unregister_oid ( &sysctl__debug_USB );' "$F"; then
-	LC_ALL=C sed -i '' \
-		's|^	sysctl_unregister_oid ( \&sysctl__debug_USB );|	/* removed by tools/vendor_usb_into_xnu.sh -- see the constructor. */|' "$F"
-fi
-if LC_ALL=C grep -qE '^	sysctl_(un)?register_oid \( &sysctl__debug_USB \);' "$F"; then
-	echo "error: IOUSBController.cpp sysctl double-registration fix did not apply" >&2
-	exit 1
-fi
 
 # 2. linkup.h: `char *period` takes strchr()'s const char* return.
 F="$CDC_SRC/linkup.h"
@@ -411,23 +319,6 @@ PY
 fi
 if ! LC_ALL=C grep -q 'receivePacket - Runt frame, packet dropped' "$F"; then
 	echo "error: AppleUSBCDCECMData.cpp runt-frame fix did not apply" >&2
-	exit 1
-fi
-
-# 4. AppleUSBHub.cpp: three `switch (direction)` on a UInt32 (the
-#    ChangeOutstandingIO/ChangeRaisedPowerState/ChangeOutstandingResumes
-#    gated helpers, each decoding a (uintptr_t) param into UInt32) carry a
-#    `case -1:` label. Legal C++03, a hard error under C++11 narrowing
-#    (-Wc++11-narrowing: "case value evaluates to -1, which cannot be
-#    narrowed to type 'UInt32'"). The callers pass (void*)-1, so
-#    (UInt32)-1 is the value they meant.
-F="$HUB_SRC/AppleUSBHub.cpp"
-if LC_ALL=C grep -q '^		case -1:$' "$F"; then
-	LC_ALL=C sed -i '' 's|^		case -1:$|		case (UInt32)-1:	/* was -1; see tools/vendor_usb_into_xnu.sh FIX 4 */|' "$F"
-fi
-if LC_ALL=C grep -q '^		case -1:' "$F" || \
-   [ "$(LC_ALL=C grep -c 'case (UInt32)-1:' "$F")" -ne 3 ]; then
-	echo "error: AppleUSBHub.cpp case -1 fix did not apply (expected 3)" >&2
 	exit 1
 fi
 

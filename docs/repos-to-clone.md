@@ -38,6 +38,7 @@ The main repo itself is `anurodhp/xnu-iokit-pi3`.
 | `libpthread` | `anurodhp/libpthread` | `iokit-port` | apple-oss-distributions |
 | `IOGraphics` | `anurodhp/IOGraphics` | `iokit-port` | apple-oss-distributions |
 | `IOHIDFamily` | `anurodhp/IOHIDFamily` | `iokit-port` | apple-oss-distributions |
+| `IOUSBFamily` | `anurodhp/IOUSBFamily` | `iokit-port` | apple-oss-distributions (off `IOUSBFamily-560.4.2`, DAR-421) |
 | `Csu` | `anurodhp/Csu` | `bcm2837-bringup` | apple-oss-distributions |
 | `bash` | `anurodhp/bash` | `iokit-port` | apple-oss-distributions |
 | `cron` | `anurodhp/cron` | `iokit-port` | apple-oss-distributions |
@@ -76,6 +77,19 @@ IOHIDFamily are all switched now (branch `iokit-port` tracking remote
 `fork`; Apple stays `origin`). gnustep-base was forked the same day
 (remote `fork`, upstream gnustep as `origin`).
 
+`IOUSBFamily` was forked on 2026-09-28 (DAR-421). `iokit-port` is
+`IOUSBFamily-560.4.2` plus seven commits, one per fix that used to be
+applied to staged or vendored copies (`build_iousbfamily.sh`,
+`vendor_usb_into_xnu.sh` FIXES 1/1b/1c/1d/4, `patch_iohid_gaps.sh` fixes
+6/6b; the last script is retired). The code is the same as the copies
+xnu-7195 already vendored; only the in-source comments differ (they cite
+the fork, not those scripts), so xnu got a comment-only re-vendor. The
+main checkout was switched in place (Apple stays `origin`, the fork is
+remote `fork`). An older checkout still at the detached
+`IOUSBFamily-560.4.2` tag has a clean tree, so a plain
+`git remote add fork git@github.com:anurodhp/IOUSBFamily.git && git fetch fork && git checkout -B iokit-port fork/iokit-port`
+switches it, or re-clone.
+
 u-boot and dtc-AppleDeviceTree were the last two repos with leftover
 patch files. On 2026-09-24 both forks' `HEAD^{tree}` was confirmed
 identical to "upstream base + `git am` of the patch", and the patch
@@ -87,7 +101,7 @@ files were deleted.
 
 | Checkout | What's local | Ticket |
 |---|---|---|
-| `IOUSBFamily` | fixes applied to staged copies by `build_iousbfamily.sh` / `patch_iohid_gaps.sh` fix 6/6b; the checkout itself is clean; no `anurodhp/IOUSBFamily` fork exists yet | DAR-421 (Urgent) |
+| `AppleUSBCDCDriver` | `vendor_usb_into_xnu.sh` FIXES 2/3 (`linkup.h` const, `AppleUSBCDCECMData.cpp` runt-frame check) edit the vendored copies in xnu-7195; the checkout itself is clean; no `anurodhp/AppleUSBCDCDriver` fork exists yet | DAR-448 |
 
 ---
 
@@ -97,7 +111,7 @@ Every other checkout is pinned to an exact upstream tag and carries no
 local changes, so there is nothing of ours to lose. It can be re-cloned
 from upstream at any time. Examples: `hfs`, `IOStorageFamily`,
 `IONetworkingFamily`, `IOPCIFamily`, `IOSerialFamily`,
-`AppleUSBCDCDriver`, `libmalloc`, `libplatform`, `Libm`, `Libnotify`,
+`libmalloc`, `libplatform`, `Libm`, `Libnotify`,
 the `*_cmds` repos, `ncurses`, `OpenSSH`, `vim`, `lzfse`, `xxHash`, and
 the sparse `llvm-project`/`freebsd-src`/`sudo` clones.
 The 17 X.org client-library pins added for DAR-383 (`xorgproto`, `xtrans`,

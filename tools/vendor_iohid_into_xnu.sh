@@ -12,7 +12,7 @@
 #   iokit/HID/IOHIDSystem/        <- IOHIDSystem/*.cpp *.h
 #   iokit/HID/IOHIDSystem/IOHIDDescriptorParser/  <- the C report parser
 #   iokit/HID/HIDDriverKit/       <- generated/HIDDriverKit/impl/*.iig.cpp
-#   iokit/HID/IOUSBHIDDriver/     <- IOUSBHIDDriver.cpp (patched copy)
+#   iokit/HID/IOUSBHIDDriver/     <- IOUSBHIDDriver.cpp (anurodhp/IOUSBFamily fork)
 #                                    + IOUSBCompositeDriver.cpp (unmodified; it
 #                                    SetConfiguration()s a class-0 device so the
 #                                    IOUSBInterface nubs IOUSBHIDDriver matches
@@ -40,10 +40,12 @@
 #   (the audit checks), and adding them back is one line if dexts ever exist.
 #
 # SOURCE FIXES: IOHIDFamily's are commits on the fork anurodhp/IOHIDFamily
-# (branch iokit-port, DAR-356), which setup_third_party.sh clones.
-# IOUSBHIDDriver.cpp's are applied to a staged copy by
-# tools/patch_iohid_gaps.sh, which runs first and also checks that the
-# IOHIDFamily checkout is the fork. The copies under third_party/xnu-7195
+# (branch iokit-port, DAR-356), and IOUSBHIDDriver.cpp's (case (UInt32)-1,
+# strLen) are commits on anurodhp/IOUSBFamily (branch iokit-port,
+# DAR-421). setup_third_party.sh clones both; this script copies their
+# files unmodified and checks first that both checkouts are the forks.
+# (tools/patch_iohid_gaps.sh, which staged a fixed IOUSBHIDDriver.cpp
+# under build/iohid/src/, is retired.) The copies under third_party/xnu-7195
 # are GENERATED and are overwritten.
 #
 # Run directly, or let tools/build_xnu_7195.sh call it. Idempotent.
@@ -67,10 +69,23 @@ for f in "$HID/IOHIDFamily/IOHIDDevice.cpp" "$HID/IOHIDSystem/IOHIDSystem.cpp" \
 	fi
 done
 
-# Check the IOHIDFamily checkout is the fork and stage the patched
-# IOUSBHIDDriver.cpp first,
-# and make sure the generated HIDDriverKit headers match the pinned .iig.
-"$REPO_ROOT/tools/patch_iohid_gaps.sh" > /dev/null
+# Check that both checkouts are the forks (so a plain upstream clone
+# fails here, not with hundreds of compile errors later), and make sure
+# the generated HIDDriverKit headers match the pinned .iig. grep -a with
+# LC_ALL=C: Apple's sources carry latin-1 bytes.
+if ! LC_ALL=C grep -aq 'kHIDPage_AppleVendor[[:space:]]*= 0xFF00' "$HID/IOHIDFamily/AppleHIDUsageTables.h" ||
+   [ ! -s "$HID/IOHIDFamily/IOHIDEventServiceFastPathUserClient.cpp" ]; then
+	echo "error: $HID lacks this project's fixes -- it is not the" >&2
+	echo "       anurodhp/IOHIDFamily iokit-port fork. Re-clone it:" >&2
+	echo "       rm -rf $HID && ./setup_third_party.sh" >&2
+	exit 1
+fi
+if ! LC_ALL=C grep -aq 'strlcpy((char \*)vOutBuf, strBuf, (size_t)strLen);' "$USB/IOUSBHIDDriver/Classes/IOUSBHIDDriver.cpp"; then
+	echo "error: $USB lacks this project's fixes -- it is not the" >&2
+	echo "       anurodhp/IOUSBFamily iokit-port fork. Re-clone it:" >&2
+	echo "       rm -rf $USB && ./setup_third_party.sh" >&2
+	exit 1
+fi
 if [ ! -f generated/HIDDriverKit/IOHIDDevice.h ] || \
    [ -n "$(find "$HID/HIDDriverKit" -name '*.iig' -newer generated/HIDDriverKit/IOHIDDevice.h -print -quit)" ]; then
 	"$REPO_ROOT/tools/generate_hid_driverkit_headers.sh" >/dev/null
@@ -141,7 +156,7 @@ copy_into "$D_SYS" "$HID/IOHIDSystem"/*.h
 copy_into "$D_PARSER" "$HID/IOHIDSystem/IOHIDDescriptorParser"/*.c \
 	"$HID/IOHIDSystem/IOHIDDescriptorParser"/*.h
 for s in $DK_IMPLS; do copy_into "$D_DKIMPL" "generated/HIDDriverKit/impl/$s.iig.cpp"; done
-copy_into "$D_USBHID" build/iohid/src/IOUSBHIDDriver.cpp \
+copy_into "$D_USBHID" "$USB/IOUSBHIDDriver/Classes/IOUSBHIDDriver.cpp" \
 	"$USB/IOUSBCompositeDriver/Classes/IOUSBCompositeDriver.cpp"
 copy_into "$D_COMPAT" compat/iohid/IOHIDFamilyPrivateMissing.h compat/iohid/math.h
 mkdir -p "$D_COMPAT/IOKit"
@@ -162,7 +177,7 @@ if [ ${#diverged[@]} -ne 0 ]; then
 	echo "error: these vendored files differ from their source AND have" >&2
 	echo "       uncommitted edits in the XNU tree. Refusing to overwrite:" >&2
 	for f in "${diverged[@]}"; do echo "         git -C $XNU diff -- $f" >&2; done
-	echo "       Move the fix into anurodhp/IOHIDFamily (iokit-port), tools/patch_iohid_gaps.sh (IOUSBHIDDriver) or compat/iohid/, then re-run." >&2
+	echo "       Move the fix into anurodhp/IOHIDFamily (iokit-port), anurodhp/IOUSBFamily (iokit-port, IOUSBHIDDriver) or compat/iohid/, then re-run." >&2
 	exit 1
 fi
 

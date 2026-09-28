@@ -64,7 +64,7 @@ untouched (see below for why); everything else already matched.
 | `hfs` | `hfs-556.100.11` | `hfs-556.60.1` | pinned tag is **newer** than the manifest |
 | `IOStorageFamily` | `IOStorageFamily-218.1.4` | `IOStorageFamily-260.40.5` | pinned tag is **older** — real version drift |
 | `msdosfs` | `msdosfs-229.1.4` | `msdosfs-435.60.1` | pinned tag is **older** — real version drift |
-| `IOUSBFamily` | `IOUSBFamily-560.4.2` *(was `630.4.5` until 2026-09-08)* | *(not in the manifest tree at all)* | no Big Sur-era tag exists to compare against; `630.4.5` re-pinned because it ships its core sources **empty** — see the 2026-09-08 addendum |
+| `IOUSBFamily` | `IOUSBFamily-560.4.2` *(was `630.4.5` until 2026-09-08)*; since 2026-09-28 cloned from fork `anurodhp/IOUSBFamily` `iokit-port` (560.4.2 + 7 fix commits, DAR-421) | *(not in the manifest tree at all)* | no Big Sur-era tag exists to compare against; `630.4.5` re-pinned because it ships its core sources **empty** — see the 2026-09-08 addendum |
 
 Everything else (`dyld`, `Libc`, `libpthread`, `libplatform`,
 `libdispatch`, `libclosure`, `libmalloc`, `libunwind`, `Libinfo`,
@@ -148,7 +148,12 @@ for that ref, which reports `"size": 0` for each):
 `IOUSBFamily/Classes` or `IOUSBFamily/Headers` — 24,804 real lines of
 source across `Classes/` alone. So the correct pin for anyone who wants
 to *build* IOUSBFamily rather than skim its headers is `560.4.2`, and
-`setup_third_party.sh` now pins that.
+`setup_third_party.sh` now pins that. (Since 2026-09-28, DAR-421, it
+clones this project's fork `anurodhp/IOUSBFamily`, branch `iokit-port`:
+`IOUSBFamily-560.4.2` plus one commit per source fix the kernel build
+needs. Those fixes used to be applied to staged/vendored copies by
+`build_iousbfamily.sh`, `vendor_usb_into_xnu.sh` and the now-retired
+`patch_iohid_gaps.sh`.)
 
 **The generalizable lesson**, worth more than the pin itself: "newest
 tag" and "newest tag that actually contains the source" are different
@@ -422,9 +427,10 @@ scripting-language runtime as a goal in itself):
   hub types into the shell on both the HDMI console and serial, and the
   same keystrokes do nothing without boot-arg `hid-legacy-shim=1` (Apple's
   own switch for the kernel keyboard shim; `runvm_hdmi.sh` passes it). The
-  sources needed source fixes, now commits on the fork
-  `anurodhp/IOHIDFamily` (branch `iokit-port`, DAR-356), plus
-  `compat/iohid/`;
+  sources needed source fixes, now commits on the forks
+  `anurodhp/IOHIDFamily` (branch `iokit-port`, DAR-356) and, for
+  `IOUSBHIDDriver.cpp`, `anurodhp/IOUSBFamily` (branch `iokit-port`,
+  DAR-421), plus `compat/iohid/`;
   `tools/iohid_gap_audit.sh` is the fast compile check. Userspace HID
   (`IOHIDManager`, `hidd`, event-system plugins) stays out of scope:
   there is no window server. Two findings about the drop itself:

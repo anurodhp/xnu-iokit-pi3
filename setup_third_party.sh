@@ -177,9 +177,20 @@
 #     apply in place. Two of them bring in files from OLDER tags as
 #     ordinary commits: AppleHIDUsageTables.h from 1035.70.7 and the
 #     FastPath user client from 1633.60.4. So a fresh clone no longer
-#     fetches extra tags. patch_iohid_gaps.sh now only stages the fixed
-#     IOUSBHIDDriver.cpp copy (IOUSBFamily, fixes 6/6b).
-#   - hfs, IOStorageFamily, IOUSBFamily, IONetworkingFamily, msdosfs: unmodified Apple
+#     fetches extra tags. The IOUSBHIDDriver.cpp fixes it went on to stage
+#     (6/6b) are commits on anurodhp/IOUSBFamily now, and the script is
+#     retired (DAR-421).
+#   - IOUSBFamily: 2026-09-28 (DAR-421): cloned from this project's own
+#     fork (git@github.com:anurodhp/IOUSBFamily.git, branch iokit-port).
+#     iokit-port = `IOUSBFamily-560.4.2` (aa1bde6) plus seven commits, one
+#     per source fix that used to be applied to staged or vendored copies:
+#     tools/build_iousbfamily.sh's IOUSBDevice.cpp fix,
+#     tools/vendor_usb_into_xnu.sh FIXES 1/1b/1c/1d/4, and
+#     tools/patch_iohid_gaps.sh fixes 6/6b (IOUSBHIDDriver.cpp). Same code
+#     as before; only the in-source comments changed (they cite the fork
+#     instead of those scripts). The pin history
+#     below (630.4.5 -> 560.4.2) still applies: the fork is based on 560.4.2.
+#   - hfs, IOStorageFamily, IOUSBFamily (until DAR-421, above), IONetworkingFamily, msdosfs: unmodified Apple
 #     open-source reference sources, pinned to an exact tag, no patching.
 #     CORRECTED 2026-08-24: a full `distribution-macOS` `macos-112` manifest
 #     audit (docs/apple-oss-catalog.md) found IOStorageFamily and msdosfs
@@ -725,7 +736,7 @@ dtc-AppleDeviceTree|git@github.com:anurodhp/dtc-appledevicetree.git|master||http
 u-boot|git@github.com:anurodhp/u-boot.git|master||https://github.com/FlorentRevest/u-boot.git
 hfs|https://github.com/apple-oss-distributions/hfs.git|hfs-556.100.11|
 IOStorageFamily|https://github.com/apple-oss-distributions/IOStorageFamily.git|IOStorageFamily-260.40.5|
-IOUSBFamily|https://github.com/apple-oss-distributions/IOUSBFamily.git|IOUSBFamily-560.4.2|
+IOUSBFamily|git@github.com:anurodhp/IOUSBFamily.git|iokit-port||https://github.com/apple-oss-distributions/IOUSBFamily.git
 IOPCIFamily|https://github.com/apple-oss-distributions/IOPCIFamily.git|IOPCIFamily-428.80.2|
 IOSerialFamily|https://github.com/apple-oss-distributions/IOSerialFamily.git|IOSerialFamily-93.200.2|
 AppleUSBCDCDriver|https://github.com/apple-oss-distributions/AppleUSBCDCDriver.git|AppleUSBCDCDriver-4303.2.1|
