@@ -14,7 +14,7 @@
  *
  * - HAVE_OBJC 1 (DAR-237, 2026-09-28; was 0 before objc4 existed here):
  *   USE_OBJC, as Apple ships libdispatch. object.m/data.m are built and
- *   _os_object_init() calls _objc_init() (src/object.m:70-72), which is
+ *   _os_object_init() calls _objc_init() (src/object.m:72-75), which is
  *   objc4's only real caller. internal.h:80-96 then gives the .m files
  *   OS_OBJECT_USE_OBJC=1 and the C files 0, as on Apple.
  * - HAVE_PTHREAD_WORKQUEUES 0 / DISPATCH_USE_INTERNAL_WORKQUEUE 1: real

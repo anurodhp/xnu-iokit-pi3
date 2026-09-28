@@ -220,9 +220,9 @@ extern int pthread_current_stack_contains_np(const void *, unsigned long);
 
 /* DAR-237 (2026-09-28): libdispatch_init(), as Apple's
  * libSystem_initializer calls it right after _dyld_initializer()
- * (third_party/Libsystem/init.c:237-238). libdispatch_init() runs
+ * (third_party/Libsystem/init.c:238,241). libdispatch_init() runs
  * _os_object_init() (third_party/libdispatch/src/queue.c:8123), which
- * with USE_OBJC calls _objc_init() (src/object.m:70-72), objc4's only
+ * with USE_OBJC calls _objc_init() (src/object.m:72-75), objc4's only
  * caller. That call has to happen here, while dyld still has its
  * RuntimeState writable: _objc_init() -> _dyld_objc_notify_register()
  * stores into it (third_party/dyld/dyld/DyldRuntimeState.cpp:1520-1522),
@@ -260,7 +260,7 @@ static void libsystem_call_dyld_initializer(int argc, const char *argv[],
 
     if (envp != 0)
         *_NSGetEnviron() = (char **)envp;
-    /* Apple's order (init.c:215-238): kernel (incl. mach_init), pthread,
+    /* Apple's order (init.c:215-241): kernel (incl. mach_init), pthread,
      * libc, then dyld, then libdispatch. mach_init() must still precede _dyld_initializer(),
      * which does VM/allocator work while registering its LibSystemHelpers
      * vtable. */

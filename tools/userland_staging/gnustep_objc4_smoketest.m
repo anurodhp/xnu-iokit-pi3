@@ -165,7 +165,7 @@ static id smokeForwardHandler(id self, SEL sel)
 
 /* On Apple, libSystem's initializer reaches _objc_init() through
  * libdispatch_init() -> _os_object_init() (third_party/libdispatch/
- * src/object.m:70-72). Until DAR-237/DAR-408 this port's libdispatch was
+ * src/object.m:72-75). Until DAR-237/DAR-408 this port's libdispatch was
  * built without ObjC, where _os_object_init() is empty (src/init.c:
  * 1541-1546), so nothing called it. With --objc-init this test calls it
  * itself, to check the rest of the runtime independently of libdispatch.

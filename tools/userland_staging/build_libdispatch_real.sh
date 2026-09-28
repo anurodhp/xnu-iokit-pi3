@@ -346,7 +346,7 @@ echo "compiled: dispatch_workgroup_dispose_compat.c (DAR-238)"
 
 # DAR-237 (2026-09-28): object.m and data.m, the USE_OBJC halves of the
 # object model. object.m's _os_object_init() is objc4's only real caller
-# of _objc_init() (src/object.m:70-72; objc-os.mm:922-945). Apple
+# of _objc_init() (src/object.m:72-75; objc-os.mm:922-945). Apple
 # compiles them as Objective-C without ARC (object.m:24-26 #errors under
 # ARC; libdispatch.xcconfig in rel/libdispatch-1173:54 sets
 # CLANG_LINK_OBJC_RUNTIME = NO, and the 1271 snapshot's xcconfig is
