@@ -251,8 +251,12 @@ int main(int argc, char **argv)
 	/* A block as a method IMP: imp_implementationWithBlock() maps
 	 * trampoline pages from /usr/lib/libobjc-trampolines.dylib
 	 * (objc4 runtime/objc-block-trampolines.mm:173). */
+	/* The block captures no object: with libdispatch's Block callbacks
+	 * installed (_Block_use_RR2, libdispatch/src/object.m:73-80), copying a
+	 * block retains captured objects through objc_retain, and GSSmokeRoot,
+	 * a root class, has no -retain. */
 	IMP blockIMP = imp_implementationWithBlock(^int(id self_) {
-		return self_ == r ? 7 : -1;
+		return self_ != nil ? 7 : -1;
 	});
 	class_addMethod(object_getClass(r), @selector(gsSmokeBlockMethod),
 	    blockIMP, "i@:");

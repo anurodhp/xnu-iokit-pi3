@@ -166,11 +166,10 @@
 #   fallback in objc-cache.mm's _collecting_in_critical() (thread-
 #   suspend-and-inspect via thread_get_state(), used on every real
 #   platform/config where restartable ranges aren't registered) -- not
-#   a fabricated behavior. thread_get_state() itself has no real MIG
-#   client here either (same future-work class); its only real caller
-#   is a diagnostic PC-for-thread helper that already treats non-
-#   KERN_SUCCESS as an honest, defined "couldn't get PC" case, so an
-#   honest KERN_FAILURE stand-in (objc4_misc_compat.c) is correct.
+#   a fabricated behavior. That fallback suspends each other thread and
+#   reads its PC with thread_get_state(), which libobjc binds from
+#   libsystem_kernel's real MIG client (DAR-236; objc4_misc_compat.c used
+#   to carry a KERN_FAILURE stand-in).
 # - getsectiondata()/getsegmentdata()/getsectdatafromheader_64(): real,
 #   public, stable <mach-o/getsect.h> API objc-file.mm/objc-class.mm/
 #   objc-block-trampolines.mm call to find each loaded image's
@@ -244,8 +243,8 @@
 # own ticket comments for full detail)
 # ============================================================
 # - A real MIG client for restartable.defs (see HAVE_TASK_RESTARTABLE_
-#   RANGES above) and for thread_act.defs's thread_get_state -- real,
-#   legitimate future work, not required for correct basic operation.
+#   RANGES above) -- real, legitimate future work, not required for
+#   correct basic operation.
 # - Wiring this dylib into configd.macho/IPMonitor.m/QoSMarking.m --
 #   that's DAR-170's job to resume separately once this ticket is done;
 #   deliberately not attempted this pass per explicit scope boundary.

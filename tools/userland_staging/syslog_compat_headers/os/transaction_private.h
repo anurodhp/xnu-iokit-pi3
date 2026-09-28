@@ -54,9 +54,22 @@ struct os_transaction_s {
 };
 typedef struct os_transaction_s *os_transaction_t;
 
-/* _OS_OBJECT_GLOBAL_REFCNT, os/object_private.h:69. */
+/* DAR-237 (2026-09-28): libdispatch is now built with USE_OBJC, as Apple
+ * ships it, so os_release() is objc_release()
+ * (third_party/libdispatch/src/object.m, os_release). objc_release reads
+ * the object's class through its isa before doing anything else. A NULL isa
+ * therefore faults, even on a global-refcount object. The isa is now
+ * libdispatch's root class, OS_object, which is what a real
+ * os_transaction_t's class descends from. objc4 gives OS_object instances
+ * a raw (pointer) isa (objc-runtime-new.mm:2683-2687, "hack for libdispatch
+ * et al"), so the plain class pointer here is the correct encoding.
+ * OS_object's -release is _os_object_release_without_xref_dispose()
+ * (object.m), which short-circuits on _OS_OBJECT_GLOBAL_REFCNT
+ * (os/object_private.h:69) as before. */
+extern char _os_transaction_compat_OS_object_class[]
+	__asm__("_OBJC_CLASS_$_OS_object");
 static struct os_transaction_s _os_transaction_compat_singleton = {
-	(const void *)0, INT_MAX, INT_MAX
+	(const void *)_os_transaction_compat_OS_object_class, INT_MAX, INT_MAX
 };
 
 static inline os_transaction_t

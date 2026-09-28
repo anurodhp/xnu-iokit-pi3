@@ -115,14 +115,14 @@ void backtrace_symbols_fd(void *const *buffer, int size, int fd) {
 	(void)fd;
 }
 
-/* thread_get_state() used to be a KERN_FAILURE stand-in here. Since
- * DAR-416, libsystem_kernel.dylib builds Apple's real
- * libsyscall/mach/thread_act.c over MIG user code for thread_act.defs
- * (build_libsystem_kernel.sh) and exports _thread_get_state, its Apple
- * home, so libobjc binds that (DAR-236, 2026-09-28). The stand-in made
- * objc-cache.mm's _get_pc_for_thread() always return PC_SENTINEL, so
- * _collecting_in_critical() always reported a thread in a critical
- * section and old method caches were never freed. */
+/* thread_get_state() used to be a KERN_FAILURE stand-in here.
+ * libsystem_kernel.dylib exports the real MIG client, thread_actUser.o
+ * generated from thread_act.defs by build_libmach_ipc.sh (DAR-143) and
+ * extracted into libsystem_kernel by build_libsystem_kernel.sh, so libobjc
+ * binds that (DAR-236, 2026-09-28). With the stand-in, objc-cache.mm's
+ * _get_pc_for_thread() always returned PC_SENTINEL. In a process with two
+ * or more threads, _collecting_in_critical() then always reported a
+ * thread in a critical section, so old method caches were never freed. */
 
 /* getSharedCachePreoptimizedProtocol(): declared unconditionally in
  * objc-private.h, but only ever DEFINED in objc-opt.mm's real
