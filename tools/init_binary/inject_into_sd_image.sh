@@ -550,6 +550,25 @@ if [ -d "$FS_STAGE/bin" ]; then
     done
     echo "+ wrote fontconfig tools to $MNT/usr/X11/bin ($(ls "$FS_STAGE"/bin/fc-*.macho | wc -l | tr -d ' ') of them)"
 fi
+# GNUstep (DAR-388): gnustep-make and gnustep-base as build_gnustep_base.sh
+# installs them, a copy of the target's /usr/GNUstep (libgnustep-base, its
+# resources, headers, makefiles and Tools) and /etc/GNUstep/GNUstep.conf.
+# libgnustep-base's install name is under /usr/GNUstep, so it does not go
+# through the libc_build/system/*.dylib loop. ditto keeps the library's
+# version symlinks.
+GS_STAGE=tools/userland_staging/libc_build/gnustep/root
+if [ -f "$GS_STAGE/usr/GNUstep/System/Library/Libraries/libgnustep-base.dylib" ]; then
+    need_kb=$(du -sk "$GS_STAGE" | awk '{print $1}')
+    free_kb=$(df -k "$MNT" | awk 'NR==2{print $4}')
+    if [ "$free_kb" -lt $((need_kb + 51200)) ]; then
+        echo "error: $MNT has ${free_kb} KB free; the GNUstep tree needs ${need_kb} KB (+50 MB headroom)" >&2
+        exit 1
+    fi
+    ditto "$GS_STAGE" "$MNT/"
+    echo "+ wrote GNUstep tree ($need_kb KB: /usr/GNUstep, /etc/GNUstep/GNUstep.conf)"
+else
+    echo "= $GS_STAGE not built -- run tools/userland_staging/build_gnustep_base.sh first if wanted, skipping"
+fi
 # X servers (DAR-387/389, X11GS 4/7): Xvfb, Xorg, xkbcomp and the test
 # clients in /usr/X11/bin, the puredarwingop video driver and (DAR-391) the
 # iohid input driver under
@@ -1122,6 +1141,17 @@ install_smoketest tools/userland_staging/libc_build/pthread_cond_smoketest.macho
     "  pthread_cond_wait on far 0x26. Run by hand from the root shell" \
     "  post-boot; prints a single PASS/FAIL line. tools/userland_staging/" \
     "  build_pthread_cond_smoketest.sh)"
+
+install_smoketest tools/userland_staging/libc_build/ffi_smoketest.macho "usr/local/bin/ffi_smoketest" \
+    "= ffi_smoketest.macho not built -- run tools/userland_staging/build_ffi_smoketest.sh first if wanted, skipping" \
+    "  (DAR-388 libffi: ffi_call plus a trampoline-table closure. Run by hand;" \
+    "  prints PASS/FAIL. tools/userland_staging/build_ffi_smoketest.sh)"
+
+install_smoketest tools/userland_staging/libc_build/foundation_smoketest.macho "usr/local/bin/foundation_smoketest" \
+    "= foundation_smoketest.macho not built -- run tools/userland_staging/build_foundation_smoketest.sh first if wanted, skipping" \
+    "  (DAR-388 gnustep-base on objc4: strings, collections, exceptions," \
+    "  NSInvocation and forwarding, threads. Run by hand; prints PASS/FAIL." \
+    "  tools/userland_staging/build_foundation_smoketest.sh)"
 
 install_smoketest tools/userland_staging/libc_build/pthread_lifecycle_smoketest.macho "usr/local/bin/pthread_lifecycle_smoketest" \
     "= pthread_lifecycle_smoketest.macho not built -- run tools/userland_staging/build_pthread_lifecycle_smoketest.sh first if wanted, skipping" \

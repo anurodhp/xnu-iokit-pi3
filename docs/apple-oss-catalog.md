@@ -609,3 +609,23 @@ starting Part 2's new-library work:
 
 Part 2's new-library list (`ncurses`, `gnutar`, `diskdev_cmds`, `awk`,
 etc.) can proceed independently of the above.
+
+## Addendum 2026-09-28: GNUstep stack pins (DAR-388)
+
+- **`libffi`** — Apple's, manifest-verified: `git ls-tree macos-112 --
+  libffi` in `distribution-macOS` is commit `491d23ac598f`, which is tag
+  `libffi-27`. Cloned unmodified. `build_libffi.sh` builds
+  `/usr/lib/libffi.dylib` plus `/usr/lib/libffi-trampolines.dylib`, the
+  trampoline page that closures `vm_remap` (`src/closures.c:225-270`,
+  `FFI_EXEC_TRAMPOLINE_TABLE`).
+
+### Non-Apple sources (no Apple repo exists)
+
+Apple ships neither of these, and GNUstep is the chosen GUI layer
+(DAR-381), so upstream is the source:
+
+| repo | pin | notes |
+|---|---|---|
+| `gnustep-make` | `gnustep/tools-make` `make-2_9_3` | built with the `apple-gnu-gnu` combo, i.e. on objc4 (DAR-382) |
+| `gnustep-base` | fork `anurodhp/libs-base` `iokit-port` (off `base-1_31_1`) | cross configure answers: `build_gnustep_config_probes.sh --run` |
+| `wmaker` | `window-maker/wmaker` `wmaker-0.96.0` | DAR-424 |

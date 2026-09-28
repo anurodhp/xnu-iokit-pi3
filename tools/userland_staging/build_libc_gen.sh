@@ -158,6 +158,11 @@ $LIBC/stdlib/FreeBSD/llabs.c
 $LIBC/stdlib/FreeBSD/bsearch.c
 $LIBC/stdlib/FreeBSD/atol.c
 $LIBC/stdlib/FreeBSD/atoi.c
+$LIBC/stdlib/FreeBSD/atoll.c
+$LIBC/gen/FreeBSD/utime.c
+$LIBC/stdlib/FreeBSD/getopt.c
+$LIBC/stdlib/FreeBSD/getopt_long.c
+$LIBC/net/FreeBSD/inet_network.c
 $LIBC/stdlib/FreeBSD/strtoll.c
 $LIBC/stdlib/FreeBSD/strtoul.c
 $LIBC/gen/FreeBSD/termios.c
