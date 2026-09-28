@@ -1164,6 +1164,11 @@ rm -f "$OUT/system/libsystem_c.dylib"
     `# (Libc/stdio/FreeBSD/fdopen.c:33-40); Apple's popen$DARWIN_EXTSN is` \
     `# uncounted. popen() can hit EMFILE earlier, as fopen/fdopen already can.` \
     -Wl,-alias,_fdopen,'_fdopen$DARWIN_EXTSN' \
+    `# DAR-388 (gnustep-base): the SDK binds fopen() in _DARWIN_C_SOURCE` \
+    `# code as _fopen$DARWIN_EXTSN. Same DEVIATION as fdopen just above:` \
+    `# the base is this dylib's counted fopen (Libc/stdio/FreeBSD/fopen.c` \
+    `# without VARIANT_DARWINEXTSN).` \
+    -Wl,-alias,_fopen,'_fopen$DARWIN_EXTSN' \
     `# DAR-424: popen.c defines only _popen$DARWIN_EXTSN; SDK clients bind _popen.` \
     -Wl,-alias,'_popen$DARWIN_EXTSN',_popen \
     `# DAR-424: plain strftime for SDK clients (wmaker); crontab used to alias it privately.` \

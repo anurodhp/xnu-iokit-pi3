@@ -21,8 +21,18 @@
 # closures, no writable+executable memory). vm_remap is real in
 # libsystem_kernel since DAR-236.
 # Link flags: the xcodeproj's OTHER_LDFLAGS minus -allowable_client
-# (Apple-internal client restriction): -not_for_dyld_shared_cache,
-# -no_compact_unwind. Versions: DYLIB_COMPATIBILITY_VERSION = 1,
+# (Apple-internal client restriction) and minus -no_compact_unwind:
+# -not_for_dyld_shared_cache only.
+# DEVIATION: -no_compact_unwind leaves the C code with no unwind info at
+# all. Apple's own /usr/lib/libffi.dylib has DWARF FDEs for the three
+# sysv.S functions and nothing else (`dyld_info -unwind
+# /usr/lib/libffi.dylib` on the macOS 27 host). Apple's Foundation never
+# throws through libffi, but gnustep-base's forwarding does:
+# -forwardInvocation: and -doesNotRecognizeSelector: run inside
+# ffi_closure_SYSV_inner (src/aarch64/ffi.c) via GSFFIInvocation.m's
+# closure callback, and without unwind info for that frame an exception
+# raised there is never caught (DAR-388, found by foundation_smoketest).
+# Upstream libffi's own build keeps compact unwind. Versions: DYLIB_COMPATIBILITY_VERSION = 1,
 # DYLIB_CURRENT_VERSION = $(CURRENT_PROJECT_VERSION), which Apple's build
 # sets from the project version (27 for this tag; the xcodeproj's own
 # RC_ProjectSourceVersion = 1 is the local-build placeholder).
@@ -74,7 +84,7 @@ link() { # link <out> <install-name> <objs...>
     rm -f "$out"
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
         -install_name "$name" -compatibility_version 1 -current_version 27 \
-        -Wl,-not_for_dyld_shared_cache -Wl,-no_compact_unwind \
+        -Wl,-not_for_dyld_shared_cache \
         -B"$NEWLD_BINDIR" -Wl,-fixup_chains -o "$out" "$@" "${SYS[@]}"
     otool -hv "$out" | grep -q " DYLIB " || { echo "error: $out is not MH_DYLIB" >&2; exit 1; }
     echo "wrote $out ($name)"

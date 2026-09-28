@@ -546,6 +546,17 @@ MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 # entitlement queries, syscalls.master:260-261) are plain stubs too; libxpc
 # exported a non-owner _csops.
 # _sigprocmask #48 (DAR-404, syscalls.master:101) is a plain stub as well.
+# DAR-388/DAR-445 (gnustep-base links against these dylibs with no
+# dynamic_lookup): _chown #16, _dup #41, _chroot #61, _setgroups #80,
+# _setsockopt #105 and _sendfile #337 are plain stubs. _statfs64 #345 carries `.set _statfs, _statfs64`
+# and ___select #93 carries `.set _select$DARWIN_EXTSN, ___select`, both
+# from Platforms/iPhoneOS/arm64/syscall.map. ___bind #104, ___getsockname
+# #32 and ___getpeername #31 are NO_SYSCALL_STUB and carry their public
+# name as an alias (`.set _bind, ___bind`), like ___accept above. ___rename
+# #128 is the raw trap under Apple's wrappers/rename.c, which also needs
+# wrappers/remove-counter.c; both are compiled below. libresolv.dylib still
+# exports its own _bind/_getsockname/_getpeername/_setsockopt; removing
+# those, and relinking what binds them, is DAR-445.
 # It used to be built into libsystem_c, so libsystem_platform's setjmp.s
 # (which calls it) had to defer it flat-namespace to avoid a link cycle. Several of these
 # names were already exported by dylibs that are not their owner
@@ -563,7 +574,9 @@ for s in _geteuid _getegid _getuid _getgid _pread _pwrite _fileport_makefd _file
     ___sem_open ___shm_open \
     ___socketpair ___getattrlist ___setlogin \
     _chdir _readlink _fchown _getpgrp _getppid _setgid _setuid _setpgid \
-    ___fchmod ___getrlimit ___setrlimit ___msync _csops _csops_audittoken _sigprocmask; do
+    ___fchmod ___getrlimit ___setrlimit ___msync _csops _csops_audittoken _sigprocmask \
+    _chown _dup _statfs64 ___select ___bind ___getsockname ___getpeername _setsockopt _sendfile ___rename \
+    _chroot _setgroups; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
         -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
         -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
@@ -1003,6 +1016,16 @@ LIBKERNEL_OBJS=$(ls "$OUT"/libsystem_kernel/lk416*.o)
     -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -idirafter "$XNU/bsd" -I "$LIBC/include" -I "$LIBC/darwin" \
     -I "$XNU/libsyscall/wrappers" \
     "$XNU/libsyscall/wrappers/reboot.c" -o "$OUT/libsystem_kernel/reboot_wrap.o"
+# rename(2) (DAR-388): Apple's wrappers/rename.c over the raw ___rename
+# trap (stub loop above; #128 is NO_SYSCALL_STUB). It bumps the counter in
+# wrappers/remove-counter.c, which Apple's libsystem_kernel also builds.
+for w in rename remove-counter; do
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+        -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+        -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -idirafter "$XNU/bsd" -I "$LIBC/include" -I "$LIBC/darwin" \
+        -I "$XNU/libsyscall/wrappers" \
+        "$XNU/libsyscall/wrappers/$w.c" -o "$OUT/libsystem_kernel/${w}_wrap.o"
+done
 # setpriority(2) (DAR-334, shutdown(8)): Apple's wrappers/setpriority.c over
 # the raw __setpriority (#96, NO_SYSCALL_STUB, syscalls.master:149). Its
 # PRIO_DARWIN_THREAD branch calls libsystem_pthread's _pthread_clear_qos_tsd,
@@ -1300,6 +1323,14 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     `# exports both from libsystem_kernel. (___getlogin is linked with` \
     `# DAR-346's socket/login traps above.)` \
     "$OUT/libsystem_kernel/sys___reboot.o" "$OUT/libsystem_kernel/reboot_wrap.o" \
+    `# DAR-388: see the stub loop's comment and rename(2)'s above.` \
+    "$OUT/libsystem_kernel/sys_chown.o" "$OUT/libsystem_kernel/sys_dup.o" \
+    "$OUT/libsystem_kernel/sys_statfs64.o" "$OUT/libsystem_kernel/sys___select.o" \
+    "$OUT/libsystem_kernel/sys___bind.o" "$OUT/libsystem_kernel/sys___getsockname.o" \
+    "$OUT/libsystem_kernel/sys___getpeername.o" "$OUT/libsystem_kernel/sys_setsockopt.o" \
+    "$OUT/libsystem_kernel/sys_sendfile.o" "$OUT/libsystem_kernel/sys___rename.o" \
+    "$OUT/libsystem_kernel/rename_wrap.o" "$OUT/libsystem_kernel/remove-counter_wrap.o" \
+    "$OUT/libsystem_kernel/sys_chroot.o" "$OUT/libsystem_kernel/sys_setgroups.o" \
     `# DAR-387: see the stub loop's and the wrappers' comments.` \
     "$OUT/libsystem_kernel/sys_chdir.o" "$OUT/libsystem_kernel/sys_readlink.o" \
     "$OUT/libsystem_kernel/sys_fchown.o" "$OUT/libsystem_kernel/sys_getpgrp.o" \
