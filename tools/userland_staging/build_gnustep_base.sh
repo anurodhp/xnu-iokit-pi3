@@ -32,76 +32,19 @@
 #
 #   build_gnustep_base.sh           # full build
 #   GNUSTEP_BASE_ONLY=1 build_...   # skip step 1 (gnustep-make already in root/)
-set -euo pipefail
 cd "$(dirname "$0")"
-HERE="$(pwd -P)"
-
-XCODE12="/Applications/Xcode-12.app/Contents/Developer"
-CLANG="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
-SDK="$XCODE12/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
-[ -x "$CLANG" ] && [ -d "$SDK" ] || { echo "error: Xcode-12.app not found at $XCODE12" >&2; exit 1; }
-DAILY_XCODE="$(xcode-select -p 2>/dev/null)"
-NEWLD_BINDIR="$DAILY_XCODE/Toolchains/XcodeDefault.xctoolchain/usr/bin"
-[ -x "$NEWLD_BINDIR/ld" ] || { echo "error: no usable 'ld' under $DAILY_XCODE" >&2; exit 1; }
-OUT="$(cd "$HERE/libc_build" && pwd -P)"
-G="$OUT/gnustep"
-ROOT="$G/root"
-PREFIX=/usr/GNUstep
-CONF=/etc/GNUstep/GNUstep.conf
+. ./gnustep_common.sh
 GM_SRC="$HERE/../../third_party/gnustep-make"
 GB_SRC="$HERE/../../third_party/gnustep-base"
 CROSS="${GNUSTEP_CROSS_CONFIG:-$HERE/x11_config/gnustep/cross-config-arm64-darwin}"
-SYS="$OUT/system"
-# Owners first (bind_target_audit.sh records each bind against the first
-# listed dylib that exports the symbol), libSystem.B last.
-SYSLIBS=("$SYS/libsystem_kernel.dylib" "$SYS/libsystem_platform.dylib" "$SYS/libsystem_pthread.dylib"
-         "$SYS/libsystem_malloc.dylib" "$SYS/libsystem_c.dylib" "$SYS/libsystem_m.dylib"
-         "$SYS/libsystem_blocks.dylib" "$SYS/libdispatch.dylib" "$SYS/libdyld.dylib"
-         "$SYS/libc++.dylib" "$SYS/libunwind.dylib" "$OUT/libobjc.A.dylib"
-         "$SYS/libffi.dylib" "$SYS/libiconv.dylib" "$SYS/libz.dylib"
-         `# getpwnam/getaddrinfo (libinfo) and inet_ntop/inet_pton/getifaddrs` \
-         `# (libresolv) are not in libSystem.B's reexports here; ping and` \
-         `# ifconfig link these two the same way (DAR-182).` \
-         "$SYS/libinfo.dylib" "$SYS/libresolv.dylib" "$SYS/libSystem.B.dylib")
 for f in "$GM_SRC/configure" "$GB_SRC/configure" "$CROSS" "$OUT/objc4_public_headers/objc/runtime.h" \
-         "$OUT/libffi_include/ffi.h" "${SYSLIBS[@]}"; do
+         "$OUT/libffi_include/ffi.h"; do
     [ -e "$f" ] || { echo "error: $f not found" >&2; exit 1; }
 done
-TARGET=(-isysroot "$SDK" -target arm64-apple-ios14.4)
-# Every dylib gets a -l name in LINKDIR, so -lobjc/-lffi/-liconv/-lz from
-# configure resolve to our dylibs (the SDK's .tbd stubs are never linked
-# against) and LIBS holds only -l flags: configure compiles some tests with
-# "-x objective-c" in CPPFLAGS, which would make clang read a .dylib path
-# in LIBS as source.
-LINKDIR="$G/linkdir"
-rm -rf "$LINKDIR"; mkdir -p "$LINKDIR"
-LIBFLAGS=""
-for d in "${SYSLIBS[@]}"; do
-    n="$(basename "$d" .dylib)"
-    case "$n" in libobjc.A) n=libobjc ;; libSystem.B) n=libSystem ;; esac
-    ln -s "$d" "$LINKDIR/$n.dylib"
-    LIBFLAGS="$LIBFLAGS -l${n#lib}"
-done
-# As on Apple, libdl/libpthread/libm are libSystem (configure adds -ldl
-# and -lpthread). Without these, -ldl found the SDK's libdl.tbd -- the
-# SDK's libSystem -- and symbols we own in libinfo got bound to it.
-for n in libdl libpthread libm; do ln -s "$SYS/libSystem.B.dylib" "$LINKDIR/$n.dylib"; done
-# libSystem.B reexports dylibs by install path (/usr/lib/system/...,
-# /usr/lib/libresolv.9.dylib, ...), which ld would look up inside the SDK
-# sysroot. -dylib_file maps each one to our build of it, found by its own
-# LC_ID_DYLIB.
-DYLIB_MAP=""
-for p in $(otool -L "$SYS/libSystem.B.dylib" | awk '/reexport/ {print $1}'); do
-    f=""
-    for c in "$SYS"/*.dylib "$OUT/libobjc.A.dylib"; do
-        [ "$(otool -D "$c" 2>/dev/null | tail -1)" = "$p" ] && { f="$c"; break; }
-    done
-    [ -n "$f" ] || { echo "error: no dylib in $SYS has install name $p (reexported by libSystem.B)" >&2; exit 1; }
-    DYLIB_MAP="$DYLIB_MAP -Wl,-dylib_file,$p:$f"
-done
-# -Wl,-Z: never search the SDK's /usr/lib for a -l, so a library this
-# project does not build is a link error, not a silent SDK stub.
-LINK="-nostdlib -B$NEWLD_BINDIR -Wl,-Z -Wl,-fixup_chains -L$LINKDIR$DYLIB_MAP"
+[ -x "$G/host-tools/plmerge" ] || { echo "error: $G/host-tools/plmerge not found -- run build_gnustep_host_tools.sh first" >&2; exit 1; }
+[ -f "$SYS/libxml2.dylib" ] && [ -f "$OUT/xml2_headers/libxml/xmlversion.h" ] ||
+    { echo "error: libxml2 not built -- run build_libxml2.sh first" >&2; exit 1; }
+gs_setup_link "$SYS/libxml2.dylib" "${GS_BASE_SYSLIBS[@]}"
 
 if [ -z "${GNUSTEP_BASE_ONLY:-}" ]; then
     rsync -a --delete --exclude .git "$GM_SRC/" "$G/make-src/"
@@ -117,17 +60,7 @@ if [ -z "${GNUSTEP_BASE_ONLY:-}" ]; then
 fi
 [ -f "$ROOT$CONF" ] || { echo "error: $ROOT$CONF missing -- run without GNUSTEP_BASE_ONLY" >&2; exit 1; }
 
-# Build-time view of the installed gnustep-make: its makefiles and
-# gnustep-config from root/, but the config file's paths are the target's,
-# so everything built here is configured for /usr/GNUstep.
-# GNUstep.sh (which configure sources) takes GNUSTEP_MAKEFILES from the
-# config file, so the build uses a copy that differs only in that line.
-BUILDCONF="$G/GNUstep-build.conf"
-sed "s|^GNUSTEP_MAKEFILES=.*|GNUSTEP_MAKEFILES=$ROOT$PREFIX/System/Library/Makefiles|" "$ROOT$CONF" > "$BUILDCONF"
-grep -q "^GNUSTEP_MAKEFILES=$ROOT" "$BUILDCONF" || { echo "error: no GNUSTEP_MAKEFILES line in $ROOT$CONF" >&2; exit 1; }
-export GNUSTEP_MAKEFILES="$ROOT$PREFIX/System/Library/Makefiles"
-export GNUSTEP_CONFIG_FILE="$BUILDCONF"
-export PATH="$ROOT$PREFIX/System/Tools:$PATH"
+gs_build_env
 
 # Apple's ffi.h needs the same availability-macro fixes as build_libffi.sh.
 # They go in a forced-include header, not -D flags: gnustep-make pastes
@@ -143,16 +76,19 @@ EOH
 
 rsync -a --delete --exclude .git "$GB_SRC/" "$G/base-src/"
 cd "$G/base-src"
-# Off for the first cut: TLS (gnutls), ICU, libxml2/libxslt, zeroconf and
+# Off for the first cut: TLS (gnutls), ICU, libxslt, zeroconf and
 # NSURLSession (libcurl). Each is its own later step.
-# PKG_CONFIG_LIBDIR: an empty directory, so configure's pkg-config probes
-# (libffi, ...) cannot find the host SDK's .pc files and add host include
-# paths such as MacOSX.sdk/usr/include/ffi.
-mkdir -p "$G/pkgconfig-empty"
-PKG_CONFIG_LIBDIR="$G/pkgconfig-empty" \
+# libxml2 is on (DAR-390): gnustep-gui's xib/storyboard loaders need
+# NSXMLDocument/NSXMLElement, which base builds only with libxml2
+# (configure.ac:3409-3428). XML_CFLAGS/XML_LIBS preset PKG_CHECK_MODULES'
+# answer (configure.ac:3419) with build_libxml2.sh's headers and dylib.
+# gs_build_env's empty PKG_CONFIG_LIBDIR keeps configure's pkg-config
+# probes (libffi, ...) from adding host include paths such as
+# MacOSX.sdk/usr/include/ffi.
 ./configure --host=aarch64-apple-darwin20 --with-cross-compilation-info="$CROSS" \
     --with-config-file="$CONF" --with-default-config="$ROOT$CONF" --with-installation-domain=SYSTEM \
-    --disable-tls --disable-icu --disable-xml --disable-xslt --disable-zeroconf --disable-nsurlsession \
+    --disable-tls --disable-icu --disable-xslt --disable-zeroconf --disable-nsurlsession \
+    XML_CFLAGS="-I$OUT/xml2_headers" XML_LIBS="-lxml2" \
     CC="$CLANG" OBJC="$CLANG" CXX="$CLANG++" \
     `# -D_FORTIFY_SOURCE=0: this project's libc has no __*_chk entry points` \
     `# (same as every build_*.sh; build_libc_locale.sh documents the recipe).` \
@@ -167,22 +103,12 @@ echo "configured gnustep-base"
 # ADDITIONAL_TOOL_LIBS: the Tools' own link lines (gdomap is plain C) do
 # not include configure's library list, so give them the same owners.
 make -k DYLIB_EXTRA_FLAGS= GNUSTEP_INSTALLATION_DOMAIN=SYSTEM ADDITIONAL_TOOL_LIBS="$LIBFLAGS" > make.out 2>&1 ||
-    { grep -E "error:|Undefined|^ld: " make.out | head -20; echo "error: gnustep-base build failed, see $G/base-src/make.out" >&2; exit 1; }
+    { grep -E "error:|Undefined|^ld: " make.out | head -20 || true; echo "error: gnustep-base build failed, see $G/base-src/make.out" >&2; exit 1; }
 rm -rf "$ROOT$PREFIX/System/Library/Libraries/gnustep-base" "$ROOT$PREFIX/System/Library/Libraries/libgnustep-base"* \
     "$ROOT$PREFIX/Local"   # base installs only into the SYSTEM domain
 make install DESTDIR="$ROOT" GNUSTEP_INSTALLATION_DOMAIN=SYSTEM > install.out 2>&1 ||
     { tail -20 install.out; echo "error: gnustep-base install failed" >&2; exit 1; }
-# base.make goes to $GNUSTEP_MAKEFILES/Additional, which during the build
-# is root/'s own host path, so DESTDIR nests it under root/<host path>.
-# Move it to the target's makefiles directory.
-NESTED="$ROOT$GNUSTEP_MAKEFILES"
-HOSTTOP="$(echo "$ROOT" | cut -d/ -f2)"     # e.g. "Users"
-[ -n "$HOSTTOP" ] || { echo "error: cannot take the top directory of $ROOT" >&2; exit 1; }
-if [ -d "$NESTED" ]; then
-    cp -R "$NESTED/." "$GNUSTEP_MAKEFILES/"
-    rm -rf "${ROOT:?}/$HOSTTOP"
-fi
-[ ! -e "$ROOT/$HOSTTOP" ] || { echo "error: host path still nested under $ROOT" >&2; exit 1; }
+gs_relocate_makefiles
 LIB="$ROOT$PREFIX/System/Library/Libraries/libgnustep-base.dylib"
 [ -e "$LIB" ] || { echo "error: $LIB not installed" >&2; exit 1; }
 ID="$(otool -D "$LIB" | tail -1)"
@@ -190,10 +116,5 @@ case "$ID" in "$PREFIX"/*) ;; *) echo "error: install name '$ID' is not under $P
 cd "$HERE"
 # Every Mach-O installed (the library and the Tools: gdomap, plutil,
 # defaults, ...), not just the library.
-n=0
-while IFS= read -r f; do
-    ./bind_target_audit.sh "$f" >/dev/null || { ./bind_target_audit.sh "$f"; echo "error: $f fails bind_target_audit" >&2; exit 1; }
-    n=$((n+1))
-done < <(find "$ROOT$PREFIX" -type f -perm -u+x -exec sh -c 'file -b "$1" | grep -q Mach-O && echo "$1"' _ {} \;)
-echo "bind_target_audit: $n images clean"
+gs_audit_tree "$ROOT$PREFIX"
 echo "installed gnustep-base into $ROOT$PREFIX (install name $ID)"

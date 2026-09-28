@@ -719,6 +719,16 @@ mkdir -p third_party
 #     branch iokit-port (off upstream tag base-1_31_1), which carries the
 #     port to Apple's objc4 runtime. GNUstep is the user's chosen GUI layer (DAR-381), and
 #     Apple ships no GNUstep, so upstream is the source.
+#     gnustep-gui 0.32.0 and gnustep-back 0.32.0 (DAR-390): released with
+#     base 1.31 (2025-02). gui is our fork anurodhp/libs-gui branch
+#     iokit-port (off upstream tag gui-0_32_0: typed IMPs, PACKAGE_SCOPE on
+#     objc4); back is upstream tag back-0_32_0, unmodified.
+#     gnustep-examples (DAR-390): our fork anurodhp/tests-examples branch
+#     iokit-port, upstream master 46ef973 (2026-06-28) unmodified -- the
+#     repo has no release tag newer than 2000, so the fork branch is what
+#     pins the commit. Source of Ink.app (build_gnustep_ink.sh).
+#     libtiff 4.7.1 (DAR-390): gitlab.com/libtiff/libtiff tag v4.7.1,
+#     unmodified; gnustep-gui requires it. Apple publishes no libtiff.
 #   DejaVu fonts -- the upstream release tarball, not the git tag: the
 #       tag (version_2_37, the nixpkgs version) holds only FontForge .sfd
 #       sources, and building the TTFs needs fontforge + perl Font::TTF,
@@ -840,6 +850,10 @@ wmaker|https://github.com/window-maker/wmaker.git|wmaker-0.96.0|
 libffi|https://github.com/apple-oss-distributions/libffi.git|libffi-27|
 gnustep-make|https://github.com/gnustep/tools-make.git|make-2_9_3|
 gnustep-base|git@github.com:anurodhp/libs-base.git|iokit-port||https://github.com/gnustep/libs-base.git
+gnustep-gui|git@github.com:anurodhp/libs-gui.git|iokit-port||https://github.com/gnustep/libs-gui.git
+gnustep-back|https://github.com/gnustep/libs-back.git|back-0_32_0|
+gnustep-examples|git@github.com:anurodhp/tests-examples.git|iokit-port||https://github.com/gnustep/tests-examples.git
+libtiff|https://gitlab.com/libtiff/libtiff.git|v4.7.1|
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch upstream_url; do

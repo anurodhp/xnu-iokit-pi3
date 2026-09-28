@@ -618,16 +618,11 @@ POPEN_CFLAGS="$SIGLIST_CFLAGS -DPLATFORM_iPhoneOS -Werror=implicit-function-decl
 # the reexport (`build_libsystem.sh`) no longer panics -- real QEMU
 # boot test PASS, see that commit's own message for the log path.
 #
-# This dylib's own 2 internal callers of asin()/sqrt()
-# (libsystem_c_gap_compat.o's atan(x) == asin(x / sqrt(1+x*x)), see that
-# file's own header) cannot link libsystem_m.dylib directly -- that
-# would be the real circular BUILD dependency this project's own layering
-# forbids (libsystem_m links libsystem_c, not the reverse). Deferred via
-# `-Wl,-U` below instead: safe specifically because libsystem_m.dylib is
-# now unconditionally co-loaded with this dylib (both reexported through
-# the same libSystem.B.dylib umbrella every process links), so the flat-
-# namespace bind always finds a real provider at load time -- unlike the
-# `__muldc3` case above, this is not a dormant, unprovided gap.
+# DAR-447: the hand-written ceil/floor/round/sin/cos/tan/atan/atan2/log
+# that libsystem_c_gap_compat.c used to define (and whose atan() made this
+# dylib call asin()/sqrt(), deferred with -Wl,-U) are gone; libsystem_m.dylib
+# builds the real FreeBSD msun versions (build_libm_dylib.sh). This dylib calls
+# no libm function now.
 if [ ! -f "$OUT/libm.a" ]; then
     echo "error: $OUT/libm.a not found -- run build_libm.sh first" >&2
     exit 1
@@ -797,6 +792,9 @@ LOCALTIME_FLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -fno-stack-chec
 # exception no longer applies -- so this is now the one real owner, same
 # as the rest of the family above.
 "$CLANG" $SIGLIST_CFLAGS "$LIBC/stdtime/FreeBSD/asctime.c" -o "$EXTRACT/asctime.o"
+# difftime (DAR-390, cairo's PDF/PS surfaces): Libc's
+# stdtime/FreeBSD/difftime.c, same family and flags as asctime above.
+"$CLANG" $SIGLIST_CFLAGS "$LIBC/stdtime/FreeBSD/difftime.c" -o "$EXTRACT/difftime.o"
 # usleep (DAR-419): Libc's gen/FreeBSD/usleep.c, a nanosleep() wrapper.
 # libsystem_c is its home on Apple. Before this, only libsystem_notify
 # (_usleep) and libSystemConfiguration (_usleep$UNIX2003) exported
@@ -1054,14 +1052,6 @@ rm -f "$OUT/system/libsystem_c.dylib"
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -Wl,-U,___progname \
-    `# DAR-16: asin/sqrt no longer local to this dylib (real owner is` \
-    `# now libsystem_m.dylib, see the extraction-removal comment above);` \
-    `# libsystem_c_gap_compat.o's atan() still calls both internally.` \
-    `# Deferred flat-namespace, resolved at real load time by` \
-    `# libsystem_m.dylib -- always co-loaded via the libSystem.B.dylib` \
-    `# umbrella, not a dormant gap.` \
-    -Wl,-U,_asin \
-    -Wl,-U,_sqrt \
     `# __ldpart_free_extra: ldpart.o's own real definition is` \
     `# __private_extern__ (real Apple source), which -Wl,-exported_symbol` \
     `# does NOT reverse (tried first, real confirmed-via-dyld_info` \

@@ -489,3 +489,4 @@ double pow(double x, double y)
     else SET_HIGH_WORD(z, j);
     return s * z;
 }
+
