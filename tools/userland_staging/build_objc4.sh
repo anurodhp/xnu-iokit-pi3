@@ -243,10 +243,6 @@
 # NOT built this pass (real, deliberately out of scope -- see DAR-236's
 # own ticket comments for full detail)
 # ============================================================
-# - libobjc-trampolines.dylib (block-IMP trampoline pages,
-#   imp_implementationWithBlock's OS-level support): a real, SEPARATE
-#   objc.xcodeproj PBXNativeTarget product this project hasn't touched
-#   yet -- not needed for the smoketest, a real future step.
 # - A real MIG client for restartable.defs (see HAVE_TASK_RESTARTABLE_
 #   RANGES above) and for thread_act.defs's thread_get_state -- real,
 #   legitimate future work, not required for correct basic operation.
@@ -532,6 +528,40 @@ rm -f "$OUT/libobjc.A.dylib"
     echo "error: libobjc.A.dylib has an unresolvable two-level bind -- it would abort at dyld load" >&2
     exit 1
 }
+
+# ------------------------------------------------------------------
+# libobjc-trampolines.dylib (DAR-236, 2026-09-28): objc.xcodeproj's
+# separate "objc-trampolines" PBXNativeTarget (product
+# libobjc-trampolines.dylib, INSTALL_PATH /usr/lib). Its Sources phase is
+# the four per-arch objc-blocktramps-*.s files, of which arm64 is ours;
+# OTHER_CFLAGS -fdollars-in-identifiers, OTHER_LDFLAGS
+# -not_for_dyld_shared_cache -nodefaultlibs (project.pbxproj:866-876,
+# 1295-1323). imp_implementationWithBlock() dlopen()s it by that path and
+# vm_remap()s its TEXT segment (runtime/objc-block-trampolines.mm:173,
+# 376-386); it imports nothing. It is linked against libSystem.B.dylib
+# anyway because the daily-driver ld refuses any dylib that doesn't ("ld:
+# dynamic executables or dylibs must link with libSystem.dylib"), which
+# Apple's -nodefaultlibs link predates; every process already has
+# libSystem.B loaded, so the extra load command changes nothing at runtime.
+# ------------------------------------------------------------------
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -fdollars-in-identifiers \
+    -I "$OBJC4" -idirafter "$XNU/osfmk" \
+    "$OBJC4/objc-blocktramps-arm64.s" -o "$OBJDIR/objc-blocktramps-arm64.o"
+rm -f "$OUT/libobjc-trampolines.dylib"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -nodefaultlibs \
+    -B"$NEWLD_BINDIR" \
+    -dynamiclib -install_name /usr/lib/libobjc-trampolines.dylib \
+    -Wl,-not_for_dyld_shared_cache \
+    -o "$OUT/libobjc-trampolines.dylib" \
+    "$OBJDIR/objc-blocktramps-arm64.o" \
+    "$OUT/system/libSystem.B.dylib"
+for sym in __objc_blockTrampolineImpl __objc_blockTrampolineStart __objc_blockTrampolineLast; do
+    nm -gUj "$OUT/libobjc-trampolines.dylib" | grep -qx "$sym" || {
+        echo "error: libobjc-trampolines.dylib does not export $sym" >&2
+        exit 1
+    }
+done
+echo "wrote $OUT/libobjc-trampolines.dylib"
 
 # ------------------------------------------------------------------
 # Real, minimal, standalone Objective-C smoketest.

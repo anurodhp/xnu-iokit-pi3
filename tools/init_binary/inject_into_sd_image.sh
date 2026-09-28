@@ -1494,6 +1494,12 @@ if [ -f tools/userland_staging/libc_build/libobjc.A.dylib ]; then
     echo "  (DAR-236 -- full real objc4 runtime, real Apple product name/path,"
     echo "  tools/userland_staging/build_objc4.sh; not yet wired into"
     echo "  configd.macho/IPMonitor.m/QoSMarking.m, that's DAR-170's job)"
+    if [ -f tools/userland_staging/libc_build/libobjc-trampolines.dylib ]; then
+        cp tools/userland_staging/libc_build/libobjc-trampolines.dylib "$MNT/usr/lib/libobjc-trampolines.dylib"
+        chmod 755 "$MNT/usr/lib/libobjc-trampolines.dylib"
+        echo "+ wrote $MNT/usr/lib/libobjc-trampolines.dylib (DAR-236 -- imp_implementationWithBlock's"
+        echo "  trampoline pages, dlopen()ed by libobjc; tools/userland_staging/build_objc4.sh)"
+    fi
     install_smoketest tools/userland_staging/objc4_smoketest.macho "bin/objc4_smoketest" \
         "= tools/userland_staging/objc4_smoketest.macho not built -- run tools/userland_staging/build_objc4.sh first if wanted, skipping" \
         "  (real minimal Objective-C smoketest -- one @interface/@implementation," \

@@ -248,6 +248,18 @@ int main(int argc, char **argv)
 	check("block with __block capture", inc(1) == 16 && counter == 16);
 	Block_release(inc);
 
+	/* A block as a method IMP: imp_implementationWithBlock() maps
+	 * trampoline pages from /usr/lib/libobjc-trampolines.dylib
+	 * (objc4 runtime/objc-block-trampolines.mm:173). */
+	IMP blockIMP = imp_implementationWithBlock(^int(id self_) {
+		return self_ == r ? 7 : -1;
+	});
+	class_addMethod(object_getClass(r), @selector(gsSmokeBlockMethod),
+	    blockIMP, "i@:");
+	int (*blockCall)(id, SEL) = (int (*)(id, SEL))
+	    class_getMethodImplementation(object_getClass(r), @selector(gsSmokeBlockMethod));
+	check("imp_implementationWithBlock", blockCall(r, @selector(gsSmokeBlockMethod)) == 7);
+
 	/* Associated objects. */
 	static char key;
 	objc_setAssociatedObject(t, &key, d, OBJC_ASSOCIATION_RETAIN);
