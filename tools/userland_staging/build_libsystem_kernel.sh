@@ -24,9 +24,9 @@
 # project's own libmalloc_vm_traps.s (the hand-written Mach-trap stubs
 # create-syscalls.pl's BSD-only generator doesn't cover -- see that
 # file's own header comment for the real trap numbers, cross-checked
-# against osfmk/mach/syscall_sw.h) and libmalloc_vm_mig_stubs.c (real but
-# provably-unreachable MIG-fallback dead code mach_vm.c's source
-# unconditionally references -- see docs/backlog.md).
+# against osfmk/mach/syscall_sw.h) and real MIG user code for
+# mach_vm.defs/vm_map.defs (the _kernelrpc_* routines mach_vm.c calls;
+# see the DAR-236 note below).
 #
 # Reuses build_libmalloc.sh's already-generated MIG header
 # ($OUT/malloc_mig/mach/mach_vm_internal.h, from real osfmk/mach/
@@ -89,13 +89,48 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
     "$XNU/libsyscall/wrappers/init_cpu_capabilities.c" -o "$OUT/libsystem_kernel/init_cpu_capabilities.o"
 
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c libmalloc_vm_traps.s -o "$OUT/libsystem_kernel/libmalloc_vm_traps.o"
-if [ ! -f libmalloc_vm_mig_stubs.c ]; then
-    echo "error: libmalloc_vm_mig_stubs.c not found (real, provably-unreachable MIG-fallback dead code build_libmalloc.sh already established -- see docs/backlog.md)" >&2
-    exit 1
-fi
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 -I "$OUT/malloc_mig" -I "$OUT/compat_include" \
-    libmalloc_vm_mig_stubs.c -o "$OUT/libsystem_kernel/libmalloc_vm_mig_stubs.o"
+
+# DAR-236 (2026-09-28): this dylib used to link libmalloc_vm_mig_stubs.c's
+# KERN_FAILURE _kernelrpc_* stubs, described as unreachable. They are NOT
+# all unreachable. mach_vm.c's mach_vm_remap()/vm_remap() and
+# mach_vm_read()/vm_read() have no trap fast path; they call the MIG
+# routine directly (third_party/xnu-7195/libsyscall/mach/mach_vm.c,
+# mach_vm_remap/vm_remap bodies). So every vm_remap() in every process
+# returned KERN_FAILURE, which is what killed objc4's
+# imp_implementationWithBlock() ("vm_remap trampolines failed (5)",
+# runtime/objc-block-trampolines.mm:381-386).
+#
+# Apple generates these as MIG user code from libsyscall/mach/mach_vm.defs
+# and libsyscall/mach/vm_map.defs, which on LP64 is mach_vm.defs with
+# _MACH_VM_PUBLISH_AS_LOCAL_ (libsyscall/mach/vm_map.defs), both built
+# without LIBSYSCALL_INTERFACE so the routines carry the _kernelrpc_
+# prefix (osfmk/mach/mach_vm.defs:80-84; MIGS_INTERNAL,
+# libsyscall/xcodescripts/mach_install_mig.sh:97-100). Same here. Only the
+# _kernelrpc_* routines are exported: that is exactly the set the stubs
+# defined (plus _kernelrpc_vm_purgable_control), and the files'
+# public routines (mach_vm_region, vm_region_64, mach_make_memory_entry_64,
+# ...) already have other owners in this tree whose migration is separate
+# work.
+mkdir -p "$OUT/libsystem_kernel/vm_mig"
+for d in mach_vm vm_map; do
+    "$(which mig)" -arch arm64 -I"$XNU/osfmk" \
+        -header "$OUT/libsystem_kernel/vm_mig/${d}.h" \
+        -user "$OUT/libsystem_kernel/vm_mig/${d}User.c" \
+        -server /dev/null -sheader /dev/null \
+        "$XNU/libsyscall/mach/${d}.defs"
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+        -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+        -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$OUT/libsystem_kernel/vm_mig" \
+        "$OUT/libsystem_kernel/vm_mig/${d}User.c" -o "$OUT/libsystem_kernel/vm_mig/${d}User.o"
+done
+VM_RPC_EXPORTS=""
+for r in mach_vm_allocate mach_vm_deallocate mach_vm_protect mach_vm_map mach_vm_remap mach_vm_read \
+         mach_vm_purgable_control vm_map vm_remap vm_read vm_purgable_control; do
+    VM_RPC_EXPORTS="$VM_RPC_EXPORTS -exported_symbol __kernelrpc_$r"
+done
+"$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld" -r -arch arm64 $VM_RPC_EXPORTS \
+    "$OUT/libsystem_kernel/vm_mig/mach_vmUser.o" "$OUT/libsystem_kernel/vm_mig/vm_mapUser.o" \
+    -o "$OUT/libsystem_kernel/mig_vm_rpc.o"
 
 # Real gap: mach_init.c calls pthread_set_self() (real libpthread isn't
 # linked into this narrowly-scoped dylib) and mig_reply_port.c's
@@ -1199,7 +1234,7 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     -o "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/libsystem_kernel/mach_vm.o" "$OUT/libsystem_kernel/mach_init.o" "$OUT/libsystem_kernel/mig_reply_port.o" \
     "$OUT/libsystem_kernel/init_cpu_capabilities.o" "$OUT/libsystem_kernel/libmalloc_vm_traps.o" \
-    "$OUT/libsystem_kernel/libmalloc_vm_mig_stubs.o" "$OUT/libsystem_kernel/compat.o" \
+    "$OUT/libsystem_kernel/mig_vm_rpc.o" "$OUT/libsystem_kernel/compat.o" \
     "$OUT/libsystem_kernel/cerror_stub.o" "$OUT/libsystem_kernel/os_alloc_once_table.o" \
     "$OUT/libsystem_kernel/mach_msg_real.o" "$OUT/libsystem_kernel/mach_ipc_traps.o" \
     "$OUT/libsystem_kernel/sys_geteuid.o" "$OUT/libsystem_kernel/sys_getegid.o" \

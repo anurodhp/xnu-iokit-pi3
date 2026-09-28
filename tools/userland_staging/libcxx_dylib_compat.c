@@ -66,17 +66,11 @@ int catclose(nl_catd catd) {
  * is Libc's real gen/clock_gettime.c in libsystem_c.dylib, its Apple home,
  * and libc++ binds it there. */
 
-__attribute__((visibility("hidden")))
-int _dyld_find_unwind_sections(void *addr, void *info) {
-    (void)addr; (void)info;
-    return 0;
-}
-__attribute__((visibility("hidden")))
-void _dyld_register_func_for_remove_image(void (*func)(const void *, unsigned long)) {
-    (void)func;
-}
-__attribute__((visibility("hidden")))
-void *dladdr(const void *addr, void *info) {
-    (void)addr; (void)info;
-    return 0;
-}
+/* _dyld_find_unwind_sections/_dyld_register_func_for_remove_image/dladdr
+ * used to be hidden always-"not found" stubs here. With them, libunwind
+ * never found any image's __unwind_info/__eh_frame, so no C++ or
+ * Objective-C exception was ever caught in any process: every throw went
+ * to std::terminate (DAR-236, 2026-09-28). libunwind.dylib now binds the
+ * real ones in libdyld.dylib, as Apple's does
+ * (third_party/libunwind/libunwind/src/CMakeLists.txt:113, -ldyld); see
+ * build_libunwind_dylib.sh and libdyld_for_libunwind.tbd. */

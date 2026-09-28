@@ -1,3 +1,11 @@
+/* CORRECTION (DAR-236, 2026-09-28): the claim below is wrong for
+ * vm_remap/mach_vm_remap and vm_read/mach_vm_read. mach_vm.c calls those
+ * MIG routines directly, with no trap fast path, so these KERN_FAILURE
+ * bodies were reached by every vm_remap() in every process.
+ * libsystem_kernel.dylib no longer links this file: it builds real MIG user
+ * code instead (build_libsystem_kernel.sh). Only the static archives that
+ * still compile it (build_libmalloc.sh, build_libmach_ipc.sh) keep these
+ * stubs. */
 /* Real Apple third_party/xnu-7195/libsyscall/mach/mach_vm.c (unmodified)
  * calls these non-trap _kernelrpc_mach_vm_* / _kernelrpc_vm_* MIG fallback
  * functions ONLY when its trap fast-path returns MACH_SEND_INVALID_DEST
