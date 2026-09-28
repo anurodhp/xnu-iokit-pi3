@@ -10,9 +10,8 @@
  * (separate, static-archive) consumers -- not linking that whole file
  * here since it also carries a lot of malloc-specific glue with no
  * business being in the kernel-trap dylib. */
-void _pthread_set_self(void *p) {
-    (void)p;
-}
+/* _pthread_set_self() used to be a no-op here. Since DAR-416 1b it is Apple's
+ * own no-op, the hidden one in libsyscall/wrappers/_libc_funcptr.c:74-78. */
 
 typedef unsigned int mach_port_name_t;
 typedef mach_port_name_t ipc_space_t;

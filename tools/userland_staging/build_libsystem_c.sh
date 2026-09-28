@@ -769,6 +769,17 @@ LOCALTIME_FLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -fno-stack-chec
 # (fbsdcompat/_fbsd_compat_.h:86).
 "$CLANG" $SIGLIST_CFLAGS -include "$LIBC/fbsdcompat/_fbsd_compat_.h" \
     "$LIBC/gen/FreeBSD/usleep.c" -o "$EXTRACT/usleep.o"
+# clock_gettime family (DAR-416 1b, part of DAR-410): Libc's gen/clock_gettime.c
+# (clock_gettime, clock_gettime_nsec_np, clock_getres, clock_settime).
+# libsystem_c is its home on Apple. Before this, clock_gettime came from
+# libunwind and clock_gettime_nsec_np from libsystem_pthread's
+# libpthread_qos_compat.o. It needs PRIVATE for mach_boottime_usec(), which
+# xnu's own osfmk/mach/mach_time.h declares (the SDK copy doesn't), and
+# libplatform's private os/base_private.h via xnu's installed headers.
+"$CLANG" $SIGLIST_CFLAGS -DPRIVATE=1 -I "../../third_party/libplatform/private" \
+    -idirafter "$XNU/BUILD.hdrs/dst/usr/local/include" -include "$XNU/osfmk/mach/mach_time.h" \
+    -include "$LIBC/fbsdcompat/_fbsd_compat_.h" \
+    "$LIBC/gen/clock_gettime.c" -o "$EXTRACT/clock_gettime.o"
 
 # uuid_unparse/uuid_unparse_lower/uuid_unparse_upper/uuid_copy/uuid_parse/
 # uuid_pack: real duplicate-ownership investigation 2026-08-31

@@ -398,6 +398,20 @@ echo "+ wrote $(wc -c < tools/pwtool/pwtool.macho) bytes to $MNT/sbin/pwtool"
 mkdir -p "$MNT/etc"
 echo "+ ensured $MNT/etc exists (pwtool lock-file/master.passwd/group directory)"
 
+# Core files. On this embedded (iPhoneOS) kernel, kern.corefile defaults
+# to /private/var/cores/%N.core (third_party/xnu-7195/bsd/kern/
+# kern_proc.c:185; /cores/core.%P is the XNU_TARGET_OS_OSX default). A
+# DEVELOPMENT kernel also dumps initproc there before its "initproc
+# exited" panic (bsd/kern/kern_exit.c:709). Without the directory that
+# fails with ENOENT ("Failed to generate initproc core file: error 2"),
+# and a launchd crash leaves no user register state at all. This image
+# keeps /var as a real directory rather than Apple's /var -> private/var,
+# so /private/var is a link back to it.
+mkdir -p "$MNT/private" "$MNT/var/cores"
+[ -e "$MNT/private/var" ] || ln -s ../var "$MNT/private/var"
+chmod 1775 "$MNT/var/cores"
+echo "+ ensured /private/var/cores resolves (kernel core files, incl. initproc's)"
+
 if [ -f tools/userland_staging/bash.macho ]; then
     mkdir -p "$MNT/bin"
     cp tools/userland_staging/bash.macho "$MNT/bin/bash"

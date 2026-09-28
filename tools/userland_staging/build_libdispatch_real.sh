@@ -219,6 +219,14 @@ mkdir -p "$OUT/dispatch_mig"
     "$DISPATCH/src/protocol.defs"
 echo "mig: protocol.defs regenerated cleanly"
 
+# DAR-416: DISPATCH_USE_DIRECT_TSD (see config_ac.h) pulls in libpthread's
+# private/pthread/tsd_private.h, which includes the installed-SDK path
+# <System/machine/cpu_capabilities.h>. Forward it to xnu's real
+# osfmk/arm/cpu_capabilities.h, as build_libplatform.sh does for its own
+# compile (it writes the same one-line forwarder).
+mkdir -p "$OUT/dispatch_compat_system/System/machine"
+printf '#include <arm/cpu_capabilities.h>\n' > "$OUT/dispatch_compat_system/System/machine/cpu_capabilities.h"
+
 CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 -DOS_OBJECT_USE_OBJC=0 \
     -DOS_VOUCHER_ACTIVITY_SPI=0 -DOS_FIREHOSE_SPI=0 \
@@ -269,7 +277,8 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-buil
     -idirafter "$XNU/bsd" -idirafter "$XNU/osfmk" -idirafter "$XNU/libsyscall" -idirafter "$XNU/libsyscall/mach" \
     -idirafter "$LIBC" \
     -idirafter "$PTHREAD/include" -idirafter "$PTHREAD/private" \
-    -idirafter "$PLATFORM/private" -idirafter "$PLATFORM/include" -idirafter "$PLATFORM/internal")
+    -idirafter "$PLATFORM/private" -idirafter "$PLATFORM/include" -idirafter "$PLATFORM/internal" \
+    -idirafter "$OUT/dispatch_compat_system")
 
 mkdir -p "$OUT/dispatch_obj" "$OUT/dispatch_obj/event"
 for f in once semaphore apply time allocator init queue object source voucher io mach eventlink transform data; do

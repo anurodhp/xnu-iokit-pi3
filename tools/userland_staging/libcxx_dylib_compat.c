@@ -62,63 +62,9 @@ int catclose(nl_catd catd) {
     return -1;
 }
 
-/* clock_gettime: real Apple's own gen/clock_gettime.c is commpage-
- * accelerated and pulls in more machinery than this narrow real need
- * justifies porting right now (real std::chrono::system_clock::now()/
- * std::atomic wait-on-address timeouts are this dylib's only callers,
- * confirmed via nm -u tracing to atomic.o/chrono.o/thread.o). Real,
- * working raw syscall #116 (gettimeofday, same real trap
- * bash_syscalls.c's own header comment already documents as XNU's
- * honest non-commpage fallback path) for CLOCK_REALTIME, real
- * mach_absolute_time()+mach_timebase_info() (already real and exported
- * by libsystem_platform.dylib) for CLOCK_MONOTONIC -- both real,
- * already-working primitives elsewhere in this project, just not
- * previously combined behind the standard POSIX clock_gettime() name. */
-struct compat_timespec { long tv_sec; long tv_nsec; };
-struct compat_timeval { long tv_sec; int tv_usec; };
-static long gtod_syscall3(long num, long a0, long a1, long a2) {
-    register long x0 asm("x0") = a0;
-    register long x1 asm("x1") = a1;
-    register long x2 asm("x2") = a2;
-    register long x16 asm("x16") = num;
-    long is_error;
-    asm volatile("svc #0x80\n"
-                 "cset %1, cs"
-                 : "+r"(x0), "=r"(is_error)
-                 : "r"(x1), "r"(x2), "r"(x16)
-                 : "memory", "cc");
-    extern int cerror_nocancel(int);
-    if (is_error) {
-        return cerror_nocancel((int)x0);
-    }
-    return x0;
-}
-extern unsigned long long mach_absolute_time(void);
-struct compat_mach_timebase_info { unsigned int numer; unsigned int denom; };
-extern int mach_timebase_info(struct compat_mach_timebase_info *info);
-
-#define COMPAT_CLOCK_REALTIME 0
-#define COMPAT_CLOCK_MONOTONIC 6
-
-int clock_gettime(int clock_id, struct compat_timespec *ts) {
-    if (clock_id == COMPAT_CLOCK_MONOTONIC || clock_id == 4 /* _RAW */) {
-        struct compat_mach_timebase_info tb;
-        mach_timebase_info(&tb);
-        unsigned long long now = mach_absolute_time();
-        unsigned long long ns = tb.denom ? (now * tb.numer) / tb.denom : now;
-        ts->tv_sec = (long)(ns / 1000000000ULL);
-        ts->tv_nsec = (long)(ns % 1000000000ULL);
-        return 0;
-    }
-    struct compat_timeval tv;
-    int rv = (int)gtod_syscall3(116, (long)&tv, 0, 0);
-    if (rv != 0) {
-        return rv;
-    }
-    ts->tv_sec = tv.tv_sec;
-    ts->tv_nsec = tv.tv_usec * 1000;
-    return 0;
-}
+/* clock_gettime used to be a hand-written stand-in here. Since DAR-416 1b it
+ * is Libc's real gen/clock_gettime.c in libsystem_c.dylib, its Apple home,
+ * and libc++ binds it there. */
 
 __attribute__((visibility("hidden")))
 int _dyld_find_unwind_sections(void *addr, void *info) {
