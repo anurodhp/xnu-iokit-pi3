@@ -145,7 +145,11 @@ MSUN_COPY="$OUT/libm_dylib/msun_src"
 rm -rf "$MSUN_COPY"
 mkdir -p "$MSUN_COPY"
 cp "$MSUN"/*.c "$MSUN/math_private.h" "$MSUN_COPY/"
-for f in s_ceilf s_sinf s_cosf s_frexp e_hypot; do
+# e_powf.c (DAR-424): powf, for Window Maker's wrlib (gradient/alpha
+# math). msun's own float pow, same shape as s_sinf/s_cosf above; it
+# calls fabsf and scalbnf, which s_fabsf.c/s_scalbnf.c provide.
+# e_atan2f.c + s_atanf.c: atan2f (wmaker's src/ geometry), same source.
+for f in s_ceilf s_sinf s_cosf s_frexp e_hypot e_powf s_fabsf s_scalbnf e_atan2f s_atanf; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
         -Wno-nullability-completeness -include libm_msun_compat.h \
         "$MSUN_COPY/$f.c" -o "$EXTRACT/msun_$f.o"

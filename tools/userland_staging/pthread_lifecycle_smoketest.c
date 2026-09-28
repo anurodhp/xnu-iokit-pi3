@@ -12,6 +12,12 @@
  *      cancellation point: __pthread_markcancel interrupts the wait)
  *   6. pthread_kill delivers a signal to the target thread
  *   7. posix_spawn + waitpid
+ * and the kernel psynch paths Apple's libpthread uses instead of ulock
+ * (pthread_mutex.c:1765-1779 limits ulock to NORMAL firstfit mutexes;
+ * rwlocks always use psynch), real since DAR-416's bsd_pthread_synch.c:
+ *   8. contended PTHREAD_MUTEX_RECURSIVE (psynch_mutexwait/mutexdrop)
+ *   9. contended rwlock, readers vs a writer (psynch_rw_*)
+ *  10. pthread_cond_wait/signal on an ERRORCHECK mutex (psynch_cvwait)
  * alarm(60) turns a hang into SIGALRM rather than a stuck boot test. */
 #include <errno.h>
 #include <pthread.h>
@@ -91,6 +97,59 @@ static void *kill_target_fn(void *arg)
     return NULL;
 }
 
+static pthread_mutex_t rec_mutex;
+static volatile long rec_counter;
+static void *rec_fn(void *arg)
+{
+    (void)arg;
+    for (int i = 0; i < 2000; i++) {
+        pthread_mutex_lock(&rec_mutex);
+        pthread_mutex_lock(&rec_mutex);        /* recursive re-entry */
+        rec_counter++;
+        pthread_mutex_unlock(&rec_mutex);
+        pthread_mutex_unlock(&rec_mutex);
+    }
+    return NULL;
+}
+
+static pthread_rwlock_t rw = PTHREAD_RWLOCK_INITIALIZER;
+static volatile long rw_value, rw_bad;
+static void *rw_reader(void *arg)
+{
+    (void)arg;
+    for (int i = 0; i < 2000; i++) {
+        pthread_rwlock_rdlock(&rw);
+        long a = rw_value; long b = rw_value;
+        if (a != b || (a & 1)) rw_bad++;       /* writer holds it odd */
+        pthread_rwlock_unlock(&rw);
+    }
+    return NULL;
+}
+static void *rw_writer(void *arg)
+{
+    (void)arg;
+    for (int i = 0; i < 1000; i++) {
+        pthread_rwlock_wrlock(&rw);
+        rw_value++; rw_value++;
+        pthread_rwlock_unlock(&rw);
+    }
+    return NULL;
+}
+
+static pthread_mutex_t ec_mutex;
+static pthread_cond_t ec_cond = PTHREAD_COND_INITIALIZER;
+static volatile int ec_ready;
+static void *ec_fn(void *arg)
+{
+    (void)arg;
+    usleep(20000);
+    pthread_mutex_lock(&ec_mutex);
+    ec_ready = 1;
+    pthread_cond_signal(&ec_cond);
+    pthread_mutex_unlock(&ec_mutex);
+    return NULL;
+}
+
 int main(void)
 {
     pthread_t t;
@@ -139,6 +198,32 @@ int main(void)
     ok = posix_spawn(&pid, "/bin/echo", NULL, NULL, argv, environ) == 0 &&
          waitpid(pid, &status, 0) == pid && WIFEXITED(status) && WEXITSTATUS(status) == 0;
     check(ok, "posix_spawn /bin/echo + waitpid, exit 0");
+
+    pthread_mutexattr_t ma;
+    pthread_mutexattr_init(&ma);
+    pthread_mutexattr_settype(&ma, PTHREAD_MUTEX_RECURSIVE);
+    pthread_mutex_init(&rec_mutex, &ma);
+    pthread_t rt[3];
+    ok = 1;
+    for (int i = 0; i < 3; i++) ok = ok && pthread_create(&rt[i], NULL, rec_fn, NULL) == 0;
+    for (int i = 0; i < 3; i++) pthread_join(rt[i], NULL);
+    check(ok && rec_counter == 6000, "contended RECURSIVE mutex, 3 threads x 2000");
+
+    pthread_t rd[3], wr;
+    ok = pthread_create(&wr, NULL, rw_writer, NULL) == 0;
+    for (int i = 0; i < 3; i++) ok = ok && pthread_create(&rd[i], NULL, rw_reader, NULL) == 0;
+    pthread_join(wr, NULL);
+    for (int i = 0; i < 3; i++) pthread_join(rd[i], NULL);
+    check(ok && rw_value == 2000 && rw_bad == 0, "contended rwlock, 3 readers + 1 writer");
+
+    pthread_mutexattr_settype(&ma, PTHREAD_MUTEX_ERRORCHECK);
+    pthread_mutex_init(&ec_mutex, &ma);
+    ok = pthread_create(&t, NULL, ec_fn, NULL) == 0;
+    pthread_mutex_lock(&ec_mutex);
+    while (ok && !ec_ready) pthread_cond_wait(&ec_cond, &ec_mutex);
+    pthread_mutex_unlock(&ec_mutex);
+    pthread_join(t, NULL);
+    check(ok && ec_ready, "pthread_cond_wait on an ERRORCHECK mutex");
 
     put(failures ? "pthread_lifecycle_smoketest: FAIL\n" : "pthread_lifecycle_smoketest: PASS\n");
     return failures ? 1 : 0;

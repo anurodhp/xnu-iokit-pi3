@@ -43,4 +43,11 @@ typedef float __float_t;
 #define __weak_reference(sym, alias) \
     __asm__(".globl _" #alias "\n\t.set _" #alias ", _" #sym)
 
+/* FreeBSD sys/sys/cdefs.h's __strong_reference is a strong alias
+ * (__attribute__((__alias__))); Mach-O has no alias attribute, so this
+ * uses the same .set form as __weak_reference above. Used by
+ * s_scalbnf.c (scalbnf -> ldexpf), DAR-424. */
+#define __strong_reference(sym, alias) \
+    __asm__(".globl _" #alias "\n\t.set _" #alias ", _" #sym)
+
 #endif

@@ -199,6 +199,34 @@ void *reallocf(void *ptr, size_t size) {
     return p;
 }
 
+/* reallocarray(3)/reallocarrayf(3) (DAR-424: libsystem_c's fts.c:1401
+ * calls reallocarray). Apple's owner is libmalloc:
+ * third_party/libmalloc/src/malloc.c:2022-2040, ported line for line.
+ * That file's os_mul_overflow is __builtin_mul_overflow
+ * (libplatform os/base.h), and malloc_set_errno_fast(MZ_POSIX, ENOMEM)
+ * sets errno. Also exported as $DARWIN_EXTSN (see
+ * build_libsystem_malloc.sh), the spelling Libc's own VARIANT_DARWINEXTSN
+ * objects bind. libremovefile.dylib's private copy predates this
+ * (DAR-429). */
+extern int *__error(void);
+void *reallocarray(void *in_ptr, size_t nmemb, size_t size) {
+    size_t alloc_size;
+    if (__builtin_mul_overflow(nmemb, size, &alloc_size)) {
+        *__error() = 12; /* ENOMEM */
+        return (void *)0;
+    }
+    return realloc(in_ptr, alloc_size);
+}
+
+void *reallocarrayf(void *in_ptr, size_t nmemb, size_t size) {
+    size_t alloc_size;
+    if (__builtin_mul_overflow(nmemb, size, &alloc_size)) {
+        *__error() = 12; /* ENOMEM */
+        return (void *)0;
+    }
+    return reallocf(in_ptr, alloc_size);
+}
+
 /* ---- Real _malloc_fork_prepare/_malloc_fork_parent/_malloc_fork_child
  * (real Apple malloc.c, out of scope for this file wholesale -- see this
  * file's header comment -- so its three fork hooks are reimplemented here,

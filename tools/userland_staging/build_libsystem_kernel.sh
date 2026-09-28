@@ -899,7 +899,11 @@ done
 #    (libsyscall/Platforms/syscall.map:12-13). libsystem_pthread's
 #    pthread_thread_ops_compat.o used to export a geteuid()-based stand-in
 #    (CoreFoundation binds it).
-for s in ___mmap ___munmap _getrusage ___settimeofday ___gettid ___settid; do
+#  - _fchdir (#13) and _getattrlistbulk (#461), plain generated stubs
+#    (DAR-424): Libc's gen/fts.c, now in libsystem_c for nftw(3), calls
+#    both (fts.c:96/:719). libremovefile.dylib carries its own private
+#    copies from the same generator (DAR-429).
+for s in ___mmap ___munmap _getrusage ___settimeofday ___gettid ___settid _fchdir _getattrlistbulk; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
         -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
         -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \

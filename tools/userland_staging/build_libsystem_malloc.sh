@@ -304,6 +304,8 @@ rm -f "$OUT/system/libsystem_malloc.dylib"
     -Wl,-fixup_chains \
     -Wl,-U,_getenv -Wl,-U,_getprogname -Wl,-U,_isatty \
     -Wl,-alias,___kill,_kill \
+    -Wl,-alias,_reallocarray,'_reallocarray$DARWIN_EXTSN' \
+    -Wl,-alias,_reallocarrayf,'_reallocarrayf$DARWIN_EXTSN' \
     -Wl,-alias,___kill,'_kill$UNIX2003' \
     -Wl,-alias,___kdebug_trace,_kdebug_trace \
     -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
