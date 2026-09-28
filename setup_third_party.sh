@@ -693,6 +693,12 @@ mkdir -p third_party
 #     libxcvt 0.1.3 (same rev, tag confirmed with `git ls-remote`): the Xorg
 #     server's modeline library (DAR-389), required by xserver meson.build
 #     when -Dxorg=true.
+#     Window Maker 0.96.0 (DAR-424): upstream window-maker/wmaker, tag
+#     wmaker-0.96.0 (latest release, confirmed with `git ls-remote`
+#     2026-09-27). Apple ships no X window manager and FreeBSD's x11-wm/
+#     windowmaker port builds this same upstream, so upstream is the
+#     source. Cloned unmodified; built by
+#     tools/userland_staging/build_wmaker.sh.
 #   DejaVu fonts -- the upstream release tarball, not the git tag: the
 #       tag (version_2_37, the nixpkgs version) holds only FontForge .sfd
 #       sources, and building the TTFs needs fontforge + perl Font::TTF,
@@ -810,6 +816,7 @@ xev|https://gitlab.freedesktop.org/xorg/app/xev.git|xev-1.2.6|
 libXi|https://gitlab.freedesktop.org/xorg/lib/libxi.git|libXi-1.8.2|
 libXtst|https://gitlab.freedesktop.org/xorg/lib/libxtst.git|libXtst-1.2.5|
 libxcvt|https://gitlab.freedesktop.org/xorg/lib/libxcvt.git|libxcvt-0.1.3|
+wmaker|https://github.com/window-maker/wmaker.git|wmaker-0.96.0|
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch upstream_url; do

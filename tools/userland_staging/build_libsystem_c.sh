@@ -535,6 +535,41 @@ rm -f "$EXTRACT/getenv_real_raw.o"
 "$CLANG" $SIGLIST_CFLAGS -include "$LIBC/fbsdcompat/_fbsd_compat_.h" -Werror=implicit-function-declaration \
     "$LIBC/gen/FreeBSD/fnmatch.c" -o "$EXTRACT/fnmatch.o"
 
+# popen(3)/pclose(3), system(3) and nftw(3)/ftw(3) (DAR-424, Window
+# Maker: WUtil's menuparser/userdefaults use popen/pclose and nftw;
+# wmaker's main.c:474 calls system). All three are Libc's own files
+# (gen/FreeBSD/popen.c, stdlib/FreeBSD/system.c, gen/nftw.c), compiled
+# unmodified. popen.c and system.c are built on posix_spawn, which is why
+# they used to be deferred (ed_popen_system_compat.c's header).
+# libsystem_kernel.dylib now exports Apple's real posix_spawn and
+# posix_spawn_file_actions_* family (DAR-416, pthread_lifecycle_smoketest
+# case 7), so the per-binary compat copies can retire in favour of this
+# owner. nftw.c walks the tree with fts(3), so Libc's gen/fts.c comes
+# too. Apple's owner for fts is libsystem_c; libremovefile.dylib carries
+# its own private $INODE64-only copy (DAR-429).
+# -DPLATFORM_iPhoneOS: Apple's own switch for building Libc for iOS. It
+# makes xnu's bsd/sys/cdefs.h:529-534 define __DARWIN_ONLY_UNIX_CONFORMANCE,
+# __DARWIN_ONLY_64_BIT_INO_T and __DARWIN_ONLY_VERS_1050, so these files
+# reference and export the plain arm64 names (socketpair, fdopen,
+# fts_open) that arm64 SDK clients bind. The rest of this dylib predates
+# that and exports $UNIX2003/$INODE64 spellings with plain aliases.
+POPEN_CFLAGS="$SIGLIST_CFLAGS -DPLATFORM_iPhoneOS -Werror=implicit-function-declaration"
+"$CLANG" $POPEN_CFLAGS -include "$LIBC/fbsdcompat/_fbsd_compat_.h" \
+    "$LIBC/gen/FreeBSD/popen.c" -o "$EXTRACT/popen.o"
+"$CLANG" $POPEN_CFLAGS -include "$LIBC/fbsdcompat/_fbsd_compat_.h" \
+    "$LIBC/stdlib/FreeBSD/system.c" -o "$EXTRACT/system.o"
+"$CLANG" $POPEN_CFLAGS "$LIBC/gen/nftw.c" -o "$EXTRACT/nftw.o"
+# fts.c:68 includes <os/assumes.h> for os_assert. Later on this include
+# path, that name resolves to build_libmalloc.sh's generated os_crash-only
+# shim (compat_include/os/assumes.h), so -I "$LIBC" goes first to reach
+# Libc's real os/assumes.h. (Libc's root holds no headers of its own,
+# only os/.) That header needs libplatform's _simple.h and xnu's
+# os/base_private.h. malloc_private.h (fts.c:73) is libmalloc's private
+# header.
+"$CLANG" -I "$LIBC" $POPEN_CFLAGS -idirafter ../../third_party/libmalloc/private \
+    -idirafter ../../third_party/libplatform/private -idirafter "$XNU/BUILD.hdrs/dst/usr/local/include" \
+    "$LIBC/gen/fts.c" -o "$EXTRACT/fts.o"
+
 # atof(3)/atof_l and strtoull(3)/strtoull_l (DAR-384, font/2D stack:
 # libpng's png.c calls atof; fontconfig's fcxml.c/fcname.c call
 # strtoull). Real Apple's home is libsystem_c: Libc's own
@@ -609,7 +644,10 @@ if [ ! -f "$OUT/libremovefile.a" ]; then
     echo "error: $OUT/libremovefile.a not found -- run build_removefile.sh first" >&2
     exit 1
 fi
-(cd "$EXTRACT" && ar x "../../libremovefile.a" qsort.o heapsort.o)
+# qsort_b.o (Apple's stdlib/qsort_b.c, same archive) since DAR-424:
+# gen/fts.c:1414 sorts with it for fts_open_b's block comparator; it is
+# built on qsort_r (qsort_r.o, with heapsort_r.o as its fallback).
+(cd "$EXTRACT" && ar x "../../libremovefile.a" qsort.o heapsort.o qsort_b.o qsort_r.o heapsort_r.o)
 
 # flsl: qsort.o (just extracted) calls it for its introsort recursion-
 # depth heuristic, and this dylib had NO local definition -- it was
@@ -1120,6 +1158,12 @@ rm -f "$OUT/system/libsystem_c.dylib"
     -Wl,-alias,_fdopendir,'_fdopendir$INODE64$UNIX2003' \
     -Wl,-alias,_regcomp,'_regcomp$UNIX2003' \
     -Wl,-alias,_fdopen,'_fdopen$UNIX2003' \
+    `# DAR-424: popen.c (VARIANT_DARWINEXTSN) binds the $DARWIN_EXTSN name.` \
+    -Wl,-alias,_fdopen,'_fdopen$DARWIN_EXTSN' \
+    `# DAR-424: popen.c defines only _popen$DARWIN_EXTSN; SDK clients bind _popen.` \
+    -Wl,-alias,'_popen$DARWIN_EXTSN',_popen \
+    `# DAR-424: plain strftime for SDK clients (wmaker); crontab used to alias it privately.` \
+    -Wl,-alias,'_strftime$UNIX2003',_strftime \
     -Wl,-alias,_strtod,'_strtod$UNIX2003' \
     -Wl,-alias,___strtok_r,_strtok_r \
     `# waitpid.c's own real __waitpid() never gets its public "waitpid"/` \
