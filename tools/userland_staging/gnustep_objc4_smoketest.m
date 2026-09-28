@@ -163,27 +163,48 @@ static id smokeForwardHandler(id self, SEL sel)
 - (id)gsSmokeNotImplemented;
 @end
 
-int main(int argc, char **argv)
+/* On Apple, libSystem's initializer reaches _objc_init() through
+ * libdispatch_init() -> _os_object_init() (third_party/libdispatch/
+ * src/object.m:70-72). Until DAR-237/DAR-408 this port's libdispatch was
+ * built without ObjC, where _os_object_init() is empty (src/init.c:
+ * 1541-1546), so nothing called it. With --objc-init this test calls it
+ * itself, to check the rest of the runtime independently of libdispatch.
+ *
+ * It has to happen from an initializer, not from main(): dyld-940 makes
+ * its RuntimeState read-only once initializers have run
+ * (third_party/dyld/dyld/dyldMain.cpp:866-867, state.decWritable()), and
+ * _dyld_objc_notify_register() -> RuntimeState::setObjCNotifiers() stores
+ * the three callbacks into that state (dyld/DyldRuntimeState.cpp:1520-1522)
+ * without making it writable. Called from main() that store is a write to
+ * a read-only page: SIGBUS, esr 0x9200004f (DAR-236, 2026-09-28). The main
+ * executable's own initializers run inside
+ * runInitializersBottomUpPlusUpwardLinks(), which holds incWritable()
+ * (dyld/Loader.cpp:1311). The executable's +load has already been
+ * dispatched by then (Loader.cpp:1302, before its initializers), so in
+ * this mode +load does not run for this image. */
+static int selfInit;
+__attribute__((constructor))
+static void smokeObjcInitFromInitializer(int argc, char **argv)
 {
-	/* On Apple, libSystem's initializer reaches _objc_init() through
-	 * libdispatch_init() -> _os_object_init() (third_party/libdispatch/
-	 * src/object.m:70-72). This port's libdispatch is built without ObjC,
-	 * where _os_object_init() is empty (src/init.c:1541-1546), so nothing
-	 * calls it and objc4 never registers an image (DAR-408). With
-	 * --objc-init this test calls it itself, to check the rest of the
-	 * runtime while that is open; dyld then reports every loaded image to
-	 * map_images/load_images at registration, so +load runs here. */
-	int selfInit = (argc > 1 && strcmp(argv[1], "--objc-init") == 0);
+	selfInit = (argc > 1 && strcmp(argv[1], "--objc-init") == 0);
 	if (selfInit) {
-		printf("gnustep-objc4 smoketest: calling _objc_init() itself (--objc-init)\n");
+		printf("gnustep-objc4 smoketest: calling _objc_init() itself from an initializer (--objc-init)\n");
 		_objc_init();
 	}
+}
 
+int main(int argc, char **argv)
+{
+	(void)argc; (void)argv;
 	void *pool = objc_autoreleasePoolPush();
 
 	/* +load runs at image load, +initialize at the first message. */
-	check(selfInit ? "+load ran at _objc_init" : "+load ran before main",
-	    loadOrder == 1 && initOrder == 0);
+	if (selfInit) {
+		printf("gnustep-objc4 smoketest: %-34s %s\n", "+load ran before main", "skipped (--objc-init)");
+		orderCounter = 1;
+	} else {
+		check("+load ran before main", loadOrder == 1 && initOrder == 0);
+	}
 	GSSmokeRoot *r = [[GSSmokeRoot alloc] init];
 	check("+initialize on first message", initOrder == 2);
 
