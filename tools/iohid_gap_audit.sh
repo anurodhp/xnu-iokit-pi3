@@ -81,13 +81,21 @@ ln -s "$USB/IOUSBHIDDriver/Headers/IOUSBHIDDriver.h" "$STAGE/IOKit/usb/IOUSBHIDD
 ln -s "$USB/IOUSBCompositeDriver/Headers/IOUSBCompositeDriver.h" "$STAGE/IOKit/usb/IOUSBCompositeDriver.h"
 ln -s "$REPO_ROOT/generated/HIDDriverKit" "$STAGE/HIDDriverKit"
 
-# IOHIDFamily's source fixes are commits on the anurodhp/IOHIDFamily fork
-# (iokit-port, DAR-356). This step only stages the fixed IOUSBHIDDriver.cpp
-# copy, and fails if the IOHIDFamily checkout is not the fork.
-# IOHID_AUDIT_NO_PATCH=1 skips it; the build/iohid/src/IOUSBHIDDriver.cpp
-# already staged, if any, is then used as-is.
-if [ -z "${IOHID_AUDIT_NO_PATCH:-}" ]; then
-	./tools/patch_iohid_gaps.sh >/dev/null
+# Source fixes are commits on this project's forks: anurodhp/IOHIDFamily
+# (iokit-port, DAR-356) and anurodhp/IOUSBFamily (iokit-port, DAR-421, for
+# IOUSBHIDDriver.cpp). Both checkouts are compiled as they are. Fail here,
+# with a clear message, if either is a plain upstream clone rather than
+# the fork. grep -a/LC_ALL=C: the sources carry latin-1 bytes.
+if ! LC_ALL=C grep -aq 'kHIDPage_AppleVendor[[:space:]]*= 0xFF00' "$HID/IOHIDFamily/AppleHIDUsageTables.h" ||
+   [ ! -s "$HID/IOHIDFamily/IOHIDEventServiceFastPathUserClient.cpp" ]; then
+	echo "error: $HID is not the anurodhp/IOHIDFamily iokit-port fork." >&2
+	echo "       Re-clone it: rm -rf $HID && ./setup_third_party.sh" >&2
+	exit 1
+fi
+if ! LC_ALL=C grep -aq 'strlcpy((char \*)vOutBuf, strBuf, (size_t)strLen);' "$USB/IOUSBHIDDriver/Classes/IOUSBHIDDriver.cpp"; then
+	echo "error: $USB is not the anurodhp/IOUSBFamily iokit-port fork." >&2
+	echo "       Re-clone it: rm -rf $USB && ./setup_third_party.sh" >&2
+	exit 1
 fi
 
 # extract_cc <obj> <src> -- prints the normalised compile line for one
@@ -190,8 +198,8 @@ SOURCES=(
 	"$REPO_ROOT/generated/HIDDriverKit/impl/IOHIDDevice.iig.cpp"
 	"$REPO_ROOT/generated/HIDDriverKit/impl/IOHIDInterface.iig.cpp"
 	"$REPO_ROOT/generated/HIDDriverKit/impl/IOHIDEventService.iig.cpp"
-	# patched copy written by tools/patch_iohid_gaps.sh (fix 6)
-	"$REPO_ROOT/build/iohid/src/IOUSBHIDDriver.cpp"
+	# anurodhp/IOUSBFamily fork (its case (UInt32)-1 and strLen fixes)
+	"$USB/IOUSBHIDDriver/Classes/IOUSBHIDDriver.cpp"
 	# IOUSBFamily-560.4.2's generic device driver: configures a class-0
 	# (composite) device so its IOUSBInterface nubs exist for IOUSBHIDDriver.
 	"$USB/IOUSBCompositeDriver/Classes/IOUSBCompositeDriver.cpp"

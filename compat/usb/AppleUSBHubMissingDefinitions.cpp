@@ -17,7 +17,7 @@
  * (630.4.5 publishes zero-byte sources). Every one of them declares
  * SetPortPower in AppleUSBHub.h and calls it; none defines it. Apple
  * shipped these from a file it did not publish, the same class of gap as
- * IOUSBControllerV3::GetErrataBits (tools/vendor_usb_into_xnu.sh FIX 1c).
+ * IOUSBControllerV3::GetErrataBits (anurodhp/IOUSBFamily, DAR-421).
  */
 
 #include <IOKit/usb/USBHub.h>

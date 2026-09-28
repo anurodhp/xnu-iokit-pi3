@@ -15,8 +15,9 @@
 # and be compiled. This script is the first step of that: prove Apple's
 # real family source compiles against this kernel, and keep it compiling.
 #
-# STATUS (2026-09-08): 18 of the family's 19 .cpp files compile clean.
-# See "KNOWN SOURCE FIX" below for the 19th. This script produces real
+# STATUS (2026-09-08): all 19 .cpp files compile clean (the 19th needed
+# the IOUSBDevice.cpp fix, now a commit on the anurodhp/IOUSBFamily fork;
+# see "Source fixes" below). This script produces real
 # .o files; it does NOT yet link them into the kernel -- that is the next
 # milestone (vendoring into third_party/xnu-7195/iokit/USB/ +
 # iokit/conf/files entries, exactly the way iokit/Network/ and
@@ -68,73 +69,40 @@ if [ ! -s "$FAMILY/IOUSBFamily/Classes/IOUSBController.cpp" ]; then
 fi
 
 OUT_DIR="${1:-build/iousbfamily}"
-SRC_DIR="$OUT_DIR/src"
-mkdir -p "$OUT_DIR" "$SRC_DIR"
+mkdir -p "$OUT_DIR"
 
 # Drop objects from previous runs. Without this the success summary at
 # the bottom lists stale .o files alongside the current ones, so a source
 # removed from FILES still shows up under the "N/N objects built" banner.
+# (build/iousbfamily/src/ held staged, sed-fixed source copies before
+# DAR-421; it is no longer written or read.)
 find "$OUT_DIR" -maxdepth 1 -name '*.o' -delete 2>/dev/null || true
 
 # ---------------------------------------------------------------------
-# Staged source copy + the one known source fix.
+# Source fixes: none here. They are commits on this project's fork,
+# anurodhp/IOUSBFamily branch iokit-port (IOUSBFamily-560.4.2 plus one
+# commit per fix, citations in the commit messages; DAR-421), which
+# setup_third_party.sh clones. This script compiles the checkout's files
+# directly.
 #
-# KNOWN SOURCE FIX: IOUSBDevice.cpp declares `UInt32 info = NULL;` (in
-# SetConfiguration()'s USB-3.0 extra-power path). That was legal in the
-# C++98/03 dialect Apple built this family with in 2012, where NULL is
-# an integer constant expression; under the -std=gnu++14 this project's
-# kernel uses, NULL is nullptr_t and the initialisation is a hard error:
+# The one this script used to apply to a staged copy is the fork's
+# IOUSBDevice.cpp commit: `UInt32 info = NULL;` in SetConfiguration() is a
+# hard error under -std=gnu++14 (NULL is nullptr_t there), and 0 is what
+# the code means.
 #
-#   error: cannot initialize a variable of type 'UInt32' with an rvalue
-#          of type 'nullptr_t'
-#
-# The variable is an out-parameter for GetPortInformation() and is
-# overwritten before every read, so zero-initialising it is exactly what
-# the original code meant. This is a real (if harmless) bug in Apple's
-# published source, not a porting compromise.
-#
-# It is applied to a staged copy rather than to third_party/ so that
-# third_party/IOUSBFamily stays a pristine, unpatched upstream checkout
-# (same treatment every other unmodified Apple pin gets). When the family
-# is vendored into third_party/xnu-7195/iokit/USB/ for the real kernel
-# build, the fix moves there as a real commit on the xnu fork -- the same
-# way IOStorageFamily's and msdosfs's local fixes already live in that
-# fork rather than in a patch file.
-#
-# The substitution asserts on its own target: if a future re-pin changes
-# that line, this fails loudly instead of silently not applying.
+# Check for that commit's result so a plain upstream clone fails here with
+# a clear message instead of a compile error. LC_ALL=C (and -a) are
+# load-bearing: Apple's 2012 sources carry a latin-1 (c) byte in every
+# copyright header, which is invalid UTF-8; under a UTF-8 locale grep
+# treats the file as binary and reports nothing.
 # ---------------------------------------------------------------------
-copy_sources() {
-	local src dst
-	for src in "$FAMILY/IOUSBFamily/Classes"/*.cpp; do
-		dst="$SRC_DIR/$(basename "$src")"
-		cp "$src" "$dst"
-	done
-}
-copy_sources
-
-# NOTE: LC_ALL=C on both grep and sed is load-bearing, not cosmetic.
-# Apple's 2012 sources carry a latin-1 (c) byte in every copyright header,
-# which is invalid UTF-8; under this machine's default UTF-8 locale BSD
-# sed fails outright with "RE error: illegal byte sequence" and GNU/BSD
-# grep silently treats the file as binary and reports nothing -- which
-# would make the assertion below pass or fail for entirely the wrong
-# reason. (The same trap costs a `grep -a` when searching this tree by
-# hand.)
-FIXFILE="$SRC_DIR/IOUSBDevice.cpp"
-if ! LC_ALL=C grep -q 'UInt32[[:space:]]*info = NULL;' "$FIXFILE"; then
-	echo "error: expected 'UInt32 info = NULL;' in IOUSBDevice.cpp and did" >&2
-	echo "       not find it. The pin changed; re-check whether the fix is" >&2
-	echo "       still needed before deleting this block." >&2
+if LC_ALL=C grep -aq 'UInt32[[:space:]]*info = NULL;' "$FAMILY/IOUSBFamily/Classes/IOUSBDevice.cpp"; then
+	echo "error: $FAMILY lacks this project's fixes -- it is not the" >&2
+	echo "       anurodhp/IOUSBFamily iokit-port fork. Re-clone it:" >&2
+	echo "       rm -rf $FAMILY && ./setup_third_party.sh" >&2
 	exit 1
 fi
-LC_ALL=C sed -i '' \
-	's|UInt32\([[:space:]]*\)info = NULL;|UInt32\1info = 0;\t/* was NULL; see tools/build_iousbfamily.sh */|' \
-	"$FIXFILE"
-if LC_ALL=C grep -q 'UInt32[[:space:]]*info = NULL;' "$FIXFILE"; then
-	echo "error: the IOUSBDevice.cpp NULL fix did not apply" >&2
-	exit 1
-fi
+SRC_DIR="$FAMILY/IOUSBFamily/Classes"
 
 # ---------------------------------------------------------------------
 # Include path + flags.
