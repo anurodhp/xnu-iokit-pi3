@@ -48,21 +48,43 @@
     .text
     .align 2
     .globl __dyld_start_tsd_bootstrap
+// DAR-416 step 1b: the block is laid out as a real struct pthread_s,
+// so that Apple's __pthread_init() can adopt it as the main thread, as it
+// adopts dyld's _main_thread on Apple. pthread.c's __pthread_init does
+// `_main_thread_ptr = _pthread_self_direct()` and crashes if that is NULL.
+// This does what libpthread's _pthread_set_self_dyld() does
+// (third_party/libpthread/src/pthread.c:1545-1564):
+//   p->thread_id = __thread_selfid(); tsd[PTHREAD_SELF] = p;
+//   tsd[ERRNO] = &p->err_no; TSD base = &p->tsd[0].
+// __pthread_init() (pthread.c:1736) does not set thread_id itself; left
+// at 0 (the "unowned" tid), the main thread's first lock of a recursive
+// mutex looked already-owned (pthread_mutex.c:535-551).
+// arm64 offsets, from the real headers (libpthread types_internal.h,
+// measured with offsetof): sizeof(struct pthread_s) = 0x10e0,
+// offsetof(tsd) = 224 (_PTHREAD_STRUCT_DIRECT_TSD_OFFSET),
+// offsetof(thread_id) = 216 and offsetof(err_no) = 172. The 8 KiB block
+// is large enough.
 __dyld_start_tsd_bootstrap:
-    adrp    x0, _g_dyld_tsd_bootstrap_block@PAGE
-    add     x0, x0, _g_dyld_tsd_bootstrap_block@PAGEOFF
+    mov     x16, #372               // SYS_thread_selfid (syscalls.master:568)
+    svc     #0x80
+    adrp    x9, _g_dyld_tsd_bootstrap_block@PAGE
+    add     x9, x9, _g_dyld_tsd_bootstrap_block@PAGEOFF   // p (struct pthread_s)
+    str     x0, [x9, #216]          // p->thread_id
+    add     x0, x9, #224            // &p->tsd[0]: the TSD base
+    str     x9, [x0]                // tsd[0] = __TSD_THREAD_SELF = p
+    add     x1, x9, #172            // &p->err_no
+    str     x1, [x0, #8]            // tsd[1] = __TSD_ERRNO
     mov     x3, #2                  // platform_syscall case 2: "set cthread self"
     mov     x16, #0x80000000        // PLATFORM_SYSCALL_TRAP_NO (matches
                                      // tsd_bootstrap.c/pthread_tsd_shim.c)
     svc     #0x80
 // __TSD_MACH_THREAD_SELF (slot 3, offset 0x18) -- real gap closed
 // 2026-09-01 (DAR-153, syslogd runtime SIGTRAP). This block is the TSD
-// every dyld-launched process's MAIN THREAD keeps for its whole life:
-// nothing later re-points TPIDRRO_EL0 (a dynamically-linked executable's
-// crt.c only calls pthread_main_thread_bootstrap() through a
-// weak_import, and neither launchd.macho nor syslogd.macho actually
-// binds it -- confirmed with `nm -m`, not assumed). Slot 3 was never
-// written by anyone, so it read back 0 for every such process, and 0 is
+// every dyld-launched process's MAIN THREAD keeps for its whole life
+// (__pthread_init adopts it; only a fork child re-points TPIDRRO_EL0,
+// via _pthread_main_thread_postfork_init). Before 2026-09-01 slot 3 was
+// never written by anyone, so it read back 0 for every such process, and
+// 0 is
 // exactly OS_LOCK_NO_OWNER. That is not a benign zero:
 //
 //   * libplatform's os_unfair_lock stores the caller's slot-3 value as
@@ -106,15 +128,10 @@ __dyld_start_tsd_bootstrap:
                                      // what _os_tsd_get_direct() returns
     adrp    x1, _g_dyld_tsd_bootstrap_block@PAGE
     add     x1, x1, _g_dyld_tsd_bootstrap_block@PAGEOFF
+    add     x1, x1, #224            // TSD base (see above)
     str     x0, [x1, #24]           // __TSD_MACH_THREAD_SELF == slot 3
     b       __dyld_start
 
-// Header (matches pthread_tsd_shim.c's TSD_HEADER_SIZE) + a generous
-// slot area -- dyld itself only ever indexes __TSD_MIG_REPLY (slot 2)
-// and, as of the fix above, __TSD_MACH_THREAD_SELF (slot 3), but this
-// block must be large enough that a stray direct-TSD read from
-// any other reserved slot index Libsyscall might touch during dyld's own
-// early bootstrap (e.g. errno, if any linked object still reads it via
-// direct TSD this early) lands in real zeroed memory, not past the end
-// of this block.
-    .zerofill __DATA,__bss,_g_dyld_tsd_bootstrap_block,8192,4
+// One struct pthread_s (0x10e0 bytes, its tsd[] array included), rounded
+// up to 8 KiB.
+    .zerofill __DATA,__bss,_g_dyld_tsd_bootstrap_block,8192,6   // 64-byte aligned, like pthread.c's _main_thread

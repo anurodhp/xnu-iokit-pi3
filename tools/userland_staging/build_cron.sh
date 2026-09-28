@@ -242,7 +242,7 @@ fi
 # so it silently ordered this script before the ones that produce these
 # dylibs. See build_ifconfig.sh's identically-structured block for the
 # same fix.
-for d in libsystem_c libsystem_pthread libsystem_malloc libsystem_platform; do
+for d in libsystem_c libsystem_kernel libsystem_pthread libsystem_malloc libsystem_platform; do
     if [ ! -f "$OUT/system/$d.dylib" ]; then
         echo "error: $OUT/system/$d.dylib not found -- run build_${d}.sh first" >&2
         exit 1
@@ -256,7 +256,9 @@ if [ ! -f "$OUT/system/libSystem.B.dylib" ]; then
     echo "error: $OUT/system/libSystem.B.dylib not found -- run build_libsystem.sh first" >&2
     exit 1
 fi
-LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libsystem_platform.dylib $OUT/system/libdyld.dylib $OUT/system/libSystem.B.dylib"
+# libsystem_kernel.dylib: owns mmap/munmap (and their $UNIX2003 names)
+# since DAR-416 step 1b; before that libsystem_pthread.dylib exported them.
+LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_kernel.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libsystem_platform.dylib $OUT/system/libdyld.dylib $OUT/system/libSystem.B.dylib"
 
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
     -DCRT_DYNAMIC_LINKING \

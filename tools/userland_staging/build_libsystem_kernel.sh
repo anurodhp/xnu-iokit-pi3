@@ -127,7 +127,7 @@ fi
 # are unaffected -- they never had a duplication problem in the first
 # place (one process, one image, one errno already).
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    cerror_stub.c -o "$OUT/libsystem_kernel/cerror_stub.o"
+    -DCERROR_STUB_LIBKERNEL_FUNCPTR cerror_stub.c -o "$OUT/libsystem_kernel/cerror_stub.o"
 
 # Real gap found batch 2 (static-to-dylib migration step 3, docs/
 # daemon-roadmap.md): real dyld's own _dyld_initializer() unconditionally
@@ -597,10 +597,9 @@ done
 # for the full root-cause trace and why real Apple's table indirection
 # (inert until libdispatch installs a voucher table, which this build's
 # libdispatch never does) is the thing that was missing.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
-    -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" \
-    libsystem_kernel_voucher_funcptr_compat.c \
-    -o "$OUT/libsystem_kernel/voucher_funcptr_compat.o"
+# (DAR-416 1b: the voucher thunks now come from Apple's own
+# libsyscall/wrappers/_libc_funcptr.c; see the LIBKERNEL block below.
+# libsystem_kernel_voucher_funcptr_compat.c is retired.)
 
 # DAR-124/DAR-11 (libresolv.dylib), 2026-08-31 sweep continuation:
 # _kevent/_kqueue added above (plain generated stubs, syscalls.master
@@ -731,11 +730,18 @@ done
 "$CLANG" $CFLAGS -I "$XNU/libsyscall" -include "$XNU/osfmk/mach/mach_traps.h" "$XNU/libsyscall/mach/mach_legacy.c" \
     -o "$OUT/libsystem_kernel/pt416_mach_legacy_all.o"
 LD_R="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+# Also __kernelrpc_mach_port_guard_trap/_move_member_trap and the two voucher
+# traps (DAR-416 1b):
+# mach_port.c, narrowed below for mach_voucher_extract_attr_recipe, still
+# references them from its other functions.
 "$LD_R" -r -arch arm64 -exported_symbol _swtch_pri \
+    -exported_symbol __kernelrpc_mach_port_guard_trap -exported_symbol __kernelrpc_mach_port_move_member_trap \
+    -exported_symbol _host_create_mach_voucher_trap -exported_symbol _mach_voucher_extract_attr_recipe_trap \
     "$OUT/libsystem_kernel/pt416_mach_traps_all.o" -o "$OUT/libsystem_kernel/pt416_swtch_pri.o"
 "$LD_R" -r -arch arm64 -exported_symbol _mach_thread_self \
     "$OUT/libsystem_kernel/pt416_mach_legacy_all.o" -o "$OUT/libsystem_kernel/pt416_mach_thread_self.o"
-# thread_act.c includes <mach/thread_act_internal.h>, the MIG header Apple
+# thread_act.c (and, for the voucher narrowing below, mach_port.c) include
+# <mach/thread_act_internal.h> / <mach/mach_port_internal.h>, the MIG headers Apple
 # generates without -DLIBSYSCALL_INTERFACE so it declares the _kernelrpc_
 # routines (libsyscall/xcodescripts/mach_install_mig.sh:171-179, with
 # thread_act.defs in MIGS_INTERNAL at :97-100). Apple runs it with a
@@ -745,9 +751,11 @@ LD_R="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
 PT416_HDR="$PWD/$OUT/libsystem_kernel/pt416_internal_hdr"
 PT416_XNU="$(cd "$XNU" && pwd)"
 mkdir -p "$PT416_HDR/mach"
-(cd "$PT416_HDR" && "$(which mig)" -novouchers -arch arm64 -I"$PT416_XNU/osfmk" \
-    -header "$PT416_HDR/mach/thread_act_internal.h" -user /dev/null -server /dev/null \
-    "$PT416_XNU/osfmk/mach/thread_act.defs" >/dev/null)
+for d in thread_act mach_port; do
+    (cd "$PT416_HDR" && "$(which mig)" -novouchers -arch arm64 -I"$PT416_XNU/osfmk" \
+        -header "$PT416_HDR/mach/${d}_internal.h" -user /dev/null -server /dev/null \
+        "$PT416_XNU/osfmk/mach/${d}.defs" >/dev/null)
+done
 "$CLANG" $CFLAGS -I "$PT416_HDR" -I "$XNU/libsyscall" -I "$XNU/libsyscall/mach" \
     "$XNU/libsyscall/mach/thread_act.c" -o "$OUT/libsystem_kernel/pt416_thread_act.o"
 PT416_OBJS=$(ls "$OUT"/libsystem_kernel/pt416*.o | grep -v "_all\.o$")
@@ -781,11 +789,116 @@ done
     "$XNU/libsyscall/wrappers/terminate_with_reason.c" -o "$OUT/libsystem_kernel/d423_terminate_with_reason.o"
 # terminate_with_reason.c's __darwin_check_fd_set_overflow calls
 # pthread_current_stack_contains_np, which Apple resolves inside this dylib
-# through a _libc_funcptr.c thunk; see
-# libsystem_kernel_stack_contains_funcptr_compat.c.
-"$CLANG" $CFLAGS libsystem_kernel_stack_contains_funcptr_compat.c \
-    -o "$OUT/libsystem_kernel/d423_stack_contains_funcptr.o"
+# through a _libc_funcptr.c thunk (the LIBKERNEL block below).
 D423_OBJS=$(ls "$OUT"/libsystem_kernel/d423*.o)
+
+# LIBKERNEL block (DAR-416 step 1b): Apple's libSystem init parity for this
+# dylib.
+#  - wrappers/_libkernel_init.c: __libkernel_init(fns, envp, apple, vars)
+#    stores the libSystem function table and calls mach_init(). The libSystem
+#    initializer calls it first, as Libsystem init.c:215 does
+#    (libsystem_dyld_initializer_compat.c).
+#  - wrappers/_libc_funcptr.c: the hidden thunks this dylib uses to reach
+#    upward: malloc/free/realloc/reallocf, _pthread_exit_if_canceled,
+#    _pthread_clear_qos_tsd, pthread_current_stack_contains_np,
+#    voucher_mach_msg_*, and the string functions mapped onto the private
+#    _libkernel_* copies. This replaces libsystem_kernel_voucher_funcptr_compat.c,
+#    libsystem_kernel_stack_contains_funcptr_compat.c, cerror_stub.c's no-op
+#    _pthread_exit_if_canceled, and the -U deferrals of _memcpy and
+#    __pthread_clear_qos_tsd.
+#  - wrappers/string/*.c: the _libkernel_* string layer. It is compiled with
+#    libsyscall's own string/strings.h forced first, because it shares the
+#    _STRINGS_H_ guard with the SDK's; and with the SDK's machine/limits.h
+#    pre-included, because under -ffreestanding <limits.h> is clang's own,
+#    which never includes arm/limits.h, where LONG_BIT (which strlen.c
+#    needs) is defined.
+#  - wrappers/spawn/posix_spawn.c plus the generated ___posix_spawn stub:
+#    the posix_spawn family. No dylib exported it before (launchd carries a
+#    private copy). It also provides posix_spawnattr_get/set_qos_clamp_np,
+#    which libpthread's qos.c calls.
+rm -f "$OUT"/libsystem_kernel/lk416*.o
+LK_FLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -D_FORTIFY_SOURCE=0 -DPRIVATE=1 \
+    -I $OUT/compat_include -include machine/limits.h -include $XNU/libsyscall/wrappers/string/strings.h \
+    -I $XNU/libsyscall/wrappers/string -I $XNU/libsyscall/wrappers \
+    -idirafter $XNU/bsd -idirafter $XNU/osfmk -idirafter $XNU/libsyscall/mach -idirafter $XNU/libsyscall \
+    -idirafter $XNU/libkern"
+for f in _libkernel_init _libc_funcptr; do
+    "$CLANG" $LK_FLAGS "$XNU/libsyscall/wrappers/$f.c" -o "$OUT/libsystem_kernel/lk416_$f.o"
+done
+for f in "$XNU"/libsyscall/wrappers/string/*.c; do
+    "$CLANG" $LK_FLAGS "$f" -o "$OUT/libsystem_kernel/lk416_str_$(basename "$f" .c).o"
+done
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -D_FORTIFY_SOURCE=0 -DPRIVATE=1 \
+    -idirafter "$XNU/bsd" -idirafter "$XNU/osfmk" -idirafter "$XNU/libsyscall/mach" -idirafter "$XNU/libsyscall" \
+    -I "$XNU/libsyscall/wrappers/spawn" "$XNU/libsyscall/wrappers/spawn/posix_spawn.c" \
+    -o "$OUT/libsystem_kernel/lk416_posix_spawn.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
+    -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
+    "$SYSGEN/___posix_spawn.s" -o "$OUT/libsystem_kernel/lk416___posix_spawn.o"
+#  - mmap/munmap: generated ___mmap/___munmap plus libsyscall's
+#    wrappers/unix03/mmap.c and munmap.c (the syscall-logger hooks go to
+#    this dylib's own __syscall_logger). Before this, only
+#    libsystem_pthread's compat objects exported them.
+#  - host_priv and mach_voucher MIG user stubs (host_reboot,
+#    host_get_special_port, mach_voucher_*, host_create_mach_voucher, ...):
+#    Mach MIG clients that live here on Apple. They are extracted from
+#    libpthread_qos.a, which build_libpthread_qos.sh generates from
+#    xnu-7195's host_priv.defs and mach_voucher.defs; libsystem_pthread used
+#    to export them.
+#  - getrusage (#117, plain generated stub) and ___settimeofday (#122,
+#    NO_SYSCALL_STUB, raw trap only). Libc's gen/clock_gettime.c, now in
+#    libsystem_c, calls getrusage() and settimeofday(). No dylib exported
+#    either before.
+#    DEVIATION, temporary: Apple's public settimeofday() is Libc's
+#    third_party/Libc/sys/settimeofday.c:46-59. It wraps ___settimeofday, then posts
+#    kNotifyClockSet (:49) and ASL-logs the change (:51-56). That needs notify_post (in
+#    libsystem_notify, above libsystem_c), asprintf (exported by no dylib
+#    here) and _simple_asl_log (exported by libsystem_malloc, a wrong
+#    owner). DAR-410 tracks porting it. Until then, _settimeofday is an
+#    alias of the raw trap, so the clock is set but no notification is sent.
+#  - ___gettid/___settid (#286/#285): the generated stubs carry Apple's
+#    syscall.map aliases pthread_getugid_np/pthread_setugid_np
+#    (libsyscall/Platforms/syscall.map:12-13). libsystem_pthread's
+#    pthread_thread_ops_compat.o used to export a geteuid()-based stand-in
+#    (CoreFoundation binds it).
+for s in ___mmap ___munmap _getrusage ___settimeofday ___gettid ___settid; do
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+        -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
+        -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
+        "$SYSGEN/${s}.s" -o "$OUT/libsystem_kernel/lk416${s}.o"
+done
+for f in mmap munmap; do
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+        -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+        -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" -I "$OUT/compat_include" \
+        -I "$OUT/malloc_mig" -I "$XNU/libsyscall/wrappers" \
+        "$XNU/libsyscall/wrappers/unix03/$f.c" -o "$OUT/libsystem_kernel/lk416_$f.o"
+done
+[ -f "$OUT/libpthread_qos.a" ] || { echo "error: $OUT/libpthread_qos.a not found -- run build_libpthread_qos.sh first" >&2; exit 1; }
+(cd "$OUT/libsystem_kernel" && ar x ../libpthread_qos.a host_privUser.o mach_voucherUser.o && \
+    mv host_privUser.o lk416_host_privUser.o && mv mach_voucherUser.o lk416_mach_voucherUser.o)
+#  - host_create_mach_voucher, mach_voucher_deallocate and
+#    mach_voucher_extract_attr_recipe: Apple's libsyscall/mach/host.c:86,
+#    mach_msg.c:767 and mach_port.c:731. This port links its own hand-written
+#    Mach wrappers rather than those whole files, so each is narrowed with
+#    ld -r to the one function (the same precedent as the
+#    mach_port_set_attributes narrowing above). libsystem_pthread's
+#    libpthread_qos_compat.o used to export hand-written copies.
+LK_MACH_FLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+    -I $OUT/compat_include -I $XNU/libsyscall -I $XNU/libsyscall/mach -I $XNU/libsyscall/os -I $OUT/libsystem_kernel/pt416_internal_hdr \
+    -I $OUT/malloc_mig -I $XNU/osfmk -idirafter $XNU/bsd"
+LD_R="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld"
+for pair in host:_host_create_mach_voucher mach_msg:_mach_voucher_deallocate mach_port:_mach_voucher_extract_attr_recipe; do
+    f=${pair%%:*}; sym=${pair#*:}
+    "$CLANG" $LK_MACH_FLAGS "$XNU/libsyscall/mach/$f.c" -o "$OUT/libsystem_kernel/lkall_$f.o"
+    "$LD_R" -r -arch arm64 -exported_symbol "$sym" "$OUT/libsystem_kernel/lkall_$f.o" \
+        -o "$OUT/libsystem_kernel/lk416_narrow$sym.o"
+done
+LIBKERNEL_OBJS=$(ls "$OUT"/libsystem_kernel/lk416*.o)
 
 # __pipe.s (above) only exports the private-indirection name `___pipe`
 # (real Apple naming convention, same as __lchown/__platform_sigaction);
@@ -994,17 +1107,19 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     `# is safe for these three specifically: nothing in this project ever` \
     `# loads libsystem_kernel.dylib without libSystem.B.dylib (which` \
     `# re-exports both) also in the process.` \
-    -Wl,-U,_abort -Wl,-U,_memcpy -Wl,-U,_pthread_tsd_shim_bootstrap \
+    -Wl,-U,_abort -Wl,-U,_pthread_tsd_shim_bootstrap \
     `# __semwait_signal: nanosleep_compat.o's own real dependency, see` \
     `# that compile step's own comment just above -- real canonical copy` \
     `# is libsystem_malloc.dylib's sys_semwait_signal.o, always loaded` \
     `# alongside this dylib (same class of deferral as the 3 just above).` \
     -Wl,-U,___semwait_signal \
-    `# _pthread_clear_qos_tsd: Apple's wrappers/setpriority.c (DAR-334)` \
-    `# calls it on its PRIO_DARWIN_THREAD branch. It lives in` \
-    `# libsystem_pthread.dylib, which links this dylib -- same cycle, same` \
-    `# deferral as abort/memcpy/pthread_tsd_shim_bootstrap above.` \
-    -Wl,-U,__pthread_clear_qos_tsd \
+    `# mmap/munmap $UNIX2003 spellings, which this port's xnu-cdefs builds` \
+    `# bind (e.g. crontab); libsystem_pthread used to carry these aliases.` \
+    -Wl,-alias,_mmap,'_mmap$UNIX2003' -Wl,-alias,_munmap,'_munmap$UNIX2003' \
+    -Wl,-alias,___settimeofday,_settimeofday \
+    `# (_memcpy and __pthread_clear_qos_tsd are no longer deferred:` \
+    `# DAR-416 1b builds Apple's _libc_funcptr.c, whose hidden thunks` \
+    `# resolve both inside this dylib.)` \
     `# BSD socket family additions, 2026-08-31 (static-linking cleanup,` \
     `# dylib-vs-dylib duplicate-symbol pass). chmod/connect/recvmsg/` \
     `# writev's $UNIX2003 aliases are created HERE (base is genuinely` \
@@ -1115,7 +1230,7 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/mig_reply_setup.o" \
     "$OUT/libsystem_kernel/sys___sigaction.o" \
     "$OUT/libsystem_kernel/proc_pidinfo_compat.o" \
-    "$OUT/libsystem_kernel/voucher_funcptr_compat.o" \
+    $LIBKERNEL_OBJS \
     "$OUT/libsystem_kernel/sys_setegid.o" "$OUT/libsystem_kernel/sys_seteuid.o" \
     "$OUT/libsystem_kernel/sys_getgroups.o" "$OUT/libsystem_kernel/sys_setitimer.o" \
     "$OUT/libsystem_kernel/sys_flock.o" \

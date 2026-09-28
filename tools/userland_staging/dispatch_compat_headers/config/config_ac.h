@@ -26,15 +26,26 @@
  *   pool with plain pthread_create()+condvars, which this project's real
  *   pthread_create() (Phase 7.5, QEMU-verified) already supports end to
  *   end.
- * - HAVE_PTHREAD_MACHDEP_H 0 / HAVE_PTHREAD_KEY_INIT_NP 0: no
- *   `pthread_machdep.h` exists anywhere in this project's pinned
- *   libpthread (confirmed via find) -- this disables
- *   `DISPATCH_USE_DIRECT_TSD` (a Darwin-specific direct-register TSD-slot
- *   optimization that needs exact coordination with libpthread's real
- *   internal slot table, which this project's curated libpthread doesn't
- *   replicate), falling back to the portable `pthread_getspecific()`/
- *   `pthread_setspecific()` path in shims/tsd.h -- correct, just not the
- *   perf-optimized Darwin fast path.
+ * - HAVE_PTHREAD_MACHDEP_H 0: no `pthread_machdep.h` exists anywhere in
+ *   this project's pinned libpthread (confirmed via find).
+ * - HAVE_PTHREAD_KEY_INIT_NP 1 / USE_APPLE_TSD_OPTIMIZATIONS 1 (DAR-416):
+ *   selects DISPATCH_USE_DIRECT_TSD (third_party/libdispatch/src/shims/
+ *   tsd.h:36-38), Apple's own configuration. libdispatch's keys are then
+ *   the static slots libpthread reserves for it (__PTK_LIBDISPATCH_KEY0..9,
+ *   tsd.h:76-94), zero in every new thread's TSD. These used to be 0 on
+ *   the grounds that this port's hand-written libpthread did not share
+ *   Apple's slot table; libsystem_pthread.dylib is now Apple's real
+ *   libpthread (pthread_key_init_np exported), so that no longer holds.
+ *   The portable path it replaces was actively wrong with real
+ *   libpthread: its keys are pthread_key_create()d globals that stay 0
+ *   until libdispatch_init() runs, and that runs lazily here (dyld skips
+ *   /usr/lib/system initializers; Apple calls it from
+ *   libSystem_initializer, Libsystem/init.c:241). Before that,
+ *   pthread_getspecific(0) returned real libpthread's tsd[0], the main
+ *   thread's own pthread_t, and the first dispatch_async() "allocated" a
+ *   continuation from the cache key: it wrote a continuation vtable over
+ *   the pthread_t's signature and the next pthread_self() aborted
+ *   ("pthread_t was corrupted" -- syslogd and configd at boot).
  * - HAVE_MACH 1 / USE_MACH_SEM 1: real, both already present and working
  *   (osfmk/mach headers, and this project's own real semaphore_signal/
  *   semaphore_wait trap stubs from Phase 6.8's build_libxpc_syscalls.sh).
@@ -65,7 +76,7 @@
 #define HAVE_PTHREAD_WORKQUEUE_SETDISPATCH_NP 0
 
 #define HAVE_PTHREAD_MACHDEP_H 0
-#define HAVE_PTHREAD_KEY_INIT_NP 0
+#define HAVE_PTHREAD_KEY_INIT_NP 1
 #define HAVE_PTHREAD_NP_H 0
 #define HAVE_PTHREAD_QOS_H 1
 /* real, distinct from HAVE_PTHREAD_WORKQUEUES above -- QoS class support
@@ -79,7 +90,7 @@
 #define HAVE_PTHREAD_ATTR_SETCPUPERCENT_NP 0
 #define HAVE_PTHREAD_MAIN_NP 1
 #define HAVE_PTHREAD_YIELD_NP 0
-#define USE_APPLE_TSD_OPTIMIZATIONS 0
+#define USE_APPLE_TSD_OPTIMIZATIONS 1
 
 #define USE_MACH_SEM 1
 #define USE_POSIX_SEM 0

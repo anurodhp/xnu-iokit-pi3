@@ -30,11 +30,18 @@ int *__error(void) {
 
 typedef unsigned __int128 cerror_return_t;
 
-/* Apple's real cerror() calls this first; libpthread cancellation doesn't
- * exist on this target, so it's a deliberate no-op, not a missing feature. */
+/* Apple's real cerror() calls this first. libsystem_kernel builds this file
+ * with CERROR_STUB_LIBKERNEL_FUNCPTR (DAR-416): there it is the real
+ * _libc_funcptr.c thunk into libsystem_pthread's pthread_cancelable.c,
+ * registered through __libkernel_init. The static images that still link
+ * this file keep the no-op. */
+#ifdef CERROR_STUB_LIBKERNEL_FUNCPTR
+extern void _pthread_exit_if_canceled(int error);
+#else
 void _pthread_exit_if_canceled(int error) {
 	(void)error;
 }
+#endif
 
 __attribute__((noinline))
 cerror_return_t cerror_nocancel(int err) {

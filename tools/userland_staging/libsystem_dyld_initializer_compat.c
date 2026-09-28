@@ -29,7 +29,8 @@
  * own init.c uses) that calls the real, already-correct
  * _dyld_initializer() itself.
  *
- * Also calls mach_init() here first. This used to need a second,
+ * Also runs mach_init() here first (now via __libkernel_init(), as
+ * Apple does). This used to need a second,
  * cross-dylib call (libdyld_mach_init_compat_run()) to separately
  * initialize libdyld.dylib's OWN private, independently-never-
  * initialized copy of mach_task_self_ -- real dyld does not run
@@ -44,51 +45,25 @@
  * Apple's actual architecture) and a single mach_init() call here
  * suffices for both. */
 extern void _dyld_initializer(void);
-extern int mach_init(void);
-extern int pthread_main_thread_bootstrap(void);
 
-/* Real gap found booting launchd.macho (a real, dynamically-linked
- * executable) as PID 1, 2026-08-28: nothing ever called
- * pthread_main_thread_bootstrap() (pthread_main_thread_bootstrap.c) for a
- * dylib-linked process. That function is the real, already-established
- * single entry point installing the main thread's TPIDRRO_EL0/TSD base +
- * errno slot + real pthread_t signature -- every STATIC consumer
- * (bash_main_wrapper.c, ifconfig/ping/ps/uname/getty's own wrappers, the
- * llvm_libcxx smoketest) already calls it explicitly from its own
- * hand-rolled entry point, but a real dynamic executable has no such
- * wrapper -- dyld jumps straight to real Csu start.s/crt.c, which calls
- * main() directly.
+/* Main-thread setup. Until DAR-416 this port had no real libpthread and
+ * called its own pthread_main_thread_bootstrap() here to install the TSD
+ * base, errno slot and pthread_t (without it, libc++abi's cxa_guard.cpp
+ * pthread_self() read a never-installed TPIDRRO_EL0 and the process
+ * exited silently; docs/backlog.md item d10). Now dyld's entry
+ * trampoline (dyld_tsd_entry_trampoline.s) lays out a struct pthread_s
+ * and points TSD slot 0 at it, as Apple's _pthread_set_self_dyld() does,
+ * and the real __pthread_init() below adopts it
+ * (third_party/libpthread/src/pthread.c:1753-1757, __pthread_init:
+ * _main_thread_ptr = _pthread_self_direct()).
  *
- * First attempt (reverted) put this call in a NEW constructor inside
- * libsystem_pthread.dylib's own build instead -- that never actually ran:
- * dyld's real runAllInitializersForMain() (DyldAPIs.cpp) treats every
- * "/usr/lib/system/lib*"-installed sub-dylib as already-initialized
- * (matching real macOS's shared-cache architecture, where these are all
- * really one umbrella image) and only calls beginInitializers() on them,
- * never runInitializers() -- confirmed via real dyld-level tracing
- * (Loader::runInitializersBottomUp's own early-return on an
- * already-"inited" Loader). This project's dylibs are real, SEPARATE
- * files though, so that assumption doesn't hold for them the way it does
- * on real macOS -- a real, structural mismatch, not something to fix
- * here. This constructor (libSystem.B.dylib's own local
- * S_MOD_INIT_FUNC_POINTERS entry, not a separate reexported dylib file)
- * is the one place already confirmed to actually run (see this file's
- * own _dyld_initializer() writeup above, same class of gap). Ordering:
- * matches real Apple's own mach_init()-then-__pthread_init() sequence
- * (mach_init "sets the bare minimum TSD setup... __pthread_init will
- * finish the initialization during library init" -- pthread.c's own real
- * comment on _pthread_set_self_dyld()) -- call right after mach_init(),
- * before _dyld_initializer() (which itself may touch TSD-dependent
- * os_alloc_once/allocator paths). Real, concrete symptom this fixes:
- * libc++abi's cxa_guard.cpp (the compiler-generated guard for any real
- * C++ function-local static, e.g. iostream.cpp's
- * `static DoIOSInit init_the_streams;`) calls
- * pthread_mach_thread_np(pthread_self()) the first time ANY guarded
- * static initializes anywhere in the process -- without this bootstrap
- * having run first, pthread_self() reads a never-installed TPIDRRO_EL0
- * and the process dies silently (exit(1), no signal, no dyld/libc++abi
- * error message -- root-caused via a real multi-layer dyld/libc++abi/
- * libpthread instrumentation pass, see docs/backlog.md item d10). */
+ * It must be called from here, not from a constructor in
+ * libsystem_pthread.dylib: dyld-940's runAllInitializersForMain()
+ * (DyldAPIs.cpp) treats every "/usr/lib/system/lib*" image as already
+ * initialized and never runs its initializers. That matches Apple's
+ * shared-cache layout, where they are one image; here they are separate
+ * files. This constructor, in libSystem.B.dylib itself, is the one that
+ * is confirmed to run. */
 
 /* Real gap found+fixed 2026-09-02 (DAR-217), root-causing syslogd's
  * exit(1) loop: NOTHING in this project ever initialized the process's
@@ -122,7 +97,7 @@ extern int pthread_main_thread_bootstrap(void);
  * PureDarwin libxpc/libbootstrap.c, still implements verbatim). This
  * project's libSystem.B.dylib does not link libxpc.dylib, and a
  * constructor placed inside libxpc.dylib itself would never run at all
- * (see this file's own pthread_main_thread_bootstrap() writeup above:
+ * (see this file's own main-thread setup note above:
  * dyld-940's runAllInitializersForMain() treats every
  * "/usr/lib/system/lib*" image as already-initialized), so the real
  * equivalent is to do it here, inline, in the one constructor that is
@@ -142,7 +117,7 @@ extern int pthread_main_thread_bootstrap(void);
  * Deliberately NOT placed in libsyscall's own mach_init_doit() (where
  * the bootstrap_port global actually lives, and where Apple's much older
  * Libc mach_init_ports() really did do this): mach_init_doit() runs
- * before pthread_main_thread_bootstrap() installs TPIDRRO_EL0, and
+ * before __pthread_init() has adopted the main thread's TSD, and
  * task_get_special_port() is a real MIG call whose mig_get_reply_port()
  * reads the direct TSD slot -- it would fault. mach_init_doit() is also
  * what _mach_fork_child() calls, and adding a MIG round-trip to the
@@ -172,7 +147,7 @@ extern int task_get_special_port(__iokit_mach_port_t task, int which_port,
  * (Libc/sys/crt_externs.c:94) points libc's environ at the process's
  * real environment. Same effect here via libsystem_c's exported
  * _NSGetEnviron() (== &its environ). It cannot be a constructor inside
- * libsystem_c.dylib: see the pthread_main_thread_bootstrap note above --
+ * libsystem_c.dylib: see the main-thread setup note above --
  * dyld never runs /usr/lib/system/lib* initializers
  * (DyldAPIs.cpp:3316, runAllInitializersForMain). Done first, so
  * everything later in this initializer and every other image's
@@ -199,7 +174,49 @@ extern void __libc_program_vars_init(const struct ProgramVars *vars);
  * here, not in libsystem_pthread.dylib: dyld marks every
  * /usr/lib/system/lib* dylib initialized without running its initializers
  * (third_party/dyld/dyld/DyldAPIs.cpp:3325-3333). */
-extern int pthread_main_thread_init_stack(const char *apple[]);
+/* DAR-416 step 1b: Apple's libSystem_initializer sequence
+ * (third_party/Libsystem/init.c:170-221). __libkernel_init() stores the
+ * function table libsystem_kernel's _libc_funcptr.c thunks call through
+ * (malloc, _pthread_exit_if_canceled, ...), then runs mach_init(). Then
+ * __pthread_init() adopts the main thread that dyld's entry trampoline laid
+ * out (dyld_tsd_entry_trampoline.s), reads the main stack from apple[], and
+ * registers with the kernel (bsdthread_register). This replaces this
+ * port's own mach_init() + pthread_main_thread_bootstrap() +
+ * pthread_main_thread_init_stack() calls. The two table types are copied
+ * field for field from xnu libsyscall/wrappers/_libkernel_init.h
+ * (struct _libkernel_functions, version 4) and libpthread
+ * private/pthread/private.h:34-39 (struct _libpthread_functions, version
+ * 2); this file is compiled without those headers, like the rest of it. */
+struct ProgramVars;
+struct libsystem_libkernel_functions {
+    unsigned long version;
+    void *(*dlsym)(void *, const char *);
+    void *(*malloc)(unsigned long);
+    void (*free)(void *);
+    void *(*realloc)(void *, unsigned long);
+    void (*_pthread_exit_if_canceled)(int);
+    void *reserved1, *reserved2, *reserved3, *reserved4, *reserved5;
+    void (*pthread_clear_qos_tsd)(unsigned int);
+    int (*pthread_current_stack_contains_np)(const void *, unsigned long);
+};
+struct libsystem_libpthread_functions {
+    unsigned long version;
+    void (*exit)(int);
+    void *(*malloc)(unsigned long);
+    void (*free)(void *);
+};
+extern void __libkernel_init(const struct libsystem_libkernel_functions *fns,
+    const char *envp[], const char *apple[], const struct ProgramVars *vars);
+extern void __pthread_init(const struct libsystem_libpthread_functions *fns,
+    const char *envp[], const char *apple[], const struct ProgramVars *vars);
+extern void *dlsym(void *, const char *);
+extern void *malloc(unsigned long);
+extern void free(void *);
+extern void *realloc(void *, unsigned long);
+extern void exit(int);
+extern void _pthread_exit_if_canceled(int);
+extern void _pthread_clear_qos_tsd(unsigned int);
+extern int pthread_current_stack_contains_np(const void *, unsigned long);
 
 __attribute__((constructor))
 static void libsystem_call_dyld_initializer(int argc, const char *argv[],
@@ -207,21 +224,36 @@ static void libsystem_call_dyld_initializer(int argc, const char *argv[],
                                             const char *apple[],
                                             const struct ProgramVars *vars) {
     (void)argc; (void)argv;
+    static const struct libsystem_libkernel_functions libkernel_funcs = {
+        .version = 4,
+        .dlsym = dlsym,
+        .malloc = malloc,
+        .free = free,
+        .realloc = realloc,
+        ._pthread_exit_if_canceled = _pthread_exit_if_canceled,
+        .pthread_clear_qos_tsd = _pthread_clear_qos_tsd,
+        .pthread_current_stack_contains_np = pthread_current_stack_contains_np,
+    };
+    static const struct libsystem_libpthread_functions libpthread_funcs = {
+        .version = 2,
+        .exit = exit,
+        .malloc = malloc,
+        .free = free,
+    };
+
     if (envp != 0)
         *_NSGetEnviron() = (char **)envp;
+    /* Apple's order (init.c:215-238): kernel (incl. mach_init), pthread,
+     * libc, then dyld. mach_init() must still precede _dyld_initializer(),
+     * which does VM/allocator work while registering its LibSystemHelpers
+     * vtable. */
+    __libkernel_init(&libkernel_funcs, envp, apple, vars);
+    __pthread_init(&libpthread_funcs, envp, apple, vars);
     __libc_program_vars_init(vars);
-    /* Order matters: mach_init() must run before _dyld_initializer(),
-     * not after -- _dyld_initializer() itself (real, unmodified dyld
-     * source) does real VM/allocator work while registering the
-     * LibSystemHelpers vtable, which can reach os_alloc_once/
-     * mach_vm_map before a call placed after it ever gets a turn. */
-    mach_init();
-    pthread_main_thread_bootstrap();
-    pthread_main_thread_init_stack(apple);
     _dyld_initializer();
 
     /* Last: needs mach_init()'s mach_task_self_/_task_reply_port AND
-     * pthread_main_thread_bootstrap()'s TSD base already installed,
+     * the main thread's TSD (dyld trampoline + __pthread_init) in place,
      * because this is a real MIG round-trip to the task port. */
     (void)task_get_special_port(task_self_trap(),
                                 __IOKIT_TASK_BOOTSTRAP_PORT,
