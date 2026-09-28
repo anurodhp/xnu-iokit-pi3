@@ -159,6 +159,16 @@ if [ ! -f "$OUT/system/libdyld.dylib" ]; then
     echo "error: $OUT/system/libdyld.dylib not found -- run build_libdyld.sh first" >&2
     exit 1
 fi
+# libdispatch.dylib reexport added 2026-09-28 (DAR-237): Apple's
+# libSystem.B reexports libdispatch, and its libSystem_initializer calls
+# libdispatch_init() (third_party/Libsystem/init.c:238,241), which is how
+# _objc_init() runs in every process. libsystem_dyld_initializer_compat.c
+# now makes that call, so this dylib has to link libdispatch.dylib.
+# libdispatch.dylib doesn't link this dylib back, so there is no cycle.
+if [ ! -f "$OUT/system/libdispatch.dylib" ]; then
+    echo "error: $OUT/system/libdispatch.dylib not found -- run build_libdispatch_dylib.sh first" >&2
+    exit 1
+fi
 # libunwind.dylib reexport added 2026-08-29 (docs/daemon-roadmap.md Phase
 # 6.8 continued, item 1 real root-cause): a real launchd-as-PID-1 boot
 # panicked with dyld's own real exit reason "Symbol not found:
@@ -323,6 +333,7 @@ rm -f "$OUT/system/libSystem.B.dylib"
     -Wl,-reexport_library,"$OUT/system/libremovefile.dylib" \
     -Wl,-reexport_library,"$OUT/system/libresolv.dylib" \
     -Wl,-reexport_library,"$OUT/system/libdyld.dylib" \
+    -Wl,-reexport_library,"$OUT/system/libdispatch.dylib" \
     "$RTLIB"
     # ALL -Wl,-alias entries REMOVED 2026-08-28 (docs/backlog.md item
     # d10): real, systemic gap, first found via _mmap specifically --

@@ -841,6 +841,34 @@ rm -f "$OUT/system/libdispatch.dylib"
 # comment) -- libsystem_kernel.dylib is already a linked sibling just
 # below, so this dylib's own real reference to kqueue() now resolves
 # there instead of carrying a second, independently-compiled copy.
+# DAR-237 (2026-09-28): with USE_OBJC (object.m/data.m), libdispatch
+# imports the Objective-C runtime and __Unwind_Resume. Apple links it
+# `-Wl,-upward-lobjc` and `-lunwind` (libdispatch.xcconfig at
+# rel/libdispatch-1173:163-165; the 1271 snapshot's xcconfig is stripped).
+# The upward link is needed because libobjc.A.dylib sits above this dylib
+# (here it links libsystem_notify.dylib, which links libdispatch.dylib),
+# so libobjc cannot be built first. libobjc_for_libdispatch.tbd is a
+# link-time stub carrying libobjc's install name and exactly the symbols
+# object.m/data.m import. The load command and binds match linking the
+# real dylib upward. When libobjc.A.dylib exists, the check after the link
+# confirms it really exports each symbol, so the stub cannot drift.
+if [ ! -f "$OUT/system/libunwind.dylib" ]; then
+    echo "error: $OUT/system/libunwind.dylib not found -- run build_libunwind_dylib.sh first" >&2
+    exit 1
+fi
+# The order file matters as much as the link itself. With USE_OBJC a
+# dispatch object's isa is its ObjC class, and libdispatch reads its
+# vtable (do_type, do_dispose, ...) from the bytes right after the class
+# (object_internal.h:133-142: "ObjC classes and dispatch vtables are
+# co-located via linker order and alias files"). Apple links with
+# -Wl,-order_file,xcodeconfig/libdispatch.order
+# (libdispatch.xcconfig at rel/libdispatch-1173:170), which puts each
+# __OS_dispatch_X_vtable directly after _OBJC_CLASS_$_OS_dispatch_X in
+# __DATA,__objc_data. Without it, dispatch_sync() on a serial queue hit
+# DISPATCH_CLIENT_CRASH ("Queue type doesn't support dispatch_sync")
+# because it read a neighbouring class's bytes as do_type. The check
+# after the link verifies that every vtable sits right after its class.
+DISPATCH_SRC="../../third_party/libdispatch"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \
     -install_name /usr/lib/system/libdispatch.dylib \
     -Wl,-not_for_dyld_shared_cache \
@@ -848,6 +876,7 @@ rm -f "$OUT/system/libdispatch.dylib"
     -Wl,-fixup_chains \
     "${UNDEF_FLAGS[@]}" \
     -Wl,-alias,__dispatch_queue_attrs,__dispatch_queue_attr_concurrent \
+    -Wl,-order_file,"$DISPATCH_SRC/xcodeconfig/libdispatch.order" \
     -o "$OUT/system/libdispatch.dylib" \
     "$OUT"/dispatch_obj/*.o "$OUT"/dispatch_obj/event/*.o \
     "$OUT"/dispatch_dylib_extract/*.o \
@@ -856,6 +885,8 @@ rm -f "$OUT/system/libdispatch.dylib"
     -Wl,-reexport_library,"$OUT/system/libsystem_blocks.dylib" \
     -Wl,-reexport_library,"$OUT/system/libsystem_c.dylib" \
     -Wl,-reexport_library,"$OUT/system/libsystem_kernel.dylib" \
+    "$OUT/system/libunwind.dylib" \
+    -Wl,-upward_library,libobjc_for_libdispatch.tbd \
     2>"$OUT/system/libdispatch_dylib_link.err" \
     || { echo "note: dylib link reported diagnostics (expected -- undefined symbols are normal in a dylib), see $OUT/system/libdispatch_dylib_link.err" >&2; }
 
@@ -866,6 +897,38 @@ if [ ! -f "$OUT/system/libdispatch.dylib" ]; then
 fi
 
 echo "wrote $OUT/system/libdispatch.dylib"
+if [ -f "$OUT/libobjc.A.dylib" ]; then
+    for sym in $(sed -n '/symbols:/,/]/p' libobjc_for_libdispatch.tbd | tr -d '[],' | sed 's/symbols://' | tr ' ' '\n' | grep .) \
+               '_OBJC_CLASS_$_NSObject' '_OBJC_METACLASS_$_NSObject'; do
+        nm -gUj "$OUT/libobjc.A.dylib" | grep -qxF "$sym" || {
+            echo "error: libobjc.A.dylib no longer exports $sym (libobjc_for_libdispatch.tbd is stale)" >&2
+            exit 1
+        }
+    done
+fi
+nm "$OUT/system/libdispatch.dylib" | python3 -c '
+import sys
+cls, vt = {}, {}
+for line in sys.stdin:
+    f = line.split()
+    if len(f) != 3:
+        continue
+    addr, name = int(f[0], 16), f[2]
+    if name.startswith("_OBJC_CLASS_$_OS_"):
+        cls[name[len("_OBJC_CLASS_$_"):]] = addr
+    elif name.startswith("__OS_") and name.endswith("_vtable"):
+        vt[name[2:-len("_vtable")]] = addr
+bad = [n for n in vt if cls.get(n, -1) + 40 != vt[n]]
+for n in bad:
+    sys.stderr.write("error: %s_vtable is not right after its class\n" % n)
+sys.exit(1 if bad or not vt else 0)' || {
+    echo "error: libdispatch.dylib's ObjC class/vtable co-location is broken (libdispatch.order not applied?)" >&2
+    exit 1
+}
+otool -l "$OUT/system/libdispatch.dylib" | grep -A2 LC_LOAD_UPWARD_DYLIB | grep -q /usr/lib/libobjc.A.dylib || {
+    echo "error: libdispatch.dylib has no upward load of /usr/lib/libobjc.A.dylib" >&2
+    exit 1
+}
 otool -hv "$OUT/system/libdispatch.dylib" | grep -q " DYLIB " || {
     echo "error: filetype is not DYLIB" >&2
     exit 1

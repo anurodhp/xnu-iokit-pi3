@@ -218,6 +218,23 @@ extern void _pthread_exit_if_canceled(int);
 extern void _pthread_clear_qos_tsd(unsigned int);
 extern int pthread_current_stack_contains_np(const void *, unsigned long);
 
+/* DAR-237 (2026-09-28): libdispatch_init(), as Apple's
+ * libSystem_initializer calls it right after _dyld_initializer()
+ * (third_party/Libsystem/init.c:238,241). libdispatch_init() runs
+ * _os_object_init() (third_party/libdispatch/src/queue.c:8123), which
+ * with USE_OBJC calls _objc_init() (src/object.m:72-75), objc4's only
+ * caller. That call has to happen here, while dyld still has its
+ * RuntimeState writable: _objc_init() -> _dyld_objc_notify_register()
+ * stores into it (third_party/dyld/dyld/DyldRuntimeState.cpp:1520-1522),
+ * and dyld makes it read-only once initializers are done
+ * (dyld/dyldMain.cpp:866-867). Called from main() instead, it is a SIGBUS
+ * inside dyld (DAR-236). Before this, libdispatch_init() only ran lazily,
+ * from libdispatch's own first continuation allocation (DAR-153), because
+ * nothing here called it. libdispatch.dylib's own initializers never run
+ * here: dyld treats /usr/lib/system/lib* as already initialized
+ * (DyldAPIs.cpp:3325-3333). */
+extern void libdispatch_init(void);
+
 __attribute__((constructor))
 static void libsystem_call_dyld_initializer(int argc, const char *argv[],
                                             const char *envp[],
@@ -243,14 +260,15 @@ static void libsystem_call_dyld_initializer(int argc, const char *argv[],
 
     if (envp != 0)
         *_NSGetEnviron() = (char **)envp;
-    /* Apple's order (init.c:215-238): kernel (incl. mach_init), pthread,
-     * libc, then dyld. mach_init() must still precede _dyld_initializer(),
+    /* Apple's order (init.c:215-241): kernel (incl. mach_init), pthread,
+     * libc, then dyld, then libdispatch. mach_init() must still precede _dyld_initializer(),
      * which does VM/allocator work while registering its LibSystemHelpers
      * vtable. */
     __libkernel_init(&libkernel_funcs, envp, apple, vars);
     __pthread_init(&libpthread_funcs, envp, apple, vars);
     __libc_program_vars_init(vars);
     _dyld_initializer();
+    libdispatch_init();
 
     /* Last: needs mach_init()'s mach_task_self_/_task_reply_port AND
      * the main thread's TSD (dyld trampoline + __pthread_init) in place,

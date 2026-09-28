@@ -166,11 +166,10 @@
 #   fallback in objc-cache.mm's _collecting_in_critical() (thread-
 #   suspend-and-inspect via thread_get_state(), used on every real
 #   platform/config where restartable ranges aren't registered) -- not
-#   a fabricated behavior. thread_get_state() itself has no real MIG
-#   client here either (same future-work class); its only real caller
-#   is a diagnostic PC-for-thread helper that already treats non-
-#   KERN_SUCCESS as an honest, defined "couldn't get PC" case, so an
-#   honest KERN_FAILURE stand-in (objc4_misc_compat.c) is correct.
+#   a fabricated behavior. That fallback suspends each other thread and
+#   reads its PC with thread_get_state(), which libobjc binds from
+#   libsystem_kernel's real MIG client (DAR-236; objc4_misc_compat.c used
+#   to carry a KERN_FAILURE stand-in).
 # - getsectiondata()/getsegmentdata()/getsectdatafromheader_64(): real,
 #   public, stable <mach-o/getsect.h> API objc-file.mm/objc-class.mm/
 #   objc-block-trampolines.mm call to find each loaded image's
@@ -244,8 +243,8 @@
 # own ticket comments for full detail)
 # ============================================================
 # - A real MIG client for restartable.defs (see HAVE_TASK_RESTARTABLE_
-#   RANGES above) and for thread_act.defs's thread_get_state -- real,
-#   legitimate future work, not required for correct basic operation.
+#   RANGES above) -- real, legitimate future work, not required for
+#   correct basic operation.
 # - Wiring this dylib into configd.macho/IPMonitor.m/QoSMarking.m --
 #   that's DAR-170's job to resume separately once this ticket is done;
 #   deliberately not attempted this pass per explicit scope boundary.
@@ -394,7 +393,17 @@ for f in objc4_config_override.h objc4_config_override_no_restartable.h; do
     cp "$f" "$COMPAT/$f"
 done
 
-CXXFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+# No -ffreestanding/-fno-builtin here (DAR-237, 2026-09-28), unlike most of
+# this tree's libc builds. Apple builds objc4 hosted, and objc4 depends on
+# it: Settings[] (runtime/objc-runtime.mm:85-89) is initialized with
+# strlen("OBJC_...") and must be constant-initialized, because
+# environ_init() reads it first thing in _objc_init() (objc-os.mm:929),
+# before static_init() runs any C++ initializer. With -fno-builtin, clang
+# can't fold strlen, so Settings[] became a dynamic initializer that ran
+# too late. Every OBJC_* variable was ignored, and OBJC_PRINT_OPTIONS
+# crashed every process at objc-runtime.mm:465. Checked with
+# `nm objc-runtime.o | grep __GLOBAL__sub_I`, which is now empty.
+CXXFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -fno-stack-protector -O0 \
     -std=gnu++17 -fno-exceptions -fno-objc-arc -fobjc-exceptions \
     -DPRIVATE=1 -DNDEBUG \
     -DSUPPORT_PREOPT=0 \
@@ -461,6 +470,10 @@ else
 fi
 
 echo "objc4 (.mm/.m): $ok compiled, $fail gaps (see $OBJDIR/*.err for full detail)"
+if nm "$OBJDIR/objc-runtime.o" | grep -q "__GLOBAL__sub_I"; then
+    echo "error: objc-runtime.o has a dynamic initializer; Settings[] must be constant-initialized (see CXXFLAGS note)" >&2
+    exit 1
+fi
 if [ "$fail" -ne 0 ]; then
     exit 1
 fi
@@ -524,6 +537,30 @@ rm -f "$OUT/libobjc.A.dylib"
     && echo "real link: 0 undefined symbols -- libobjc.A.dylib fully closed" \
     || { n=$(grep -c 'Undefined symbol' "$OUT/objc4_link.err" || true); echo "real link found $n undefined symbol group(s):"; grep '^  "' "$OUT/objc4_link.err" | sed 's/,.*//' | sort -u; tail -80 "$OUT/objc4_link.err" >&2; exit 1; }
 
+# markgc (DAR-237, 2026-09-28): Apple's own post-link step for this
+# target, "Run Script (markgc)" (objc.xcodeproj/project.pbxproj:754-768),
+# builds third_party/objc4/markgc.cpp for the host and runs it on the
+# dylib. It renames __TEXT,__init_offsets to __objc_init_offs (and
+# __mod_init_func/__mod_term_func likewise) and clears the section type
+# (markgc.cpp:385-409), so dyld no longer runs libobjc's C++ static
+# initializers. _objc_init() runs them itself through static_init()
+# (runtime/objc-os.mm:652-669), before environ_init() reads Settings[] and
+# before map_images. _objc_init() runs inside libSystem's initializer,
+# before dyld would reach libobjc's own. Without this, every OBJC_*
+# environment option was silently ignored (Settings[] still zero), and
+# OBJC_PRINT_OPTIONS crashed every process (objc-runtime.mm:465).
+MARKGC="$OUT/objc4_markgc"
+xcrun -sdk macosx clang++ -Wall -std=c++11 ../../third_party/objc4/markgc.cpp -o "$MARKGC"
+"$MARKGC" "$OUT/libobjc.A.dylib"
+if otool -l "$OUT/libobjc.A.dylib" | grep -qE "sectname __(init_offsets|mod_init_func)$"; then
+    echo "error: markgc left an __init_offsets/__mod_init_func section in libobjc.A.dylib" >&2
+    exit 1
+fi
+otool -l "$OUT/libobjc.A.dylib" | grep -q "sectname __objc_init_offs" || {
+    echo "error: libobjc.A.dylib has no __objc_init_offs section after markgc" >&2
+    exit 1
+}
+
 ./bind_target_audit.sh "$OUT/libobjc.A.dylib" || {
     echo "error: libobjc.A.dylib has an unresolvable two-level bind -- it would abort at dyld load" >&2
     exit 1
@@ -562,6 +599,17 @@ for sym in __objc_blockTrampolineImpl __objc_blockTrampolineStart __objc_blockTr
     }
 done
 echo "wrote $OUT/libobjc-trampolines.dylib"
+
+# libdispatch.dylib is linked (upward) against libobjc_for_libdispatch.tbd
+# before this dylib exists (DAR-237). Check that the real libobjc exports
+# everything that stub promises.
+for sym in $(sed -n '/symbols:/,/]/p' libobjc_for_libdispatch.tbd | tr -d '[],' | sed 's/symbols://' | tr ' ' '\n' | grep .) \
+           '_OBJC_CLASS_$_NSObject' '_OBJC_METACLASS_$_NSObject'; do
+    nm -gUj "$OUT/libobjc.A.dylib" | grep -qxF "$sym" || {
+        echo "error: libobjc.A.dylib does not export $sym, which libobjc_for_libdispatch.tbd promises libdispatch.dylib" >&2
+        exit 1
+    }
+done
 
 # ------------------------------------------------------------------
 # Real, minimal, standalone Objective-C smoketest.

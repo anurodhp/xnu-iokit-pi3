@@ -24,12 +24,10 @@
 # Real, honestly-scoped exclusion: libunwind_dyld_shim.o needs
 # __mh_execute_header, never synthesized for MH_DYLIB output (same real
 # reason build_dyld_link.sh/build_libdyld.sh/build_libcxx_dylib.sh
-# already exclude it) -- this dylib provides its own real
-# _dyld_find_unwind_sections/_dyld_register_func_for_remove_image/dladdr
-# stubs instead (same real pattern build_libcxx_dylib.sh's own
-# libcxx_dylib_compat.c already established, copied rather than
-# depending on libc++.dylib for them, which would be circular --
-# libc++.dylib depends on libunwind.dylib, not the other way around).
+# already exclude it). Its three imports,
+# _dyld_find_unwind_sections/_dyld_register_func_for_remove_image/dladdr,
+# bind to libdyld.dylib through libdyld_for_libunwind.tbd (DAR-236; see
+# the note after the link). They used to be always-"not found" stubs.
 set -e
 cd "$(dirname "$0")"
 

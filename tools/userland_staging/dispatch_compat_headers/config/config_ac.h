@@ -12,9 +12,11 @@
  * build_libdispatch_real.sh's own header comment for the verification
  * done for each):
  *
- * - HAVE_OBJC 0: this project compiles libdispatch as plain C (no ObjC
- *   runtime exists on this target at all -- same OS_OBJECT_USE_OBJC=0
- *   convention already used throughout Phase 6.8's libxpc work).
+ * - HAVE_OBJC 1 (DAR-237, 2026-09-28; was 0 before objc4 existed here):
+ *   USE_OBJC, as Apple ships libdispatch. object.m/data.m are built and
+ *   _os_object_init() calls _objc_init() (src/object.m:72-75), which is
+ *   objc4's only real caller. internal.h:80-96 then gives the .m files
+ *   OS_OBJECT_USE_OBJC=1 and the C files 0, as on Apple.
  * - HAVE_PTHREAD_WORKQUEUES 0 / DISPATCH_USE_INTERNAL_WORKQUEUE 1: real
  *   Darwin kernel-backed pthread workqueues (`_pthread_workqueue_init`,
  *   `pthread_workqueue_setdispatch_np`, the `workq_kernreturn` syscall's
@@ -66,7 +68,7 @@
 #define HAVE_MACH 1
 #define HAVE_MACH_ABSOLUTE_TIME 1
 #define HAVE_MACH_APPROXIMATE_TIME 1
-#define HAVE_OBJC 0
+#define HAVE_OBJC 1
 
 #define HAVE_PTHREAD_WORKQUEUES 0
 #define DISPATCH_USE_INTERNAL_WORKQUEUE 1

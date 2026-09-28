@@ -228,7 +228,10 @@ mkdir -p "$OUT/dispatch_compat_system/System/machine"
 printf '#include <arm/cpu_capabilities.h>\n' > "$OUT/dispatch_compat_system/System/machine/cpu_capabilities.h"
 
 CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 -DOS_OBJECT_USE_OBJC=0 \
+    -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+    `# DAR-237: no -DOS_OBJECT_USE_OBJC=0 any more. HAVE_OBJC=1` \
+    `# (config_ac.h) and internal.h:80-96 set it per file, 1 for .m,` \
+    `# 0 for C, as Apple builds it.` \
     -DOS_VOUCHER_ACTIVITY_SPI=0 -DOS_FIREHOSE_SPI=0 \
     `# libdispatch_init() real-caller investigation, 2026-09-01 (DAR-153,` \
     `# syslogd runtime SIGTRAP investigation) -- real root cause found` \
@@ -331,16 +334,38 @@ done
 rm -f "$OUT/dispatch_obj/os_semaphore.o"
 echo "compiled: 20/20 core+data+event+lock+yield dispatch files (zero errors)"
 
-# Real gap, same "always-run init reference, not the whole real file"
-# class as os_semaphore.o above, found immediately after fixing it:
-# queue.c's real _libdispatch_init() unconditionally references
-# _os_workgroup_tsd_cleanup (a pthread TSD destructor) -- see
-# dispatch_workgroup_tsd_compat.c's own header comment for the full real
-# finding (real function reproduced exactly, not the whole 1076-line
-# workgroup.c that defines it, which pulls in real <mach/work_interval.h>
-# dependencies this project doesn't otherwise need).
-"$CLANG" "${CFLAGS[@]}" dispatch_workgroup_tsd_compat.c -o "$OUT/dispatch_obj/workgroup_tsd_compat.o"
-echo "compiled: real dispatch_workgroup_tsd_compat.c (zero errors)"
+# queue.c's _libdispatch_init() references _os_workgroup_tsd_cleanup (a
+# TSD destructor), and with USE_OBJC object.m's workgroup classes need
+# workgroup.c's dispose/debug functions. dispatch_workgroup_dispose_compat.c
+# (DAR-238) carries those functions verbatim from workgroup.c. It
+# replaces dispatch_workgroup_tsd_compat.c, which held only the TSD
+# destructor.
+rm -f "$OUT/dispatch_obj/workgroup_tsd_compat.o"
+"$CLANG" "${CFLAGS[@]}" dispatch_workgroup_dispose_compat.c -o "$OUT/dispatch_obj/workgroup_dispose_compat.o"
+echo "compiled: dispatch_workgroup_dispose_compat.c (DAR-238)"
+
+# DAR-237 (2026-09-28): object.m and data.m, the USE_OBJC halves of the
+# object model. object.m's _os_object_init() is objc4's only real caller
+# of _objc_init() (src/object.m:72-75; objc-os.mm:922-945). Apple
+# compiles them as Objective-C without ARC (object.m:24-26 #errors under
+# ARC; libdispatch.xcconfig in rel/libdispatch-1173:54 sets
+# CLANG_LINK_OBJC_RUNTIME = NO, and the 1271 snapshot's xcconfig is
+# stripped). The objc/ headers come straight from third_party/objc4
+# through a local symlink farm, the same flattening build_objc4.sh does,
+# so this does not depend on libobjc.A.dylib having been built (which
+# needs libsystem_notify.dylib, which needs this).
+OBJC4_RT="$(cd ../../third_party/objc4/runtime && pwd)"
+rm -rf "$OUT/dispatch_objc_headers"
+mkdir -p "$OUT/dispatch_objc_headers/objc"
+for h in "$OBJC4_RT"/*.h; do
+    ln -sf "$h" "$OUT/dispatch_objc_headers/objc/$(basename "$h")"
+done
+for f in object data; do
+    "$CLANG" "${CFLAGS[@]}" -x objective-c -fno-objc-arc -fobjc-exceptions \
+        -I "$OUT/dispatch_objc_headers" \
+        "$DISPATCH/src/$f.m" -o "$OUT/dispatch_obj/${f}_objc.o"
+done
+echo "compiled: object.m, data.m (Objective-C, no ARC)"
 
 # real C++11 file (Blocks-runtime integration only, no ObjC -- see this
 # script's own HONEST SCOPE STATEMENT); needed the same explicit

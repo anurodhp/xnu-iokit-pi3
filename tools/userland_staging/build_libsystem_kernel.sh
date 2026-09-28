@@ -110,10 +110,12 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
 # defined (plus _kernelrpc_vm_purgable_control), and the files'
 # public routines (mach_vm_region, vm_region_64, mach_make_memory_entry_64,
 # ...) already have other owners in this tree whose migration is separate
-# work.
+# work. -novouchers as Apple's Libsyscall builds all its MIG code
+# (libsyscall/Libsyscall.xcconfig:36, OTHER_MIGFLAGS), so these VM
+# primitives never call back into libdispatch's voucher_mach_msg_set().
 mkdir -p "$OUT/libsystem_kernel/vm_mig"
 for d in mach_vm vm_map; do
-    "$(which mig)" -arch arm64 -I"$XNU/osfmk" \
+    "$(which mig)" -novouchers -arch arm64 -I"$XNU/osfmk" \
         -header "$OUT/libsystem_kernel/vm_mig/${d}.h" \
         -user "$OUT/libsystem_kernel/vm_mig/${d}User.c" \
         -server /dev/null -sheader /dev/null \
@@ -937,6 +939,22 @@ for pair in host:_host_create_mach_voucher mach_msg:_mach_voucher_deallocate mac
     "$LD_R" -r -arch arm64 -exported_symbol "$sym" "$OUT/libsystem_kernel/lkall_$f.o" \
         -o "$OUT/libsystem_kernel/lk416_narrow$sym.o"
 done
+# DAR-238 (2026-09-28): work_interval_create/destroy/join/notify/...,
+# Apple's libsyscall/wrappers/work_interval.c, over the generated
+# ___work_interval_ctl stub (#499, NO_SYSCALL_STUB,
+# bsd/kern/syscalls.master:801). libsystem_kernel is their Apple home
+# (SDK usr/lib/system/libsystem_kernel.tbd). libdispatch's
+# _os_workgroup_dispose() calls work_interval_destroy()
+# (libdispatch/src/workgroup.c:105), which it needs once object.m is built
+# (DAR-237). No dylib exported any of these before.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+    -idirafter "$XNU/bsd" -idirafter "$XNU/osfmk" -idirafter "$XNU/libsyscall/mach" -idirafter "$XNU/libsyscall" \
+    "$XNU/libsyscall/wrappers/work_interval.c" -o "$OUT/libsystem_kernel/lk416_work_interval.o"
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
+    -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
+    -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
+    "$SYSGEN/___work_interval_ctl.s" -o "$OUT/libsystem_kernel/lk416___work_interval_ctl.o"
 LIBKERNEL_OBJS=$(ls "$OUT"/libsystem_kernel/lk416*.o)
 
 # __pipe.s (above) only exports the private-indirection name `___pipe`

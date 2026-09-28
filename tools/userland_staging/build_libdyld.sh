@@ -421,6 +421,16 @@ rm -f "$OUT/system/libdyld.dylib"
     # includes, no alias needed.
 
 echo "wrote $OUT/system/libdyld.dylib"
+# libunwind.dylib links against libdyld_for_libunwind.tbd, a link-time
+# stub, because it has to be built before this dylib (DAR-236). Check that
+# the real libdyld still exports what the stub promises; otherwise
+# libunwind would link clean and abort at load.
+for sym in __dyld_find_unwind_sections __dyld_register_func_for_remove_image _dladdr; do
+    nm -gUj "$OUT/system/libdyld.dylib" | grep -qx "$sym" || {
+        echo "error: libdyld.dylib no longer exports $sym, which libdyld_for_libunwind.tbd promises libunwind.dylib" >&2
+        exit 1
+    }
+done
 otool -hv "$OUT/system/libdyld.dylib" | grep -q " DYLIB " || {
     echo "error: filetype is not DYLIB" >&2
     exit 1
