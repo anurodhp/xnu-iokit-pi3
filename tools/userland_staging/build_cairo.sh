@@ -10,9 +10,12 @@
 # nix/pkgs/gtk/cairo.nix / cairoArm64Build, runs the same meson.build),
 # configured with only what the ticket asks for: the image and xlib
 # (+Xrender) surfaces, the FreeType and fontconfig font backends and the
-# PNG functions. Off: xcb, zlib (script/PS/PDF), quartz, glib/gobject,
-# GL, tee, lzo, spectre, symbol-lookup, tests. The SVG surface comes along
-# with PNG -- meson.build couples them (see cairo-features.h).
+# PNG functions. Off: xcb, quartz, glib/gobject, GL, tee, lzo, spectre,
+# symbol-lookup, tests. The SVG surface comes along with PNG -- meson.build
+# couples them (see cairo-features.h). zlib is on since DAR-390:
+# gnustep-back's cairo backend compiles CairoPSSurface.m/CairoPDFSurface.m
+# unconditionally (Source/cairo/GNUmakefile), and meson.build:556-581 turns
+# the script, PS and PDF surfaces on together whenever zlib is found.
 #
 #   config.h / cairo-features.h -- fontstack_config/cairo/, every define
 #       citing its meson.build line
@@ -61,7 +64,7 @@ text = open(sys.argv[1]).read()
 base = re.search(r"^cairo_sources = \[(.*?)^\]", text, re.S | re.M).group(1)
 feat = re.search(r"^cairo_feature_sources = \{(.*?)^\}", text, re.S | re.M).group(1)
 out = re.findall(r"'([^']+\.c)'", base)
-for key in ('cairo-png', 'cairo-svg', 'cairo-ft', 'cairo-xlib'):
+for key in ('cairo-png', 'cairo-svg', 'cairo-ft', 'cairo-xlib', 'cairo-script', 'cairo-ps', 'cairo-pdf'):
     m = re.search(r"'%s': \[(.*?)\]" % re.escape(key), feat, re.S)
     if not m:
         sys.exit('no cairo_feature_sources entry for ' + key)
@@ -69,7 +72,7 @@ for key in ('cairo-png', 'cairo-svg', 'cairo-ft', 'cairo-xlib'):
 print('\n'.join(out))
 EOF
 )
-[ "$(echo "$SRCS" | wc -l)" -eq 132 ] || { echo "error: expected 132 cairo sources (meson's own count for this configuration), got $(echo "$SRCS" | wc -l)" >&2; exit 1; }
+[ "$(echo "$SRCS" | wc -l)" -eq 136 ] || { echo "error: expected 136 cairo sources (meson's own count for this configuration), got $(echo "$SRCS" | wc -l)" >&2; exit 1; }
 for f in $SRCS; do
     x11_compile "$OBJ" "$SRC/src/$f" -D_GNU_SOURCE -D_REENTRANT -DCAIRO_COMPILATION \
         -fvisibility=hidden -fno-strict-aliasing \
@@ -79,7 +82,8 @@ done
 x11_compile_report cairo
 
 mkdir -p "$X11_INC/cairo"
-for h in cairo.h cairo-version.h cairo-deprecated.h cairo-svg.h cairo-ft.h cairo-xlib.h cairo-xlib-xrender.h; do
+for h in cairo.h cairo-version.h cairo-deprecated.h cairo-svg.h cairo-ft.h cairo-xlib.h cairo-xlib-xrender.h \
+         cairo-script.h cairo-ps.h cairo-pdf.h; do
     cp "$SRC/src/$h" "$X11_INC/cairo/"
 done
 cp "$GEN/cairo-features.h" "$X11_INC/cairo/"
@@ -87,4 +91,4 @@ cp "$GEN/cairo-features.h" "$X11_INC/cairo/"
 fs_link_dylib libcairo.dylib "$X11_PREFIX/lib/libcairo.2.dylib" 2 2 "$OBJ" \
     "$OUT/system/libpixman-1.dylib" "$OUT/system/libfontconfig.dylib" "$OUT/system/libfreetype.dylib" \
     "$OUT/system/libpng16.dylib" "$OUT/system/libXrender.dylib" "$OUT/system/libXext.dylib" \
-    "$OUT/system/libX11.dylib" "$OUT/system/libsystem_m.dylib"
+    "$OUT/system/libX11.dylib" "$OUT/system/libz.dylib" "$OUT/system/libsystem_m.dylib"

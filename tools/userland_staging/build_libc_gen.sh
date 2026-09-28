@@ -163,6 +163,7 @@ $LIBC/gen/FreeBSD/utime.c
 $LIBC/stdlib/FreeBSD/getopt.c
 $LIBC/stdlib/FreeBSD/getopt_long.c
 $LIBC/net/FreeBSD/inet_network.c
+$LIBC/emulated/statvfs.c
 $LIBC/stdlib/FreeBSD/strtoll.c
 $LIBC/stdlib/FreeBSD/strtoul.c
 $LIBC/gen/FreeBSD/termios.c

@@ -797,6 +797,9 @@ LOCALTIME_FLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -fno-stack-chec
 # exception no longer applies -- so this is now the one real owner, same
 # as the rest of the family above.
 "$CLANG" $SIGLIST_CFLAGS "$LIBC/stdtime/FreeBSD/asctime.c" -o "$EXTRACT/asctime.o"
+# difftime (DAR-390, cairo's PDF/PS surfaces): Libc's
+# stdtime/FreeBSD/difftime.c, same family and flags as asctime above.
+"$CLANG" $SIGLIST_CFLAGS "$LIBC/stdtime/FreeBSD/difftime.c" -o "$EXTRACT/difftime.o"
 # usleep (DAR-419): Libc's gen/FreeBSD/usleep.c, a nanosleep() wrapper.
 # libsystem_c is its home on Apple. Before this, only libsystem_notify
 # (_usleep) and libSystemConfiguration (_usleep$UNIX2003) exported

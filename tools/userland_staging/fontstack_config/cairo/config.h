@@ -4,7 +4,9 @@
  * when its checks ran against this project's own Xcode 12 iPhoneOS 14.4
  * toolchain and its own libc_build/system dylibs (has_function links
  * against them), with the options build_cairo.sh documents (xlib + png +
- * freetype + fontconfig on; xcb, zlib, quartz, glib/gobject, tee, lzo,
+ * freetype + fontconfig on, zlib on since DAR-390 (PS/PDF/script surfaces;
+ * its CAIRO_HAS_INTERPRETER define, :583-585, is read only by util/);
+ * xcb, quartz, glib/gobject, tee, lzo,
  * spectre, symbol-lookup, tests off).
  *
  * check_funcs (:151-166) that came back NO, and what cairo does instead:
