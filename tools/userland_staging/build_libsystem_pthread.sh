@@ -16,9 +16,10 @@
 # libpthread_qos_compat.c, libsystem_pthread_atfork_compat.c,
 # libsystem_pthread_main_stack_compat.c,
 # libsystem_pthread_dylib_bootstrap_compat.c and pthread_cond_wait_public.c).
-# The one survivor is a no-op pthread_main_thread_bootstrap export, which
-# ~105 main wrappers still call (libsystem_pthread_legacy_compat.c,
-# DAR-426). The history comment below describes the old layer.
+# The last survivor, a no-op pthread_main_thread_bootstrap export
+# (libsystem_pthread_legacy_compat.c), is gone too (DAR-426): the main
+# wrappers no longer call it. The history comment below describes the old
+# layer.
 # Builds libc_build/system/libsystem_pthread.dylib: static-to-dylib
 # migration batch 2b (docs/daemon-roadmap.md's "Static-vs-dylib
 # architecture debt" section).
@@ -159,8 +160,6 @@ done
 # pthread_join, pthread_cond_wait and friends with cancellation points.
 $CLANG $CFLAGS "$PTHREAD/src/variants/pthread_cancelable_cancel.c" -o "$OBJ/pthread_cancelable_cancel.o"
 $CLANG $CFLAGS "$PTHREAD/src/pthread_asm.s" -o "$OBJ/pthread_asm.o"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    libsystem_pthread_legacy_compat.c -o "$OBJ/legacy_compat.o"
 
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libsystem_pthread.dylib"
