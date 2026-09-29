@@ -1814,6 +1814,43 @@ else
     echo "+ $MNT/etc/pam.d/su already exists -- leaving as-is"
 fi
 
+# --- sudo (DAR-340) ---------------------------------------------------
+# Real sudo-project/sudo v1.9.5p2 built by tools/userland_staging/
+# build_sudo.sh (UNVERIFIED on a booted target as of this entry -- first
+# drafted on a Linux host with no SDK). Like su, sudo refuses to run
+# unless it is setuid root (third_party/sudo/src/sudo.c:914, "%s must be
+# owned by uid %d and have the setuid bit set"), and it refuses a sudoers
+# file that fails sudo_secure_file() (plugins/sudoers/sudoers.c:1046;
+# the build passes -DSUDOERS_MODE=0440 -DSUDOERS_UID=0 -DSUDOERS_GID=0). Auth is plugins/sudoers/auth/passwd.c
+# (getpwnam + crypt against /etc/master.passwd) -- no PAM, so no
+# /etc/pam.d/sudo is written.
+if [ -f tools/userland_staging/sudo.macho ]; then
+    cp tools/userland_staging/sudo.macho "$MNT/usr/bin/sudo"
+    chown root:wheel "$MNT/usr/bin/sudo" 2>/dev/null || true
+    chmod 4755 "$MNT/usr/bin/sudo"
+    real_owner="$(stat -f '%u:%g' "$MNT/usr/bin/sudo")"
+    if [ "$real_owner" = "0:0" ]; then
+        echo "+ wrote $(wc -c < tools/userland_staging/sudo.macho) bytes to $MNT/usr/bin/sudo (mode 4755, root:wheel confirmed)"
+    else
+        echo "! wrote $(wc -c < tools/userland_staging/sudo.macho) bytes to $MNT/usr/bin/sudo, but chown to root:wheel did NOT take (owner is uid:gid $real_owner) -- sudo will refuse to run until this image's root account provisions it for real"
+    fi
+    if [ ! -f "$MNT/etc/sudoers" ]; then
+        cat > "$MNT/etc/sudoers" <<'SUDOERS_EOF'
+# Written by tools/init_binary/inject_into_sd_image.sh (DAR-340).
+# Edit with visudo-equivalent care: a syntax error locks everyone out.
+root	ALL=(ALL) ALL
+%wheel	ALL=(ALL) ALL
+SUDOERS_EOF
+        chown root:wheel "$MNT/etc/sudoers" 2>/dev/null || true
+        chmod 440 "$MNT/etc/sudoers"
+        echo "+ wrote $MNT/etc/sudoers (mode 440)"
+    else
+        echo "+ $MNT/etc/sudoers already exists -- leaving as-is"
+    fi
+else
+    echo "= tools/userland_staging/sudo.macho not built -- run build_sudo.sh first if wanted, skipping"
+fi
+
 # /var/empty: sshd's real privilege-separation chroot directory
 # (_PATH_PRIVSEP_CHROOT_DIR). sshd.c's own privsep_preauth() fatals with
 # "Missing privilege separation directory" unless it exists, is owned by
