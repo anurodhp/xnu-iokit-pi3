@@ -733,6 +733,11 @@ mkdir -p third_party
 #     gnustep/gap master 220860a9 (2026-09-08; gap has no release tags).
 #     Source of Terminal.app (system-apps/Terminal): one commit adding the
 #     Darwin pty include and link libraries. build_gnustep_terminal.sh.
+#     gnustep-gworkspace (DAR-392): our fork anurodhp/apps-gworkspace
+#     branch iokit-port, off gnustep/apps-gworkspace tag gworkspace-1_0_0
+#     (2025-02-12, 14ea9f49). One commit: typed IMP function pointers at
+#     five call sites for objc4. Source of GWorkspace.app, Recycler.app,
+#     FSNode/DBKit and the ddbd/fswatcher tools (build_gnustep_gworkspace.sh).
 #     libtiff 4.7.1 (DAR-390): gitlab.com/libtiff/libtiff tag v4.7.1,
 #     unmodified; gnustep-gui requires it. Apple publishes no libtiff.
 #   DejaVu fonts -- the upstream release tarball, not the git tag: the
@@ -861,6 +866,7 @@ gnustep-back|https://github.com/gnustep/libs-back.git|back-0_32_0|
 gnustep-examples|git@github.com:anurodhp/tests-examples.git|iokit-port||https://github.com/gnustep/tests-examples.git
 libtiff|https://gitlab.com/libtiff/libtiff.git|v4.7.1|
 gnustep-gap|git@github.com:anurodhp/gap.git|iokit-port||https://github.com/gnustep/gap.git
+gnustep-gworkspace|git@github.com:anurodhp/apps-gworkspace.git|iokit-port||https://github.com/gnustep/apps-gworkspace.git
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch upstream_url; do
