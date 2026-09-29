@@ -41,8 +41,13 @@
 # Usage:
 #   tools/userland_staging/bind_target_audit.sh [image ...]
 #
-# With no arguments, audits every .dylib under libc_build/system/ plus
-# every .macho in libc_build/ and tools/userland_staging/.
+# With no arguments, audits every .dylib under libc_build/system/, every
+# .macho in libc_build/ and tools/userland_staging/, and every target
+# (non-macOS-platform) Mach-O anywhere else under libc_build/ -- the staged
+# trees inject_into_sd_image.sh copies onto the image (x11/server/root,
+# gnustep/root, fontstack/...). Those were not swept before DAR-447, and a
+# relink sweep missed Xorg/Xvfb there: the real Pi then aborted Xorg at
+# dyld load ("Symbol not found: _atan2, Expected in libsystem_c.dylib").
 #
 # Exit status is 1 if any image has an unresolvable two-level bind.
 #
@@ -70,8 +75,9 @@ trap 'rm -rf "$WORK"' EXIT
 # genuinely differ here (libresolv.dylib vs /usr/lib/libresolv.9.dylib,
 # libc++.dylib vs /usr/lib/libc++.1.dylib, ...).
 : > "$WORK/index"
-for d in libc_build/system/*.dylib icu_build/target/lib/*.dylib; do
-    [ -f "$d" ] || continue
+for d in libc_build/system/*.dylib icu_build/target/lib/*.dylib \
+         libc_build/gnustep/root/usr/GNUstep/System/Library/Libraries/*.dylib; do
+    [ -f "$d" ] && [ ! -L "$d" ] || continue
     id=$(otool -D "$d" 2>/dev/null | tail -1)
     [ -z "$id" ] && continue
     printf '%s\t%s\n' "$id" "$d" >> "$WORK/index"
@@ -135,6 +141,17 @@ else
     for f in libc_build/system/*.dylib libc_build/*.macho *.macho; do
         [ -f "$f" ] && IMAGES+=("$f")
     done
+    # Staged trees: every other target Mach-O under libc_build (skipping
+    # the gnustep *-src configure trees,
+    # object dirs, symlinks, and host build tools, which are platform 1 =
+    # macOS in LC_BUILD_VERSION).
+    while IFS= read -r f; do
+        case "$f" in libc_build/system/*.dylib|libc_build/*.macho) continue ;; esac
+        file -b "$f" | grep -q '^Mach-O' || continue
+        otool -l "$f" 2>/dev/null | grep -q '^ *platform 1$' && continue
+        IMAGES+=("$f")
+    done < <(find libc_build -type f \( -perm -u+x -o -name '*.dylib' -o -name '*.so' \) \
+                 -not -path '*/obj/*' -not -path '*_obj/*' -not -path 'libc_build/gnustep/*-src/*' 2>/dev/null)
 fi
 
 for img in "${IMAGES[@]}"; do
