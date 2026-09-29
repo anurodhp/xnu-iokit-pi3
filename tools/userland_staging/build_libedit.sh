@@ -614,7 +614,7 @@ rm -f libedit_smoketest.macho
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
     -B"$NEWLD_BINDIR" -Wl,-fixup_chains \
     -o libedit_smoketest.macho \
-    ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
+    -DCRT_NO_PTHREAD_BOOTSTRAP ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/libedit_smoketest.o" \
     "$OUT/chk_fail.o" \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" \

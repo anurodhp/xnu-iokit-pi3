@@ -343,7 +343,7 @@ rm -f configd.macho
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -o configd.macho \
-    ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
+    -DCRT_NO_PTHREAD_BOOTSTRAP ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/libconfigd.a" \
     `# DAR-241/DAR-240 (2026-09-04): whole-archive link, relying on real` \
     `# ld64 archive-member selection -- load_IPMonitor/prime_IPMonitor/` \

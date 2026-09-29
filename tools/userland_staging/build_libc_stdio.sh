@@ -221,12 +221,14 @@ echo "apple_stdio: $ok compiled, $skip skipped (printf/scanf family - genuinely 
 "$CLANG" $CFLAGS libc_stdio_env_shims.c -o "$OUT/libc_stdio_env_shims.o"
 "$CLANG" $CFLAGS libc_stdio_syscalls.c -o "$OUT/libc_stdio_syscalls.o"
 "$CLANG" $CFLAGS libc_stdio_process_shims.c -o "$OUT/libc_stdio_process_shims.o"
+# DAR-129 static-link fallback for exit()'s weak __cxa_finalize reference.
+"$CLANG" $CFLAGS libc_stdio_finalize_fallback.c -o "$OUT/libc_stdio_finalize_fallback.o"
 
 rm -f "$OUT/libc_stdio.a"
 ar rcs "$OUT/libc_stdio.a" \
     "$OUT"/apple_stdio/*.o \
     "$OUT/libc_stdio_shims.o" "$OUT/libc_stdio_env_shims.o" "$OUT/libc_stdio_syscalls.o" \
-    "$OUT/libc_stdio_process_shims.o"
+    "$OUT/libc_stdio_process_shims.o" "$OUT/libc_stdio_finalize_fallback.o"
 echo "wrote $OUT/libc_stdio.a"
 
 # libc_locale.a's own libc_locale_stdio.o (build_libc_locale.sh's own

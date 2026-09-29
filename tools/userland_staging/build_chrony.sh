@@ -378,7 +378,7 @@ rm -f chronyd.macho
     -Wl,-u,__current_pid \
     -Wl,-unexported_symbol,__DefaultRuneXLocale \
     -o chronyd.macho \
-    ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
+    -DCRT_NO_PTHREAD_BOOTSTRAP ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/chrony_obj/*.o \
     "$OUT/liblaunchd_syscalls.a" \
     "$OUT/liblaunchd_mig.a" "$OUT/libmach_ipc.a" "$OUT/chk_fail.o" "$OUT/sys_getpid_current_pid_only.o" \

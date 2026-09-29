@@ -41,7 +41,7 @@ CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -O0 -Wno-nullability-com
 M="$OUT/pdgop_smoketest.macho"
 rm -f "$M"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -B"$NEWLD_BINDIR" -Wl,-fixup_chains \
-    -o "$M" "$T/Csu/start.s" "$T/Csu/crt.c" "$OUT/pdgop_smoketest.o" "$OUT/pdgop_PDGOP.o" \
+    -o "$M" -DCRT_NO_PTHREAD_BOOTSTRAP "$T/Csu/start.s" "$T/Csu/crt.c" "$OUT/pdgop_smoketest.o" "$OUT/pdgop_PDGOP.o" \
     "$S/libiokituser.dylib" "$S/libCoreFoundation.dylib" "$S/libsystem_kernel.dylib" \
     "$S/libsystem_c.dylib" "$S/libsystem_pthread.dylib" "$S/libsystem_malloc.dylib" \
     "$S/libsystem_platform.dylib" "$S/libdyld.dylib" "$S/libSystem.B.dylib"

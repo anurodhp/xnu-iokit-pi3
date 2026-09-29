@@ -278,6 +278,10 @@ else
     -Wno-nullability-completeness -include libc_build_prototypes.h \
     -D_LIBC_NO_FEATURE_VERIFICATION -D_FORTIFY_SOURCE=0 \
     libunwind_smoketest.c -o "$OUT/libunwind_smoketest.o"
+# ___gdtoa_locks is a COMMON symbol in libc_printf.a(glue.o), which ld64 never
+# pulls from an archive: extract it (same as build_ps.sh; never -force_load).
+mkdir -p "$OUT/printf_glue_extract"
+(cd "$OUT/printf_glue_extract" && ar x "../libc_printf.a" glue.o)
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o libunwind_smoketest.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
@@ -290,6 +294,8 @@ else
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
     -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
+    "$OUT/printf_glue_extract/glue.o" \
+    -Wl,-alias,'_mmap$UNIX2003',_mmap \
     -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
     -Wl,-alias,___kill,'_kill$UNIX2003' \
     -Wl,-alias,___kill,_kill \

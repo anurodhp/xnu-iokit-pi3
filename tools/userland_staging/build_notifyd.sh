@@ -592,7 +592,7 @@ rm -f notifyd.macho
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -o notifyd.macho \
-    ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
+    -DCRT_NO_PTHREAD_BOOTSTRAP ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     -Wl,-force_load,"$OUT/libnotifyd.a" \
     "$OUT/notify_mig/notify_mig_special_reply_port_trap.o" \
     "$OUT/liblaunchd_mig.a" \
