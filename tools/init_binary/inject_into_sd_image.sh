@@ -1783,18 +1783,60 @@ done
 # on` passed) -- if it silently no-ops here, su would need a real
 # sudo-elevated provisioning step instead, which this script does not
 # attempt to add on its own.
-if [ -f tools/userland_staging/su.macho ]; then
-    cp tools/userland_staging/su.macho "$MNT/usr/bin/su"
-    chown root:wheel "$MNT/usr/bin/su" 2>/dev/null || true
-    chmod 4755 "$MNT/usr/bin/su"
-    real_owner="$(stat -f '%u:%g' "$MNT/usr/bin/su")"
-    if [ "$real_owner" = "0:0" ]; then
-        echo "+ wrote $(wc -c < tools/userland_staging/su.macho) bytes to $MNT/usr/bin/su (mode 4755, root:wheel confirmed)"
+# DAR-340/H1: a setuid bit is only ever installed when the file really ends
+# up root-owned (0:0). This script runs as the host user (uid 502) against an
+# hdiutil attach without `-owners on`; chown(2) silently no-ops there and
+# `sudo` on the host needs a password, so 0:0 is normally NOT reachable here.
+# Shipping "4755, owned by uid 502" is worse than useless (a setuid-as-502
+# binary that su/sudo then refuse to trust), so the fallback is mode 0755
+# (NOT setuid) plus a documented first-boot provisioning step from a root
+# shell: /usr/sbin/provision-setuid (tools/userland_staging/provision-setuid.sh)
+# does chown root:wheel + chmod 4755 (su, sudo) / 0440 (sudoers) and prints
+# `ls -ln`. Set REQUIRE_SETUID_ROOT=1 to make "did not become 0:0" a hard
+# build failure instead.
+install_setuid_root() { # <src> <dest> <label>
+    local src="$1" dest="$2" label="$3" owner
+    cp "$src" "$dest"
+    chown root:wheel "$dest" 2>/dev/null || true
+    owner="$(stat -f '%u:%g' "$dest")"
+    if [ "$owner" = "0:0" ]; then
+        chmod 4755 "$dest"
+        echo "+ wrote $(wc -c < "$src") bytes to $dest (mode 4755, root:wheel confirmed)"
     else
-        echo "! wrote $(wc -c < tools/userland_staging/su.macho) bytes to $MNT/usr/bin/su, but chown to root:wheel did NOT take (owner is uid:gid $real_owner) -- su will refuse to run (\"not running setuid\") until this image's root account provisions it for real, e.g. from a real root shell on the booted target"
+        chmod 0755 "$dest"
+        if [ "${REQUIRE_SETUID_ROOT:-0}" = "1" ]; then
+            echo "error: $label: chown root:wheel did not take (owner uid:gid $owner) and REQUIRE_SETUID_ROOT=1" >&2
+            exit 1
+        fi
+        echo "! $label installed NON-setuid (mode 0755, owner $owner): chown root:wheel did not take on this host mount. It will refuse to elevate until provisioned: run /usr/sbin/provision-setuid from a ROOT shell on the booted target (DAR-340 H1)"
     fi
+}
+
+if [ -f tools/userland_staging/su.macho ]; then
+    install_setuid_root tools/userland_staging/su.macho "$MNT/usr/bin/su" su
 else
     echo "= tools/userland_staging/su.macho not built -- run build_su.sh first if wanted, skipping"
+fi
+
+# First-boot provisioning helper for the setuid/root-owned files above.
+if [ -f tools/userland_staging/provision-setuid.sh ]; then
+    mkdir -p "$MNT/usr/sbin"
+    cp tools/userland_staging/provision-setuid.sh "$MNT/usr/sbin/provision-setuid"
+    chmod 755 "$MNT/usr/sbin/provision-setuid"
+    echo "+ wrote $MNT/usr/sbin/provision-setuid"
+fi
+
+if [ -f tools/userland_staging/dyld-inject-regression.sh ]; then
+    cp tools/userland_staging/dyld-inject-regression.sh "$MNT/usr/sbin/dyld-inject-regression"
+    chmod 755 "$MNT/usr/sbin/dyld-inject-regression"
+    echo "+ wrote $MNT/usr/sbin/dyld-inject-regression"
+fi
+
+# DAR-340/C1 regression probe (see docs/sudo-su-dyld-regression.md).
+if [ -f tools/userland_staging/libc_build/dyld_inject_probe.dylib ]; then
+    cp tools/userland_staging/libc_build/dyld_inject_probe.dylib "$MNT/usr/lib/dyld_inject_probe.dylib"
+    chmod 755 "$MNT/usr/lib/dyld_inject_probe.dylib"
+    echo "+ wrote $MNT/usr/lib/dyld_inject_probe.dylib"
 fi
 
 # su's own real openpam_configure.c defaults every uncovered PAM
@@ -1821,35 +1863,40 @@ else
 fi
 
 # --- sudo (DAR-340) ---------------------------------------------------
-# Real sudo-project/sudo v1.9.5p2 built by tools/userland_staging/
+# Real sudo-project/sudo v1.9.17p2 built by tools/userland_staging/
 # build_sudo.sh (UNVERIFIED on a booted target as of this entry -- first
 # drafted on a Linux host with no SDK). Like su, sudo refuses to run
-# unless it is setuid root (third_party/sudo/src/sudo.c:914, "%s must be
+# unless it is setuid root (third_party/sudo/src/sudo.c:994, "%s must be
 # owned by uid %d and have the setuid bit set"), and it refuses a sudoers
-# file that fails sudo_secure_file() (plugins/sudoers/sudoers.c:1046;
+# file that fails sudo_secure_file() (plugins/sudoers/sudoers.c:1297 sudo_secure_fd;
 # the build passes -DSUDOERS_MODE=0440 -DSUDOERS_UID=0 -DSUDOERS_GID=0). Auth is plugins/sudoers/auth/passwd.c
 # (getpwnam + crypt against /etc/master.passwd) -- no PAM, so no
 # /etc/pam.d/sudo is written.
 if [ -f tools/userland_staging/sudo.macho ]; then
-    cp tools/userland_staging/sudo.macho "$MNT/usr/bin/sudo"
-    chown root:wheel "$MNT/usr/bin/sudo" 2>/dev/null || true
-    chmod 4755 "$MNT/usr/bin/sudo"
-    real_owner="$(stat -f '%u:%g' "$MNT/usr/bin/sudo")"
-    if [ "$real_owner" = "0:0" ]; then
-        echo "+ wrote $(wc -c < tools/userland_staging/sudo.macho) bytes to $MNT/usr/bin/sudo (mode 4755, root:wheel confirmed)"
-    else
-        echo "! wrote $(wc -c < tools/userland_staging/sudo.macho) bytes to $MNT/usr/bin/sudo, but chown to root:wheel did NOT take (owner is uid:gid $real_owner) -- sudo will refuse to run until this image's root account provisions it for real"
-    fi
+    install_setuid_root tools/userland_staging/sudo.macho "$MNT/usr/bin/sudo" sudo
     if [ ! -f "$MNT/etc/sudoers" ]; then
         cat > "$MNT/etc/sudoers" <<'SUDOERS_EOF'
 # Written by tools/init_binary/inject_into_sd_image.sh (DAR-340).
 # Edit with visudo-equivalent care: a syntax error locks everyone out.
+# secure_path (DAR-340/M1): the invoking user's PATH is never trusted.
+Defaults	secure_path="/usr/bin:/bin:/usr/sbin:/sbin"
+# NOT SUPPORTED, do not add: `Defaults noexec` / NOEXEC: sudo_noexec.so is not
+# built in this port (build_sudo.sh), so the setting would be silently
+# ineffective -- it must not be relied on as a restriction (DAR-340/M2).
 root	ALL=(ALL) ALL
 %wheel	ALL=(ALL) ALL
 SUDOERS_EOF
         chown root:wheel "$MNT/etc/sudoers" 2>/dev/null || true
         chmod 440 "$MNT/etc/sudoers"
-        echo "+ wrote $MNT/etc/sudoers (mode 440)"
+        sudoers_owner="$(stat -f '%u:%g' "$MNT/etc/sudoers")"
+        if [ "$sudoers_owner" = "0:0" ]; then
+            echo "+ wrote $MNT/etc/sudoers (mode 440, root:wheel confirmed)"
+        elif [ "${REQUIRE_SETUID_ROOT:-0}" = "1" ]; then
+            echo "error: /etc/sudoers owner is $sudoers_owner, not 0:0, and REQUIRE_SETUID_ROOT=1" >&2
+            exit 1
+        else
+            echo "! wrote $MNT/etc/sudoers (mode 440) but owner is $sudoers_owner, not 0:0 -- sudo will refuse it (sudo_secure_file) until /usr/sbin/provision-setuid is run from a root shell"
+        fi
     else
         echo "+ $MNT/etc/sudoers already exists -- leaving as-is"
     fi

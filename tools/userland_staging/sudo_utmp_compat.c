@@ -10,10 +10,10 @@
  * iPhoneOS SDK does not ship.
  *
  * Why a no-op is behaviour-safe: both callers ignore the return value
- * (src/exec_pty.c:161 utmp_login, :128 and :885 utmp_logout), and the only
+ * (src/exec_pty.c:126 utmp_login, :87 utmp_logout (v1.9.17p2)), and the only
  * effect lost is the `who`-visible utmpx record for a sudo-allocated pty,
- * which plugins/sudoers/defaults.c:610 (def_set_utmp = true) would
- * otherwise request. Prototypes: src/sudo_exec.h:111-113.
+ * which plugins/sudoers/defaults.c:663 (def_set_utmp = true) would
+ * otherwise request. Prototypes: src/sudo_exec.h:220-222.
  *
  * Follow-up (not done here): link the real Libc utmpx pair the way
  * build_login.sh does and compile the real src/utmp.c instead.

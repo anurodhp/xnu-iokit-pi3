@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds sudo.macho: real, unmodified sudo-project/sudo v1.9.5p2
+# Builds sudo.macho: real, unmodified sudo-project/sudo v1.9.17p2
 # (third_party/sudo, pinned by setup_third_party.sh; DAR-340, DAR-329's
 # "user management commands" parent). Apple/FreeBSD have no source for
 # sudo at all (see setup_third_party.sh's SUDO block) so this is the
@@ -51,8 +51,11 @@ PTHREAD="../../third_party/libpthread"
 XNU="../../third_party/xnu-7195"
 SUDO="../../third_party/sudo"
 OUT="libc_build"
-OBJ="$OUT/sudo_obj"
-GEN="$OUT/sudo_gen"
+# SUDO_OBJ_DIR/SUDO_GEN_DIR/SUDO_COMPILE_ONLY: scratch-output, compile-only mode
+# (used to triage a version bump without touching libc_build/ while another
+# session owns it). Default behaviour is unchanged.
+OBJ="${SUDO_OBJ_DIR:-$OUT/sudo_obj}"
+GEN="${SUDO_GEN_DIR:-$OUT/sudo_gen}"
 
 XCODE12="/Applications/Xcode-12.app/Contents/Developer"
 CLANG="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
@@ -66,7 +69,7 @@ if [ ! -f "$SUDO/src/sudo.c" ]; then
     exit 1
 fi
 
-for dep in libplatform.a libmalloc.a libpthread.a libclosure.a libc_gen.a libc_stdio.a libc_printf.a \
+[ -n "$SUDO_COMPILE_ONLY" ] || for dep in libplatform.a libmalloc.a libpthread.a libclosure.a libc_gen.a libc_stdio.a libc_printf.a \
            libc_locale_for_stdio.a liblaunchd_syscalls.a libmach_ipc.a libc_regex.a; do
     if [ ! -f "$OUT/$dep" ]; then
         echo "error: $OUT/$dep not found -- run its build_*.sh first" >&2
@@ -74,7 +77,7 @@ for dep in libplatform.a libmalloc.a libpthread.a libclosure.a libc_gen.a libc_s
     fi
 done
 
-rm -rf "$OUT/sudo_obj" "$OUT/sudo_gen"
+rm -rf "$OBJ" "$GEN"
 mkdir -p "$OBJ" "$GEN"
 
 # ---- generated headers/sources (no configure run) ------------------------
@@ -99,6 +102,14 @@ fi
 # iPhoneOS one. Their inputs mksiglist.h/mksigname.h ship in the tag.
 MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 HOSTCC="$(xcrun -f clang 2>/dev/null || command -v clang)"
+# 1.9.17: mksiglist.h/mksigname.h are no longer shipped -- lib/util/Makefile.in:275-285
+# generates them by preprocessing the shipped sys_siglist.h/sys_signame.h and
+# dropping everything up to `int sudo_end_of_headers;` plus `#` lines.
+for t in siglist signame; do
+    "$HOSTCC" -isysroot "$MACSDK" -E -I "$GEN" -I "$SUDO" -I "$SUDO/include" -I "$SUDO/lib/util" \
+        "$SUDO/lib/util/sys_$t.h" > "$GEN/sys_$t.i"
+    sed -e '1,/^int sudo_end_of_headers;/d' -e '/^#/d' < "$GEN/sys_$t.i" > "$GEN/mk$t.h"
+done
 for t in mksiglist mksigname; do
     "$HOSTCC" -isysroot "$MACSDK" -I "$GEN" -I "$SUDO" -I "$SUDO/include" -I "$SUDO/lib/util" \
         "$SUDO/lib/util/$t.c" -o "$GEN/$t"
@@ -128,9 +139,9 @@ done
 # as a macro because HAVE_KILLPG is undefined; Libc/include/signal.h:92
 # declares it).
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    -Wno-nullability-completeness -Wno-everything -Werror=implicit-function-declaration \
+    -Wno-nullability-completeness -Wno-everything -Werror=implicit-function-declaration -Werror=int-conversion \
     -include libc_build_prototypes.h -include $OUT/compat_include/stdio_flockfile_compat.h \
-    -include sys/stat.h -include signal.h \
+    -include sys/stat.h -include signal.h -include string.h \
     -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
     -DVARIANT_STATIC -DVARIANT_CANCELABLE -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \
     -D__ct_rune_t=__darwin_ct_rune_t -D__va_list=__builtin_va_list \
@@ -154,40 +165,46 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
 # AIX-only aix.c, the openssl/gcrypt digest backends, the generator
 # programs (built above), event_poll.c (HAVE_POLL is left undefined, see
 # the .def), and regress/.
-UTIL_SRCS="arc4random arc4random_buf arc4random_uniform cfmakeraw closefrom digest dup3 event event_select \
- explicit_bzero fatal fchmodat fnmatch freezero fstatat getaddrinfo getcwd getdelim getentropy getgrouplist \
- gethostname getopt_long gettime getusershell gidlist glob inet_ntop inet_pton isblank json key_val lbuf \
- locking logfac logpri memrchr mkdir_parents mktemp nanosleep openat parseln pipe2 pread progname pw_dup \
- pwrite reallocarray roundup secure_path setgroups sha2 sig2str snprintf str2sig strlcat strlcpy strndup \
- strnlen strsignal strsplit strtobool strtoid strtomode strtonum sudo_conf sudo_debug sudo_dso term \
- ttyname_dev ttysize unlinkat utimens uuid vsyslog"
-# lib/eventlog/Makefile.in:85, lib/iolog/Makefile.in:89-90.
-EVENTLOG_SRCS="eventlog logwrap"
-IOLOG_SRCS="iolog_fileio iolog_json iolog_path iolog_util host_port hostcheck"
-# lib/logsrv/Makefile.in:76 (LIBLOGSRV_OBJS = protobuf-c.lo log_server.pb-c.lo):
-# the bundled protobuf-c runtime + generated message code that
-# plugins/sudoers/log_client.c (SUDOERS_LOG_CLIENT) links against.
-LOGSRV_SRCS="protobuf-c log_server.pb-c"
-# plugins/sudoers/Makefile.in:162-176 (LIBPARSESUDOERS_OBJS + SUDOERS_OBJS
+UTIL_SRCS="arc4random arc4random_buf arc4random_uniform basename cfmakeraw closefrom digest dup3 event event_select \
+ explicit_bzero fatal fchmodat fchownat fnmatch freezero fstatat getaddrinfo getdelim getentropy getgrouplist \
+ gethostname getopt_long gettime getusershell gidlist glob gmtime_r hexchar inet_ntop inet_pton isblank json \
+ key_val lbuf localtime_r locking logfac login_max logpri memrchr mkdir_parents mkdirat mktemp mmap_alloc \
+ multiarch nanosleep openat parseln pipe2 pread progname pw_dup pwrite rcstr reallocarray realpath regex \
+ roundup secure_path setgroups sha2 sig2str snprintf str2sig strlcat strlcpy strndup strnlen strsignal \
+ strsplit strtobool strtoid strtomode strtonum sudo_conf sudo_debug sudo_dso term timegm ttyname_dev \
+ ttysize unlinkat utimens uuid"
+# lib/eventlog/Makefile.in:90 (LIBEVENTLOG_OBJS), lib/iolog/Makefile.in:108-114
+# (LIBIOLOG_OBJS).
+EVENTLOG_SRCS="eventlog eventlog_conf eventlog_free logwrap parse_json"
+IOLOG_SRCS="host_port hostcheck iolog_clearerr iolog_close iolog_conf iolog_eof iolog_filter iolog_flush \
+ iolog_gets iolog_json iolog_legacy iolog_loginfo iolog_mkdirs iolog_mkdtemp iolog_mkpath iolog_nextid \
+ iolog_open iolog_openat iolog_path iolog_read iolog_seek iolog_swapids iolog_timing iolog_util iolog_write"
+# lib/logsrv/Makefile.in:80 (LIBLOGSRV_OBJS = log_server.pb-c.lo) and
+# lib/protobuf-c/Makefile.in:77 (protobuf-c.lo): the protobuf-c runtime moved
+# to its own lib/protobuf-c/ directory after 1.9.5p2.
+LOGSRV_SRCS="log_server.pb-c"
+# plugins/sudoers/Makefile.in:178-196 (LIBPARSESUDOERS_OBJS + SUDOERS_OBJS
 # without the @SUDOERS_OBJS@ optional backends). def_data.c is NOT in the
-# list: it is a generated fragment #included by defaults.c:76, not a
-# standalone object. log_client.c/audit.c
-# are in the object lists; both need SUDOERS_LOG_CLIENT (see the .def).
-# getspwuid.c (plugins/sudoers/, not auth/): configure.ac:4641 adds
-# getspwuid.lo alongside passwd.lo for the passwd backend; it defines
-# sudo_getepw/sudo_setspent/sudo_endspent (auth/passwd.c:53 calls sudo_getepw).
-SUDOERS_SRCS="alias audit base64 defaults digestname getspwuid exptilde filedigest gentime gmtoff gram \
- hexchar match match_addr match_command match_digest pwutil pwutil_impl rcstr redblack strlist \
- sudoers_debug timeout timestr toke toke_util boottime check editor env env_pattern file find_path \
- fmtsudoers gc goodpath group_plugin interfaces iolog iolog_path_escapes locale log_client logging \
- parse policy prompt set_perms starttime sudo_nss sudoers timestamp"
+# list: it is a generated fragment #included by defaults.c, not a
+# standalone object. log_client.c/audit.c need SUDOERS_LOG_CLIENT.
+# getspwuid.c (plugins/sudoers/, not auth/): configure.ac:4213 adds
+# getspwuid.lo alongside passwd.lo for the passwd backend.
+SUDOERS_SRCS="alias b64_decode canon_path defaults digestname exptilde filedigest gentime gram match \
+ match_addr match_command match_digest parser_warnx pwutil pwutil_impl redblack resolve_cmnd strlist \
+ sudoers_debug timeout timestr toke toke_util audit boottime check check_util display editor env \
+ sudoers_hooks env_pattern file find_path fmtsudoers gc goodpath group_plugin interfaces iolog \
+ iolog_path_escapes locale log_client logging lookup policy prompt serialize_list set_perms sethost \
+ starttime strlcpy_unesc strvec_join sudo_nss sudoers sudoers_cb sudoers_ctx_free timestamp unesc_str \
+ getspwuid"
 AUTH_SRCS="sudo_auth passwd"
-# src/Makefile.in:126-130 minus utmp.c (replaced by sudo_utmp_compat.c, see its
-# header) + preload.c (added by configure.ac:4239 when
-# --enable-static-sudoers).
-SRC_SRCS="conversation copy_file edit_open env_hooks exec exec_common exec_monitor exec_nopty exec_pty \
- get_pty hooks limits load_plugins net_ifs parse_args preserve_fds signal sudo sudo_edit \
- tcsetpgrp_nobg tgetpass ttyname preload"
+# src/Makefile.in:147-152 (OBJS) minus utmp.c (replaced by sudo_utmp_compat.c,
+# see its header) + preload.c (configure.ac:4088-4118, --enable-static-sudoers).
+# exec_intercept/exec_ptrace/exec_preload/suspend_parent are unconditional
+# members of OBJS even without intercept/ptrace support (their bodies are
+# gated by HAVE_* / SUDO_INTERCEPT config, left undefined here).
+SRC_SRCS="conversation copy_file edit_open env_hooks exec exec_common exec_intercept exec_iolog exec_monitor \
+ exec_nopty exec_preload exec_ptrace exec_pty get_pty hooks limits load_plugins net_ifs parse_args \
+ preserve_fds signal sudo sudo_edit suspend_parent tgetpass ttyname preload"
 
 ok=0; skip=0
 compile() { # <src file> <object name> [extra flags]
@@ -204,6 +221,7 @@ compile "$GEN/signame.c" util_signame
 for b in $EVENTLOG_SRCS; do compile "$SUDO/lib/eventlog/$b.c"    "eventlog_$b"; done
 for b in $IOLOG_SRCS;    do compile "$SUDO/lib/iolog/$b.c"       "iolog_$b"; done
 for b in $LOGSRV_SRCS;   do compile "$SUDO/lib/logsrv/$b.c"      "logsrv_$b"; done
+compile "$SUDO/lib/protobuf-c/protobuf-c.c" logsrv_protobuf-c
 for b in $SUDOERS_SRCS;  do compile "$SUDO/plugins/sudoers/$b.c" "sudoers_$b"; done
 for b in $AUTH_SRCS;     do compile "$SUDO/plugins/sudoers/auth/$b.c" "auth_$b"; done
 for b in $SRC_SRCS; do
@@ -222,11 +240,13 @@ for f in sudo_main_wrapper.c sudo_utmp_compat.c ps_passwd_compat.c ../libinfo_cu
     compile "$f" "glue_$(basename "$f" .c)"
 done
 
-echo "sudo (real sudo-project/sudo v1.9.5p2): $ok compiled, $skip skipped"
+echo "sudo (real sudo-project/sudo v1.9.17p2): $ok compiled, $skip skipped"
 if [ "$skip" -ne 0 ]; then
     echo "error: sudo has real compile failures, not building sudo.macho" >&2
     exit 1
 fi
+
+[ -z "$SUDO_COMPILE_ONLY" ] || { echo "SUDO_COMPILE_ONLY set: stopping after the compile pass"; exit 0; }
 
 # Diagnostic-landed check (CLAUDE.md, DAR-200): the pre-generated parser
 # and the static-plugin table must actually be in the objects.
@@ -285,10 +305,18 @@ LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_kernel.dylib $O
 # and build_ifconfig.sh:275.
 LINK_DYLIBS="$LINK_DYLIBS $OUT/system/libinfo.dylib $OUT/system/libresolv.dylib"
 
+# DAR-340/C1 belt and braces: a __RESTRICT,__restrict section makes
+# MachOFile::isRestricted() true (third_party/dyld/common/MachOFile.cpp:1339-1343),
+# which dyld hands to amfi_check_dyld_policy_self as
+# AMFI_DYLD_INPUT_PROC_HAS_RESTRICT_SEG (DyldDelegates.cpp:110-111), so DYLD_*
+# is ignored for this setuid image even if the issetugid() check were bypassed.
+RESTRICT_MARK="$(mktemp -t restrict_marker)"
+printf 'R' > "$RESTRICT_MARK"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
     -DCRT_DYNAMIC_LINKING \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
+    -Wl,-sectcreate,__RESTRICT,__restrict,"$RESTRICT_MARK" \
     -o sudo.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OBJ"/*.o \
@@ -310,6 +338,8 @@ LINK_DYLIBS="$LINK_DYLIBS $OUT/system/libinfo.dylib $OUT/system/libresolv.dylib"
     -Wl,-alias,_glob,'_glob$INODE64' \
     -Wl,-alias,_socketpair,'_socketpair$UNIX2003'
 echo "wrote sudo.macho"
+otool -l sudo.macho | grep -q "sectname __restrict" || {
+    echo "error: sudo: __RESTRICT,__restrict section missing (DAR-340 C1)" >&2; exit 1; }
 
 bad=0
 otool -l sudo.macho | grep -A2 "cmd LC_LOAD_DYLINKER" | grep -q "/usr/lib/dyld" || {

@@ -1192,11 +1192,14 @@ fi
 # source project Apple's own implementation is downstream of or
 # equivalent to"), the real, correct source is the actual sudo project
 # itself: https://github.com/sudo-project/sudo.
-# Pinned to v1.9.5p2 (released 2021-01, the closest real tagged release
-# to this project's own Darwin 20.3/macOS 11.2 anchor, released
-# 2021-02 -- same era-matching principle as every apple-oss-
-# distributions pin, just against a real upstream release date instead
-# of a manifest entry, since no manifest covers sudo at all).
+# Pinned to v1.9.17p2 (DAR-340 review H2, 2026-09-29). The first draft
+# pinned v1.9.5p2 to era-match Darwin 20.3, but that is the WRONG
+# principle for a setuid-root security tool: 1.9.5p2 predates several
+# upstream security fixes (see the 1.9.x NEWS file: e.g. CVE-2021-3156
+# is fixed in 1.9.5p2 itself, but later releases fix sudoedit
+# extra-argument handling, log-escape and -h/--host issues). Newest
+# tag of the newest release series verified with
+# `git ls-remote --tags https://github.com/sudo-project/sudo.git`.
 # Real scoping already done (2026-09-21, DAR-340's own ticket) so the
 # next session doesn't re-derive it:
 #   - plugins/sudoers/gram.y+gram.c and toke.l+toke.c: BOTH the real
@@ -1218,7 +1221,7 @@ fi
 #     as the OpenSSH port's own config.h, DAR-183) -- no reference
 #     config.h to diff against since Apple's own sudo build is closed
 #     and was never based on this same configure.ac anyway.
-SUDO_REF="v1.9.5p2"
+SUDO_REF="v1.9.17p2"
 SUDO_DEST="third_party/sudo"
 if [ -d "$SUDO_DEST" ]; then
     if [ "$FORCE" = "1" ]; then

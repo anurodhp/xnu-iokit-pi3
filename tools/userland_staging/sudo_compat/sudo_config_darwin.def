@@ -1,4 +1,4 @@
-# Hand-derived Darwin/arm64 answers for third_party/sudo (v1.9.5p2)
+# Hand-derived Darwin/arm64 answers for third_party/sudo (v1.9.17p2)
 # config.h.in (DAR-340). Consumed by ../gen_sudo_config_h.sh: every name
 # here MUST exist as an `#undef` in config.h.in (the generator hard-fails
 # on a typo); every `#undef` not named here becomes `/* #undef X */`.
@@ -24,7 +24,7 @@ SUDOERS_LOG_CLIENT 1
 # No PAM (configure.ac:2276 -- Darwin excludes PAM by default anyway),
 # no login_cap, no BSM audit, no LDAP/SSSD, no openssl/zlib, no
 # openssl/zlib. SUDOERS_LOG_CLIENT is DEFINED (below): configure.ac:1667
-# defaults it ON, and it cannot be left off in v1.9.5p2 --
+# defaults it ON, and it cannot be left off (verified for v1.9.5p2, kept for 1.9.17p2) --
 # plugins/sudoers/audit.c:371 and :404 call audit_to_eventlog()
 # unconditionally, but audit.c:200 only defines it under
 # SUDOERS_LOG_CLIENT (implicit-declaration error otherwise). Without
@@ -51,8 +51,10 @@ SUDO_UMASK 0022
 RUNAS_DEFAULT "root"
 TIMESTAMP_TYPE tty
 SEND_MAIL_WHEN_NO_USER 1
-SHELL_IF_NO_ARGS 1
-SHELL_SETS_HOME 1
+# SHELL_IF_NO_ARGS / SHELL_SETS_HOME: deliberately UNDEFINED (DAR-340/M3).
+# They are NOT upstream defaults: third_party/sudo/configure.ac:1226-1246 only
+# define them for --enable-noargs-shell / --enable-shell-sets-home. `sudo`
+# with no arguments therefore prints usage, as upstream does.
 os_init os_init_common
 RTLD_PRELOAD_VAR "DYLD_INSERT_LIBRARIES"
 RTLD_PRELOAD_DELIM ":"
@@ -64,8 +66,8 @@ NO_PAM_SESSION 1
 # sudo.c:222, policy.c:1122, iolog.c:859, audit.c:427 use PACKAGE_VERSION.
 PACKAGE_NAME "sudo"
 PACKAGE_TARNAME "sudo"
-PACKAGE_VERSION "1.9.5p2"
-PACKAGE_STRING "sudo 1.9.5p2"
+PACKAGE_VERSION "1.9.17p2"
+PACKAGE_STRING "sudo 1.9.17p2"
 PACKAGE_BUGREPORT "https://bugzilla.sudo.ws/"
 PACKAGE_URL ""
 
@@ -86,8 +88,24 @@ GETGROUPS_T gid_t
 SIZEOF_ID_T 4
 SIZEOF_LONG_LONG 8
 SIZEOF_TIME_T 8
-MAX_UID_T_LEN 10
 STDC_HEADERS 1
+SIZEOF_OFF_T 8
+HAVE_STDIO_H 1
+HAVE_WCHAR_H 1
+HAVE_INTMAX_T 1
+HAVE_UINTMAX_T 1
+HAVE_SIG_ATOMIC_T 1
+HAVE_SOCKLEN_T 1
+HAVE_STRTOULL 1
+HAVE_VA_COPY 1
+HAVE___BUILTIN_CLZ 1
+HAVE___BUILTIN_CLZL 1
+HAVE_DECL_NSIG 1
+HAVE_DECL_SSIZE_MAX 1
+# ioctl(int, unsigned long, ...) on Darwin: the request takes no (int) cast
+# (m4/sudo.m4:380-392 SUDO_FUNC_IOCTL_REQ_INT emits an EMPTY definition then).
+IOCTL_REQ_CAST <empty>
+CONFIGURE_ARGS "(none; see tools/userland_staging/build_sudo.sh)"
 HAVE___FUNC__ 1
 HAVE__BOOL 1
 HAVE_STDBOOL_H 1
@@ -107,6 +125,7 @@ HAVE_STDLIB_H 1
 HAVE_STRINGS_H 1
 HAVE_STRING_H 1
 HAVE_SYS_SELECT_H 1
+HAVE_SYS_SYSCTL_H 1
 HAVE_SYS_SOCKIO_H 1
 HAVE_SYS_STAT_H 1
 HAVE_SYS_TYPES_H 1
@@ -159,7 +178,6 @@ HAVE_GETTTYENT 1
 HAVE_GRANTPT 1
 HAVE_POSIX_OPENPT 1
 HAVE_INNETGR 1
-HAVE_LRAND48 1
 HAVE_OPTRESET 1
 HAVE_PSELECT 1
 HAVE_PTHREAD_ATFORK 1
@@ -176,7 +194,6 @@ HAVE_ASPRINTF 1
 HAVE_VASPRINTF 1
 HAVE_SNPRINTF 1
 HAVE_VSNPRINTF 1
-HAVE_VSYSLOG 1
 HAVE_STRLCAT 1
 HAVE_STRLCPY 1
 HAVE_STRNDUP 1
@@ -184,7 +201,6 @@ HAVE_STRNLEN 1
 HAVE_STRSIGNAL 1
 HAVE_BZERO 1
 HAVE_ISBLANK 1
-HAVE_MKDTEMP 1
 HAVE_FNMATCH 1
 HAVE_GLOB 1
 HAVE_GETDELIM 1

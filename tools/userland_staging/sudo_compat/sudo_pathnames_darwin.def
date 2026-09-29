@@ -4,6 +4,13 @@
 # own defaults (devsearch, sesh/noexec under $libexecdir/sudo) otherwise.
 # _PATH_SUDO_SENDMAIL is left UNDEFINED on purpose: no MTA exists here,
 # and eventlog.c:94 / defaults.c:590 both guard on it.
+# 1.9.17's pathnames.h.in has bare `# undef` entries (no built-in defaults any
+# more); these three are what upstream's Makefile/configure would supply
+# (configure.ac:239 sudoers_plugin, :4462-4464 sysconfdir=/etc).
+_PATH_SUDO_CONF "/etc/sudo.conf"
+_PATH_SUDOERS "/etc/sudoers"
+_PATH_SUDOERS_PLUGIN "sudoers.so"
+_PATH_BSHELL "/bin/sh"
 _PATH_SUDO_TIMEDIR "/var/db/sudo/ts"
 _PATH_SUDO_LECTURE_DIR "/var/db/sudo/lectured"
 _PATH_SUDO_IO_LOGDIR "/var/log/sudo-io"
