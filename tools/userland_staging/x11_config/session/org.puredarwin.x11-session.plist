@@ -6,10 +6,15 @@
 	<string>org.puredarwin.x11-session</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/usr/X11/bin/x11-session</string>
+		<string>/usr/X11/bin/xdm-launch</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>
+	<!-- Restart only after a failure. xdm-launch exits 0 without starting
+	     anything when the kernel boot-args lack hdmi_console=1 (plain QEMU,
+	     no framebuffer) or /etc/x11-session.disabled exists; a plain
+	     KeepAlive=true would respawn that every ThrottleInterval. A
+	     nonzero exit (xdm crash, exec failure) is still retried. -->
 	<key>KeepAlive</key>
 	<dict>
 		<key>SuccessfulExit</key>

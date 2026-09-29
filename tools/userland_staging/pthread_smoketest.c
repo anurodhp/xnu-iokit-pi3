@@ -1,6 +1,5 @@
 #include "internal.h"
 
-extern int pthread_main_thread_bootstrap(void);
 static void put(const char *s) {
     long len = 0;
     while (s[len]) len++;
@@ -46,7 +45,12 @@ static void *child_fn(void *arg) {
 }
 
 int main(void) {
-    if (!pthread_main_thread_bootstrap()) {
+    /* DAR-426: pthread_main_thread_bootstrap() is gone (77cc1e1); this is a
+     * dynamic image, so dyld runs libSystem_initializer, which calls the real
+     * __pthread_init() (third_party/Libsystem/init.c:221; defined at
+     * third_party/libpthread/src/pthread.c:1736) before main(). Check its
+     * result instead of re-running a bootstrap. */
+    if (!pthread_self()) {
         die("FAIL: bootstrap\n");
     }
     put("PASS: bootstrap\n");

@@ -31,7 +31,7 @@ fi
 M="$OUT/iokitlib_smoketest.macho"
 rm -f "$M"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -B"$NEWLD_BINDIR" -Wl,-fixup_chains \
-    -o "$M" "$T/Csu/start.s" "$T/Csu/crt.c" "$OUT/iokitlib_smoketest.o" \
+    -o "$M" -DCRT_NO_PTHREAD_BOOTSTRAP "$T/Csu/start.s" "$T/Csu/crt.c" "$OUT/iokitlib_smoketest.o" \
     "$S/libiokituser.dylib" "$S/libCoreFoundation.dylib" "$S/libsystem_kernel.dylib" \
     "$S/libsystem_c.dylib" "$S/libsystem_pthread.dylib" "$S/libsystem_malloc.dylib" \
     "$S/libsystem_platform.dylib" "$S/libdyld.dylib" "$S/libSystem.B.dylib"

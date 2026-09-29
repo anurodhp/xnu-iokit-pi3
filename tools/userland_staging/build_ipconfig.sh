@@ -328,7 +328,7 @@ rm -f ipconfig.macho
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -o ipconfig.macho \
-    ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
+    -DCRT_NO_PTHREAD_BOOTSTRAP ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OBJ"/*.o \
     "$OUT/libmach_ipc.a" "$OUT/chk_fail.o" \
     "$OUT/system/libsystem_kernel.dylib" \

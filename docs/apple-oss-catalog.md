@@ -635,8 +635,12 @@ Apple ships neither of these, and GNUstep is the chosen GUI layer
 | `gnustep-make` | `gnustep/tools-make` `make-2_9_3` | built with the `apple-gnu-gnu` combo, i.e. on objc4 (DAR-382) |
 | `gnustep-base` | fork `anurodhp/libs-base` `iokit-port` (off `base-1_31_1`) | cross configure answers: `build_gnustep_config_probes.sh --run` |
 | `wmaker` | `window-maker/wmaker` `wmaker-0.96.0` | DAR-424 |
+| `xdm` | `xorg/app/xdm` `xdm-1.1.17` | graphical login; unmodified, `build_xdm.sh` (non-PAM crypt(3)/master.passwd auth, same as `login`) |
+| `libXaw` | `xorg/lib/libxaw` `libXaw-1.0.16` | xdm's chooser toolkit (Xaw7); unmodified, `build_libXaw.sh` |
+| `libXpm` | `xorg/lib/libxpm` `libXpm-3.5.19` | required by libXaw's `Pixmap.c` and xdm's logo; unmodified, `build_libXpm.sh` |
 | `gnustep-gui` | fork `anurodhp/libs-gui` `iokit-port` (off `gui-0_32_0`) | DAR-390: typed IMPs, `PACKAGE_SCOPE` `@public` on objc4 |
 | `gnustep-back` | `gnustep/libs-back` `back-0_32_0` | DAR-390: x11 server, cairo graphics; unmodified |
 | `gnustep-examples` | fork `anurodhp/tests-examples` `iokit-port` (upstream master 46ef973) | DAR-390: Ink.app; unmodified, the fork branch pins the commit |
 | `libtiff` | `gitlab.com/libtiff/libtiff` `v4.7.1` | DAR-390: gnustep-gui requires it; Apple publishes no libtiff |
 | `gnustep-gap` | fork `anurodhp/gap` `iokit-port` (off master 220860a9) | DAR-394: Terminal.app; Darwin pty include + link libs |
+| `gnustep-gworkspace` | fork `anurodhp/apps-gworkspace` `iokit-port` (off tag gworkspace-1_0_0, 14ea9f49) | DAR-392: GWorkspace.app, Recycler, FSNode/DBKit, ddbd/fswatcher; typed IMPs for objc4 |

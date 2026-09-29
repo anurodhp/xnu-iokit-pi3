@@ -103,9 +103,17 @@ fi
 # libdispatch and libxpc, none of which existed when build_iokituser.sh
 # was written. configd's InterfaceNamer plugin (DAR-240) is the first
 # consumer. Only built into this dylib, not libiokituser.a.
-for d in libCoreFoundation libdispatch libinfo libsystem_blocks; do
+# libsystem_asl.dylib: IOKitLib.c calls asl_log() (lines 151, 913). It is
+# the real owner of _asl_log and must be listed EARLY on the link line
+# (DAR-217: libCoreFoundation plain-links it, so listing CF first would
+# bind the symbol through the wrong image).
+for d in libsystem_asl libCoreFoundation libdispatch libinfo libsystem_blocks; do
     if [ ! -f "$OUT/system/$d.dylib" ]; then
-        echo "error: $OUT/system/$d.dylib not found -- build it first" >&2
+        if [ "$d" = libsystem_asl ]; then
+            echo "error: $OUT/system/$d.dylib not found -- run build_libsystem_asl_dylib.sh first" >&2
+        else
+            echo "error: $OUT/system/$d.dylib not found -- build it first" >&2
+        fi
         exit 1
     fi
 done
@@ -166,6 +174,7 @@ rm -f "$OUT/system/libiokituser.dylib"
     -Wl,-fixup_chains \
     -o "$OUT/system/libiokituser.dylib" \
     "$EXTRACT"/*.o \
+    "$OUT/system/libsystem_asl.dylib" \
     "$OUT/system/libCoreFoundation.dylib" "$OUT/system/libdispatch.dylib" \
     "$OUT/system/libinfo.dylib" "$OUT/system/libsystem_blocks.dylib" \
     "$OUT/system/libxpc.dylib" \
@@ -182,7 +191,7 @@ otool -hv "$OUT/system/libiokituser.dylib" | grep -q " DYLIB " || {
 }
 echo "declared -Wl,-U deferrals (expect: none for this library):"
 xcrun dyld_info -fixups "$OUT/system/libiokituser.dylib" 2>/dev/null | grep '<flat-namespace>' | awk '{print "  " $NF}'
-UNEXPECTED=$(xcrun dyld_info -fixups "$OUT/system/libiokituser.dylib" 2>/dev/null | grep -v -E '<flat-namespace>|<weak-def-coalesce>' | grep 'bind' | grep -v -E 'libsystem_c/|libsystem_malloc/|libsystem_platform/|libsystem_kernel/|libsystem_pthread/|libxpc/|libCoreFoundation/|libdispatch/|libinfo/|libsystem_blocks/' || true)
+UNEXPECTED=$(xcrun dyld_info -fixups "$OUT/system/libiokituser.dylib" 2>/dev/null | grep -v -E '<flat-namespace>|<weak-def-coalesce>' | grep 'bind' | grep -v -E 'libsystem_asl/|libsystem_c/|libsystem_malloc/|libsystem_platform/|libsystem_kernel/|libsystem_pthread/|libxpc/|libCoreFoundation/|libdispatch/|libinfo/|libsystem_blocks/' || true)
 if [ -n "$UNEXPECTED" ]; then
     echo "error: real, unexpected non-sibling bind targets found:" >&2
     echo "$UNEXPECTED" >&2

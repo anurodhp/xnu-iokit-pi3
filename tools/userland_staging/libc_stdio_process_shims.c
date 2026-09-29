@@ -16,11 +16,13 @@
  * exit(2) syscall. __cleanup's real assignment above means real stdio
  * buffers genuinely get flushed on exit, not skipped.
  *
- * NOT complete since DAR-383 (2026-09-26): libsystem_c now exports a real
- * atexit() (libsystem_c_cxa_atexit_compat.c), and this exit() still never
- * calls __cxa_finalize(NULL), so registered handlers do not run. Real
- * Libc's exit() runs __cxa_finalize(NULL) before __cleanup. Tracked as
- * DAR-129.
+ * DAR-129: exit() now runs __cxa_finalize(NULL) before __cleanup, in the
+ * order of real Libc (third_party/Libc/stdlib/FreeBSD/exit.c:66-69), so
+ * atexit()/__cxa_atexit() handlers and C++ static destructors run. The
+ * reference is weak because libc_stdio.a is also linked into images that
+ * have no __cxa_finalize provider (only libsystem_c.dylib's
+ * libsystem_c_cxa_atexit_compat.c defines it here); there the call is
+ * skipped, as before. The _tlv_exit() call at exit.c:62 is x86-only.
  */
 
 /* Real exit(2) syscall number (bsd/kern/syscalls.master #1, AUE_EXIT),
@@ -47,7 +49,12 @@ static void raw_exit_syscall(int code) {
 void (*__cleanup)(void) = 0;
 
 void exit(int status) __attribute__((noreturn));
+extern void __cxa_finalize(void *) __attribute__((weak_import));
+
 void exit(int status) {
+    if (__cxa_finalize) {
+        __cxa_finalize(0);
+    }
     if (__cleanup) {
         __cleanup();
     }

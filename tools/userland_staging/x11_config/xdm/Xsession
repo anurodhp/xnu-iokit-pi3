@@ -1,0 +1,66 @@
+#!/bin/sh
+# The user's X session. xdm runs this as the logged-in user: session.c's
+# StartClient does setgid + setlogin + initgroups + setuid to the account
+# that greeter/verify.c authenticated, then execs this script with DISPLAY,
+# HOME, USER, SHELL, PATH and XAUTHORITY in the environment. It must never
+# be started as root by anything but a root login.
+#
+# It sets the GNUstep environment exactly as the old boot-time x11-session
+# script did, then execs Window Maker, whose global autostart
+# (/usr/X11/share/WindowMaker/autostart) opens Terminal.app.
+
+# xdm's default user PATH (DEF_USER_PATH) has /bin and /usr/bin; the full
+# session PATH is set below once the log is open.
+PATH=/usr/X11/bin:/bin:/usr/bin:/sbin:/usr/sbin
+export PATH
+
+# HOME: xdm sets it from the passwd entry. root's entry is "/" (no home
+# under /Users), so give root /var/root as before; any other user whose home
+# is missing or unwritable gets a private directory under /tmp so wmaker and
+# GNUstep can write their state.
+case "$HOME" in
+/|"")
+    if [ "`id -u`" = 0 ]; then HOME=/var/root; fi
+    ;;
+esac
+mkdir -p "$HOME" 2>/dev/null
+if [ ! -d "$HOME" ] || [ ! -w "$HOME" ]; then
+    HOME=/tmp/home-`id -u`
+    ( umask 077; mkdir -p "$HOME" )
+fi
+export HOME
+
+# Session log, as upstream's Xsession.in does (~/.xsession-errors), falling
+# back to a per-uid file in /tmp.
+errfile="$HOME/.xsession-errors"
+if ( umask 077 && cp /dev/null "$errfile" 2>/dev/null ); then
+    exec > "$errfile" 2>&1
+else
+    errfile=/tmp/xsession-errors-`id -u`
+    if ( umask 077 && cp /dev/null "$errfile" 2>/dev/null ); then
+        exec > "$errfile" 2>&1
+    else
+        exec > /dev/null 2>&1
+    fi
+fi
+
+export PATH=/usr/X11/bin:/usr/GNUstep/System/Tools:/bin:/usr/bin:/sbin:/usr/sbin
+[ -n "$DISPLAY" ] || export DISPLAY=:0
+
+# GNUstep.sh (gnustep-make) reads GNUSTEP_CONFIG_FILE; it sets the
+# GNUSTEP_* paths and library paths apps need.
+export GNUSTEP_CONFIG_FILE=/etc/GNUstep/GNUstep.conf
+if [ -f /usr/GNUstep/System/Library/Makefiles/GNUstep.sh ]; then
+    . /usr/GNUstep/System/Library/Makefiles/GNUstep.sh
+fi
+
+# Upstream Xsession.in: a user's own ~/.xsession replaces the default.
+startup="$HOME/.xsession"
+if [ -s "$startup" ]; then
+    if [ -x "$startup" ]; then
+        exec "$startup"
+    else
+        exec /bin/sh "$startup"
+    fi
+fi
+exec /usr/X11/bin/wmaker

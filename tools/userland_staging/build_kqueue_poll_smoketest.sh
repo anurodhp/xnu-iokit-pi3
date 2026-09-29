@@ -20,7 +20,7 @@ done
 M="$OUT/kqueue_poll_smoketest.macho"
 rm -f "$M"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -B"$NEWLD_BINDIR" -Wl,-fixup_chains \
-    -o "$M" "$T/Csu/start.s" "$T/Csu/crt.c" "$OUT/kqueue_poll_smoketest.o" \
+    -o "$M" -DCRT_NO_PTHREAD_BOOTSTRAP "$T/Csu/start.s" "$T/Csu/crt.c" "$OUT/kqueue_poll_smoketest.o" \
     "$S/libsystem_kernel.dylib" "$S/libsystem_c.dylib" "$S/libsystem_pthread.dylib" \
     "$S/libsystem_malloc.dylib" "$S/libsystem_platform.dylib" "$S/libdyld.dylib" "$S/libSystem.B.dylib"
 otool -l "$M" | grep -A2 "cmd LC_LOAD_DYLINKER" | grep -q "/usr/lib/dyld" || { echo "error: no LC_LOAD_DYLINKER" >&2; exit 1; }
