@@ -1,0 +1,21 @@
+("Applications",
+ ("Info Panel", INFO_PANEL),
+ ("Terminal", EXEC, "/usr/GNUstep/System/Applications/Terminal.app/Terminal"),
+ ("Ink", EXEC, "/usr/GNUstep/System/Applications/Ink.app/Ink"),
+ ("GWorkspace", EXEC, "/usr/GNUstep/System/Applications/GWorkspace.app/GWorkspace"),
+ ("X Events", EXEC, "/usr/X11/bin/xev"),
+ ("Workspaces", WORKSPACE_MENU),
+ ("Commands",
+  ("Hide Others", HIDE_OTHERS),
+  ("Show All", SHOW_ALL),
+  ("Arrange Icons", ARRANGE_ICONS),
+  ("Refresh", REFRESH)
+ ),
+ ("Appearance", OPEN_MENU, "appearance.menu"),
+ ("Session",
+  ("Save Session", SAVE_SESSION),
+  ("Clear Session", CLEAR_SESSION),
+  ("Restart Window Maker", RESTART),
+  ("Exit", EXIT)
+ )
+)

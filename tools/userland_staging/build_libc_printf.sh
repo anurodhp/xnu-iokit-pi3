@@ -141,6 +141,20 @@ if [ ! -x "$CLANG" ] || [ ! -d "$SDK" ]; then
     exit 1
 fi
 
+# spinlock.h: gdtoaimp.h:275/542 needs the REAL spinlock_t
+# (third_party/Libc/fbsdcompat/spinlock.h:65, `typedef os_unfair_lock
+# spinlock_t`), but build_libc_stdio.sh writes an EMPTY stand-in to the
+# shared $OUT/compat_include/spinlock.h (findfp.c only #includes it) and
+# that dir precedes fbsdcompat on the -I line -- so once libc_stdio has ever
+# run, every gdtoa file fails "unknown type name 'spinlock_t'" and
+# libc_printf.a silently loses __dtoa/__hdtoa. Shadow it in this tier's own
+# dir (same reasoning as os/assumes.h below) so the result no longer depends
+# on which script ran first.
+LIBC_ABS="$(cd "$LIBC" && pwd)"
+cat > "$OUT/compat_include_printf/spinlock.h" <<EOF2
+#include "$LIBC_ABS/fbsdcompat/spinlock.h"
+EOF2
+
 cat > "$OUT/compat_include_printf/os/assumes.h" <<'EOF'
 /* Printf-tier-scoped shadow of third_party/Libc/os/assumes.h (kept in a
  * SEPARATE -I dir from the shared libc_build/compat_include used by the
@@ -356,6 +370,10 @@ else
     libunwind_sched_yield.s -o "$OUT/libc_printf_sched_yield_trap.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     libunwind_sched_yield.c -o "$OUT/libc_printf_sched_yield.o"
+# ___gdtoa_locks is a COMMON symbol in libc_printf.a(glue.o), which ld64 never
+# pulls from an archive: extract it (same as build_ps.sh; never -force_load).
+mkdir -p "$OUT/printf_glue_extract"
+(cd "$OUT/printf_glue_extract" && ar x "../libc_printf.a" glue.o)
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o libc_printf_smoketest.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
@@ -367,6 +385,8 @@ else
     -Wl,-alias,'_pthread_rwlock_wrlock$UNIX2003',_pthread_rwlock_wrlock \
     -Wl,-alias,'_pthread_rwlock_rdlock$UNIX2003',_pthread_rwlock_rdlock \
     -Wl,-alias,'_pthread_rwlock_unlock$UNIX2003',_pthread_rwlock_unlock \
+    "$OUT/printf_glue_extract/glue.o" \
+    -Wl,-alias,'_mmap$UNIX2003',_mmap \
     -Wl,-alias,_mprotect,'_mprotect$UNIX2003' \
     -Wl,-alias,___kill,'_kill$UNIX2003' \
     -Wl,-alias,___kill,_kill \

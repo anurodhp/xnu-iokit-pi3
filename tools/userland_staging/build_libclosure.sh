@@ -157,7 +157,7 @@ else
 # requirement, not a coincidence).
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o libclosure_smoketest.macho \
-    ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
+    -DCRT_NO_PTHREAD_BOOTSTRAP ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/libclosure_smoketest.o" "$OUT/libclosure.a" \
     "$OUT/libmalloc.a" "$OUT/libplatform.a" "$OUT/cerror_stub.o" \
     "$OUT/libc_locale_for_stdio.a" "$OUT/libc_stdio.a" \

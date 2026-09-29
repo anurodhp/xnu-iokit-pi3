@@ -192,7 +192,12 @@ sed -e "s:#extension#:xpm:" "$WMD/Defaults/WMWindowAttributes.in" > "$PKGCONF/WM
 sed -e "s:#pkgdatadir#:$X11_PREFIX/share/WindowMaker:" -e "s:#pixmapdir#:$X11_PREFIX/share/pixmaps:" \
     "$WMD/Defaults/WindowMaker.in" > "$PKGCONF/WindowMaker"
 sed -e "s:#wprefs#:$X11_PREFIX/bin/WPrefs:" "$WMD/Defaults/WMState.in" > "$PKGCONF/WMState"
-cp "$PKGDATA/plmenu" "$PKGCONF/WMRootMenu"
+# This port's own menu (only installed programs) instead of upstream's
+# plmenu, whose entries (xterm, firefox, gimp, ...) do not exist here.
+# (No comments inside the file: Window Maker refuses them in its owned
+# domain files, WINGs/proplist.c:887-889. Syntax: WindowMaker/plmenu.in.
+# Add an entry there when a new app is installed.)
+cp x11_config/wmaker/WMRootMenu "$PKGCONF/WMRootMenu"
 # WindowMaker/IconSets/Makefile.am: Default.iconset is the Icon lines of
 # WMWindowAttributes wrapped in braces.
 mkdir -p "$PKGDATA/IconSets"

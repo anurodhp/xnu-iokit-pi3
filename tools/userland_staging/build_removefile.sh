@@ -218,6 +218,13 @@ echo "removefile: $ok compiled, $skip skipped"
 # unlinkat + real getiopolicy_np - see that file's own header comment).
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
     removefile_syscalls.c -o "$OUT/removefile/removefile_syscalls.o"
+# (link order: libmalloc.a is listed BEFORE libremovefile.a so libmalloc's
+# reallocarray wins; the reverse order pulls both members -> duplicate.)
+# reallocarray lives in its OWN archive member (DAR-429): libmalloc.a owns
+# it (libmalloc_dispatch.c:202-226), so a copy inside removefile_syscalls.o
+# hard-collided with it on every link carrying both archives.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    removefile_reallocarray.c -o "$OUT/removefile/removefile_reallocarray.o"
 
 # Real Apple rand()/srand() (Libc/stdlib/FreeBSD/rand.c) built on real
 # random()/srandom() (Libc/stdlib/FreeBSD/random.c) - removefile_random.c's
@@ -305,7 +312,9 @@ mkdir -p "$OUT/removefile_glue_extract"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -static -e start \
     -o removefile_smoketest.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
-    "$OUT/removefile_smoketest.o" "$OUT/libremovefile.a" \
+    "$OUT/removefile_smoketest.o" \
+    "$OUT/libmalloc.a" \
+    "$OUT/libremovefile.a" \
     "$OUT/libclosure.a" \
     "$OUT/libc_printf.a" \
     "$OUT/removefile_glue_extract/glue.o" \
@@ -313,7 +322,7 @@ mkdir -p "$OUT/removefile_glue_extract"
     "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
     "$OUT/libpthread.a" "$OUT/removefile_sched_yield_trap.o" "$OUT/removefile_sched_yield.o" \
     "$OUT/sys_mmap_for_removefile.o" "$OUT/sys_munmap_for_removefile.o" \
-    "$OUT/libmalloc.a" "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
+    "$OUT/cerror_stub.o" "$OUT/libplatform.a" \
     "$OUT/libunwind.a" \
     -Wl,-alias,___mmap,_mmap \
     -Wl,-alias,___munmap,_munmap \

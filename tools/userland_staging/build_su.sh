@@ -182,10 +182,18 @@ if [ ! -f "$OUT/system/libSystem.B.dylib" ]; then
 fi
 LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_kernel.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libsystem_platform.dylib $OUT/system/libdyld.dylib $OUT/system/libcopyfile.dylib $OUT/system/libremovefile.dylib $OUT/system/libbsm.dylib $OUT/system/libSystem.B.dylib"
 
+# DAR-340/C1 belt and braces: a __RESTRICT,__restrict section makes
+# MachOFile::isRestricted() true (third_party/dyld/common/MachOFile.cpp:1339-1343),
+# which dyld hands to amfi_check_dyld_policy_self as
+# AMFI_DYLD_INPUT_PROC_HAS_RESTRICT_SEG (DyldDelegates.cpp:110-111), so DYLD_*
+# is ignored for this setuid image even if the issetugid() check were bypassed.
+RESTRICT_MARK="$(mktemp -t restrict_marker)"
+printf 'R' > "$RESTRICT_MARK"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
     -DCRT_DYNAMIC_LINKING \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
+    -Wl,-sectcreate,__RESTRICT,__restrict,"$RESTRICT_MARK" \
     -o su.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/su_obj/*.o \
@@ -203,6 +211,8 @@ LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_kernel.dylib $O
     -Wl,-alias,_sigaction,'_sigaction$UNIX2003' \
     -Wl,-alias,_sigprocmask,'_sigprocmask$UNIX2003'
 echo "wrote su.macho"
+otool -l su.macho | grep -q "sectname __restrict" || {
+    echo "error: su: __RESTRICT,__restrict section missing (DAR-340 C1)" >&2; exit 1; }
 
 bad=0
 otool -l su.macho | grep -A2 "cmd LC_LOAD_DYLINKER" | grep -q "/usr/lib/dyld" || {

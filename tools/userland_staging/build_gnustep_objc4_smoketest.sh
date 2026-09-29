@@ -79,7 +79,7 @@ rm -f gnustep_objc4_smoketest.macho
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
     -o gnustep_objc4_smoketest.macho \
-    ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
+    -DCRT_NO_PTHREAD_BOOTSTRAP ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/gnustep_objc4_smoketest.o" \
     "$OUT/libobjc.A.dylib" \
     "$OUT/system/libsystem_kernel.dylib" \

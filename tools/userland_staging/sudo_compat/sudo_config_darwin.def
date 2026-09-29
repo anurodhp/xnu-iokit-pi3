@@ -1,0 +1,226 @@
+# Hand-derived Darwin/arm64 answers for third_party/sudo (v1.9.17p2)
+# config.h.in (DAR-340). Consumed by ../gen_sudo_config_h.sh: every name
+# here MUST exist as an `#undef` in config.h.in (the generator hard-fails
+# on a typo); every `#undef` not named here becomes `/* #undef X */`.
+# Format: NAME<space>VALUE   (VALUE is pasted verbatim after #define).
+#
+# STATUS: UNVERIFIED against a real compile -- written on a Linux host
+# with no Xcode/SDK. Sections say what each answer rests on:
+#   [cfg]  upstream configure.ac's own default or its `*-*-darwin*` case
+#          (configure.ac:179-287 defaults, :2270-2300 Darwin branch)
+#   [sdk]  standard Darwin/macOS SDK fact -- re-check with the Xcode 12
+#          iPhoneOS SDK headers
+#   [libc] a function this project's curated libsystem_c must EXPORT --
+#          confirm with tools/userland_staging/gap_audit.sh
+# Policy: where upstream ships a portable fallback in lib/util/ (gated by
+# `#ifndef HAVE_X`), the symbol is left UNDEFINED here on purpose, so the
+# fallback compiles in and no new libsystem bind is needed. See
+# build_sudo.sh's header.
+
+# ---- build shape ----
+ENABLE_SUDO_PLUGIN_API 1
+STATIC_SUDOERS_PLUGIN 1
+SUDOERS_LOG_CLIENT 1
+# No PAM (configure.ac:2276 -- Darwin excludes PAM by default anyway),
+# no login_cap, no BSM audit, no LDAP/SSSD, no openssl/zlib, no
+# openssl/zlib. SUDOERS_LOG_CLIENT is DEFINED (below): configure.ac:1667
+# defaults it ON, and it cannot be left off (verified for v1.9.5p2, kept for 1.9.17p2) --
+# plugins/sudoers/audit.c:371 and :404 call audit_to_eventlog()
+# unconditionally, but audit.c:200 only defines it under
+# SUDOERS_LOG_CLIENT (implicit-declaration error otherwise). Without
+# HAVE_OPENSSL the client is plain-TCP only and never contacts a server
+# unless a log_servers Defaults entry names one.
+
+# ---- [cfg] compile-time defaults (configure.ac:179-287) ----
+ENV_RESET 1
+ENV_EDITOR 1
+EDITOR "vi"
+LOGGING SLOG_SYSLOG
+LOGFAC "auth"
+PRI_SUCCESS "notice"
+PRI_FAILURE "alert"
+MAXLOGFILELEN 80
+MAILTO "root"
+MAILSUBJECT "*** SECURITY information for %h ***"
+INCORRECT_PASSWORD "Sorry, try again."
+PASSPROMPT "Password: "
+PASSWORD_TIMEOUT 5
+TIMEOUT 5
+TRIES_FOR_PASSWORD 3
+SUDO_UMASK 0022
+RUNAS_DEFAULT "root"
+TIMESTAMP_TYPE tty
+SEND_MAIL_WHEN_NO_USER 1
+# SHELL_IF_NO_ARGS / SHELL_SETS_HOME: deliberately UNDEFINED (DAR-340/M3).
+# They are NOT upstream defaults: third_party/sudo/configure.ac:1226-1246 only
+# define them for --enable-noargs-shell / --enable-shell-sets-home. `sudo`
+# with no arguments therefore prints usage, as upstream does.
+os_init os_init_common
+RTLD_PRELOAD_VAR "DYLD_INSERT_LIBRARIES"
+RTLD_PRELOAD_DELIM ":"
+NO_PAM_SESSION 1
+# Auth: plugins/sudoers/auth/passwd.c (getpwnam + crypt) is the only
+# backend; nothing here defines WITHOUT_PASSWD.
+
+# ---- [cfg] package identity (configure.ac:21 AC_INIT) ----
+# sudo.c:222, policy.c:1122, iolog.c:859, audit.c:427 use PACKAGE_VERSION.
+PACKAGE_NAME "sudo"
+PACKAGE_TARNAME "sudo"
+PACKAGE_VERSION "1.9.17p2"
+PACKAGE_STRING "sudo 1.9.17p2"
+PACKAGE_BUGREPORT "https://bugzilla.sudo.ws/"
+PACKAGE_URL ""
+
+# ---- [sdk] putenv() prototype ----
+# m4/sudo.m4:294-306 (SUDO_FUNC_PUTENV_CONST): PUTENV_CONST is `const` only
+# if a redeclaration `int putenv(const char *)` compiles. The SDK declares
+# `int putenv(char *)` (iPhoneOS.sdk/usr/include/stdlib.h:227), so the
+# redeclaration conflicts and configure emits an EMPTY PUTENV_CONST
+# (sudo.m4:305). src/env_hooks.c:76,119,122,133 use it as a type qualifier.
+PUTENV_CONST <empty>
+
+# ---- [sdk] types / sizes (LP64 arm64) ----
+# GETGROUPS_T: configure.ac's AC_TYPE_GETGROUPS answer, gid_t. It MUST be
+# gid_t: include/sudo_util.h:208 declares sudo_getgrouplist2_v1 with a
+# gid_t basegid, and lib/util/getgrouplist.c:65 defines it with
+# GETGROUPS_T -- any other type is a "conflicting types" compile error.
+GETGROUPS_T gid_t
+SIZEOF_ID_T 4
+SIZEOF_LONG_LONG 8
+SIZEOF_TIME_T 8
+STDC_HEADERS 1
+SIZEOF_OFF_T 8
+HAVE_STDIO_H 1
+HAVE_WCHAR_H 1
+HAVE_INTMAX_T 1
+HAVE_UINTMAX_T 1
+HAVE_SIG_ATOMIC_T 1
+HAVE_SOCKLEN_T 1
+HAVE_STRTOULL 1
+HAVE_VA_COPY 1
+HAVE___BUILTIN_CLZ 1
+HAVE___BUILTIN_CLZL 1
+HAVE_DECL_NSIG 1
+HAVE_DECL_SSIZE_MAX 1
+# ioctl(int, unsigned long, ...) on Darwin: the request takes no (int) cast
+# (m4/sudo.m4:380-392 SUDO_FUNC_IOCTL_REQ_INT emits an EMPTY definition then).
+IOCTL_REQ_CAST <empty>
+CONFIGURE_ARGS "(none; see tools/userland_staging/build_sudo.sh)"
+HAVE___FUNC__ 1
+HAVE__BOOL 1
+HAVE_STDBOOL_H 1
+HAVE_LONG_LONG_INT 1
+HAVE_UNSIGNED_LONG_LONG_INT 1
+HAVE_FALLTHROUGH_ATTRIBUTE 1
+HAVE_DSO_VISIBILITY 1
+
+# ---- [sdk] headers ----
+HAVE_DIRENT_H 1
+HAVE_DLFCN_H 1
+HAVE_INTTYPES_H 1
+HAVE_MACHINE_ENDIAN_H 1
+HAVE_PATHS_H 1
+HAVE_STDINT_H 1
+HAVE_STDLIB_H 1
+HAVE_STRINGS_H 1
+HAVE_STRING_H 1
+HAVE_SYS_SELECT_H 1
+HAVE_SYS_SYSCTL_H 1
+HAVE_SYS_SOCKIO_H 1
+HAVE_SYS_STAT_H 1
+HAVE_SYS_TYPES_H 1
+HAVE_UNISTD_H 1
+HAVE_UTIL_H 1
+HAVE_PTHREAD_H 1
+# HAVE_UTMPX_H / HAVE_GETUTXID / HAVE_STRUCT_UTMP_*: deliberately UNDEFINED --
+# src/utmp.c is not compiled; sudo_utmp_compat.c replaces it (see its header).
+# HAVE_LIBUTIL_H / HAVE_LOGIN_CAP_H / HAVE_SYS_SYSMACROS_H: not Darwin.
+
+# ---- [sdk] declarations ----
+HAVE_DECL_ERRNO 1
+HAVE_DECL_GETDELIM 1
+HAVE_DECL_GETDOMAINNAME 1
+HAVE_DECL_H_ERRNO 1
+HAVE_DECL_INNETGR 1
+HAVE_DECL_LLONG_MAX 1
+HAVE_DECL_LLONG_MIN 1
+HAVE_DECL_PATH_MAX 1
+HAVE_DECL_QUAD_MAX 1
+HAVE_DECL_QUAD_MIN 1
+HAVE_DECL_SIZE_MAX 1
+HAVE_DECL_SIZE_T_MAX 1
+HAVE_DECL_ULLONG_MAX 1
+HAVE_DECL_UQUAD_MAX 1
+
+# ---- [sdk] struct members ----
+HAVE_STRUCT_DIRENT_D_NAMLEN 1
+HAVE_STRUCT_DIRENT_D_TYPE 1
+HAVE_STRUCT_IN6_ADDR 1
+HAVE_STRUCT_SOCKADDR_IN_SIN_LEN 1
+HAVE_STRUCT_SOCKADDR_SA_LEN 1
+HAVE_STRUCT_TM_TM_GMTOFF 1
+HAVE_ST_MTIMESPEC 1
+HAVE_KINFO_PROC_44BSD 1
+
+# ---- [libc] functions sudo has NO fallback for, or must use natively ----
+HAVE_CRYPT 1
+HAVE_DLOPEN 1
+HAVE_DIRFD 1
+HAVE_EXECVP 1
+HAVE_FSEEKO 1
+HAVE_GETADDRINFO 1
+HAVE_GETGROUPS 1
+HAVE_GETGROUPLIST 1
+HAVE_GETIFADDRS 1
+HAVE_FREEIFADDRS 1
+HAVE_GETPROGNAME 1
+HAVE_GETTTYENT 1
+HAVE_GRANTPT 1
+HAVE_POSIX_OPENPT 1
+HAVE_INNETGR 1
+HAVE_OPTRESET 1
+HAVE_PSELECT 1
+HAVE_PTHREAD_ATFORK 1
+HAVE_REVOKE 1
+HAVE_SETEUID 1
+HAVE_SETREUID 1
+HAVE_SYSCTL 1
+HAVE_UNSETENV 1
+HAVE_FUTIMES 1
+HAVE_UTIMES 1
+HAVE_MACH_CONTINUOUS_TIME 1
+# Native libc printf family / string helpers (Apple Libc's own):
+HAVE_ASPRINTF 1
+HAVE_VASPRINTF 1
+HAVE_SNPRINTF 1
+HAVE_VSNPRINTF 1
+HAVE_STRLCAT 1
+HAVE_STRLCPY 1
+HAVE_STRNDUP 1
+HAVE_STRNLEN 1
+HAVE_STRSIGNAL 1
+HAVE_BZERO 1
+HAVE_ISBLANK 1
+HAVE_FNMATCH 1
+HAVE_GLOB 1
+HAVE_GETDELIM 1
+HAVE_GETUSERSHELL 1
+HAVE_INET_NTOP 1
+HAVE_INET_PTON 1
+HAVE_NANOSLEEP 1
+HAVE_PREAD 1
+HAVE_PWRITE 1
+HAVE_ARC4RANDOM 1
+HAVE_ARC4RANDOM_BUF 1
+HAVE_ARC4RANDOM_UNIFORM 1
+HAVE_GETENTROPY 1
+# HAVE_KILLPG is UNDEFINED: include/sudo_compat.h:271-272 then maps
+# killpg(p,s) to kill(-(p),s), and libsystem_c exports _kill but no _killpg.
+# Deliberately UNDEFINED so upstream's fallback compiles in (each gated
+# `#ifndef HAVE_X` in lib/util/): openat fstatat unlinkat fchmodat
+# reallocarray memrchr closefrom explicit_bzero freezero getopt_long
+# pw_dup sig2str str2sig pipe2 dup3 futimens utimensat mkstemps
+# clock_gettime cfmakeraw. Also undefined: HAVE_POLL (configure.ac:2279,
+# "Darwin has a broken poll()"), HAVE___INTERPOSE (only for
+# sudo_noexec.so, not built), HAVE_DECL_SYS_SIGLIST (sudo generates its
+# own via mksiglist/mksigname -- see build_sudo.sh).

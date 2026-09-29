@@ -37,7 +37,7 @@
  * (they run with no sibling dylibs loaded at all), so the archive build
  * must keep every one of them.
  *
- * rename/unlinkat/reallocarray/getiopolicy_np/setiopolicy_np are NOT
+ * rename/unlinkat/getiopolicy_np/setiopolicy_np are NOT
  * guarded: no sibling dylib defines any of them, so libremovefile.dylib
  * is their real single owner.
  */
@@ -156,28 +156,12 @@ struct _iopol_param_t {
 #define IOPOL_CMD_GET 0x00000001
 #define IOPOL_CMD_SET 0x00000002
 
-/* reallocarray: real Apple libmalloc source (third_party/libmalloc/src/
- * malloc.c) defines this, but that file itself isn't compiled here
- * (build_libmalloc.sh's real, documented scope decision - malloc.c needs
- * dlopen/dyld, this target has neither). Ported directly from that real
- * implementation (same overflow-checked-multiply-then-realloc logic,
- * os_mul_overflow -> the equivalent real __builtin_mul_overflow, a real
- * compiler builtin lowering to a real overflow-checked multiply
- * instruction, not a hand-rolled approximation) rather than reimplemented
- * from scratch - last resort per CLAUDE.md's source-priority rule since
- * the real defining file can't be linked whole. */
-extern void *realloc(void *ptr, size_t size);
-extern int *__error(void);
-#define ENOMEM 12
-
-void *reallocarray(void *in_ptr, size_t nmemb, size_t size) {
-    size_t alloc_size;
-    if (__builtin_mul_overflow(nmemb, size, &alloc_size)) {
-        *__error() = ENOMEM;
-        return (void *)0;
-    }
-    return realloc(in_ptr, alloc_size);
-}
+/* reallocarray: moved out of this object (DAR-429) into its own archive
+ * member, removefile_reallocarray.c. libmalloc.a's libmalloc_dispatch.o
+ * (DAR-424) owns reallocarray; a copy inside THIS object, which every
+ * consumer pulls in for rename()/unlinkat(), collided with it as a hard
+ * duplicate-symbol whenever both archives were on one link line. As a
+ * separate member it is only pulled when nothing earlier defines it. */
 
 /* flsl: find-last-set (1-indexed highest set bit, 0 for input 0) - real
  * BSD libc function real qsort.c's insertion-sort-threshold heuristic

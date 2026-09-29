@@ -1,0 +1,30 @@
+# Darwin answers for third_party/sudo's pathnames.h.in (DAR-340), consumed
+# by ../gen_sudo_config_h.sh exactly like sudo_config_darwin.def.
+# Layout follows this project's /etc + /var conventions; configure.ac's
+# own defaults (devsearch, sesh/noexec under $libexecdir/sudo) otherwise.
+# _PATH_SUDO_SENDMAIL is left UNDEFINED on purpose: no MTA exists here,
+# and eventlog.c:94 / defaults.c:590 both guard on it.
+# 1.9.17's pathnames.h.in has bare `# undef` entries (no built-in defaults any
+# more); these three are what upstream's Makefile/configure would supply
+# (configure.ac:239 sudoers_plugin, :4462-4464 sysconfdir=/etc).
+_PATH_SUDO_CONF "/etc/sudo.conf"
+_PATH_SUDOERS "/etc/sudoers"
+_PATH_SUDOERS_PLUGIN "sudoers.so"
+_PATH_BSHELL "/bin/sh"
+_PATH_SUDO_TIMEDIR "/var/db/sudo/ts"
+_PATH_SUDO_LECTURE_DIR "/var/db/sudo/lectured"
+_PATH_SUDO_IO_LOGDIR "/var/log/sudo-io"
+_PATH_SUDO_LOGDIR "/var/log"
+_PATH_SUDO_LOGFILE "/var/log/sudo.log"
+_PATH_SUDO_NOEXEC "/usr/libexec/sudo/sudo_noexec.so"
+_PATH_SUDO_ASKPASS ""
+_PATH_SUDO_PLUGIN_DIR "/usr/libexec/sudo"
+_PATH_SUDO_DEVSEARCH "/dev/pts:/dev/vt:/dev/term:/dev/zcons:/dev/pty:/dev"
+_PATH_SUDO_SESH "/usr/libexec/sudo/sesh"
+_PATH_VI "/usr/bin/vi"
+_PATH_MV "/bin/mv"
+# _PATH_LDAP_CONF/_PATH_LDAP_SECRET: plugins/sudoers/policy.c:55-56 uses
+# them unconditionally (they are DEFINEd by configure.ac:1201,1205 even
+# without LDAP) with configure.ac:207-208's defaults. LDAP itself is off.
+_PATH_LDAP_CONF "/etc/ldap.conf"
+_PATH_LDAP_SECRET "/etc/ldap.secret"

@@ -423,14 +423,47 @@ kern_return_t task_dyld_process_info_notify_get(mach_port_t *names, unsigned int
     return KERN_FAILURE;
 }
 
-/* Real, honest always-allow: see dyld_compat/libamfi.h's header comment
- * (this target has no AMFI kext at all, so there is no real policy to
- * consult -- "allow everything" is the true, correct answer here, the
- * exact same real fact this project's CLAUDE.md already documents about
- * unsigned binaries running fine on this port). */
+/* DAR-340/C1: this target has no AMFI kext, so dyld's policy is decided
+ * HERE, and "allow everything" is only correct for an ordinary process.
+ * A setuid/setgid image must NOT honor DYLD_INSERT_LIBRARIES /
+ * DYLD_LIBRARY_PATH & co: with all-ones output dyld-940 sets
+ * allowEnvVarsPath/allowInterposing/allowInsertFailures
+ * (third_party/dyld/dyld/DyldProcessConfig.cpp:491-497) and then
+ * addEnvVar()s every DYLD_* from envp (DyldProcessConfig.cpp:841-845);
+ * pruneEnvVars only runs for Platform macOS/iOSMac/driverKit
+ * (DyldProcessConfig.cpp:505-511) and these binaries are iOS-platform,
+ * so nothing else stops it. Any local user could run their constructor as
+ * root through su/sudo.
+ * Restricted = the kernel marked the process P_SUGID (issetugid(), xnu-7195
+ * bsd/kern/kern_exec.c exec_handle_sugid; syscall 327 per
+ * bsd/kern/syscalls.master:497) OR the main image has a
+ * __RESTRICT,__restrict section (input flag
+ * AMFI_DYLD_INPUT_PROC_HAS_RESTRICT_SEG, set by
+ * DyldDelegates.cpp:110-111 from MachOFile::isRestricted()).
+ * Restricted output keeps ONLY ALLOW_AT_PATH: allowEnvVarsPath/
+ * PrintVars/SharedCache/FallbackPaths/InsertFailures/Interposing are all
+ * consumed as booleans in DyldProcessConfig.cpp:491-497, 587-597, 663,
+ * 841, 859 and Loader.cpp:457,625,1815, so 0 there means every DYLD_* is
+ * ignored.
+ * NOTE: the `issetugid` linked into dyld.macho is the libc_locale_env_stubs.c
+ * stub that always returns 0 (verified: otool -tV dyld.macho shows
+ * `_issetugid: mov w8,#0; ret`), so it can NOT be used here -- issue the
+ * real trap directly. */
+static int dyld_real_issetugid(void) {
+    register long x0 __asm__("x0");
+    register long x16 __asm__("x16") = 327; /* SYS_issetugid */
+    __asm__ volatile("svc #0x80" : "=r"(x0) : "r"(x16) : "memory", "cc");
+    return (int)x0;
+}
+#define DYLD_AMFI_INPUT_HAS_RESTRICT_SEG (1ULL << 1) /* libamfi.h */
+#define DYLD_AMFI_OUTPUT_ALLOW_AT_PATH   (1ULL << 0)
 int amfi_check_dyld_policy_self(unsigned long long input_flags, unsigned long long *output_flags) {
-    (void)input_flags;
-    if (output_flags) *output_flags = ~0ULL;
+    if (output_flags) {
+        if (dyld_real_issetugid() != 0 || (input_flags & DYLD_AMFI_INPUT_HAS_RESTRICT_SEG))
+            *output_flags = DYLD_AMFI_OUTPUT_ALLOW_AT_PATH;
+        else
+            *output_flags = ~0ULL;
+    }
     return 0;
 }
 

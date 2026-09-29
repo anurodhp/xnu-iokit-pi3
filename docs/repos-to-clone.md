@@ -53,6 +53,7 @@ The main repo itself is `anurodhp/xnu-iokit-pi3`.
 | `gnustep-gui` | `anurodhp/libs-gui` | `iokit-port` | gnustep/libs-gui (off `gui-0_32_0`; objc4 port, DAR-390) |
 | `gnustep-examples` | `anurodhp/tests-examples` | `iokit-port` | gnustep/tests-examples (master 46ef973, unmodified; pins the commit) |
 | `gnustep-gap` | `anurodhp/gap` | `iokit-port` | gnustep/gap (master 220860a9; Terminal Darwin build, DAR-394) |
+| `gnustep-gworkspace` | `anurodhp/apps-gworkspace` | `iokit-port` | gnustep/apps-gworkspace tag gworkspace-1_0_0 (14ea9f49); typed IMPs for objc4, DAR-392 |
 
 On-disk remote naming varies. Repos converted from patch files keep
 Apple as `origin` and the fork as `fork`, so push with `git push fork
