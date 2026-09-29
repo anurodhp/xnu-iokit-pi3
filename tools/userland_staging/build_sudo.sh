@@ -5,12 +5,12 @@
 # sudo at all (see setup_third_party.sh's SUDO block) so this is the
 # tier-3 upstream in CLAUDE.md's source-priority rule.
 #
-# STATUS (2026-09-28): compiles all 173 objects with zero errors (also with
-# -Werror=implicit-function-declaration live) and LINKS against the current
-# libc_build dylibs; bind_target_audit.sh, dead_stub_audit.sh and
-# weak_def_audit.sh all pass on that image (checked against a scratch
-# output path, libc_build untouched). NEVER BOOTED -- no QEMU run has
-# happened, and sudo has never executed. Every answer that could be wrong is
+# STATUS (2026-09-29): pinned to sudo 1.9.17p2 (bumped from 1.9.5p2), 225
+# objects compile with -Werror=implicit-function-declaration -Werror=int-conversion
+# and link against the current libc_build dylibs. BOOT-VERIFIED on QEMU:
+# `sudo -V`, wrong-password x3, correct password as a wheel user, env and fd
+# sanitizing (see docs/sudo-su-dyld-regression.md). bind_target_audit.sh (no
+# args) is clean. Every answer that could be wrong is
 # listed in sudo_compat/sudo_config_darwin.def with a tag. Gaps closed by the
 # first real compile/link (each is commented at its fix site): PACKAGE_*,
 # PUTENV_CONST, GETGROUPS_T=gid_t, _PATH_LDAP_*, SUDOERS_LOG_CLIENT (+
@@ -230,13 +230,23 @@ for b in $SRC_SRCS; do
         *)    compile "$SUDO/src/$b.c"   "src_$b" ;;
     esac
 done
+# 1.9.17 additions to the glue (each found by the first real link):
+#  * collate.c/collcmp.c (+ the two honest-failure loader stubs): lib/util/regex.c
+#    pulls libc_regex.a's tre-match-*, which needs the LOCAL (non-exported)
+#    ___collate_equiv_value -- same recipe/justification as build_login.sh:402-422.
+#  * Libc/compat-43/FreeBSD/killpg.c: src/suspend_parent.c:123 calls killpg()
+#    directly; no shipped dylib exports it (nm -gU libc_build/system/*.dylib).
+#    Real Apple/FreeBSD source, uses the exported ___kill.
 # Project glue -- same set su links for the same reasons (build_su.sh):
 # real passwd/group lookup shim, fork/atfork compat, getusershell, crypt,
 # sigsetops, and the shared locale-globals object (NEVER a narrower
 # hand-written one, DAR-169).
 for f in sudo_main_wrapper.c sudo_utmp_compat.c ps_passwd_compat.c ../libinfo_custom/libinfo_custom.c chpass_fork_compat.c \
          "$LIBC/gen/getusershell.c" "$LIBC/gen/crypt.c" "$LIBC/gen/sigsetops.c" \
-         libc_locale_globals_compat.c "$LIBC/locale/FreeBSD/table.c" "$LIBC/locale/FreeBSD/none.c"; do
+         libc_locale_globals_compat.c "$LIBC/locale/FreeBSD/table.c" "$LIBC/locale/FreeBSD/none.c" \
+         "$LIBC/locale/FreeBSD/collate.c" "$LIBC/locale/FreeBSD/collcmp.c" \
+         chrony_part_load_locale_stub.c simple_cmds_libsystem_c_gap_compat.c \
+         "$LIBC/compat-43/FreeBSD/killpg.c"; do
     compile "$f" "glue_$(basename "$f" .c)"
 done
 
@@ -280,7 +290,7 @@ SYSCFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -I $XNU/libsyscall/cust
 #   NO_SYSCALL_STUB but the generator still emits ___setreuid/___setregid,
 #   and libsyscall/Platforms/iPhoneOS/arm64/syscall.map:64-65 aliases
 #   _setreuid/_setregid to them; the aliases are on the link line below.
-SUDO_SYSCALLS="_chdir _getpgrp _getpgid _getpriority _getsid _sigpending _futimes ___setreuid ___setregid $SUDO_EXTRA_SYSCALLS"
+SUDO_SYSCALLS="_chdir _getpgrp _getpgid _getpriority _getsid _sigpending _futimes ___setreuid ___setregid ___lchown $SUDO_EXTRA_SYSCALLS"
 for s in $SUDO_SYSCALLS; do
     "$CLANG" $SYSCFLAGS "$TMPGEN/${s}.s" -o "$OBJ/sys${s}.o"
 done
@@ -334,6 +344,7 @@ printf 'R' > "$RESTRICT_MARK"
     -Wl,-alias,_sigprocmask,'_sigprocmask$UNIX2003' \
     -Wl,-alias,___setreuid,'_setreuid$UNIX2003' \
     -Wl,-alias,___setregid,'_setregid$UNIX2003' \
+    -Wl,-alias,___lchown,'_lchown$UNIX2003' \
     -Wl,-alias,_getgroups,'_getgroups$DARWIN_EXTSN' \
     -Wl,-alias,_glob,'_glob$INODE64' \
     -Wl,-alias,_socketpair,'_socketpair$UNIX2003'

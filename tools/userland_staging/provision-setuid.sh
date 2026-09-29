@@ -12,5 +12,10 @@ done
 if [ -f /etc/sudoers ]; then
     chown root:wheel /etc/sudoers && chmod 0440 /etc/sudoers || rc=1
 fi
-ls -ln /usr/bin/su /usr/bin/sudo /etc/sudoers 2>&1
+# OpenPAM ignores a policy file that is not root-owned (su then fails with
+# "no pam_deny.so found"): the host cannot chown it either.
+if [ -f /etc/pam.d/su ]; then
+    chown root:wheel /etc/pam.d/su && chmod 0644 /etc/pam.d/su || rc=1
+fi
+ls -ln /usr/bin/su /usr/bin/sudo /etc/sudoers /etc/pam.d/su 2>&1
 exit $rc

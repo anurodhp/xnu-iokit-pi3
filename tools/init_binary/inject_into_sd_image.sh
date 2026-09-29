@@ -1855,6 +1855,13 @@ if [ ! -f "$MNT/etc/pam.d/su" ]; then
 auth		required	pam_unix.so
 account		required	pam_unix.so
 session		required	pam_unix.so
+# DAR-340: the password facility MUST be present. openpam_configure.c:337-344
+# defaults every EMPTY facility (incl. password) to `required pam_deny.so`, and
+# no pam_deny.so module exists here, so an absent line makes pam_start() itself
+# fail ("no pam_deny.so found") and su never runs at all. su never calls
+# pam_chauthtok; pam_unix's pam_sm_chauthtok (su_pam_unix_static.c:141) is a
+# no-op that returns PAM_SUCCESS.
+password	required	pam_unix.so
 PAM_SU_EOF
     chmod 644 "$MNT/etc/pam.d/su"
     echo "+ wrote $MNT/etc/pam.d/su"

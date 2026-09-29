@@ -64,7 +64,8 @@ LOCK = os.path.join(REPO, "qemu", ".qemu_test_lock")
 # run had silently never sent a single --cmd because of this, which
 # looked identical to the guest hanging for the same reason the comment
 # above already warns about.
-PROMPT_CANDIDATES = ("-bash-3.2# ", "-sh-3.2# ")
+# DAR-340: non-root logins (alice/bob) get a "$ " prompt.
+PROMPT_CANDIDATES = ("-bash-3.2# ", "-sh-3.2# ", "-bash-3.2$ ", "-sh-3.2$ ")
 
 
 def acquire_lock(timeout):

@@ -16,5 +16,5 @@ NEWLD_BINDIR="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/bin"
     -install_name /usr/lib/dyld_inject_probe.dylib -B"$NEWLD_BINDIR" -Wl,-fixup_chains \
     -o "$OUT/dyld_inject_probe.dylib" dyld_inject_probe.c "$OUT/system/libSystem.B.dylib"
 otool -hv "$OUT/dyld_inject_probe.dylib" | grep -q " DYLIB " || { echo "error: not a DYLIB" >&2; exit 1; }
-otool -l "$OUT/dyld_inject_probe.dylib" | grep -q "__mod_init_func" || { echo "error: no constructor section" >&2; exit 1; }
+otool -l "$OUT/dyld_inject_probe.dylib" | grep -Eq "__mod_init_func|__init_offsets" || { echo "error: no constructor section" >&2; exit 1; }
 echo "wrote $OUT/dyld_inject_probe.dylib"

@@ -25,7 +25,9 @@ also carry the `__RESTRICT` section (belt and braces).
    `-rwsr-xr-x 0 0`, `/etc/sudoers` `-r--r----- 0 0`). Host-built images cannot
    chown to root (host user is uid 502, host `sudo` needs a password), so the
    image ships su/sudo as 0755 NON-setuid until this runs.
-4. `/usr/sbin/dyld-inject-regression` -- exits 0 only if: the control (plain
+4. As root: `/usr/sbin/dyld-inject-regression prep`; then log in as a
+   NON-root user (e.g. `pw useradd`-created alice) and run
+   `/usr/sbin/dyld-inject-regression test`. Exit 0 only if: the control (plain
    binary) DOES run the probe constructor; a setuid copy of `id` does NOT
    (issetugid path); real `su` and `sudo -V` do NOT; a non-setuid copy of `su`
    does NOT (`__RESTRICT` path). It prints SKIP (not PASS) if su/sudo are not
