@@ -727,6 +727,10 @@ mkdir -p third_party
 #     iokit-port, upstream master 46ef973 (2026-06-28) unmodified -- the
 #     repo has no release tag newer than 2000, so the fork branch is what
 #     pins the commit. Source of Ink.app (build_gnustep_ink.sh).
+#     gnustep-gap (DAR-394): our fork anurodhp/gap branch iokit-port, off
+#     gnustep/gap master 220860a9 (2026-09-08; gap has no release tags).
+#     Source of Terminal.app (system-apps/Terminal): one commit adding the
+#     Darwin pty include and link libraries. build_gnustep_terminal.sh.
 #     libtiff 4.7.1 (DAR-390): gitlab.com/libtiff/libtiff tag v4.7.1,
 #     unmodified; gnustep-gui requires it. Apple publishes no libtiff.
 #   DejaVu fonts -- the upstream release tarball, not the git tag: the
@@ -854,6 +858,7 @@ gnustep-gui|git@github.com:anurodhp/libs-gui.git|iokit-port||https://github.com/
 gnustep-back|https://github.com/gnustep/libs-back.git|back-0_32_0|
 gnustep-examples|git@github.com:anurodhp/tests-examples.git|iokit-port||https://github.com/gnustep/tests-examples.git
 libtiff|https://gitlab.com/libtiff/libtiff.git|v4.7.1|
+gnustep-gap|git@github.com:anurodhp/gap.git|iokit-port||https://github.com/gnustep/gap.git
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch upstream_url; do

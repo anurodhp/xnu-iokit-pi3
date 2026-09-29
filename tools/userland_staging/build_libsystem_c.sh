@@ -496,6 +496,20 @@ rm -f "$EXTRACT/getenv_real_raw.o"
     -I ../../third_party/libplatform/private -I "$XNU/libkern" \
     -include stdlib.h "$LIBC/gen/FreeBSD/arc4random.c" -o "$EXTRACT/arc4random.o"
 "$CLANG" $SIGLIST_CFLAGS libresolv_getentropy_syscall.c -o "$EXTRACT/getentropy_syscall.o"
+# grantpt/posix_openpt/ptsname/ptsname_r/unlockpt (DAR-390, GNUstep
+# Terminal.app; openpty/forkpty in libc_gen's util/pty.c call them):
+# Libc's stdlib/grantpt.c, libsystem_c on Apple (dyld_info -exports
+# /usr/lib/system/libsystem_c.dylib). Same -I paths as arc4random.c above;
+# -include of Libc's real os/assumes.h because SIGLIST_CFLAGS's
+# compat_include/os/assumes.h (build_libmalloc.sh's os_crash-only stand-in)
+# comes first and lacks the os_assert/os_assert_zero grantpt.c:70-90 uses;
+# its include guard is pre-defined so only the real header applies (the
+# stand-in's os_crash prototype collides with assumes.h:255's macro).
+# Those call _os_assert_log/_os_crash, which os_assumes_compat.o provides.
+"$CLANG" $SIGLIST_CFLAGS -I arc4random_compat_include -I "$LIBC" \
+    -I ../../third_party/libplatform/private -I "$XNU/libkern" \
+    -D_OS_ASSUMES_MALLOC_SHIM_H_ -include "$LIBC/os/assumes.h" \
+    "$LIBC/stdlib/grantpt.c" -o "$EXTRACT/grantpt.o"
 # NOT libresolv_arc4random_deps_compat.o here (unlike build_libresolv.sh):
 # that file's real open$UNIX2003/read$UNIX2003 forwarders exist only
 # because libresolv's own narrower build never otherwise pulls in a real
