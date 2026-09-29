@@ -201,4 +201,22 @@ cp "$WMD/Defaults/WMGLOBAL" "$PKGCONF/"
 for f in $(am_data "$SRC/WINGs/Resources/Makefile.am" resdata_DATA); do
     cp "$SRC/WINGs/Resources/$f" "$STAGE/share/WINGs/"
 done
+
+# ---- boot session: Xorg + wmaker + GNUstep, started by launchd ----------
+# x11_config/session/: x11-session (Xorg, then wmaker, GNUstep env),
+# autostart (wmaker's init script: opens Terminal.app) and the
+# LaunchDaemon plist. The staged tree is ditto'd onto the image root by
+# inject_into_sd_image.sh, so all three land with no entry of their own.
+SESS="x11_config/session"
+ROOTDIR="$X11_ROOT/server/root"
+cp "$SESS/x11-session" "$STAGE/bin/x11-session"
+cp "$SESS/autostart" "$PKGDATA/autostart"
+chmod 755 "$STAGE/bin/x11-session" "$PKGDATA/autostart"
+mkdir -p "$ROOTDIR/Library/LaunchDaemons"
+cp "$SESS/org.puredarwin.x11-session.plist" "$ROOTDIR/Library/LaunchDaemons/"
+chmod 644 "$ROOTDIR/Library/LaunchDaemons/org.puredarwin.x11-session.plist"
+plutil -lint "$ROOTDIR/Library/LaunchDaemons/org.puredarwin.x11-session.plist" >/dev/null ||
+    { echo "error: x11-session plist is not valid" >&2; exit 1; }
+sh -n "$STAGE/bin/x11-session" && sh -n "$PKGDATA/autostart" ||
+    { echo "error: session script syntax" >&2; exit 1; }
 echo "staged $STAGE/{bin/wmaker,share/WindowMaker,share/WINGs,etc/WindowMaker}"

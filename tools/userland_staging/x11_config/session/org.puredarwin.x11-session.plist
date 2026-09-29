@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>org.puredarwin.x11-session</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/X11/bin/x11-session</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>30</integer>
+	<key>StandardOutPath</key>
+	<string>/var/log/x11-session.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/x11-session.log</string>
+</dict>
+</plist>
