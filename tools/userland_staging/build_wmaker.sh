@@ -191,7 +191,12 @@ sed -e "s:#extension#:xpm:" "$WMD/Defaults/WMWindowAttributes.in" > "$PKGCONF/WM
 sed -e "s:#pkgdatadir#:$X11_PREFIX/share/WindowMaker:" -e "s:#pixmapdir#:$X11_PREFIX/share/pixmaps:" \
     "$WMD/Defaults/WindowMaker.in" > "$PKGCONF/WindowMaker"
 sed -e "s:#wprefs#:$X11_PREFIX/bin/WPrefs:" "$WMD/Defaults/WMState.in" > "$PKGCONF/WMState"
-cp "$PKGDATA/plmenu" "$PKGCONF/WMRootMenu"
+# This port's own menu (only installed programs) instead of upstream's
+# plmenu, whose entries (xterm, firefox, gimp, ...) do not exist here.
+# (No comments inside the file: Window Maker refuses them in its owned
+# domain files, WINGs/proplist.c:887-889. Syntax: WindowMaker/plmenu.in.
+# Add an entry there when a new app is installed.)
+cp x11_config/wmaker/WMRootMenu "$PKGCONF/WMRootMenu"
 # WindowMaker/IconSets/Makefile.am: Default.iconset is the Icon lines of
 # WMWindowAttributes wrapped in braces.
 mkdir -p "$PKGDATA/IconSets"
@@ -201,4 +206,27 @@ cp "$WMD/Defaults/WMGLOBAL" "$PKGCONF/"
 for f in $(am_data "$SRC/WINGs/Resources/Makefile.am" resdata_DATA); do
     cp "$SRC/WINGs/Resources/$f" "$STAGE/share/WINGs/"
 done
+
+# ---- boot session: Xorg + wmaker + GNUstep, started by launchd ----------
+# x11_config/session/: x11-session (Xorg, then wmaker, GNUstep env),
+# autostart (wmaker's init script: opens Terminal.app) and the
+# LaunchDaemon plist. The staged tree is ditto'd onto the image root by
+# inject_into_sd_image.sh, so all three land with no entry of their own.
+SESS="x11_config/session"
+ROOTDIR="$X11_ROOT/server/root"
+cp "$SESS/x11-session" "$STAGE/bin/x11-session"
+cp "$SESS/autostart" "$PKGDATA/autostart"
+chmod 755 "$STAGE/bin/x11-session" "$PKGDATA/autostart"
+mkdir -p "$ROOTDIR/Library/LaunchDaemons"
+cp "$SESS/org.puredarwin.x11-session.plist" "$ROOTDIR/Library/LaunchDaemons/"
+chmod 644 "$ROOTDIR/Library/LaunchDaemons/org.puredarwin.x11-session.plist"
+# Ships DISABLED: x11-session exits 0 at once while this file exists, so the
+# Pi boots to the console login only. Enable later on the Pi with
+# `rm /etc/x11-session.disabled` (no rebuild needed).
+mkdir -p "$ROOTDIR/etc"
+printf '%s\n' "# Remove this file to start the X session (Xorg + wmaker) at boot." > "$ROOTDIR/etc/x11-session.disabled"
+plutil -lint "$ROOTDIR/Library/LaunchDaemons/org.puredarwin.x11-session.plist" >/dev/null ||
+    { echo "error: x11-session plist is not valid" >&2; exit 1; }
+sh -n "$STAGE/bin/x11-session" && sh -n "$PKGDATA/autostart" ||
+    { echo "error: session script syntax" >&2; exit 1; }
 echo "staged $STAGE/{bin/wmaker,share/WindowMaker,share/WINGs,etc/WindowMaker}"

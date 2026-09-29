@@ -31,6 +31,7 @@ SHELL_CMDS="../../third_party/shell_cmds"
 TEXT_CMDS="../../third_party/text_cmds"
 TEXT_CMDS_BINTRANS="../../third_party/text_cmds_bintrans"
 SYSTEM_CMDS="../../third_party/system_cmds"
+ADV_CMDS="../../third_party/adv_cmds"
 AWK_SRC="../../third_party/awk/src"
 FILE_CMDS="../../third_party/file_cmds"
 GNUDIFF="../../third_party/gnudiff/diffutils"
@@ -981,8 +982,17 @@ fi
 # same class of mismatch fstatfs() already had to work around). Hand-
 # written correctly in simple_cmds_statfs64_compat.c instead, alongside a
 # correct getfsstat() (also never in this list -- same file).
-SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access _getuid _execve _link _symlink _getegid _geteuid _getgid _getgroups _chflags _chown _mknod _mkfifo _futimes _readlink _pread _pwrite _pathconf _faccessat _getentropy _dup2 _getpriority _chroot _setgroups _setgid _setuid _chdir _fgetattrlist _fsetattrlist _dup _readlinkat _poll _fsync _getrusage"
-if [ ! -f "$OUT/simple_getlogin_trap.o" ]; then
+SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access _getuid _execve _link _symlink _getegid _geteuid _getgid _getgroups _chflags _chown _mknod _mkfifo _futimes _readlink _pread _pwrite _pathconf _faccessat _getentropy _dup2 _getpriority _chroot _setgroups _setgid _setuid _chdir _fgetattrlist _fsetattrlist _dup _readlinkat _poll _fsync _getrusage _getsid"
+# DAR-343: the old single sentinel (simple_getlogin_trap.o) made this whole
+# block run exactly once per libc_build, so a stub added to
+# SYS_STUBS_NEEDED later (_getsid, for pkill) was silently never generated
+# on an already-built tree. Run the block whenever ANY listed stub object
+# is missing, and only compile the missing ones.
+sys_stubs_missing=0
+for s in $SYS_STUBS_NEEDED; do
+    [ -f "$OUT/simple_obj/sys_${s}.o" ] || sys_stubs_missing=1
+done
+if [ "$sys_stubs_missing" = 1 ] || [ ! -f "$OUT/simple_getlogin_trap.o" ]; then
     mkdir -p "$OUT/sys_asm_compat/mach/arm64"
     cat > "$OUT/sys_asm_compat/mach/arm64/asm.h" <<'EOF'
 /* SYS.h expects the installed-SDK-style path mach/arm64/asm.h; real
@@ -999,6 +1009,7 @@ EOF
         iPhoneOS \
         "$SYS_TMPGEN" >/dev/null
     for s in $SYS_STUBS_NEEDED; do
+        [ -f "$OUT/simple_obj/sys_${s}.o" ] && [ -f "$OUT/simple_getlogin_trap.o" ] && continue
         "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -arch arm64 \
             -I"$SYS_TMPGEN" -I"$OUT/sys_asm_compat" -I"$XNU/libsyscall/custom" -I"$XNU/libsyscall/mach" -I"$XNU/osfmk" \
             "$SYS_TMPGEN/${s}.s" -o "$OUT/simple_obj/sys_${s}.o" 2>"$OUT/simple_obj/sys_${s}.err" \
@@ -1695,6 +1706,14 @@ CMD_LIST=(
     # libc_regex.a: real regcomp/regexec/regfree (killall -m's real
     # regex-match mode), same archive tar/less/diff already proved.
     "killall:$SHELL_CMDS/killall/killall.c:$LIBC/gen/FreeBSD/siglist.c|ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c"
+    # pkill/pgrep (DAR-343): real, unmodified adv_cmds/pkill/pkill.c (one
+    # binary; getprogname() picks pgrep, pkill.c line 228 -- inject_into_
+    # sd_image.sh installs a second copy as pgrep). Compiled through its
+    # FreeBSD (!__APPLE__) path against a kvm(3) shim over sysctl(KERN_PROC),
+    # since the __APPLE__ path needs private libsysmon/libxpc -- see
+    # pkill_compat_include/pkill_kvm.h and pkill_kvm_compat.c. Same
+    # sysctl/kill/regex/getpwnam surface as killall above.
+    "pkill:$ADV_CMDS/pkill/pkill.c:pkill_kvm_compat.c|ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c"
     # md5 (Phase 4.6 item 6, closing the gap Block 6's own comment above
     # flagged and deferred): real, unmodified text_cmds/md5/md5.c, linked
     # against md5_commoncrypto_shim.c's real-CommonCrypto-header-shaped
@@ -1792,6 +1811,18 @@ for spec in "${CMD_LIST[@]}"; do
     # comment.
     cmd_cflags=""
     case "$name" in
+        pkill)
+            # DAR-343: see pkill_compat_include/pkill_prefix.h. pkill.c's
+            # `#include <kvm.h>` would otherwise resolve to
+            # $LIBC/include/kvm.h (real FreeBSD kvm, `struct __kvm`,
+            # earlier on $CFLAGS's -I list), which conflicts with the
+            # shim's kvm_t/kvm_openfiles -- so, like diff's regex.h and
+            # tar's err.h, shadow it via $OUT/cmd_pre_include (cleared per
+            # command above). kvm.h itself `#include "pkill_kvm.h"`, found
+            # via the -I pkill_compat_include below.
+            cp pkill_compat_include/kvm.h pkill_compat_include/jail.h "$OUT/cmd_pre_include/"
+            cmd_cflags="-include pkill_compat_include/pkill_prefix.h -I pkill_compat_include"
+            ;;
         grep)
             cmd_cflags="-DWITHOUT_FASTMATCH -DWITHOUT_LZMA -DWITHOUT_BZIP2 -DWITHOUT_NLS -DSTDC -DNO_DUMMY_DECL -D__LITTLE_ENDIAN=1 -I $OUT/zlib_glue"
             ;;
@@ -2054,6 +2085,15 @@ for spec in "${CMD_LIST[@]}"; do
             # $LINK_DYLIBS for every command now, not just this one.
             extra_libs="$OUT/system/libremovefile.dylib"
             common_read_compat=""
+            ;;
+        pkill)
+            # DAR-343: pkill_kvm_compat.c's getsid(2) (ki_sid for pkill -s).
+            # No shipped dylib exports _getsid (nm -gU over libc_build/
+            # system/*.dylib), so link the raw syscall stub generated from
+            # syscalls.master line 476 (`310 AUE_GETSID`) above -- the
+            # same route getgid/setuid/etc take via LINK_COMMON, scoped
+            # here rather than widened for every command.
+            extra_libs="$OUT/simple_obj/sys__getsid.o"
             ;;
         sed)
             # sed needs libc_regex.a (Phase 4.6 item 3) for regcomp/

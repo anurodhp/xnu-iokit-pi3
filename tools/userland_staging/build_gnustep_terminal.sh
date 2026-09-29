@@ -14,6 +14,8 @@
 # Build, install and audit: gnustep_common.sh's gs_build_app.
 cd "$(dirname "$0")"
 . ./gnustep_common.sh
+# gs_build_app checks these; the line is here so gen_build_order.py sees the
+# edge: run build_gnustep_host_tools.sh and build_gnustep_back.sh first.
 for s in _forkpty _openpty _grantpt; do
     nm -gU "$SYS/libsystem_c.dylib" | grep -q " $s$" ||
         { echo "error: libsystem_c.dylib does not export $s -- run build_libc_gen.sh and build_libsystem_c.sh first" >&2; exit 1; }

@@ -43,7 +43,7 @@ CROSS_OUT="x11_config/gnustep/cross-config-arm64-darwin"
 [ -f "$SRC/configure.ac" ] || { echo "error: $SRC missing -- run setup_third_party.sh" >&2; exit 1; }
 for f in libobjc.A.dylib objc4_public_headers/objc/runtime.h system/libffi.dylib system/libiconv.dylib \
          libffi_include/ffi.h system/libc++.dylib system/libunwind.dylib system/libsystem_blocks.dylib; do
-    [ -e "$OUT/$f" ] || { echo "error: $OUT/$f not found -- build it first" >&2; exit 1; }
+    [ -e "$OUT/$f" ] || { echo "error: $OUT/$f not found -- run build_objc4.sh, build_libffi.sh, build_libiconv_dylib.sh, build_libcxx_dylib.sh, build_libunwind_dylib.sh and build_libsystem_blocks.sh first" >&2; exit 1; }
 done
 
 rm -rf "$P"; mkdir -p "$P"

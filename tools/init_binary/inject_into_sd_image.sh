@@ -1674,7 +1674,7 @@ fi
 # base64(1) and awk(1): built by build_simple_cmds.sh like the loop above,
 # but a Mac ships them in /usr/bin, not /bin.
 mkdir -p "$MNT/usr/bin"
-for cmd in base64 awk; do
+for cmd in base64 awk pkill; do
     if [ -f "tools/userland_staging/$cmd.macho" ]; then
         cp "tools/userland_staging/$cmd.macho" "$MNT/usr/bin/$cmd"
         chmod 755 "$MNT/usr/bin/$cmd"
@@ -1683,6 +1683,12 @@ for cmd in base64 awk; do
         echo "= tools/userland_staging/$cmd.macho not built -- run build_simple_cmds.sh first if wanted, skipping"
     fi
 done
+# pgrep(1) is the same binary as pkill(1) (pkill.c picks its mode from
+# getprogname(), DAR-343); HFS+ symlinks aren't injected yet, so copy.
+if [ -f tools/userland_staging/pkill.macho ]; then
+    cp tools/userland_staging/pkill.macho "$MNT/usr/bin/pgrep"
+    chmod 755 "$MNT/usr/bin/pgrep"
+fi
 
 # whoami(1) (Tier B, docs/roadmap.md "Command priority reorganized"):
 # no standalone real source exists anywhere in the macos-112 manifest

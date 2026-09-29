@@ -18,8 +18,8 @@
 # SD image ships has to be in the sweep, or "clean" means nothing for it.
 #
 # Symlinks are skipped (find -type f) so a versioned dylib is audited once.
-# Object files, host (non-arm64) tools and anything that is not 64-bit
-# Mach-O are skipped.
+# Object files, host tools (non-arm64, or arm64 with LC_BUILD_VERSION
+# platform 1 = macOS) and anything that is not 64-bit Mach-O are skipped.
 staged_images() {
     local f kind="${1:-EXECUTE|DYLIB|BUNDLE}"
     find libc_build/*/root libc_build/*/*/root libc_build/*/bin -type f 2>/dev/null |
@@ -27,6 +27,7 @@ staged_images() {
         while IFS= read -r f; do
             [ "$(od -An -N4 -tx1 "$f" 2>/dev/null | tr -d ' \n')" = "cffaedfe" ] || continue
             otool -hv "$f" 2>/dev/null | grep -qE "ARM64 .* ($kind) " || continue
+            otool -l "$f" 2>/dev/null | grep -q '^ *platform 1$' && continue
             printf '%s\n' "$f"
         done
 }
