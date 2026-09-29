@@ -31,6 +31,7 @@ SHELL_CMDS="../../third_party/shell_cmds"
 TEXT_CMDS="../../third_party/text_cmds"
 TEXT_CMDS_BINTRANS="../../third_party/text_cmds_bintrans"
 SYSTEM_CMDS="../../third_party/system_cmds"
+ADV_CMDS="../../third_party/adv_cmds"
 AWK_SRC="../../third_party/awk/src"
 FILE_CMDS="../../third_party/file_cmds"
 GNUDIFF="../../third_party/gnudiff/diffutils"
@@ -1695,6 +1696,14 @@ CMD_LIST=(
     # libc_regex.a: real regcomp/regexec/regfree (killall -m's real
     # regex-match mode), same archive tar/less/diff already proved.
     "killall:$SHELL_CMDS/killall/killall.c:$LIBC/gen/FreeBSD/siglist.c|ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c"
+    # pkill/pgrep (DAR-343): real, unmodified adv_cmds/pkill/pkill.c (one
+    # binary; getprogname() picks pgrep, pkill.c line ~240 -- inject_into_
+    # sd_image.sh installs a second copy as pgrep). Compiled through its
+    # FreeBSD (!__APPLE__) path against a kvm(3) shim over sysctl(KERN_PROC),
+    # since the __APPLE__ path needs private libsysmon/libxpc -- see
+    # pkill_compat_include/pkill_kvm.h and pkill_kvm_compat.c. Same
+    # sysctl/kill/regex/getpwnam surface as killall above.
+    "pkill:$ADV_CMDS/pkill/pkill.c:pkill_kvm_compat.c|ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c"
     # md5 (Phase 4.6 item 6, closing the gap Block 6's own comment above
     # flagged and deferred): real, unmodified text_cmds/md5/md5.c, linked
     # against md5_commoncrypto_shim.c's real-CommonCrypto-header-shaped
@@ -1792,6 +1801,10 @@ for spec in "${CMD_LIST[@]}"; do
     # comment.
     cmd_cflags=""
     case "$name" in
+        pkill)
+            # DAR-343: see pkill_compat_include/pkill_prefix.h.
+            cmd_cflags="-include pkill_compat_include/pkill_prefix.h -I pkill_compat_include"
+            ;;
         grep)
             cmd_cflags="-DWITHOUT_FASTMATCH -DWITHOUT_LZMA -DWITHOUT_BZIP2 -DWITHOUT_NLS -DSTDC -DNO_DUMMY_DECL -D__LITTLE_ENDIAN=1 -I $OUT/zlib_glue"
             ;;
