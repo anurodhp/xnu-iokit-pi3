@@ -161,7 +161,8 @@ TC="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin"
     echo "[built-in options]"
     echo "c_args = ['-fno-builtin', '-fno-stack-protector', '-fno-common', '-D_FORTIFY_SOURCE=0',"
     echo "          '-Wno-nullability-completeness', '-Wno-deprecated-declarations',"
-    echo "          '-I$INC', '-I$FS_SYSINC', '-I$GEN/md/include']"
+    echo "          '-I$INC', '-I$FS_SYSINC', '-I$GEN/md/include',"
+    echo "          '-include', '$PWD/xserver_reallocarray_decl.h']"
     # Probe links go against THIS system's dylibs, not the SDK's
     # libSystem: meson's has_function() checks then report what Xvfb will
     # really find at run time (backtrace, clock_gettime... are in the SDK
