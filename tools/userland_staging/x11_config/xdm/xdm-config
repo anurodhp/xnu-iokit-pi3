@@ -29,3 +29,13 @@ DisplayManager*terminateServer:	true
 DisplayManager*loginmoveInterval:	10
 ! SECURITY: do not listen for XDMCP or Chooser requests (same as upstream).
 DisplayManager.requestPort:	0
+! MIT-MAGIC-COOKIE-1 only. xdm is built HASXDMAUTH (xdm/resource.c:109-113
+! then defaults authName to "XDM-AUTHORIZATION-1 MIT-MAGIC-COOKIE-1", and
+! libxcb, built HASXDMAUTH too, prefers the XDM entry when it reads the
+! Xauthority xdm writes), but this port's X server is built
+! -Dxdm-auth-1=false (build_xserver.sh:188; xserver os/auth.c:72-73
+! registers XDM-AUTHORIZATION-1 only under HASXDMAUTH), so any client
+! using that entry -- e.g. wmaker after login -- is refused with
+! "Authorization protocol not supported by server". Seen on QEMU with
+! Xvfb (same server-side build), where xwd failed until this was set.
+DisplayManager*authName:	MIT-MAGIC-COOKIE-1
