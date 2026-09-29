@@ -215,6 +215,11 @@ chmod 755 "$STAGE/bin/x11-session" "$PKGDATA/autostart"
 mkdir -p "$ROOTDIR/Library/LaunchDaemons"
 cp "$SESS/org.puredarwin.x11-session.plist" "$ROOTDIR/Library/LaunchDaemons/"
 chmod 644 "$ROOTDIR/Library/LaunchDaemons/org.puredarwin.x11-session.plist"
+# Ships DISABLED: x11-session exits 0 at once while this file exists, so the
+# Pi boots to the console login only. Enable later on the Pi with
+# `rm /etc/x11-session.disabled` (no rebuild needed).
+mkdir -p "$ROOTDIR/etc"
+printf '%s\n' "# Remove this file to start the X session (Xorg + wmaker) at boot." > "$ROOTDIR/etc/x11-session.disabled"
 plutil -lint "$ROOTDIR/Library/LaunchDaemons/org.puredarwin.x11-session.plist" >/dev/null ||
     { echo "error: x11-session plist is not valid" >&2; exit 1; }
 sh -n "$STAGE/bin/x11-session" && sh -n "$PKGDATA/autostart" ||
