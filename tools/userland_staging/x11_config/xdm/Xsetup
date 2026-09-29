@@ -1,0 +1,6 @@
+#!/bin/sh
+# Run as root, with the X server up, before the greeter is shown.
+if [ -x /usr/X11/bin/xsetroot ]; then
+    /usr/X11/bin/xsetroot -solid grey30
+fi
+exit 0
