@@ -9,7 +9,8 @@
 #   libc_build/x11/server/root/usr/X11/etc/WindowMaker   (global defaults)
 # inject_into_sd_image.sh copies that staged tree and every
 # libc_build/system dylib with a /usr/X11/lib install name, so it needs no
-# entry of its own.
+# entry of its own. The graphical login that starts wmaker at boot is
+# build_xdm.sh's.
 #
 # Toolchain, layout and helpers: x11_common.sh / fontstack_common.sh. As
 # with the other X11 ports, configure is not run. Instead:
@@ -207,26 +208,14 @@ for f in $(am_data "$SRC/WINGs/Resources/Makefile.am" resdata_DATA); do
     cp "$SRC/WINGs/Resources/$f" "$STAGE/share/WINGs/"
 done
 
-# ---- boot session: Xorg + wmaker + GNUstep, started by launchd ----------
-# x11_config/session/: x11-session (Xorg, then wmaker, GNUstep env),
-# autostart (wmaker's init script: opens Terminal.app) and the
-# LaunchDaemon plist. The staged tree is ditto'd onto the image root by
-# inject_into_sd_image.sh, so all three land with no entry of their own.
-SESS="x11_config/session"
-ROOTDIR="$X11_ROOT/server/root"
-cp "$SESS/x11-session" "$STAGE/bin/x11-session"
-cp "$SESS/autostart" "$PKGDATA/autostart"
-chmod 755 "$STAGE/bin/x11-session" "$PKGDATA/autostart"
-mkdir -p "$ROOTDIR/Library/LaunchDaemons"
-cp "$SESS/org.puredarwin.x11-session.plist" "$ROOTDIR/Library/LaunchDaemons/"
-chmod 644 "$ROOTDIR/Library/LaunchDaemons/org.puredarwin.x11-session.plist"
-# Ships DISABLED: x11-session exits 0 at once while this file exists, so the
-# Pi boots to the console login only. Enable later on the Pi with
-# `rm /etc/x11-session.disabled` (no rebuild needed).
-mkdir -p "$ROOTDIR/etc"
-printf '%s\n' "# Remove this file to start the X session (Xorg + wmaker) at boot." > "$ROOTDIR/etc/x11-session.disabled"
-plutil -lint "$ROOTDIR/Library/LaunchDaemons/org.puredarwin.x11-session.plist" >/dev/null ||
-    { echo "error: x11-session plist is not valid" >&2; exit 1; }
-sh -n "$STAGE/bin/x11-session" && sh -n "$PKGDATA/autostart" ||
-    { echo "error: session script syntax" >&2; exit 1; }
+# ---- Terminal.app autostart ---------------------------------------------
+# x11_config/session/autostart is wmaker's global init script; it opens
+# Terminal.app. The boot session itself (xdm login screen, Xsession that
+# execs wmaker as the logged-in user, the launchd plist) is staged by
+# build_xdm.sh. The old root-run x11-session script and its staging are
+# gone (build_xdm.sh removes an already-staged copy together with replacing
+# the plist that ran it).
+cp "x11_config/session/autostart" "$PKGDATA/autostart"
+chmod 755 "$PKGDATA/autostart"
+sh -n "$PKGDATA/autostart" || { echo "error: autostart syntax" >&2; exit 1; }
 echo "staged $STAGE/{bin/wmaker,share/WindowMaker,share/WINGs,etc/WindowMaker}"

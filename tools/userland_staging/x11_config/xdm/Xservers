@@ -1,0 +1,3 @@
+# One local display. xdm appends "-auth <file>" itself. Xorg needs the USB
+# mouse plugged in before boot (DAR-442).
+:0 local /usr/X11/bin/Xorg :0 -nolisten tcp

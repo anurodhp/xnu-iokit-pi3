@@ -706,6 +706,14 @@ mkdir -p third_party
 #     libxcvt 0.1.3 (same rev, tag confirmed with `git ls-remote`): the Xorg
 #     server's modeline library (DAR-389), required by xserver meson.build
 #     when -Dxorg=true.
+#     xdm 1.1.17, libXaw 1.0.16 and libXpm 3.5.19 (graphical login): the
+#     newest release tag of each on its freedesktop.org repo, confirmed
+#     with `git ls-remote --tags` 2026-09-28 (nixpkgs' rev is not the
+#     constraint here: xdm and libXaw are not in the earlier X.org
+#     pins, so newest release it is). libXaw's Pixmap.c includes
+#     <X11/xpm.h> unconditionally, so it needs libXpm; xdm's greeter
+#     needs libXpm for its logo and libXaw for the chooser. Cloned
+#     unmodified; built by build_libXpm.sh, build_libXaw.sh, build_xdm.sh.
 #     Window Maker 0.96.0 (DAR-424): upstream window-maker/wmaker, tag
 #     wmaker-0.96.0 (latest release, confirmed with `git ls-remote`
 #     2026-09-27). Apple ships no X window manager and FreeBSD's x11-wm/
@@ -856,6 +864,9 @@ xwd|https://gitlab.freedesktop.org/xorg/app/xwd.git|xwd-1.0.9|
 xev|https://gitlab.freedesktop.org/xorg/app/xev.git|xev-1.2.6|
 libXi|https://gitlab.freedesktop.org/xorg/lib/libxi.git|libXi-1.8.2|
 libXtst|https://gitlab.freedesktop.org/xorg/lib/libxtst.git|libXtst-1.2.5|
+libXpm|https://gitlab.freedesktop.org/xorg/lib/libxpm.git|libXpm-3.5.19|
+libXaw|https://gitlab.freedesktop.org/xorg/lib/libxaw.git|libXaw-1.0.16|
+xdm|https://gitlab.freedesktop.org/xorg/app/xdm.git|xdm-1.1.17|
 libxcvt|https://gitlab.freedesktop.org/xorg/lib/libxcvt.git|libxcvt-0.1.3|
 wmaker|https://github.com/window-maker/wmaker.git|wmaker-0.96.0|
 libffi|https://github.com/apple-oss-distributions/libffi.git|libffi-27|
