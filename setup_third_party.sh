@@ -244,7 +244,9 @@
 #     ceiling above is unchanged -- but this is the newest tag that is
 #     actually usable as source. Real consumer as of DAR-243/DAR-244:
 #     the IOUSBController/IOUSBDevice/IOUSBInterface/IOUSBPipe layer
-#     `AppleUSBCDCECM` needs. NOTE: `AppleUSBCDCDriver-4303.2.1` still
+#     `AppleUSBCDCECM` needs. NOTE: `AppleUSBCDCDriver-4303.2.1` (DAR-448:
+#     now anurodhp/AppleUSBCDCDriver iokit-port, that tag plus two fix
+#     commits) still
 #     `#include`s the legacy `<IOKit/usb/IOUSBDevice.h>`/`IOUSBPipe.h`/
 #     `IOUSBInterface.h`/`USB.h` family (checked in its own source, not
 #     assumed from the version number), so the legacy IOUSBFamily is the
@@ -761,7 +763,7 @@ IOStorageFamily|https://github.com/apple-oss-distributions/IOStorageFamily.git|I
 IOUSBFamily|git@github.com:anurodhp/IOUSBFamily.git|iokit-port||https://github.com/apple-oss-distributions/IOUSBFamily.git
 IOPCIFamily|https://github.com/apple-oss-distributions/IOPCIFamily.git|IOPCIFamily-428.80.2|
 IOSerialFamily|https://github.com/apple-oss-distributions/IOSerialFamily.git|IOSerialFamily-93.200.2|
-AppleUSBCDCDriver|https://github.com/apple-oss-distributions/AppleUSBCDCDriver.git|AppleUSBCDCDriver-4303.2.1|
+AppleUSBCDCDriver|git@github.com:anurodhp/AppleUSBCDCDriver.git|iokit-port||https://github.com/apple-oss-distributions/AppleUSBCDCDriver.git
 IONetworkingFamily|https://github.com/apple-oss-distributions/IONetworkingFamily.git|IONetworkingFamily-151.40.1|
 IOGraphics|git@github.com:anurodhp/IOGraphics.git|iokit-port||https://github.com/apple-oss-distributions/IOGraphics.git
 IOHIDFamily|git@github.com:anurodhp/IOHIDFamily.git|iokit-port||https://github.com/apple-oss-distributions/IOHIDFamily.git

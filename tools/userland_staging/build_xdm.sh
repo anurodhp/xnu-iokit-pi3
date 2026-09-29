@@ -178,6 +178,11 @@ rm -f "$STAGE/bin/x11-session"
 mkdir -p "$ROOT/Library/LaunchDaemons"
 cp "$SESS/org.puredarwin.x11-session.plist" "$ROOT/Library/LaunchDaemons/"
 chmod 644 "$ROOT/Library/LaunchDaemons/org.puredarwin.x11-session.plist"
+# Ships DISABLED: xdm-launch exits 0 without starting Xorg/xdm while this
+# file exists, so the Pi boots to the console login only. Enable later on
+# the Pi with `rm /etc/x11-session.disabled` (no rebuild needed).
+mkdir -p "$ROOT/etc"
+printf '%s\n' "# Remove this file to start xdm (Xorg + login screen) at boot." > "$ROOT/etc/x11-session.disabled"
 plutil -lint "$ROOT/Library/LaunchDaemons/org.puredarwin.x11-session.plist" >/dev/null ||
     { echo "error: x11-session plist is not valid" >&2; exit 1; }
 for f in Xsession Xsetup Xstartup Xreset; do

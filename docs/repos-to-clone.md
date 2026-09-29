@@ -39,6 +39,7 @@ The main repo itself is `anurodhp/xnu-iokit-pi3`.
 | `IOGraphics` | `anurodhp/IOGraphics` | `iokit-port` | apple-oss-distributions |
 | `IOHIDFamily` | `anurodhp/IOHIDFamily` | `iokit-port` | apple-oss-distributions |
 | `IOUSBFamily` | `anurodhp/IOUSBFamily` | `iokit-port` | apple-oss-distributions (off `IOUSBFamily-560.4.2`, DAR-421) |
+| `AppleUSBCDCDriver` | `anurodhp/AppleUSBCDCDriver` | `iokit-port` | apple-oss-distributions (off `AppleUSBCDCDriver-4303.2.1`, DAR-448) |
 | `Csu` | `anurodhp/Csu` | `bcm2837-bringup` | apple-oss-distributions |
 | `bash` | `anurodhp/bash` | `iokit-port` | apple-oss-distributions |
 | `cron` | `anurodhp/cron` | `iokit-port` | apple-oss-distributions |
@@ -93,6 +94,14 @@ remote `fork`). An older checkout still at the detached
 `git remote add fork git@github.com:anurodhp/IOUSBFamily.git && git fetch fork && git checkout -B iokit-port fork/iokit-port`
 switches it, or re-clone.
 
+`AppleUSBCDCDriver` was forked on 2026-09-29 (DAR-448). `iokit-port` is
+`AppleUSBCDCDriver-4303.2.1` plus two commits, one per fix that
+`vendor_usb_into_xnu.sh` (FIXES 2/3) used to apply at vendor time:
+`linkup.h`'s `const char *period` and `AppleUSBCDCECMData.cpp`'s
+runt-frame check (DAR-374). An older checkout at the detached tag has a
+clean tree, so `git remote add fork git@github.com:anurodhp/AppleUSBCDCDriver.git && git fetch fork && git checkout -B iokit-port fork/iokit-port`
+switches it, or re-clone.
+
 u-boot and dtc-AppleDeviceTree were the last two repos with leftover
 patch files. On 2026-09-24 both forks' `HEAD^{tree}` was confirmed
 identical to "upstream base + `git am` of the patch", and the patch
@@ -102,9 +111,8 @@ files were deleted.
 
 ## 2. Changed, but NOT on a fork yet (open tickets)
 
-| Checkout | What's local | Ticket |
-|---|---|---|
-| `AppleUSBCDCDriver` | `vendor_usb_into_xnu.sh` FIXES 2/3 (`linkup.h` const, `AppleUSBCDCECMData.cpp` runt-frame check) edit the vendored copies in xnu-7195; the checkout itself is clean; no `anurodhp/AppleUSBCDCDriver` fork exists yet | DAR-448 |
+None open as of 2026-09-29 (DAR-448 was the last). When the audit finds
+one, add a row here with its ticket.
 
 ---
 

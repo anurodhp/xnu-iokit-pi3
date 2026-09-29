@@ -29,8 +29,8 @@
 # fix to IOUSBFamily (including AppleUSBHub) belongs on this project's
 # fork, anurodhp/IOUSBFamily branch iokit-port (DAR-421), which is what
 # third_party/IOUSBFamily is cloned from; this script copies its files
-# unmodified. AppleUSBCDCDriver's fixes are still applied in the FIXES
-# section below.
+# unmodified. The same holds for AppleUSBCDCDriver: anurodhp/
+# AppleUSBCDCDriver branch iokit-port (DAR-448), checked below.
 # The script refuses to clobber a vendored file that has uncommitted edits
 # in the xnu tree, for the same reason tools/sync_iokit_drivers.sh does:
 # that check already caught a real correction that would otherwise have
@@ -239,18 +239,15 @@ if [ ${#diverged[@]} -ne 0 ]; then
 fi
 
 # ---------------------------------------------------------------------
-# FIXES -- the only edits made to Apple's published AppleUSBCDCDriver
-# source, each asserting on its own target and re-checking afterwards, so
-# a re-pin that changes the line fails loudly instead of silently not
-# applying.
-#
-# IOUSBFamily's fixes that used to be here (1 IOUSBDevice.cpp `info =
-# NULL`, 1b IOUSBPipe.cpp bool `return NULL`, 1c IOUSBControllerV3.h's
+# No source edits are made here. IOUSBFamily's fixes (1 IOUSBDevice.cpp
+# `info = NULL`, 1b IOUSBPipe.cpp bool `return NULL`, 1c IOUSBControllerV3.h's
 # undefined GetErrataBits override, 1d IOUSBController.cpp's double sysctl
 # registration, 4 AppleUSBHub.cpp's `case -1:`) are commits on
-# anurodhp/IOUSBFamily iokit-port now, each with its evidence in the
-# commit message (DAR-421); the in-source comments cite the fork. Two
-# lessons from them, kept here: 1b
+# anurodhp/IOUSBFamily iokit-port (DAR-421), and AppleUSBCDCDriver's two
+# (2 linkup.h `const char *period`, 3 AppleUSBCDCECMData.cpp runt-frame
+# check, DAR-374) are commits on anurodhp/AppleUSBCDCDriver iokit-port
+# (DAR-448), each with its evidence in the commit message. Two lessons from
+# the IOUSBFamily ones, kept here: 1b
 # compiles under tools/build_iousbfamily.sh (Xcode 12, NULL is __null)
 # and still failed the real kernel build (live Xcode, NULL is nullptr),
 # so that script is a fast syntax gate, not a proxy for the kernel build;
@@ -258,67 +255,21 @@ fi
 # building a kext into the kernel, which changes which init machinery
 # runs.
 #
-# LC_ALL=C is load-bearing on every grep/sed here: Apple's 2012 sources
-# carry a latin-1 (c) byte that makes BSD sed abort with "RE error:
-# illegal byte sequence" and makes grep treat the file as binary and
-# match nothing.
+# grep -a with LC_ALL=C on the checks: Apple's 2012 sources carry a latin-1
+# (c) byte that makes grep treat the file as binary and match nothing.
 # ---------------------------------------------------------------------
-
-# 2. linkup.h: `char *period` takes strchr()'s const char* return.
-F="$CDC_SRC/linkup.h"
-if LC_ALL=C grep -q '	char \*period;' "$F"; then
-	LC_ALL=C sed -i '' 's|	char \*period;|	const char *period;|' "$F"
-fi
-if LC_ALL=C grep -q '	char \*period;' "$F"; then
-	echo "error: linkup.h const fix did not apply" >&2
-	exit 1
-fi
-if LC_ALL=C grep -q 'const const' "$F"; then
-	echo "error: linkup.h fix produced a duplicate 'const'" >&2
-	exit 1
-fi
-
-# 3. AppleUSBCDCECMData::receivePacket() drops a frame larger than
-#    fMax_Block_Size but has no lower bound, so a runt (shorter than an
-#    Ethernet header) is counted in inputPackets and handed up the stack.
-#    With IONetworkInterface's own DAR-374 guard (acceptInputFrame(), xnu
-#    fork) that no longer panics, but the driver would still claim the frame
-#    as received. Reject it next to the oversize check, counted the same way.
-#    Found when an 8-byte bulk-IN completion reached dlil as len -6 and
-#    panicked (DAR-374; DAR-371 was the QEMU model bug that produced it).
-F="$CDC_SRC/AppleUSBCDCECMData.cpp"
-if ! LC_ALL=C grep -q 'receivePacket - Runt frame, packet dropped' "$F"; then
-	python3 - "$F" <<'PY'
-import sys
-p = sys.argv[1]
-s = open(p, encoding='latin-1').read()
-anchor = """    if (size > fControlDriver->fMax_Block_Size)
-    {
-        XTRACE(this, 0, 0, "receivePacket - Packet size error, packet dropped");
-        if (fControlDriver->fInputErrsOK)
-            fpNetStats->inputErrors++;
-        return;
-    }
-"""
-add = """
-        // Too short to be an Ethernet frame (two addresses and a type).
-        // Added by tools/vendor_usb_into_xnu.sh, FIX 3 (DAR-374).
-    if (size < (2 * kIOEthernetAddressSize + 2))
-    {
-        XTRACE(this, 0, size, "receivePacket - Runt frame, packet dropped");
-        if (fControlDriver->fInputErrsOK)
-            fpNetStats->inputErrors++;
-        return;
-    }
-"""
-if s.count(anchor) != 1:
-    sys.exit("anchor count %d" % s.count(anchor))
-s = s.replace(anchor, anchor + add)
-open(p, 'w', encoding='latin-1').write(s)
-PY
-fi
-if ! LC_ALL=C grep -q 'receivePacket - Runt frame, packet dropped' "$F"; then
-	echo "error: AppleUSBCDCECMData.cpp runt-frame fix did not apply" >&2
+# The AppleUSBCDCDriver checkout must be the fork too; a plain upstream
+# clone would vendor unfixed sources (linkup.h does not compile).
+cdc_fork_missing=()
+LC_ALL=C grep -aq '	const char \*period;' "$CDC/AppleUSBCDCECM/DataDriver/Headers/linkup.h" ||
+	cdc_fork_missing+=("linkup.h: const char *period")
+LC_ALL=C grep -aq 'receivePacket - Runt frame, packet dropped' "$CDC/AppleUSBCDCECM/DataDriver/Classes/AppleUSBCDCECMData.cpp" ||
+	cdc_fork_missing+=("AppleUSBCDCECMData.cpp: runt-frame check")
+if [ ${#cdc_fork_missing[@]} -ne 0 ]; then
+	echo "error: $CDC lacks this project's fixes -- it is not the" >&2
+	echo "       anurodhp/AppleUSBCDCDriver iokit-port fork. Missing:" >&2
+	printf '         %s\n' "${cdc_fork_missing[@]}" >&2
+	echo "       Re-clone it: rm -rf $CDC && ./setup_third_party.sh" >&2
 	exit 1
 fi
 
