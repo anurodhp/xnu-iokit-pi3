@@ -41,8 +41,10 @@
 # Usage:
 #   tools/userland_staging/bind_target_audit.sh [image ...]
 #
-# With no arguments, audits every .dylib under libc_build/system/ plus
-# every .macho in libc_build/ and tools/userland_staging/.
+# With no arguments, audits every .dylib under libc_build/system/, every
+# .macho in libc_build/ and tools/userland_staging/, and every Mach-O image
+# in the staged install trees (libc_build/x11/server/root, gnustep/root,
+# fontstack/{root,bin}, ...; see staged_images.sh).
 #
 # Exit status is 1 if any image has an unresolvable two-level bind.
 #
@@ -56,6 +58,7 @@
 #                           the same re-export walk
 set -uo pipefail
 cd "$(dirname "$0")"
+. ./staged_images.sh
 
 if ! command -v xcrun >/dev/null 2>&1; then
     echo "error: xcrun not found (need dyld_info)" >&2
@@ -69,13 +72,17 @@ trap 'rm -rf "$WORK"' EXIT
 # LC_ID_DYLIB. Needed because on-disk basenames and real install names
 # genuinely differ here (libresolv.dylib vs /usr/lib/libresolv.9.dylib,
 # libc++.dylib vs /usr/lib/libc++.1.dylib, ...).
-: > "$WORK/index"
+staged_images > "$WORK/staged"
+# Staged dylibs too: libgnustep-base's install name is under /usr/GNUstep,
+# not libc_build/system/, and a versioned real file keeps its version
+# suffix (the plain .dylib name is the symlink find skips).
 for d in libc_build/system/*.dylib icu_build/target/lib/*.dylib; do
-    [ -f "$d" ] || continue
+    [ -f "$d" ] && echo "$d"
+done | cat - <(staged_images DYLIB) | while IFS= read -r d; do
     id=$(otool -D "$d" 2>/dev/null | tail -1)
     [ -z "$id" ] && continue
-    printf '%s\t%s\n' "$id" "$d" >> "$WORK/index"
-done
+    printf '%s\t%s\n' "$id" "$d"
+done > "$WORK/index"
 
 resolve_install_name() {
     awk -F'\t' -v n="$1" '$1 == n { print $2; exit }' "$WORK/index"
@@ -135,6 +142,8 @@ else
     for f in libc_build/system/*.dylib libc_build/*.macho *.macho; do
         [ -f "$f" ] && IMAGES+=("$f")
     done
+    # Everything the staged install trees ship (staged_images.sh's header).
+    while IFS= read -r f; do IMAGES+=("$f"); done < "$WORK/staged"
 fi
 
 for img in "${IMAGES[@]}"; do
