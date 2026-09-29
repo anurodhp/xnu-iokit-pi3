@@ -12,7 +12,15 @@
  * (layout as consumed by ps.c's own argument printing, adv_cmds/ps/print.c).
  *
  * Unsupported on Darwin, hence constant: ki_jid (0), ki_loginclass ("").
- * ki_sid comes from getsid(2) per process, -1 when denied.
+ * ki_sid comes from getsid(2). It cannot be lazier than once per
+ * kvm_getprocs(): pkill.c reads kp->ki_sid as a plain field (line 663),
+ * with no hook to intercept, and XNU offers no sid in kinfo_proc nor a
+ * KERN_PROC_SESSION (sysctl_prochandle, bsd/kern/kern_sysctl.c:825-852).
+ * It is cheap and safe to do eagerly: getsid (bsd/kern/kern_prot.c:276-300)
+ * does one proc_find and no permission check, so it never fails for a
+ * live pid and returns ESRCH (-> -1) only for one that just exited. The
+ * pid==0 special case matters: getsid(0) means "the caller"
+ * (kern_prot.c:283), so pid 0 (kernproc) must not be asked.
  */
 #include <sys/types.h>
 #include <sys/sysctl.h>
@@ -82,7 +90,7 @@ kvm_getprocs(kvm_t *kd, int op, int arg, int *cnt)
 		k->ki_pid = d->kp_proc.p_pid;
 		k->ki_ppid = d->kp_eproc.e_ppid;
 		k->ki_pgid = d->kp_eproc.e_pgid;
-		k->ki_sid = getsid(k->ki_pid);
+		k->ki_sid = (k->ki_pid == 0) ? 0 : getsid(k->ki_pid);
 		k->ki_uid = d->kp_eproc.e_ucred.cr_uid;
 		k->ki_ruid = d->kp_eproc.e_pcred.p_ruid;
 		k->ki_rgid = d->kp_eproc.e_pcred.p_rgid;

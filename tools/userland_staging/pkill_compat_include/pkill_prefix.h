@@ -41,12 +41,34 @@
 typedef struct kinfo_proc darwin_kinfo_proc;
 #include "pkill_kvm.h"
 
-/* FreeBSD's P_KPROC (kernel process) has no Darwin twin; P_SYSTEM is the
- * flag Darwin's proc.h gives kernel_task and other system procs, which is
- * what pkill.c's PSKIP() wants to skip (line 92-93; the Apple branch's
- * equivalent is PROC_FLAG_SYSTEM, line 89). */
-#ifndef P_KPROC
-#define P_KPROC P_SYSTEM
+/* pkill.c's FreeBSD path needs two names Darwin's SDK headers lack. Both
+ * were confirmed absent from this project's Xcode-12 iPhoneOS SDK
+ * (usr/include/sys/sysctl.h, sys/proc.h) and from
+ * third_party/xnu-7195/bsd/sys/{sysctl.h,proc.h}.
+ *
+ * P_KTHREAD: used only by PSKIP() (pkill.c lines 86-87) to skip kernel
+ * threads unless -S. XNU has no kernel-thread struct proc: the only
+ * kernel "process" is kernproc, whose flag is set to exactly P_SYSTEM at
+ * xnu-7195/bsd/kern/bsd_init.c:673 (`kernproc->p_flag = P_SYSTEM;`), and
+ * P_SYSTEM is defined at bsd/sys/proc.h:173. The Apple branch of the same
+ * macro skips PROC_FLAG_SYSTEM (pkill.c lines 80-83), i.e. the same
+ * "system process" notion, so P_SYSTEM is the faithful mapping.
+ *
+ * KERN_PROC_PROC: used at pkill.c line 419. FreeBSD's KERN_PROC_PROC is
+ * "processes only, no kernel threads" (see pkill.c's comment at lines
+ * 416-418). XNU's kern.proc sysctl handler (bsd/kern/kern_sysctl.c
+ * sysctl_prochandle, lines 791-891) only knows ALL/PID/PGRP/TTY/UID/RUID
+ * and returns ENOTSUP for anything else (lines 849-851); its ALL case
+ * walks proc_iterate(PROC_ALLPROCLIST|PROC_ZOMBPROCLIST) (lines 869-870),
+ * which holds only real processes (plus kernproc, filtered by P_SYSTEM
+ * above) -- there are no per-thread entries to exclude, so ALL is
+ * equivalent. KERN_PROC_ALL is defined at bsd/sys/sysctl.h:720 (SDK
+ * sys/sysctl.h:429). */
+#ifndef P_KTHREAD
+#define P_KTHREAD P_SYSTEM
+#endif
+#ifndef KERN_PROC_PROC
+#define KERN_PROC_PROC KERN_PROC_ALL
 #endif
 
 #undef __APPLE__
