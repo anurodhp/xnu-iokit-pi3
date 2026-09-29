@@ -98,12 +98,10 @@ void __cxa_finalize(void *dso) {
  * address lies inside the unloaded image. Nothing here unloads images or
  * calls __cxa_finalize(dso), so the difference is not reachable today.
  *
- * KNOWN, PRE-EXISTING GAP (not introduced here): this port's exit()
- * (libc_stdio_process_shims.c) calls only __cleanup (stdio flush) and
- * then the raw exit trap -- it never calls __cxa_finalize(NULL), so no
- * atexit()/__cxa_atexit() handler runs at process exit today, exactly as
- * for every C++ static destructor already registered through this file.
- * Registration itself is real and correct. */
+ * exit() (libc_stdio_process_shims.c) calls __cxa_finalize(NULL) before
+ * __cleanup, as Libc/stdlib/FreeBSD/exit.c:66-69 does (DAR-129), so these
+ * handlers run at process exit.
+ */
 static void atexit_std_trampoline(void *func) {
     ((void (*)(void))func)();
 }
