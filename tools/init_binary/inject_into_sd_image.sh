@@ -1159,6 +1159,12 @@ install_smoketest tools/userland_staging/libc_build/foundation_smoketest.macho "
     "  NSInvocation and forwarding, threads. Run by hand; prints PASS/FAIL." \
     "  tools/userland_staging/build_foundation_smoketest.sh)"
 
+install_smoketest tools/userland_staging/libc_build/weak_proxy_smoketest.macho "usr/local/bin/weak_proxy_smoketest" \
+    "= weak_proxy_smoketest.macho not built -- run tools/userland_staging/build_weak_proxy_smoketest.sh first if wanted, skipping" \
+    "  (DAR-450 __weak references to GNUstep NSProxy instances and NSProxy" \
+    "  subclass class objects on objc4; a failure leaks a SideTable lock." \
+    "  Run by hand; prints PASS/FAIL. tools/userland_staging/build_weak_proxy_smoketest.sh)"
+
 install_smoketest tools/userland_staging/libc_build/pthread_lifecycle_smoketest.macho "usr/local/bin/pthread_lifecycle_smoketest" \
     "= pthread_lifecycle_smoketest.macho not built -- run tools/userland_staging/build_pthread_lifecycle_smoketest.sh first if wanted, skipping" \
     "  (DAR-416 real libpthread: pthread_join/exit/detach/cancel/kill and" \
