@@ -10,4 +10,6 @@
 # Build, install and audit: gnustep_common.sh's gs_build_app.
 cd "$(dirname "$0")"
 . ./gnustep_common.sh
+# gs_build_app checks these; the line is here so gen_build_order.py sees the
+# edge: run build_gnustep_host_tools.sh and build_gnustep_back.sh first.
 gs_build_app Ink "$HERE/../../third_party/gnustep-examples/gui/Ink"

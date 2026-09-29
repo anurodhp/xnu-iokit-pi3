@@ -39,7 +39,7 @@ GB_SRC="$HERE/../../third_party/gnustep-base"
 CROSS="${GNUSTEP_CROSS_CONFIG:-$HERE/x11_config/gnustep/cross-config-arm64-darwin}"
 for f in "$GM_SRC/configure" "$GB_SRC/configure" "$CROSS" "$OUT/objc4_public_headers/objc/runtime.h" \
          "$OUT/libffi_include/ffi.h"; do
-    [ -e "$f" ] || { echo "error: $f not found" >&2; exit 1; }
+    [ -e "$f" ] || { echo "error: $f not found -- run setup_third_party.sh, build_objc4.sh and build_libffi.sh first" >&2; exit 1; }
 done
 [ -x "$G/host-tools/plmerge" ] || { echo "error: $G/host-tools/plmerge not found -- run build_gnustep_host_tools.sh first" >&2; exit 1; }
 [ -f "$SYS/libxml2.dylib" ] && [ -f "$OUT/xml2_headers/libxml/xmlversion.h" ] ||
