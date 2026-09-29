@@ -5,13 +5,18 @@
 # sudo at all (see setup_third_party.sh's SUDO block) so this is the
 # tier-3 upstream in CLAUDE.md's source-priority rule.
 #
-# STATUS: FIRST DRAFT, NEVER RUN. Written on a Linux host with no Xcode
-# 12 / iPhoneOS SDK / QEMU, so nothing here has compiled, linked or
-# booted. Expect the first real run to surface (a) per-file compile
-# errors -- this script's compile loop collects ALL of them before
-# stopping, like build_libc_regex.sh, and (b) undefined-symbol link
-# errors, which gap_audit.sh then classifies. Every answer that could be
-# wrong is listed in sudo_compat/sudo_config_darwin.def with a tag.
+# STATUS (2026-09-28): compiles all 173 objects with zero errors (also with
+# -Werror=implicit-function-declaration live) and LINKS against the current
+# libc_build dylibs; bind_target_audit.sh, dead_stub_audit.sh and
+# weak_def_audit.sh all pass on that image (checked against a scratch
+# output path, libc_build untouched). NEVER BOOTED -- no QEMU run has
+# happened, and sudo has never executed. Every answer that could be wrong is
+# listed in sudo_compat/sudo_config_darwin.def with a tag. Gaps closed by the
+# first real compile/link (each is commented at its fix site): PACKAGE_*,
+# PUTENV_CONST, GETGROUPS_T=gid_t, _PATH_LDAP_*, SUDOERS_LOG_CLIENT (+
+# lib/logsrv), getspwuid.c, def_data.c is #included not compiled, -include
+# sys/stat.h/signal.h, sudo_utmp_compat.c, extra syscall stubs/aliases,
+# libinfo+libresolv on the link line.
 #
 # Build shape (all decisions here are deliberate, not accidents):
 #   * STATIC sudoers plugin (STATIC_SUDOERS_PLUGIN): the sudoers policy
@@ -27,7 +32,7 @@
 #     DAR-339's static-PAM machinery.
 #   * NO bison/flex: gram.c/toke.c are pre-generated and shipped in the
 #     tag's git tree.
-#   * NO LDAP/SSSD/BSM-audit/openssl/zlib/logsrvd-client/selinux/noexec/
+#   * NO LDAP/SSSD/BSM-audit/openssl/zlib/selinux/noexec/
 #     visudo/cvtsudoers/sudoreplay -- none needed for a minimal build.
 #   * config.h / pathnames.h are GENERATED from upstream's own
 #     config.h.in / pathnames.h.in by gen_sudo_config_h.sh plus the two
@@ -108,17 +113,28 @@ done
 # lib/util/Makefile.in:63-66 -- the real Makefiles' CPPFLAGS).
 # -D_DARWIN_UNLIMITED_GETGROUPS: configure.ac's own Darwin branch
 # (AC_DEFINE([_DARWIN_UNLIMITED_GETGROUPS])).
-# -w: upstream is warning-noisy under -ffreestanding/-O0; real errors
-# still stop the build. Drop it when triaging.
+# -Wno-everything: upstream is warning-noisy under -ffreestanding/-O0. NOT
+# plain -w: -w also silences -Werror=implicit-function-declaration, and an
+# implicit declaration is exactly how a missing/mis-guarded function (e.g.
+# audit.c's audit_to_eventlog, see the .def) would hide until link time.
+# Drop -Wno-everything when triaging.
+# -include sys/stat.h: include/sudo_compat.h:461-478 #defines fstatat/fchmodat/
+# utimensat/futimens to sudo_* fallbacks (HAVE_* left undefined on purpose),
+# and the SDK's own declarations in <sys/stat.h> (xnu-7195
+# bsd/sys/stat.h:571-579) then collide with those macros in every file that
+# reaches stat.h AFTER sudo_compat.h (parse.h:23). Upstream's fallback .c
+# files include <sys/stat.h> first, so pre-including it reproduces that.
+# -include signal.h: same reason for killpg (sudo_compat.h:271-272 defines it
+# as a macro because HAVE_KILLPG is undefined; Libc/include/signal.h:92
+# declares it).
 CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
-    -Wno-nullability-completeness -w \
+    -Wno-nullability-completeness -Wno-everything -Werror=implicit-function-declaration \
     -include libc_build_prototypes.h -include $OUT/compat_include/stdio_flockfile_compat.h \
+    -include sys/stat.h -include signal.h \
     -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
     -DVARIANT_STATIC -DVARIANT_CANCELABLE -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \
     -D__ct_rune_t=__darwin_ct_rune_t -D__va_list=__builtin_va_list \
     -D_DARWIN_UNLIMITED_GETGROUPS \
-    -D_PATH_SUDO_CONF=\\\"/etc/sudo.conf\\\" -D_PATH_SUDOERS=\\\"/etc/sudoers\\\" \
-    -D_PATH_CVTSUDOERS_CONF=\\\"/etc/cvtsudoers.conf\\\" \
     -DSUDOERS_UID=0 -DSUDOERS_GID=0 -DSUDOERS_MODE=0440 \
     -I $GEN -I $SUDO/include -I $SUDO -I $SUDO/src -I $SUDO/plugins/sudoers \
     -I $SUDO/lib/util -I $SUDO/lib/eventlog -I $SUDO/lib/iolog \
@@ -148,21 +164,30 @@ UTIL_SRCS="arc4random arc4random_buf arc4random_uniform cfmakeraw closefrom dige
 # lib/eventlog/Makefile.in:85, lib/iolog/Makefile.in:89-90.
 EVENTLOG_SRCS="eventlog logwrap"
 IOLOG_SRCS="iolog_fileio iolog_json iolog_path iolog_util host_port hostcheck"
+# lib/logsrv/Makefile.in:76 (LIBLOGSRV_OBJS = protobuf-c.lo log_server.pb-c.lo):
+# the bundled protobuf-c runtime + generated message code that
+# plugins/sudoers/log_client.c (SUDOERS_LOG_CLIENT) links against.
+LOGSRV_SRCS="protobuf-c log_server.pb-c"
 # plugins/sudoers/Makefile.in:162-176 (LIBPARSESUDOERS_OBJS + SUDOERS_OBJS
-# without the @SUDOERS_OBJS@ optional backends) + def_data.c, which
-# Makefile.in builds into the same library, + log_client.c/audit.c which
-# are in the object lists and compile out via SUDOERS_LOG_CLIENT.
-SUDOERS_SRCS="alias audit base64 defaults def_data digestname exptilde filedigest gentime gmtoff gram \
+# without the @SUDOERS_OBJS@ optional backends). def_data.c is NOT in the
+# list: it is a generated fragment #included by defaults.c:76, not a
+# standalone object. log_client.c/audit.c
+# are in the object lists; both need SUDOERS_LOG_CLIENT (see the .def).
+# getspwuid.c (plugins/sudoers/, not auth/): configure.ac:4641 adds
+# getspwuid.lo alongside passwd.lo for the passwd backend; it defines
+# sudo_getepw/sudo_setspent/sudo_endspent (auth/passwd.c:53 calls sudo_getepw).
+SUDOERS_SRCS="alias audit base64 defaults digestname getspwuid exptilde filedigest gentime gmtoff gram \
  hexchar match match_addr match_command match_digest pwutil pwutil_impl rcstr redblack strlist \
  sudoers_debug timeout timestr toke toke_util boottime check editor env env_pattern file find_path \
  fmtsudoers gc goodpath group_plugin interfaces iolog iolog_path_escapes locale log_client logging \
  parse policy prompt set_perms starttime sudo_nss sudoers timestamp"
 AUTH_SRCS="sudo_auth passwd"
-# src/Makefile.in:126-130 + preload.c (added by configure.ac:4239 when
+# src/Makefile.in:126-130 minus utmp.c (replaced by sudo_utmp_compat.c, see its
+# header) + preload.c (added by configure.ac:4239 when
 # --enable-static-sudoers).
 SRC_SRCS="conversation copy_file edit_open env_hooks exec exec_common exec_monitor exec_nopty exec_pty \
  get_pty hooks limits load_plugins net_ifs parse_args preserve_fds signal sudo sudo_edit \
- tcsetpgrp_nobg tgetpass ttyname utmp preload"
+ tcsetpgrp_nobg tgetpass ttyname preload"
 
 ok=0; skip=0
 compile() { # <src file> <object name> [extra flags]
@@ -178,6 +203,7 @@ compile "$GEN/siglist.c" util_siglist
 compile "$GEN/signame.c" util_signame
 for b in $EVENTLOG_SRCS; do compile "$SUDO/lib/eventlog/$b.c"    "eventlog_$b"; done
 for b in $IOLOG_SRCS;    do compile "$SUDO/lib/iolog/$b.c"       "iolog_$b"; done
+for b in $LOGSRV_SRCS;   do compile "$SUDO/lib/logsrv/$b.c"      "logsrv_$b"; done
 for b in $SUDOERS_SRCS;  do compile "$SUDO/plugins/sudoers/$b.c" "sudoers_$b"; done
 for b in $AUTH_SRCS;     do compile "$SUDO/plugins/sudoers/auth/$b.c" "auth_$b"; done
 for b in $SRC_SRCS; do
@@ -190,7 +216,7 @@ done
 # real passwd/group lookup shim, fork/atfork compat, getusershell, crypt,
 # sigsetops, and the shared locale-globals object (NEVER a narrower
 # hand-written one, DAR-169).
-for f in sudo_main_wrapper.c ps_passwd_compat.c ../libinfo_custom/libinfo_custom.c chpass_fork_compat.c \
+for f in sudo_main_wrapper.c sudo_utmp_compat.c ps_passwd_compat.c ../libinfo_custom/libinfo_custom.c chpass_fork_compat.c \
          "$LIBC/gen/getusershell.c" "$LIBC/gen/crypt.c" "$LIBC/gen/sigsetops.c" \
          libc_locale_globals_compat.c "$LIBC/locale/FreeBSD/table.c" "$LIBC/locale/FreeBSD/none.c"; do
     compile "$f" "glue_$(basename "$f" .c)"
@@ -225,7 +251,16 @@ ARCHS=arm64 perl "$XNU/libsyscall/xcodescripts/create-syscalls.pl" \
     "$XNU/bsd/kern/syscalls.master" "$XNU/libsyscall/custom" "$XNU/libsyscall/Platforms" \
     iPhoneOS "$TMPGEN" >/dev/null
 SYSCFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -I $XNU/libsyscall/custom -I $XNU/libsyscall/mach -idirafter $XNU/osfmk -idirafter $MACSDK/usr/include"
-SUDO_SYSCALLS="_chdir _getpgrp _getpgid _getpriority $SUDO_EXTRA_SYSCALLS"
+# Added for sudo (each undefined in a real object-file nm -u pass against the
+# shipped dylib exports; generated stub names come from create-syscalls.pl
+# run over xnu-7195 bsd/kern/syscalls.master):
+#   _getsid #310 (src/sudo.c), _sigpending #52 (auth/sudo_auth.c),
+#   _futimes #139 (lib/util/utimens.c),
+#   ___setreuid #126 / ___setregid #127 -- syscalls.master marks both
+#   NO_SYSCALL_STUB but the generator still emits ___setreuid/___setregid,
+#   and libsyscall/Platforms/iPhoneOS/arm64/syscall.map:64-65 aliases
+#   _setreuid/_setregid to them; the aliases are on the link line below.
+SUDO_SYSCALLS="_chdir _getpgrp _getpgid _getpriority _getsid _sigpending _futimes ___setreuid ___setregid $SUDO_EXTRA_SYSCALLS"
 for s in $SUDO_SYSCALLS; do
     "$CLANG" $SYSCFLAGS "$TMPGEN/${s}.s" -o "$OBJ/sys${s}.o"
 done
@@ -237,13 +272,18 @@ if [ ! -x "$NEWLD_BINDIR/ld" ]; then
     exit 1
 fi
 for d in libsystem_c libsystem_kernel libsystem_pthread libsystem_malloc libsystem_platform libdyld \
-         libcopyfile libremovefile libbsm libSystem.B; do
+         libcopyfile libremovefile libbsm libSystem.B libinfo libresolv; do
     if [ ! -f "$OUT/system/$d.dylib" ]; then
         echo "error: $OUT/system/$d.dylib not found -- run its build_*.sh first (see build_su.sh's prerequisite block)" >&2
         exit 1
     fi
 done
 LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_kernel.dylib $OUT/system/libsystem_pthread.dylib $OUT/system/libsystem_malloc.dylib $OUT/system/libsystem_platform.dylib $OUT/system/libdyld.dylib $OUT/system/libcopyfile.dylib $OUT/system/libremovefile.dylib $OUT/system/libbsm.dylib $OUT/system/libSystem.B.dylib"
+# libinfo/libresolv: sudo needs getaddrinfo/getgrouplist/innetgr (libinfo) and
+# getifaddrs/inet_pton/inet_ntop/gethostname/pselect (libresolv) -- found by a
+# real link, which listed them undefined. Same list position as build_ping.sh:360
+# and build_ifconfig.sh:275.
+LINK_DYLIBS="$LINK_DYLIBS $OUT/system/libinfo.dylib $OUT/system/libresolv.dylib"
 
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
     -DCRT_DYNAMIC_LINKING \
@@ -263,7 +303,12 @@ LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_kernel.dylib $O
     -Wl,-alias,_fchmod,'_fchmod$UNIX2003' \
     -Wl,-alias,_stat,'_stat$INODE64' \
     -Wl,-alias,_sigaction,'_sigaction$UNIX2003' \
-    -Wl,-alias,_sigprocmask,'_sigprocmask$UNIX2003'
+    -Wl,-alias,_sigprocmask,'_sigprocmask$UNIX2003' \
+    -Wl,-alias,___setreuid,'_setreuid$UNIX2003' \
+    -Wl,-alias,___setregid,'_setregid$UNIX2003' \
+    -Wl,-alias,_getgroups,'_getgroups$DARWIN_EXTSN' \
+    -Wl,-alias,_glob,'_glob$INODE64' \
+    -Wl,-alias,_socketpair,'_socketpair$UNIX2003'
 echo "wrote sudo.macho"
 
 bad=0

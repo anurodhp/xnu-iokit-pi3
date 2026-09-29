@@ -16,3 +16,8 @@ _PATH_SUDO_DEVSEARCH "/dev/pts:/dev/vt:/dev/term:/dev/zcons:/dev/pty:/dev"
 _PATH_SUDO_SESH "/usr/libexec/sudo/sesh"
 _PATH_VI "/usr/bin/vi"
 _PATH_MV "/bin/mv"
+# _PATH_LDAP_CONF/_PATH_LDAP_SECRET: plugins/sudoers/policy.c:55-56 uses
+# them unconditionally (they are DEFINEd by configure.ac:1201,1205 even
+# without LDAP) with configure.ac:207-208's defaults. LDAP itself is off.
+_PATH_LDAP_CONF "/etc/ldap.conf"
+_PATH_LDAP_SECRET "/etc/ldap.secret"

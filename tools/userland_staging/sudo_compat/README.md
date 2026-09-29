@@ -1,7 +1,10 @@
 # sudo port (DAR-340) -- first-run checklist
 
-Everything here was written on a Linux host with no Xcode/SDK/QEMU. **Nothing
-has been compiled, linked or booted.** Run on the Mac, in order:
+Drafted on Linux, then compiled and linked on a Mac (2026-09-28): 173 objects
+compile clean, `sudo.macho` links against the current libc_build dylibs, and
+`bind_target_audit.sh` / `dead_stub_audit.sh` / `weak_def_audit.sh` pass on it.
+**Nothing has been booted; sudo has never run.** Steps below are what is left
+(steps 1-5 were exercised once; re-run them for real in your own libc_build):
 
 1. `./setup_third_party.sh` (clones `third_party/sudo` @ v1.9.5p2).
 2. Build prerequisites as for `su` (`build_su.sh`'s dep list), then
@@ -24,8 +27,9 @@ has been compiled, linked or booted.** Run on the Mac, in order:
    a bad password (3 tries), and a user missing from sudoers (must log via
    syslog and refuse).
 
-Known open questions: `gen_sudo_config_h.sh` output vs a real compile
-(esp. `HAVE_UTMPX_H` struct fields used by `src/utmp.c`, `HAVE_GETUTXID`);
-whether `-ffreestanding` interacts badly with sudo's `<stdbool.h>` fallback
+Known open questions: `src/utmp.c` is replaced by the no-op
+`sudo_utmp_compat.c` (no utmpx record for a sudo pty; see its header for the
+real-Libc follow-up); `SUDOERS_LOG_CLIENT` is on because v1.9.5p2 does not
+compile without it (see the .def); whether `-ffreestanding` interacts badly with sudo's `<stdbool.h>` fallback
 (`include/compat/stdbool.h`); `crypt.c` from Libc (as `su` does) vs sudo's
 expectations of `crypt(3)` returning NULL on failure.

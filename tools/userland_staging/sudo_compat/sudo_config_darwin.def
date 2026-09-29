@@ -20,9 +20,16 @@
 # ---- build shape ----
 ENABLE_SUDO_PLUGIN_API 1
 STATIC_SUDOERS_PLUGIN 1
+SUDOERS_LOG_CLIENT 1
 # No PAM (configure.ac:2276 -- Darwin excludes PAM by default anyway),
 # no login_cap, no BSM audit, no LDAP/SSSD, no openssl/zlib, no
-# sudo_logsrvd client (SUDOERS_LOG_CLIENT left undefined).
+# openssl/zlib. SUDOERS_LOG_CLIENT is DEFINED (below): configure.ac:1667
+# defaults it ON, and it cannot be left off in v1.9.5p2 --
+# plugins/sudoers/audit.c:371 and :404 call audit_to_eventlog()
+# unconditionally, but audit.c:200 only defines it under
+# SUDOERS_LOG_CLIENT (implicit-declaration error otherwise). Without
+# HAVE_OPENSSL the client is plain-TCP only and never contacts a server
+# unless a log_servers Defaults entry names one.
 
 # ---- [cfg] compile-time defaults (configure.ac:179-287) ----
 ENV_RESET 1
@@ -53,8 +60,29 @@ NO_PAM_SESSION 1
 # Auth: plugins/sudoers/auth/passwd.c (getpwnam + crypt) is the only
 # backend; nothing here defines WITHOUT_PASSWD.
 
+# ---- [cfg] package identity (configure.ac:21 AC_INIT) ----
+# sudo.c:222, policy.c:1122, iolog.c:859, audit.c:427 use PACKAGE_VERSION.
+PACKAGE_NAME "sudo"
+PACKAGE_TARNAME "sudo"
+PACKAGE_VERSION "1.9.5p2"
+PACKAGE_STRING "sudo 1.9.5p2"
+PACKAGE_BUGREPORT "https://bugzilla.sudo.ws/"
+PACKAGE_URL ""
+
+# ---- [sdk] putenv() prototype ----
+# m4/sudo.m4:294-306 (SUDO_FUNC_PUTENV_CONST): PUTENV_CONST is `const` only
+# if a redeclaration `int putenv(const char *)` compiles. The SDK declares
+# `int putenv(char *)` (iPhoneOS.sdk/usr/include/stdlib.h:227), so the
+# redeclaration conflicts and configure emits an EMPTY PUTENV_CONST
+# (sudo.m4:305). src/env_hooks.c:76,119,122,133 use it as a type qualifier.
+PUTENV_CONST <empty>
+
 # ---- [sdk] types / sizes (LP64 arm64) ----
-GETGROUPS_T int
+# GETGROUPS_T: configure.ac's AC_TYPE_GETGROUPS answer, gid_t. It MUST be
+# gid_t: include/sudo_util.h:208 declares sudo_getgrouplist2_v1 with a
+# gid_t basegid, and lib/util/getgrouplist.c:65 defines it with
+# GETGROUPS_T -- any other type is a "conflicting types" compile error.
+GETGROUPS_T gid_t
 SIZEOF_ID_T 4
 SIZEOF_LONG_LONG 8
 SIZEOF_TIME_T 8
@@ -84,8 +112,9 @@ HAVE_SYS_STAT_H 1
 HAVE_SYS_TYPES_H 1
 HAVE_UNISTD_H 1
 HAVE_UTIL_H 1
-HAVE_UTMPX_H 1
 HAVE_PTHREAD_H 1
+# HAVE_UTMPX_H / HAVE_GETUTXID / HAVE_STRUCT_UTMP_*: deliberately UNDEFINED --
+# src/utmp.c is not compiled; sudo_utmp_compat.c replaces it (see its header).
 # HAVE_LIBUTIL_H / HAVE_LOGIN_CAP_H / HAVE_SYS_SYSMACROS_H: not Darwin.
 
 # ---- [sdk] declarations ----
@@ -113,11 +142,6 @@ HAVE_STRUCT_SOCKADDR_SA_LEN 1
 HAVE_STRUCT_TM_TM_GMTOFF 1
 HAVE_ST_MTIMESPEC 1
 HAVE_KINFO_PROC_44BSD 1
-HAVE_STRUCT_UTMP_UT_ID 1
-HAVE_STRUCT_UTMP_UT_PID 1
-HAVE_STRUCT_UTMP_UT_TV 1
-HAVE_STRUCT_UTMP_UT_TYPE 1
-HAVE_STRUCT_UTMP_UT_USER 1
 
 # ---- [libc] functions sudo has NO fallback for, or must use natively ----
 HAVE_CRYPT 1
@@ -132,11 +156,9 @@ HAVE_GETIFADDRS 1
 HAVE_FREEIFADDRS 1
 HAVE_GETPROGNAME 1
 HAVE_GETTTYENT 1
-HAVE_GETUTXID 1
 HAVE_GRANTPT 1
 HAVE_POSIX_OPENPT 1
 HAVE_INNETGR 1
-HAVE_KILLPG 1
 HAVE_LRAND48 1
 HAVE_OPTRESET 1
 HAVE_PSELECT 1
@@ -176,6 +198,8 @@ HAVE_ARC4RANDOM 1
 HAVE_ARC4RANDOM_BUF 1
 HAVE_ARC4RANDOM_UNIFORM 1
 HAVE_GETENTROPY 1
+# HAVE_KILLPG is UNDEFINED: include/sudo_compat.h:271-272 then maps
+# killpg(p,s) to kill(-(p),s), and libsystem_c exports _kill but no _killpg.
 # Deliberately UNDEFINED so upstream's fallback compiles in (each gated
 # `#ifndef HAVE_X` in lib/util/): openat fstatat unlinkat fchmodat
 # reallocarray memrchr closefrom explicit_bzero freezero getopt_long
