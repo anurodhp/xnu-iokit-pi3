@@ -667,7 +667,7 @@ cp "$OUT/launchd_libc_extras.a" "$OUT/launchd_libc_extras_no_dup.a"
 ar d "$OUT/launchd_libc_extras_no_dup.a" \
     copy.o fstatat64.o heapsort.o Libc_sys_sigaction.o \
     libplatform_sigaction.o libresolv_getentropy_syscall.o \
-    ls_fenv_compat.o qsort.o removefile_syscalls.o
+    ls_fenv_compat.o qsort.o removefile_syscalls.o removefile_reallocarray.o
 # ncurses_extra_syscalls.o investigated (DAR-23, 2026-09-14) and left
 # ALONE: 10 of its symbols (___darwin_check_fd_set_overflow/
 # ___sigaction/__sigtramp/_access/_fpathconf/_mkdir/_select/

@@ -380,7 +380,7 @@ mkdir -p "$OUT/launchd_libc_extras_obj"
   ar x "../libcopyfile.a" copy.o && \
   ar x "../dyld_core.a" isnull.o && \
   ar x "../libopenpam.a" ls_fenv_compat.o && \
-  ar x "../libremovefile.a" fstatat64.o qsort.o heapsort.o removefile_syscalls.o )
+  ar x "../libremovefile.a" fstatat64.o qsort.o heapsort.o removefile_syscalls.o removefile_reallocarray.o )
 # Real, narrowed re-exports (ld -r -exported_symbol, same precedent
 # build_libdispatch_dylib.sh's own mach_make_memory_entry_64 extraction
 # already established) for ncurses_extra_syscalls.o/removefile_syscalls.o:
@@ -407,7 +407,7 @@ rm -f "$OUT/launchd_libc_extras_obj/ncurses_extra_syscalls_raw.o"
 ar p "$OUT/libremovefile.a" removefile_syscalls.o > "$OUT/launchd_libc_extras_obj/removefile_syscalls_raw.o"
 "$LD" -r -arch arm64 \
     -exported_symbol _flsl -exported_symbol _getiopolicy_np -exported_symbol _setiopolicy_np -exported_symbol _gettimeofday \
-    -exported_symbol _read -exported_symbol _reallocarray -exported_symbol _rename \
+    -exported_symbol _read -exported_symbol _rename \
     -exported_symbol _rmdir -exported_symbol _unlink -exported_symbol _unlinkat \
     "$OUT/launchd_libc_extras_obj/removefile_syscalls_raw.o" \
     -o "$OUT/launchd_libc_extras_obj/removefile_syscalls.o"
