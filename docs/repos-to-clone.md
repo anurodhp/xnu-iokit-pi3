@@ -31,7 +31,7 @@ The main repo itself is `anurodhp/xnu-iokit-pi3`.
 | `qemu-zhuowei` | `anurodhp/qemu-xnu-arm` | `master` | — |
 | `u-boot` | `anurodhp/u-boot` | `master` | FlorentRevest/u-boot |
 | `dtc-AppleDeviceTree` | `anurodhp/dtc-appledevicetree` | `master` | darwin-on-arm/dtc-AppleDeviceTree |
-| `dyld` | `anurodhp/dyld` | `iokit-port` | apple-oss-distributions |
+| `dyld` | `anurodhp/dyld` | `xdm-greeter-fix` | apple-oss-distributions |
 | `Libc` | `anurodhp/Libc` | `iokit-port` | apple-oss-distributions |
 | `libdispatch` | `anurodhp/libdispatch` | `iokit-port` | apple-oss-distributions |
 | `Libinfo` | `anurodhp/Libinfo` | `iokit-port` | apple-oss-distributions |

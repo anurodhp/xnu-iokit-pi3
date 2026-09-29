@@ -775,7 +775,7 @@ IOHIDFamily|git@github.com:anurodhp/IOHIDFamily.git|iokit-port||https://github.c
 xxHash|https://github.com/Cyan4973/xxHash.git|v0.8.2|
 lzfse|https://github.com/lzfse/lzfse.git|lzfse-1.0|
 msdosfs|https://github.com/apple-oss-distributions/msdosfs.git|msdosfs-435.60.1|
-dyld|git@github.com:anurodhp/dyld.git|iokit-port||https://github.com/apple-oss-distributions/dyld.git
+dyld|git@github.com:anurodhp/dyld.git|xdm-greeter-fix||https://github.com/apple-oss-distributions/dyld.git
 Libc|git@github.com:anurodhp/Libc.git|iokit-port||https://github.com/apple-oss-distributions/Libc.git
 libpthread|git@github.com:anurodhp/libpthread.git|iokit-port||https://github.com/apple-oss-distributions/libpthread.git
 libplatform|https://github.com/apple-oss-distributions/libplatform.git|libplatform-254.80.2|
