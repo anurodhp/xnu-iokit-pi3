@@ -1,4 +1,5 @@
-# Sourced (not run) by bind_target_audit.sh and weak_def_audit.sh, from
+# Sourced (not run) by weak_def_audit.sh (bind_target_audit.sh has its own
+# find-based sweep, from the DAR-447 follow-up), from
 # tools/userland_staging/.
 #
 # staged_images [DYLIB|EXECUTE|BUNDLE]: print every (or only that kind of)
