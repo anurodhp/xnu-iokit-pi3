@@ -10,11 +10,12 @@
 # by an archive member (archives precede dylibs on these link lines).
 # Membership is detected with nm, not hard-coded, so a newly added member
 # that defines one of these is dropped too.
+# usage: make_no_fork_archive.sh [SRC.a DST.a]   (default: liblaunchd_syscalls)
 set -e
 cd "$(dirname "$0")"
 OUT=libc_build
-SRC="$OUT/liblaunchd_syscalls.a"
-DST="$OUT/liblaunchd_syscalls_no_fork.a"
+SRC="${1:-$OUT/liblaunchd_syscalls.a}"
+DST="${2:-$OUT/liblaunchd_syscalls_no_fork.a}"
 [ -f "$SRC" ] || { echo "error: $SRC missing -- run build_launchd_syscalls.sh" >&2; exit 1; }
 if [ -f "$DST" ] && [ "$DST" -nt "$SRC" ] && [ "$DST" -nt "$0" ]; then exit 0; fi
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT

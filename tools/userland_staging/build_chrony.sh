@@ -132,6 +132,14 @@
 # setlocale() dependency), mach_approximate_time.c + mach_continuous_time.c
 # + __thread_selfusage.s (xnu libsyscall).
 #
+# DAR-292 (2026-09-30): the __current_pid workaround below is OBSOLETE.
+# chronyd now links liblaunchd_syscalls_no_fork.a (make_no_fork_archive.sh),
+# so sys____fork.o is not linked at all: _fork/___fork/_waitpid bind to
+# libsystem_c/libsystem_kernel, whose __fork resets the dylib's own cached
+# pid. A private __current_pid/_getpid copy here would now go STALE in a
+# fork child, so sys_getpid_current_pid_only.o and -Wl,-u,__current_pid
+# were removed from the link line. Historical text follows.
+#
 # Real __current_pid same-image-addressing gap: sys____fork.o (from
 # liblaunchd_syscalls.a) needs __current_pid resolvable via a same-image
 # arm64_adrp_lo12 relocation, exactly the class build_launchd.sh's own
@@ -182,13 +190,14 @@ if [ ! -f "$CHRONY/configure" ]; then
     echo "error: $CHRONY not found -- run setup_third_party.sh first" >&2
     exit 1
 fi
+./make_no_fork_archive.sh || exit 1  # DAR-292
 for a in liblaunchd_syscalls liblaunchd_mig libmach_ipc; do
     if [ ! -f "$OUT/$a.a" ]; then
         echo "error: $OUT/$a.a not found -- run build_${a}.sh (or build_launchd_syscalls.sh/build_launchd_core.sh) first" >&2
         exit 1
     fi
 done
-for o in chk_fail.o sys_getpid_current_pid_only.o; do
+for o in chk_fail.o; do
     if [ ! -f "$OUT/$o" ]; then
         echo "error: $OUT/$o not found -- run build_libmalloc.sh then build_launchd.sh first (the latter produces sys_getpid_current_pid_only.o)" >&2
         exit 1
@@ -375,13 +384,12 @@ rm -f chronyd.macho
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
-    -Wl,-u,__current_pid \
     -Wl,-unexported_symbol,__DefaultRuneXLocale \
     -o chronyd.macho \
     -DCRT_NO_PTHREAD_BOOTSTRAP ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/chrony_obj/*.o \
-    "$OUT/liblaunchd_syscalls.a" \
-    "$OUT/liblaunchd_mig.a" "$OUT/libmach_ipc.a" "$OUT/chk_fail.o" "$OUT/sys_getpid_current_pid_only.o" \
+    "$OUT/liblaunchd_syscalls_no_fork.a" \
+    "$OUT/liblaunchd_mig.a" "$OUT/libmach_ipc.a" "$OUT/chk_fail.o" \
     "$OUT/system/libsystem_kernel.dylib" \
     "$OUT/system/libsystem_platform.dylib" "$OUT/system/libsystem_blocks.dylib" \
     "$OUT/system/libsystem_pthread.dylib" \
