@@ -26,7 +26,7 @@ DYLD_INSERT_LIBRARIES=$CD /usr/GNUstep/System/Applications/Terminal.app/Terminal
 sleep 60
 cp $F /var/root/o2_2_term.xwd
 DYLD_INSERT_LIBRARIES=$CD /usr/GNUstep/System/Applications/Ink.app/Ink > /tmp/ink.log 2>&1 &
-sleep 150
+sleep 240
 cp $F /var/root/o2_3_ink.xwd
 echo "== ps"; ps ax | grep -E "Xvfb|wmaker|Terminal|Ink|xev|gdnc|gpbs" | grep -v grep
 for l in xvfb wm xev term ink; do echo "== $l.log"; tail -5 /tmp/$l.log | cut -c1-200; done
