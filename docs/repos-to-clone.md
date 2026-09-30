@@ -34,6 +34,7 @@ The main repo itself is `anurodhp/xnu-iokit-pi3`.
 | `dyld` | `anurodhp/dyld` | `xdm-greeter-fix` | apple-oss-distributions |
 | `Libc` | `anurodhp/Libc` | `iokit-port` | apple-oss-distributions |
 | `libdispatch` | `anurodhp/libdispatch` | `iokit-port` | apple-oss-distributions |
+| `wmaker` | `anurodhp/wmaker` | `iokit-port` | window-maker/wmaker |
 | `Libinfo` | `anurodhp/Libinfo` | `iokit-port` | apple-oss-distributions |
 | `libpthread` | `anurodhp/libpthread` | `iokit-port` | apple-oss-distributions |
 | `IOGraphics` | `anurodhp/IOGraphics` | `iokit-port` | apple-oss-distributions |
