@@ -122,67 +122,11 @@ uint32_t notify_post(const char *name) {
     return LGS_NOTIFY_STATUS_OK;
 }
 
-/* fork(): real, unmodified Apple Libc/sys/fork.c wraps the raw syscall
- * with _libSystem_atfork_prepare/parent/child() function-pointer
- * callouts only ever populated by libSystem's real process-startup
- * initializer (_libc_fork_init(), called from Libsystem_initializer) --
- * this project has no such initializer wired up. Linking
- * liblaunchd_syscalls.a's own real fork_compat.o (which DOES go through
- * that real wrapper) was tried first and confirmed to drag in a real,
- * large, unrelated pthread_atfork()/os_alloc_once/dispatch_atfork_*
- * cascade this one optional login fork() doesn't need. Real, already-
- * established fix for exactly this situation: bash_syscalls.c's own
- * fork() (real, working, QEMU-verified for bash's interactive job
- * control) -- same real arm64 XNU ABI quirk it documents (raw fork()
- * returns the child's pid in x0 to BOTH parent and child; x1 is the
- * only real parent/child discriminator, 0=parent, 1=child), reused
- * verbatim here rather than reintroduced.
- *
- * DAR-221: that copy predated bash's own DAR-220 fix and so also lacked
- * the child-side step of third_party/xnu-7195/libsyscall/custom/
- * __fork.s's arm64 path:
- *
- *     // Child
- *     MI_GET_ADDRESS(x9, __current_pid)  // Get address of cached "current pid"
- *     mov  w0, #0
- *     str  w0, [x9]                      // Clear cached current pid
- *
- * (DAR-423, 2026-09-27: the getpid/__current_pid pair below now lives in
- * libsystem_kernel.dylib, not libsystem_malloc.dylib; login binds it
- * through libSystem's re-export. The mechanism described is unchanged.)
- * getpid() here is the caching ___getpid (custom/__getpid.s): it returns
- * `__current_pid` when it is > 0 and only traps when it is 0. Since
- * DAR-314 login is dynamic, so both that getpid and its cache live in
- * libsystem_malloc.dylib (`xcrun dyld_info -fixups login.macho` shows
- * `bind libsystem_malloc/_getpid`; `nm -m libsystem_malloc.dylib` shows
- * `__current_pid` as an exported __DATA symbol) -- the asm-label extern
- * below binds to that same datum. Without the clear, getpid() in the
- * child returns the parent's pid. login.c's child (third_party/
- * system_cmds/login.tproj/login.c:818) calls no getpid() before its
- * execve() today, so this was latent, not observed. */
-pid_t fork(void) {
-    /* asm label, not name mangling: the very `__current_pid` datum
-     * ___getpid caches into. */
-    extern volatile int login_cached_current_pid asm("__current_pid");
-    register long x0 asm("x0") = 0;
-    register long x1 asm("x1") = 0;
-    register long x16 asm("x16") = 2; /* SYS_fork, see syscalls.master */
-    long is_error;
-    asm volatile("svc #0x80\n"
-                 "cset %2, cs"
-                 : "+r"(x0), "+r"(x1), "=r"(is_error)
-                 : "r"(x16)
-                 : "memory", "cc");
-    if (is_error) {
-        extern long cerror_nocancel(int err);
-        return (pid_t)cerror_nocancel((int)x0);
-    }
-    if (x1) { /* child (x1==1) */
-        login_cached_current_pid = 0; /* real __fork.s's own child-side step */
-        return (pid_t)0;              /* real fork() contract */
-    }
-    return (pid_t)x0;
-}
+/* fork() REMOVED (DAR-292): login.macho used to carry a private raw-svc
+ * copy (DAR-221 patched its missing __current_pid clear by hand). The
+ * canonical owner is libsystem_c.dylib (real atfork handlers +
+ * _libc_fork_child(); the raw __fork trap, which resets the cached pid, is
+ * libsystem_kernel's). tools/userland_staging/fork_owner_gate.sh enforces it. */
 
 /* alarm(): same real, honest, already-established no-op as
  * getty_syscalls.c/bash_syscalls.c's own alarm() (see either file's own

@@ -328,22 +328,9 @@ void endpwent(void) {}
  * REAL lookup this file gets from ps_passwd_compat.c instead -- linking
  * both would collide on those three symbols. */
 
-/* #2 -- SYS_fork. Real x1 is the only real parent/child discriminator
- * (0=parent, 1=child) on this arm64 XNU target; x0 is the child's pid to
- * BOTH parent and child. */
-pid_t fork(void) {
-    register long x0 asm("x0") = 0;
-    register long x1 asm("x1") = 0;
-    register long x16 asm("x16") = 2;
-    long is_error;
-    asm volatile("svc #0x80\n"
-                 "cset %2, cs"
-                 : "+r"(x0), "+r"(x1), "=r"(is_error)
-                 : "r"(x16)
-                 : "memory", "cc");
-    if (is_error) return (pid_t)cerror_nocancel((int)x0);
-    return (pid_t)(x1 ? 0 : x0);
-}
+/* fork() REMOVED (DAR-292): the canonical owner is libsystem_c.dylib
+ * (real atfork handlers + _libc_fork_child()); cron/crontab bind it there.
+ * tools/userland_staging/fork_owner_gate.sh enforces it. */
 
 /* #42 -- real macOS ABI returns both fds via x0/x1 directly. */
 int pipe(int fd[2]) {
@@ -367,27 +354,10 @@ int unlink(const char *path) {
     return (int)csyscall3(10, (long)path, 0, 0);
 }
 
-/* #7 -- int wait4(int pid, user_addr_t status, int options, user_addr_t
- * rusage). waitpid(pid, status, options) == wait4(pid, status, options,
- * NULL), real BSD lineage equivalence. */
-pid_t wait4(pid_t pid, int *status, int options, void *rusage) {
-    register long x0 asm("x0") = pid;
-    register long x1 asm("x1") = (long)status;
-    register long x2 asm("x2") = options;
-    register long x3 asm("x3") = (long)rusage;
-    register long x16 asm("x16") = 7;
-    long is_error;
-    asm volatile("svc #0x80\n"
-                 "cset %1, cs"
-                 : "+r"(x0), "=r"(is_error)
-                 : "r"(x1), "r"(x2), "r"(x3), "r"(x16)
-                 : "memory", "cc");
-    if (is_error) return (pid_t)cerror_nocancel((int)x0);
-    return (pid_t)x0;
-}
-pid_t waitpid(pid_t pid, int *status, int options) {
-    return wait4(pid, status, options, (void *)0);
-}
+/* wait4()/waitpid() REMOVED (DAR-292): canonical owners are libsystem_c.dylib's
+ * _wait4/_waitpid. wait() stays local -- no shipped dylib exports _wait --
+ * and forwards to the canonical wait4(). */
+extern pid_t wait4(pid_t pid, int *status, int options, void *rusage);
 pid_t wait(int *status) {
     return wait4(-1, status, 0, (void *)0);
 }

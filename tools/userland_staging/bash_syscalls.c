@@ -49,16 +49,12 @@ static inline long bsyscall4(long num, long a0, long a1, long a2, long a3) {
     return x0;
 }
 
-/* #7 -- int wait4(int pid, user_addr_t status, int options, user_addr_t rusage) */
-pid_t wait4(pid_t pid, int *status, int options, void *rusage) {
-    return (pid_t)bsyscall4(7, (long)pid, (long)status, (long)options, (long)rusage);
-}
-/* Real Apple waitpid() is a thin wrapper: waitpid(pid, status, options) ==
- * wait4(pid, status, options, NULL) -- confirmed via Libc/gen/wait.c's own
- * documented equivalence in real BSD lineage, not guessed. */
-pid_t waitpid(pid_t pid, int *status, int options) {
-    return wait4(pid, status, options, (void *)0);
-}
+/* wait4()/waitpid()/fork() REMOVED (DAR-292): bash.macho used to carry
+ * private raw-svc copies (fork() also hand-zeroed __current_pid, DAR-220).
+ * The canonical owner is libsystem_c.dylib (libsystem_c_fork_compat.c: real
+ * atfork handlers + _libc_fork_child(); the raw __fork trap is
+ * libsystem_kernel's). bash binds _fork/_waitpid/_wait4 there.
+ * tools/userland_staging/fork_owner_gate.sh enforces it. */
 
 /* #10 -- int unlink(user_addr_t path) */
 int unlink(const char *path) {
@@ -139,72 +135,6 @@ void *getpwnam(const char *name) { (void)name; return (void *)0; }
 void *getpwuid(unsigned uid) { (void)uid; return (void *)0; }
 void endpwent(void) {}
 
-/* fork(): real Apple Libc/sys/fork.c wraps this with
- * _libSystem_atfork_prepare/parent/child() function-pointer callouts that
- * are only ever populated by libSystem's real process-startup initializer
- * (_libc_fork_init(), called from Libsystem_initializer) -- this project
- * has no such initializer wired up, so those pointers are NULL and real
- * fork.c would crash calling through them. Same real ABI quirk this
- * project's own tools/init_binary/init.c already found and documented
- * (arm64 XNU's raw fork() returns the child's pid in x0 to BOTH parent
- * and child; x1 is the only real parent/child discriminator, 0=parent,
- * 1=child) -- reused verbatim here rather than fighting Libc's fork.c.
- *
- * DAR-220: the raw trap is NOT the whole of real Apple's own fork
- * wrapper. third_party/xnu-7195/libsyscall/custom/__fork.s's arm64 path
- * does one more thing in the child before returning:
- *
- *     // Child
- *     MI_GET_ADDRESS(x9, __current_pid)  // Get address of cached "current pid"
- *     mov  w0, #0
- *     str  w0, [x9]                      // Clear cached current pid
- *
- * because ___getpid (custom/__getpid.s, linked into this binary -- check
- * with `nm -m bash.macho | grep __current_pid`) is a CACHING getpid: it
- * returns the process-wide `__current_pid` global whenever it is > 0 and
- * only falls through to the real SYS_getpid trap when it is 0. The child
- * of fork() inherits the parent's cached value, so unless the fork
- * wrapper itself zeroes it, getpid() in the child keeps returning the
- * PARENT's pid forever.
- *
- * Real, real-hardware-observed symptom that found this (DAR-220): every
- * command typed at the login shell printed
- *     -sh: child setpgid (6 to 6): No such process
- * where 6 was the SHELL's pid, identical for every command rather than
- * incrementing per child. That is jobs.c:1748's `setpgid (mypid,
- * pipeline_pgrp)` in the freshly-forked child, with mypid = the stale
- * cached parent pid. bsd/kern/kern_prot.c's setpgid() only returns ESRCH
- * on the `uap->pid != curp->p_pid` branch (`proc_find() == 0 ||
- * !inferior()`) -- a real self-setpgid can never produce ESRCH -- so the
- * error itself was proof getpid() had returned someone else's pid.
- *
- * Not merely cosmetic: bash's child then has pipeline_pgrp == the
- * shell's own pid == shell_pgrp, which sends it down make_child()'s
- * "this is a command-substitution child" branch -- ignore_tty_job_signals()
- * (SIGTSTP/SIGTTIN/SIGTTOU set to SIG_IGN, inherited across exec, so
- * ^Z could not suspend a foreground job) plus a skipped
- * give_terminal_to(). */
-pid_t fork(void) {
-    /* asm label, not name mangling: this is the very same `__current_pid`
-     * datum ___getpid.s defines and caches into. */
-    extern volatile int bash_cached_current_pid asm("__current_pid");
-    register long x0 asm("x0") = 0;
-    register long x1 asm("x1") = 0;
-    register long x16 asm("x16") = 2; /* SYS_fork, see syscalls.master */
-    long is_error;
-    asm volatile("svc #0x80\n"
-                 "cset %2, cs"
-                 : "+r"(x0), "+r"(x1), "=r"(is_error)
-                 : "r"(x16)
-                 : "memory", "cc");
-    if (is_error) return (pid_t)cerror_nocancel((int)x0);
-    if (x1) { /* child (x1==1) */
-        bash_cached_current_pid = 0; /* real __fork.s's own child-side step */
-        return (pid_t)0;             /* real fork() contract */
-    }
-    return (pid_t)x0;
-}
-
 /* pipe(2): real macOS ABI returns BOTH fds via x0/x1 registers directly
  * (not through an out-param struct) -- confirmed via
  * third_party/xnu-7195/libsyscall/custom/__pipe.s's own real macro
@@ -282,10 +212,6 @@ long read_u2003(int fd, void *buf, unsigned long n) {
 extern long write_u2003(int fd, const void *buf, unsigned long n) asm("_write$UNIX2003");
 long write_u2003(int fd, const void *buf, unsigned long n) {
     return bsyscall3(4, (long)fd, (long)buf, (long)n); /* #4 write */
-}
-extern pid_t waitpid_u2003(pid_t pid, int *status, int options) asm("_waitpid$UNIX2003");
-pid_t waitpid_u2003(pid_t pid, int *status, int options) {
-    return waitpid(pid, status, options);
 }
 extern int setreuid_u2003(unsigned r, unsigned e) asm("_setreuid$UNIX2003");
 int setreuid_u2003(unsigned r, unsigned e) { return setreuid(r, e); }
