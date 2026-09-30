@@ -878,7 +878,7 @@ libXpm|https://gitlab.freedesktop.org/xorg/lib/libxpm.git|libXpm-3.5.19|
 libXaw|https://gitlab.freedesktop.org/xorg/lib/libxaw.git|libXaw-1.0.16|
 xdm|https://gitlab.freedesktop.org/xorg/app/xdm.git|xdm-1.1.17|
 libxcvt|https://gitlab.freedesktop.org/xorg/lib/libxcvt.git|libxcvt-0.1.3|
-wmaker|git@github.com:anurodhp/wmaker.git|dar-431-kqueue||https://github.com/window-maker/wmaker.git
+wmaker|git@github.com:anurodhp/wmaker.git|iokit-port|
 libffi|https://github.com/apple-oss-distributions/libffi.git|libffi-27|
 gnustep-make|git@github.com:anurodhp/tools-make.git|dar-451-objc4-framework-classes||https://github.com/gnustep/tools-make.git
 gnustep-base|git@github.com:anurodhp/libs-base.git|dar-451-gworkspace||https://github.com/gnustep/libs-base.git
