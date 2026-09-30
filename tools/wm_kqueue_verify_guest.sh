@@ -14,13 +14,17 @@ export DISPLAY=:0 HOME=/var/root
 X=/usr/X11/bin
 IDLE=${IDLE:-60}
 MODE=${1:-full}
+# func: only the functional part, on one kqueue wmaker
+[ "$MODE" = func ] && { ORDER=kqueue; IDLE=5; }
 rm -rf /var/root/GNUstep/Defaults /var/root/fb; mkdir -p /var/root/fb
 mkdir -p /var/root/GNUstep/Library/WindowMaker
 printf '#!/bin/sh\nexit 0\n' > /var/root/GNUstep/Library/WindowMaker/autostart; chmod 755 /var/root/GNUstep/Library/WindowMaker/autostart
 F=/var/root/fb/Xvfb_screen0
 
+if [ "$MODE" != menu ] && [ "$MODE" != func ]; then
 echo "== unit: kqueue"; $X/wutil_kq_test; echo "rc=$?"
 echo "== unit: select"; WM_EVENT_BACKEND=select $X/wutil_kq_test; echo "rc=$?"
+fi
 
 $X/Xvfb :0 -screen 0 1280x720x24 -fbdir /var/root/fb > /tmp/xvfb.log 2>&1 &
 sleep 8
@@ -48,7 +52,30 @@ ab() { # backend-name  env-setting
     echo "[$name] stats (idle window = lines between the MARKs):"; grep -E "MARK|event stats" /tmp/wm_$name.log | sed -n '/idle-start/,/idle-end/p'; grep -B1 -m1 "idle-start" /tmp/wm_$name.log | head -2
     echo "[$name] ps after load:"; ps -p $WP -o pid,state,time
 }
-stopwm() { kill $MON; kill $WP; sleep 5; ps ax | grep -e wmaker | grep -v grep; }
+# wmaker takes several seconds to exit under TCG; a still-running one makes the
+# next start fail with "already a window manager running".
+stopwm() {
+    kill $MON; kill $WP
+    i=0; while ps -p $WP > /dev/null 2>&1 && [ $i -lt 90 ]; do sleep 1; i=$((i + 1)); done
+    echo "wmaker gone after ${i}s"; ps ax | grep -e wmaker | grep -v grep
+}
+# menu: per backend, open the root menu (button 3), snapshot, click outside
+# it (button 1), snapshot, to compare menu dismissal between the backends.
+if [ "$MODE" = menu ]; then
+    for b in select kqueue; do
+        : > /tmp/wm_menu_$b.log
+        env WM_EVENT_BACKEND=$b $X/wmaker >> /tmp/wm_menu_$b.log 2>&1 &
+        MON=$!; sleep 40
+        WP=$(ps ax | grep -e '--for-real' | grep -v grep | awk '{print $1}')
+        $X/x11_probe click 600 400 3; sleep 5; cp $F /var/root/menu_${b}_a_open.xwd
+        $X/x11_probe click 900 300 1; sleep 5; cp $F /var/root/menu_${b}_b_after_click.xwd
+        $X/x11_probe click 600 400 3; sleep 5; $X/wmclose_probe key Escape; sleep 5
+        cp $F /var/root/menu_${b}_c_after_escape.xwd
+        kill $MON; kill $WP; i=0; while ps -p $WP > /dev/null 2>&1 && [ $i -lt 90 ]; do sleep 1; i=$((i + 1)); done
+    done
+    sync; sync; echo TESTEND; exit 0
+fi
+
 # The first wmaker after a fresh Xvfb is ~25x slower to answer (median
 # 275 ms vs 10 ms per round trip, whichever backend it runs), so the first
 # run is a discarded "warm" one and the backends then alternate.
@@ -79,10 +106,10 @@ echo "-- keyboard into xev"
 $X/x11_probe click 1000 140 1; sleep 1
 $X/xtest_type hello; sleep 3
 grep -c KeyPress /tmp/xev.log; grep -m3 "keysym" /tmp/xev.log | cut -c1-100
-echo "-- pointer into xev"; grep -c "MotionNotify\|ButtonPress" /tmp/xev.log
+echo "-- pointer into xev (ButtonPress/MotionNotify lines)"; grep -c "MotionNotify\|ButtonPress" /tmp/xev.log
 echo "-- wmclose delete xev"
-$X/wmclose_probe delete xev; sleep 5
-$X/wmclose_probe list | grep -ci xev
+$X/wmclose_probe delete Event; sleep 5
+$X/wmclose_probe list | grep -ci "Event Tester"
 kill $XEVP 2>/dev/null
 echo "-- Terminal"
 . /usr/GNUstep/System/Library/Makefiles/GNUstep.sh 2>/dev/null
@@ -96,8 +123,8 @@ DYLD_INSERT_LIBRARIES=$CD /usr/GNUstep/System/Applications/Ink.app/Ink > /tmp/in
 sleep 120
 cp $F /var/root/kq_3_ink.xwd
 $X/wmclose_probe list
-echo "-- close Ink via titlebar button"
-$X/wmclose_probe closebtn Ink; sleep 8
+echo "-- close the Ink document window via its titlebar close button"
+$X/wmclose_probe closebtn Untitled; sleep 8
 $X/wmclose_probe list
 ps -p $WP -o pid,state,time,command
 ps ax | grep -E "Xvfb|wmaker|Terminal|Ink" | grep -v grep
