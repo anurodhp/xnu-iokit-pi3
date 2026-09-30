@@ -526,6 +526,9 @@ install_smoketest tools/userland_staging/xtest_type.macho "usr/X11/bin/xtest_typ
 install_smoketest tools/userland_staging/wutil_kq_test.macho "usr/X11/bin/wutil_kq_test" \
     "= tools/userland_staging/wutil_kq_test.macho not built -- run build_wutil_kq_test.sh first if wanted, skipping" \
     "  (tools/userland_staging/build_wutil_kq_test.sh: libWUtil kqueue/select input-wait test)"
+install_smoketest tools/userland_staging/wutil_timer_test.macho "usr/X11/bin/wutil_timer_test" \
+    "= tools/userland_staging/wutil_timer_test.macho not built -- run build_wutil_timer_test.sh first if wanted, skipping" \
+    "  (tools/userland_staging/build_wutil_timer_test.sh: DAR-432 timer clock-step and leeway test)"
 install_smoketest tools/userland_staging/wmlat.macho "usr/X11/bin/wmlat" \
     "= tools/userland_staging/wmlat.macho not built -- run build_wmlat.sh first if wanted, skipping" \
     "  (tools/userland_staging/build_wmlat.sh: Window Maker event latency probe)"
