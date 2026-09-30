@@ -1680,7 +1680,7 @@ fi
 # base64(1) and awk(1): built by build_simple_cmds.sh like the loop above,
 # but a Mac ships them in /usr/bin, not /bin.
 mkdir -p "$MNT/usr/bin"
-for cmd in base64 awk pkill; do
+for cmd in base64 awk pkill top; do
     if [ -f "tools/userland_staging/$cmd.macho" ]; then
         cp "tools/userland_staging/$cmd.macho" "$MNT/usr/bin/$cmd"
         chmod 755 "$MNT/usr/bin/$cmd"
