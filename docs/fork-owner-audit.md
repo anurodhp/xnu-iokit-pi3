@@ -7,8 +7,8 @@ real `_libc_fork_child()`). The raw `___fork` trap is `libsystem_kernel.dylib`'s
 (it clears the dylib's own cached `__current_pid`). No shipped image other than
 the exceptions below may define any of these.
 
-Enforced by `tools/userland_staging/fork_owner_gate.sh` (run by
-`build_simple_cmds.sh`; also run by hand over every built image).
+Enforced by `tools/userland_staging/fork_owner_gate.sh` (run it over every built
+image after touching any link recipe; pass image paths to check a subset).
 
 ## Where the ~92 private copies came from (measured with `nm -m`, 2026-09-30)
 
