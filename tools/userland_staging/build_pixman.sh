@@ -47,7 +47,9 @@ cp "$FS_CONFIG_DIR/pixman/pixman-config.h" "$GEN/"
 SRCS=$(awk '/^pixman_files = files\(/{f=1; next} f && /^\)/{f=0} f {gsub(/[ ,\x27]/, ""); if ($0 != "") print}' "$SRC/pixman/meson.build")
 [ "$(echo "$SRCS" | wc -l)" -ge 30 ] || { echo "error: could not read pixman_files from pixman/meson.build" >&2; exit 1; }
 for f in $SRCS pixman-arm-neon.c pixman-arma64-neon-asm.S pixman-arma64-neon-asm-bilinear.S; do
-    x11_compile "$OBJ" "$SRC/pixman/$f" -I "$GEN" -I "$SRC/pixman"
+    # pixman/meson.build:37 builds with -fno-strict-aliasing; keep it now that
+    # this is no longer -O0 (DAR-438).
+    x11_compile "$OBJ" "$SRC/pixman/$f" -fno-strict-aliasing -I "$GEN" -I "$SRC/pixman"
 done
 x11_compile_report pixman
 

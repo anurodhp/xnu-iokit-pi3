@@ -78,7 +78,7 @@ sys.exit("shmodule.c not found in compile_commands.json")')
 (cd "$BUILD" && eval "$MODCMD" -c -I "$SRC/include" -Werror=implicit-function-declaration \
     "$SRC/puredarwingop_drv.c" -o "$OBJ/puredarwingop_drv.o")
 
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -O0 -Wno-nullability-completeness -DPRIVATE=1 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c "${X11_OPT:--O2}" -Wno-nullability-completeness -DPRIVATE=1 \
     -Werror=implicit-function-declaration \
     -I "$SRC/include" -I "$OUT/iokitlib_headers" -I "$OUT/compat_include" -I "$OUT/cf_headers" \
     -I "$T/xnu-7195/iokit" -I "$T/xnu-7195/libkern" -idirafter "$T/xnu-7195/osfmk" \

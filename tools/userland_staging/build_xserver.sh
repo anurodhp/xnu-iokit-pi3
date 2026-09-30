@@ -159,7 +159,12 @@ TC="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin"
     echo "strip = '$TC/strip'"
     echo "pkg-config = '$(command -v pkg-config)'"
     echo "[built-in options]"
-    echo "c_args = ['-fno-builtin', '-fno-stack-protector', '-fno-common', '-D_FORTIFY_SOURCE=0',"
+    # $X11_OPT (x11_common.sh, default -O2, DAR-438): --buildtype=plain passes
+    # no optimisation flag of its own, so the server was -O0 before.
+    # hw/xfree86 modules (iohid_drv, puredarwingop_drv) reuse this c_args via
+    # their compile_commands.json entry. xserver/meson.build:14 already adds
+    # -fno-strict-aliasing globally.
+    echo "c_args = ['$X11_OPT', '-fno-builtin', '-fno-stack-protector', '-fno-common', '-D_FORTIFY_SOURCE=0',"
     echo "          '-Wno-nullability-completeness', '-Wno-deprecated-declarations',"
     echo "          '-I$INC', '-I$FS_SYSINC', '-I$GEN/md/include',"
     echo "          '-include', '$PWD/xserver_reallocarray_decl.h']"
