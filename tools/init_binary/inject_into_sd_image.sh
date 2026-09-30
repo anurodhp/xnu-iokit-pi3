@@ -516,6 +516,9 @@ fi
 install_smoketest tools/userland_staging/x11_smoketest.macho "usr/X11/bin/x11_smoketest" \
     "= tools/userland_staging/x11_smoketest.macho not built -- run build_x11_smoketest.sh first if wanted, skipping" \
     "  (tools/userland_staging/build_x11_smoketest.sh)"
+install_smoketest tools/userland_staging/xtest_type.macho "usr/X11/bin/xtest_type" \
+    "= tools/userland_staging/xtest_type.macho not built -- run build_xtest_type.sh first if wanted, skipping" \
+    "  (tools/userland_staging/build_xtest_type.sh: XTEST typing client for greeter tests)"
 
 # Font/2D stack (DAR-384). The dylibs (libz, libexpat, freetype, libpng,
 # pixman, fontconfig, cairo, libXft) go in through the generic
