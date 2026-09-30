@@ -516,6 +516,10 @@ fi
 install_smoketest tools/userland_staging/x11_smoketest.macho "usr/X11/bin/x11_smoketest" \
     "= tools/userland_staging/x11_smoketest.macho not built -- run build_x11_smoketest.sh first if wanted, skipping" \
     "  (tools/userland_staging/build_x11_smoketest.sh)"
+# Window Maker Close/Kill driver (DAR-452): QEMU-only diagnostic, no xdotool/xkill here.
+install_smoketest tools/userland_staging/wmclose_probe.macho "usr/X11/bin/wmclose_probe" \
+    "= tools/userland_staging/wmclose_probe.macho not built -- run build_wmclose_probe.sh first if wanted, skipping" \
+    "  (tools/userland_staging/build_wmclose_probe.sh)"
 
 # Font/2D stack (DAR-384). The dylibs (libz, libexpat, freetype, libpng,
 # pixman, fontconfig, cairo, libXft) go in through the generic
