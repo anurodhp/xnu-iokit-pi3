@@ -565,7 +565,7 @@ MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 # those copies are left alone here.
 for s in _geteuid _getegid _getuid _getgid _pread _pwrite _fileport_makefd _fileport_makeport \
     _socket _writev ___chmod ___connect_nocancel ___recvmsg_nocancel ___sendmsg_nocancel \
-    ___select_nocancel ___sendto_nocancel ___recvfrom_nocancel _fpathconf _kevent _kqueue ___sigaction \
+    ___select_nocancel ___sendto_nocancel ___recvfrom_nocancel _fpathconf _kevent _kqueue _kevent64 _kevent_id ___sigaction \
     _setegid _seteuid _getgroups _setitimer _flock _sync ___reboot ___getlogin _setsid ___setpriority _dup2 \
     _link _pathconf _readv _poll _getsockopt _shutdown _umask ___listen ___accept \
     _utimes _shmat _shmdt _shmget ___shmctl \
@@ -674,6 +674,17 @@ done
 # separate fix just below (NO_SYSCALL_STUB, can't go through this same
 # generated-stub loop) and build_libresolv_dylib.sh's updated header for
 # the other half of this fix (dropping the now-stale -Wl,-U deferrals).
+
+# DAR-456: _kevent64 (#369) and _kevent_id (#375) are plain generated
+# stubs too (syscalls.master:560,571, no NO_SYSCALL_STUB marker; the same
+# create-syscalls.pl run emits _kevent64.s/_kevent_id.s with the same
+# MI_ENTRY_POINT/SYSCALL_NONAME/cerror_nocancel shape as _kevent.s), so
+# real Apple's libsystem_kernel exports them exactly this way
+# (third_party/xnu-7195/libsyscall/xcodescripts/create-syscalls.pl over
+# bsd/kern/syscalls.master; libsyscall has no hand-written kevent64).
+# _kevent_qos (#374) stays owned by libdispatch.dylib on purpose: moving
+# an existing export's owner is the DAR-217/weak-def hazard class.
+# WUtil (wmaker fork, WINGs/handlers.c) calls _kevent64 for NOTE_LEEWAY.
 
 # pipe(2): NO_SYSCALL_STUB (the real kernel trap returns TWO fds via
 # x0/x1, not one -- a case create-syscalls.pl's generic single-return
@@ -1296,6 +1307,7 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/sys___getlogin.o" "$OUT/libsystem_kernel/sys___setlogin.o" \
     "$OUT/libsystem_kernel/sys_fpathconf.o" "$OUT/libsystem_kernel/nanosleep_compat.o" \
     "$OUT/libsystem_kernel/sys_kevent.o" "$OUT/libsystem_kernel/sys_kqueue.o" \
+    "$OUT/libsystem_kernel/sys_kevent64.o" "$OUT/libsystem_kernel/sys_kevent_id.o" \
     "$OUT/libsystem_kernel/pipe_trap.o" "$OUT/libsystem_kernel/pipe_forwarder.o" \
     "$OUT/libsystem_kernel/ptrace_trap.o" \
     "$OUT/libsystem_kernel/chmod_wrap.o" "$OUT/libsystem_kernel/xpc_syscall_wrappers_compat.o" \
