@@ -724,10 +724,15 @@ mkdir -p third_party
 #     pin -- `git ls-tree macos-112 -- libffi` in distribution-macOS ==
 #     commit 491d23ac598f == tag libffi-27 (checked 2026-09-28). Cloned
 #     unmodified; built by tools/userland_staging/build_libffi.sh.
-#     gnustep-make 2.9.3 and gnustep-base 1.31.1 (DAR-388): upstream
-#     gnustep/tools-make tag make-2_9_3, and our fork anurodhp/libs-base
-#     branch iokit-port (off upstream tag base-1_31_1), which carries the
-#     port to Apple's objc4 runtime. GNUstep is the user's chosen GUI layer (DAR-381), and
+#     gnustep-make 2.9.3 and gnustep-base 1.31.1 (DAR-388): our fork
+#     anurodhp/tools-make branch dar-451-objc4-framework-classes (off
+#     upstream tag make-2_9_3; DAR-451: target.make extracts objc4's
+#     _OBJC_CLASS_$_ class names on Darwin, so NSFramework_<name> lists its
+#     classes and framework resources are found), and our fork
+#     anurodhp/libs-base branch dar-451-gworkspace (off iokit-port, off
+#     upstream tag base-1_31_1), which carries the port to Apple's objc4
+#     runtime plus DAR-451's gdnc stdio, getpw*_r result and BOOL-NSNumber
+#     archiving fixes. GNUstep is the user's chosen GUI layer (DAR-381), and
 #     Apple ships no GNUstep, so upstream is the source.
 #     gnustep-gui 0.32.0 and gnustep-back 0.32.0 (DAR-390): released with
 #     base 1.31 (2025-02). gui is our fork anurodhp/libs-gui branch
@@ -743,8 +748,9 @@ mkdir -p third_party
 #     Darwin pty include and link libraries. build_gnustep_terminal.sh.
 #     gnustep-gworkspace (DAR-392): our fork anurodhp/apps-gworkspace
 #     branch iokit-port, off gnustep/apps-gworkspace tag gworkspace-1_0_0
-#     (2025-02-12, 14ea9f49). One commit: typed IMP function pointers at
-#     five call sites for objc4. Source of GWorkspace.app, Recycler.app,
+#     (2025-02-12, 14ea9f49): typed IMP function pointers at five call
+#     sites for objc4; branch dar-451-daemon-start-wait adds a longer wait
+#     for a just-launched fswatcher/ddbd to register (DAR-451). Source of GWorkspace.app, Recycler.app,
 #     FSNode/DBKit and the ddbd/fswatcher tools (build_gnustep_gworkspace.sh).
 #     libtiff 4.7.1 (DAR-390): gitlab.com/libtiff/libtiff tag v4.7.1,
 #     unmodified; gnustep-gui requires it. Apple publishes no libtiff.
@@ -871,14 +877,14 @@ xdm|https://gitlab.freedesktop.org/xorg/app/xdm.git|xdm-1.1.17|
 libxcvt|https://gitlab.freedesktop.org/xorg/lib/libxcvt.git|libxcvt-0.1.3|
 wmaker|https://github.com/window-maker/wmaker.git|wmaker-0.96.0|
 libffi|https://github.com/apple-oss-distributions/libffi.git|libffi-27|
-gnustep-make|https://github.com/gnustep/tools-make.git|make-2_9_3|
-gnustep-base|git@github.com:anurodhp/libs-base.git|iokit-port||https://github.com/gnustep/libs-base.git
+gnustep-make|git@github.com:anurodhp/tools-make.git|dar-451-objc4-framework-classes||https://github.com/gnustep/tools-make.git
+gnustep-base|git@github.com:anurodhp/libs-base.git|dar-451-gworkspace||https://github.com/gnustep/libs-base.git
 gnustep-gui|git@github.com:anurodhp/libs-gui.git|iokit-port||https://github.com/gnustep/libs-gui.git
 gnustep-back|https://github.com/gnustep/libs-back.git|back-0_32_0|
 gnustep-examples|git@github.com:anurodhp/tests-examples.git|iokit-port||https://github.com/gnustep/tests-examples.git
 libtiff|https://gitlab.com/libtiff/libtiff.git|v4.7.1|
 gnustep-gap|git@github.com:anurodhp/gap.git|iokit-port||https://github.com/gnustep/gap.git
-gnustep-gworkspace|git@github.com:anurodhp/apps-gworkspace.git|iokit-port||https://github.com/gnustep/apps-gworkspace.git
+gnustep-gworkspace|git@github.com:anurodhp/apps-gworkspace.git|dar-451-daemon-start-wait||https://github.com/gnustep/apps-gworkspace.git
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch upstream_url; do
