@@ -1,6 +1,7 @@
 #!/bin/sh
 # DAR-432 guest-side verification, run as root inside the QEMU guest:
-#   sh /var/root/wmtm.sh unit     wutil_timer_test, kqueue then select backend
+#   sh /var/root/wmtm.sh unit     kevent64 timer probe, then wutil_timer_test on the
+#                                 default (kqueue) then the select backend
 #   sh /var/root/wmtm.sh idle     Xvfb + one wmaker: idle CPU and WM_EVENT_STATS
 #                                 counters over IDLE seconds (2 windows), then a
 #                                 -3600 s / +3600 s wall-clock step under the
@@ -13,8 +14,11 @@ IDLE=${IDLE:-60}
 MODE=${1:-unit}
 
 if [ "$MODE" = unit ]; then
+    echo "== raw kevent64 EVFILT_TIMER probe"; $X/wutil_timer_test kq64
     echo "== unit: default backend"; $X/wutil_timer_test; echo "rc=$?"
     echo "== unit: select"; WM_EVENT_BACKEND=select $X/wutil_timer_test; echo "rc=$?"
+    echo "== regression: wutil_kq_test (DAR-431) default, select"; $X/wutil_kq_test | grep -v "^PASS"; echo "rc=$?"
+    WM_EVENT_BACKEND=select $X/wutil_kq_test | grep -v "^PASS"; echo "rc=$?"
     echo TESTEND; exit 0
 fi
 
