@@ -145,62 +145,19 @@ int setpriority(int which, id_t_compat who, int prio) {
     return (int)syscall3(SYS_setpriority, which, who, prio);
 }
 
-/* fork()/vfork()/waitpid(): mv.c's cross-filesystem-rename fallback
- * (fastcopy() calling out to real /bin/cp + /bin/rm as subprocesses via
- * fork+execl+waitpid, exercised when rename(2) fails EXDEV) is the
- * first real use of process-spawning library calls in this
- * userland_staging tier -- everything before this used raw syscalls
- * directly (tools/init_binary/init.c, PID 1) or never forked at all.
+/* fork()/waitpid() REMOVED (DAR-292): this file used to carry private
+ * raw-svc copies, linked into ~90 shipped commands. A private fork() never
+ * runs the atfork handlers (libmalloc/libpthread/libdispatch/dyld
+ * fork-child fix-ups) and leaves the cached __current_pid stale in the
+ * child. The canonical owner is libsystem_c.dylib's _fork/_waitpid
+ * (build_libsystem_c.sh, libsystem_c_fork_compat.c), which every command
+ * link line already lists; tools/userland_staging/fork_owner_gate.sh
+ * fails the build if a private copy reappears.
  *
- * Real Apple Libc/sys/fork.c exists and is real source, but its real
- * body unconditionally calls three atfork-notification function
- * pointers (_libSystem_atfork_prepare/_parent/_child) that only get
- * populated by a real libSystem_initializer() call this project's
- * no-dyld target never runs -- linking it as-is would compile clean but
- * NULL-call-pointer crash on the very first real fork(), a real
- * correctness trap far worse than not having fork() at all. This
- * project's own PID-1 (tools/init_binary/init.c's sys_fork(), see its
- * header comment) already root-caused and documents the one genuinely
- * hardware/ABI-specific wrinkle here: arm64 Darwin's real fork(2) kernel
- * trap returns parent/child status in x1 (1 = you're the child), not by
- * x0's sign or value the way Linux does -- getting this backwards makes
- * the "child" branch simply never run. Reusing that exact, already
- * QEMU-verified convention here (last-resort narrow port, matching this
- * project's own precedent of bypassing Apple's real-but-unusable-here
- * private-wrapper layering in removefile_syscalls.c's unlink/rmdir/
- * rename) rather than fighting fork.c's uninitialized-function-pointer
- * dependency. No atfork bookkeeping exists to skip (this project has no
- * real pthread/atfork subsystem at all -- bsd_pthread_stub.c already
- * documents that as a permanent, documented ceiling, not a gap
- * introduced here). */
-#define SYS_fork  2
-#define SYS_vfork 66
-#define SYS_wait4 7
-
+ * vfork() stays local: no shipped dylib exports _vfork. It forwards to the
+ * canonical fork() (extern, bound to libsystem_c). */
 typedef int pid_t;
-
-pid_t fork(void) {
-    register long x0 asm("x0") = 0;
-    register long x1 asm("x1") = 0;
-    register long x16 asm("x16") = SYS_fork;
-    long is_error;
-    asm volatile("svc #0x80\n"
-                 "cset %2, cs"
-                 : "+r"(x0), "+r"(x1), "=r"(is_error)
-                 : "r"(x16)
-                 : "memory", "cc");
-    if (is_error) {
-        return (pid_t)cerror_nocancel((int)x0);
-    }
-    if (x1) {
-        /* We are the child -- real fork(2) contract is 0 in the child,
-         * regardless of what raw x0 held (real PID of the child, from
-         * the kernel's perspective, but POSIX fork() never exposes that
-         * to the child itself). */
-        return 0;
-    }
-    return (pid_t)x0;
-}
+pid_t fork(void);
 
 /* Real vfork(2) is a genuine distinct syscall (address-space-sharing
  * optimization until exec/exit) with the same x1 parent/child ABI
@@ -216,23 +173,4 @@ pid_t fork(void) {
  * first time. */
 pid_t vfork(void) {
     return fork();
-}
-
-struct rusage;
-pid_t waitpid(pid_t pid, int *status, int options) {
-    register long x0 asm("x0") = pid;
-    register long x1 asm("x1") = (long)status;
-    register long x2 asm("x2") = options;
-    register long x3 asm("x3") = 0;
-    register long x16 asm("x16") = SYS_wait4;
-    long is_error;
-    asm volatile("svc #0x80\n"
-                 "cset %1, cs"
-                 : "+r"(x0), "=r"(is_error)
-                 : "r"(x1), "r"(x2), "r"(x3), "r"(x16)
-                 : "memory", "cc");
-    if (is_error) {
-        return (pid_t)cerror_nocancel((int)x0);
-    }
-    return (pid_t)x0;
 }

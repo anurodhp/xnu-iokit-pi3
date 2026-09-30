@@ -40,6 +40,7 @@ fi
 PD="../../third_party/PureDarwin/src/Libraries/XPC"
 OUT="libc_build"
 
+./make_no_fork_archive.sh || exit 1  # DAR-292
 for a in liblaunchd_syscalls.a libxpc_syscalls.a \
          libc_gen.a libc_string.a libc_stdio.a libc_printf.a libc_locale_for_stdio.a \
          libmalloc.a libplatform.a libpthread.a; do
@@ -109,7 +110,7 @@ rm -f "$OUT/pd_console_login.macho"
     -o "$OUT/pd_console_login.macho" \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/pd_console_login.o" \
-    "$OUT/liblaunchd_syscalls.a" "$OUT/libxpc_syscalls_no_getenv.a" \
+    "$OUT/liblaunchd_syscalls_no_fork.a" "$OUT/libxpc_syscalls_no_getenv.a" \
     `# libxpc_syscalls.a swapped for the derived _no_getenv.a copy above` \
     `# (DAR-25): getenv_compat.o/setenv.o dropped, real owner` \
     `# libsystem_c.dylib below now resolves __NSGetEnviron/_getenv/` \

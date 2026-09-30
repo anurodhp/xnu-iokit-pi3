@@ -164,6 +164,7 @@ LOGIN="../../third_party/system_cmds/login.tproj"
 ASL_INC="../../third_party/syslog/libsystem_asl.tproj/include"
 XPC_INC="../../third_party/PureDarwin/src/Libraries/XPC/libxpc/include"
 OUT="libc_build"
+./make_no_fork_archive.sh || exit 1  # DAR-292: fork/wait/exec family binds libsystem_c
 rm -rf "$OUT/login_obj"
 mkdir -p "$OUT/login_obj" "$OUT/compat_include"
 
@@ -200,7 +201,7 @@ if [ ! -f "$OUT/launchd_libc_extras.a" ]; then
     exit 1
 fi
 for f in simple_obj/sys____chmod.o \
-         simple_obj/sys__chown.o simple_obj/sys__dup2.o simple_obj/sys__execve.o \
+         simple_obj/sys__chown.o simple_obj/sys__dup2.o \
          simple_obj/sys__chflags.o simple_obj/sys__setgid.o simple_obj/sys__setuid.o \
          simple_obj/sys____mmap.o simple_obj/sys__geteuid.o simple_obj/sys__getuid.o \
          simple_obj/sys__getpriority.o; do
@@ -249,7 +250,6 @@ $LIBC/gen/oldsyslog.c
 cat_socket_stub.c
 date_compat.c
 $LIBC/gen/FreeBSD/err.c
-$LIBC/gen/FreeBSD/exec.c
 $LIBC/gen/FreeBSD/signal.c
 $LIBC/gen/FreeBSD/usleep.c
 simple_cmds_read_compat.c
@@ -505,7 +505,7 @@ LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $
     `# flagged it UNRESOLVABLE when dropped: a clean link that would have` \
     `# aborted at dyld load, the DAR-217 hazard). Kept across DAR-314.` \
     "$OUT/simple_obj/sys__getpriority.o" \
-    "$OUT/liblaunchd_syscalls.a" \
+    "$OUT/liblaunchd_syscalls_no_fork.a" \
     "$OUT/libmach_ipc.a" \
     "$OUT/libc_regex.a" \
     `# Real raw-syscall objects with no dylib equivalent -- see the` \
@@ -520,8 +520,7 @@ LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $
     -Wl,-alias,_writev,'_writev$UNIX2003' \
     -Wl,-alias,_send,'_send$UNIX2003' \
     -Wl,-alias,_connect,'_connect$UNIX2003' \
-    -Wl,-alias,_ttyname_r,'_ttyname_r$UNIX2003' \
-    -Wl,-alias,_waitpid,'_waitpid$UNIX2003'
+    -Wl,-alias,_ttyname_r,'_ttyname_r$UNIX2003'
 echo "wrote login.macho"
 
 # Real dynamic-executable assertions (DAR-314) -- inverted, not deleted.

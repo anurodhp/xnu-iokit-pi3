@@ -275,10 +275,12 @@ BUILTIN_FILES=$(ls $BASHSRC/builtins/*.c | grep -v -e mkbuiltins.c -e psize.c)
 # Real Apple-generated raw syscall stubs (Perl generator, same pattern as
 # build_libsyscall_smoketest.sh) for the real, non-NO_SYSCALL_STUB
 # syscalls bash needs that no prior tier had a caller for yet.
+# execve dropped (DAR-292): libsystem_c.dylib exports the canonical _execve.
 SYS_STUB_NAMES="setuid getuid geteuid getppid getegid getgid sigprocmask \
-    execve umask getgroups getpgrp setpgid setgid chdir dup dup2 \
+    umask getgroups getpgrp setpgid setgid chdir dup dup2 \
     getrusage csops readlink pathconf"
 mkdir -p "$BOUT/sys_stubs" "$BOUT/sys_asm_compat/mach/arm64"
+rm -f "$BOUT"/sys_stubs/*  # DAR-292: the link globs sys_stubs/*.o; drop stale stubs (e.g. execve.o)
 cat > "$BOUT/sys_asm_compat/mach/arm64/asm.h" <<'EOF'
 /* SYS.h expects the installed-SDK-style path mach/arm64/asm.h (a real
  * symlink Apple's SDK build produces); real content is osfmk/arm64/asm.h

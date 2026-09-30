@@ -20,6 +20,7 @@ PTHREAD="../../third_party/libpthread"
 XNU="../../third_party/xnu-7195"
 PWDMKDB="../../third_party/system_cmds/pwd_mkdb.tproj"
 OUT="libc_build"
+./make_no_fork_archive.sh || exit 1  # DAR-292: fork/wait/exec family binds libsystem_c
 rm -rf "$OUT/pwd_mkdb_obj"
 mkdir -p "$OUT/pwd_mkdb_obj" "$OUT/compat_include"
 
@@ -219,14 +220,13 @@ LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_kernel.dylib $O
     -o pwd_mkdb.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/pwd_mkdb_obj/*.o \
-    "$OUT/liblaunchd_syscalls.a" \
+    "$OUT/liblaunchd_syscalls_no_fork.a" \
     "$OUT/libmach_ipc.a" \
     "$OUT/libc_regex.a" \
     "$OUT/libc_db.a" \
     $LINK_DYLIBS \
     -Wl,-alias,__err,_err \
     -Wl,-alias,__warn,_warn \
-    -Wl,-alias,_waitpid,'_waitpid$UNIX2003' \
     -Wl,-alias,_setrlimit,'_setrlimit$UNIX2003' \
     -Wl,-alias,_fchmod,'_fchmod$UNIX2003' \
     -Wl,-alias,_pread,'_pread$UNIX2003' \

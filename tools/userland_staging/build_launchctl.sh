@@ -538,6 +538,14 @@ cp "$OUT/liblaunchd_syscalls.a" "$OUT/liblaunchd_syscalls_no_dup.a"
 ar d "$OUT/liblaunchd_syscalls_no_dup.a" \
     siglist.o sys____munmap.o sys__dup.o sys__kevent.o \
     sys__mkdirat.o uuid_pack.o sys__getgid.o uuid_clear.o
+# DAR-292: launchctl is an ordinary process, not PID 1 -- it binds the
+# canonical libsystem_c fork()/waitpid()/execlp()/wait4()/execve() instead of
+# the archive's private copies (launchd.macho alone keeps its dispatch-aware
+# private fork_compat.o; see docs/fork-owner-audit.md). The private
+# __current_pid copy (sys_getpid_current_pid_only.o, -u __current_pid) is
+# dropped with them: it would go stale in a fork child now that __fork is
+# libsystem_kernel's.
+./make_no_fork_archive.sh "$OUT/liblaunchd_syscalls_no_dup.a" "$OUT/liblaunchd_syscalls_no_dup_no_fork.a"
 
 rm -f "$OUT/launchctl.macho"
 # -DCRT_DYNAMIC_LINKING (DAR-161, 2026-08-31): launchctl.macho is a real,
@@ -572,7 +580,6 @@ rm -f "$OUT/launchctl.macho"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -DCRT_DYNAMIC_LINKING \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
-    -Wl,-u,__current_pid \
     -Wl,-alias,_connect,'_connect$UNIX2003' \
     -Wl,-alias,_send,'_send$UNIX2003' \
     -Wl,-alias,_writev,'_writev$UNIX2003' \
@@ -581,10 +588,9 @@ rm -f "$OUT/launchctl.macho"
     -o "$OUT/launchctl.macho" \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT/launchctl_obj/launchctl.o" \
-    "$OUT/sys_getpid_current_pid_only.o" \
     "$OUT/liblaunchctl_extras.a" \
     "$OUT/launchctl_copyfile_extract/copyfile_syscalls.o" "$OUT/launchd_libc_extras.a" \
-    "$OUT/liblaunchd_mig.a" "$OUT/liblaunchd_syscalls_no_dup.a" \
+    "$OUT/liblaunchd_mig.a" "$OUT/liblaunchd_syscalls_no_dup_no_fork.a" \
     `# libclosure.a/libmalloc.a/libplatform.a/libpthread.a/libc_gen.a/` \
     `# libc_string.a/libc_stdio.a/libc_printf.a/libc_locale_for_stdio.a` \
     `# REMOVED 2026-09-03 (dynamicfix sweep): every one of them is merged` \

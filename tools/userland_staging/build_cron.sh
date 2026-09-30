@@ -135,7 +135,6 @@ for spec in \
     "simple_cmds_getenv_compat.c:" \
     "md5_rfc1321_core.c:" \
     "$LIBPLATFORM/src/setjmp/generic/sigaction.c:" \
-    "$LIBC/gen/FreeBSD/exec.c:" \
     "$LIBC/gen/FreeBSD/signal.c:" \
     "$LIBC/gen/FreeBSD/gethostname.c:" \
     "cron_main_wrapper.c:" \
@@ -274,8 +273,7 @@ LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_kernel.dylib $O
     `# exports, so libSystem.B.dylib's baked-in UNIX2003 alias set does` \
     `# not cover them and they survive the DAR-314 conversion.` \
     -Wl,-alias,_pwrite,'_pwrite$UNIX2003' \
-    -Wl,-alias,_wait,'_wait$UNIX2003' \
-    -Wl,-alias,_waitpid,'_waitpid$UNIX2003'
+    -Wl,-alias,_wait,'_wait$UNIX2003'
 echo "wrote cron.macho"
 
 # Real dynamic-executable assertions (DAR-314) -- inverted, not deleted.
@@ -313,7 +311,6 @@ for spec in \
     "ps_time_compat.c:" \
     "simple_cmds_getenv_compat.c:" \
     "md5_rfc1321_core.c:" \
-    "$LIBC/gen/FreeBSD/exec.c:" \
     "$LIBC/gen/FreeBSD/signal.c:" \
     "$LIBPLATFORM/src/setjmp/generic/sigaction.c:" \
     "crontab_main_wrapper.c:" \
@@ -381,7 +378,6 @@ mkdir -p "$OUT/cron_glue_extract"
     `# not cover them and they survive the DAR-314 conversion.` \
     -Wl,-alias,_pwrite,'_pwrite$UNIX2003' \
     -Wl,-alias,_wait,'_wait$UNIX2003' \
-    -Wl,-alias,_waitpid,'_waitpid$UNIX2003' \
     -Wl,-alias,_fchmod,'_fchmod$UNIX2003' \
     `# real libsystem_c.dylib exports _strftime$UNIX2003 but never the` \
     `# bare _strftime (confirmed nm -gU), so alias the versioned export` \

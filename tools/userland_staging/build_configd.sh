@@ -292,7 +292,7 @@ echo "wrote $OUT/libconfigd.a ($(ls "$OUT"/configd_obj/*.o | wc -l | tr -d ' ') 
 # dylibs -- DAR-217's "one pthread runtime, one locking runtime" rule).
 # ------------------------------------------------------------------
 SIMPLE_OBJ="$OUT/simple_obj"
-for o in sys__chown sys__dup2 sys__setgid sys__setuid sys__execve sys__chdir; do
+for o in sys__chown sys__dup2 sys__setgid sys__setuid sys__chdir; do
     if [ ! -f "$SIMPLE_OBJ/$o.o" ]; then
         echo "error: $SIMPLE_OBJ/$o.o not found -- run build_simple_cmds.sh first" >&2
         exit 1
@@ -372,7 +372,7 @@ rm -f configd.macho
     `# mechanism DAR-240/241 already established for the other 4 plugins.` \
     "$OUT/libconfigd_ipconfiguration.a" \
     "$SIMPLE_OBJ/sys__chown.o" "$SIMPLE_OBJ/sys__dup2.o" \
-    "$SIMPLE_OBJ/sys__setgid.o" "$SIMPLE_OBJ/sys__setuid.o" "$SIMPLE_OBJ/sys__execve.o" \
+    "$SIMPLE_OBJ/sys__setgid.o" "$SIMPLE_OBJ/sys__setuid.o" `# sys__execve.o dropped, DAR-292: libsystem_c owns _execve` \
     "$SIMPLE_OBJ/sys__chdir.o" \
     "$LAUNCHD_SYSCALL_OBJ/sys__getppid.o" "$LAUNCHD_SYSCALL_OBJ/sys__setsid.o" \
     "$OUT/liblaunchd_mig.a" \

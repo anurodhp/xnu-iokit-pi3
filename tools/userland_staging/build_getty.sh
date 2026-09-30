@@ -253,8 +253,6 @@ cat_socket_stub.c
 date_compat.c
 $LIBC/gen/FreeBSD/err.c
 $LIBC/gen/FreeBSD/gethostname.c
-$LIBC/gen/FreeBSD/exec.c
-simple_cmds_execve_compat.c
 $LIBC/gen/FreeBSD/signal.c
 cp_mv_syscalls.c
 $LIBC/gen/FreeBSD/usleep.c
@@ -427,13 +425,12 @@ LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/getty_obj/*.o "$OUT/ed_setjmp_raw.o" \
     `# Real raw-syscall wrapper objects with NO dylib equivalent:` \
-    `# libSystem.B.dylib does not export _chown/_dup2/_execve (verified` \
+    `# libSystem.B.dylib does not export _chown/_dup2 (verified` \
     `# by bind_target_audit.sh, which failed UNRESOLVABLE on all three` \
     `# when they were dropped -- a clean link that would have aborted at` \
     `# dyld load, exactly the DAR-217 hazard). Kept across DAR-314.` \
     "$OUT/simple_obj/sys__chown.o" \
     "$OUT/simple_obj/sys__dup2.o" \
-    "$OUT/simple_obj/sys__execve.o" \
     "$OUT/libmach_ipc.a" \
     `# Real raw-syscall objects with no dylib equivalent here -- see the` \
     `# send_real.o compile step above. Kept across the conversion.` \
