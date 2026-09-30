@@ -1285,4 +1285,37 @@ if [ -n "$DEJAVU_DEST" ]; then
     rm -rf "$DEJAVU_TMP"
 fi
 
+# Inter 4.0 (UI font, Mac-like look): the Inter project's own release zip
+# (rsms/inter v4.0). The git tag holds only sources and WOFF2 web fonts, and
+# FreeType here has no WOFF2 support, so the release zip's static TTFs
+# (extras/ttf/) are used. OFL-1.1 licensed (LICENSE.txt in the zip).
+# Verified by SHA-256 before unpacking; build_fonts.sh stages the TTFs.
+INTER_VER="4.0"
+INTER_SHA256="ff970a5d4561a04f102a7cb781adbd6ac4e9b6c460914c7a101f15acb7f7d1a4"
+INTER_DEST="third_party/inter-fonts-$INTER_VER"
+if [ -d "$INTER_DEST" ]; then
+    if [ "$FORCE" = "1" ]; then
+        echo "+ removing existing $INTER_DEST (--force)"
+        rm -rf "$INTER_DEST"
+    else
+        echo "= $INTER_DEST already exists, skipping (use --force to re-fetch)"
+        INTER_DEST=""
+    fi
+fi
+if [ -n "$INTER_DEST" ]; then
+    echo "+ fetching Inter-$INTER_VER.zip"
+    INTER_TMP="$(mktemp -d)"
+    curl -fsSL -o "$INTER_TMP/inter.zip" \
+        "https://github.com/rsms/inter/releases/download/v$INTER_VER/Inter-$INTER_VER.zip"
+    got="$(shasum -a 256 "$INTER_TMP/inter.zip" | awk '{print $1}')"
+    if [ "$got" != "$INTER_SHA256" ]; then
+        echo "error: Inter-$INTER_VER.zip SHA-256 is $got, expected $INTER_SHA256" >&2
+        rm -rf "$INTER_TMP"
+        exit 1
+    fi
+    mkdir -p "$INTER_DEST"
+    unzip -q -o "$INTER_TMP/inter.zip" 'extras/ttf/*' LICENSE.txt -d "$INTER_DEST"
+    rm -rf "$INTER_TMP"
+fi
+
 echo "done -- third_party/ populated. See docs/roadmap.md and README.md for what to build next."

@@ -20,6 +20,8 @@
 # linked against the SDK's libz. config: fontstack_config/mkfontscale/.
 # mkfontdir is upstream's own mkfontdir.in wrapper: `mkfontscale -b -s -l`.
 #
+# Run build_fontconfig.sh first (the defaults staged at the end go into its /etc/fonts).
+#
 # fontconfig does NOT need either file (it scans the directory itself);
 # its cache is left to the target (see build_fontconfig.sh).
 set -e
@@ -28,10 +30,15 @@ TP="../../third_party"
 OUT="libc_build"
 FS_ROOT="$OUT/fontstack"
 FONTS_SRC="$TP/dejavu-fonts-ttf-2.37/ttf"
+INTER_SRC="$TP/inter-fonts-4.0/extras/ttf"
+INTER_FACES="Regular Italic Medium SemiBold Bold BoldItalic"
 if [ ! -f "$FONTS_SRC/DejaVuSans.ttf" ]; then
     echo "error: $FONTS_SRC not found -- run setup_third_party.sh first" >&2
     exit 1
 fi
+for f in $INTER_FACES; do
+    [ -f "$INTER_SRC/Inter-$f.ttf" ] || { echo "error: $INTER_SRC/Inter-$f.ttf not found -- run setup_third_party.sh first" >&2; exit 1; }
+done
 for d in mkfontscale libfontenc freetype; do
     [ -d "$TP/$d" ] || { echo "error: $TP/$d not found -- run setup_third_party.sh first" >&2; exit 1; }
 done
@@ -79,11 +86,34 @@ FONTS="$FS_ROOT/root/usr/share/fonts"
 rm -rf "$FONTS"
 mkdir -p "$FONTS"
 cp "$FONTS_SRC"/*.ttf "$FONTS/"
+for f in $INTER_FACES; do cp "$INTER_SRC/Inter-$f.ttf" "$FONTS/"; done
 chmod 644 "$FONTS"/*.ttf
 "$HOST/mkfontscale" "$FONTS"             # mkfontscale .  -> fonts.scale
 "$HOST/mkfontscale" -b -s -l "$FONTS"    # mkfontdir .    -> fonts.dir
 n=$(ls "$FONTS"/*.ttf | wc -l | tr -d ' ')
-[ "$n" -eq 22 ] || { echo "error: expected 22 DejaVu TTFs, staged $n" >&2; exit 1; }
+[ "$n" -eq 28 ] || { echo "error: expected 22 DejaVu + 6 Inter TTFs, staged $n" >&2; exit 1; }
 [ "$(head -1 "$FONTS/fonts.scale")" -gt 0 ] && [ "$(head -1 "$FONTS/fonts.dir")" -gt 0 ] || {
     echo "error: fonts.scale/fonts.dir came out empty" >&2; exit 1; }
 echo "staged $n fonts in $FONTS ($(du -sk "$FONTS" | awk '{print $1}') KB): fonts.scale $(head -1 "$FONTS/fonts.scale") entries, fonts.dir $(head -1 "$FONTS/fonts.dir") entries"
+
+# --- font defaults (Mac-like look) -------------------------------------
+# Inter for sans-serif / system UI, DejaVu Sans Mono for monospace. Run
+# build_fontconfig.sh first: it wipes and recreates /etc/fonts, so the
+# conf.d file below has to be added after it.
+# Sources: x11_config/fonts/61-inter-sans.conf (fontconfig; Window Maker's
+# "Sans" and GNUstep's cairo backend both resolve through it) and
+# x11_config/gnustep/GlobalDefaults.plist (GNUstep system-wide defaults,
+# read from next to GNUstep.conf -- gnustep-base NSUserDefaults.m: the
+# GlobalDefaults.plist "stored in the same directory as the system wide
+# GNUstep.conf file"; NSFont roles, and Terminal.app's TerminalFont keys,
+# gnustep-gap system-apps/Terminal TerminalViewPrefs.m:41-44).
+[ -d "$FS_ROOT/root/etc/fonts/conf.d" ] || {
+    echo "error: $FS_ROOT/root/etc/fonts/conf.d missing -- run build_fontconfig.sh first" >&2; exit 1; }
+cp x11_config/fonts/61-inter-sans.conf "$FS_ROOT/root/etc/fonts/conf.d/61-inter-sans.conf"
+chmod 644 "$FS_ROOT/root/etc/fonts/conf.d/61-inter-sans.conf"
+mkdir -p "$FS_ROOT/root/etc/GNUstep"
+cp x11_config/gnustep/GlobalDefaults.plist "$FS_ROOT/root/etc/GNUstep/GlobalDefaults.plist"
+chmod 644 "$FS_ROOT/root/etc/GNUstep/GlobalDefaults.plist"
+plutil -lint "$FS_ROOT/root/etc/GNUstep/GlobalDefaults.plist" >/dev/null 2>&1 ||
+    { echo "error: GlobalDefaults.plist is not a valid old-style plist for the host parser" >&2; }
+echo "staged fontconfig 61-inter-sans.conf and GNUstep GlobalDefaults.plist"

@@ -1,0 +1,20 @@
+{
+    NSFont = "Inter-Regular";
+    NSFontSize = 12;
+    NSBoldFont = "Inter-Bold";
+    NSUserFont = "Inter-Regular";
+    NSMenuFont = "Inter-Regular";
+    NSMessageFont = "Inter-Regular";
+    NSControlContentFont = "Inter-Regular";
+    NSLabelFont = "Inter-Regular";
+    NSPaletteFont = "Inter-Regular";
+    NSTitleBarFont = "Inter-Bold";
+    NSToolTipsFont = "Inter-Regular";
+    NSUserFixedPitchFont = "DejaVuSansMono";
+    NSFixedPitchFont = "DejaVuSansMono";
+    NSUserFixedPitchFontSize = 13;
+    TerminalFont = "DejaVuSansMono";
+    TerminalFontSize = 13;
+    BoldTerminalFont = "DejaVuSansMono-Bold";
+    BoldTerminalFontSize = 13;
+}
