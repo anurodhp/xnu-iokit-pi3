@@ -796,6 +796,7 @@ text_cmds|https://github.com/apple-oss-distributions/text_cmds.git|text_cmds-106
 text_cmds_bintrans|https://github.com/apple-oss-distributions/text_cmds.git|text_cmds-165.0.4|
 adv_cmds|https://github.com/apple-oss-distributions/adv_cmds.git|adv_cmds-176|
 system_cmds|https://github.com/apple-oss-distributions/system_cmds.git|system_cmds-880.60.2|
+top|git@github.com:anurodhp/top.git|iokit-port||https://github.com/apple-oss-distributions/top.git
 basic_cmds|https://github.com/apple-oss-distributions/basic_cmds.git|basic_cmds-55|
 misc_cmds|https://github.com/apple-oss-distributions/misc_cmds.git|misc_cmds-34|
 gnudiff|https://github.com/apple-oss-distributions/gnudiff.git|gnudiff-25.40.1|

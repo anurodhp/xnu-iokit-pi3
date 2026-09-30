@@ -8,6 +8,15 @@
 	<array>
 		<string>/usr/X11/bin/xdm-launch</string>
 	</array>
+	<!-- Without ProcessType this launchd (built for the iPhoneOS SDK,
+	     TARGET_OS_EMBEDDED) runs the job as DAEMON_BACKGROUND
+	     (PureDarwin launchd core.c:2257): xdm, Xorg, wmaker and every app they
+	     start ran at scheduler priority 4 and got the background timer
+	     coalescing, which made the UI sluggish. Interactive maps to
+	     POSIX_SPAWN_PROC_TYPE_DAEMON_INTERACTIVE (core.c:2737-2739); the
+	     children inherit it (DAR-439). -->
+	<key>ProcessType</key>
+	<string>Interactive</string>
 	<key>RunAtLoad</key>
 	<true/>
 	<!-- Restart only after a failure. xdm-launch exits 0 without starting

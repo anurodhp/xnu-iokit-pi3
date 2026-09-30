@@ -520,6 +520,9 @@ install_smoketest tools/userland_staging/x11_smoketest.macho "usr/X11/bin/x11_sm
 install_smoketest tools/userland_staging/wmclose_probe.macho "usr/X11/bin/wmclose_probe" \
     "= tools/userland_staging/wmclose_probe.macho not built -- run build_wmclose_probe.sh first if wanted, skipping" \
     "  (tools/userland_staging/build_wmclose_probe.sh)"
+install_smoketest tools/userland_staging/xtest_type.macho "usr/X11/bin/xtest_type" \
+    "= tools/userland_staging/xtest_type.macho not built -- run build_xtest_type.sh first if wanted, skipping" \
+    "  (tools/userland_staging/build_xtest_type.sh: XTEST typing client for greeter tests)"
 
 # Font/2D stack (DAR-384). The dylibs (libz, libexpat, freetype, libpng,
 # pixman, fontconfig, cairo, libXft) go in through the generic
@@ -1684,7 +1687,7 @@ fi
 # base64(1) and awk(1): built by build_simple_cmds.sh like the loop above,
 # but a Mac ships them in /usr/bin, not /bin.
 mkdir -p "$MNT/usr/bin"
-for cmd in base64 awk pkill; do
+for cmd in base64 awk pkill top; do
     if [ -f "tools/userland_staging/$cmd.macho" ]; then
         cp "tools/userland_staging/$cmd.macho" "$MNT/usr/bin/$cmd"
         chmod 755 "$MNT/usr/bin/$cmd"
