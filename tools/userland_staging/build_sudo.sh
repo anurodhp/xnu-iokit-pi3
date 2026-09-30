@@ -51,6 +51,7 @@ PTHREAD="../../third_party/libpthread"
 XNU="../../third_party/xnu-7195"
 SUDO="../../third_party/sudo"
 OUT="libc_build"
+./make_no_fork_archive.sh || exit 1  # DAR-292: fork/wait/exec family binds libsystem_c
 # SUDO_OBJ_DIR/SUDO_GEN_DIR/SUDO_COMPILE_ONLY: scratch-output, compile-only mode
 # (used to triage a version bump without touching libc_build/ while another
 # session owns it). Default behaviour is unchanged.
@@ -330,13 +331,12 @@ printf 'R' > "$RESTRICT_MARK"
     -o sudo.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OBJ"/*.o \
-    "$OUT/liblaunchd_syscalls.a" \
+    "$OUT/liblaunchd_syscalls_no_fork.a" \
     "$OUT/libmach_ipc.a" \
     "$OUT/libc_regex.a" \
     $LINK_DYLIBS \
     -Wl,-alias,__err,_err \
     -Wl,-alias,__warn,_warn \
-    -Wl,-alias,_waitpid,'_waitpid$UNIX2003' \
     -Wl,-alias,_setrlimit,'_setrlimit$UNIX2003' \
     -Wl,-alias,_fchmod,'_fchmod$UNIX2003' \
     -Wl,-alias,_stat,'_stat$INODE64' \

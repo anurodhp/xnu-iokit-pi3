@@ -126,6 +126,7 @@ XNU="../../third_party/xnu-7195"
 PWSRC="../../third_party/freebsd-src/usr.sbin/pw"
 LOGINCAP="../../third_party/freebsd-src/lib/libutil"
 OUT="libc_build"
+./make_no_fork_archive.sh || exit 1  # DAR-292: fork/wait/exec family binds libsystem_c
 rm -rf "$OUT/pw_obj"
 mkdir -p "$OUT/pw_obj" "$OUT/compat_include"
 
@@ -240,6 +241,7 @@ simple_cmds_read_compat.c
 simple_cmds_getenv_compat.c
 simple_cmds_mmap_compat.c
 chpass_fork_compat.c
+pw_wait4_compat.c
 ps_passwd_compat.c
 pw_pwent_grent_compat.c
 ../libinfo_custom/libinfo_custom.c
@@ -400,22 +402,20 @@ LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_kernel.dylib $O
     -o pw.macho \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/pw_obj/*.o \
-    "$OUT/liblaunchd_syscalls.a" \
+    "$OUT/liblaunchd_syscalls_no_fork.a" \
     "$OUT/libmach_ipc.a" \
     "$OUT/libc_regex.a" \
     "$OUT/libc_db.a" \
     $LINK_DYLIBS \
     -Wl,-alias,__err,_err \
     -Wl,-alias,__warn,_warn \
-    -Wl,-alias,_waitpid,'_waitpid$UNIX2003' \
     -Wl,-alias,_setrlimit,'_setrlimit$UNIX2003' \
     -Wl,-alias,_fchmod,'_fchmod$UNIX2003' \
     -Wl,-alias,_stat,'_stat$INODE64' \
     -Wl,-alias,_sigaction,'_sigaction$UNIX2003' \
     -Wl,-alias,_sigprocmask,'_sigprocmask$UNIX2003' \
     -Wl,-alias,_freopen,'_freopen$UNIX2003' \
-    -Wl,-alias,_pw_real_system,'_pw_real_system$UNIX2003' \
-    -Wl,-alias,_wait4,__wait4
+    -Wl,-alias,_pw_real_system,'_pw_real_system$UNIX2003'
 echo "wrote pw.macho"
 
 # Real dynamic-executable assertions (DAR-314).

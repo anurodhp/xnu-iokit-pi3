@@ -29,6 +29,7 @@ XNU="../../third_party/xnu-7195"
 OPENPAM="../../third_party/OpenPAM/openpam"
 SU_SRC="../../third_party/shell_cmds/su"
 OUT="libc_build"
+./make_no_fork_archive.sh || exit 1  # DAR-292: fork/wait/exec family binds libsystem_c
 rm -rf "$OUT/su_obj"
 mkdir -p "$OUT/su_obj"
 
@@ -198,13 +199,12 @@ printf 'R' > "$RESTRICT_MARK"
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     "$OUT"/su_obj/*.o \
     "$OUT/libopenpam.a" \
-    "$OUT/liblaunchd_syscalls.a" \
+    "$OUT/liblaunchd_syscalls_no_fork.a" \
     "$OUT/libmach_ipc.a" \
     "$OUT/libc_regex.a" \
     $LINK_DYLIBS \
     -Wl,-alias,__err,_err \
     -Wl,-alias,__warn,_warn \
-    -Wl,-alias,_waitpid,'_waitpid$UNIX2003' \
     -Wl,-alias,_setrlimit,'_setrlimit$UNIX2003' \
     -Wl,-alias,_fchmod,'_fchmod$UNIX2003' \
     -Wl,-alias,_stat,'_stat$INODE64' \

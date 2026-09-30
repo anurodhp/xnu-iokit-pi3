@@ -42,6 +42,7 @@ PTHREAD="../../third_party/libpthread"
 XNU="../../third_party/xnu-7195"
 VIPW="../../third_party/system_cmds/vipw.tproj"
 OUT="libc_build"
+./make_no_fork_archive.sh || exit 1  # DAR-292: fork/wait/exec family binds libsystem_c
 rm -rf "$OUT/vipw_obj"
 mkdir -p "$OUT/vipw_obj" "$OUT/compat_include"
 
@@ -114,8 +115,6 @@ EXTRA_FILES="
 $LIBC/gen/FreeBSD/err.c
 $LIBC/stdlib/FreeBSD/getopt.c
 $LIBC/gen/FreeBSD/signal.c
-$LIBC/gen/FreeBSD/exec.c
-simple_cmds_execve_compat.c
 cp_mv_syscalls.c
 simple_cmds_read_compat.c
 simple_cmds_getenv_compat.c
@@ -226,14 +225,13 @@ LINK_DYLIBS="$OUT/system/libsystem_c.dylib $OUT/system/libsystem_pthread.dylib $
     `# would flag UNRESOLVABLE if dropped -- real Apple objects, already` \
     `# built for launchd, reused verbatim here, same DAR-217-avoidance` \
     `# shape as build_login.sh's own sigaction extraction).` \
-    "$OUT/liblaunchd_syscalls.a" \
+    "$OUT/liblaunchd_syscalls_no_fork.a" \
     "$OUT/libmach_ipc.a" \
     $LINK_DYLIBS \
     `# Aliases that survive: each targets a LOCAL definition or a` \
     `# versioned dylib export whose bare name is never exported.` \
     -Wl,-alias,__err,_err \
     -Wl,-alias,__warn,_warn \
-    -Wl,-alias,_waitpid,'_waitpid$UNIX2003' \
     -Wl,-alias,_setrlimit,'_setrlimit$UNIX2003'
 echo "wrote vipw.macho"
 
