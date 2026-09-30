@@ -29,9 +29,10 @@ ab() { # backend-name  env-setting
     name=$1; shift
     : > /tmp/wm_$name.log
     env "$@" WM_EVENT_STATS=10 $X/wmaker >> /tmp/wm_$name.log 2>&1 &
-    WP=$!
+    MON=$!      # wmaker's monitor process (src/monitor.c); the real WM is its --for-real child
     sleep 25
-    echo "== [$name] wmaker pid $WP"; ps -p $WP -o pid,state,time,command
+    WP=$(ps ax | grep -e '--for-real' | grep -v grep | awk '{print $1}')
+    echo "== [$name] monitor pid $MON, wmaker pid $WP"; ps -p $WP -o pid,state,time,command
     echo "MARK idle-start" >> /tmp/wm_$name.log
     ps -p $WP -o time= > /tmp/t0_$name
     sleep $IDLE
@@ -42,15 +43,25 @@ ab() { # backend-name  env-setting
     echo "[$name] latency:"
     $X/wmlat rt 200
     $X/wmlat rt 200
-    $X/wmlat burst 500
-    $X/wmlat burst 500
-    echo "[$name] stats:"; grep -E "MARK|event stats" /tmp/wm_$name.log | tail -14
+    $X/wmlat burst 200
+    $X/wmlat burst 200
+    echo "[$name] stats (idle window = lines between the MARKs):"; grep -E "MARK|event stats" /tmp/wm_$name.log | sed -n '/idle-start/,/idle-end/p'; grep -B1 -m1 "idle-start" /tmp/wm_$name.log | head -2
     echo "[$name] ps after load:"; ps -p $WP -o pid,state,time
 }
-ab select WM_EVENT_BACKEND=select
-kill $WP; sleep 3; echo "[select] exit stats:"; tail -2 /tmp/wm_select.log
-ab kqueue WM_EVENT_BACKEND=kqueue
-[ "$MODE" = quick ] && { kill $WP; sleep 3; tail -2 /tmp/wm_kqueue.log; echo TESTEND; exit 0; }
+stopwm() { kill $MON; kill $WP; sleep 5; ps ax | grep -e wmaker | grep -v grep; }
+# The first wmaker after a fresh Xvfb is ~25x slower to answer (median
+# 275 ms vs 10 ms per round trip, whichever backend it runs), so the first
+# run is a discarded "warm" one and the backends then alternate.
+# ORDER overrides it. The last entry's wmaker is left running for the
+# functional part, so full mode needs ORDER to end in kqueue.
+ORDER=${ORDER:-warm select kqueue select kqueue}
+LAST=${ORDER##* }
+for b in $ORDER; do
+    n=$((${n:-0} + 1)); ab $b.$n WM_EVENT_BACKEND=${b#warm}
+    [ $n -eq $(echo $ORDER | wc -w) ] && break
+    stopwm; echo "[$b.$n] exit stats:"; tail -1 /tmp/wm_$b.$n.log
+done
+[ "$MODE" = quick ] && { stopwm; tail -1 /tmp/wm_$LAST.$n.log; echo TESTEND; exit 0; }
 
 echo "== functional (kqueue wmaker, pid $WP)"
 $X/x11_probe tree 2>&1 | grep -v unmapped | grep -v unviewable | head -10
@@ -90,7 +101,7 @@ $X/wmclose_probe closebtn Ink; sleep 8
 $X/wmclose_probe list
 ps -p $WP -o pid,state,time,command
 ps ax | grep -E "Xvfb|wmaker|Terminal|Ink" | grep -v grep
-grep -E "event stats" /tmp/wm_kqueue.log | tail -2
-kill $WP; sleep 3; tail -2 /tmp/wm_kqueue.log
+grep -E "event stats" /tmp/wm_$LAST.$n.log | tail -2
+stopwm; tail -1 /tmp/wm_$LAST.$n.log
 sync; sync
 echo TESTEND

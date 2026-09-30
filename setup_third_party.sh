@@ -720,7 +720,9 @@ mkdir -p third_party
 #     windowmaker port builds this same upstream, so upstream is the
 #     source. DAR-437: now anurodhp/wmaker branch iokit-port (upstream
 #     0.96.0 + wrlib/fastpath.h: 32bpp TrueColor fast path and NEON);
-#     built by tools/userland_staging/build_wmaker.sh.
+#     built by tools/userland_staging/build_wmaker.sh. DAR-431: branch
+#     dar-431-kqueue (off iokit-port): WUtil waits in a kqueue instead of
+#     select(), with W_KQueueAddFilter for DAR-432/433.
 #     libffi-27 (DAR-388): apple-oss-distributions/libffi, the manifest
 #     pin -- `git ls-tree macos-112 -- libffi` in distribution-macOS ==
 #     commit 491d23ac598f == tag libffi-27 (checked 2026-09-28). Cloned
@@ -876,7 +878,7 @@ libXpm|https://gitlab.freedesktop.org/xorg/lib/libxpm.git|libXpm-3.5.19|
 libXaw|https://gitlab.freedesktop.org/xorg/lib/libxaw.git|libXaw-1.0.16|
 xdm|https://gitlab.freedesktop.org/xorg/app/xdm.git|xdm-1.1.17|
 libxcvt|https://gitlab.freedesktop.org/xorg/lib/libxcvt.git|libxcvt-0.1.3|
-wmaker|git@github.com:anurodhp/wmaker.git|iokit-port||https://github.com/window-maker/wmaker.git
+wmaker|git@github.com:anurodhp/wmaker.git|dar-431-kqueue||https://github.com/window-maker/wmaker.git
 libffi|https://github.com/apple-oss-distributions/libffi.git|libffi-27|
 gnustep-make|git@github.com:anurodhp/tools-make.git|dar-451-objc4-framework-classes||https://github.com/gnustep/tools-make.git
 gnustep-base|git@github.com:anurodhp/libs-base.git|dar-451-gworkspace||https://github.com/gnustep/libs-base.git

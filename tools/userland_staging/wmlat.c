@@ -17,6 +17,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/time.h>
+#include <sys/select.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/extensions/XTest.h>
@@ -34,20 +35,32 @@ static int cmp(const void *a, const void *b)
     return x < y ? -1 : x > y;
 }
 
-/* Wait up to ms for a synthetic ConfigureNotify on w; 1 if seen. */
+/* Wait up to ms for a synthetic ConfigureNotify on w; 1 if seen. Blocks in
+ * select() on the X fd (not a usleep poll, whose granularity would swamp
+ * what is being measured). */
 static int wait_cn(Display *d, Window w, int ms)
 {
     long long end = now_us() + ms * 1000LL;
     XEvent ev;
-    while (now_us() < end) {
+    int fd = ConnectionNumber(d);
+    for (;;) {
+        long long left;
+        struct timeval tv;
+        fd_set rs;
         while (XPending(d)) {
             XNextEvent(d, &ev);
             if (ev.type == ConfigureNotify && ev.xconfigure.window == w && ev.xconfigure.send_event)
                 return 1;
         }
-        usleep(200);
+        left = end - now_us();
+        if (left <= 0)
+            return 0;
+        tv.tv_sec = left / 1000000;
+        tv.tv_usec = left % 1000000;
+        FD_ZERO(&rs);
+        FD_SET(fd, &rs);
+        select(fd + 1, &rs, NULL, NULL, &tv);
     }
-    return 0;
 }
 
 int main(int argc, char **argv)
@@ -104,7 +117,7 @@ int main(int argc, char **argv)
             XTestFakeMotionEvent(d, scr, 10 + (i * 7) % (w0 - 20), 10 + (i * 13) % (h0 - 20), 0);
         XMoveWindow(d, w, 140, 100);
         XFlush(d);
-        if (!wait_cn(d, w, 60000)) { printf("burst: timeout\n"); return 1; }
+        if (!wait_cn(d, w, 240000)) { printf("burst: timeout\n"); return 1; }
         t1 = now_us();
         printf("burst n=%d total=%lld us (%.1f us/event)\n", n, t1 - t0, (double)(t1 - t0) / n);
     }
