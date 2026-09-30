@@ -10,7 +10,7 @@
 #                                 to /var/root/vn_*.xwd (pull out of the image on the
 #                                 host, tools/xwd_to_png.py)
 # Needs on the image: wutil_vnode_test, wutil_kq_test, wutil_timer_test, wmlat,
-# x11_probe, wmclose_probe (installed by inject_into_sd_image.sh).
+# x11_probe (installed by inject_into_sd_image.sh) and wmclose_probe (copied by hand to /usr/X11/bin).
 export DISPLAY=:0 HOME=/var/root
 X=/usr/X11/bin
 IDLE=${IDLE:-60}
@@ -38,7 +38,7 @@ sleep 8
 startwm() { # name [env...]
     name=$1; shift
     : > /tmp/wm_$name.log
-    env "$@" WM_EVENT_STATS=10 $X/wmaker >> /tmp/wm_$name.log 2>&1 &
+    env "$@" WM_EVENT_STATS=10 WM_DEFAULTS_TRACE=1 $X/wmaker >> /tmp/wm_$name.log 2>&1 &
     MON=$!
     sleep ${WARM:-25}
     WP=$(ps ax | grep -e '--for-real' | grep -v grep | awk '{print $1}')
@@ -67,27 +67,50 @@ if [ "$MODE" = idle ]; then
     stopwm; sync; sync; echo TESTEND; exit 0
 fi
 
-# reload
+# chronyd steps the wall clock by seconds on this port (DAR-169): WMRootMenu is only
+# rebuilt when its mtime is a newer second than the menu on screen, so a step back
+# during the test looks like "menu not reloaded". Stop it (and any respawn) first.
+for p in $(ps ax | grep '[c]hronyd' | awk '{print $1}'); do kill -9 $p; done
+sleep 2; ps ax | grep -i '[c]hrony'
+# reload. The domain files exist when wmaker starts, like on a configured system;
+# ABSENT=1 starts without them (the Defaults directory is then created by wmaker).
 WARM=40
-startwm r
 mkdir -p $D
-openmenu() { $X/x11_probe click 600 400 3 > /dev/null; sleep 4; cp $F /var/root/vn_$1.xwd; $X/wmclose_probe key Escape > /dev/null; $X/x11_probe click 900 650 1 > /dev/null; sleep 2; }
-menu() { # title colour
-    printf '("%s",\n ("Info Panel", INFO_PANEL),\n ("Refresh", REFRESH)\n)\n' "$1"
-}
-echo "-- baseline"; openmenu 0_base
-echo "-- A: atomic rename-replace of WMRootMenu + WindowMaker (MenuTitleBack red), menu opened ~1 s later"
-menu "ATOMIC-RENAME" > $D/WMRootMenu.tmp; mv $D/WMRootMenu.tmp $D/WMRootMenu
-printf '{\n MenuTitleBack = (solid, "#ff0000");\n}\n' > $D/WindowMaker.tmp; mv $D/WindowMaker.tmp $D/WindowMaker
-date; openmenu 1_atomic
-echo "-- B: in-place write (truncate + write) of WMRootMenu"
-menu "INPLACE-WRITE" > $D/WMRootMenu
-date; openmenu 2_inplace
-echo "-- C: delete and recreate WMRootMenu"
-rm $D/WMRootMenu; menu "DELETE-RECREATE" > $D/WMRootMenu
-date; openmenu 3_recreate
-echo "-- D: WindowMaker back to blue by touch-free rewrite (atomic)"
-printf '{\n MenuTitleBack = (solid, "#0000ff");\n}\n' > $D/WindowMaker.tmp; mv $D/WindowMaker.tmp $D/WindowMaker
-date; openmenu 4_blue
-grep -c . /tmp/wm_r.log; grep -i "warn\|corrupt\|could not" /tmp/wm_r.log | head -5
+if [ -z "$ABSENT" ]; then
+    printf '{\n}\n' > $D/WindowMaker; printf '{\n}\n' > $D/WMWindowAttributes
+    printf '("Base",\n ("Info Panel", INFO_PANEL)\n)\n' > $D/WMRootMenu
+fi
+startwm r
+# mk runs just before a change; stamp gives the changed file an mtime that only ever
+# increases (+100 s per change, in the future), whatever the wall clock does.
+T=$(( $(date +%s) + 3600 ))
+mk() { echo "MARK change $(date +%s)" >> /tmp/wm_r.log; T=$((T + 100)); }
+stamp() { touch -t $(date -r $T +%Y%m%d%H%M.%S) "$@"; }
+# The root menu stays open from the baseline click on (it is sticky under x11_probe's
+# press+release), and MenuTitleBack is repainted on it when WindowMaker is reloaded:
+# each snapshot is taken 1 s after the change and shows its title colour.
+snap() { sleep 1; cp $F /var/root/vn_$1.xwd; }
+wm() { printf '{\n MenuTitleBack = (solid, "%s");\n}\n' "$1"; }
+menu() { printf '("%s",\n ("Info Panel", INFO_PANEL),\n ("Refresh", REFRESH)\n)\n' "$1"; }
+echo "MARK start $(date +%s)" >> /tmp/wm_r.log
+echo "-- baseline: open the root menu"
+$X/x11_probe click 600 400 3 > /dev/null; sleep 4; cp $F /var/root/vn_0_base.xwd
+echo "-- A: atomic rename-replace of WindowMaker (title red) and WMRootMenu"
+mk; menu "ATOMIC-RENAME" > $D/WMRootMenu.tmp; mv $D/WMRootMenu.tmp $D/WMRootMenu; stamp $D/WMRootMenu
+wm "#ff0000" > $D/WindowMaker.tmp; mv $D/WindowMaker.tmp $D/WindowMaker; stamp $D/WindowMaker
+snap 1_atomic_red
+echo "-- B: in-place write (truncate + write) of WindowMaker (title green) and WMRootMenu"
+mk; menu "INPLACE-WRITE" > $D/WMRootMenu; stamp $D/WMRootMenu
+wm "#00ff00" > $D/WindowMaker; stamp $D/WindowMaker
+snap 2_inplace_green
+echo "-- C: delete and recreate WindowMaker (title blue) and WMRootMenu"
+mk; rm $D/WMRootMenu; menu "DELETE-RECREATE" > $D/WMRootMenu; stamp $D/WMRootMenu
+rm $D/WindowMaker; wm "#0000ff" > $D/WindowMaker; stamp $D/WindowMaker
+snap 3_recreate_blue
+echo "-- D: touch only (mtime bump, content unchanged: expect a reload, no visible change)"
+mk; stamp $D/WindowMaker
+snap 4_touch
+echo "== trace (MARK = when the file was changed, epoch s; defaults-trace = wmaker epoch s.ms)"
+grep -E "^MARK|defaults-trace" /tmp/wm_r.log
+grep -i "warn\|corrupt\|could not" /tmp/wm_r.log | head -5
 stopwm; sync; sync; echo TESTEND
