@@ -48,12 +48,29 @@ int main(int argc, char **argv)
     TIME("wr gradient diag 512x384", iters, { t = RRenderGradient(512, 384, &c1, &c2, RGRD_DIAGONAL); RReleaseImage(t); });
     TIME("wr gradient horiz 512x384", iters, { t = RRenderGradient(512, 384, &c1, &c2, RGRD_HORIZONTAL); RReleaseImage(t); });
     TIME("wr RScaleImage ->640x480", iters, { t = RScaleImage(a, 640, 480); RReleaseImage(t); });
+    {   /* DAR-437: same op on an image no gradient code touched, to separate data/state effects */
+        RImage *n = RCreateImage(512, 384, False);
+        int k;
+        for (k = 0; k < 512 * 384 * 3; k++) n->data[k] = (unsigned char)(k * 5 + (k >> 7));
+        TIME("wr RScaleImage (noise src)", iters, { t = RScaleImage(n, 640, 480); RReleaseImage(t); });
+        RReleaseImage(n);
+        TIME("wr RScaleImage (grad src)", iters, { t = RScaleImage(a, 640, 480); RReleaseImage(t); });
+    }
     TIME("wr RSmoothScaleImage ->320x240", iters, { t = RSmoothScaleImage(a, 320, 240); RReleaseImage(t); });
     t = RCloneImage(a);
     TIME("wr RCombineImages 512x384", iters, RCombineImagesWithOpaqueness(t, b, 128));
     TIME("wr RBevelImage 512x384", iters, RBevelImage(t, RBEV_RAISED2));
     TIME("wr RBlurImage 512x384", iters, RBlurImage(t));
     RReleaseImage(t);
+    {   /* DAR-437: RGBA source over an RGB destination (RCombineImages alpha path) */
+        RImage *s = RCreateImage(512, 384, True);
+        int k;
+        if (!s) { puts("FAIL: rgba"); return 1; }
+        for (k = 0; k < 512 * 384 * 4; k++) s->data[k] = (unsigned char)(k * 7 + (k >> 9));
+        t = RCloneImage(a);
+        TIME("wr RCombineImages RGBA src", iters, RCombineImages(t, s));
+        RReleaseImage(t); RReleaseImage(s);
+    }
 
     dpy = XOpenDisplay(dpyname);
     if (!dpy) { printf("NOX no display %s; CPU-only results above\n", dpyname); puts("BENCHDONE"); return 0; }
@@ -67,6 +84,23 @@ int main(int argc, char **argv)
         XMapWindow(dpy, w);
         XSync(dpy, False);
         if (!rc) { puts("FAIL: RCreateContext"); return 1; }
+        {   /* DAR-437: RConvertImage output must equal the source pixels packed by the visual's masks */
+            XImage *ci;
+            int x, y, bad = 0;
+            if (!RConvertImage(rc, a, &pm)) { puts("FAIL: convert"); return 1; }
+            ci = XGetImage(dpy, pm, 0, 0, 512, 384, AllPlanes, ZPixmap);
+            if (!ci) { puts("FAIL: getimage pm"); return 1; }
+            if (rc->depth >= 24)
+                for (y = 0; y < 384; y++)
+                    for (x = 0; x < 512; x++) {
+                        unsigned char *p = a->data + (y * 512 + x) * 3;
+                        unsigned long e = ((unsigned long)p[0] << rc->red_offset) | ((unsigned long)p[1] << rc->green_offset) | ((unsigned long)p[2] << rc->blue_offset);
+                        if ((XGetPixel(ci, x, y) & 0xffffff) != e) bad++;
+                    }
+            printf("CONVCHECK depth=%d bpp=%d byte_order=%d offs=%d,%d,%d mismatches=%d %s\n", rc->depth, ci->bits_per_pixel,
+                   ci->byte_order, rc->red_offset, rc->green_offset, rc->blue_offset, bad, bad ? "FAIL" : "OK");
+            XDestroyImage(ci); XFreePixmap(dpy, pm);
+        }
         TIME("wr RConvertImage+XFreePixmap", iters, { if (!RConvertImage(rc, a, &pm)) { puts("FAIL: convert"); return 1; } XCopyArea(dpy, pm, w, gc, 0, 0, 512, 384, 0, 0); XSync(dpy, False); XFreePixmap(dpy, pm); });
         XSetForeground(dpy, gc, WhitePixel(dpy, scr));
         TIME("x 2000 FillRect+Line+Str+Sync", 1, {
