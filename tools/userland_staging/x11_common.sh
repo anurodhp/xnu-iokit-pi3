@@ -55,7 +55,8 @@ X11_CONFIG_DIR="x11_config"          # checked-in per-library config.h files
 
 # Base compile flags. Same recipe as every other third-party port here
 # (build_vim.sh): Xcode 12's iPhoneOS 14.4 SDK headers, -fno-builtin
-# -fno-stack-protector, -O0. NOT -ffreestanding, unlike the libc-internal
+# -fno-stack-protector, optimised at $X11_OPT (default -O2, DAR-438; was
+# -O0 only because "same recipe as build_vim.sh"). NOT -ffreestanding, unlike the libc-internal
 # archives: these are ordinary hosted POSIX clients, and under
 # -ffreestanding clang's own <limits.h> stops #include_next-ing the SDK's,
 # so IOV_MAX/PATH_MAX vanish (libxcb's xcb_conn.c/xcb_util.c fail to
@@ -67,8 +68,20 @@ X11_CONFIG_DIR="x11_config"          # checked-in per-library config.h files
 # clang 11's default on Darwin anyway; spelled out so a tentative
 # definition duplicated across two X sources fails the link instead of
 # silently merging.
+# X11_OPT: override from the environment (e.g. X11_OPT=-O0) to rebuild one
+# component unoptimised if -O2 is found to expose UB in it; record the
+# evidence next to that component's build script.
+# -fno-builtin stays (checked 2026-09-30 by compiling with Xcode 12's clang
+# at -O2 -fno-builtin -D_FORTIFY_SOURCE=0 and reading the -S output):
+# memcpy(d,s,n) stays `b _memcpy`, constant-size memcpy(d,s,32) stays
+# `bl _memcpy` (without the flag it is inlined as ldp/stp q), and a
+# hand-written zeroing loop stays a loop (without it, it becomes
+# `bl _bzero`). So every memcpy/memset keeps calling libsystem_platform's
+# real arm64 _platform_memmove/_platform_memset via libsystem_c, and -O2
+# introduces no new libc calls.
+X11_OPT="${X11_OPT:--O2}"
 X11_CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c
-    -fno-builtin -fno-stack-protector -O0 -fno-common
+    -fno-builtin -fno-stack-protector $X11_OPT -fno-common
     -D_FORTIFY_SOURCE=0 -DHAVE_CONFIG_H
     -Wno-nullability-completeness -Wno-deprecated-declarations
     -I "$X11_INC")
