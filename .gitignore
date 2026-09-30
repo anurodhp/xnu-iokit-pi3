@@ -72,3 +72,6 @@ tools/sdhci_baremetal/*.elf
 tools/sdhci_baremetal/sdcard.img
 tools/sdhci_baremetal/mon.sock
 tools/sdhci_baremetal/*.log
+
+# stray linker output from libinfo_smoketest builds
+tools/userland_staging/*_link.err
