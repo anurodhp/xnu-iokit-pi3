@@ -137,12 +137,19 @@ echo "+ wrote $(wc -c < "$DTB_SRC") bytes to $BOOT_MNT/rpi3.dtb"
 echo "  (freshly built from $DTB_SRC, renamed to match u-boot's fatload target"
 echo "  -- same rename convention as the kernel above, NOT sdcard/'s frozen copy)"
 
-# Optional extra kernel boot-args. u-boot's bootcmd loads uEnv.txt from FAT
-# partition 0:1 if present, `env import -t`s it and appends ${extra_bootargs}
+# Extra kernel boot-args. u-boot's bootcmd loads uEnv.txt from FAT partition
+# 0:1 if present, `env import -t`s it and appends ${extra_bootargs}
 # (anurodhp/u-boot configs/rpi3_xnu_defconfig), so this needs no u-boot
-# rebuild and never drives u-boot over serial. Unset = base args only, e.g.
-#   REALHW_EXTRA_BOOTARGS=-user_fault_debug tools/make_realhw_sd_image.sh out.img
-if [ -n "${REALHW_EXTRA_BOOTARGS:-}" ]; then
+# rebuild and never drives u-boot over serial.
+# Default: fb_width=1280 fb_height=720. Without them the kernel framebuffer
+# is 640x480 (third_party/xnu-7195 pexpert/arm/pe_init.c,
+# bcm2837_video_init: commit c2383ed9e reads the two boot-args, clamped to
+# 320..1920 x 200..1200, and logs "requested WxH, granted WxH"); the xdm
+# greeter is clipped at 640 wide. Override:
+#   REALHW_EXTRA_BOOTARGS="-user_fault_debug fb_width=1280 fb_height=720" tools/make_realhw_sd_image.sh out.img
+# or REALHW_EXTRA_BOOTARGS= (set but empty) for no uEnv.txt at all.
+REALHW_EXTRA_BOOTARGS="${REALHW_EXTRA_BOOTARGS-fb_width=1280 fb_height=720}"
+if [ -n "$REALHW_EXTRA_BOOTARGS" ]; then
     printf 'extra_bootargs=%s\n' "$REALHW_EXTRA_BOOTARGS" > "$BOOT_MNT/uEnv.txt"
     echo "+ wrote $BOOT_MNT/uEnv.txt: extra_bootargs=$REALHW_EXTRA_BOOTARGS"
 fi
