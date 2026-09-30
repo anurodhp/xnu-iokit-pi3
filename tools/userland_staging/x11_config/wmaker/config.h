@@ -38,6 +38,12 @@
 #define HAVE_GETHOSTNAME 1
 #define HAVE_SELECT 1
 #define HAVE_POLL 1
+
+/* DAR-431: WUtil waits in one kqueue (WINGs/handlers.c in the
+ * anurodhp/wmaker iokit-port fork) instead of select(); select() remains
+ * the runtime fallback (kqueue() failing, or WM_EVENT_BACKEND=select).
+ * Not an autoconf symbol: it is this port's own option, default on. */
+#define WM_USE_KQUEUE 1
 #define HAVE_STRCASECMP 1
 #define HAVE_STRNCASECMP 1
 #define HAVE_SETSID 1

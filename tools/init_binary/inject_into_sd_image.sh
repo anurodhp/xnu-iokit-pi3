@@ -522,6 +522,16 @@ install_smoketest tools/userland_staging/x11_bench.macho "usr/X11/bin/x11_bench"
 install_smoketest tools/userland_staging/xtest_type.macho "usr/X11/bin/xtest_type" \
     "= tools/userland_staging/xtest_type.macho not built -- run build_xtest_type.sh first if wanted, skipping" \
     "  (tools/userland_staging/build_xtest_type.sh: XTEST typing client for greeter tests)"
+# DAR-431: Window Maker event-loop test aids (QEMU-only).
+install_smoketest tools/userland_staging/wutil_kq_test.macho "usr/X11/bin/wutil_kq_test" \
+    "= tools/userland_staging/wutil_kq_test.macho not built -- run build_wutil_kq_test.sh first if wanted, skipping" \
+    "  (tools/userland_staging/build_wutil_kq_test.sh: libWUtil kqueue/select input-wait test)"
+install_smoketest tools/userland_staging/wmlat.macho "usr/X11/bin/wmlat" \
+    "= tools/userland_staging/wmlat.macho not built -- run build_wmlat.sh first if wanted, skipping" \
+    "  (tools/userland_staging/build_wmlat.sh: Window Maker event latency probe)"
+install_smoketest tools/userland_staging/x11_probe.macho "usr/X11/bin/x11_probe" \
+    "= tools/userland_staging/x11_probe.macho not built -- run build_x11_probe.sh first if wanted, skipping" \
+    "  (tools/userland_staging/build_x11_probe.sh: window tree / XTest click client)"
 
 # Font/2D stack (DAR-384). The dylibs (libz, libexpat, freetype, libpng,
 # pixman, fontconfig, cairo, libXft) go in through the generic
