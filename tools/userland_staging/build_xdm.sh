@@ -178,11 +178,20 @@ rm -f "$STAGE/bin/x11-session"
 mkdir -p "$ROOT/Library/LaunchDaemons"
 cp "$SESS/org.puredarwin.x11-session.plist" "$ROOT/Library/LaunchDaemons/"
 chmod 644 "$ROOT/Library/LaunchDaemons/org.puredarwin.x11-session.plist"
-# Ships DISABLED: xdm-launch exits 0 without starting Xorg/xdm while this
-# file exists, so the Pi boots to the console login only. Enable later on
-# the Pi with `rm /etc/x11-session.disabled` (no rebuild needed).
+# Ships ENABLED (the user's decision, 2026-10-01): at boot xdm-launch starts
+# Xorg and the xdm login screen when the kernel boot-args carry
+# hdmi_console=<nonzero> (QEMU without a framebuffer, and any boot without
+# it, stays console-only: xdm-launch exits 0). The serial console login is
+# a separate job and always comes up. The off switch is a file: set
+# X_SESSION_DISABLED=1 when running this script to ship it, or create
+# /etc/x11-session.disabled on the Pi (`touch`), no rebuild needed;
+# `rm /etc/x11-session.disabled` enables it again.
 mkdir -p "$ROOT/etc"
-printf '%s\n' "# Remove this file to start xdm (Xorg + login screen) at boot." > "$ROOT/etc/x11-session.disabled"
+if [ "${X_SESSION_DISABLED:-0}" = "1" ]; then
+    printf '%s\n' "# Remove this file to start xdm (Xorg + login screen) at boot." > "$ROOT/etc/x11-session.disabled"
+else
+    rm -f "$ROOT/etc/x11-session.disabled"
+fi
 plutil -lint "$ROOT/Library/LaunchDaemons/org.puredarwin.x11-session.plist" >/dev/null ||
     { echo "error: x11-session plist is not valid" >&2; exit 1; }
 for f in Xsession Xsetup Xstartup Xreset; do
