@@ -192,6 +192,15 @@ sed -e "s:#extension#:xpm:" "$WMD/Defaults/WMWindowAttributes.in" > "$PKGCONF/WM
 sed -e "s:#pkgdatadir#:$X11_PREFIX/share/WindowMaker:" -e "s:#pixmapdir#:$X11_PREFIX/share/pixmaps:" \
     "$WMD/Defaults/WindowMaker.in" > "$PKGCONF/WindowMaker"
 sed -e "s:#wprefs#:$X11_PREFIX/bin/WPrefs:" "$WMD/Defaults/WMState.in" > "$PKGCONF/WMState"
+# Rik look (colours, title/resize-bar textures): the Rik.themed style from
+# gnustep/plugins-sessions-windowmaker (pinned as third_party/wmaker-rik-theme,
+# GPL-3.0) applied over the generated global defaults, fonts retargeted to
+# Inter (the image has none of the theme's Trebuchet/Arial/Liberation faces).
+# Its PNG textures land in share/WindowMaker/Pixmaps, on the default
+# PixmapPath (WindowMaker.in:24-32). See apply_wmaker_style.py.
+RIK="../../third_party/wmaker-rik-theme/Windowmaker theme/Rik.themed"
+[ -f "$RIK/style" ] || { echo "error: $RIK/style not found -- run setup_third_party.sh" >&2; exit 1; }
+python3 apply_wmaker_style.py "$RIK" "$PKGCONF/WindowMaker" "$PKGDATA/Pixmaps" Inter
 # This port's own menu (only installed programs) instead of upstream's
 # plmenu, whose entries (xterm, firefox, gimp, ...) do not exist here.
 # (No comments inside the file: Window Maker refuses them in its owned
