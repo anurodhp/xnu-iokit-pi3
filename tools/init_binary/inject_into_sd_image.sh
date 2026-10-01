@@ -535,6 +535,9 @@ install_smoketest tools/userland_staging/wutil_vnode_test.macho "usr/X11/bin/wut
 install_smoketest tools/userland_staging/qos_probe.macho "usr/X11/bin/qos_probe" \
     "= tools/userland_staging/qos_probe.macho not built -- run build_qos_probe.sh first if wanted, skipping" \
     "  (tools/userland_staging/build_qos_probe.sh: thread QoS / priority probe, DAR-439)"
+install_smoketest tools/userland_staging/dispatch_stall_test.macho "usr/X11/bin/dispatch_stall_test" \
+    "= tools/userland_staging/dispatch_stall_test.macho not built -- run build_dispatch_stall_test.sh first if wanted, skipping" \
+    "  (tools/userland_staging/build_dispatch_stall_test.sh: DAR-409 libdispatch pool stall monitor test)"
 install_smoketest tools/userland_staging/wmlat.macho "usr/X11/bin/wmlat" \
     "= tools/userland_staging/wmlat.macho not built -- run build_wmlat.sh first if wanted, skipping" \
     "  (tools/userland_staging/build_wmlat.sh: Window Maker event latency probe)"
