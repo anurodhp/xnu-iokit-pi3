@@ -111,8 +111,8 @@ echo "-- kill it"
 kill $SP; sleep 3
 ps -o pid,state,comm -p $SP 2>&1 | tail -1
 grep "pid $SP " /tmp/wm_sp.log
-echo "== kill the dock-launched xev (pid $(ps ax -o pid,comm | awk '/[x]ev$/ {print $1; exit}'))"
-DX=$(ps ax -o pid,comm | awk '/[x]ev$/ {print $1; exit}'); kill $DX; sleep 3
+DX=$(ps ax | grep '[x]ev -geometry 200x150' | awk '{print $1; exit}')
+echo "== kill the dock-launched xev (pid $DX)"; kill $DX; sleep 3
 grep "pid $DX " /tmp/wm_sp.log
 echo "== ps for zombies"; ps ax -o pid,ppid,state,comm | awk '$3 ~ /Z/'
 echo "== F7: launching a program that does not exist"
