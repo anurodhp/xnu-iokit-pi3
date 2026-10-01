@@ -62,7 +62,7 @@ fi
 # grab (rootmenu.c wRootMenuBindShortcuts), so drive the root menu with the pointer:
 # right-click opens it at the pointer, entry N is 20 px high below a 23 px title
 # (menu window 116x127 at 543,401 for a click at 600,400, from x11_probe tree).
-pick() { $X/x11_probe click 600 400 3 > /dev/null; sleep 1; $X/x11_probe click 600 $((434 + 20 * $1)) 1 > /dev/null; }
+pick() { $X/x11_probe click 600 400 3 > /dev/null; sleep 3; $X/x11_probe click 600 $((434 + 20 * $1)) 1 > /dev/null; sleep 1; }
 rm -f /tmp/e2e_* /tmp/lat_stamps.txt /tmp/wm_sp.log
 $X/Xvfb :$DN -screen 0 1280x720x24 -fbdir $FB > /tmp/xvfb_sp.log 2>&1 &
 XP=$!
