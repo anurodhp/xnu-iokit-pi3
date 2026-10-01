@@ -33,9 +33,13 @@
 
 #define STALL_TIMEOUT_S 3
 
+/* monotonic (mach_absolute_time, the same clock as dispatch_time(NOW)): chronyd
+ * may step the wall clock during a boot test, which a gettimeofday-based
+ * latency would report as a bogus multi-minute number. */
 static double now_s(void) {
-	struct timeval tv; gettimeofday(&tv, NULL);
-	return tv.tv_sec + tv.tv_usec / 1e6;
+	static mach_timebase_info_data_t tb;
+	if (!tb.denom) mach_timebase_info(&tb);
+	return (double)mach_absolute_time() * tb.numer / tb.denom / 1e9;
 }
 static double cpu_s(void) {
 	struct rusage ru; getrusage(RUSAGE_SELF, &ru);
