@@ -183,7 +183,7 @@ gs_build_app() {
 # gnustep-make theme bundle (BUNDLE_EXTENSION = .theme) in a copy of <source
 # dir> and install it as /usr/GNUstep/System/Library/Themes/<Name>.theme in
 # root/. It builds ONLY the bundle: it links the already-installed
-# libgnustep-gui/base and the X11 libraries (Eau calls Xlib directly) and
+# libgnustep-gui/base and the X11 libraries (themes may call Xlib) and
 # rebuilds none of them. gnustep-gui dlopen()s the bundle, so the executable
 # is bind_target_audited. Callers check build_gnustep_back.sh was run.
 gs_build_theme() {
