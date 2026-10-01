@@ -763,8 +763,14 @@ mkdir -p third_party
 #     Savannah plugins/themes/Eau is on no GitHub mirror and savannah's
 #     viewvc/svn returned 503 to scripts. Fork changes: no NSRegularExpression
 #     (our base is --disable-icu), GWDialog categories via class_addMethod
-#     (GWDialog is in the GWorkspace app, not linkable), EAU_NO_TEST guard.
+#     (GWDialog is in the GWorkspace app, not linkable), -O2 (ARC block retains
+#     crash here), EAU_NO_TEST guard.
 #     build_gnustep_eau_theme.sh.
+#     gnustep-rik-theme (DAR-461): our fork anurodhp/rik.theme branch
+#     iokit-port, unmodified off AlessandroSangiuliano/rik.theme master
+#     fbb9944 (2026-09-16, LGPL-2.1), the maintained Rik.theme (the
+#     original is mclarenlabs/nongio-zz rik.theme). The default GNUstep
+#     theme; matches the Window Maker Rik.themed. build_gnustep_rik_theme.sh.
 #   DejaVu fonts -- the upstream release tarball, not the git tag: the
 #       tag (version_2_37, the nixpkgs version) holds only FontForge .sfd
 #       sources, and building the TTFs needs fontforge + perl Font::TTF,
@@ -898,6 +904,7 @@ gnustep-gap|git@github.com:anurodhp/gap.git|iokit-port||https://github.com/gnust
 wmaker-rik-theme|https://github.com/gnustep/plugins-sessions-windowmaker.git|master|
 gnustep-gworkspace|git@github.com:anurodhp/apps-gworkspace.git|iokit-port||https://github.com/gnustep/apps-gworkspace.git
 gnustep-eau-theme|git@github.com:anurodhp/gershwin-eau-theme.git|iokit-port||https://github.com/gershwin-desktop/gershwin-eau-theme.git
+gnustep-rik-theme|git@github.com:anurodhp/rik.theme.git|iokit-port||https://github.com/AlessandroSangiuliano/rik.theme.git
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch upstream_url; do

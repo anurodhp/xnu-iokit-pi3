@@ -178,3 +178,38 @@ gs_build_app() {
     gs_audit_tree "$app"
     echo "installed $app"
 }
+
+# gs_build_theme <Name> <source dir> [make VAR=value...] (DAR-461): build a
+# gnustep-make theme bundle (BUNDLE_EXTENSION = .theme) in a copy of <source
+# dir> and install it as /usr/GNUstep/System/Library/Themes/<Name>.theme in
+# root/. It builds ONLY the bundle: it links the already-installed
+# libgnustep-gui/base and the X11 libraries (Eau calls Xlib directly) and
+# rebuilds none of them. gnustep-gui dlopen()s the bundle, so the executable
+# is bind_target_audited. Callers check build_gnustep_back.sh was run.
+gs_build_theme() {
+    local name="$1" src="$2" work T x11_inc cppflags
+    shift 2
+    [ -f "$src/GNUmakefile" ] || { echo "error: $src not found -- run setup_third_party.sh" >&2; exit 1; }
+    [ -d "$ROOT$PREFIX/System/Library/Bundles/libgnustep-back-032.bundle" ] ||
+        { echo "error: gnustep-back not installed -- run build_gnustep_back.sh first" >&2; exit 1; }
+    gs_setup_link "$SYS/libXext.dylib" "$SYS/libX11.dylib" "$SYS/libxcb.dylib" "$SYS/libXau.dylib" \
+        "$SYS/libXdmcp.dylib" "${GS_BASE_SYSLIBS[@]}"
+    gs_build_env
+    x11_inc="$OUT/x11/include"
+    cppflags="${TARGET[*]} -D_FORTIFY_SOURCE=0 -I$GS_SYS_HEADERS -I$OUT/objc4_public_headers -I$x11_inc"
+    work="$G/$(echo "$name" | tr 'A-Z' 'a-z')-theme-src"
+    rsync -a --delete --exclude .git "$src/" "$work/"
+    (cd "$work" &&
+     make DYLIB_EXTRA_FLAGS= GNUSTEP_INSTALLATION_DOMAIN=SYSTEM CPPFLAGS="$cppflags" \
+         LDFLAGS="${TARGET[*]} $LINK $LIBFLAGS -L$GS_SYS_LIBS -lgnustep-gui -lgnustep-base" "$@" > make.out 2>&1) ||
+        { grep -E "error:|Undefined|^ld: |^  \"" "$work/make.out" | grep -v "ld: warning" | head -40 || true
+          echo "error: $name theme build failed, see $work/make.out" >&2; exit 1; }
+    T="$ROOT$PREFIX/System/Library/Themes/$name.theme"
+    rm -rf "$T"
+    (cd "$work" && make install "$@" DESTDIR="$ROOT" GNUSTEP_INSTALLATION_DOMAIN=SYSTEM > install.out 2>&1) ||
+        { tail -20 "$work/install.out"; echo "error: $name theme install failed" >&2; exit 1; }
+    gs_relocate_makefiles
+    [ -x "$T/$name" ] || { echo "error: $T/$name not installed" >&2; exit 1; }
+    gs_audit_tree "$T"
+    echo "installed $T"
+}
