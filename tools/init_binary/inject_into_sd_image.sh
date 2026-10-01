@@ -572,6 +572,19 @@ if [ -d "$FS_STAGE/bin" ]; then
     done
     echo "+ wrote fontconfig tools to $MNT/usr/X11/bin ($(ls "$FS_STAGE"/bin/fc-*.macho | wc -l | tr -d ' ') of them)"
 fi
+# terminfo database (DAR-293): libncurses here is built without one
+# (build_ncurses.sh), so top, vim and libedit fail with "error opening terminal:
+# linux" (Terminal.app exports TERM=linux). build_terminfo.sh compiles a small
+# set of real ncurses terminfo.src entries with the host tic; ditto keeps the
+# hex-named directories.
+TI_STAGE=tools/userland_staging/libc_build/terminfo/root
+if [ -d "$TI_STAGE/usr/share/terminfo" ]; then
+    mkdir -p "$MNT/usr/share"
+    ditto "$TI_STAGE/usr/share/terminfo" "$MNT/usr/share/terminfo"
+    echo "+ wrote terminfo database ($(find "$TI_STAGE/usr/share/terminfo" -type f | wc -l | tr -d ' ') entries) to $MNT/usr/share/terminfo"
+else
+    echo "= $TI_STAGE not built -- run tools/userland_staging/build_terminfo.sh first if wanted, skipping (top/vim/libedit then fail with 'error opening terminal')"
+fi
 # GNUstep (DAR-388): gnustep-make and gnustep-base as build_gnustep_base.sh
 # installs them, a copy of the target's /usr/GNUstep (libgnustep-base, its
 # resources, headers, makefiles and Tools) and /etc/GNUstep/GNUstep.conf.
