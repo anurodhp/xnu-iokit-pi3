@@ -14,7 +14,7 @@ B=/usr/local/bin/fb_cache_test
 echo "== FB1 cache modes"
 $B -r 2 default wc inhibit posted
 echo "== FB2 bands"
-$B -r 1 -T 12 wc
+$B -r 1 -T 40 wc
 run_x() {
     name=$1; mode=$2; shadow=$3; delay=$4
     rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
