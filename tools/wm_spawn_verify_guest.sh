@@ -89,6 +89,7 @@ if [ "$MODE" = lat ]; then
     grep "stamp" /tmp/wm_sp.log | sed -n 's/.*t0=\([0-9.]*\) call=\([0-9.]*\) ms/\1 \2/p' > /tmp/lat_t0.txt
     paste /tmp/lat_t0.txt /tmp/lat_stamps.txt | awk 'NF==3 { d=$3-$1; c=$2; n++; sd+=d; sc+=c; if (n==1||d<mn) mn=d; if (d>mx) mx=d; printf "launch %d: call %.2f ms, child started %.2f ms after the call\n", n, c, d }
         END { if (n) printf "LAT %d launches: call avg %.2f ms; start-to-child avg %.2f ms (min %.2f max %.2f)\n", n, sc/n, sd/n, mn, mx }'
+    cp $FB/Xvfb_screen0 $HOME/sp_lat.xwd 2>/dev/null
     echo "== wmaker"; ps -o pid,pri,rss,time -p $WP
     kill $MON; kill $WP; kill $XP; sleep 2; echo TESTEND; exit 0
 fi
@@ -96,7 +97,9 @@ fi
 # ---- e2e ----
 echo "== dock autolaunch (execCommand in dock.c)"
 grep "xev\|nosuch\|no/such" /tmp/wm_sp.log | head
-echo "== wmaker windows"; $X/wmclose_probe list
+echo "== wmaker windows (the bad dock command opens a modal Error dialog, as with fork+exec; dismiss it)"; $X/wmclose_probe list
+cp $FB/Xvfb_screen0 $HOME/sp_dialog.xwd 2>/dev/null
+$X/x11_probe click 786 456 1 > /dev/null; sleep 3; $X/wmclose_probe list
 echo "== F10: a menu launch; the child's descriptors"
 pick 0; sleep 3
 ls -l /tmp/e2e_* 2>&1; cat /tmp/e2e_fds.txt
