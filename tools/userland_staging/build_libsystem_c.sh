@@ -584,6 +584,16 @@ POPEN_CFLAGS="$SIGLIST_CFLAGS -DPLATFORM_iPhoneOS -Werror=implicit-function-decl
     -idirafter ../../third_party/libplatform/private -idirafter "$XNU/BUILD.hdrs/dst/usr/local/include" \
     "$LIBC/gen/fts.c" -o "$EXTRACT/fts.o"
 
+# posix_spawnp(3) (DAR-434, Window Maker spawns app launches with it):
+# Libc's own sys/posix_spawn.c:70, compiled unmodified, the PATH-searching
+# front end over posix_spawn. It is derived from execvp's execvP, so it
+# keeps execvp's semantics (PATH search, ENOEXEC retried through
+# /bin/sh, posix_spawn.c:142-154). The file defines only posix_spawnp;
+# the posix_spawn it calls is libsystem_kernel.dylib's
+# (libsyscall/wrappers/spawn/posix_spawn.c). No dylib exported
+# posix_spawnp before this. A new export only: nothing moves or renames.
+"$CLANG" $POPEN_CFLAGS -I "$XNU/libsyscall/wrappers/spawn" "$LIBC/sys/posix_spawn.c" -o "$EXTRACT/posix_spawn.o"
+
 # atof(3)/atof_l and strtoull(3)/strtoull_l (DAR-384, font/2D stack:
 # libpng's png.c calls atof; fontconfig's fcxml.c/fcname.c call
 # strtoull). Real Apple's home is libsystem_c: Libc's own
