@@ -44,6 +44,13 @@
  * the runtime fallback (kqueue() failing, or WM_EVENT_BACKEND=select).
  * Not an autoconf symbol: it is this port's own option, default on. */
 #define WM_USE_KQUEUE 1
+
+/* DAR-434: programs are launched with posix_spawnp (src/spawn.c in the
+ * anurodhp/wmaker iokit-port fork) instead of fork+exec, and their exit is
+ * watched with EVFILT_PROC on the WUtil kqueue. fork+exec stays as the
+ * run-time fallback (WM_SPAWN=fork). Not an autoconf symbol: this port's
+ * own option, default on. posix_spawnp is libsystem_c's (build_libsystem_c.sh). */
+#define WM_USE_POSIX_SPAWN 1
 #define HAVE_STRCASECMP 1
 #define HAVE_STRNCASECMP 1
 #define HAVE_SETSID 1
