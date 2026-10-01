@@ -1,7 +1,10 @@
 # SMP bring-up (DAR-455)
 
-Status: **Phase 1 (scoping) done 2026-10-01.** Nothing here is built or
-verified yet; every claim below cites the file it rests on. Paths are
+Status: **Phase 2 (QEMU) done 2026-10-01.** With `cpus=4` all four cores
+come up, take IPIs and run user threads under QEMU; default boots are
+unchanged. Untested on the real Pi: see `docs/smp-pi-experiment.md`.
+"Phase 2 results" is at the end. Phase 1 scoping follows; every claim
+cites the file it rests on. Paths are
 relative to the repo root, `third_party/` paths are the pinned forks.
 `armstub8.S` is the Raspberry Pi firmware's built-in 64-bit stub,
 `raspberrypi/tools` master, `armstubs/armstub8.S` (not vendored here; the
@@ -171,3 +174,121 @@ firmware on the Pi's card may embed an older version).
 Unknowns: whether caches-off reads need more than the targeted cleans
 (Pi only), whether the card's armstub matches master (log page 0 before
 release), whether any driver breaks under real concurrency.
+
+## Phase 2 results (QEMU, 2026-10-01)
+
+### Where the code is
+
+| Repo | Branch | Commits |
+|---|---|---|
+| iokit (this repo) | `dar-455-smp` (local) | 4d36b79 doc, 63783bc bring-up, 2d617f9 runvm `QEMU_EXTRA_ARGS`, 74ee09d arrival timeout + old-DT fallback |
+| xnu fork `anurodhp/xnu-pi3-macos11` | `dar-455-smp` (pushed) | 64ccb03b0 kernel side, plus the auto-synced driver commits |
+| qemu fork `anurodhp/qemu-xnu-arm` | `dar-455-smp` (pushed) | 24c39a2 `-M raspi3,xnu-smp=on` |
+
+None of the forks' main lines (`bcm2837-bringup`, `master`) were touched.
+
+How to switch it on:
+- **Kernel:** boot-arg `cpus=N` (Apple's own; `ml_parse_cpu_topology()`).
+  On BCM2837 the default is now 1, so the 4-CPU DT is inert without it.
+- **QEMU:** `QEMU_SMP=N ./runvm.sh` adds `-M raspi3,xnu-smp=on` and
+  `cpus=N`. Without `xnu-smp=on` the fork halts cores 1-3 as before.
+
+### What happens at boot (with `cpus=4`)
+
+1. `BCM2837CPU::start("cpu0")` builds a 4-source `IOCPUInterruptController`
+   and publishes it.
+2. Each `cpuN` nub's `start()` waits for that controller, then calls
+   `ml_processor_register()` and `processor_start()`. That reaches
+   `cpu_start()` -> `PE_cpu_start()` -> `startCPU()`, which writes the PA of
+   `bcm2837_secondary_entry` into the spin table at `0xd8 + 8*N` (through
+   an `ml_io_map()` device mapping) and does `dsb; sev`.
+3. The core drops EL2 -> EL1 if needed, runs `LowResetVectorBase` ->
+   `start_cpu` -> `arm_init_cpu` -> `slave_main`, then `initCPU()` on
+   itself: `enableCPUInterrupt()` and a self-IPI.
+4. Once all four are enabled, BCM2837LocalIntc registers one source per
+   CPU, enables every core's mailbox 0 and IPIs each core.
+5. A core that has not arrived 5 s after its release is abandoned, so
+   device interrupts do not wait for it forever (74ee09d; see the
+   `abandonSecondary()` comment for the one side effect and why it is
+   harmless here).
+
+### Evidence
+
+- **Default boot unchanged.** The new kernel with the new DT and no
+  `cpus=` logs "1 CPU(s) in topology", "1 core(s)" and reaches login. So
+  does the new kernel with the **old** `rpi3.dtb`, with and without
+  `QEMU_SMP=4`.
+- **`QEMU_SMP=4`.** The log shows "releasing core N at PA 0x8192490",
+  "arm_cpu_init(): cpu N online", "initCPU on core N; <75-175k> ticks
+  after release" and "cpuN (core N) is running" for N = 1..3, then
+  "BCM2837LocalIntc ... 4 core(s)", then login. No panic in more than 15
+  boots.
+  - The timebases agree: 0.9-2.8 ms between release and arrival, no
+    CNTPCT/CNTVCT difference.
+  - IPI counters (temporary, now removed) passed 8192 sent and received
+    on every core.
+- **A core that never starts.** `EXTRA_BOOT_ARGS=cpus=4` without
+  `xnu-smp=on` logs "cpuN (core N) did NOT come up within 5 s; continuing
+  without it" three times, then LocalIntc starts and login works.
+- **Parallelism.**
+  - `top` "CPU usage" idle: 0.2% with 4 `yes`; 33-48% with 1 `yes`.
+    Single core: 0% in both cases.
+  - QEMU used 165-215% host CPU with the guest loaded, i.e. several vCPUs
+    run guest code at once.
+  - `dispatch_stall_test` sees `cap=4` (hw.activecpu) instead of 1.
+- **Regression tests, `cpus=4` and default, both pass:**
+  `fork_atfork_smoketest`, `fork_alarm_smoketest`, `pthread_smoketest`,
+  `pthread_cond_smoketest`, `pthread_lifecycle_smoketest`,
+  `foundation_smoketest`, `kqueue_poll_smoketest`,
+  `dispatch_stall_test all` (ALL PASS), `wutil_kq_test` (11/11),
+  `wutil_timer_test` (5/5) and `wutil_vnode_test` (ALL PASS).
+  - GNUstep under Xvfb also passes in both modes: `x11_smoketest` PASS,
+    and Xvfb, wmaker, Ink, Terminal and gdnc are all alive after 120 s,
+    with the same log warnings in both modes.
+
+### Known problems / findings
+
+- **No speedup under QEMU; SMP is slower there.**
+  - One `seq 1 400000` takes 5.3 s host time in both modes. Four in
+    parallel take 33.5 s with `cpus=4` against 18.4 s single-core.
+  - Interactive commands slow down 3-10x while a `yes` runs, and
+    per-process CPU TIME is inflated (each `yes` shows more CPU than
+    elapsed).
+  - Ruled out: timebase skew (measured, above) and IPI loss (counted,
+    above).
+  - Likely cause (not proven): this QEMU stops every vCPU for each
+    broadcast TLB maintenance op the kernel issues. `tlbi vmalle1is` ->
+    `tlb_flush_by_mmuidx_all_cpus_synced()` -> `async_safe_run_on_cpu()`
+    (`target/arm/helper.c:3092`, `accel/tcg/cputlb.c:227-235`). XNU
+    issues these on every pmap change. The host was also loaded (8 cores,
+    load average about 8, Spotlight at 121%).
+  - Only the real Pi can say whether SMP helps.
+- **`-accel tcg,thread=single` panics** "Ticket spinlock timeout" on
+  `pset0` from `thread_setrun()`. With round-robin TCG a spinning vCPU
+  runs for a whole slice while the owner vCPU is descheduled. This is
+  read as a QEMU artifact; the default MTTCG never hit it.
+- **Guest time runs about 2.2x host time under QEMU** (62.5 MHz counter).
+  This is independent of SMP. chronyd steps the clock, so sh `time`
+  "real" is meaningless; measure on the host.
+- **dtc-AppleDeviceTree emits a node's children in reverse source
+  order.** The cpu nodes are therefore written cpu3 -> cpu0 in `rpi3.dts`.
+  In source order the boot CPU became logical CPU 3.
+- **The kernel PRNG is never installed on this port** (no corecrypto
+  kext). `random_cpu_init()` used to panic for every secondary; it now
+  returns. The early DRBG that serves every `read_random()` is now
+  serialised across CPUs (xnu 64ccb03b0).
+- **`IODeviceMemory` cannot map PA 0.** IOKit asserts a non-zero first
+  physical address (`IOMemoryDescriptor.cpp:5013`), so the spin-table
+  page is mapped with `ml_io_map()`.
+- **Build workarounds used here.** Both matter for anyone repeating this
+  in a fresh worktree.
+  - `tools/build_xnu_7195.sh PYTHON=true`: the lldbmacros dSYM step's
+    `syntax_checker.py` is Python 2 and fails; the kernel itself links.
+  - The private worktree uses its own `build/xnu-latest-build/out/` (a
+    directory of symlinks to the shared SDK, with a real `out/`) and its
+    own `third_party/` symlink farm whose `xnu-7195` and `qemu-zhuowei`
+    point at private worktrees of the forks. So the shared kernel and
+    QEMU binary are never written.
+  - The qemu worktree needed `ui/keycodemapdb` copied in and a
+    `.git-submodule-status` matching `git submodule status`; otherwise
+    `make` stops at "GIT submodule checkout is out of date".
