@@ -1,4 +1,5 @@
 {
+    NSInterfaceStyleDefault = NSMacintoshInterfaceStyle;
     NSFont = "Inter-Regular";
     NSFontSize = 12;
     NSBoldFont = "Inter-Bold";
