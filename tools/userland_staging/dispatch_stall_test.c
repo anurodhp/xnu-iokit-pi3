@@ -26,6 +26,7 @@
 #include <sys/resource.h>
 #include <sys/sysctl.h>
 #include <mach/mach.h>
+#include <mach/mach_time.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
