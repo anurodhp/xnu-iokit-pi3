@@ -77,7 +77,8 @@ mismatched attributes cannot leave stale cache lines.
 
 ## Driver options (`/etc/X11/xorg.conf`, Device section)
 
-Implemented on PureDarwin fork branch `dar-460-fb`
+Implemented on PureDarwin fork branch `dar-460-fb`, fast-forwarded into
+`iokit-launchd-port` (69276ed8)
 (`src/Userspace/xf86-video-puredarwingop/puredarwingop_drv.c`,
 `src/Libraries/PDGOP/PDGOP.c`):
 
@@ -133,4 +134,25 @@ run at the same speed under QEMU, and an unaligned store to a Device
 mapping does not fault there. QEMU shows only that each mode maps, that
 stores land, and that the driver's code paths work.
 
-QEMU results: see the DAR-460 Linear ticket.
+### QEMU results (2026-10-01, hdmi_console=1, 640x480)
+
+- All four cache modes map (`map options` 0x1/0x401/0x101/0x601), the
+  stores read back through the mapping, no fault or panic. This exercises
+  the kernel's `MAP_MEM_ONLY` cache-mode change on the device-pager entry.
+  Throughput is the same for every mode (store128 about 650-810 MB/s,
+  copy about 410-500 MB/s, the same as RAM), as expected without attribute
+  modelling.
+- Xorg starts with each configuration (WC + shadow, default + shadow,
+  WC without shadow, WC + shadow + 16 ms delay) and logs the options,
+  `VRAM mapped writecombine (map options 0x401)` and `rendering into ...`.
+  x11_bench's 2000 draw+XSync round trips: 78 shadow copies (29.9 MB) with
+  no delay, 59 with the default mapping, 40 (22.0 MB) with
+  `ShadowUpdateDelay 16`. ShadowFB off was fastest under QEMU (0.8 s vs
+  2.1-2.7 s), because QEMU's VRAM is ordinary host RAM; that says nothing
+  about the Pi, where it means uncached reads.
+- DAR-443 reproduces with fb_cache_test `-T` (one band per second): every
+  band reads back correctly through the user mapping, but the monitor's
+  `xp` of guest physical 0x3C100000+ shows only the first three bands
+  (the first three 16 KB pages, about 0-2 s); later bands are not in guest
+  physical memory, and the Xorg screendumps are black. So QEMU cannot show
+  X output; the Pi must be used for anything visual.
