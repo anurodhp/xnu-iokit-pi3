@@ -64,7 +64,19 @@ enum {
 	kSpinTablePhys  = 0xd8,
 	kSpinTableSlots = 4,
 };
+
+// DAR-455: a secondary's bring-up handshake (BCM2837CPU::fArrival).
+enum {
+	kArrivalPending   = 0,
+	kArrivalArrived   = 1,  // the core reached initCPU() in time
+	kArrivalAbandoned = 2,  // startSecondary() timed out and gave it up
+	kArrivalTimeoutSecs = 5,
+};
 static volatile uint64_t *sSpinTable = NULL;
+
+// DAR-455 diagnostic: the boot CPU's mach_absolute_time() just before it
+// releases a core, read back on that core to check the two timebases agree.
+static volatile uint64_t sReleaseStamp;
 
 // Defensive name re-check (backlog item 13) - every other DT-matched
 // driver in this tree (BCM2837ArmIO, BCM2837InterruptController,
@@ -115,6 +127,13 @@ BCM2837CPU::start(IOService *provider)
 	OSData *reg = OSDynamicCast(OSData, provider->getProperty("reg"));
 	if (reg != NULL && reg->getLength() >= sizeof(UInt32)) {
 		fPhysID = *(const UInt32 *)reg->getBytesNoCopy();
+	}
+	if (fPhysID >= kSpinTableSlots) {
+		// A pre-DAR-455 device tree: cpu0 had reg = <0xf00> (a BCM2836
+		// Cortex-A7 MPIDR), not this core's MPIDR Aff0. Keep the value this
+		// driver always registered (phys_id 0) so a new kernel booted with
+		// an old rpi3.dtb behaves exactly as before.
+		fPhysID = fLogicalID;
 	}
 	setCPUNumber(fLogicalID);
 
@@ -208,26 +227,59 @@ BCM2837CPU::startSecondary(void)
 	kern_return_t kr = processor_start(machProcessor);
 	if (kr != KERN_SUCCESS) {
 		IOLog("BCM2837CPU: cpu%u: processor_start failed: %d\n", (unsigned)fLogicalID, kr);
+		abandonSecondary();
 		return false;
 	}
 
-	// Diagnostic only: the core sets kIOCPUStateRunning in initCPU(), on
-	// itself. Nothing waits for it otherwise (Apple's PE_cpu_start() does
-	// not either), but a core that never arrives would otherwise be
-	// silent until IOCPUInterruptController::registerInterrupt() blocks
-	// forever waiting for it.
+	// The core sets kIOCPUStateRunning in initCPU(), on itself. Apple's
+	// PE_cpu_start() does not wait for it, but here a core that never
+	// arrives would never call enableCPUInterrupt(), and
+	// IOCPUInterruptController::registerInterrupt() - i.e.
+	// BCM2837LocalIntc::start(), and with it every device interrupt on the
+	// board - would block forever (iokit/Kernel/IOCPU.cpp:690-700). So
+	// wait a bounded time and then give the core up.
 	uint64_t deadline;
-	clock_interval_to_deadline(2, kSecondScale, &deadline);
-	while (getCPUState() != kIOCPUStateRunning && mach_absolute_time() < deadline) {
+	clock_interval_to_deadline(kArrivalTimeoutSecs, kSecondScale, &deadline);
+	while (fArrival == kArrivalPending && mach_absolute_time() < deadline) {
 		IOSleep(10);
 	}
-	if (getCPUState() == kIOCPUStateRunning) {
+	if (fArrival == kArrivalArrived) {
 		IOLog("BCM2837CPU: cpu%u (core %u) is running\n", (unsigned)fLogicalID, (unsigned)fPhysID);
-	} else {
-		IOLog("BCM2837CPU: cpu%u (core %u) did NOT come up within 2 s\n",
-		    (unsigned)fLogicalID, (unsigned)fPhysID);
+		return true;
 	}
+	abandonSecondary();
 	return true;
+}
+
+/*
+ * DAR-455. Give up on a secondary that did not arrive, so boot continues on
+ * the cores that did. Runs on the boot CPU's matching thread.
+ *
+ * IOCPUInterruptController counts enabled CPUs and releases
+ * registerInterrupt() callers only once every CPU it was sized for has
+ * called enableCPUInterrupt() (iokit/Kernel/IOCPU.cpp:633-650, :690-700);
+ * there is no way to shrink that count. So this calls enableCPUInterrupt()
+ * on the absent CPU's behalf. Its one side effect is the
+ * ml_install_interrupt_handler() inside it, which rewrites the calling
+ * core's cpu_data interrupt fields with this CPU's number as the source
+ * (IOCPU.cpp:640, osfmk/arm64/machine_routines.c:683-703): that core's IRQs
+ * are then dispatched to vector <this CPU's number> instead of its own.
+ * That is harmless here only because BCM2837LocalIntc registers the same
+ * handler for every source and that handler reads the interrupting core
+ * from MPIDR_EL1, never from the source number
+ * (BCM2837LocalIntc::start()/handleInterrupt()). The Mach processor stays
+ * in PROCESSOR_START and is never scheduled.
+ */
+void
+BCM2837CPU::abandonSecondary(void)
+{
+	if (!OSCompareAndSwap(kArrivalPending, kArrivalAbandoned, &fArrival)) {
+		return;         // it arrived after all
+	}
+	IOLog("BCM2837CPU: cpu%u (core %u) did NOT come up within %u s; "
+	    "continuing without it\n", (unsigned)fLogicalID, (unsigned)fPhysID,
+	    (unsigned)kArrivalTimeoutSecs);
+	sBCM2837CPUIC->enableCPUInterrupt(this);
 }
 
 void
@@ -252,6 +304,18 @@ BCM2837CPU::initCPU(bool boot)
 	// calling core's cpu_data (osfmk/arm64/machine_routines.c:683-703,
 	// iokit/Kernel/IOCPU.cpp:640). No IOLog here: interrupts are off.
 	if (fLogicalID != (UInt32)ml_get_boot_cpu_number()) {
+		// Too late? startSecondary() gave up on this core and already
+		// accounted for it in the interrupt controller; enabling it now
+		// would count it twice. Park it here for good, interrupts masked
+		// (we run at splsched), as quiesceCPU() parks a core.
+		if (!OSCompareAndSwap(kArrivalPending, kArrivalArrived, &fArrival)) {
+			kprintf("BCM2837CPU: cpu%u (core %u) arrived after its bring-up "
+			    "timed out; parking it\n", (unsigned)fLogicalID, (unsigned)fPhysID);
+			for (;;) {
+				__asm__ volatile ("dsb sy" ::: "memory");
+				__asm__ volatile ("wfi");
+			}
+		}
 		sBCM2837CPUIC->enableCPUInterrupt(this);
 		if (ipi_handler != NULL) {
 			BCM2837LocalIntc::setIPIHandler(ipi_handler);
@@ -261,9 +325,18 @@ BCM2837CPU::initCPU(bool boot)
 			signalCPU(this);
 		}
 		setCPUState(kIOCPUStateRunning);
-		kprintf("BCM2837CPU: cpu%u (core %u) initCPU on core %llu\n",
+		// One line per core, SMP boots only. The release-to-here delta is
+		// the cheap check that this core's timebase agrees with the boot
+		// CPU's (both read CNTVCT + the same rtclock base, osfmk/arm64/
+		// machine_routines.c ml_get_timebase()): it must be small and
+		// positive (QEMU: 0.9-2.8 ms).
+		uint64_t now = mach_absolute_time();
+		kprintf("BCM2837CPU: cpu%u (core %u) initCPU on core %llu; "
+		    "%lld ticks after release, CNTFRQ %llu\n",
 		    (unsigned)fLogicalID, (unsigned)fPhysID,
-		    (unsigned long long)(__builtin_arm_rsr64("MPIDR_EL1") & 0xff));
+		    (unsigned long long)(__builtin_arm_rsr64("MPIDR_EL1") & 0xff),
+		    (long long)(now - sReleaseStamp),
+		    (unsigned long long)__builtin_arm_rsr64("CNTFRQ_EL0"));
 		return;
 	}
 
@@ -520,6 +593,7 @@ BCM2837CPU::startCPU(vm_offset_t /*start_paddr*/, vm_offset_t /*arg_paddr*/)
 	uint64_t entry = (uint64_t)ml_static_vtop((vm_offset_t)bcm2837_secondary_entry);
 	IOLog("BCM2837CPU: releasing core %u at PA 0x%llx\n", (unsigned)fPhysID,
 	    (unsigned long long)entry);
+	sReleaseStamp = mach_absolute_time();
 	sSpinTable[fPhysID] = entry;
 	// Store complete before the event that wakes the core's WFE.
 	__asm__ volatile ("dsb sy" ::: "memory");

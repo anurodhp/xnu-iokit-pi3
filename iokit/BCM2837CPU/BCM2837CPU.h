@@ -65,6 +65,12 @@ private:
 	// DAR-455: secondary-core bring-up, run on the boot CPU from start().
 	bool startSecondary(void);
 	void registerWithMach(void);
+	void abandonSecondary(void);
+
+	// DAR-455: kArrival* (BCM2837CPU.cpp). Pending until the core reaches
+	// initCPU() or the boot CPU gives up on it; whichever side swaps it
+	// first wins.
+	volatile UInt32 fArrival;
 
 public:
 	virtual IOService       *probe(IOService *provider, SInt32 *score) APPLE_KEXT_OVERRIDE;

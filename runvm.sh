@@ -135,6 +135,9 @@
 # Unset (the default): both off, every boot exactly as before. raspi3
 # always has four vCPUs, so -smp needs no change.
 #
+# QEMU_DTB overrides the device tree (default devicetrees/rpi3.dtb), e.g.
+# to boot an older tree against a newer kernel.
+#
 # QEMU_EXTRA_ARGS is appended to the QEMU command line verbatim, e.g.
 # QEMU_EXTRA_ARGS="-accel tcg,thread=single" to compare MTTCG (the default
 # on this host) with round-robin TCG.
@@ -184,7 +187,7 @@ fi
 exec ./third_party/qemu-zhuowei/aarch64-softmmu/qemu-system-aarch64 -M "$QEMU_MACHINE" -m 1024 -display "$QEMU_DISPLAY" \
   -serial null -serial stdio \
   -kernel build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped \
-  -dtb devicetrees/rpi3.dtb \
+  -dtb "${QEMU_DTB:-devicetrees/rpi3.dtb}" \
   -drive "file=$SD_IMAGE,if=sd,format=raw" \
   $USB_DEVICES \
   -append "debug=0x8 kextlog=0xfff -noprogress -v -enable_kprintf_spam rd=$ROOT_DEV serial=3 cpu-factor=10 vm_compressor=0 $SMP_BOOT_ARGS $EXTRA_BOOT_ARGS" \
