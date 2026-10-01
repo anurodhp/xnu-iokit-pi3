@@ -17,9 +17,13 @@
  * target/arm/helper.c HELPER(dc_zva) comment), so QEMU numbers only show
  * that each mode maps, writes land, and nothing faults.
  *
- * Usage: fb_cache_test [-r reps] [-H hold-secs] [mode ...]
+ * Usage: fb_cache_test [-r reps] [-H hold-secs] [-T band-secs] [mode ...]
  *   mode: default | inhibit | wc | posted     (default: "default wc")
  *   -H n  after the last mode, leave colour bars on screen for n seconds
+ *   -T n  after the last mode, write one 8-row band per second for n
+ *         seconds (band i at rows 8i..8i+7, value 0x00a50000 | i) and read
+ *         it back through the mapping: the DAR-443 QEMU check (compare with
+ *         the monitor's `xp` of the physical framebuffer)
  * Exit status 0 = every mode mapped and read back what it wrote.
  */
 #include <PDGOP.h>
@@ -145,14 +149,15 @@ static void bars(PDGOPFramebuffer *fb, uint8_t *base)
 
 int main(int argc, char **argv)
 {
-    int reps = 4, hold = 0, opt, failures = 0;
+    int reps = 4, hold = 0, bandsecs = 0, opt, failures = 0;
     const char *defaults[] = {"default", "wc"};
     const char **modes = defaults;
     int nmodes = 2;
 
-    while ((opt = getopt(argc, argv, "r:H:")) != -1) {
+    while ((opt = getopt(argc, argv, "r:H:T:")) != -1) {
         if (opt == 'r') reps = atoi(optarg);
         else if (opt == 'H') hold = atoi(optarg);
+        else if (opt == 'T') bandsecs = atoi(optarg);
         else { fprintf(stderr, "usage: fb_cache_test [-r reps] [-H secs] [default|inhibit|wc|posted ...]\n"); return 2; }
     }
     if (optind < argc) {
@@ -217,6 +222,21 @@ int main(int argc, char **argv)
             printf("fb_cache_test: holding colour bars for %d s\n", hold);
             fflush(stdout);
             sleep(hold);
+        }
+        if (bandsecs > 0 && m == nmodes - 1) {
+            double t0 = now_s();
+            for (int i = 0; i < bandsecs && (uint32_t)(i * 8 + 8) <= fb.height; i++) {
+                uint32_t v = 0x00a50000u | (uint32_t)i;
+                for (uint32_t y = (uint32_t)i * 8; y < (uint32_t)i * 8 + 8; y++)
+                    store32((volatile uint32_t *)(vram + (size_t)y * fb.stride), fb.width, v);
+                uint32_t got = *(volatile uint32_t *)(vram + (size_t)i * 8 * fb.stride);
+                printf("fb_cache_test: band %d t=%.1fs offset 0x%zx wrote 0x%08x read 0x%08x%s\n",
+                       i, now_s() - t0, (size_t)i * 8 * fb.stride, v, got, got == v ? "" : " MISMATCH");
+                fflush(stdout);
+                if (got != v)
+                    failures++;
+                sleep(1);
+            }
         }
         free(ram);
         free(src);
