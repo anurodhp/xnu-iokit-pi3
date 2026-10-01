@@ -757,15 +757,6 @@ mkdir -p third_party
 #     FSNode/DBKit and the ddbd/fswatcher tools (build_gnustep_gworkspace.sh).
 #     libtiff 4.7.1 (DAR-390): gitlab.com/libtiff/libtiff tag v4.7.1,
 #     unmodified; gnustep-gui requires it. Apple publishes no libtiff.
-#     gnustep-eau-theme (DAR-461): our fork anurodhp/gershwin-eau-theme
-#     branch iokit-port, off gershwin-desktop/gershwin-eau-theme main
-#     3d741fbc (2026-09-30, LGPL-2.1), the Mac-like Eau theme. The original
-#     Savannah plugins/themes/Eau is on no GitHub mirror and savannah's
-#     viewvc/svn returned 503 to scripts. Fork changes: no NSRegularExpression
-#     (our base is --disable-icu), GWDialog categories via class_addMethod
-#     (GWDialog is in the GWorkspace app, not linkable), -O2 (ARC block retains
-#     crash here), EAU_NO_TEST guard.
-#     build_gnustep_eau_theme.sh.
 #     gnustep-rik-theme (DAR-461): our fork anurodhp/rik.theme branch
 #     iokit-port, unmodified off AlessandroSangiuliano/rik.theme master
 #     fbb9944 (2026-09-16, LGPL-2.1), the maintained Rik.theme (the
@@ -903,7 +894,6 @@ libtiff|https://gitlab.com/libtiff/libtiff.git|v4.7.1|
 gnustep-gap|git@github.com:anurodhp/gap.git|iokit-port||https://github.com/gnustep/gap.git
 wmaker-rik-theme|https://github.com/gnustep/plugins-sessions-windowmaker.git|master|
 gnustep-gworkspace|git@github.com:anurodhp/apps-gworkspace.git|iokit-port||https://github.com/gnustep/apps-gworkspace.git
-gnustep-eau-theme|git@github.com:anurodhp/gershwin-eau-theme.git|iokit-port||https://github.com/gershwin-desktop/gershwin-eau-theme.git
 gnustep-rik-theme|git@github.com:anurodhp/rik.theme.git|iokit-port||https://github.com/AlessandroSangiuliano/rik.theme.git
 '
 

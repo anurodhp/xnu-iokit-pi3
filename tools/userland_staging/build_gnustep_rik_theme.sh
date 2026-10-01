@@ -6,8 +6,9 @@
 # itself the maintained descendant of mclarenlabs/nongio-zz rik.theme), and
 # installs it into libc_build/gnustep/root as
 # /usr/GNUstep/System/Library/Themes/Rik.theme. This is the default
-# (GSTheme = "Rik"; in x11_config/gnustep/GlobalDefaults.plist); to switch
-# to Eau use GSTheme = "Eau"; (build_gnustep_eau_theme.sh).
+# (GSTheme = "Rik"; in x11_config/gnustep/GlobalDefaults.plist). The fork's
+# one change: RikInfo.plist sets NSMenuInterfaceStyle = NSMacintoshInterfaceStyle
+# (horizontal top menu bar), because GSThemeDomain outranks GlobalDefaults.
 # Bundle recipe: gnustep_common.sh's gs_build_theme.
 # run build_gnustep_host_tools.sh and build_gnustep_back.sh first.
 cd "$(dirname "$0")"
