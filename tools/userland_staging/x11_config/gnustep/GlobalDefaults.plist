@@ -1,5 +1,6 @@
 {
     NSInterfaceStyleDefault = NSMacintoshInterfaceStyle;
+    GSTheme = "Eau";
     NSFont = "Inter-Regular";
     NSFontSize = 12;
     NSBoldFont = "Inter-Bold";

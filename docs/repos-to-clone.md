@@ -56,6 +56,7 @@ The main repo itself is `anurodhp/xnu-iokit-pi3`.
 | `gnustep-examples` | `anurodhp/tests-examples` | `iokit-port` | gnustep/tests-examples (master 46ef973, unmodified; pins the commit) |
 | `gnustep-gap` | `anurodhp/gap` | `iokit-port` | gnustep/gap (master 220860a9; Terminal Darwin build, DAR-394) |
 | `gnustep-gworkspace` | `anurodhp/apps-gworkspace` | `iokit-port` | gnustep/apps-gworkspace tag gworkspace-1_0_0 (14ea9f49); typed IMPs for objc4 DAR-392, longer fswatcher/ddbd start wait DAR-451 |
+| `gnustep-eau-theme` | `anurodhp/gershwin-eau-theme` | `iokit-port` | gershwin-desktop/gershwin-eau-theme main 3d741fbc (LGPL-2.1); no NSRegularExpression, GWDialog via class_addMethod, EAU_NO_TEST (DAR-461) |
 
 On-disk remote naming varies. Repos converted from patch files keep
 Apple as `origin` and the fork as `fork`, so push with `git push fork

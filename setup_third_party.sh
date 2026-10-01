@@ -757,6 +757,14 @@ mkdir -p third_party
 #     FSNode/DBKit and the ddbd/fswatcher tools (build_gnustep_gworkspace.sh).
 #     libtiff 4.7.1 (DAR-390): gitlab.com/libtiff/libtiff tag v4.7.1,
 #     unmodified; gnustep-gui requires it. Apple publishes no libtiff.
+#     gnustep-eau-theme (DAR-461): our fork anurodhp/gershwin-eau-theme
+#     branch iokit-port, off gershwin-desktop/gershwin-eau-theme main
+#     3d741fbc (2026-09-30, LGPL-2.1), the Mac-like Eau theme. The original
+#     Savannah plugins/themes/Eau is on no GitHub mirror and savannah's
+#     viewvc/svn returned 503 to scripts. Fork changes: no NSRegularExpression
+#     (our base is --disable-icu), GWDialog categories via class_addMethod
+#     (GWDialog is in the GWorkspace app, not linkable), EAU_NO_TEST guard.
+#     build_gnustep_eau_theme.sh.
 #   DejaVu fonts -- the upstream release tarball, not the git tag: the
 #       tag (version_2_37, the nixpkgs version) holds only FontForge .sfd
 #       sources, and building the TTFs needs fontforge + perl Font::TTF,
@@ -888,6 +896,7 @@ gnustep-examples|git@github.com:anurodhp/tests-examples.git|iokit-port||https://
 libtiff|https://gitlab.com/libtiff/libtiff.git|v4.7.1|
 gnustep-gap|git@github.com:anurodhp/gap.git|iokit-port||https://github.com/gnustep/gap.git
 gnustep-gworkspace|git@github.com:anurodhp/apps-gworkspace.git|iokit-port||https://github.com/gnustep/apps-gworkspace.git
+gnustep-eau-theme|git@github.com:anurodhp/gershwin-eau-theme.git|iokit-port||https://github.com/gershwin-desktop/gershwin-eau-theme.git
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch upstream_url; do
