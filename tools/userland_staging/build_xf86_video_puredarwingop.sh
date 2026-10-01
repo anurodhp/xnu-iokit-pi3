@@ -6,8 +6,10 @@
 # Source: PureDarwin's src/Userspace/xf86-video-puredarwingop/
 # puredarwingop_drv.c plus src/Libraries/PDGOP/PDGOP.c from the PureDarwin
 # fork pin (third_party/PureDarwin, branch iokit-launchd-port). The driver
-# carries one fork commit (4b9effb: reopen the framebuffer on server
-# regeneration); PDGOP.c is upstream. The clone is sparse, so the files are
+# and PDGOP.c carry fork commits (4b9effb: reopen the framebuffer on server
+# regeneration; DAR-439 QoS; DAR-460: VRAMCacheMode/ShadowFB/
+# ShadowUpdateDelay/ShadowStats options and PDGOPOpenWithCacheMode, see
+# docs/framebuffer-mapping.md). The clone is sparse, so the files are
 # extracted with `git show iokit-launchd-port:` (the pinned branch, not
 # whatever HEAD happens to be checked out).
 # The driver opens the framebuffer through PDGOP (IOFramebufferUserClient
