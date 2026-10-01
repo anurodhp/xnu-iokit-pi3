@@ -880,14 +880,14 @@ xdm|https://gitlab.freedesktop.org/xorg/app/xdm.git|xdm-1.1.17|
 libxcvt|https://gitlab.freedesktop.org/xorg/lib/libxcvt.git|libxcvt-0.1.3|
 wmaker|git@github.com:anurodhp/wmaker.git|iokit-port|
 libffi|https://github.com/apple-oss-distributions/libffi.git|libffi-27|
-gnustep-make|git@github.com:anurodhp/tools-make.git|dar-451-objc4-framework-classes||https://github.com/gnustep/tools-make.git
-gnustep-base|git@github.com:anurodhp/libs-base.git|dar-451-gworkspace||https://github.com/gnustep/libs-base.git
+gnustep-make|git@github.com:anurodhp/tools-make.git|iokit-port||https://github.com/gnustep/tools-make.git
+gnustep-base|git@github.com:anurodhp/libs-base.git|iokit-port||https://github.com/gnustep/libs-base.git
 gnustep-gui|git@github.com:anurodhp/libs-gui.git|iokit-port||https://github.com/gnustep/libs-gui.git
 gnustep-back|https://github.com/gnustep/libs-back.git|back-0_32_0|
 gnustep-examples|git@github.com:anurodhp/tests-examples.git|iokit-port||https://github.com/gnustep/tests-examples.git
 libtiff|https://gitlab.com/libtiff/libtiff.git|v4.7.1|
 gnustep-gap|git@github.com:anurodhp/gap.git|iokit-port||https://github.com/gnustep/gap.git
-gnustep-gworkspace|git@github.com:anurodhp/apps-gworkspace.git|dar-451-daemon-start-wait||https://github.com/gnustep/apps-gworkspace.git
+gnustep-gworkspace|git@github.com:anurodhp/apps-gworkspace.git|iokit-port||https://github.com/gnustep/apps-gworkspace.git
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch upstream_url; do
