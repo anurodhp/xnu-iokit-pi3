@@ -91,7 +91,7 @@ if [ "$MODE" = lat ]; then
         END { if (n) printf "LAT %d launches: call avg %.2f ms; start-to-child avg %.2f ms (min %.2f max %.2f)\n", n, sc/n, sd/n, mn, mx }'
     cp $FB/Xvfb_screen0 $HOME/sp_lat.xwd 2>/dev/null
     echo "== wmaker"; ps -o pid,pri,rss,time -p $WP
-    kill $MON; kill $WP; kill $XP; sleep 2; echo TESTEND; exit 0
+    kill $MON; kill $WP; kill $XP; sleep 2; sync; sync; echo TESTEND; exit 0
 fi
 
 # ---- e2e ----
