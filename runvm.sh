@@ -134,6 +134,10 @@
 # BCM2837 the kernel keeps only the boot CPU unless cpus=N is given).
 # Unset (the default): both off, every boot exactly as before. raspi3
 # always has four vCPUs, so -smp needs no change.
+#
+# QEMU_EXTRA_ARGS is appended to the QEMU command line verbatim, e.g.
+# QEMU_EXTRA_ARGS="-accel tcg,thread=single" to compare MTTCG (the default
+# on this host) with round-robin TCG.
 set -e
 cd "$(dirname "$0")"
 mkdir -p qemu
@@ -184,4 +188,5 @@ exec ./third_party/qemu-zhuowei/aarch64-softmmu/qemu-system-aarch64 -M "$QEMU_MA
   -drive "file=$SD_IMAGE,if=sd,format=raw" \
   $USB_DEVICES \
   -append "debug=0x8 kextlog=0xfff -noprogress -v -enable_kprintf_spam rd=$ROOT_DEV serial=3 cpu-factor=10 vm_compressor=0 $SMP_BOOT_ARGS $EXTRA_BOOT_ARGS" \
-  -monitor unix:qemu/mon.sock,server,nowait
+  -monitor unix:qemu/mon.sock,server,nowait \
+  $QEMU_EXTRA_ARGS
