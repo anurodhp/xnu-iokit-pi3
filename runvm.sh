@@ -126,9 +126,28 @@
 # OID_802_3_CURRENT_ADDRESS; only the CDC-ECM string is affected. Nothing
 # filters on it either - usbnet_receive() has no MAC filter and SLIRP learns
 # the guest's address from its ARP/DHCP traffic - so DHCP is unaffected.
+#
+# QEMU_SMP=N (DAR-455, N = 2..4): boot with cores 1..N-1 released. Adds
+# qemu-zhuowei's opt-in `xnu-smp=on` raspi3 machine property (cores 1-3
+# start in the spin-table stub at EL2, as the real Pi 3 firmware leaves
+# them, instead of being halted) and the kernel boot-arg cpus=N (on
+# BCM2837 the kernel keeps only the boot CPU unless cpus=N is given).
+# Unset (the default): both off, every boot exactly as before. raspi3
+# always has four vCPUs, so -smp needs no change.
 set -e
 cd "$(dirname "$0")"
 mkdir -p qemu
+
+QEMU_MACHINE="raspi3"
+SMP_BOOT_ARGS=""
+if [ -n "${QEMU_SMP:-}" ]; then
+  case "$QEMU_SMP" in
+    2|3|4) ;;
+    *) echo "error: QEMU_SMP must be 2, 3 or 4 (got '$QEMU_SMP')" >&2; exit 1 ;;
+  esac
+  QEMU_MACHINE="raspi3,xnu-smp=on"
+  SMP_BOOT_ARGS="cpus=$QEMU_SMP"
+fi
 
 SD_IMAGE="${SD_IMAGE:-qemu/hfs_root_test.img}"
 ROOT_DEV="${ROOT_DEV:-disk0s2}"
@@ -158,11 +177,11 @@ fi
 # starved a later boot badly enough to look like a boot regression (see
 # tools/boot_test.py's header on why concurrent QEMUs produce exactly that
 # false negative).
-exec ./third_party/qemu-zhuowei/aarch64-softmmu/qemu-system-aarch64 -M raspi3 -m 1024 -display "$QEMU_DISPLAY" \
+exec ./third_party/qemu-zhuowei/aarch64-softmmu/qemu-system-aarch64 -M "$QEMU_MACHINE" -m 1024 -display "$QEMU_DISPLAY" \
   -serial null -serial stdio \
   -kernel build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped \
   -dtb devicetrees/rpi3.dtb \
   -drive "file=$SD_IMAGE,if=sd,format=raw" \
   $USB_DEVICES \
-  -append "debug=0x8 kextlog=0xfff -noprogress -v -enable_kprintf_spam rd=$ROOT_DEV serial=3 cpu-factor=10 vm_compressor=0 $EXTRA_BOOT_ARGS" \
+  -append "debug=0x8 kextlog=0xfff -noprogress -v -enable_kprintf_spam rd=$ROOT_DEV serial=3 cpu-factor=10 vm_compressor=0 $SMP_BOOT_ARGS $EXTRA_BOOT_ARGS" \
   -monitor unix:qemu/mon.sock,server,nowait

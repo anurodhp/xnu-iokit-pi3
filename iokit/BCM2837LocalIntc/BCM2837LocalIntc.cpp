@@ -6,6 +6,10 @@
 #include <IOKit/IOCPU.h>
 #include <string.h>
 
+extern "C" {
+#include <machine/machine_routines.h>   // ml_get_cpu_count()
+}
+
 #define super IOInterruptController
 
 OSDefineMetaClassAndStructors(BCM2837LocalIntc, IOInterruptController);
@@ -35,6 +39,7 @@ BCM2837LocalIntc::init(OSDictionary *propTable)
 	fRegBase = NULL;
 	fLoggedUnexpectedPending = false;
 	fLastUnexpectedPending = 0;
+	fNumCores = 1;
 
 	vectors = (IOInterruptVector *)IOMalloc(kNumVectors * sizeof(IOInterruptVector));
 	if (vectors == NULL) {
@@ -88,13 +93,14 @@ BCM2837LocalIntc::setIPIHandler(void (*handler)(void))
  * PE_cpu_signal() (osfmk/arm/cpu_common.c:477), so no barrier is needed here.
  */
 bool
-BCM2837LocalIntc::sendIPI(void)
+BCM2837LocalIntc::sendIPI(UInt32 core)
 {
 	BCM2837LocalIntc *me = sInstance;
-	if (me == NULL) {
+	if (me == NULL || core >= me->fNumCores) {
 		return false;
 	}
-	me->fRegBase[kRegMailbox0Set0] = 1;
+	// DAR-455: the target core's mailbox 0 (core 0 only, before).
+	me->fRegBase[kRegMailbox0Set0 + core * kCoreStrideMbox] = 1;
 	return true;
 }
 
@@ -116,7 +122,8 @@ BCM2837LocalIntc::start(IOService *provider)
 	// before trusting it - "local-intc"'s own reg property declares 0x100
 	// bytes, so this should always pass; catches a misconfigured DT rather
 	// than a runtime condition.
-	if (fRegMap->getLength() < (kRegMailbox0Clr0 * sizeof(uint32_t)) + sizeof(uint32_t)) {
+	if (fRegMap->getLength() < ((kRegMailbox0Clr0 + (kMaxCores - 1) * kCoreStrideMbox) *
+	    sizeof(uint32_t)) + sizeof(uint32_t)) {
 		IOLog("BCM2837LocalIntc: \"local-intc\" register mapping too small (%llu bytes)\n",
 		    (unsigned long long)fRegMap->getLength());
 		fRegMap->release();
@@ -153,13 +160,25 @@ BCM2837LocalIntc::start(IOService *provider)
 	// passthrough bit, so IRQ-routing a timer comparator here would hit
 	// the exact "unhandled pending bit, no way to clear it" spin
 	// backlog item 2 just added a diagnostic latch for).
-	fRegBase[kRegTimerControl0] = 0xF0;
+	// DAR-455: every core this controller serves. osfmk/arm64/start.s's
+	// BCM2837 block already writes the same value for each core as it
+	// starts; this is the same explicit, don't-trust-firmware write.
+	fNumCores = ml_get_cpu_count();
+	if (fNumCores < 1 || fNumCores > kMaxCores) {
+		IOLog("BCM2837LocalIntc: topology reports %u CPUs\n", (unsigned)fNumCores);
+		return false;
+	}
+	for (UInt32 core = 0; core < fNumCores; core++) {
+		fRegBase[kRegTimerControl0 + core * kCoreStrideCtl] = 0xF0;
+	}
 
-	// DAR-375: core 0 mailbox 0 as its IPI. Clear anything stale, then
-	// enable its IRQ (bit 0; FIQ bits 4-7 left clear). Covered by the
+	// DAR-375: each core's mailbox 0 is its IPI. Clear anything stale now;
+	// the IRQ enable (bit 0; FIQ bits 4-7 left clear) is set below, once a
+	// handler is registered for every core's IRQ line. Covered by the
 	// mapping-size check above.
-	fRegBase[kRegMailbox0Clr0] = 0xFFFFFFFF;
-	fRegBase[kRegMailboxControl0] = 0x1;
+	for (UInt32 core = 0; core < fNumCores; core++) {
+		fRegBase[kRegMailbox0Clr0 + core * kCoreStrideMbox] = 0xFFFFFFFF;
+	}
 
 	const OSSymbol *controllerName = IODTInterruptControllerName(provider);
 	if (controllerName == NULL) {
@@ -196,24 +215,39 @@ BCM2837LocalIntc::start(IOService *provider)
 	}
 	IOInterruptHandler cpuICHandler = OSMemberFunctionCast(
 		IOInterruptHandler, this, &BCM2837LocalIntc::handleInterrupt);
-	IOReturn err = cpuIC->registerInterrupt(provider, 0, this, cpuICHandler, NULL);
-	if (err != kIOReturnSuccess) {
-		IOLog("BCM2837LocalIntc: registerInterrupt against IOPlatformInterruptController failed: %#x\n", err);
-		controllerName->release();
-		return false;
+	// DAR-455: one source per CPU (the source number is the CPU number,
+	// iokit/Kernel/IOCPU.cpp:640, :744-760). The first call blocks until
+	// every CPU has enabled itself (IOCPU.cpp:690-700).
+	for (UInt32 cpu = 0; cpu < fNumCores; cpu++) {
+		IOReturn err = cpuIC->registerInterrupt(provider, (int)cpu, this, cpuICHandler, NULL);
+		if (err != kIOReturnSuccess) {
+			IOLog("BCM2837LocalIntc: registerInterrupt(cpu%u) against IOPlatformInterruptController failed: %#x\n",
+			    (unsigned)cpu, err);
+			controllerName->release();
+			return false;
+		}
+		cpuIC->enableInterrupt(provider, (int)cpu);
 	}
-	cpuIC->enableInterrupt(provider, 0);
+
+	// Every core's IRQ now has a handler: enable each core's mailbox 0.
+	for (UInt32 core = 0; core < fNumCores; core++) {
+		fRegBase[kRegMailboxControl0 + core * kCoreStrideCtl] = 0x1;
+	}
 
 	getPlatform()->registerInterruptController((OSSymbol *)controllerName, this);
 
-	IOLog("BCM2837LocalIntc: started, base=%p, registered as \"%s\"\n",
-	    (void *)fRegBase, controllerName->getCStringNoCopy());
+	IOLog("BCM2837LocalIntc: started, base=%p, registered as \"%s\", %u core(s)\n",
+	    (void *)fRegBase, controllerName->getCStringNoCopy(), (unsigned)fNumCores);
 	controllerName->release();
 
-	// Live now: take IPIs, and deliver any signal posted before we were.
+	// Live now: take IPIs, and deliver any signal posted before we were -
+	// including each CPU's own SIGPdisabled-clearing self-IPI
+	// (BCM2837CPU::initCPU()), which was a no-op until now.
 	OSMemoryBarrier();
 	sInstance = this;
-	sendIPI();
+	for (UInt32 core = 0; core < fNumCores; core++) {
+		sendIPI(core);
+	}
 
 	return true;
 }
@@ -223,7 +257,9 @@ BCM2837LocalIntc::stop(IOService *provider)
 {
 	// No more IPIs through a mapping that is about to go away.
 	if (sInstance == this) {
-		fRegBase[kRegMailboxControl0] = 0;
+		for (UInt32 core = 0; core < fNumCores; core++) {
+			fRegBase[kRegMailboxControl0 + core * kCoreStrideCtl] = 0;
+		}
 		sInstance = NULL;
 		OSMemoryBarrier();
 	}
@@ -270,7 +306,11 @@ BCM2837LocalIntc::getInterruptHandlerAddress(void)
 IOReturn
 BCM2837LocalIntc::handleInterrupt(void * /*refCon*/, IOService * /*nub*/, int /*source*/)
 {
-	uint32_t pending0 = fRegBase[kRegIRQPending0];
+	// DAR-455: this core's own pending register and mailbox. IRQs are
+	// per core (QA7 core n IRQ source at 0x60 + 4n), and this handler runs
+	// on whichever core took the IRQ. MPIDR_EL1 Aff0 is the core.
+	UInt32 core = (UInt32)(__builtin_arm_rsr64("MPIDR_EL1") & 0x3);
+	uint32_t pending0 = fRegBase[kRegIRQPending0 + core * kCoreStrideCtl];
 
 	if (pending0 & (1U << kVectorMailbox0)) {
 		// DAR-375 IPI. Acknowledge before running the handler, so a signal
@@ -278,7 +318,7 @@ BCM2837LocalIntc::handleInterrupt(void * /*refCon*/, IOService * /*nub*/, int /*
 		// (the same ordering sleh.c keeps for Apple's fast IPIs,
 		// osfmk/arm64/sleh.c:1833-1844).
 		// Write-1-to-clear: one bit is all this mailbox is ever used for.
-		fRegBase[kRegMailbox0Clr0] = 0xFFFFFFFF;
+		fRegBase[kRegMailbox0Clr0 + core * kCoreStrideMbox] = 0xFFFFFFFF;
 		__asm__ volatile ("dsb sy" ::: "memory");
 		void (*handler)(void) = sIPIHandler;
 		if (handler != NULL) {

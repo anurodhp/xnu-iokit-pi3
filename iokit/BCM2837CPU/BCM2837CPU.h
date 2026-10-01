@@ -55,6 +55,17 @@ private:
 	// it).
 	const OSSymbol *fCPUName;
 
+	// DAR-455. This CPU's MPIDR_EL1 Aff0 (DT "reg", 0-3) and logical
+	// number (DT nub "logical-cpu-id"). Equal on this board, but kept
+	// apart because the mailbox/spin-table registers are indexed by the
+	// physical core and XNU's cpu_data by the logical one.
+	UInt32 fPhysID;
+	UInt32 fLogicalID;
+
+	// DAR-455: secondary-core bring-up, run on the boot CPU from start().
+	bool startSecondary(void);
+	void registerWithMach(void);
+
 public:
 	virtual IOService       *probe(IOService *provider, SInt32 *score) APPLE_KEXT_OVERRIDE;
 	virtual bool            start(IOService *provider) APPLE_KEXT_OVERRIDE;

@@ -67,8 +67,58 @@
 		#address-cells = <1>;
 		#size-cells = <0>;
 
+		/*
+		 * DAR-455. All four Cortex-A53 cores. `reg` is the core's
+		 * MPIDR_EL1 Aff0 (QEMU: hw/arm/bcm2836.c mp_affinity = core,
+		 * clusterid 0 for bcm2837; Linux/u-boot bcm2837.dtsi uses
+		 * reg = <0>..<3> for the same cores). XNU uses it as the CPU's
+		 * phys_id (osfmk/arm64/machine_routines.c ml_parse_cpu_topology)
+		 * and the reset vector finds a waking core's cpu_data by
+		 * comparing MPIDR & 0xff against it (osfmk/arm64/start.s).
+		 * cpu0's reg used to be 0xf00 (a BCM2836/Cortex-A7 MPIDR); it was
+		 * never consumed: the node had no device_type, so createNubs()
+		 * never looked it up, and BCM2837CPU hard-coded phys_id 0.
+		 *
+		 * device_type = "cpu" makes IODTPlatformExpert::createNubs()
+		 * attach "logical-cpu-id" to each nub the kernel's topology kept
+		 * (iokit/Kernel/IOPlatformExpert.cpp). On BCM2837 the kernel
+		 * keeps only cpu0 unless booted with cpus=N, so cpu1-3 are inert
+		 * by default.
+		 */
+		/*
+		 * Listed cpu3 -> cpu0 ON PURPOSE: dtc-AppleDeviceTree emits a
+		 * node's children in reverse source order (checked with
+		 * `strings rpi3.dtb`: the first build had "waiting" x3 before
+		 * "running"), and XNU numbers CPUs in blob order
+		 * (ml_parse_cpu_topology()). Reversed here, the blob holds cpu0
+		 * first, so logical CPU N is core N and the boot CPU is CPU 0.
+		 * In source order the first QEMU try gave the boot CPU logical
+		 * id 3.
+		 */
+		cpu3 {
+			device_type = "cpu";
+			reg = <0x3>;
+			cpu-id = <0x3>;
+			state = "waiting";
+		};
+
+		cpu2 {
+			device_type = "cpu";
+			reg = <0x2>;
+			cpu-id = <0x2>;
+			state = "waiting";
+		};
+
+		cpu1 {
+			device_type = "cpu";
+			reg = <0x1>;
+			cpu-id = <0x1>;
+			state = "waiting";
+		};
+
 		cpu0 {
-			reg = <0xf00>;
+			device_type = "cpu";
+			reg = <0x0>;
 			cpu-id = <0x0>;
 			state = "running";
 		};

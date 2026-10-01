@@ -592,6 +592,16 @@ BCM2837RegisterBuiltinPersonalities(void)
 	// this CPU, so sleh_irq() had nothing real to dispatch to. See
 	// BCM2837CPU.h for the full chain.
 	OSDictionary *cpu0 = makePersonality("IOPlatformDevice", "BCM2837CPU", "cpu0", -1);
+	// DAR-455: the secondary cores. BCM2837CPU::probe() only accepts a
+	// cpuN nub that IODTPlatformExpert::createNubs() gave a
+	// "logical-cpu-id", i.e. one ml_parse_cpu_topology() kept, which on
+	// BCM2837 means the kernel was booted with cpus=N (default 1). So
+	// these are inert on every default boot.
+	OSDictionary *cpuN[3] = {
+		makePersonality("IOPlatformDevice", "BCM2837CPU", "cpu1", -1),
+		makePersonality("IOPlatformDevice", "BCM2837CPU", "cpu2", -1),
+		makePersonality("IOPlatformDevice", "BCM2837CPU", "cpu3", -1),
+	};
 
 	/*
 	 * --- Real Apple AppleUSBCDCDriver (CDC-ECM) personalities ---
@@ -701,6 +711,12 @@ BCM2837RegisterBuiltinPersonalities(void)
 	if (cpu0 != NULL) {
 		personalities->setObject(cpu0);
 		cpu0->release();
+	}
+	for (unsigned i = 0; i < sizeof(cpuN) / sizeof(cpuN[0]); i++) {
+		if (cpuN[i] != NULL) {
+			personalities->setObject(cpuN[i]);
+			cpuN[i]->release();
+		}
 	}
 	if (cdcDevice != NULL) {
 		personalities->setObject(cdcDevice);

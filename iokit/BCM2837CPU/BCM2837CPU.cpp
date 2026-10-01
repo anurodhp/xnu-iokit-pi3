@@ -15,6 +15,19 @@
 extern "C" {
 #include <machine/machine_routines.h>
 #include <kern/cpu_number.h>
+#include <kern/clock.h>
+
+// DAR-455. processor_start() is defined at osfmk/kern/processor.c:721 and
+// declared for kernel callers only by the MIG-generated processor headers
+// (osfmk/mach/processor.defs), which IOKit does not include;
+// iokit/Kernel/IOCPU.cpp:309 calls it the same way. The secondary entry is
+// BCM2837-only code in osfmk/arm64/start.s.
+kern_return_t processor_start(processor_t processor);
+extern char bcm2837_secondary_entry[];
+// Defined at osfmk/arm64/machine_routines.c:1354; its prototype in
+// osfmk/arm/machine_routines.h:639-643 is visible only to
+// PEXPERT_KERNEL_PRIVATE/MACH_KERNEL_PRIVATE code, not IOKit.
+vm_offset_t ml_io_map(vm_offset_t phys_addr, vm_size_t size);
 }
 
 #define super IOCPU
@@ -27,6 +40,31 @@ OSDefineMetaClassAndStructors(BCM2837CPU, IOCPU);
 // (if trivially small) IOCPUInterruptController rather than special-casing
 // away the mechanism sleh_irq() actually depends on.
 static IOCPUInterruptController *sBCM2837CPUIC = NULL;
+
+/*
+ * DAR-455: number of CPUs the kernel's topology kept, i.e. the cpus=N
+ * boot-arg capped at the DT's cpu nodes (osfmk/arm64/machine_routines.c
+ * ml_parse_cpu_topology(); on BCM2837 the default is 1, see that file).
+ * Read once by the boot CPU before it sizes the interrupt controller.
+ */
+static UInt32 sNumCPUs = 1;
+
+/*
+ * DAR-455: the Pi 3 firmware's spin table. The built-in armstub8 parks
+ * cores 1-3 at EL2 in `wfe; ldr x4, [0xd8 + 8*core]; cbz x4, spin; br x4`
+ * (raspberrypi/tools armstubs/armstub8.S:149-161, table at :175-189);
+ * u-boot's own bcm2837.dtsi lists the same release addresses
+ * (third_party/u-boot/arch/arm/dts/bcm2837.dtsi:41-71). QEMU's raspi3
+ * models the same stub (hw/arm/raspi.c write_smpboot64()). Page 0 lies
+ * below XNU's phys_base (0x1004000 on the Pi, cmd/bootxnu.c:14-15,146),
+ * so XNU never hands it out as RAM; it is mapped here as device memory, so
+ * the write reaches DRAM for a core that reads it with caches off.
+ */
+enum {
+	kSpinTablePhys  = 0xd8,
+	kSpinTableSlots = 4,
+};
+static volatile uint64_t *sSpinTable = NULL;
 
 // Defensive name re-check (backlog item 13) - every other DT-matched
 // driver in this tree (BCM2837ArmIO, BCM2837InterruptController,
@@ -45,7 +83,15 @@ BCM2837CPU::probe(IOService *provider, SInt32 *score)
 		return NULL;
 	}
 	const char *name = provider->getName();
-	if (name == NULL || strcmp(name, "cpu0") != 0) {
+	if (name == NULL || strncmp(name, "cpu", 3) != 0 ||
+	    name[3] < '0' || name[3] > '3' || name[4] != '\0') {
+		return NULL;
+	}
+	// DAR-455: a secondary only if the kernel's topology kept it.
+	// IODTPlatformExpert::createNubs() sets "logical-cpu-id" on exactly
+	// those nubs (iokit/Kernel/IOPlatformExpert.cpp:1612-1632), so with
+	// the default cpus=1 cpu1-3 never match.
+	if (name[3] != '0' && provider->getProperty("logical-cpu-id") == NULL) {
 		return NULL;
 	}
 	return result;
@@ -58,14 +104,129 @@ BCM2837CPU::start(IOService *provider)
 		return false;
 	}
 
+	// DAR-455. Logical number from the nub (createNubs()), physical core
+	// from the DT "reg" (the core's MPIDR Aff0, devicetrees/rpi3.dts).
+	fLogicalID = 0;
+	OSNumber *logical = OSDynamicCast(OSNumber, provider->getProperty("logical-cpu-id"));
+	if (logical != NULL) {
+		fLogicalID = logical->unsigned32BitValue();
+	}
+	fPhysID = fLogicalID;
+	OSData *reg = OSDynamicCast(OSData, provider->getProperty("reg"));
+	if (reg != NULL && reg->getLength() >= sizeof(UInt32)) {
+		fPhysID = *(const UInt32 *)reg->getBytesNoCopy();
+	}
+	setCPUNumber(fLogicalID);
+
+	if (fLogicalID != (UInt32)ml_get_boot_cpu_number()) {
+		return startSecondary();
+	}
+
+	sNumCPUs = ml_get_cpu_count();
+	if (sNumCPUs < 1 || sNumCPUs > kSpinTableSlots) {
+		panic("BCM2837CPU: topology reports %u CPUs", (unsigned)sNumCPUs);
+	}
+
 	initCPU(true);
 
 	setCPUState(kIOCPUStateRunning);
 
-	IOLog("BCM2837CPU: started \"%s\"\n", provider->getName() ? provider->getName() : "?");
+	IOLog("BCM2837CPU: started \"%s\" (boot CPU, %u CPU(s) in topology)\n",
+	    provider->getName() ? provider->getName() : "?", (unsigned)sNumCPUs);
 
 	registerService();
 
+	return true;
+}
+
+/*
+ * DAR-455. ml_processor_register() for this CPU. For the boot CPU this runs
+ * from initCPU() (on the boot CPU, as before). For a secondary it runs from
+ * startSecondary() on the boot CPU, before the core exists, which is what
+ * Apple's own CPU bring-up does: register every topology CPU, then
+ * processor_start() it (iokit/Kernel/arm/AppleARMSMP.cpp:163-195).
+ */
+void
+BCM2837CPU::registerWithMach(void)
+{
+	ml_processor_info_t procInfo;
+	memset(&procInfo, 0, sizeof(procInfo));
+	procInfo.cpu_id = (cpu_id_t)this;
+	procInfo.supports_nap = FALSE;
+	procInfo.log_id = fLogicalID;
+	// cpu_data->cpu_phys_id: what the reset vector compares MPIDR_EL1 &
+	// 0xff against to find a waking core's cpu_data
+	// (osfmk/arm64/start.s:184-205, machine_routines.c:1218).
+	procInfo.phys_id = fPhysID;
+	procInfo.cluster_id = 0;
+	procInfo.cluster_type = CLUSTER_TYPE_SMP;
+
+	processor_t theProcessor = NULL;
+	ipi_handler_t ipiHandler = NULL;
+	perfmon_interrupt_handler_func pmiHandler = NULL;
+
+	kern_return_t kr = ml_processor_register(&procInfo, &theProcessor, &ipiHandler, &pmiHandler);
+	if (kr != KERN_SUCCESS) {
+		// P0 backlog item 0 companion fix: this CPU never becomes enabled,
+		// so the whole interrupt controller chain would hang forever
+		// downstream instead of diagnosably failing here.
+		panic("BCM2837CPU: ml_processor_register(cpu%u) failed: %d", (unsigned)fLogicalID, kr);
+	}
+
+	machProcessor = theProcessor;
+	ipi_handler = ipiHandler;
+}
+
+/*
+ * DAR-455. Bring up a secondary core. Runs on the boot CPU, on this nub's
+ * matching thread.
+ */
+bool
+BCM2837CPU::startSecondary(void)
+{
+	// The boot CPU's interrupt controller must exist before this core can
+	// enable itself in initCPU(). The boot CPU publishes it only after it
+	// is itself enabled (initCPU(true) below), and this lookup blocks
+	// until then (IOPlatformExpert::lookUpInterruptController() sleeps
+	// until the name is registered).
+	IOInterruptController *ic =
+	    getPlatform()->lookUpInterruptController((OSSymbol *)gPlatformInterruptControllerName);
+	if (ic == NULL || ic != sBCM2837CPUIC) {
+		IOLog("BCM2837CPU: cpu%u: no BCM2837 CPU interrupt controller, not starting\n",
+		    (unsigned)fLogicalID);
+		return false;
+	}
+
+	registerWithMach();
+	setCPUState(kIOCPUStateStopped);
+	registerService();
+
+	// processor_start() -> cpu_start() (sets cpu_reset_handler =
+	// start_cpu, cleans the cpu_data to PoC) -> PE_cpu_start() ->
+	// startCPU() below (osfmk/kern/processor.c:721-850,
+	// osfmk/arm64/cpu.c:815-880, iokit/Kernel/IOCPU.cpp:90-99).
+	kern_return_t kr = processor_start(machProcessor);
+	if (kr != KERN_SUCCESS) {
+		IOLog("BCM2837CPU: cpu%u: processor_start failed: %d\n", (unsigned)fLogicalID, kr);
+		return false;
+	}
+
+	// Diagnostic only: the core sets kIOCPUStateRunning in initCPU(), on
+	// itself. Nothing waits for it otherwise (Apple's PE_cpu_start() does
+	// not either), but a core that never arrives would otherwise be
+	// silent until IOCPUInterruptController::registerInterrupt() blocks
+	// forever waiting for it.
+	uint64_t deadline;
+	clock_interval_to_deadline(2, kSecondScale, &deadline);
+	while (getCPUState() != kIOCPUStateRunning && mach_absolute_time() < deadline) {
+		IOSleep(10);
+	}
+	if (getCPUState() == kIOCPUStateRunning) {
+		IOLog("BCM2837CPU: cpu%u (core %u) is running\n", (unsigned)fLogicalID, (unsigned)fPhysID);
+	} else {
+		IOLog("BCM2837CPU: cpu%u (core %u) did NOT come up within 2 s\n",
+		    (unsigned)fLogicalID, (unsigned)fPhysID);
+	}
 	return true;
 }
 
@@ -78,6 +239,31 @@ BCM2837CPU::initCPU(bool boot)
 		// the way Apple does on every init - see the DAR-375 comment below.
 		// Latent here: this port never sleeps (quiesceCPU()).
 		signalCPU(this);
+		return;
+	}
+
+	// DAR-455: on a secondary core this runs on that core, from
+	// PE_cpu_machine_init() via cpu_machine_init() at splsched
+	// (osfmk/arm/cpu_common.c:650-666, osfmk/kern/startup.c:893-899). The
+	// boot CPU already created the controller and registered this CPU
+	// with Mach (startSecondary()); what must happen here, on the core
+	// itself, is enableCPUInterrupt(): it installs the IRQ handler through
+	// ml_install_interrupt_handler(), which writes getCpuDatap(), i.e. the
+	// calling core's cpu_data (osfmk/arm64/machine_routines.c:683-703,
+	// iokit/Kernel/IOCPU.cpp:640). No IOLog here: interrupts are off.
+	if (fLogicalID != (UInt32)ml_get_boot_cpu_number()) {
+		sBCM2837CPUIC->enableCPUInterrupt(this);
+		if (ipi_handler != NULL) {
+			BCM2837LocalIntc::setIPIHandler(ipi_handler);
+			// Self-IPI to clear SIGPdisabled, as on the boot CPU below. A
+			// no-op until BCM2837LocalIntc has started; its start() then
+			// signals every CPU once the mailboxes are live.
+			signalCPU(this);
+		}
+		setCPUState(kIOCPUStateRunning);
+		kprintf("BCM2837CPU: cpu%u (core %u) initCPU on core %llu\n",
+		    (unsigned)fLogicalID, (unsigned)fPhysID,
+		    (unsigned long long)(__builtin_arm_rsr64("MPIDR_EL1") & 0xff));
 		return;
 	}
 
@@ -112,9 +298,13 @@ BCM2837CPU::initCPU(bool boot)
 			// silent permanent hang.
 			panic("BCM2837CPU: failed to allocate IOCPUInterruptController");
 		}
-		// One source (this CPU's own incoming IRQ line), one CPU - see
-		// BCM2837CPU.h for why this needs to exist at all.
-		if (ic->initCPUInterruptController(1, 1) != kIOReturnSuccess) {
+		// One source per CPU (each CPU's own incoming IRQ line; the source
+		// number is the CPU number, IOCPU.cpp:640/744-760), one entry per
+		// CPU the topology kept (DAR-455; 1 unless booted with cpus=N).
+		// registerInterrupt() then blocks until every one of them is
+		// enabled (IOCPU.cpp:690-700). See BCM2837CPU.h for why this needs
+		// to exist at all.
+		if (ic->initCPUInterruptController((int)sNumCPUs, (int)sNumCPUs) != kIOReturnSuccess) {
 			panic("BCM2837CPU: initCPUInterruptController failed");
 		}
 		ic->attach(this);
@@ -122,30 +312,7 @@ BCM2837CPU::initCPU(bool boot)
 		justCreatedIC = true;
 	}
 
-	ml_processor_info_t procInfo;
-	memset(&procInfo, 0, sizeof(procInfo));
-	procInfo.cpu_id = (cpu_id_t)this;
-	procInfo.supports_nap = FALSE;
-	procInfo.log_id = 0;
-	procInfo.phys_id = 0;
-	procInfo.cluster_id = 0;
-	procInfo.cluster_type = CLUSTER_TYPE_SMP;
-
-	processor_t theProcessor = NULL;
-	ipi_handler_t ipiHandler = NULL;
-	perfmon_interrupt_handler_func pmiHandler = NULL;
-
-	kern_return_t kr = ml_processor_register(&procInfo, &theProcessor, &ipiHandler, &pmiHandler);
-	if (kr != KERN_SUCCESS) {
-		// P0 backlog item 0 companion fix - see the matching comment above,
-		// same reasoning: this CPU never becomes enabled, so the whole
-		// interrupt controller chain hangs forever downstream instead of
-		// diagnosably failing here.
-		panic("BCM2837CPU: ml_processor_register failed: %d", kr);
-	}
-
-	machProcessor = theProcessor;
-	ipi_handler = ipiHandler;
+	registerWithMach();
 
 	sBCM2837CPUIC->enableCPUInterrupt(this);
 
@@ -219,8 +386,8 @@ BCM2837CPU::quiesceCPU(void)
 	// have fallen straight into that panic.
 	//
 	// UNEXERCISED on this platform, and a QEMU boot cannot change that:
-	// this port registers exactly one IOCPU, never takes a processor
-	// offline, and never sleeps the kernel (PE_halt_restart is still
+	// this port registers one IOCPU unless booted with cpus=N (DAR-455),
+	// never takes a processor offline, and never sleeps the kernel (PE_halt_restart is still
 	// NULL here - iokit/Kernel/IOPlatformExpert.cpp:334). A boot test
 	// proves only that this still builds and still boots, never that the
 	// park below is correct.
@@ -245,8 +412,8 @@ BCM2837CPU::quiesceCPU(void)
 	// same thing about the IOCPU-driver path this build actually uses:
 	// "This calls IOCPURunPlatformQuiesceActions when sleeping the boot
 	// cpu" - i.e. on this path it is the IOCPU subclass, not the
-	// machine layer, that owes that call. probe() only ever matches
-	// "cpu0", so in practice this branch is always taken.
+	// machine layer, that owes that call. On a default (cpus=1) boot
+	// only cpu0 exists, so in practice this branch is always taken.
 	if (getCPUNumber() == (UInt32)master_cpu) {
 		IOCPURunPlatformQuiesceActions();
 	}
@@ -298,13 +465,66 @@ BCM2837CPU::quiesceCPU(void)
 kern_return_t
 BCM2837CPU::startCPU(vm_offset_t /*start_paddr*/, vm_offset_t /*arg_paddr*/)
 {
-	// Secondary cores are parked below IOKit entirely (see project
-	// memory: QEMU-side SMP-parking fix) - this project has no real
-	// mechanism to bring one up from here, and nothing should be asking
-	// to (we only ever register one IOCPU). Fail loudly rather than
-	// silently pretending to succeed.
-	IOLog("BCM2837CPU: startCPU called but not supported (single-core boot)\n");
-	return KERN_FAILURE;
+	/*
+	 * DAR-455. Release this core from the firmware's spin table. Reached
+	 * from processor_start() -> cpu_start() -> PE_cpu_start() on the boot
+	 * CPU, after cpu_start() has pointed this core's cpu_reset_handler at
+	 * start_cpu and cleaned its cpu_data to PoC (osfmk/arm64/cpu.c
+	 * :815-880). Like Apple's PE_cpu_start() (AppleARMSMP.cpp:207-217) it
+	 * ignores the start/arg addresses (cpu_start() passes NULL): the core
+	 * enters at bcm2837_secondary_entry (osfmk/arm64/start.s), which drops
+	 * EL2 -> EL1 if needed and continues into LowResetVectorBase, the
+	 * same reset path an Apple core takes.
+	 */
+	if (fLogicalID == (UInt32)ml_get_boot_cpu_number()) {
+		return KERN_SUCCESS;    // cpu_start() never calls this for itself
+	}
+	if (fPhysID == 0 || fPhysID >= kSpinTableSlots) {
+		IOLog("BCM2837CPU: startCPU: core %u has no spin-table slot\n", (unsigned)fPhysID);
+		return KERN_FAILURE;
+	}
+
+	if (sSpinTable == NULL) {
+		// Page 0 holds the stub and the table; map it once, as device
+		// memory, so neither our write nor our reads go through a cache.
+		// Not IODeviceMemory: IOKit asserts a mapping's first physical
+		// address is non-zero (iokit/Kernel/IOMemoryDescriptor.cpp:5013,
+		// a panic on the first QEMU try). ml_io_map() maps it VM_WIMG_IO
+		// (device memory) through pmap_map(), which takes page 0 like any
+		// other (osfmk/arm64/machine_routines.c:1354-1359,
+		// osfmk/arm/pmap.c:4100-4126). Kept for the life of the system.
+		vm_offset_t va = ml_io_map(0, PAGE_SIZE);
+		if (va == 0) {
+			IOLog("BCM2837CPU: startCPU: cannot map the spin-table page\n");
+			return KERN_FAILURE;
+		}
+		sSpinTable = (volatile uint64_t *)(va + kSpinTablePhys);
+		// Diagnostic for the real Pi: the first words of the firmware stub
+		// (armstub8.S:98 onwards) and the table as we found it.
+		volatile uint32_t *stub = (volatile uint32_t *)va;
+		IOLog("BCM2837CPU: spin table page: stub %08x %08x %08x %08x, "
+		    "slots %llx %llx %llx %llx\n",
+		    stub[0], stub[1], stub[2], stub[3],
+		    (unsigned long long)sSpinTable[0], (unsigned long long)sSpinTable[1],
+		    (unsigned long long)sSpinTable[2], (unsigned long long)sSpinTable[3]);
+	}
+
+	if (sSpinTable[fPhysID] != 0) {
+		// The stub would already have taken a non-zero value, so the core
+		// is not sitting in the spin loop we know how to release.
+		IOLog("BCM2837CPU: startCPU: core %u spin slot already %llx, not releasing\n",
+		    (unsigned)fPhysID, (unsigned long long)sSpinTable[fPhysID]);
+		return KERN_FAILURE;
+	}
+
+	uint64_t entry = (uint64_t)ml_static_vtop((vm_offset_t)bcm2837_secondary_entry);
+	IOLog("BCM2837CPU: releasing core %u at PA 0x%llx\n", (unsigned)fPhysID,
+	    (unsigned long long)entry);
+	sSpinTable[fPhysID] = entry;
+	// Store complete before the event that wakes the core's WFE.
+	__asm__ volatile ("dsb sy" ::: "memory");
+	__asm__ volatile ("sev");
+	return KERN_SUCCESS;
 }
 
 void
@@ -322,9 +542,11 @@ BCM2837CPU::haltCPU(void)
 	//
 	//  - Non-boot CPU (IOCPU.cpp:265): must actually go down; when the
 	//    system wakes, IOCPU.cpp:305 panics "Spurious wakeup of cpu %u"
-	//    if that CPU is still kIOCPUStateRunning. Unreachable here -
-	//    this port registers exactly one IOCPU (probe() matches only
-	//    "cpu0"), and startCPU() below refuses to bring a secondary up.
+	//    if that CPU is still kIOCPUStateRunning. Unreachable here:
+	//    nothing in this port ever sleeps the kernel. With cpus=N
+	//    (DAR-455) secondaries exist, and this would still only log and
+	//    return - the "Spurious wakeup" panic is the honest outcome for
+	//    an S2R this board cannot do.
 	//    Apple's equivalent for that case is processor_exit() (see
 	//    PE_cpu_halt(), iokit/Kernel/arm/AppleARMSMP.cpp:251-256) -
 	//    defined at osfmk/kern/processor.c:853 but declared only by the
@@ -374,7 +596,10 @@ BCM2837CPU::getCPUName(void)
 	// caller doesn't release, and getCPUName() has no documented "caller
 	// owns this" contract that would make repeated allocation correct.
 	if (fCPUName == NULL) {
-		fCPUName = OSSymbol::withCString("cpu0");
+		// DAR-455: "cpuN", the DT node this instance matched.
+		char name[8];
+		snprintf(name, sizeof(name), "cpu%u", (unsigned)fLogicalID);
+		fCPUName = OSSymbol::withCString(name);
 	}
 	return fCPUName;
 }
@@ -391,12 +616,11 @@ BCM2837CPU::free(void)
 
 /*
  * DAR-375. IOCPU::signalCPU() is a no-op (iokit/Kernel/IOCPU.cpp:460-463); a
- * real Apple CPU class sends an IPI. The only CPU this class runs is the boot
- * CPU (cpu1-3 are parked), so the only IPI it is ever asked for is one to
- * itself: cpu_signal_internal() has posted the signal bits and xcall
- * arguments and then called PE_cpu_signal() -> here
- * (osfmk/arm/cpu_common.c:429-498). Raise a real IPI through core 0's
- * mailbox 0 (BCM2837LocalIntc::sendIPI()). It is taken as an IRQ once this
+ * real Apple CPU class sends an IPI. cpu_signal_internal() has posted the
+ * signal bits and xcall arguments and then called PE_cpu_signal() -> here
+ * (osfmk/arm/cpu_common.c:429-498). Raise a real IPI through the target
+ * core's mailbox 0 (BCM2837LocalIntc::sendIPI()); on a default boot
+ * (cpus=1) that is always core 0 signalling itself, as before DAR-455. It is taken as an IRQ once this
  * CPU unmasks IRQs, and BCM2837LocalIntc runs the IPI handler from
  * interrupt context, as a real IPI would.
  *
@@ -410,8 +634,10 @@ BCM2837CPU::free(void)
 void
 BCM2837CPU::signalCPU(IOCPU *target)
 {
-	if (target != this) {
+	// DAR-455: any CPU, through the target core's own mailbox 0.
+	BCM2837CPU *cpu = OSDynamicCast(BCM2837CPU, target);
+	if (cpu == NULL) {
 		return;
 	}
-	BCM2837LocalIntc::sendIPI();
+	BCM2837LocalIntc::sendIPI(cpu->fPhysID);
 }

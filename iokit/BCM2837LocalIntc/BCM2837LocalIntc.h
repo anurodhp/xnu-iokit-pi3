@@ -87,6 +87,14 @@ private:
 		kRegMailbox0Set0    = 0x80 / sizeof(uint32_t),
 		kRegMailbox0Clr0    = 0xC0 / sizeof(uint32_t),
 
+		// DAR-455: per-core strides. Core n's timer control, mailbox
+		// control and IRQ pending registers are 4 bytes apart; its four
+		// mailboxes (write-set at 0x80, read/clear at 0xC0) are 16 bytes
+		// apart (QA7; QEMU hw/intc/bcm2836_control.c:22-26, :173-205).
+		kCoreStrideCtl   = 0x04 / sizeof(uint32_t),
+		kCoreStrideMbox  = 0x10 / sizeof(uint32_t),
+		kMaxCores        = 4,
+
 		kVectorMailbox0 = 4, // bit 4 of LOCAL_IRQ_PENDINGN(n) (QEMU: IRQ_MAILBOX0)
 		kVectorGPUIRQ = 8, // bit 8 of LOCAL_IRQ_PENDINGN(n) - real HW bit position
 	};
@@ -97,6 +105,10 @@ private:
 	static BCM2837LocalIntc *sInstance;
 	static void (*sIPIHandler)(void);
 
+	// DAR-455: how many cores (0..fNumCores-1) this controller serves,
+	// i.e. the CPUs the kernel's topology kept (1 unless cpus=N).
+	UInt32 fNumCores;
+
 public:
 	/*
 	 * DAR-375 IPI support. BCM2837CPU hands over its IPI handler at
@@ -106,7 +118,7 @@ public:
 	 * in the gap is delivered then.
 	 */
 	static void setIPIHandler(void (*handler)(void));
-	static bool sendIPI(void);
+	static bool sendIPI(UInt32 core);
 
 	virtual IOService *probe(IOService *provider, SInt32 *score) APPLE_KEXT_OVERRIDE;
 
