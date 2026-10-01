@@ -153,6 +153,9 @@ stores land, and that the driver's code paths work.
 - DAR-443 reproduces with fb_cache_test `-T` (one band per second): every
   band reads back correctly through the user mapping, but the monitor's
   `xp` of guest physical 0x3C100000+ shows only the first three bands
-  (the first three 16 KB pages, about 0-2 s); later bands are not in guest
-  physical memory, and the Xorg screendumps are black. So QEMU cannot show
-  X output; the Pi must be used for anything visual.
+  (the first three 16 KB pages, written in the first ~2 s; this run cannot
+  tell offset from time). In an earlier boot a screendump taken after the
+  band process had exited did show all 12 bands, so the stores may be
+  delayed rather than lost. The Xorg screendumps (`-retro`) are black.
+  Not pursued further: DAR-443 is canceled. QEMU cannot show X output;
+  use the Pi for anything visual.
