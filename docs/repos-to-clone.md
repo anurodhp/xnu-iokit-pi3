@@ -34,7 +34,7 @@ The main repo itself is `anurodhp/xnu-iokit-pi3`.
 | `dyld` | `anurodhp/dyld` | `xdm-greeter-fix` | apple-oss-distributions |
 | `Libc` | `anurodhp/Libc` | `iokit-port` | apple-oss-distributions |
 | `libdispatch` | `anurodhp/libdispatch` | `iokit-port` | apple-oss-distributions |
-| `wmaker` | `anurodhp/wmaker` | `iokit-port` | window-maker/wmaker 0.96.0 + wrlib NEON fast path (DAR-437) + kqueue WUtil input wait (DAR-431); no upstream remote is added, this fork is the only source |
+| `wmaker` | `anurodhp/wmaker` | `iokit-port` | **RETIRED 2026-10-02: not built or shipped, kept to revive** (`revive_wmaker.sh`). window-maker/wmaker 0.96.0 + wrlib NEON fast path (DAR-437) + kqueue WUtil input wait (DAR-431); no upstream remote is added, this fork is the only source |
 | `Libinfo` | `anurodhp/Libinfo` | `iokit-port` | apple-oss-distributions |
 | `libpthread` | `anurodhp/libpthread` | `iokit-port` | apple-oss-distributions |
 | `IOGraphics` | `anurodhp/IOGraphics` | `iokit-port` | apple-oss-distributions |

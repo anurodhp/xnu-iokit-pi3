@@ -893,6 +893,7 @@ libXpm|https://gitlab.freedesktop.org/xorg/lib/libxpm.git|libXpm-3.5.19|
 libXaw|https://gitlab.freedesktop.org/xorg/lib/libxaw.git|libXaw-1.0.16|
 xdm|https://gitlab.freedesktop.org/xorg/app/xdm.git|xdm-1.1.17|
 libxcvt|https://gitlab.freedesktop.org/xorg/lib/libxcvt.git|libxcvt-0.1.3|
+# wmaker is retired (2026-10-02): not built or shipped, fork and pin kept to revive it (revive_wmaker.sh).
 wmaker|git@github.com:anurodhp/wmaker.git|iokit-port|
 libffi|https://github.com/apple-oss-distributions/libffi.git|libffi-27|
 gnustep-make|git@github.com:anurodhp/tools-make.git|iokit-port||https://github.com/gnustep/tools-make.git

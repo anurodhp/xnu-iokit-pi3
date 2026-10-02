@@ -287,7 +287,8 @@ Milestones, in order:
    real test is on the Pi. Check Eau titlebars, move/resize, Alt-Tab, focus,
    and wmaker-only behaviour we rely on. Record WM RSS and start time
    against wmaker (DAR-412 tooling).
-5. **M4, decision point.** If M3 passes on hardware, make Gershwin the
+5. **M4, decision point. DONE 2026-10-02 (earlier than planned, user's call after the Pi test).** Gershwin is the only session: `Xsession` starts the WM + Terminal and execs GWorkspace; wmaker, libWUtil/libwraster/libWINGs and the wmaker-only test builds were renamed `revive_*.sh` (not built, not on the image); the `anurodhp/wmaker` fork and its pin stay.
+   Original scope: If M3 passes on hardware, make Gershwin the
    default and keep wmaker installed as the fallback session for one release.
    Remove wmaker (fork pin, `build_wmaker.sh`, `x11_config/wmaker`) only
    after that.

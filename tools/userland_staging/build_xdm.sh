@@ -10,9 +10,10 @@
 #   Library/LaunchDaemons/org.puredarwin.x11-session.plist
 #   var/lib/xdm
 # Prerequisites (read by gen_build_order.py): run build_libXaw.sh, build_libXpm.sh, build_libXft.sh, build_libXmu.sh, build_libXt.sh, build_libXext.sh, build_libX11.sh, build_libXrender.sh, build_libXau.sh, build_libXdmcp.sh, build_libinfo.sh, build_libresolv_dylib.sh, build_openpam_dylib.sh first.
-# The session it starts also needs build_xserver.sh (Xorg) and
-# build_wmaker.sh (wmaker, and the autostart that opens Terminal.app) run
-# before the image is made; neither is needed to build xdm itself.
+# The session it starts also needs build_xserver.sh (Xorg),
+# build_gnustep_windowmanager.sh and the GNUstep apps (Terminal, GWorkspace)
+# run before the image is made; none is needed to build xdm itself.
+# (Window Maker, revive_wmaker.sh, is retired.)
 # Toolchain, layout and helpers: x11_common.sh / fontstack_common.sh. As with
 # the other X11 ports, configure is not run:
 #   config: x11_config/xdm/config.h (each define cites configure.ac).

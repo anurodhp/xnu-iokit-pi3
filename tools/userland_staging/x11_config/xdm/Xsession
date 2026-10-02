@@ -6,10 +6,8 @@
 # be started as root by anything but a root login.
 #
 # It sets the GNUstep environment exactly as the old boot-time x11-session
-# script did, then execs the window manager: Window Maker by default (its
-# global autostart, /usr/X11/share/WindowMaker/autostart, opens Terminal.app),
-# or Gershwin's WindowManager when /etc/x11-session.wm says "gershwin"
-# (docs/gershwin-feasibility.md M3). A user's own ~/.xsession still wins.
+# script did, then starts the Gershwin desktop (docs/gershwin-feasibility.md).
+# A user's own ~/.xsession still wins.
 
 # xdm's default user PATH (DEF_USER_PATH) has /bin and /usr/bin; the full
 # session PATH is set below once the log is open.
@@ -25,7 +23,7 @@ export PATH
 # export it). Clients without XAUTHORITY read "$HOME/.Xauthority" of the
 # HOME they see (third_party/libXau/AuFileName.c:56-58), so once HOME
 # moves from "/" to /var/root they find no cookie: "Authorization required, but no authorization protocol
-# specified" and wmaker exits at once. The first login on a fresh card got
+# specified" and the window manager exits at once. The first login on a fresh card got
 # away with it only because no /.Xauthority existed yet: openFiles leaves
 # old == NULL and auth.c:1098-1099 then take the temp-file fallback, which
 # does export XAUTHORITY. Every later login finds the (emptied, by
@@ -38,7 +36,7 @@ fi
 
 # HOME: xdm sets it from the passwd entry. root's entry is "/" (no home
 # under /Users), so give root /var/root as before; any other user whose home
-# is missing or unwritable gets a private directory under /tmp so wmaker and
+# is missing or unwritable gets a private directory under /tmp so the WM and
 # GNUstep can write their state.
 case "$HOME" in
 /|"")
@@ -86,33 +84,24 @@ if [ -s "$startup" ]; then
     fi
 fi
 
-# Session choice: first word of /etc/x11-session.wm; missing or anything
-# other than "gershwin" means Window Maker.
-wm=wmaker
-[ -r /etc/x11-session.wm ] && read wm _ < /etc/x11-session.wm
-case "$wm" in
-gershwin)
-    GWM=/System/Library/CoreServices/Applications/WindowManager.app/WindowManager
-    GWS=/Applications/GWorkspace.app/GWorkspace
-    if [ -x "$GWM" ] && [ -x "$GWS" ]; then
-        # GWorkspace is the session leader, as in a GNUstep desktop session:
-        # its Logout command quits it, which ends this script and so the
-        # xdm session (there is no logout menu in the WM itself). The WM runs
-        # beside it, started first so the apps find it already managing the
-        # root; compositing is off by default (the WM's -ec turns it on).
-        "$GWM" &
-        sleep 3
-        T=/Applications/Terminal.app/Terminal
-        [ -x "$T" ] && "$T" &
-        exec "$GWS"
-    fi
-    if [ -x "$GWM" ]; then
-        # No GWorkspace on the image: the WM alone, Terminal as the autostart.
-        T=/Applications/Terminal.app/Terminal
-        [ -x "$T" ] && "$T" &
-        exec "$GWM"
-    fi
-    echo "Xsession: $GWM missing, falling back to wmaker"
-    ;;
-esac
-exec /usr/X11/bin/wmaker
+# The session is Gershwin's WindowManager with GWorkspace as session leader:
+# its Logout command quits it, which ends this script and so the xdm session
+# (the WM has no logout menu). The WM runs beside it, started first so the
+# apps find it already managing the root. Compositing is off by default (the
+# WM's -ec turns it on). Window Maker is retired (revive_wmaker.sh).
+GWM=/System/Library/CoreServices/Applications/WindowManager.app/WindowManager
+GWS=/Applications/GWorkspace.app/GWorkspace
+T=/Applications/Terminal.app/Terminal
+if [ ! -x "$GWM" ]; then
+    echo "Xsession: $GWM missing, nothing to run"
+    exit 1
+fi
+if [ -x "$GWS" ]; then
+    "$GWM" &
+    sleep 3
+    [ -x "$T" ] && "$T" &
+    exec "$GWS"
+fi
+# No GWorkspace on the image: the WM alone, with Terminal.
+[ -x "$T" ] && "$T" &
+exec "$GWM"
