@@ -1419,15 +1419,14 @@ CMD_LIST=(
     # this project has no opendirectoryd, same class of gap as nohup's
     # vprocmgr stub; ls.c's own real uuid_to_name() already has a correct
     # upstream fallback to plain uuid_unparse_upper() on failure);
-    # bash_readline_termcap_compat.c (real, already-proven honest
-    # "no termcap database" stub from the bash tier, reused verbatim --
-    # ls -G's tgetent()==1 color-setup branch is simply skipped, same as
-    # bash's own real readline fallback); strmode.c (real FreeBSD source,
+    # (no termcap stub any more: ls is built -DCOLORLS and links the
+    # real libncurses.dylib for tgetent/tgetstr/tputs/tgoto -- see the
+    # `ls)` cmd_cflags/extra_libs cases below); strmode.c (real FreeBSD source,
     # already vendored); humanize_number.c (real, unmodified FreeBSD
     # libutil source, curl-fetched above -- genuinely missing from this
     # checkout, not a libc gap); getbsize.c (real, already proven by du);
     # uuid/uuidsrc/unparse.c (real, already-vendored uuid_unparse_upper).
-    "ls:$FILE_CMDS/ls/ls.c:$FILE_CMDS/ls/print.c|$FILE_CMDS/ls/util.c|$FILE_CMDS/ls/cmp.c|$LIBC/posix1e/acl.c|$LIBC/posix1e/acl_entry.c|$LIBC/posix1e/acl_perm.c|$LIBC/posix1e/acl_flag.c|$LIBC/posix1e/acl_file.c|$LIBC/posix1e/acl_translate.c|$LIBC/gen/filesec.c|$LIBC/sys/statx_np.c|ls_acl_syscalls.c|ls_acl_pwgr_compat.c|ls_mbr_compat.c|bash_readline_termcap_compat.c|$LIBC/string/FreeBSD/strmode.c|$OUT/freebsd_extra/humanize_number.c|$LIBC/gen/FreeBSD/getbsize.c|$LIBC/uuid/uuidsrc/unparse.c|$LIBC/gen/get_compat.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/gen/strtofflags.c|mv_pwcache_compat.c|../libinfo_custom/libinfo_custom.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c"
+    "ls:$FILE_CMDS/ls/ls.c:$FILE_CMDS/ls/print.c|$FILE_CMDS/ls/util.c|$FILE_CMDS/ls/cmp.c|$LIBC/posix1e/acl.c|$LIBC/posix1e/acl_entry.c|$LIBC/posix1e/acl_perm.c|$LIBC/posix1e/acl_flag.c|$LIBC/posix1e/acl_file.c|$LIBC/posix1e/acl_translate.c|$LIBC/gen/filesec.c|$LIBC/sys/statx_np.c|ls_acl_syscalls.c|ls_acl_pwgr_compat.c|ls_mbr_compat.c|$LIBC/string/FreeBSD/strmode.c|$OUT/freebsd_extra/humanize_number.c|$LIBC/gen/FreeBSD/getbsize.c|$LIBC/uuid/uuidsrc/unparse.c|$LIBC/gen/get_compat.c|$LIBC/stdlib/FreeBSD/atoi.c|$LIBC/gen/strtofflags.c|mv_pwcache_compat.c|../libinfo_custom/libinfo_custom.c|$LIBC/gen/FreeBSD/time.c|ls_fenv_compat.c|$LIBC/stdtime/FreeBSD/localtime.c|$LIBC/stdtime/timezone_unix03.c|$LIBC/stdtime/FreeBSD/asctime.c|$LIBC/stdtime/FreeBSD/strftime.c|$LIBC/stdtime/FreeBSD/timelocal.c"
     # Block 4: chmod/chown, deliberately re-examined per the roadmap's own
     # note that "chmod needs real ACLs" was never actually verified for
     # the common mode-bit-only case -- turned out FALSE: real Apple
@@ -1855,12 +1854,19 @@ for spec in "${CMD_LIST[@]}"; do
             cmd_cflags="-include ios_prohibited_override.h"
             ;;
         ls)
-            # ls.c/print.c real `#include <termcap.h>`: reuse the real
-            # GNU termcap.h declaring header bash's own tier already
-            # vendors (third_party/bash/bash-3.2/lib/termcap/termcap.h --
-            # matches bash_readline_termcap_compat.c's real function
-            # definitions this command's own CMD_LIST extra list links
-            # in). print.c's real `#include <membershipPriv.h>` (for
+            # -DCOLORLS: Apple's real ls builds with it (file_cmds'
+            # ls target); without it `ls -G`/CLICOLOR hits ls.c's
+            # "#else fprintf(stderr, \"Color support not compiled in.\")"
+            # branch. ls.c/print.c's `#include <termcap.h>` under
+            # COLORLS resolves to ncurses' real checked-in
+            # third_party/ncurses/ncurses/include/termcap.h, matching
+            # the real libncurses.dylib this command links (extra_libs
+            # in the `ls)` link case below). That library's tgetent()
+            # reads the shipped /usr/share/terminfo tree (TERMINFO
+            # compiled in via ncurses_cfg.h) and maps the termcap names
+            # ls asks for (AF/AB/op/me/md) to terminfo setaf/setab/op/
+            # sgr0/bold; any tgetent() != 1 (TERM unset/unknown) just
+            # leaves f_color 0 -- same plain output. print.c's real `#include <membershipPriv.h>` (for
             # mbr_identifier_translate's declaration, ls_mbr_compat.c
             # supplies the honest stub body) needs real Apple
             # membership.h/membershipPriv.h/ntsid.h, vendored at
@@ -1873,7 +1879,7 @@ for spec in "${CMD_LIST[@]}"; do
             # the same header) upstream build-time knob is set, which
             # makes it use plain <stdint.h> instead -- a real supported
             # upstream code path, not a workaround.
-            cmd_cflags="-I ../../third_party/bash/bash-3.2/lib/termcap -I ../../third_party/Libinfo/membership.subproj -DHAVE_STDINT_H=1 -I ls_acl_compat_headers"
+            cmd_cflags="-DCOLORLS -I ../../third_party/ncurses/ncurses/include -I ../../third_party/Libinfo/membership.subproj -DHAVE_STDINT_H=1 -I ls_acl_compat_headers"
             ;;
         diff)
             # See the gnudiff_glue generation comment above (near
@@ -2242,7 +2248,7 @@ for spec in "${CMD_LIST[@]}"; do
             extra_libs="$OUT/system/libremovefile.dylib $OUT/system/libcopyfile.dylib $OUT/simple_obj/sys__fgetattrlist.o $OUT/simple_obj/sys__fsetattrlist.o $OUT/simple_obj/sys__dup.o"
             common_read_compat=""
             ;;
-        cp|mv|mktemp|du|chmod|ls)
+        cp|mv|mktemp|du|chmod)
             # Same real duplicate-symbol reasoning as rm|ln above
             # (libremovefile.a's removefile_syscalls.o already defines
             # plain read()) plus libcopyfile.a for real copyfile()/
@@ -2257,6 +2263,16 @@ for spec in "${CMD_LIST[@]}"; do
             # definition on the link line wins, archive members for an
             # already-resolved symbol are simply never pulled).
             extra_libs="$OUT/system/libremovefile.dylib $OUT/system/libcopyfile.dylib"
+            common_read_compat=""
+            ;;
+        ls)
+            # Same as cp|mv|... above, plus the real libncurses.dylib
+            # (owner of tgetent/tgetstr/tgoto/tputs and PC/UP/BC/ospeed)
+            # for -DCOLORLS -- replaces the old linked-in
+            # bash_readline_termcap_compat.c "no database" stub. Listed
+            # directly on the link line so every termcap bind names
+            # libncurses itself (DAR-217; checked by bind_target_audit.sh).
+            extra_libs="$OUT/system/libremovefile.dylib $OUT/system/libcopyfile.dylib $OUT/system/libncurses.dylib"
             common_read_compat=""
             ;;
         diff)
