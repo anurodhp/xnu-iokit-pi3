@@ -448,7 +448,7 @@ to load-finished on a fixed page set; scroll fps (frames counted in
 | 1 — dependency stack | GLib, libsoup3 (+psl, nghttp2, sqlite, brotli), OpenSSL 3 + glib-networking, CA bundle, HarfBuzz, libjpeg-turbo, libwebp, libgcrypt/gpg-error, libtasn1, libepoxy, libxkbcommon, libxml2 bump; each with a smoketest (e.g. a GIO `https://` fetch with cert validation on the Pi) | 3–5 weeks | `soup` HTTPS GET of a real site on the Pi with chain validation |
 | 2 — WPE headless | WPE 2.54 with the stripped option set (§1.1 list OFF), MacPorts-derived Darwin patches, EGL-optional SHM path; a tiny `wpe-snapshot` tool (C, custom WPEDisplay writing the SHM buffer to PNG) | 4–6 weeks | PNG of a fixed page set rendered on the Pi; WebProcess/NetworkProcess RSS; first-paint time |
 | 3 — GNUstep view | `WPEDisplayGNUstep` + `GSWebView` NSView (bitmap hand-off, input, GLib↔NSRunLoop glue) | 2–3 weeks | interactive page in an NSWindow under Window Maker; scroll fps; bytes/frame |
-| 4 — Browser.app | /Applications/Browser.app: tabs, address bar, back/forward/reload/stop, find, zoom, progress, downloads, history/bookmarks, TLS error sheet; Rik theme | 2–3 weeks | daily-use smoke list of sites |
+| 4 — Browser.app | /Applications/Browser.app: tabs, address bar, back/forward/reload/stop, find, zoom, progress, downloads, history/bookmarks, TLS error sheet; Eau theme | 2–3 weeks | daily-use smoke list of sites |
 | 5 — later | JIT experiment (MAP_JIT + entitlement gate patch), WOFF2/AVIF, memory tuning, security-update cadence | open | |
 
 **Total: ~3–5 months.** Host build cost: the JSC trial was **120.7 s wall,

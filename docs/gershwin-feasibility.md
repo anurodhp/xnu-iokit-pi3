@@ -33,9 +33,9 @@ Sources examined (shallow clones, scratchpad only), at these commits:
      libraries, plus xcb-util, xcb-util-wm (icccm) and xcb-util-cursor.
   3. The global menu (`Menu.app`) is not a WM feature. GNUstep apps
      register with it from inside the **Eau** theme (`Eau.m:115-262`,
-     `NSConnection` to `org.gnustep.Gershwin.MenuServer`). DAR-461 picked Rik
-     only, so with Rik a Mac-style global menu bar means porting that client
-     code into our Rik fork. Menu also hard-links libdbus.
+     `NSConnection` to `org.gnustep.Gershwin.MenuServer`). Eau is now our
+     default theme, so the client code is already on the image; what is
+     missing is Menu.app itself. Menu also hard-links libdbus.
 - **Effort:** the WM alone as a session option is about **medium** (roughly
   1-2 focused sessions plus one real-hardware pass). The full Gershwin
   session (WM, Menu, Workspace, session supervisor) is about **large**.
@@ -87,13 +87,13 @@ us.
 | Gershwin repo / component | What it is | Our current equivalent | Replace? |
 |---|---|---|---|
 | `gershwin-windowmanager` (`WindowManager.app`) | Reparenting X11 WM. ObjC/GNUstep app over XCB. Optional XRender compositor, Alt-Tab switcher, snapping, titlebars drawn by the active GSTheme | Window Maker 0.96 (anurodhp/wmaker `iokit-port`) | **Yes**, the subject of this study |
-| `gershwin-components/Menu` | Global menu-bar server: GNUstep menus over DO, GTK/Qt menus over DBusMenu, plus menu extras (clock, battery, volume, WLAN) | None. Rik and `NSMacintoshInterfaceStyle` draw a per-app top menu | Later. Needs Eau's client code or a Rik port, and a dbus stub |
+| `gershwin-components/Menu` | Global menu-bar server: GNUstep menus over DO, GTK/Qt menus over DBusMenu, plus menu extras (clock, battery, volume, WLAN) | None. Eau and `NSMacintoshInterfaceStyle` draw a per-app top menu | Later. Eau's client code is in place; needs a dbus stub |
 | `gershwin-workspace` (`Workspace.app`) | GWorkspace fork (~155k lines of `.m` against ~99k in GWorkspace 1.0): file viewer, Desktop and **Dock**, Spatial mode, DS_Store interop | GWorkspace 1.0 (anurodhp/apps-gworkspace) | Later, optional |
 | Window Maker dock/clip | (no separate Gershwin dock) | wmaker dock | Workspace's Desktop Dock covers it |
 | `gershwin-components/gershwin-session` | 372-line Foundation tool that supervises and restarts `Workspace Menu WindowManager` (uses `ps`, not `/proc`) | xdm `Xsession` exec of wmaker | Cheap to adopt when Menu/Workspace come |
 | `gershwin-components/LoginWindow` | GNUstep login greeter. Links `-lpam -lutil` | xdm 1.1.17 | **No**. Keep xdm (no PAM modules here, DAR-226) |
 | `gershwin-systempreferences` | GNUstep SystemPreferences fork | none | Optional app |
-| `gershwin-eau-theme` | Default Gershwin GSTheme; also the global-menu client | Rik (DAR-461) | Conflict, see section 4 |
+| `gershwin-eau-theme` | Default Gershwin GSTheme; also the global-menu client | Eau (anurodhp/gershwin-eau-theme, our default) | Already adopted, see section 4 |
 | `gershwin-terminal`, `gershwin-textedit` | Forks of the GAP Terminal and TextEdit | Terminal (gap), Ink | No need |
 | `gershwin-system`, `gershwin-assets` | `/System/Library` prefs, fonts.conf, `Gershwin.sh` session script, artwork | our x11_config, stage_gnustep_mac_layout.sh | Cherry-pick only |
 
@@ -155,7 +155,7 @@ What we have was checked against `setup_third_party.sh` and
 `libc_build/system/*.dylib`. Built today: libxcb, libxcb-shm, libxcb-render,
 libX11, libX11-xcb, libXext, libXrender, libXfixes, libXrandr, libXcursor,
 libXft, libXi, libXtst, cairo, pixman, libdispatch, libsystem_blocks
-(libclosure), objc4, gnustep-base/gui/back, Rik.
+(libclosure), objc4, gnustep-base/gui/back, Eau.
 
 | Need | Used by | Status here | Effort |
 |---|---|---|---|
@@ -212,20 +212,14 @@ libXft, libXi, libXtst, cairo, pixman, libdispatch, libsystem_blocks
   installs have to own that path. LoginWindow's install rule also `cd`s into
   `$(INSTALL_APPS_DIR)` without `DESTDIR`; we don't build it, but it is a
   hazard.
-- **Rik theme.** The WM draws titlebars through whatever GSTheme is active
-  (generic `drawWindowBorder:`), so Rik titlebars should just work. The
-  global menu is the conflict:
-  - Gershwin defaults to Eau (`gershwin-system/.../NSGlobalDomain.plist`,
-    `GSTheme = Eau`), and Eau carries the code that exports each app's menu
-    to Menu.app.
-  - Under Rik, Menu.app would show only its own items, and our
-    `NSInterfaceStyleDefault = NSMacintoshInterfaceStyle`
-    (`x11_config/gnustep/GlobalDefaults.plist`) would draw a second,
-    per-app bar on top.
-  - Options: port Eau's menu-client code (`Eau.m` ~150 lines plus
-    `EauMenu*Manager`) into anurodhp/rik.theme (medium), or revisit DAR-461.
-    Eau already built on our stack in 78ca220 before bb8d9a2 dropped it.
-    That is the user's call.
+- **Theme.** The WM draws titlebars through whatever GSTheme is active
+  (generic `drawWindowBorder:`), so Eau titlebars should just work. Eau is
+  our default GSTheme, as in Gershwin (`gershwin-system/.../NSGlobalDomain.plist`,
+  `GSTheme = Eau`), and it carries the code that exports each app's menu to
+  Menu.app. With Menu.app running, our `NSInterfaceStyleDefault =
+  NSMacintoshInterfaceStyle` (`x11_config/gnustep/GlobalDefaults.plist`)
+  per-app bar has to give way to the global one; check how Eau arbitrates
+  that when Menu.app is ported.
 - **Performance on a 4-core Pi 3 with ShadowFB.** Run with `-dc`. The WM
   process is single-threaded, like wmaker. Expect a slower WM start (a full
   GNUstep app launch) and a higher RSS. Nobody has measured either yet:
@@ -287,14 +281,14 @@ Milestones, in order:
 4. **M3, session choice (small).** Xsession picks `wmaker` (default) or
    `gershwin` (`WindowManager -dc` plus the Terminal/GWorkspace launch).
    Test on QEMU where possible; QEMU graphics are limited by DAR-443, so the
-   real test is on the Pi. Check Rik titlebars, move/resize, Alt-Tab, focus,
+   real test is on the Pi. Check Eau titlebars, move/resize, Alt-Tab, focus,
    and wmaker-only behaviour we rely on. Record WM RSS and start time
    against wmaker (DAR-412 tooling).
 5. **M4, decision point.** If M3 passes on hardware, make Gershwin the
    default and keep wmaker installed as the fallback session for one release.
-   Remove wmaker (fork pin, `build_wmaker.sh`, `x11_config/wmaker`, Rik
-   wmaker theme) only after that.
-6. **M5, optional (large).** Global menu (Rik menu-client port or Eau, plus
+   Remove wmaker (fork pin, `build_wmaker.sh`, `x11_config/wmaker`) only
+   after that.
+6. **M5, optional (large).** Global menu (Menu.app against Eau's client, plus
    a Menu fork with the dbus importers stubbed and `p_comm` →
    `kp_proc.p_comm`), `gershwin-session`, then Workspace as a GWorkspace
    replacement (libarchive dylib, redo of the DAR-392 objc4 fixes).
@@ -316,7 +310,7 @@ Milestones, in order:
 
 **What to keep of Window Maker.** The whole thing as an xdm session choice
 until M4 has held for a release. After that, nothing is load-bearing:
-GWorkspace's Dock replaces the wmaker dock, and the Rik GSTheme covers the
+GWorkspace's Dock replaces the wmaker dock, and the Eau GSTheme covers the
 look.
 
 ## 6. Host-only compile trial (macOS, scratchpad)
@@ -386,10 +380,10 @@ Steps:
    install to /System/Library/CoreServices/Applications.
 4. Xsession: choose wmaker (default) or `WindowManager -dc` with the
    Terminal/GWorkspace launch, via /etc/x11-session.wm or ~/.xsession.
-5. Real-Pi test with Rik titlebars: move/resize/focus/Alt-Tab, plus RSS and
+5. Real-Pi test with Eau titlebars: move/resize/focus/Alt-Tab, plus RSS and
    start time against wmaker (DAR-412 tooling).
 
-Out of scope: Menu.app global menu (needs Eau's menu client or a Rik port,
+Out of scope: Menu.app global menu (Eau's menu client is in place; needs Menu.app
 and a dbus stub), Workspace, LoginWindow (keep xdm), compositing on ShadowFB.
 
 Done when the Gershwin session works on real hardware, wmaker is still

@@ -6,10 +6,10 @@
 # viewvc/svn is not reachable by script), and installs it into
 # libc_build/gnustep/root as /usr/GNUstep/System/Library/Themes/Eau.theme
 # (/System/Library/Themes/Eau.theme on the image: stage_gnustep_mac_layout.sh).
-# Alternative theme (Rik is the default): GSTheme = "Eau"; in /etc/GNUstep/GlobalDefaults.plist
-# (tools/userland_staging/x11_config/gnustep/GlobalDefaults.plist), or per app:
-# GWorkspace -GSTheme Eau; for Terminal use `defaults write Terminal GSTheme Eau`
-# (Terminal passes its argv to the shell).
+# The default and only GNUstep theme: GSTheme = "Eau"; in /etc/GNUstep/GlobalDefaults.plist
+# (tools/userland_staging/x11_config/gnustep/GlobalDefaults.plist). EauInfo.plist
+# sets no NSMenuInterfaceStyle, so GlobalDefaults' NSInterfaceStyleDefault =
+# NSMacintoshInterfaceStyle applies (horizontal top menu bar; NSMenu+Eau.m).
 #
 # Blocks: Eau uses dispatch_async/dispatch_sync/dispatch_once with block
 # literals and two NSNotificationCenter usingBlock: observers; all reach
