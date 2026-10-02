@@ -987,14 +987,39 @@ BCM2837DWC2::haltChannel(uint32_t chan, uint32_t *hcintOut)
  * caller, which owns the multi-chunk loop and the sequence bit.
  */
 IOReturn
-BCM2837DWC2::transferChunk(uint32_t xferLen, bool isIn, uint32_t *actualLen, uint32_t *hcintOut)
+BCM2837DWC2::transferChunk(uint32_t xferLen, bool isIn, uint32_t *actualLen, uint32_t *hcintOut,
+    bool *timeoutHalted)
 {
 	*actualLen = 0;
+	if (timeoutHalted != NULL) {
+		*timeoutHalted = false;
+	}
 
 	uint32_t hcint = 0;
 	if (!waitForChannelSettled(kDWC2Channel, 2000, &hcint)) {
+		uint32_t hcchar = regRead(hcOffset(kDWC2Channel, kDWC2_HCCHAR));
 		IOLog("BCM2837DWC2: channel halt timeout (HCINT=%#x HCCHAR=%#x)\n",
-		    hcint, regRead(hcOffset(kDWC2Channel, kDWC2_HCCHAR)));
+		    hcint, hcchar);
+		/*
+		 * DAR-465: take a channel that is still enabled down before
+		 * returning, as the NAK path below does. Returning with CHEN
+		 * still set left the next transfer to be programmed into a
+		 * channel that never sees an enable edge - DAR-282's class (see
+		 * waitForChannelSettled()'s comment). Once it has halted, its
+		 * HCTSIZ is a halted channel's, so the caller may count the
+		 * packets that did move (*timeoutHalted). Not when it was
+		 * already disabled at the timeout (state unknown) or the halt
+		 * itself failed (haltChannel() then marks it wedged).
+		 */
+		if (hcchar & kHCCHAR_CHEN) {
+			uint32_t haltHcint = 0;
+			haltChannel(kDWC2Channel, &haltHcint);
+			hcint |= haltHcint;
+			if (timeoutHalted != NULL &&
+			    !(regRead(hcOffset(kDWC2Channel, kDWC2_HCCHAR)) & kHCCHAR_CHEN)) {
+				*timeoutHalted = true;
+			}
+		}
 		if (hcintOut != NULL) {
 			*hcintOut = hcint;
 		}
@@ -1301,6 +1326,7 @@ BCM2837DWC2::doTransfer(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
 
 		uint32_t actual = 0;
 		uint32_t hcint = 0;
+		bool timeoutHalted = false;
 
 		/*
 		 * XACTERR retry, bounded at 3 attempts total - the same Cerr=3
@@ -1367,7 +1393,7 @@ BCM2837DWC2::doTransfer(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
 
 			actual = 0;
 			hcint = 0;
-			ret = transferChunk(xferLen, isIn, &actual, &hcint);
+			ret = transferChunk(xferLen, isIn, &actual, &hcint, &timeoutHalted);
 
 			if (!(ret == kIOReturnIOError && (hcint & kHCINT_XACTERR))) {
 				break;
@@ -1459,10 +1485,12 @@ BCM2837DWC2::doTransfer(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
 		 * packets first. Count them and carry the PID forward, so the
 		 * caller's resume (doTransferRetrying(), or the UIM's next attempt
 		 * at xfer->done) starts at the first packet the device did NOT
-		 * take. kIOReturnTimeout is excluded: the channel never settled,
-		 * so its HCTSIZ is not a halted channel's.
+		 * take. A kIOReturnTimeout counts only if transferChunk() found
+		 * the channel still enabled and then halted it (timeoutHalted);
+		 * otherwise its HCTSIZ is not known to be a halted channel's.
 		 */
-		if (ret != kIOReturnSuccess && ret != kIOReturnTimeout && !doSplit) {
+		if (ret != kIOReturnSuccess && !doSplit &&
+		    (ret != kIOReturnTimeout || timeoutHalted)) {
 			carryPartialChunk(ep, pid, isIn, buffer, &done, xferLen, numPackets, hcint);
 		}
 

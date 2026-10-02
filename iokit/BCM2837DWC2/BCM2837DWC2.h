@@ -780,7 +780,10 @@ private:
 
 	// Wait out one already-armed chunk and decode the result. Takes no
 	// buffer or PID: doTransfer owns those and the multi-chunk loop.
-	IOReturn transferChunk(uint32_t xferLen, bool isIn, uint32_t *actualLen, uint32_t *hcintOut);
+	// *timeoutHalted (DAR-465): on kIOReturnTimeout, true if the channel was
+	// still enabled and has now been halted, so its HCTSIZ can be read.
+	IOReturn transferChunk(uint32_t xferLen, bool isIn, uint32_t *actualLen, uint32_t *hcintOut,
+	    bool *timeoutHalted = NULL);
 
 	// Decode a halted channel's HCINT into an IOReturn and the byte count.
 	// Shared by transferChunk() (channel 0) and the async path.
