@@ -271,6 +271,7 @@ private:
 		kIntStsTxe      = 0x00004000,
 		kIntStsTdfu     = 0x00002000,
 		kIntStsTdfo     = 0x00001000,
+		kIntStsRxdf     = 0x00000800, // RX Dropped Frame (smsc95xx.h:59)
 		kHwCfgSbp       = 0x00000100,
 
 		kMiiAddrBusy = 1U << 0,
@@ -351,19 +352,20 @@ private:
 	bool mdioWait(void);
 	bool mdioRead(uint8_t phyAddr, uint8_t regAddr, uint16_t *value);
 	bool mdioWrite(uint8_t phyAddr, uint8_t regAddr, uint16_t value);
-	bool resetChip(void);
+	bool resetChip(bool resetPhy = true);
 	// DAR-465: TX recovery after a send failed even past the transport's
 	// own clear-halt-and-retry. See outputPacket().
-	bool recoverTxPath(void);
-	bool recoverChip(void);
+	void logTxState(void);
+	bool recoverChip(bool full);
 	// DAR-465: MAC_CR full/half duplex and flow control from the negotiated
 	// link, as Linux smsc95xx_mac_update_fullduplex() does.
 	void applyDuplex(bool fullDuplex, uint16_t anar, uint16_t anlpar);
 	int                  fAppliedDuplex;  // -1 not applied since link-up/reset, 0 half, 1 full
 	uint32_t             fTxFailStreak;   // consecutive failed sends
-	uint32_t             fTxRecoveries;   // recoverTxPath() calls, for sampled logging
+	uint32_t             fTxRecoveries;   // logTxState() calls, for sampled logging
+	uint32_t             fRecoveriesInStreak; // recoverChip() calls in the current failure streak
 	uint64_t             fLastChipRecovery; // absolute time of the last recoverChip()
-	uint32_t             fChipRecoveryBackoffS; // current recoverChip() spacing: 5..60 s
+	uint32_t             fRecoveryBackoffS; // current recoverChip() spacing: 0, 1, 2 .. 60 s
 	bool                 fPromiscOn;      // last setPromiscuousMode(), re-applied after recoverChip()
 	bool                 fMulticastOn;    // last setMulticastMode(), likewise
 	bool programMACAddress(const IOEthernetAddress *addr);
