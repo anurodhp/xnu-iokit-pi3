@@ -32,7 +32,7 @@ SMSC9514FamilyTransport::SMSC9514FamilyTransport()
 	: fDevice(NULL), fBulkIn(NULL), fBulkOut(NULL), fRxMD(NULL), fTxMD(NULL),
 	  fLock(NULL), fTxLock(NULL), fRxQueued(false), fRxDone(false), fRxLen(0),
 	  fStopping(false), fRxStalled(false), fRxErrors(0),
-	  fTxStallEvents(0), fTxFailures(0)
+	  fTxStallEvents(0), fTxFailures(0), fTxZlps(0)
 {
 }
 
@@ -279,6 +279,36 @@ SMSC9514FamilyTransport::bulkOut(const void *buf, uint32_t len)
 			    "ClearPipeStall(true) %#x, %s %#x\n",
 			    timedOut ? "timed out" : "stalled", first, fTxStallEvents, len, clr,
 			    timedOut ? "not retried, returning" : "retry", ret);
+		}
+	}
+	/*
+	 * DAR-465: end every transfer with a short packet. A transfer whose
+	 * length is an exact multiple of the endpoint's max packet size (512 at
+	 * high speed: a 504- or 1016-byte frame plus the 8-byte TX_CMD_A/B)
+	 * otherwise ends on a full packet, and the device cannot tell where it
+	 * stops. Linux's smsc95xx asks usbnet for exactly this zero-length
+	 * packet: FLAG_SEND_ZLP (drivers/net/usb/smsc95xx.c:2013, v6.6), which
+	 * usbnet_start_xmit() turns into URB_ZERO_PACKET when
+	 * `length % dev->maxpacket == 0` (drivers/net/usb/usbnet.c:1399-1411).
+	 * This driver never sent one. HYPOTHESIS (DAR-313), from the first Pi
+	 * run: both wedges began with the device STALLing the third, short
+	 * packet of a 1522-byte transfer after accepting the first 1024 bytes,
+	 * which is what a device that merged the previous, unterminated
+	 * transfer into this one and rejected it at the next short packet
+	 * would do. BCM2837DWC2's DAR-465 OUT history line, logged at the
+	 * first STALL, shows whether the previous transfer needed a ZLP.
+	 */
+	if (ret == kIOReturnSuccess) {
+		UInt16 mps = fBulkOut->GetMaxPacketSize();
+		if (mps != 0 && (len % mps) == 0) {
+			IOReturn zret = fBulkOut->Write(fTxMD, kTxNoDataTimeoutMS,
+			    kTxCompletionTimeoutMS, (IOByteCount)0);
+			fTxZlps++;
+			if (zret != kIOReturnSuccess || fTxZlps <= 2) {
+				IOLog("SMSC9514FamilyTransport: DAR-465 ZLP #%u after a %u-byte "
+				    "bulk OUT (max packet %u): %#x\n", fTxZlps, len, mps, zret);
+			}
+			ret = zret;
 		}
 	}
 	IOLockUnlock(fTxLock);

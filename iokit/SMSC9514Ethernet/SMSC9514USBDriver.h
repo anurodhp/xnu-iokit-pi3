@@ -71,6 +71,7 @@ private:
 	// sampled logging.
 	uint32_t                  fTxStallEvents;
 	uint32_t                  fTxFailures;
+	uint32_t                  fTxZlps;     // zero-length packets sent (DAR-465)
 };
 
 class SMSC9514USBDriver : public IOService
