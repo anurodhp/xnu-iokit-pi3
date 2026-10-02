@@ -273,6 +273,7 @@ private:
 		kIntStsTdfo     = 0x00001000,
 		kIntStsRxdf     = 0x00000800, // RX Dropped Frame (smsc95xx.h:59)
 		kHwCfgSbp       = 0x00000100,
+		kAfcCfgDefault  = 0x00F830A1, // smsc95xx.h:137 AFC_CFG_DEFAULT
 
 		kMiiAddrBusy = 1U << 0,
 		kMiiAddrWrite = 1U << 1,

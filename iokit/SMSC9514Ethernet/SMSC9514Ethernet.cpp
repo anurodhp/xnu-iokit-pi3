@@ -247,6 +247,18 @@ SMSC9514Ethernet::resetChip(bool resetPhy)
 	// stack (IOEthernetInterface) re-applies whichever filters it needs
 	// once the interface actually comes up, so there is nothing for reset
 	// to pre-apply.
+	// DAR-465: flow control defaults, as Linux smsc95xx_reset() sets them
+	// ("Init Tx", drivers/net/usb/smsc95xx.c:1013-1018 at v6.6): FLOW = 0
+	// and AFC_CFG = AFC_CFG_DEFAULT (0x00F830A1, smsc95xx.h:133-137: high
+	// watermark 15.5 KB, low 3 KB, back-pressure ~350 us, flow control on
+	// any frame). This driver never wrote AFC_CFG, and Pi run 1 read it
+	// back as 0. applyDuplex() then adjusts its low nibble per link, as
+	// smsc95xx_phy_update_flowcontrol() does.
+	if (!fTransport->writeRegister(kRegFlow, 0) ||
+	    !fTransport->writeRegister(kRegAfcCfg, kAfcCfgDefault)) {
+		return false;
+	}
+
 	uint32_t macCr;
 	if (!fTransport->readRegister(kRegMacCr, &macCr)) {
 		return false;
