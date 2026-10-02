@@ -254,6 +254,7 @@ private:
 		kLedGpioCfgLnkLed = 0x00100000, // GPIO1 -> link/activity LED
 		kLedGpioCfgFdxLed = 0x00010000, // GPIO0 -> full-duplex/collision LED
 
+		kMacCrFdpx  = 1U << 20, // Full Duplex Mode (smsc95xx.h:215, MAC_CR_FDPX_)
 		kMacCrMcPas = 1U << 19, // Pass All Multicast
 		kMacCrPrmS  = 1U << 18, // Promiscuous Mode
 		kMacCrTxEn  = 1U << 3,  // MAC Transmitter Enable
@@ -352,6 +353,7 @@ private:
 	uint32_t             fTxFailStreak;   // consecutive failed sends
 	uint32_t             fTxRecoveries;   // recoverTxPath() calls, for sampled logging
 	uint64_t             fLastChipRecovery; // absolute time of the last recoverChip()
+	uint32_t             fChipRecoveryBackoffS; // current recoverChip() spacing: 5..60 s
 	bool                 fPromiscOn;      // last setPromiscuousMode(), re-applied after recoverChip()
 	bool                 fMulticastOn;    // last setMulticastMode(), likewise
 	bool programMACAddress(const IOEthernetAddress *addr);

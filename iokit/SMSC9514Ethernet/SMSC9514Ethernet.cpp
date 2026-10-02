@@ -39,6 +39,7 @@ SMSC9514Ethernet::init(OSDictionary *properties, SMSCUSBTransport *transport)
 	fTxFailStreak = 0;
 	fTxRecoveries = 0;
 	fLastChipRecovery = 0;
+	fChipRecoveryBackoffS = 0;
 	fPromiscOn = false;
 	fMulticastOn = false;
 	bzero(fMediumTable, sizeof(fMediumTable));
@@ -871,9 +872,11 @@ SMSC9514Ethernet::outputPacket(mbuf_t m, void * /*param*/)
 	 * Escalate instead of failing every frame from now on:
 	 *   1. restart the chip's TX path (TX_CFG stop, FIFO flush, clear the
 	 *      INT_STS TX error bits, TX_CFG on) and retry this frame - on the
-	 *      first failure of a streak and every 8th after it;
+	 *      first four failures of a streak and every 8th after that;
 	 *   2. after 32 consecutive failures, a full chip re-init
-	 *      (recoverChip()), at most once per 5 s.
+	 *      (recoverChip()), first after 5 s, then backing off 10, 20, 40,
+	 *      60 s (capped) while the streak lasts, so a permanently dead
+	 *      link does not flap and log forever.
 	 * Bounded and sampled-logged, so a dead device costs a few register
 	 * accesses per frame, not a console flood.
 	 */
@@ -883,13 +886,21 @@ SMSC9514Ethernet::outputPacket(mbuf_t m, void * /*param*/)
 		if (fTxFailStreak >= 32) {
 			uint64_t now = mach_absolute_time();
 			uint64_t gap;
-			nanoseconds_to_absolutetime(5ULL * NSEC_PER_SEC, &gap);
+			if (fChipRecoveryBackoffS == 0) {
+				fChipRecoveryBackoffS = 5;
+			}
+			nanoseconds_to_absolutetime((uint64_t)fChipRecoveryBackoffS * NSEC_PER_SEC, &gap);
 			if (fLastChipRecovery == 0 || now - fLastChipRecovery >= gap) {
+				if (fLastChipRecovery != 0) {
+					// This is a repeat within one failure streak.
+					fChipRecoveryBackoffS = (fChipRecoveryBackoffS >= 30) ? 60 :
+					    fChipRecoveryBackoffS * 2;
+				}
 				fLastChipRecovery = now;
 				recoverChip();
 				retried = true;
 			}
-		} else if (fTxFailStreak == 1 || (fTxFailStreak % 8) == 0) {
+		} else if (fTxFailStreak <= 4 || (fTxFailStreak % 8) == 0) {
 			recoverTxPath();
 			retried = true;
 		}
@@ -901,6 +912,8 @@ SMSC9514Ethernet::outputPacket(mbuf_t m, void * /*param*/)
 		IOLog("SMSC9514Ethernet: DAR-465 TX recovered after %u failed send(s)\n",
 		    fTxFailStreak);
 		fTxFailStreak = 0;
+		fLastChipRecovery = 0;
+		fChipRecoveryBackoffS = 0;
 	}
 
 	IOFree(buf, bufSize);
@@ -929,19 +942,21 @@ SMSC9514Ethernet::recoverTxPath(void)
 	if (fTransport == NULL) {
 		return false;
 	}
-	uint32_t intSts = 0, txCfg = 0, hwCfg = 0;
+	uint32_t intSts = 0, txCfg = 0, hwCfg = 0, macCr = 0;
 	bool readOK = fTransport->readRegister(kRegIntSts, &intSts) &&
 	    fTransport->readRegister(kRegTxCfg, &txCfg) &&
-	    fTransport->readRegister(kRegHwCfg, &hwCfg);
+	    fTransport->readRegister(kRegHwCfg, &hwCfg) &&
+	    fTransport->readRegister(kRegMacCr, &macCr);
 	fTxRecoveries++;
 	bool log = (fTxRecoveries <= 4 || (fTxRecoveries & (fTxRecoveries - 1)) == 0);
 	if (log) {
 		IOLog("SMSC9514Ethernet: DAR-465 TX recovery #%u (streak %u): %s INT_STS=%#x "
-		    "(TXE %u TDFU %u TDFO %u TX_STOP %u) TX_CFG=%#x HW_CFG=%#x (SBP %u)\n",
+		    "(TXE %u TDFU %u TDFO %u TX_STOP %u) TX_CFG=%#x HW_CFG=%#x (SBP %u) "
+		    "MAC_CR=%#x (FDPX %u)\n",
 		    fTxRecoveries, fTxFailStreak, readOK ? "" : "[register read FAILED]",
 		    intSts, !!(intSts & kIntStsTxe), !!(intSts & kIntStsTdfu),
 		    !!(intSts & kIntStsTdfo), !!(intSts & kIntStsTxStop), txCfg, hwCfg,
-		    !!(hwCfg & kHwCfgSbp));
+		    !!(hwCfg & kHwCfgSbp), macCr, !!(macCr & kMacCrFdpx));
 	}
 	if (!readOK) {
 		return false;
@@ -993,7 +1008,8 @@ bool
 SMSC9514Ethernet::recoverChip(void)
 {
 	IOLog("SMSC9514Ethernet: DAR-465 %u consecutive failed sends - re-initialising "
-	    "the chip\n", fTxFailStreak);
+	    "the chip (next attempt no sooner than %u s)\n", fTxFailStreak,
+	    fChipRecoveryBackoffS);
 	bool ok = resetChip() && programMACAddress(&fMACAddress);
 	if (ok && fMulticastOn) {
 		ok = (setMulticastMode(true) == kIOReturnSuccess);
