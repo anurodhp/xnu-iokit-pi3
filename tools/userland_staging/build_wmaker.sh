@@ -1,13 +1,4 @@
 #!/bin/bash
-# RETIRED 2026-10-02: Window Maker is no longer built or shipped. The
-# session is Gershwin's WindowManager (build_gnustep_windowmanager.sh +
-# GWorkspace, see docs/gershwin-feasibility.md). The fork
-# anurodhp/wmaker (iokit-port) and its setup_third_party.sh pin are kept so
-# this can come back. This file is named revive_* so gen_build_order.py does
-# not pick it up. To revive: rename it back to build_wmaker.sh (and the
-# revive_wutil_*/revive_wrlib_*/revive_x11_bench scripts that need its
-# libWUtil/libwraster), run it before build_xdm.sh, and restore the wmaker
-# branch in x11_config/xdm/Xsession.
 # Builds Window Maker 0.96.0 (third_party/wmaker, tag wmaker-0.96.0,
 # unmodified upstream window-maker/wmaker). DAR-424.
 #   libc_build/system/libwraster.dylib  (/usr/X11/lib/libwraster.6.dylib)

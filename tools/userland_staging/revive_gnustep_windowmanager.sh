@@ -1,4 +1,10 @@
 #!/bin/bash
+# OPT-IN, NOT BUILT BY DEFAULT (2026-10-02): the session is Window Maker; this
+# builds Gershwin's WindowManager only on request. Named revive_* so
+# gen_build_order.py skips it. It installs into libc_build/gnustep/root, which
+# inject_into_sd_image.sh copies wholesale, so run it only for a one-off test
+# image and delete System/Library/CoreServices/Applications/WindowManager.app
+# from root/ afterwards. The Xsession no longer starts it; run it by hand.
 # Builds Gershwin's WindowManager.app (Gershwin M2, docs/gershwin-feasibility.md)
 # from third_party/gershwin-windowmanager (our fork anurodhp/gershwin-windowmanager,
 # branch iokit-port, off gershwin-desktop/gershwin-windowmanager 10b6797): a

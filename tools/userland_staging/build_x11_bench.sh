@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds x11_bench.macho (DAR-438): wrlib/Xlib micro-benchmark used to time
 # the -O0 vs -O2 X11 stack on the same SD image (see x11_bench.c). Needs
-# revive_wmaker.sh (libwraster + its generated wraster.h) first. Installed
+# build_wmaker.sh (libwraster + its generated wraster.h) first. Installed
 # at /usr/X11/bin/x11_bench by inject_into_sd_image.sh.
 #
 # Link recipe: the same dynamic-executable shape as build_reboot.sh /

@@ -17,7 +17,7 @@ rm -rf "$T"; mkdir -p "$T/refsrc" "$T/gen"
 for f in convert.c raster.c gradient.c; do
     git -C "$SRC" show "wmaker-0.96.0:wrlib/$f" > "$T/refsrc/$f"
 done
-# wraster.h exactly as revive_wmaker.sh generates it
+# wraster.h exactly as build_wmaker.sh generates it
 sh "$SRC/script/replace-ac-keywords.sh" --header "$X11_CONFIG_DIR/wmaker/config.h" --filter USE_XSHM \
     -o "$T/gen/wraster.h" "$W/wraster.h.in"
 HOSTCC="${HOSTCC:-clang}"

@@ -9,7 +9,7 @@ cd "$(dirname "$0")"
 
 X11_DYLIBS=(libWUtil)
 for l in "${X11_DYLIBS[@]}"; do
-    [ -f "$OUT/system/$l.dylib" ] || { echo "error: $OUT/system/$l.dylib not found -- run revive_wmaker.sh first" >&2; exit 1; }
+    [ -f "$OUT/system/$l.dylib" ] || { echo "error: $OUT/system/$l.dylib not found -- run build_wmaker.sh first" >&2; exit 1; }
 done
 x11_require_sys_dylibs
 

@@ -287,7 +287,7 @@ Milestones, in order:
    real test is on the Pi. Check Eau titlebars, move/resize, Alt-Tab, focus,
    and wmaker-only behaviour we rely on. Record WM RSS and start time
    against wmaker (DAR-412 tooling).
-5. **M4, decision point. DONE 2026-10-02 (earlier than planned, user's call after the Pi test).** Gershwin is the only session: `Xsession` starts the WM + Terminal and execs GWorkspace; wmaker, libWUtil/libwraster/libWINGs and the wmaker-only test builds were renamed `revive_*.sh` (not built, not on the image); the `anurodhp/wmaker` fork and its pin stay.
+5. **M4, decision point. REVERSED 2026-10-02.** Tried on the Pi: the Gershwin WM with the titlebar cache and outline move was still laggy and glitchier to use than Window Maker, and the user decided to stay on Window Maker (Eau remains the GNUstep theme). Gershwin is opt-in only: `revive_gnustep_windowmanager.sh` (not built by default, not on the image), the `anurodhp/gershwin-windowmanager` fork (6cfe343..12640d8) and its pin stay. GWorkspace is installed but not started at login.
    Original scope: If M3 passes on hardware, make Gershwin the
    default and keep wmaker installed as the fallback session for one release.
    Remove wmaker (fork pin, `build_wmaker.sh`, `x11_config/wmaker`) only
