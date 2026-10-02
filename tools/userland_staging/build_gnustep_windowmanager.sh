@@ -20,6 +20,7 @@ for l in libxcb libxcb-icccm libxcb-xfixes libxcb-cursor libxcb-shape libxcb-ran
          libxcb-render-util libxcb-sync libXext libX11 libXau libXdmcp; do
     [ -f "$SYS/$l.dylib" ] || { echo "error: $SYS/$l.dylib not found -- run build_libxcb.sh / build_libxcb_util.sh / build_libX11.sh first" >&2; exit 1; }
 done
+# WM_PROFILE=1 builds the fork's CPU probes (SIGUSR1 / every 10 s to stderr).
 # Owners first: bind_target_audit.sh needs each bind recorded against the
 # dylib that really exports the symbol, and ld records the first listed one.
 GS_APP_LIBS=("$SYS/libxcb-cursor.dylib" "$SYS/libxcb-image.dylib" "$SYS/libxcb-render-util.dylib"
@@ -33,5 +34,5 @@ GS_APP_DIR=Library/CoreServices/Applications
 # (Makefiles/common.make:353-361 prefixes only the GNUSTEP_*_APPS defaults),
 # so the fork's hard-coded /System/Library/CoreServices/Applications is
 # overridden with the path under root/ itself.
-GS_APP_MAKE=(IOKIT_PORT=1 "WindowManager_INSTALL_DIR=$ROOT$PREFIX/System/Library/CoreServices/Applications")
+GS_APP_MAKE=(IOKIT_PORT=1 ${WM_PROFILE:+PROFILE=1} "WindowManager_INSTALL_DIR=$ROOT$PREFIX/System/Library/CoreServices/Applications")
 gs_build_app WindowManager "$HERE/../../third_party/gershwin-windowmanager/WindowManager"

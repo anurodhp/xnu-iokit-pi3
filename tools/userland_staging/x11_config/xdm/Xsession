@@ -93,10 +93,21 @@ wm=wmaker
 case "$wm" in
 gershwin)
     GWM=/System/Library/CoreServices/Applications/WindowManager.app/WindowManager
+    GWS=/Applications/GWorkspace.app/GWorkspace
+    if [ -x "$GWM" ] && [ -x "$GWS" ]; then
+        # GWorkspace is the session leader, as in a GNUstep desktop session:
+        # its Logout command quits it, which ends this script and so the
+        # xdm session (there is no logout menu in the WM itself). The WM runs
+        # beside it, started first so the apps find it already managing the
+        # root; compositing is off by default (the WM's -ec turns it on).
+        "$GWM" &
+        sleep 3
+        T=/Applications/Terminal.app/Terminal
+        [ -x "$T" ] && "$T" &
+        exec "$GWS"
+    fi
     if [ -x "$GWM" ]; then
-        # Window Maker's autostart is what opens Terminal there; this WM has
-        # no equivalent, so start it here. Compositing is off by default
-        # (the WM's -ec turns it on).
+        # No GWorkspace on the image: the WM alone, Terminal as the autostart.
         T=/Applications/Terminal.app/Terminal
         [ -x "$T" ] && "$T" &
         exec "$GWM"
