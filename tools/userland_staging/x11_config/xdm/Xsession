@@ -6,8 +6,10 @@
 # be started as root by anything but a root login.
 #
 # It sets the GNUstep environment exactly as the old boot-time x11-session
-# script did, then execs Window Maker, whose global autostart
-# (/usr/X11/share/WindowMaker/autostart) opens Terminal.app.
+# script did, then execs the window manager: Window Maker by default (its
+# global autostart, /usr/X11/share/WindowMaker/autostart, opens Terminal.app),
+# or Gershwin's WindowManager when /etc/x11-session.wm says "gershwin"
+# (docs/gershwin-feasibility.md M3). A user's own ~/.xsession still wins.
 
 # xdm's default user PATH (DEF_USER_PATH) has /bin and /usr/bin; the full
 # session PATH is set below once the log is open.
@@ -83,4 +85,23 @@ if [ -s "$startup" ]; then
         exec /bin/sh "$startup"
     fi
 fi
+
+# Session choice: first word of /etc/x11-session.wm; missing or anything
+# other than "gershwin" means Window Maker.
+wm=wmaker
+[ -r /etc/x11-session.wm ] && read wm _ < /etc/x11-session.wm
+case "$wm" in
+gershwin)
+    GWM=/System/Library/CoreServices/Applications/WindowManager.app/WindowManager
+    if [ -x "$GWM" ]; then
+        # Window Maker's autostart is what opens Terminal there; this WM has
+        # no equivalent, so start it here. Compositing is off by default
+        # (the WM's -ec turns it on).
+        T=/Applications/Terminal.app/Terminal
+        [ -x "$T" ] && "$T" &
+        exec "$GWM"
+    fi
+    echo "Xsession: $GWM missing, falling back to wmaker"
+    ;;
+esac
 exec /usr/X11/bin/wmaker
