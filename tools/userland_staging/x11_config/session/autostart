@@ -4,6 +4,6 @@
 # waits for it, so everything is backgrounded. The xdm Xsession
 # (x11_config/xdm/Xsession) has already exported DISPLAY and the GNUstep
 # environment, and this runs as the user who logged in.
-T=/usr/GNUstep/System/Applications/Terminal.app/Terminal
+T=/Applications/Terminal.app/Terminal
 [ -x "$T" ] && "$T" &
 exit 0

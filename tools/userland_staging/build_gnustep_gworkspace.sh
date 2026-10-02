@@ -9,8 +9,11 @@
 #   Library/Frameworks/{FSNode,DBKit}.framework, Inspector and Operation
 #   Library/Bundles (Inspector content viewers)
 #   Tools/{ddbd,fswatcher,lsfupdater,searchtool,wopen}
+# (That is the build layout; inject_into_sd_image.sh places it in the Mac
+# layout, /Applications, /System/Library and /usr/local/bin -- see
+# stage_gnustep_mac_layout.sh.)
 # Run it on the target under an X server (gdnc must be running):
-# /usr/GNUstep/System/Applications/GWorkspace.app/GWorkspace
+# /Applications/GWorkspace.app/GWorkspace
 #
 # Optional pieces that need libraries this port does not build are off:
 # GWMetadata (--enable-gwmetadata, needs SQLite), fswatcher-inotify

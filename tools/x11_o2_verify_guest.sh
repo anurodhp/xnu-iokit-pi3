@@ -22,10 +22,10 @@ echo "== smoketest"; /usr/X11/bin/x11_smoketest :0; echo "smoketest rc=$?"
 /usr/X11/bin/xev -geometry 300x200+900+40 > /tmp/xev.log 2>&1 &
 sleep 10
 cp $F /var/root/o2_1_wm_xev.xwd
-DYLD_INSERT_LIBRARIES=$CD /usr/GNUstep/System/Applications/Terminal.app/Terminal > /tmp/term.log 2>&1 &
+DYLD_INSERT_LIBRARIES=$CD /Applications/Terminal.app/Terminal > /tmp/term.log 2>&1 &
 sleep 60
 cp $F /var/root/o2_2_term.xwd
-DYLD_INSERT_LIBRARIES=$CD /usr/GNUstep/System/Applications/Ink.app/Ink > /tmp/ink.log 2>&1 &
+DYLD_INSERT_LIBRARIES=$CD /Applications/Ink.app/Ink > /tmp/ink.log 2>&1 &
 sleep 240
 cp $F /var/root/o2_3_ink.xwd
 echo "== ps"; ps ax | grep -E "Xvfb|wmaker|Terminal|Ink|xev|gdnc|gpbs" | grep -v grep

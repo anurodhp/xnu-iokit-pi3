@@ -164,6 +164,19 @@ static-archive/custom-PID-1 bring-up phase below for historical context.
   as the locale stubs and the from-scratch SHA-256/384/512 (replacing the
   corecrypto-kext-dependent implementation that never had `g_crypto_funcs`
   registered, since there's no corecrypto kext here).
+- **GNUstep** (`build_gnustep_*.sh`, X11 + Window Maker session) is built
+  in gnustep-make's "gnustep" layout under `/usr/GNUstep`
+  (`libc_build/gnustep/root`), but the image gets the Mac layout
+  (gnustep-make `FilesystemLayouts/mac`): apps in `/Applications`
+  (`/Applications/Utilities` for admin apps), the system Library
+  (libraries, frameworks, bundles, themes, Makefiles) in `/System/Library`
+  beside `SystemConfiguration`, docs in `/Library/Documentation`, tools in
+  `/usr/local/bin`, and `/etc/GNUstep/GNUstep.conf` naming those paths
+  (gnustep-base reads it at process start). The libraries keep their
+  `/usr/GNUstep/System/Library/...` install names; compatibility symlinks
+  at `/usr/GNUstep/System/{Applications,Library,Tools}` resolve them.
+  `stage_gnustep_mac_layout.sh` does the rearrangement for
+  `inject_into_sd_image.sh`. User paths stay `~/GNUstep/...`.
 
 ## Known structural gaps (context for future work, not bugs to silently fix)
 

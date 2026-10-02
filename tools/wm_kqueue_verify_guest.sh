@@ -115,11 +115,11 @@ echo "-- Terminal"
 . /usr/GNUstep/System/Library/Makefiles/GNUstep.sh 2>/dev/null
 export GNUSTEP_CONFIG_FILE=/etc/GNUstep/GNUstep.conf
 CD=/usr/lib/crashdiag.dylib
-DYLD_INSERT_LIBRARIES=$CD /usr/GNUstep/System/Applications/Terminal.app/Terminal > /tmp/term.log 2>&1 &
+DYLD_INSERT_LIBRARIES=$CD /Applications/Terminal.app/Terminal > /tmp/term.log 2>&1 &
 sleep 60
 cp $F /var/root/kq_2_term.xwd
 $X/wmclose_probe list
-DYLD_INSERT_LIBRARIES=$CD /usr/GNUstep/System/Applications/Ink.app/Ink > /tmp/ink.log 2>&1 &
+DYLD_INSERT_LIBRARIES=$CD /Applications/Ink.app/Ink > /tmp/ink.log 2>&1 &
 sleep 120
 cp $F /var/root/kq_3_ink.xwd
 $X/wmclose_probe list
