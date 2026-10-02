@@ -1,0 +1,12 @@
+# /etc/profile -- read by login shells (serial console login, ssh).
+# CLICOLOR makes ls colorize on a tty (ls is built with COLORLS, DAR ls-color).
+# pd_console_login defaults TERM to vt220 for the serial console
+# (PureDarwin pd_console_login.c:156), and the shipped vt220 terminfo entry
+# has no setaf/setab, so ls would stay plain; linux has them and every serial
+# terminal emulator we use handles it. Only the unset/vt220 default is
+# changed: an explicit TERM from ssh or a real terminal is kept.
+CLICOLOR=1
+export CLICOLOR
+case "$TERM" in
+    ""|vt220) TERM=linux; export TERM ;;
+esac

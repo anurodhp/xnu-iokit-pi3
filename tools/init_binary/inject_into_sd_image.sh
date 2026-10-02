@@ -2368,6 +2368,12 @@ else
     echo "+ $PREFS_PLIST already has real NetworkServices config -- leaving as-is"
 fi
 
+# /etc/profile: CLICOLOR=1 and a colour-capable TERM default for login shells
+# (serial console and ssh); see tools/userland_staging/profile.
+cp tools/userland_staging/profile "$MNT/etc/profile"
+chmod 644 "$MNT/etc/profile"
+echo "+ wrote profile to $MNT/etc/"
+
 # /etc/ttys (DAR-164, real gap found completing the real login(1) E2E
 # flow): real login.c's own rootterm() (system_cmds/login.tproj/login.c,
 # non-PAM branch) refuses ANY root login unless getttynam(ttyn) finds a
