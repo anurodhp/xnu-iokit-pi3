@@ -273,7 +273,8 @@ Milestones, in order:
    build xcb-util, xcb-util-wm, xcb-util-renderutil, xcb-util-image and
    xcb-util-cursor, each as its own `build_<name>.sh` dylib, with
    `bind_target_audit.sh`.
-3. **M2, WM fork and build (small).** Fork to
+3. **M2, WM fork and build (small). DONE 2026-10-02.** Fork anurodhp/gershwin-windowmanager `iokit-port` (6cfe343): compositing off by default (`-ec` enables), `IOKIT_PORT=1` for -O2 and explicit xcb libs. `build_gnustep_windowmanager.sh` builds, links (all 15 xcb/X11 dylibs resolve) and passes `bind_target_audit.sh`; installs to `/System/Library/CoreServices/Applications/WindowManager.app` on the image. Not yet run.
+   Original scope: Fork to
    `anurodhp/gershwin-windowmanager` `iokit-port`, pinned to a commit:
    `-O2 -fno-builtin-sin/cos` (as in our Eau fork), compositing off by
    default or `-dc` in the session, and the `@[]` fix if M0 doesn't export

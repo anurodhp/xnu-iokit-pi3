@@ -156,24 +156,31 @@ gs_audit_tree() {
 # root/ as /usr/GNUstep/System/Applications/<AppName>.app, and audit it.
 # Same link recipe as the libraries; the app links gnustep-gui and
 # gnustep-base itself, and the owners are listed so its binds name them.
+# Optional, set by the caller before the call (all default to "none"):
+#   GS_APP_LIBS=(dylib...)   extra owner dylibs, listed before the libSystem tier
+#   GS_APP_CPPFLAGS="..."    extra compiler flags (e.g. -I$OUT/x11/include)
+#   GS_APP_MAKE=(VAR=val...) extra make arguments, for the build and the install
+#   GS_APP_DIR=<subdir>      install dir under $PREFIX/System (default Applications)
 gs_build_app() {
     local name="$1" src="$2" work app
     [ -f "$src/GNUmakefile" ] || { echo "error: $src not found -- run setup_third_party.sh" >&2; exit 1; }
     [ -d "$ROOT$PREFIX/System/Library/Bundles/libgnustep-back-032.bundle" ] ||
         { echo "error: gnustep-back not installed -- run build_gnustep_back.sh first" >&2; exit 1; }
-    gs_setup_link "${GS_BASE_SYSLIBS[@]}"
+    gs_setup_link ${GS_APP_LIBS[@]+"${GS_APP_LIBS[@]}"} "${GS_BASE_SYSLIBS[@]}"
     gs_build_env
-    local cppflags="${TARGET[*]} -D_FORTIFY_SOURCE=0 -I$GS_SYS_HEADERS -I$OUT/objc4_public_headers"
+    local cppflags="${TARGET[*]} -D_FORTIFY_SOURCE=0 -I$GS_SYS_HEADERS -I$OUT/objc4_public_headers ${GS_APP_CPPFLAGS:-}"
+    local appdir="${GS_APP_DIR:-Applications}"
     work="$G/$(echo "$name" | tr 'A-Z' 'a-z')-src"
     rsync -a --delete --exclude .git "$src/" "$work/"
     (cd "$work" &&
      make DYLIB_EXTRA_FLAGS= GNUSTEP_INSTALLATION_DOMAIN=SYSTEM CPPFLAGS="$cppflags" \
-         LDFLAGS="${TARGET[*]} $LINK $LIBFLAGS" > make.out 2>&1) ||
+         LDFLAGS="${TARGET[*]} $LINK $LIBFLAGS" ${GS_APP_MAKE[@]+"${GS_APP_MAKE[@]}"} > make.out 2>&1) ||
         { grep -E "error:|Undefined|^ld: |^  \"" "$work/make.out" | grep -v "ld: warning" | head -30 || true
           echo "error: $name build failed, see $work/make.out" >&2; exit 1; }
-    app="$ROOT$PREFIX/System/Applications/$name.app"
+    app="$ROOT$PREFIX/System/$appdir/$name.app"
     rm -rf "$app"
-    (cd "$work" && make install DESTDIR="$ROOT" GNUSTEP_INSTALLATION_DOMAIN=SYSTEM > install.out 2>&1) ||
+    (cd "$work" && make install DESTDIR="$ROOT" GNUSTEP_INSTALLATION_DOMAIN=SYSTEM \
+         ${GS_APP_MAKE[@]+"${GS_APP_MAKE[@]}"} > install.out 2>&1) ||
         { tail -20 "$work/install.out"; echo "error: $name install failed" >&2; exit 1; }
     [ -x "$app/$name" ] || { echo "error: $app/$name not installed" >&2; exit 1; }
     otool -l "$app/$name" | grep -q "cmd LC_MAIN" || { echo "error: $app/$name has no LC_MAIN" >&2; exit 1; }

@@ -904,6 +904,7 @@ libtiff|https://gitlab.com/libtiff/libtiff.git|v4.7.1|
 gnustep-gap|git@github.com:anurodhp/gap.git|iokit-port||https://github.com/gnustep/gap.git
 gnustep-gworkspace|git@github.com:anurodhp/apps-gworkspace.git|iokit-port||https://github.com/gnustep/apps-gworkspace.git
 gnustep-eau-theme|git@github.com:anurodhp/gershwin-eau-theme.git|iokit-port||https://github.com/gershwin-desktop/gershwin-eau-theme.git
+gershwin-windowmanager|git@github.com:anurodhp/gershwin-windowmanager.git|iokit-port||https://github.com/gershwin-desktop/gershwin-windowmanager.git
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch upstream_url; do
