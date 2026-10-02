@@ -782,12 +782,21 @@ BCM2837DWC2::channelNextPid(uint32_t chan) const
  * (:1644-1646).
  *
  * Before this, doTransfer() threw the partial progress away AND kept the
- * stale PID, then re-sent the chunk from its start. On a bulk OUT whose
- * device NAKed after accepting an EVEN number of packets (the LAN9514
- * does this when its TX FIFO fills under a sustained transmit), the
- * re-sent first packet carries a toggle the device has not seen yet, so
- * it is accepted as new data: a duplicated 512-byte block in the TX
- * stream. See docs/dar-465-ethernet-stall.md.
+ * stale PID, then re-sent the chunk from its start. Say a bulk OUT chunk
+ * starting at PID P had k packets accepted before a NAK, so the device
+ * now expects P ^ (k & 1). Re-sending from packet 1 with P:
+ *   k = 1: packet 1 goes out with P, the device expects P ^ 1, so it
+ *          ACKs and discards it (a correct duplicate drop). The host's
+ *          toggle advances, packet 2 matches, and nothing is lost or
+ *          duplicated.
+ *   k >= 2: the toggles line up again on packet 1 (k even) or packet 2
+ *          (k odd), and from there every packet the device already holds
+ *          is accepted a second time as new data. At least one duplicated
+ *          512-byte block is inserted into the stream.
+ * HYPOTHESIS, not observed (DAR-313): that the LAN9514 NAKs mid-frame
+ * when its TX FIFO fills under sustained transmit. The DAR-465 partial-
+ * chunk log below records whether it does. See
+ * docs/dar-465-ethernet-stall.md.
  */
 uint32_t
 BCM2837DWC2::channelPacketsDone(uint32_t chan, uint32_t xferLen, uint32_t numPackets,
@@ -1225,7 +1234,7 @@ BCM2837DWC2::carryPartialChunk(DWC2Endpoint *ep, uint8_t *pid, bool isIn, void *
 
 	if (diagSample(++fPartialChunks)) {
 		IOLog("BCM2837DWC2: DAR-465 partial chunk #%u carried forward: dev %u ep %u %s "
-		      "type %u, %u of %u bytes (%u pkts) moved before %s, PID %u->%u, cpu %u "
+		      "type %u, %u of %u bytes (%u pkts programmed) moved before %s, PID %u->%u, cpu %u "
 		      "(HCINT=%#x HCTSIZ=%#x)\n",
 		    fPartialChunks, ep->devAddr, ep->epNum, isIn ? "IN" : "OUT", ep->epType,
 		    part, xferLen, numPackets,
@@ -1406,10 +1415,9 @@ BCM2837DWC2::doTransfer(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
 			 * DAR-465: packets the device took before the XACTERR stay
 			 * taken. Retry from the first one it did not, with the PID
 			 * the core expects next - not from the start of the chunk
-			 * with the old PID, which re-sends an already-accepted
-			 * packet under a toggle the device treats as new data
-			 * whenever an even number got through. See
-			 * channelPacketsDone().
+			 * with the old PID, which makes the device accept
+			 * already-received packets again as new data whenever two
+			 * or more got through. See channelPacketsDone().
 			 */
 			if (!doSplit && attempt + 1 < 3 &&
 			    carryPartialChunk(ep, pid, isIn, buffer, &done, xferLen, numPackets, hcint)) {

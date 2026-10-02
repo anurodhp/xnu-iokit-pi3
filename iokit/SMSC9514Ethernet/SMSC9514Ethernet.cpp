@@ -1009,12 +1009,17 @@ SMSC9514Ethernet::outputPacket(mbuf_t m, void * /*param*/)
  * DAR-465. Restart the LAN9514's transmit path. Register bits are Linux's
  * (drivers/net/usb/smsc95xx.h at v6.6: TX_CFG_STOP_/TX_CFG_FIFO_FLUSH_/
  * TX_CFG_ON_ :68-71, INT_STS_TX_STOP_/TXE_/TDFU_/TDFO_ :51-58, HW_CFG_SBP_
- * :78 "Stall Bulk Out Pipe Dis."). HW_CFG_SBP_ is the evidence that the
- * chip STALLs its bulk OUT pipe on a TX error unless told not to; this
- * driver (like Linux) leaves it clear. The STOP -> FIFO flush -> clear
- * INT_STS -> ON order is this driver's own, not taken from a reference
- * driver: Linux never restarts the TX path at runtime, it only clears the
- * halt (usbnet EVENT_TX_HALT). The first registers are read and logged
+ * :78 "Stall Bulk Out Pipe Dis."). HW_CFG_SBP_'s name says the chip
+ * stalls its bulk OUT pipe unless told not to; that it does so on a TX
+ * error (INT_STS_TXE_) is INFERRED from the register names, not read in
+ * a datasheet. This driver (like Linux) leaves SBP clear. That the chip then keeps STALLing
+ * after CLEAR_FEATURE until its TX path is restarted is INFERRED (the
+ * real Pi log, docs/dar-465-ethernet-stall.md), not from a datasheet.
+ * The STOP -> FIFO flush -> clear INT_STS -> ON order is this driver's
+ * own, not taken from a reference driver: Linux only turns TX on at
+ * start (smsc95xx_start_tx_path(), smsc95xx.c:850-864) and on a bulk OUT
+ * -EPIPE only clears the halt (usbnet.c:1262 defers EVENT_TX_HALT, and
+ * :1141-1160 runs usb_clear_halt()). The registers are read and logged
  * before anything is written, so the next real-hardware capture shows
  * whether TXE (INT_STS bit 14) was set, i.e. whether the device really
  * was in a TX-error state.
