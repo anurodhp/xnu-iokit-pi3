@@ -598,22 +598,45 @@ if [ -d "$TI_STAGE/usr/share/terminfo" ]; then
 else
     echo "= $TI_STAGE not built -- run tools/userland_staging/build_terminfo.sh first if wanted, skipping (top/vim/libedit then fail with 'error opening terminal')"
 fi
-# GNUstep (DAR-388): gnustep-make and gnustep-base as build_gnustep_base.sh
-# installs them, a copy of the target's /usr/GNUstep (libgnustep-base, its
-# resources, headers, makefiles and Tools) and /etc/GNUstep/GNUstep.conf.
-# libgnustep-base's install name is under /usr/GNUstep, so it does not go
-# through the libc_build/system/*.dylib loop. ditto keeps the library's
-# version symlinks.
+# GNUstep (DAR-388): gnustep-make, gnustep-base/gui/back, the themes and
+# the apps as the build_gnustep_*.sh scripts install them (gnustep-make's
+# "gnustep" layout under /usr/GNUstep, in libc_build/gnustep/root), placed
+# on the image in the Mac layout (gnustep-make's FilesystemLayouts/mac):
+# apps in /Applications, the system Library in /System/Library, tools in
+# /usr/local/bin, /etc/GNUstep/GNUstep.conf pointing at them, and
+# compatibility symlinks at the old /usr/GNUstep/System/{Applications,
+# Library,Tools} so the libraries' unchanged /usr/GNUstep install names
+# still resolve. stage_gnustep_mac_layout.sh builds that tree (see its
+# header for why no library is rebuilt). ditto keeps the version symlinks.
 GS_STAGE=tools/userland_staging/libc_build/gnustep/root
 if [ -f "$GS_STAGE/usr/GNUstep/System/Library/Libraries/libgnustep-base.dylib" ]; then
-    need_kb=$(du -sk "$GS_STAGE" | awk '{print $1}')
+    GS_MAC=$(mktemp -d "${TMPDIR:-/tmp}/gnustep-mac.XXXXXX")
+    tools/userland_staging/stage_gnustep_mac_layout.sh "$GS_STAGE" "$GS_MAC/root"
+    need_kb=$(du -sk "$GS_MAC/root" | awk '{print $1}')
     free_kb=$(df -k "$MNT" | awk 'NR==2{print $4}')
     if [ "$free_kb" -lt $((need_kb + 51200)) ]; then
         echo "error: $MNT has ${free_kb} KB free; the GNUstep tree needs ${need_kb} KB (+50 MB headroom)" >&2
+        rm -rf "$GS_MAC"
         exit 1
     fi
-    ditto "$GS_STAGE" "$MNT/"
-    echo "+ wrote GNUstep tree ($need_kb KB: /usr/GNUstep, /etc/GNUstep/GNUstep.conf)"
+    # An image injected before the Mac layout has real directories at the
+    # old paths; they hold nothing but GNUstep's own files. Replace them
+    # with the compatibility symlinks rather than ditto'ing over them.
+    for d in Applications Library Tools; do
+        if [ -d "$MNT/usr/GNUstep/System/$d" ] && [ ! -L "$MNT/usr/GNUstep/System/$d" ]; then
+            rm -rf "${MNT:?}/usr/GNUstep/System/$d"
+            echo "+ removed old-layout $MNT/usr/GNUstep/System/$d"
+        fi
+    done
+    ditto "$GS_MAC/root" "$MNT/"
+    rm -rf "$GS_MAC"
+    for d in Applications Library Tools; do
+        [ -L "$MNT/usr/GNUstep/System/$d" ] ||
+            { echo "error: $MNT/usr/GNUstep/System/$d is not the compatibility symlink" >&2; exit 1; }
+    done
+    [ -x "$MNT/usr/GNUstep/System/Library/Libraries/libgnustep-base.dylib" ] ||
+        { echo "error: libgnustep-base does not resolve at its install name on $MNT" >&2; exit 1; }
+    echo "+ wrote GNUstep tree ($need_kb KB: /Applications, /System/Library, /Library/Documentation, /usr/local/bin, /etc/GNUstep/GNUstep.conf; /usr/GNUstep/System/{Applications,Library,Tools} symlinks)"
 else
     echo "= $GS_STAGE not built -- run tools/userland_staging/build_gnustep_base.sh first if wanted, skipping"
 fi

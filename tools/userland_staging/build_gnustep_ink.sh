@@ -3,9 +3,10 @@
 # editor (NSDocument, NSTextView, RTF/plain text), from
 # third_party/gnustep-examples (gnustep/tests-examples, gui/Ink), and
 # installs it into libc_build/gnustep/root as
-# /usr/GNUstep/System/Applications/Ink.app. It is the first AppKit app on
-# this port: run it on the target with `openapp Ink` (or
-# /usr/GNUstep/System/Applications/Ink.app/Ink) under an X server.
+# /usr/GNUstep/System/Applications/Ink.app (the build layout; on the image
+# it is /Applications/Ink.app, see stage_gnustep_mac_layout.sh). It is the
+# first AppKit app on this port: run it on the target with `openapp Ink`
+# (or /Applications/Ink.app/Ink) under an X server.
 #
 # Build, install and audit: gnustep_common.sh's gs_build_app.
 cd "$(dirname "$0")"

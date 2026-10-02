@@ -7,7 +7,9 @@
 # Target layout: gnustep-make's "gnustep" layout under /usr/GNUstep, config
 # file /etc/GNUstep/GNUstep.conf. Everything installs with DESTDIR into
 # libc_build/gnustep/root, a copy of the target's tree that
-# inject_into_sd_image.sh copies onto the image.
+# inject_into_sd_image.sh copies onto the image, rearranged into the Mac
+# layout (/Applications, /System/Library, /usr/local/bin) by
+# stage_gnustep_mac_layout.sh. Builds keep using this layout.
 #
 # Linking: -nostdlib against this project's own dylibs, owners listed
 # first, with no -undefined dynamic_lookup (gnustep-make's darwin default;

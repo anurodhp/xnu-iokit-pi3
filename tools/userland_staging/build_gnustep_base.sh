@@ -6,7 +6,11 @@
 # Target layout: gnustep-make's "gnustep" layout under /usr/GNUstep, with
 # the config file at /etc/GNUstep/GNUstep.conf. Both packages install
 # with DESTDIR into libc_build/gnustep/root, a copy of the target's tree
-# that inject_into_sd_image.sh copies onto the image. Because the prefix
+# that inject_into_sd_image.sh copies onto the image -- rearranged into
+# the Mac layout (/Applications, /System/Library, /usr/local/bin, with
+# compatibility symlinks at /usr/GNUstep/System/*) by
+# stage_gnustep_mac_layout.sh, which also rewrites the image's
+# GNUstep.conf; this build layout is unchanged. Because the prefix
 # is the target path, libgnustep-base's install name and the paths it
 # compiles in are the ones the target uses
 # (--enable-absolute-install-paths).

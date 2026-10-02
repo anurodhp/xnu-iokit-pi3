@@ -64,14 +64,14 @@ else
     fi
 fi
 
-export PATH=/usr/X11/bin:/usr/GNUstep/System/Tools:/bin:/usr/bin:/sbin:/usr/sbin
+export PATH=/usr/X11/bin:/usr/local/bin:/bin:/usr/bin:/sbin:/usr/sbin
 [ -n "$DISPLAY" ] || export DISPLAY=:0
 
 # GNUstep.sh (gnustep-make) reads GNUSTEP_CONFIG_FILE; it sets the
 # GNUSTEP_* paths and library paths apps need.
 export GNUSTEP_CONFIG_FILE=/etc/GNUstep/GNUstep.conf
-if [ -f /usr/GNUstep/System/Library/Makefiles/GNUstep.sh ]; then
-    . /usr/GNUstep/System/Library/Makefiles/GNUstep.sh
+if [ -f /System/Library/Makefiles/GNUstep.sh ]; then
+    . /System/Library/Makefiles/GNUstep.sh
 fi
 
 # Upstream Xsession.in: a user's own ~/.xsession replaces the default.

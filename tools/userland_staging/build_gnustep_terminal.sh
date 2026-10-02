@@ -2,9 +2,10 @@
 # Builds Terminal.app (DAR-394), GNUstep's terminal emulator, from
 # third_party/gnustep-gap (our fork anurodhp/gap, branch iokit-port, off
 # gnustep/gap master: system-apps/Terminal), and installs it into
-# libc_build/gnustep/root as /usr/GNUstep/System/Applications/Terminal.app.
-# Run it on the target under an X server:
-# /usr/GNUstep/System/Applications/Terminal.app/Terminal
+# libc_build/gnustep/root as /usr/GNUstep/System/Applications/Terminal.app
+# (the build layout; on the image it is /Applications/Terminal.app, see
+# stage_gnustep_mac_layout.sh). Run it on the target under an X server:
+# /Applications/Terminal.app/Terminal
 #
 # It starts the shell with forkpty() (TerminalView.m), which on Darwin is
 # libsystem_c's (Libc util/pty.c, with login_tty.c and stdlib/grantpt.c;
