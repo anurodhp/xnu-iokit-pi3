@@ -1,6 +1,7 @@
 {
     NSInterfaceStyleDefault = NSMacintoshInterfaceStyle;
     GSTheme = "Eau";
+    GSSuppressAppIcon = YES;
     NSFont = "Inter-Regular";
     NSFontSize = 12;
     NSBoldFont = "Inter-Bold";
