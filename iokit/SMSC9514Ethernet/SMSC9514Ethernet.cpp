@@ -40,6 +40,7 @@ SMSC9514Ethernet::init(OSDictionary *properties, SMSCUSBTransport *transport)
 	fTxRecoveries = 0;
 	fLastChipRecovery = 0;
 	fChipRecoveryBackoffS = 0;
+	fAppliedDuplex = -1;
 	fPromiscOn = false;
 	fMulticastOn = false;
 	bzero(fMediumTable, sizeof(fMediumTable));
@@ -398,6 +399,7 @@ SMSC9514Ethernet::updateLinkStatus(void)
 			fLinkUp = false;
 			setLinkStatus(kIONetworkLinkValid, NULL);
 		}
+		fAppliedDuplex = -1;   // re-applied on the next link-up
 		return;
 	}
 
@@ -407,7 +409,7 @@ SMSC9514Ethernet::updateLinkStatus(void)
 	// in the intersection (100Full > 100Half > 10Full > 10Half). Falls
 	// back to Auto/unknown-duplex if for any reason the intersection is
 	// empty (e.g. a partner that doesn't auto-negotiate at all).
-	uint16_t anar, anlpar;
+	uint16_t anar = 0, anlpar = 0;
 	UInt32   mediumIndex = kMediumIndexAuto;
 	UInt64   speed = 0;
 	if (mdioRead(kMiiPhyAddr, kMiiAnar, &anar) &&
@@ -428,9 +430,90 @@ SMSC9514Ethernet::updateLinkStatus(void)
 		}
 	}
 
+	// DAR-465: the MAC has to be told the duplex the PHY negotiated. This
+	// driver never did, so MAC_CR's FDPX stayed at its reset value
+	// (half duplex) behind a PHY negotiating 100Full. Only when the
+	// duplex is known; an unresolved (Auto) medium leaves MAC_CR alone.
+	if (mediumIndex != kMediumIndexAuto) {
+		bool full = (mediumIndex == kMediumIndex100FullDuplex ||
+		    mediumIndex == kMediumIndex10FullDuplex);
+		if (fAppliedDuplex != (full ? 1 : 0)) {
+			applyDuplex(full, anar, anlpar);
+		}
+	}
+
 	fLinkUp = true;
 	setLinkStatus(kIONetworkLinkValid | kIONetworkLinkActive,
 	    fMediumTable[mediumIndex], speed);
+}
+
+/*
+ * DAR-465. Linux smsc95xx_mac_update_fullduplex()
+ * (drivers/net/usb/smsc95xx.c:576-603, v6.6): full duplex sets
+ * MAC_CR_FDPX_ and clears MAC_CR_RCVOWN_, half duplex the reverse, then
+ * smsc95xx_phy_update_flowcontrol() (:538-574):
+ *   full duplex: FLOW = 0xFFFF0002 if RX pause is resolved, |= 0xFFFF0000
+ *                if TX pause; AFC_CFG |= 0xF with TX pause, &= ~0xF
+ *                without;
+ *   half duplex: FLOW = 0, AFC_CFG |= 0xF (back-pressure).
+ * Pause is resolved as phy_get_pause() does (drivers/net/phy/
+ * phy_device.c:2876-2887): none unless full duplex, else
+ * linkmode_resolve_pause() (drivers/net/phy/linkmode.c:24-43) on our
+ * advertisement and the partner's.
+ *
+ * MAC_CR is read-modify-written, touching only FDPX and RCVOWN, so
+ * TXEN/RXEN/PRMS/MCPAS and everything else keep what resetChip() and the
+ * filter calls set. Runs on this driver's workloop (the link timer, or
+ * enable()), as every other MAC_CR writer does.
+ */
+void
+SMSC9514Ethernet::applyDuplex(bool fullDuplex, uint16_t anar, uint16_t anlpar)
+{
+	bool txPause = false, rxPause = false;
+	if (fullDuplex) {
+		uint16_t common = anar & anlpar;
+		if (common & kAnarPause) {
+			txPause = rxPause = true;
+		} else if (common & kAnarPauseAsym) {
+			txPause = (anlpar & kAnarPause) != 0;
+			rxPause = (anar & kAnarPause) != 0;
+		}
+	}
+
+	uint32_t macCr = 0, afcCfg = 0;
+	if (!fTransport->readRegister(kRegMacCr, &macCr) ||
+	    !fTransport->readRegister(kRegAfcCfg, &afcCfg)) {
+		IOLog("SMSC9514Ethernet: DAR-465 duplex update: register read failed\n");
+		return;   // fAppliedDuplex unchanged: retried on the next link poll
+	}
+	if (fullDuplex) {
+		macCr = (macCr & ~(uint32_t)kMacCrRcvOwn) | kMacCrFdpx;
+	} else {
+		macCr = (macCr & ~(uint32_t)kMacCrFdpx) | kMacCrRcvOwn;
+	}
+	uint32_t flow = 0;
+	if (fullDuplex) {
+		if (rxPause) {
+			flow = 0xFFFF0002;
+		}
+		if (txPause) {
+			afcCfg |= 0xF;
+			flow |= 0xFFFF0000;
+		} else {
+			afcCfg &= ~0xFU;
+		}
+	} else {
+		afcCfg |= 0xF;
+	}
+	bool ok = fTransport->writeRegister(kRegMacCr, macCr) &&
+	    fTransport->writeRegister(kRegFlow, flow) &&
+	    fTransport->writeRegister(kRegAfcCfg, afcCfg);
+	IOLog("SMSC9514Ethernet: DAR-465 link %s duplex: MAC_CR=%#x FLOW=%#x AFC_CFG=%#x "
+	    "(tx pause %u, rx pause %u)%s\n", fullDuplex ? "full" : "half", macCr, flow,
+	    afcCfg, txPause, rxPause, ok ? "" : " - register write FAILED");
+	if (ok) {
+		fAppliedDuplex = fullDuplex ? 1 : 0;
+	}
 }
 
 void
@@ -1011,6 +1094,7 @@ SMSC9514Ethernet::recoverChip(void)
 	    "the chip (next attempt no sooner than %u s)\n", fTxFailStreak,
 	    fChipRecoveryBackoffS);
 	bool ok = resetChip() && programMACAddress(&fMACAddress);
+	fAppliedDuplex = -1;   // the lite reset cleared MAC_CR's duplex bits
 	if (ok && fMulticastOn) {
 		ok = (setMulticastMode(true) == kIOReturnSuccess);
 	}

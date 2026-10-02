@@ -216,6 +216,7 @@ private:
 		kRegAddrL   = 0x108,
 		kRegMiiAddr = 0x114,
 		kRegMiiData = 0x118,
+		kRegFlow    = 0x11C, // smsc95xx.h:253 FLOW
 	};
 
 	enum {
@@ -254,6 +255,7 @@ private:
 		kLedGpioCfgLnkLed = 0x00100000, // GPIO1 -> link/activity LED
 		kLedGpioCfgFdxLed = 0x00010000, // GPIO0 -> full-duplex/collision LED
 
+		kMacCrRcvOwn = 1U << 23, // Disable Receive Own (smsc95xx.h:213, MAC_CR_RCVOWN_)
 		kMacCrFdpx  = 1U << 20, // Full Duplex Mode (smsc95xx.h:215, MAC_CR_FDPX_)
 		kMacCrMcPas = 1U << 19, // Pass All Multicast
 		kMacCrPrmS  = 1U << 18, // Promiscuous Mode
@@ -333,6 +335,10 @@ private:
 		kAnar100Half = 1U << 7,
 		kAnar10Full  = 1U << 6,
 		kAnar10Half  = 1U << 5,
+		// Pause advertisement, same bit in ANAR and ANLPAR
+		// (include/uapi/linux/mii.h:83-84, :106-107 ADVERTISE_/LPA_PAUSE_*).
+		kAnarPause     = 1U << 10,
+		kAnarPauseAsym = 1U << 11,
 	};
 
 	// Re-poll interval for updateLinkStatus() while the interface is
@@ -350,6 +356,10 @@ private:
 	// own clear-halt-and-retry. See outputPacket().
 	bool recoverTxPath(void);
 	bool recoverChip(void);
+	// DAR-465: MAC_CR full/half duplex and flow control from the negotiated
+	// link, as Linux smsc95xx_mac_update_fullduplex() does.
+	void applyDuplex(bool fullDuplex, uint16_t anar, uint16_t anlpar);
+	int                  fAppliedDuplex;  // -1 not applied since link-up/reset, 0 half, 1 full
 	uint32_t             fTxFailStreak;   // consecutive failed sends
 	uint32_t             fTxRecoveries;   // recoverTxPath() calls, for sampled logging
 	uint64_t             fLastChipRecovery; // absolute time of the last recoverChip()
