@@ -213,6 +213,37 @@ int main(int argc, char **argv)
     [w->lock unlock];
     CHECK("NSThread + NSLock", count == 4000);
 
+    /* Blocks are objects (GSBlocks.m builds __NS{Stack,Malloc,Global}Block__
+     * over libclosure's isa buffers): messaging them must not crash. */
+    {
+        __block int hits = 0;
+        int base = 5;
+        void (^global)(void) = ^{ };
+        void (^stack)(void) = ^{ hits += base; };
+        id g = (id)global, st = (id)stack;
+        CHECK("global block is an object", [g isKindOfClass: [NSObject class]]);
+        CHECK("global block class", strcmp(class_getName(object_getClass(g)), "__NSGlobalBlock__") == 0);
+        CHECK("global block retain", [g retain] == g);
+        [g release];
+        id heap = [st copy];
+        CHECK("stack block copy -> malloc block",
+              heap != st && strcmp(class_getName(object_getClass(heap)), "__NSMallocBlock__") == 0);
+        ((void (^)(void))heap)();
+        CHECK("copied block runs", hits == 5);
+        CHECK("malloc block retain/release", [heap retain] == heap);
+        [heap release]; [heap release];
+        NSMutableArray *ba = [NSMutableArray array];
+        [ba addObject: ^{ hits += 100; }];
+        ((void (^)(void))[ba objectAtIndex: 0])();
+        CHECK("block stored in NSArray", hits == 105);
+        NSTimer *tm = [[NSTimer scheduledTimerWithTimeInterval: 0.01 repeats: NO
+                                                         block: ^(NSTimer *t) { hits += 1000; }] retain];
+        [[NSRunLoop currentRunLoop] runUntilDate: [NSDate dateWithTimeIntervalSinceNow: 0.3]];
+        CHECK("NSTimer block fires", hits >= 1105 && ![tm isValid]);
+        [tm release];
+        CHECK("@[] and @{} singletons", [@[] count] == 0 && [@{} count] == 0);
+    }
+
     [pool release];
     printf("foundation_smoketest: %s (%d failed)\n", failures ? "FAIL" : "PASS", failures);
     return failures ? 1 : 0;

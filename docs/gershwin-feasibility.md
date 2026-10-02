@@ -263,7 +263,8 @@ make the removal decision on real-hardware numbers.
 
 Milestones, in order:
 
-1. **M0, runtime (medium).** Block classes on objc4 (3.1), with a smoketest.
+1. **M0, runtime (medium). DONE 2026-10-02.** libs-base 93983ab2a (`GSBlocks.m`) builds the three block classes in place and defines `__NSArray0__`/`__NSDictionary0__`; `foundation_smoketest` covers global/malloc blocks, NSArray storage, NSTimer block and `@[]` and passes on QEMU. Decision 2026-10-02: ship the WM with compositing off (`-dc`); wmaker removal only after Gershwin works on the Pi.
+   Original scope: Block classes on objc4 (3.1), with a smoketest.
    Export `___NSArray0__` from gnustep-base (and check for `__NSDictionary0__`).
    Verify on QEMU with an NSTimer-block test app.
 2. **M1, X libraries (small-medium).** Extend `build_libxcb.sh` with the
