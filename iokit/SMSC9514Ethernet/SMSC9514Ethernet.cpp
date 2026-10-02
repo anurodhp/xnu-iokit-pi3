@@ -36,6 +36,11 @@ SMSC9514Ethernet::init(OSDictionary *properties, SMSCUSBTransport *transport)
 	fRxTimer = NULL;
 	fRxBuffer = NULL;
 	fRxBurstCount = 0;
+	fTxFailStreak = 0;
+	fTxRecoveries = 0;
+	fLastChipRecovery = 0;
+	fPromiscOn = false;
+	fMulticastOn = false;
 	bzero(fMediumTable, sizeof(fMediumTable));
 	bzero(&fMACAddress, sizeof(fMACAddress));
 	return true;
@@ -730,6 +735,7 @@ SMSC9514Ethernet::setMulticastMode(bool active)
 	if (!fTransport->writeRegister(kRegMacCr, macCr)) {
 		return kIOReturnIOError;
 	}
+	fMulticastOn = active;
 	return kIOReturnSuccess;
 }
 
@@ -747,6 +753,7 @@ SMSC9514Ethernet::setPromiscuousMode(bool active)
 	if (!fTransport->writeRegister(kRegMacCr, macCr)) {
 		return kIOReturnIOError;
 	}
+	fPromiscOn = active;
 	return kIOReturnSuccess;
 }
 
@@ -766,6 +773,15 @@ IOReturn
 SMSC9514Ethernet::enable(IONetworkInterface *interface)
 {
 	fInterface = interface;
+	// DAR-465: `ifconfig en0 down; up` after a TX wedge used to change
+	// nothing on the chip (enable()/disable() only start and stop the
+	// timers), so the transmitter stayed wedged until a reboot. Restart
+	// the TX path if the last send failed.
+	if (fTxFailStreak != 0) {
+		IOLog("SMSC9514Ethernet: enable() after %u failed sends - restarting the TX path\n",
+		    fTxFailStreak);
+		recoverTxPath();
+	}
 	updateLinkStatus(); // real initial state, not a hardcoded guess
 	if (fLinkTimer != NULL) {
 		fLinkTimer->setTimeoutMS(kLinkPollIntervalMS);
@@ -846,10 +862,147 @@ SMSC9514Ethernet::outputPacket(mbuf_t m, void * /*param*/)
 	}
 
 	uint32_t sent = fTransport->bulkOut(buf, (uint32_t)bufSize);
+
+	/*
+	 * DAR-465: the transport has already cleared the halt and retried
+	 * once. A send that still fails means the device keeps refusing the
+	 * bulk OUT stream - on real hardware, a LAN9514 that re-STALLed every
+	 * frame after CLEAR_FEATURE(ENDPOINT_HALT), forever, until reboot.
+	 * Escalate instead of failing every frame from now on:
+	 *   1. restart the chip's TX path (TX_CFG stop, FIFO flush, clear the
+	 *      INT_STS TX error bits, TX_CFG on) and retry this frame - on the
+	 *      first failure of a streak and every 8th after it;
+	 *   2. after 32 consecutive failures, a full chip re-init
+	 *      (recoverChip()), at most once per 5 s.
+	 * Bounded and sampled-logged, so a dead device costs a few register
+	 * accesses per frame, not a console flood.
+	 */
+	if (sent != bufSize) {
+		fTxFailStreak++;
+		bool retried = false;
+		if (fTxFailStreak >= 32) {
+			uint64_t now = mach_absolute_time();
+			uint64_t gap;
+			nanoseconds_to_absolutetime(5ULL * NSEC_PER_SEC, &gap);
+			if (fLastChipRecovery == 0 || now - fLastChipRecovery >= gap) {
+				fLastChipRecovery = now;
+				recoverChip();
+				retried = true;
+			}
+		} else if (fTxFailStreak == 1 || (fTxFailStreak % 8) == 0) {
+			recoverTxPath();
+			retried = true;
+		}
+		if (retried) {
+			sent = fTransport->bulkOut(buf, (uint32_t)bufSize);
+		}
+	}
+	if (sent == bufSize && fTxFailStreak != 0) {
+		IOLog("SMSC9514Ethernet: DAR-465 TX recovered after %u failed send(s)\n",
+		    fTxFailStreak);
+		fTxFailStreak = 0;
+	}
+
 	IOFree(buf, bufSize);
 	freePacket(m);
 
 	return (sent == bufSize) ? (UInt32)kIOReturnOutputSuccess : (UInt32)kIOReturnOutputDropped;
+}
+
+/*
+ * DAR-465. Restart the LAN9514's transmit path. Register bits are Linux's
+ * (drivers/net/usb/smsc95xx.h at v6.6: TX_CFG_STOP_/TX_CFG_FIFO_FLUSH_/
+ * TX_CFG_ON_ :68-71, INT_STS_TX_STOP_/TXE_/TDFU_/TDFO_ :51-58, HW_CFG_SBP_
+ * :78 "Stall Bulk Out Pipe Dis."). HW_CFG_SBP_ is the evidence that the
+ * chip STALLs its bulk OUT pipe on a TX error unless told not to; this
+ * driver (like Linux) leaves it clear. The STOP -> FIFO flush -> clear
+ * INT_STS -> ON order is this driver's own, not taken from a reference
+ * driver: Linux never restarts the TX path at runtime, it only clears the
+ * halt (usbnet EVENT_TX_HALT). The first registers are read and logged
+ * before anything is written, so the next real-hardware capture shows
+ * whether TXE (INT_STS bit 14) was set, i.e. whether the device really
+ * was in a TX-error state.
+ */
+bool
+SMSC9514Ethernet::recoverTxPath(void)
+{
+	if (fTransport == NULL) {
+		return false;
+	}
+	uint32_t intSts = 0, txCfg = 0, hwCfg = 0;
+	bool readOK = fTransport->readRegister(kRegIntSts, &intSts) &&
+	    fTransport->readRegister(kRegTxCfg, &txCfg) &&
+	    fTransport->readRegister(kRegHwCfg, &hwCfg);
+	fTxRecoveries++;
+	bool log = (fTxRecoveries <= 4 || (fTxRecoveries & (fTxRecoveries - 1)) == 0);
+	if (log) {
+		IOLog("SMSC9514Ethernet: DAR-465 TX recovery #%u (streak %u): %s INT_STS=%#x "
+		    "(TXE %u TDFU %u TDFO %u TX_STOP %u) TX_CFG=%#x HW_CFG=%#x (SBP %u)\n",
+		    fTxRecoveries, fTxFailStreak, readOK ? "" : "[register read FAILED]",
+		    intSts, !!(intSts & kIntStsTxe), !!(intSts & kIntStsTdfu),
+		    !!(intSts & kIntStsTdfo), !!(intSts & kIntStsTxStop), txCfg, hwCfg,
+		    !!(hwCfg & kHwCfgSbp));
+	}
+	if (!readOK) {
+		return false;
+	}
+
+	bool ok = fTransport->writeRegister(kRegTxCfg, kTxCfgStop);
+	for (int i = 0; ok && i < 20; i++) {
+		uint32_t v;
+		if (!fTransport->readRegister(kRegTxCfg, &v)) {
+			ok = false;
+			break;
+		}
+		if (!(v & (kTxCfgStop | kTxCfgOn))) {
+			break;
+		}
+		IODelay(100);
+	}
+	ok = ok && fTransport->writeRegister(kRegTxCfg, kTxCfgFifoFlush);
+	for (int i = 0; ok && i < 20; i++) {
+		uint32_t v;
+		if (!fTransport->readRegister(kRegTxCfg, &v)) {
+			ok = false;
+			break;
+		}
+		if (!(v & kTxCfgFifoFlush)) {
+			break;
+		}
+		IODelay(100);
+	}
+	ok = ok && fTransport->writeRegister(kRegIntSts,
+	    kIntStsTxe | kIntStsTdfu | kIntStsTdfo | kIntStsTxStop);
+	ok = ok && fTransport->writeRegister(kRegTxCfg, kTxCfgOn);
+	if (log || !ok) {
+		uint32_t after = 0;
+		fTransport->readRegister(kRegIntSts, &after);
+		IOLog("SMSC9514Ethernet: DAR-465 TX recovery #%u %s, INT_STS now %#x\n",
+		    fTxRecoveries, ok ? "done" : "FAILED", after);
+	}
+	return ok;
+}
+
+/*
+ * DAR-465 escalation: the full bring-up start() does (resetChip(), MAC
+ * address), plus the RX filter modes the stack had set, which a lite
+ * reset clears. The PHY restarts auto-negotiation, so the link drops for
+ * a few seconds; that is the price of not needing a reboot.
+ */
+bool
+SMSC9514Ethernet::recoverChip(void)
+{
+	IOLog("SMSC9514Ethernet: DAR-465 %u consecutive failed sends - re-initialising "
+	    "the chip\n", fTxFailStreak);
+	bool ok = resetChip() && programMACAddress(&fMACAddress);
+	if (ok && fMulticastOn) {
+		ok = (setMulticastMode(true) == kIOReturnSuccess);
+	}
+	if (ok && fPromiscOn) {
+		ok = (setPromiscuousMode(true) == kIOReturnSuccess);
+	}
+	IOLog("SMSC9514Ethernet: DAR-465 chip re-init %s\n", ok ? "done" : "FAILED");
+	return ok;
 }
 
 void

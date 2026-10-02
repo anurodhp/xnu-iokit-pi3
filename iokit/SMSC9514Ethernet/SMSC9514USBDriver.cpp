@@ -31,7 +31,8 @@ static const UInt32 kTxCompletionTimeoutMS = 2000;
 SMSC9514FamilyTransport::SMSC9514FamilyTransport()
 	: fDevice(NULL), fBulkIn(NULL), fBulkOut(NULL), fRxMD(NULL), fTxMD(NULL),
 	  fLock(NULL), fTxLock(NULL), fRxQueued(false), fRxDone(false), fRxLen(0),
-	  fStopping(false), fRxStalled(false), fRxErrors(0)
+	  fStopping(false), fRxStalled(false), fRxErrors(0),
+	  fTxStallEvents(0), fTxFailures(0)
 {
 }
 
@@ -252,14 +253,32 @@ SMSC9514FamilyTransport::bulkOut(const void *buf, uint32_t len)
 	 * ClearPipeStall(true) is allowed here.
 	 */
 	if (ret == kIOUSBPipeStalled || ret == kIOReturnTimeout) {
-		IOLog("SMSC9514FamilyTransport: bulk OUT %s, clearing the pipe and retrying\n",
-		    (ret == kIOReturnTimeout) ? "timed out" : "stalled");
-		fBulkOut->ClearPipeStall(true);
+		/*
+		 * DAR-465: logged on a sample (1st..4th, then every power of
+		 * two), not per packet. A device that keeps re-stalling turned
+		 * this pair of lines into a serial flood on every TX attempt,
+		 * forever. The CLEAR_FEATURE's own result is logged too:
+		 * before, a failed clear and a device that re-stalls after a
+		 * good clear printed the same thing.
+		 */
+		IOReturn first = ret;
+		IOReturn clr = fBulkOut->ClearPipeStall(true);
 		ret = fBulkOut->Write(fTxMD, kTxNoDataTimeoutMS, kTxCompletionTimeoutMS, len);
+		fTxStallEvents++;
+		if (fTxStallEvents <= 4 || (fTxStallEvents & (fTxStallEvents - 1)) == 0) {
+			IOLog("SMSC9514FamilyTransport: bulk OUT %s (event #%u, %u bytes): "
+			    "ClearPipeStall(true) %#x, retry %#x\n",
+			    (first == kIOReturnTimeout) ? "timed out" : "stalled",
+			    fTxStallEvents, len, clr, ret);
+		}
 	}
 	IOLockUnlock(fTxLock);
 	if (ret != kIOReturnSuccess) {
-		IOLog("SMSC9514FamilyTransport: bulk OUT of %u bytes failed (%#x)\n", len, ret);
+		fTxFailures++;
+		if (fTxFailures <= 4 || (fTxFailures & (fTxFailures - 1)) == 0) {
+			IOLog("SMSC9514FamilyTransport: bulk OUT of %u bytes failed (%#x), "
+			    "failure #%u\n", len, ret, fTxFailures);
+		}
 		return 0;
 	}
 	return len;

@@ -67,6 +67,10 @@ private:
 	bool                      fStopping;
 	bool                      fRxStalled;  // set by readComplete(), cleared by bulkIn()
 	uint32_t                  fRxErrors;
+	// DAR-465: bulk OUT stall/timeout events and failed sends, for
+	// sampled logging.
+	uint32_t                  fTxStallEvents;
+	uint32_t                  fTxFailures;
 };
 
 class SMSC9514USBDriver : public IOService

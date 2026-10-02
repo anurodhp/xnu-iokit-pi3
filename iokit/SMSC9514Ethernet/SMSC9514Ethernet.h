@@ -260,6 +260,15 @@ private:
 		kMacCrRxEn  = 1U << 2,  // MAC Receiver Enable
 
 		kTxCfgOn = 1U << 2,
+		// DAR-465, from smsc95xx.h (Linux v6.6) TX_CFG_STOP_/TX_CFG_FIFO_FLUSH_,
+		// INT_STS_TX_STOP_/TXE_/TDFU_/TDFO_, HW_CFG_SBP_.
+		kTxCfgStop      = 1U << 1,
+		kTxCfgFifoFlush = 1U << 0,
+		kIntStsTxStop   = 0x00020000,
+		kIntStsTxe      = 0x00004000,
+		kIntStsTdfu     = 0x00002000,
+		kIntStsTdfo     = 0x00001000,
+		kHwCfgSbp       = 0x00000100,
 
 		kMiiAddrBusy = 1U << 0,
 		kMiiAddrWrite = 1U << 1,
@@ -336,6 +345,15 @@ private:
 	bool mdioRead(uint8_t phyAddr, uint8_t regAddr, uint16_t *value);
 	bool mdioWrite(uint8_t phyAddr, uint8_t regAddr, uint16_t value);
 	bool resetChip(void);
+	// DAR-465: TX recovery after a send failed even past the transport's
+	// own clear-halt-and-retry. See outputPacket().
+	bool recoverTxPath(void);
+	bool recoverChip(void);
+	uint32_t             fTxFailStreak;   // consecutive failed sends
+	uint32_t             fTxRecoveries;   // recoverTxPath() calls, for sampled logging
+	uint64_t             fLastChipRecovery; // absolute time of the last recoverChip()
+	bool                 fPromiscOn;      // last setPromiscuousMode(), re-applied after recoverChip()
+	bool                 fMulticastOn;    // last setMulticastMode(), likewise
 	bool programMACAddress(const IOEthernetAddress *addr);
 	bool eepromWait(void);
 	bool readEEPROM(uint8_t offset, uint8_t *data, uint32_t length);

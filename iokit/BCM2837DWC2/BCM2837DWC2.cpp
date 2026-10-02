@@ -15,6 +15,7 @@
 #include <IOKit/IOKitKeys.h>
 #include <IOKit/network/IONetworkStack.h>
 #include <pexpert/pexpert.h>
+#include <kern/cpu_number.h>
 
 // iokit/bsddev/IOKitBSDInit.cpp (real Apple source, kernel-private). Used
 // to be `static` and only reachable from within that file for the
@@ -764,6 +765,52 @@ BCM2837DWC2::channelNextPid(uint32_t chan) const
 
 #pragma mark - Transfer engine
 
+/*
+ * DAR-465: what a channel that halted WITHOUT XFERCOMP really moved over
+ * USB - a NAKed chunk this driver force-halted (waitForChannelSettled()
+ * wakes on NAK, then transferChunk() halts the channel) or one that ended
+ * in XACTERR/STALL. HCTSIZ.PKTCNT counts down once per packet the device
+ * ACKed (OUT) or delivered (IN), and HCTSIZ.PID is the toggle for the next
+ * one; XFERSIZE is no use here because it counts AHB (DMA) bytes, not USB
+ * packets. Linux does exactly this for an abnormally halted channel:
+ * dwc2_get_actual_xfer_length() (drivers/usb/dwc2/hcd_intr.c:430-439 at
+ * v6.6, "Must use the hctsiz.pktcnt field to determine how much data has
+ * been transferred ... always an integral number of packets if the
+ * transfer was halted before its normal completion"), called from
+ * dwc2_update_urb_state_abn() and paired with dwc2_hcd_save_data_toggle()
+ * (:510-536) in dwc2_hc_nak_intr() (:1249-1251) and the XACTERR handler
+ * (:1644-1646).
+ *
+ * Before this, doTransfer() threw the partial progress away AND kept the
+ * stale PID, then re-sent the chunk from its start. On a bulk OUT whose
+ * device NAKed after accepting an EVEN number of packets (the LAN9514
+ * does this when its TX FIFO fills under a sustained transmit), the
+ * re-sent first packet carries a toggle the device has not seen yet, so
+ * it is accepted as new data: a duplicated 512-byte block in the TX
+ * stream. See docs/dar-465-ethernet-stall.md.
+ */
+uint32_t
+BCM2837DWC2::channelPacketsDone(uint32_t chan, uint32_t xferLen, uint32_t numPackets,
+    uint32_t maxPacket) const
+{
+	uint32_t pktcnt = (regRead(hcOffset(chan, kDWC2_HCTSIZ)) & kHCTSIZ_PKTCNT_MASK) >>
+	    kHCTSIZ_PKTCNT_SHIFT;
+	if (pktcnt >= numPackets) {
+		return 0;
+	}
+	uint32_t bytes = (numPackets - pktcnt) * maxPacket;
+	return (bytes > xferLen) ? xferLen : bytes;
+}
+
+// 1st..4th occurrence, then every power of two: a diagnostic that is
+// decisive the first time and cannot flood the serial console.
+bool
+BCM2837DWC2::diagSample(uint32_t n)
+{
+	return n <= 4 || (n & (n - 1)) == 0;
+}
+
+
 void
 BCM2837DWC2::channelInit(uint32_t chan, DWC2Endpoint *ep, bool isIn, bool useSplit)
 {
@@ -1064,6 +1111,17 @@ BCM2837DWC2::decodeChannelResult(uint32_t chan, uint32_t hcint, uint32_t xferLen
 		return kIOReturnNotReady; // caller retries; normal flow control
 	}
 	if (hcint & kHCINT_STALL) {
+		// DAR-465: one line per sampled STALL with everything needed to
+		// tell a device-side halt from a host-side one: which channel and
+		// endpoint, the PID the channel was on, the CPU that saw it.
+		if (diagSample(++fStallsSeen)) {
+			IOLog("BCM2837DWC2: DAR-465 STALL #%u on channel %u (%s, cpu %u): "
+			      "HCINT=%#x HCCHAR=%#x HCTSIZ=%#x (PID %u, PKTCNT %u) xferLen=%u\n",
+			    fStallsSeen, chan, isIn ? "IN" : "OUT", (unsigned)cpu_number(), hcint,
+			    regRead(hcOffset(chan, kDWC2_HCCHAR)), hctsiz,
+			    (hctsiz & kHCTSIZ_PID_MASK) >> kHCTSIZ_PID_SHIFT,
+			    (hctsiz & kHCTSIZ_PKTCNT_MASK) >> kHCTSIZ_PKTCNT_SHIFT, xferLen);
+		}
 		return kIOReturnNotResponding; // endpoint stalled: real protocol error
 	}
 
@@ -1113,6 +1171,45 @@ BCM2837DWC2::decodeChannelResult(uint32_t chan, uint32_t hcint, uint32_t xferLen
 	}
 
 	return kIOReturnIOError;
+}
+
+/*
+ * DAR-465: account for a chunk on channel 0 that halted part-way. Copies an
+ * IN chunk's whole packets out of the DMA buffer, advances *done, and takes
+ * the next PID from HCTSIZ. Returns true if any packet had moved. Caller
+ * holds fTransferLock (every doTransfer() caller does).
+ */
+bool
+BCM2837DWC2::carryPartialChunk(DWC2Endpoint *ep, uint8_t *pid, bool isIn, void *buffer,
+    uint32_t *done, uint32_t xferLen, uint32_t numPackets, uint32_t hcint)
+{
+	if (xferLen == 0) {
+		return false;
+	}
+	uint32_t part = channelPacketsDone(kDWC2Channel, xferLen, numPackets, ep->maxPacket);
+	if (part == 0) {
+		return false;
+	}
+	uint8_t oldPid = *pid;
+	if (isIn) {
+		__asm__ volatile ("dsb sy" ::: "memory");
+		memcpy((uint8_t *)buffer + *done, fDMAVirt, part);
+	}
+	*done += part;
+	*pid = channelNextPid(kDWC2Channel);
+
+	if (diagSample(++fPartialChunks)) {
+		IOLog("BCM2837DWC2: DAR-465 partial chunk #%u carried forward: dev %u ep %u %s "
+		      "type %u, %u of %u bytes (%u pkts) moved before %s, PID %u->%u, cpu %u "
+		      "(HCINT=%#x HCTSIZ=%#x)\n",
+		    fPartialChunks, ep->devAddr, ep->epNum, isIn ? "IN" : "OUT", ep->epType,
+		    part, xferLen, numPackets,
+		    (hcint & kHCINT_STALL) ? "STALL" : (hcint & kHCINT_XACTERR) ? "XACTERR" :
+		    (hcint & kHCINT_NAK) ? "NAK" : "halt",
+		    oldPid, *pid, (unsigned)cpu_number(), hcint,
+		    regRead(hcOffset(kDWC2Channel, kDWC2_HCTSIZ)));
+	}
+	return true;
 }
 
 IOReturn
@@ -1279,6 +1376,31 @@ BCM2837DWC2::doTransfer(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
 				IOLog("BCM2837DWC2: XACTERR on attempt %u/3, retrying\n",
 				    attempt + 1);
 			}
+			/*
+			 * DAR-465: packets the device took before the XACTERR stay
+			 * taken. Retry from the first one it did not, with the PID
+			 * the core expects next - not from the start of the chunk
+			 * with the old PID, which re-sends an already-accepted
+			 * packet under a toggle the device treats as new data
+			 * whenever an even number got through. See
+			 * channelPacketsDone().
+			 */
+			if (!doSplit && attempt + 1 < 3 &&
+			    carryPartialChunk(ep, pid, isIn, buffer, &done, xferLen, numPackets, hcint)) {
+				xferLen = len - done;
+				if (xferLen > maxXferLen) {
+					xferLen = maxXferLen;
+				}
+				numPackets = (xferLen > ep->maxPacket) ?
+				    (xferLen + ep->maxPacket - 1) / ep->maxPacket : 1;
+				if (xferLen == 0) {
+					// Every packet was in fact accepted.
+					ret = kIOReturnSuccess;
+					actual = 0;
+					hcint = 0;
+					break;
+				}
+			}
 		}
 
 		/*
@@ -1328,6 +1450,20 @@ BCM2837DWC2::doTransfer(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
 				ret = kIOReturnSuccess;
 				completeSplit = true;
 			}
+		}
+
+		/*
+		 * DAR-465: a chunk that ended without XFERCOMP - above all a NAKed
+		 * one, which transferChunk() force-halts (NAK does not halt a
+		 * non-periodic channel by itself) - may still have moved whole
+		 * packets first. Count them and carry the PID forward, so the
+		 * caller's resume (doTransferRetrying(), or the UIM's next attempt
+		 * at xfer->done) starts at the first packet the device did NOT
+		 * take. kIOReturnTimeout is excluded: the channel never settled,
+		 * so its HCTSIZ is not a halted channel's.
+		 */
+		if (ret != kIOReturnSuccess && ret != kIOReturnTimeout && !doSplit) {
+			carryPartialChunk(ep, pid, isIn, buffer, &done, xferLen, numPackets, hcint);
 		}
 
 		if (ret != kIOReturnSuccess) {
