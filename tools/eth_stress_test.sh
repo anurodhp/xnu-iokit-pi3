@@ -57,7 +57,9 @@ ts() { date '+%H:%M:%S'; }
 # Run "$@" with a wall-clock limit (macOS has no timeout(1) by default).
 run_limited() {
 	local limit=$1; shift
-	"$@" &
+	# <&0: a backgrounded command in a non-interactive shell gets /dev/null
+	# as stdin otherwise, so the push sent 0 bytes (found on the Pi, run 1).
+	"$@" <&0 &
 	local pid=$!
 	( sleep "$limit"; kill -TERM "$pid" 2>/dev/null; sleep 2; kill -KILL "$pid" 2>/dev/null ) &
 	local dog=$!
