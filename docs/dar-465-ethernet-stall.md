@@ -1,8 +1,130 @@
 # DAR-465: LAN9514 Ethernet wedges after a large transfer (real Pi 3)
 
-Status: candidate fix built, **not yet run on hardware**. The defect fixed
-below is proven from the source. That it is what triggered the observed
-wedge is a hypothesis until a Pi run with the diagnostics added here.
+Status: Pi run 1 done (2026-10-02, kernel `4b3c9add`). It **refuted the
+original leading hypothesis** (stale PID after a NAK) as the trigger and
+pointed at a missing zero-length packet instead. A second candidate with a
+ZLP fix, faster recovery and more diagnostics is built; see "Pi run 1" right
+below. The rest of the document is the pre-run-1 analysis, kept for the
+record. Where it disagrees with "Pi run 1", run 1 wins.
+
+## Pi run 1 (2026-10-02, candidate `4b3c9add`, `cpus=4`)
+
+Stress: `PI_PASS=… MB=4 ITER=20 tools/eth_stress_test.sh`. The 4 MB push
+worked; the pull died after 1,507,328 bytes ("Connection reset by peer").
+Serial log: `build/eth-candidate/serial-run1.log` in the main checkout (45
+lines).
+
+**Proven by the log** (decoded with `BCM2837DWC2.h` and Linux
+`smsc95xx.h` v6.6):
+
+1. The first failure is a real STALL in the middle of a 1522-byte bulk OUT,
+   not a NAK. `STALL #1 ... HCINT=0x2a` is CHHLTD|STALL|ACK, and
+   `HCTSIZ=0x400801f2` decodes to PKTCNT 1 of 3, XFERSIZE 498 left, PID
+   DATA1. So the device ACKed the two 512-byte packets and STALLed the
+   third, short (498-byte) packet. `partial chunk #1 ... 1024 of 1522 bytes
+   moved before STALL` says the same. The second incident, after a re-init,
+   is identical (`partial chunk #2 ... 1024 of 1522`).
+2. No `partial chunk ... NAK` and no XACTERR line appears before either
+   STALL. In this run the stale-PID-after-NAK path never fired, so it is
+   not what started these wedges. That fits the reviewer's caveat about
+   the OUT NAK enhancement.
+3. After the first STALL, every attempt STALLs on the first packet
+   (`HCINT=0xa`, `HCTSIZ=0x1801f2`: PKTCNT 3, PID DATA0), even right after
+   `ClearPipeStall(true)` returned 0. The device re-halts the endpoint
+   after a successful CLEAR_FEATURE.
+4. `INT_STS=0x4800` at the first recovery is TXE (0x4000, smsc95xx.h:56)
+   plus RXDF (0x800, "RX Dropped Frame", :59). The device was in a
+   transmitter-error state. The 0x800 that never clears is RXDF, an RX
+   statistic: the recovery wrote only the TX bits, so it was never
+   cleared. It is not a stuck TX flush.
+5. `TX_CFG=0x6` at recoveries 2-4 is ON|STOP (smsc95xx.h:69-70). The
+   STOP that the TX restart requested had not completed, and the TX
+   restart never unblocked the pipe (4 of 4 failed).
+6. The full chip re-init (lite reset + PHY reset + reprogramming) restored
+   TX both times. Both times it took 32 failed sends and seconds of link
+   drop, so the TCP stream died.
+7. `MAC_CR=0x18000c` is FDPX (bit 20) | MCPAS (bit 19, "Pass All
+   Multicast", smsc95xx.h:216) | TXEN | RXEN. Bit 19 is MCPAS, not RCVOWN
+   (RCVOWN is bit 23, :213). The MAC was already in full duplex before the
+   first STALL, so a duplex mismatch did not cause this one. After a
+   re-init MAC_CR read 0x10000c: MCPAS was lost until the stack set it
+   again later.
+8. `AFC_CFG=0` and `FLOW=0` after link-up: this driver never initialised
+   AFC_CFG. Linux writes `AFC_CFG_DEFAULT` at reset (smsc95xx.c:1013-1018).
+   This is RX flow control and probably related to the RXDF drops, not to
+   the TX STALL.
+9. The DWC2 engine programs the whole 1522-byte frame as one transfer
+   (PKTCNT 3), as Linux does. The STALLs came on cpu 0-3, with no pattern.
+
+**Inferred, not proven (DAR-313):**
+
+- **Leading hypothesis now: a missing ZLP.** Linux's smsc95xx sets
+  `FLAG_SEND_ZLP` (smsc95xx.c:2013), so usbnet ends any transfer whose
+  length is a multiple of the max packet size with a zero-length packet
+  (usbnet.c:1399-1411). This driver never did. A 504- or 1016-byte frame
+  (512 or 1024 bytes with TX_CMD_A/B) therefore left its transfer
+  unterminated. A device that treats the following data as the same
+  transfer, and judges it when the next short packet arrives, would
+  STALL exactly the next transfer's short third packet. That matches both
+  incidents. Run 2's OUT history line shows whether the transfer before
+  the STALL was a max-packet multiple.
+- That the TX error keeps the TLI stuck until a chip reset (TX_CFG STOP
+  never completing) is inferred from items 3, 5 and 6.
+- Buffer corruption across cores is not ruled out by run 1. Run 2 checks
+  it directly (below).
+
+**What changed after run 1** (iokit `dar-465-eth`, one commit each):
+
+- `eth_stress_test.sh`: the backgrounded push kept `/dev/null` as stdin
+  and sent 0 bytes. It now uses `<&0`, as the coordinator found.
+- **ZLP** (`SMSC9514FamilyTransport::bulkOut()`): after a successful
+  bulk OUT whose length is a multiple of the pipe's max packet size, a
+  zero-length Write follows. The first two are logged:
+  `DAR-465 ZLP #n after a N-byte bulk OUT`.
+- **Diagnostics:**
+  - At the first two OUT STALLs, BCM2837DWC2 prints the last 8 bulk OUT
+    calls: length, moved, result, HCINT/HCTSIZ, PID in->out, cpu.
+    Lengths that need a ZLP are flagged `[max-packet multiple: needs ZLP]`
+    and toggle discontinuities `[pid-gap]`.
+  - After every OUT chunk it checks that the channel-0 DMA buffer still
+    matches its source, and logs `DMA buffer ... differs` if not.
+  - The transport's stall line adds TX_CMD_A/B, checked against Linux's
+    `smsc95xx_tx_fixup()` layout (smsc95xx.c:1950-1951, `[hdr-mismatch]`
+    if not), the buffer address, and whether the DMA-able copy still
+    matches the caller's frame.
+- **Recovery:**
+  - The TX_CFG restart is gone, since run 1 showed it does not work.
+  - A failed send now logs the TX state (`DAR-465 TX state`, which adds
+    the RXDF and TX_CFG ON/STOP/FLUSH bits) and immediately re-inits the
+    chip *without* the PHY reset (lite reset + reprogramming, link kept).
+  - If two of those in one streak do not help, it does the full re-init
+    that run 1 proved. Spacing is 0, then 1, 2, 4 … 60 s.
+  - The re-init restores MAC_CR's PRMS/MCPAS bits as they were and
+    re-applies the duplex at once.
+- **Flow control:** `resetChip()` writes FLOW = 0 and
+  `AFC_CFG = AFC_CFG_DEFAULT` (0x00F830A1), as Linux does.
+
+**Run 2: what to look for**
+
+1. `ZLP #1`/`#2` lines: they confirm that max-packet-multiple frames
+   happen in this traffic and now get terminated.
+2. **No STALL at all through 20 × 4 MB** points to the ZLP fix. Run 1, on
+   the same script and the same board, wedged within the first pull, which
+   makes the A/B comparison.
+3. If a STALL still happens, the `OUT history` dump decides:
+   - The `-->` line's predecessor has `[max-packet multiple: needs ZLP]`
+     and no ZLP (len 0) line between them: the ZLP did not go out.
+     Check the ZLP log line.
+   - `[pid-gap]` without a clear-stall: a host toggle bug.
+   - `DMA buffer ... differs`, or `CHANGED since submit`: buffer
+     corruption, the SMP suspect.
+   - `[hdr-mismatch]`: a TX_CMD bug.
+   - None of these: something else, but at least the transfer before the
+     STALL is on record.
+4. Recovery: `chip re-init (lite, PHY kept) done` followed by
+   `TX recovered after 1 failed send(s), 1 re-init(s)` means the fast
+   path works. If it escalates to `(full, PHY reset)`, the lite reset
+   alone does not clear TXE.
 
 ## Symptom
 
@@ -263,12 +385,13 @@ diagnostics decide which.
 
 ## Testing it on the Pi (coordinator)
 
-Candidate kernel (rebuilt 2026-10-02 08:16 after the adversarial review,
-from iokit `dar-465-eth` 9e27838, synced into xnu `dar-465-eth` f2a353c1e
-on top of `bcm2837-bringup` 5fdb3f186):
+Candidate kernel for run 2 (built 2026-10-02 08:40 from iokit
+`dar-465-eth` ab27da0 plus this doc commit, synced into xnu `dar-465-eth`
+18bd16a2f on top of `bcm2837-bringup` 5fdb3f186):
 `/Users/anurodhp/Development/iokit-eth/build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped`,
-sha256 `4b3c9add7d73a35c46239f97802a7d518d3afa45e187c9676f41d28e29ef84ec`.
-Check it with `strings <kernel> | grep DAR-465` (9 lines).
+sha256 `005cb31c62aa3d973aa48684654d8de21afb025d143c8d65eeda2c5f1f5afafb`.
+(Run 1 used `4b3c9add7d73a35c46239f97802a7d518d3afa45e187c9676f41d28e29ef84ec`.)
+Check it with `strings <kernel> | grep DAR-465` (10 lines).
 
 The change is kernel-only. All of these drivers are compiled into the kernel.
 The dtb and uEnv.txt stay as they are in the release (`cpus=4` stays: the bug
