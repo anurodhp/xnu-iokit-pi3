@@ -152,6 +152,67 @@ fs_link_exe "$STAGE/bin/wmaker" "$OBJ" \
     "$OUT/system/libXft.dylib" "$OUT/system/libfontconfig.dylib" "$OUT/system/libXmu.dylib" \
     "$OUT/system/libXext.dylib" "$OUT/system/libX11.dylib" "$OUT/system/libsystem_m.dylib"
 
+# ---- WPrefs (the settings tool) and the helpers it and wmaker run ------
+# 2026-10-02: the settings tool and background setting were not built before.
+#   WPrefs        WPrefs.app/Makefile.am WPrefs_SOURCES. --with-nolocalegettext-style
+#                 layout (configure.ac:894-895): bin/WPrefs, data in
+#                 share/WPrefs (RESOURCE_PATH) -- WPrefs.xpm and xpm/*.xpm
+#                 (ICON_EXT_XPM, as config.h has no libtiff). WPrefs/xmodifier.c
+#                 is the same nested-function file as src/xmodifier.c, so it gets
+#                 the same nested-func-to-macro treatment.
+#   wmsetbg       util/Makefile.am: the helper wmaker spawns for every background
+#                 change (src/misc.c:1000, src/defaults.c:3350) and that WPrefs'
+#                 background panel drives. Its "../src/wconfig.h" include is
+#                 served from $GEN/src through -I $GEN/util.
+#   wdwrite/wdread/getstyle/setstyle: util/Makefile.am, what WPrefs' theme and
+#                 style panels shell out to.
+# Same libraries as the wmaker link above; wraster has PNG and the built-in XPM
+# loader only (config.h), so backgrounds are PNG/XPM or a colour/gradient.
+mkdir -p "$GEN/util" "$GEN/src"
+cp "$GEN/wconfig.h" "$GEN/src/wconfig.h"
+sh "$SRC/script/nested-func-to-macro.sh" "$SRC/WPrefs.app/xmodifier.c" -o "$GEN/wprefs_xmodifier.hack_nf.c" \
+    -f "modwarn" -f "modbarf" -f "check_modifier" -f "store_modifier"
+WLIBS=("$OUT/system/libWINGs.dylib" "$OUT/system/libWUtil.dylib" "$OUT/system/libwraster.dylib"
+    "$OUT/system/libXft.dylib" "$OUT/system/libfontconfig.dylib" "$OUT/system/libXmu.dylib"
+    "$OUT/system/libXext.dylib" "$OUT/system/libX11.dylib" "$OUT/system/libremovefile.dylib"
+    "$OUT/system/libinfo.dylib" "$OUT/system/libsystem_m.dylib")   # fsync: libremovefile (as libWUtil)
+UFLAGS=("${COMMON[@]}" -I "$SRC/src" -I "$SRC/wrlib" -I "$GEN/util" -I "$SRC/util"
+    '-DETCDIR="/usr/X11/etc"' '-DDATADIR="/usr/X11/share/WindowMaker"')
+
+OBJ="$X11_ROOT/obj/WPrefs"
+rm -rf "$OBJ"; mkdir -p "$OBJ"
+X11_OK=0 X11_FAIL=0
+for f in $(x11_am_sources "$SRC/WPrefs.app/Makefile.am" WPrefs_SOURCES); do
+    [ "$f" = xmodifier.c ] && continue
+    x11_compile "$OBJ" "$SRC/WPrefs.app/$f" "${COMMON[@]}" -I "$SRC/WPrefs.app" -I "$SRC/wrlib" \
+        '-DRESOURCE_PATH="/usr/X11/share/WPrefs"' '-DWMAKER_RESOURCE_PATH="/usr/X11/share/WindowMaker"' \
+        -include ios_prohibited_override.h
+done
+x11_compile "$OBJ" "$GEN/wprefs_xmodifier.hack_nf.c" "${COMMON[@]}" -I "$SRC/WPrefs.app" -I "$SRC/wrlib"
+x11_compile_report WPrefs
+fs_link_exe "$STAGE/bin/WPrefs" "$OBJ" "${WLIBS[@]}"
+mkdir -p "$STAGE/share/WPrefs/xpm"
+cp "$SRC/WPrefs.app/WPrefs.xpm" "$STAGE/share/WPrefs/"
+cp "$SRC/WPrefs.app/xpm/"*.xpm "$STAGE/share/WPrefs/xpm/"
+
+# util tools: <name>:<sources>
+for t in "wmsetbg:wmsetbg.c" "wdwrite:wdwrite.c" "wdread:wdread.c" \
+         "getstyle:getstyle.c fontconv.c" "setstyle:setstyle.c fontconv.c"; do
+    name=${t%%:*}
+    OBJ="$X11_ROOT/obj/wm_util_$name"
+    rm -rf "$OBJ"; mkdir -p "$OBJ"
+    X11_OK=0 X11_FAIL=0
+    for f in ${t#*:}; do
+        x11_compile "$OBJ" "$SRC/util/$f" "${UFLAGS[@]}" -include ios_prohibited_override.h
+    done
+    x11_compile_report "$name"
+    # setstyle's realpath(3) is the DARWIN_EXTSN variant, which this tree's
+    # libcopyfile.dylib exports (build_copyfile.sh's -alias list).
+    extra=()
+    [ "$name" = setstyle ] && extra=("$OUT/system/libcopyfile.dylib")
+    fs_link_exe "$STAGE/bin/$name" "$OBJ" ${extra[@]+"${extra[@]}"} "${WLIBS[@]}"
+done
+
 # ---- data (what `make install` puts in datadir/pkgconfdir) -------------
 # am_data <Makefile.am> <VAR>: every entry of an automake _DATA list.
 am_data() {
@@ -221,4 +282,4 @@ done
 cp "x11_config/session/autostart" "$PKGDATA/autostart"
 chmod 755 "$PKGDATA/autostart"
 sh -n "$PKGDATA/autostart" || { echo "error: autostart syntax" >&2; exit 1; }
-echo "staged $STAGE/{bin/wmaker,share/WindowMaker,share/WINGs,etc/WindowMaker}"
+echo "staged $STAGE/{bin/{wmaker,WPrefs,wmsetbg,wdwrite,wdread,getstyle,setstyle},share/{WindowMaker,WPrefs,WINGs},etc/WindowMaker}"

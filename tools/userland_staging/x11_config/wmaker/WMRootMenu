@@ -11,6 +11,7 @@
   ("Arrange Icons", ARRANGE_ICONS),
   ("Refresh", REFRESH)
  ),
+ ("Preferences", EXEC, "/usr/X11/bin/WPrefs"),
  ("Appearance", OPEN_MENU, "appearance.menu"),
  ("Session",
   ("Save Session", SAVE_SESSION),
