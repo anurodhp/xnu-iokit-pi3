@@ -263,11 +263,12 @@ diagnostics decide which.
 
 ## Testing it on the Pi (coordinator)
 
-Candidate kernel (built 2026-10-02 from iokit `dar-465-eth` 60b3580, synced
-into xnu `dar-465-eth` 4dde4af05 on top of `bcm2837-bringup` 5fdb3f186):
+Candidate kernel (rebuilt 2026-10-02 08:16 after the adversarial review,
+from iokit `dar-465-eth` 9e27838, synced into xnu `dar-465-eth` f2a353c1e
+on top of `bcm2837-bringup` 5fdb3f186):
 `/Users/anurodhp/Development/iokit-eth/build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped`,
-sha256 `2747ddd4cbf2fd4d85d80481ce546ca4464a2ac694f7319f28d332caea97a508`.
-Check it with `strings <kernel> | grep DAR-465`.
+sha256 `4b3c9add7d73a35c46239f97802a7d518d3afa45e187c9676f41d28e29ef84ec`.
+Check it with `strings <kernel> | grep DAR-465` (9 lines).
 
 The change is kernel-only. All of these drivers are compiled into the kernel.
 The dtb and uEnv.txt stay as they are in the release (`cpus=4` stays: the bug
