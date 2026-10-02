@@ -15,6 +15,7 @@
 #include <IOKit/IOKitKeys.h>
 #include <IOKit/network/IONetworkStack.h>
 #include <pexpert/pexpert.h>
+#include <kern/cpu_number.h>
 
 // iokit/bsddev/IOKitBSDInit.cpp (real Apple source, kernel-private). Used
 // to be `static` and only reachable from within that file for the
@@ -764,6 +765,61 @@ BCM2837DWC2::channelNextPid(uint32_t chan) const
 
 #pragma mark - Transfer engine
 
+/*
+ * DAR-465: what a channel that halted WITHOUT XFERCOMP really moved over
+ * USB - a NAKed chunk this driver force-halted (waitForChannelSettled()
+ * wakes on NAK, then transferChunk() halts the channel) or one that ended
+ * in XACTERR/STALL. HCTSIZ.PKTCNT counts down once per packet the device
+ * ACKed (OUT) or delivered (IN), and HCTSIZ.PID is the toggle for the next
+ * one; XFERSIZE is no use here because it counts AHB (DMA) bytes, not USB
+ * packets. Linux does exactly this for an abnormally halted channel:
+ * dwc2_get_actual_xfer_length() (drivers/usb/dwc2/hcd_intr.c:430-439 at
+ * v6.6, "Must use the hctsiz.pktcnt field to determine how much data has
+ * been transferred ... always an integral number of packets if the
+ * transfer was halted before its normal completion"), called from
+ * dwc2_update_urb_state_abn() and paired with dwc2_hcd_save_data_toggle()
+ * (:510-536) in dwc2_hc_nak_intr() (:1249-1251) and the XACTERR handler
+ * (:1644-1646).
+ *
+ * Before this, doTransfer() threw the partial progress away AND kept the
+ * stale PID, then re-sent the chunk from its start. Say a bulk OUT chunk
+ * starting at PID P had k packets accepted before a NAK, so the device
+ * now expects P ^ (k & 1). Re-sending from packet 1 with P:
+ *   k = 1: packet 1 goes out with P, the device expects P ^ 1, so it
+ *          ACKs and discards it (a correct duplicate drop). The host's
+ *          toggle advances, packet 2 matches, and nothing is lost or
+ *          duplicated.
+ *   k >= 2: the toggles line up again on packet 1 (k even) or packet 2
+ *          (k odd), and from there every packet the device already holds
+ *          is accepted a second time as new data. At least one duplicated
+ *          512-byte block is inserted into the stream.
+ * HYPOTHESIS, not observed (DAR-313): that the LAN9514 NAKs mid-frame
+ * when its TX FIFO fills under sustained transmit. The DAR-465 partial-
+ * chunk log below records whether it does. See
+ * docs/dar-465-ethernet-stall.md.
+ */
+uint32_t
+BCM2837DWC2::channelPacketsDone(uint32_t chan, uint32_t xferLen, uint32_t numPackets,
+    uint32_t maxPacket) const
+{
+	uint32_t pktcnt = (regRead(hcOffset(chan, kDWC2_HCTSIZ)) & kHCTSIZ_PKTCNT_MASK) >>
+	    kHCTSIZ_PKTCNT_SHIFT;
+	if (pktcnt >= numPackets) {
+		return 0;
+	}
+	uint32_t bytes = (numPackets - pktcnt) * maxPacket;
+	return (bytes > xferLen) ? xferLen : bytes;
+}
+
+// 1st..4th occurrence, then every power of two: a diagnostic that is
+// decisive the first time and cannot flood the serial console.
+bool
+BCM2837DWC2::diagSample(uint32_t n)
+{
+	return n <= 4 || (n & (n - 1)) == 0;
+}
+
+
 void
 BCM2837DWC2::channelInit(uint32_t chan, DWC2Endpoint *ep, bool isIn, bool useSplit)
 {
@@ -940,14 +996,39 @@ BCM2837DWC2::haltChannel(uint32_t chan, uint32_t *hcintOut)
  * caller, which owns the multi-chunk loop and the sequence bit.
  */
 IOReturn
-BCM2837DWC2::transferChunk(uint32_t xferLen, bool isIn, uint32_t *actualLen, uint32_t *hcintOut)
+BCM2837DWC2::transferChunk(uint32_t xferLen, bool isIn, uint32_t *actualLen, uint32_t *hcintOut,
+    bool *timeoutHalted)
 {
 	*actualLen = 0;
+	if (timeoutHalted != NULL) {
+		*timeoutHalted = false;
+	}
 
 	uint32_t hcint = 0;
 	if (!waitForChannelSettled(kDWC2Channel, 2000, &hcint)) {
+		uint32_t hcchar = regRead(hcOffset(kDWC2Channel, kDWC2_HCCHAR));
 		IOLog("BCM2837DWC2: channel halt timeout (HCINT=%#x HCCHAR=%#x)\n",
-		    hcint, regRead(hcOffset(kDWC2Channel, kDWC2_HCCHAR)));
+		    hcint, hcchar);
+		/*
+		 * DAR-465: take a channel that is still enabled down before
+		 * returning, as the NAK path below does. Returning with CHEN
+		 * still set left the next transfer to be programmed into a
+		 * channel that never sees an enable edge - DAR-282's class (see
+		 * waitForChannelSettled()'s comment). Once it has halted, its
+		 * HCTSIZ is a halted channel's, so the caller may count the
+		 * packets that did move (*timeoutHalted). Not when it was
+		 * already disabled at the timeout (state unknown) or the halt
+		 * itself failed (haltChannel() then marks it wedged).
+		 */
+		if (hcchar & kHCCHAR_CHEN) {
+			uint32_t haltHcint = 0;
+			haltChannel(kDWC2Channel, &haltHcint);
+			hcint |= haltHcint;
+			if (timeoutHalted != NULL &&
+			    !(regRead(hcOffset(kDWC2Channel, kDWC2_HCCHAR)) & kHCCHAR_CHEN)) {
+				*timeoutHalted = true;
+			}
+		}
 		if (hcintOut != NULL) {
 			*hcintOut = hcint;
 		}
@@ -1064,6 +1145,17 @@ BCM2837DWC2::decodeChannelResult(uint32_t chan, uint32_t hcint, uint32_t xferLen
 		return kIOReturnNotReady; // caller retries; normal flow control
 	}
 	if (hcint & kHCINT_STALL) {
+		// DAR-465: one line per sampled STALL with everything needed to
+		// tell a device-side halt from a host-side one: which channel and
+		// endpoint, the PID the channel was on, the CPU that saw it.
+		if (diagSample(++fStallsSeen)) {
+			IOLog("BCM2837DWC2: DAR-465 STALL #%u on channel %u (%s, cpu %u): "
+			      "HCINT=%#x HCCHAR=%#x HCTSIZ=%#x (PID %u, PKTCNT %u) xferLen=%u\n",
+			    fStallsSeen, chan, isIn ? "IN" : "OUT", (unsigned)cpu_number(), hcint,
+			    regRead(hcOffset(chan, kDWC2_HCCHAR)), hctsiz,
+			    (hctsiz & kHCTSIZ_PID_MASK) >> kHCTSIZ_PID_SHIFT,
+			    (hctsiz & kHCTSIZ_PKTCNT_MASK) >> kHCTSIZ_PKTCNT_SHIFT, xferLen);
+		}
 		return kIOReturnNotResponding; // endpoint stalled: real protocol error
 	}
 
@@ -1115,6 +1207,106 @@ BCM2837DWC2::decodeChannelResult(uint32_t chan, uint32_t hcint, uint32_t xferLen
 	return kIOReturnIOError;
 }
 
+/*
+ * DAR-465: account for a chunk on channel 0 that halted part-way. Copies an
+ * IN chunk's whole packets out of the DMA buffer, advances *done, and takes
+ * the next PID from HCTSIZ. Returns true if any packet had moved. Caller
+ * holds fTransferLock (every doTransfer() caller does).
+ */
+bool
+BCM2837DWC2::carryPartialChunk(DWC2Endpoint *ep, uint8_t *pid, bool isIn, void *buffer,
+    uint32_t *done, uint32_t xferLen, uint32_t numPackets, uint32_t hcint)
+{
+	if (xferLen == 0) {
+		return false;
+	}
+	uint32_t part = channelPacketsDone(kDWC2Channel, xferLen, numPackets, ep->maxPacket);
+	if (part == 0) {
+		return false;
+	}
+	uint8_t oldPid = *pid;
+	if (isIn) {
+		__asm__ volatile ("dsb sy" ::: "memory");
+		memcpy((uint8_t *)buffer + *done, fDMAVirt, part);
+	}
+	*done += part;
+	*pid = channelNextPid(kDWC2Channel);
+
+	if (diagSample(++fPartialChunks)) {
+		IOLog("BCM2837DWC2: DAR-465 partial chunk #%u carried forward: dev %u ep %u %s "
+		      "type %u, %u of %u bytes (%u pkts programmed) moved before %s, PID %u->%u, cpu %u "
+		      "(HCINT=%#x HCTSIZ=%#x)\n",
+		    fPartialChunks, ep->devAddr, ep->epNum, isIn ? "IN" : "OUT", ep->epType,
+		    part, xferLen, numPackets,
+		    (hcint & kHCINT_STALL) ? "STALL" : (hcint & kHCINT_XACTERR) ? "XACTERR" :
+		    (hcint & kHCINT_NAK) ? "NAK" : "halt",
+		    oldPid, *pid, (unsigned)cpu_number(), hcint,
+		    regRead(hcOffset(kDWC2Channel, kDWC2_HCTSIZ)));
+	}
+	return true;
+}
+
+/*
+ * DAR-465: keep the recent bulk OUT history, and print it at the first two
+ * OUT STALLs. Each line is one doTransfer() call: requested and moved
+ * bytes, result, the PID it started with and the PID it left, and whether
+ * its length was a max-packet multiple (such a transfer needs a ZLP to
+ * end, see SMSC9514FamilyTransport::bulkOut()). "pid-gap" marks a call
+ * whose starting PID differs from the previous call's ending PID on the
+ * same endpoint, which is a host-side toggle discontinuity. A clear-stall
+ * reset to DATA0 also shows up as one.
+ */
+void
+BCM2837DWC2::recordOut(const DWC2Endpoint *ep, uint32_t len, uint32_t done, IOReturn ret,
+    uint32_t hcint, uint8_t pidIn, uint8_t pidOut)
+{
+	if (ret == kIOReturnNotResponding && fOutStallDumps < 2) {
+		fOutStallDumps++;
+		uint32_t n = (fOutHistNext < kOutHistory) ? fOutHistNext : kOutHistory;
+		IOLog("BCM2837DWC2: DAR-465 OUT history at STALL dump %u (oldest first, %u "
+		      "earlier bulk OUT calls on record), then the stalled call:\n",
+		    fOutStallDumps, fOutHistNext);
+		const OutRecord *prev = NULL;
+		for (uint32_t i = 0; i <= n; i++) {
+			OutRecord cur;
+			const OutRecord *r;
+			if (i < n) {
+				r = &fOutHist[(fOutHistNext - n + i) % kOutHistory];
+			} else {
+				cur.len = len; cur.done = done; cur.ret = (uint32_t)ret; cur.hcint = hcint;
+				cur.hctsiz = regRead(hcOffset(kDWC2Channel, kDWC2_HCTSIZ));
+				cur.dev = ep->devAddr; cur.ep = ep->epNum; cur.pidIn = pidIn;
+				cur.pidOut = pidOut; cur.mps = ep->maxPacket;
+				cur.cpu = (uint16_t)cpu_number();
+				r = &cur;
+			}
+			bool gap = (prev != NULL && prev->dev == r->dev && prev->ep == r->ep &&
+			    prev->pidOut != r->pidIn);
+			IOLog("BCM2837DWC2:   %s dev %u ep %u len %u moved %u ret %#x HCINT=%#x "
+			      "HCTSIZ=%#x PID %u->%u cpu %u%s%s\n", (i < n) ? "   " : "-->",
+			    r->dev, r->ep, r->len, r->done, r->ret, r->hcint, r->hctsiz, r->pidIn,
+			    r->pidOut, r->cpu,
+			    (r->mps != 0 && r->len != 0 && (r->len % r->mps) == 0) ?
+			    " [max-packet multiple: needs ZLP]" : "",
+			    gap ? " [pid-gap]" : "");
+			prev = r;
+		}
+	}
+	OutRecord *r = &fOutHist[fOutHistNext % kOutHistory];
+	r->len = len;
+	r->done = done;
+	r->ret = (uint32_t)ret;
+	r->hcint = hcint;
+	r->hctsiz = regRead(hcOffset(kDWC2Channel, kDWC2_HCTSIZ));
+	r->dev = ep->devAddr;
+	r->ep = ep->epNum;
+	r->pidIn = pidIn;
+	r->pidOut = pidOut;
+	r->mps = ep->maxPacket;
+	r->cpu = (uint16_t)cpu_number();
+	fOutHistNext++;
+}
+
 IOReturn
 BCM2837DWC2::doTransfer(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
                         void *buffer, uint32_t len, uint32_t *actualLen)
@@ -1140,6 +1332,8 @@ BCM2837DWC2::doTransfer(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
 
 	uint32_t done = 0;
 	IOReturn ret = kIOReturnSuccess;
+	uint8_t pidAtStart = *pid;
+	uint32_t lastHcint = 0;
 	bool stopTransfer = false;
 	bool doSplit = false;
 	bool completeSplit = false;
@@ -1204,6 +1398,7 @@ BCM2837DWC2::doTransfer(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
 
 		uint32_t actual = 0;
 		uint32_t hcint = 0;
+		bool timeoutHalted = false;
 
 		/*
 		 * XACTERR retry, bounded at 3 attempts total - the same Cerr=3
@@ -1270,7 +1465,31 @@ BCM2837DWC2::doTransfer(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
 
 			actual = 0;
 			hcint = 0;
-			ret = transferChunk(xferLen, isIn, &actual, &hcint);
+			ret = transferChunk(xferLen, isIn, &actual, &hcint, &timeoutHalted);
+			lastHcint = hcint;
+
+			/*
+			 * DAR-465: the DMA buffer must still hold exactly what was
+			 * copied in for this chunk. A difference means something
+			 * wrote the channel-0 buffer (or the caller's buffer) while
+			 * the core was reading it - the cross-core corruption the
+			 * first Pi run could not rule out. Costs one memcmp of at
+			 * most one chunk per OUT.
+			 */
+			if (!isIn && xferLen > 0 &&
+			    memcmp(fDMAVirt, (const uint8_t *)buffer + done, xferLen) != 0) {
+				uint32_t off = 0;
+				while (off < xferLen &&
+				    ((const uint8_t *)fDMAVirt)[off] == ((const uint8_t *)buffer)[done + off]) {
+					off++;
+				}
+				if (diagSample(++fDmaMismatches)) {
+					IOLog("BCM2837DWC2: DAR-465 DMA buffer #%u differs from its source "
+					      "after an OUT chunk: dev %u ep %u, %u bytes, first difference "
+					      "at %u, cpu %u\n", fDmaMismatches, ep->devAddr, ep->epNum,
+					    xferLen, off, (unsigned)cpu_number());
+				}
+			}
 
 			if (!(ret == kIOReturnIOError && (hcint & kHCINT_XACTERR))) {
 				break;
@@ -1278,6 +1497,30 @@ BCM2837DWC2::doTransfer(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
 			if (attempt + 1 < 3 && failLogAllowed()) {
 				IOLog("BCM2837DWC2: XACTERR on attempt %u/3, retrying\n",
 				    attempt + 1);
+			}
+			/*
+			 * DAR-465: packets the device took before the XACTERR stay
+			 * taken. Retry from the first one it did not, with the PID
+			 * the core expects next - not from the start of the chunk
+			 * with the old PID, which makes the device accept
+			 * already-received packets again as new data whenever two
+			 * or more got through. See channelPacketsDone().
+			 */
+			if (!doSplit && attempt + 1 < 3 &&
+			    carryPartialChunk(ep, pid, isIn, buffer, &done, xferLen, numPackets, hcint)) {
+				xferLen = len - done;
+				if (xferLen > maxXferLen) {
+					xferLen = maxXferLen;
+				}
+				numPackets = (xferLen > ep->maxPacket) ?
+				    (xferLen + ep->maxPacket - 1) / ep->maxPacket : 1;
+				if (xferLen == 0) {
+					// Every packet was in fact accepted.
+					ret = kIOReturnSuccess;
+					actual = 0;
+					hcint = 0;
+					break;
+				}
 			}
 		}
 
@@ -1330,6 +1573,22 @@ BCM2837DWC2::doTransfer(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
 			}
 		}
 
+		/*
+		 * DAR-465: a chunk that ended without XFERCOMP - above all a NAKed
+		 * one, which transferChunk() force-halts (NAK does not halt a
+		 * non-periodic channel by itself) - may still have moved whole
+		 * packets first. Count them and carry the PID forward, so the
+		 * caller's resume (doTransferRetrying(), or the UIM's next attempt
+		 * at xfer->done) starts at the first packet the device did NOT
+		 * take. A kIOReturnTimeout counts only if transferChunk() found
+		 * the channel still enabled and then halted it (timeoutHalted);
+		 * otherwise its HCTSIZ is not known to be a halted channel's.
+		 */
+		if (ret != kIOReturnSuccess && !doSplit &&
+		    (ret != kIOReturnTimeout || timeoutHalted)) {
+			carryPartialChunk(ep, pid, isIn, buffer, &done, xferLen, numPackets, hcint);
+		}
+
 		if (ret != kIOReturnSuccess) {
 			break;
 		}
@@ -1348,6 +1607,10 @@ BCM2837DWC2::doTransfer(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
 			*pid = channelNextPid(kDWC2Channel);
 		}
 	} while (((done < len) && !stopTransfer) || completeSplit);
+
+	if (!isIn && ep->epType == kHCCHAR_EPTYPE_BULK) {
+		recordOut(ep, len, done, ret, lastHcint, pidAtStart, *pid);
+	}
 
 	regWrite(hcOffset(kDWC2Channel, kDWC2_HCINTMSK), 0);
 	regWrite(hcOffset(kDWC2Channel, kDWC2_HCINT), 0xFFFFFFFF);

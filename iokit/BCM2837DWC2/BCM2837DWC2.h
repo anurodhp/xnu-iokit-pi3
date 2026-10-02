@@ -249,6 +249,7 @@ enum {
 
 	kHCTSIZ_XFERSIZE_MASK = 0x7FFFF,
 	kHCTSIZ_PKTCNT_SHIFT  = 19,
+	kHCTSIZ_PKTCNT_MASK   = 0x3FFU << 19,
 	kHCTSIZ_PID_SHIFT     = 29,
 	kHCTSIZ_PID_MASK      = 0x3U << 29,
 
@@ -607,6 +608,35 @@ private:
 	uint64_t                 fFailLogWindowStart;
 	uint32_t                 fFailLogCount;
 	uint32_t                 fFailLogSuppressed;
+	// DAR-465 diagnostics: chunks halted part-way that moved whole packets
+	// (now carried forward, see channelPacketsDone()), and STALLs seen.
+	// Logged on the 1st..4th and then every power-of-two occurrence.
+	uint32_t                 fPartialChunks;
+	uint32_t                 fStallsSeen;
+	// DAR-465 run-1 follow-up: the last kOutHistory bulk OUT doTransfer()
+	// calls on channel 0, dumped at the first two OUT STALLs, so the
+	// transfer BEFORE a stall (its length, result, PIDs) is on record.
+	// Written and read under fTransferLock only.
+	enum { kOutHistory = 8 };
+	struct OutRecord {
+		uint32_t len;
+		uint32_t done;
+		uint32_t ret;
+		uint32_t hcint;
+		uint32_t hctsiz;
+		uint8_t  dev;
+		uint8_t  ep;
+		uint8_t  pidIn;
+		uint8_t  pidOut;
+		uint16_t mps;
+		uint16_t cpu;
+	};
+	OutRecord                fOutHist[kOutHistory];
+	uint32_t                 fOutHistNext;     // total records written
+	uint32_t                 fOutStallDumps;
+	uint32_t                 fDmaMismatches;
+	void                     recordOut(const DWC2Endpoint *ep, uint32_t len, uint32_t done,
+	    IOReturn ret, uint32_t hcint, uint8_t pidIn, uint8_t pidOut);
 
 	/*
 	 * DAR-352: recovery from a confirmed channel-0 wedge. haltChannel()
@@ -761,13 +791,23 @@ private:
 	    IOBufferMemoryDescriptor **bmdOut, void **virtOut, uint64_t *busOut);
 	uint32_t channelInBytesDone(uint32_t chan, uint32_t xferLen) const;
 	uint8_t  channelNextPid(uint32_t chan) const;
+	// DAR-465: bytes a channel that halted before XFERCOMP really moved
+	// over USB, from HCTSIZ.PKTCNT. See the implementation.
+	uint32_t channelPacketsDone(uint32_t chan, uint32_t xferLen, uint32_t numPackets,
+	    uint32_t maxPacket) const;
+	static bool diagSample(uint32_t n);
+	bool carryPartialChunk(DWC2Endpoint *ep, uint8_t *pid, bool isIn, void *buffer,
+	    uint32_t *done, uint32_t xferLen, uint32_t numPackets, uint32_t hcint);
 	void asyncRelease(uint32_t chan);
 	IOReturn asyncFinish(uint32_t chan, DWC2Endpoint *ep, uint32_t hcint,
 	    void *dst, uint32_t dstLen, uint32_t *actualLen);
 
 	// Wait out one already-armed chunk and decode the result. Takes no
 	// buffer or PID: doTransfer owns those and the multi-chunk loop.
-	IOReturn transferChunk(uint32_t xferLen, bool isIn, uint32_t *actualLen, uint32_t *hcintOut);
+	// *timeoutHalted (DAR-465): on kIOReturnTimeout, true if the channel was
+	// still enabled and has now been halted, so its HCTSIZ can be read.
+	IOReturn transferChunk(uint32_t xferLen, bool isIn, uint32_t *actualLen, uint32_t *hcintOut,
+	    bool *timeoutHalted = NULL);
 
 	// Decode a halted channel's HCINT into an IOReturn and the byte count.
 	// Shared by transferChunk() (channel 0) and the async path.

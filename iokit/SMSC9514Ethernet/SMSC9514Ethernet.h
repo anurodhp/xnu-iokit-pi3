@@ -216,6 +216,7 @@ private:
 		kRegAddrL   = 0x108,
 		kRegMiiAddr = 0x114,
 		kRegMiiData = 0x118,
+		kRegFlow    = 0x11C, // smsc95xx.h:253 FLOW
 	};
 
 	enum {
@@ -254,12 +255,25 @@ private:
 		kLedGpioCfgLnkLed = 0x00100000, // GPIO1 -> link/activity LED
 		kLedGpioCfgFdxLed = 0x00010000, // GPIO0 -> full-duplex/collision LED
 
+		kMacCrRcvOwn = 1U << 23, // Disable Receive Own (smsc95xx.h:213, MAC_CR_RCVOWN_)
+		kMacCrFdpx  = 1U << 20, // Full Duplex Mode (smsc95xx.h:215, MAC_CR_FDPX_)
 		kMacCrMcPas = 1U << 19, // Pass All Multicast
 		kMacCrPrmS  = 1U << 18, // Promiscuous Mode
 		kMacCrTxEn  = 1U << 3,  // MAC Transmitter Enable
 		kMacCrRxEn  = 1U << 2,  // MAC Receiver Enable
 
 		kTxCfgOn = 1U << 2,
+		// DAR-465, from smsc95xx.h (Linux v6.6) TX_CFG_STOP_/TX_CFG_FIFO_FLUSH_,
+		// INT_STS_TX_STOP_/TXE_/TDFU_/TDFO_, HW_CFG_SBP_.
+		kTxCfgStop      = 1U << 1,
+		kTxCfgFifoFlush = 1U << 0,
+		kIntStsTxStop   = 0x00020000,
+		kIntStsTxe      = 0x00004000,
+		kIntStsTdfu     = 0x00002000,
+		kIntStsTdfo     = 0x00001000,
+		kIntStsRxdf     = 0x00000800, // RX Dropped Frame (smsc95xx.h:59)
+		kHwCfgSbp       = 0x00000100,
+		kAfcCfgDefault  = 0x00F830A1, // smsc95xx.h:137 AFC_CFG_DEFAULT
 
 		kMiiAddrBusy = 1U << 0,
 		kMiiAddrWrite = 1U << 1,
@@ -323,6 +337,10 @@ private:
 		kAnar100Half = 1U << 7,
 		kAnar10Full  = 1U << 6,
 		kAnar10Half  = 1U << 5,
+		// Pause advertisement, same bit in ANAR and ANLPAR
+		// (include/uapi/linux/mii.h:83-84, :106-107 ADVERTISE_/LPA_PAUSE_*).
+		kAnarPause     = 1U << 10,
+		kAnarPauseAsym = 1U << 11,
 	};
 
 	// Re-poll interval for updateLinkStatus() while the interface is
@@ -335,7 +353,22 @@ private:
 	bool mdioWait(void);
 	bool mdioRead(uint8_t phyAddr, uint8_t regAddr, uint16_t *value);
 	bool mdioWrite(uint8_t phyAddr, uint8_t regAddr, uint16_t value);
-	bool resetChip(void);
+	bool resetChip(bool resetPhy = true);
+	// DAR-465: TX recovery after a send failed even past the transport's
+	// own clear-halt-and-retry. See outputPacket().
+	void logTxState(void);
+	bool recoverChip(bool full);
+	// DAR-465: MAC_CR full/half duplex and flow control from the negotiated
+	// link, as Linux smsc95xx_mac_update_fullduplex() does.
+	void applyDuplex(bool fullDuplex, uint16_t anar, uint16_t anlpar);
+	int                  fAppliedDuplex;  // -1 not applied since link-up/reset, 0 half, 1 full
+	uint32_t             fTxFailStreak;   // consecutive failed sends
+	uint32_t             fTxRecoveries;   // logTxState() calls, for sampled logging
+	uint32_t             fRecoveriesInStreak; // recoverChip() calls in the current failure streak
+	uint64_t             fLastChipRecovery; // absolute time of the last recoverChip()
+	uint32_t             fRecoveryBackoffS; // current recoverChip() spacing: 0, 1, 2 .. 60 s
+	bool                 fPromiscOn;      // last setPromiscuousMode(), re-applied after recoverChip()
+	bool                 fMulticastOn;    // last setMulticastMode(), likewise
 	bool programMACAddress(const IOEthernetAddress *addr);
 	bool eepromWait(void);
 	bool readEEPROM(uint8_t offset, uint8_t *data, uint32_t length);
