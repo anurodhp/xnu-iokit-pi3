@@ -204,6 +204,12 @@ board. The DAR-465 diagnostics below log exactly that.
 
 ## Testing it on the Pi (coordinator)
 
+Candidate kernel (built 2026-10-02 from iokit `dar-465-eth` 60b3580, synced
+into xnu `dar-465-eth` 4dde4af05 on top of `bcm2837-bringup` 5fdb3f186):
+`/Users/anurodhp/Development/iokit-eth/build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped`,
+sha256 `2747ddd4cbf2fd4d85d80481ce546ca4464a2ac694f7319f28d332caea97a508`.
+Check it with `strings <kernel> | grep DAR-465` (7 lines).
+
 The change is kernel-only. All of these drivers are compiled into the kernel.
 The dtb and uEnv.txt stay as they are in the release (`cpus=4` stays: the bug
 needs SMP-speed traffic).
