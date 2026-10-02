@@ -242,34 +242,43 @@ SMSC9514FamilyTransport::bulkOut(const void *buf, uint32_t len)
 	bcopy(buf, fTxMD->getBytesNoCopy(), len);
 	IOReturn ret = fBulkOut->Write(fTxMD, kTxNoDataTimeoutMS, kTxCompletionTimeoutMS, len);
 	/*
-	 * A timed-out or stalled Write leaves the pipe halted, and every later
-	 * Write then fails with kIOUSBPipeStalled until the halt is cleared --
-	 * one transient timeout took transmit down for good (real Pi,
-	 * 2026-09-25: one kIOReturnTimeout, then 120+ kIOUSBPipeStalled).
-	 * Clear it (with the device-side CLEAR_FEATURE) and retry once, as
+	 * A stalled Write leaves the pipe halted, and every later Write then
+	 * fails with kIOUSBPipeStalled until the halt is cleared. Clear it
+	 * (with the device-side CLEAR_FEATURE) and retry once, as
 	 * AppleUSBCDCECMData does for its data pipe (clearPipeStall() then
 	 * Write again, AppleUSBCDCECMData.cpp:2317-2319). This runs on the
 	 * sender's thread, never the USB workloop, so the synchronous
 	 * ClearPipeStall(true) is allowed here.
+	 *
+	 * DAR-465: a TIMED-OUT Write is cleared but not retried. The UIM fails
+	 * a bulk OUT with kIOUSBTransactionTimeout after 5 s without progress
+	 * (kDataOutTimeoutMS, BCM2837USBHostController.cpp:191, applied at
+	 * :908-921); kIOReturnTimeout
+	 * is kept because a real Pi returned it once (2026-09-25). Either way
+	 * part of the frame may already be in the LAN9514's TX FIFO. Re-sending
+	 * the frame whole on top of that misframes the TX stream, so return
+	 * the failure and let SMSC9514Ethernet::outputPacket() restart the TX
+	 * path (which flushes the FIFO) before it sends the frame again. That
+	 * also stops a timeout from holding the driver's workloop for a second
+	 * 5 s attempt.
+	 *
+	 * Logged on a sample (1st..4th, then every power of two), not per
+	 * frame: a device that keeps re-stalling made this a serial flood.
+	 * The CLEAR_FEATURE's own result is logged too.
 	 */
-	if (ret == kIOUSBPipeStalled || ret == kIOReturnTimeout) {
-		/*
-		 * DAR-465: logged on a sample (1st..4th, then every power of
-		 * two), not per packet. A device that keeps re-stalling turned
-		 * this pair of lines into a serial flood on every TX attempt,
-		 * forever. The CLEAR_FEATURE's own result is logged too:
-		 * before, a failed clear and a device that re-stalls after a
-		 * good clear printed the same thing.
-		 */
+	bool timedOut = (ret == kIOReturnTimeout || ret == kIOUSBTransactionTimeout);
+	if (ret == kIOUSBPipeStalled || timedOut) {
 		IOReturn first = ret;
 		IOReturn clr = fBulkOut->ClearPipeStall(true);
-		ret = fBulkOut->Write(fTxMD, kTxNoDataTimeoutMS, kTxCompletionTimeoutMS, len);
+		if (!timedOut) {
+			ret = fBulkOut->Write(fTxMD, kTxNoDataTimeoutMS, kTxCompletionTimeoutMS, len);
+		}
 		fTxStallEvents++;
 		if (fTxStallEvents <= 4 || (fTxStallEvents & (fTxStallEvents - 1)) == 0) {
-			IOLog("SMSC9514FamilyTransport: bulk OUT %s (event #%u, %u bytes): "
-			    "ClearPipeStall(true) %#x, retry %#x\n",
-			    (first == kIOReturnTimeout) ? "timed out" : "stalled",
-			    fTxStallEvents, len, clr, ret);
+			IOLog("SMSC9514FamilyTransport: bulk OUT %s %#x (event #%u, %u bytes): "
+			    "ClearPipeStall(true) %#x, %s %#x\n",
+			    timedOut ? "timed out" : "stalled", first, fTxStallEvents, len, clr,
+			    timedOut ? "not retried, returning" : "retry", ret);
 		}
 	}
 	IOLockUnlock(fTxLock);
