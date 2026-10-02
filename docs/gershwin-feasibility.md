@@ -267,7 +267,8 @@ Milestones, in order:
    Original scope: Block classes on objc4 (3.1), with a smoketest.
    Export `___NSArray0__` from gnustep-base (and check for `__NSDictionary0__`).
    Verify on QEMU with an NSTimer-block test app.
-2. **M1, X libraries (small-medium).** Extend `build_libxcb.sh` with the
+2. **M1, X libraries (small-medium). DONE 2026-10-02.** `build_libxcb.sh` now also builds composite, damage, xfixes, randr, shape, present and sync (present imports sync and dri3; dri3 is header-only); new `build_libxcb_util.sh` builds xcb-util (with xcb_aux), xcb-icccm, xcb-render-util, xcb-image and xcb-cursor. Pins added to `setup_third_party.sh`. Every dylib passes `bind_target_audit.sh`; nothing run yet.
+   Original scope: Extend `build_libxcb.sh` with the
    composite, damage, xfixes, randr, shape and present libraries. Pin and
    build xcb-util, xcb-util-wm, xcb-util-renderutil, xcb-util-image and
    xcb-util-cursor, each as its own `build_<name>.sh` dylib, with

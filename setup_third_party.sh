@@ -854,6 +854,11 @@ xcb-proto|https://gitlab.freedesktop.org/xorg/proto/xcbproto.git|xcb-proto-1.17.
 libXau|https://gitlab.freedesktop.org/xorg/lib/libxau.git|libXau-1.0.12|
 libXdmcp|https://gitlab.freedesktop.org/xorg/lib/libxdmcp.git|libXdmcp-1.1.5|
 libxcb|https://gitlab.freedesktop.org/xorg/lib/libxcb.git|libxcb-1.17.0|
+xcb-util|https://gitlab.freedesktop.org/xorg/lib/libxcb-util.git|xcb-util-0.4.1|
+xcb-util-wm|https://gitlab.freedesktop.org/xorg/lib/libxcb-wm.git|xcb-util-wm-0.4.2|
+xcb-util-renderutil|https://gitlab.freedesktop.org/xorg/lib/libxcb-render-util.git|xcb-util-renderutil-0.3.10|
+xcb-util-image|https://gitlab.freedesktop.org/xorg/lib/libxcb-image.git|xcb-util-image-0.4.1|
+xcb-util-cursor|https://gitlab.freedesktop.org/xorg/lib/libxcb-cursor.git|xcb-util-cursor-0.1.6|
 libX11|https://gitlab.freedesktop.org/xorg/lib/libx11.git|libX11-1.8.13|
 libXext|https://gitlab.freedesktop.org/xorg/lib/libxext.git|libXext-1.3.7|
 libXrender|https://gitlab.freedesktop.org/xorg/lib/libxrender.git|libXrender-0.9.12|
