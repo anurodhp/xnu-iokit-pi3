@@ -1246,6 +1246,67 @@ BCM2837DWC2::carryPartialChunk(DWC2Endpoint *ep, uint8_t *pid, bool isIn, void *
 	return true;
 }
 
+/*
+ * DAR-465: keep the recent bulk OUT history, and print it at the first two
+ * OUT STALLs. Each line is one doTransfer() call: requested and moved
+ * bytes, result, the PID it started with and the PID it left, and whether
+ * its length was a max-packet multiple (such a transfer needs a ZLP to
+ * end, see SMSC9514FamilyTransport::bulkOut()). "pid-gap" marks a call
+ * whose starting PID differs from the previous call's ending PID on the
+ * same endpoint, which is a host-side toggle discontinuity. A clear-stall
+ * reset to DATA0 also shows up as one.
+ */
+void
+BCM2837DWC2::recordOut(const DWC2Endpoint *ep, uint32_t len, uint32_t done, IOReturn ret,
+    uint32_t hcint, uint8_t pidIn, uint8_t pidOut)
+{
+	if (ret == kIOReturnNotResponding && fOutStallDumps < 2) {
+		fOutStallDumps++;
+		uint32_t n = (fOutHistNext < kOutHistory) ? fOutHistNext : kOutHistory;
+		IOLog("BCM2837DWC2: DAR-465 OUT history at STALL dump %u (oldest first, %u "
+		      "earlier bulk OUT calls on record), then the stalled call:\n",
+		    fOutStallDumps, fOutHistNext);
+		const OutRecord *prev = NULL;
+		for (uint32_t i = 0; i <= n; i++) {
+			OutRecord cur;
+			const OutRecord *r;
+			if (i < n) {
+				r = &fOutHist[(fOutHistNext - n + i) % kOutHistory];
+			} else {
+				cur.len = len; cur.done = done; cur.ret = (uint32_t)ret; cur.hcint = hcint;
+				cur.hctsiz = regRead(hcOffset(kDWC2Channel, kDWC2_HCTSIZ));
+				cur.dev = ep->devAddr; cur.ep = ep->epNum; cur.pidIn = pidIn;
+				cur.pidOut = pidOut; cur.mps = ep->maxPacket;
+				cur.cpu = (uint16_t)cpu_number();
+				r = &cur;
+			}
+			bool gap = (prev != NULL && prev->dev == r->dev && prev->ep == r->ep &&
+			    prev->pidOut != r->pidIn);
+			IOLog("BCM2837DWC2:   %s dev %u ep %u len %u moved %u ret %#x HCINT=%#x "
+			      "HCTSIZ=%#x PID %u->%u cpu %u%s%s\n", (i < n) ? "   " : "-->",
+			    r->dev, r->ep, r->len, r->done, r->ret, r->hcint, r->hctsiz, r->pidIn,
+			    r->pidOut, r->cpu,
+			    (r->mps != 0 && r->len != 0 && (r->len % r->mps) == 0) ?
+			    " [max-packet multiple: needs ZLP]" : "",
+			    gap ? " [pid-gap]" : "");
+			prev = r;
+		}
+	}
+	OutRecord *r = &fOutHist[fOutHistNext % kOutHistory];
+	r->len = len;
+	r->done = done;
+	r->ret = (uint32_t)ret;
+	r->hcint = hcint;
+	r->hctsiz = regRead(hcOffset(kDWC2Channel, kDWC2_HCTSIZ));
+	r->dev = ep->devAddr;
+	r->ep = ep->epNum;
+	r->pidIn = pidIn;
+	r->pidOut = pidOut;
+	r->mps = ep->maxPacket;
+	r->cpu = (uint16_t)cpu_number();
+	fOutHistNext++;
+}
+
 IOReturn
 BCM2837DWC2::doTransfer(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
                         void *buffer, uint32_t len, uint32_t *actualLen)
@@ -1271,6 +1332,8 @@ BCM2837DWC2::doTransfer(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
 
 	uint32_t done = 0;
 	IOReturn ret = kIOReturnSuccess;
+	uint8_t pidAtStart = *pid;
+	uint32_t lastHcint = 0;
 	bool stopTransfer = false;
 	bool doSplit = false;
 	bool completeSplit = false;
@@ -1403,6 +1466,30 @@ BCM2837DWC2::doTransfer(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
 			actual = 0;
 			hcint = 0;
 			ret = transferChunk(xferLen, isIn, &actual, &hcint, &timeoutHalted);
+			lastHcint = hcint;
+
+			/*
+			 * DAR-465: the DMA buffer must still hold exactly what was
+			 * copied in for this chunk. A difference means something
+			 * wrote the channel-0 buffer (or the caller's buffer) while
+			 * the core was reading it - the cross-core corruption the
+			 * first Pi run could not rule out. Costs one memcmp of at
+			 * most one chunk per OUT.
+			 */
+			if (!isIn && xferLen > 0 &&
+			    memcmp(fDMAVirt, (const uint8_t *)buffer + done, xferLen) != 0) {
+				uint32_t off = 0;
+				while (off < xferLen &&
+				    ((const uint8_t *)fDMAVirt)[off] == ((const uint8_t *)buffer)[done + off]) {
+					off++;
+				}
+				if (diagSample(++fDmaMismatches)) {
+					IOLog("BCM2837DWC2: DAR-465 DMA buffer #%u differs from its source "
+					      "after an OUT chunk: dev %u ep %u, %u bytes, first difference "
+					      "at %u, cpu %u\n", fDmaMismatches, ep->devAddr, ep->epNum,
+					    xferLen, off, (unsigned)cpu_number());
+				}
+			}
 
 			if (!(ret == kIOReturnIOError && (hcint & kHCINT_XACTERR))) {
 				break;
@@ -1520,6 +1607,10 @@ BCM2837DWC2::doTransfer(DWC2Endpoint *ep, uint8_t *pid, bool isIn,
 			*pid = channelNextPid(kDWC2Channel);
 		}
 	} while (((done < len) && !stopTransfer) || completeSplit);
+
+	if (!isIn && ep->epType == kHCCHAR_EPTYPE_BULK) {
+		recordOut(ep, len, done, ret, lastHcint, pidAtStart, *pid);
+	}
 
 	regWrite(hcOffset(kDWC2Channel, kDWC2_HCINTMSK), 0);
 	regWrite(hcOffset(kDWC2Channel, kDWC2_HCINT), 0xFFFFFFFF);

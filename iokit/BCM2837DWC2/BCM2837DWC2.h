@@ -613,6 +613,30 @@ private:
 	// Logged on the 1st..4th and then every power-of-two occurrence.
 	uint32_t                 fPartialChunks;
 	uint32_t                 fStallsSeen;
+	// DAR-465 run-1 follow-up: the last kOutHistory bulk OUT doTransfer()
+	// calls on channel 0, dumped at the first two OUT STALLs, so the
+	// transfer BEFORE a stall (its length, result, PIDs) is on record.
+	// Written and read under fTransferLock only.
+	enum { kOutHistory = 8 };
+	struct OutRecord {
+		uint32_t len;
+		uint32_t done;
+		uint32_t ret;
+		uint32_t hcint;
+		uint32_t hctsiz;
+		uint8_t  dev;
+		uint8_t  ep;
+		uint8_t  pidIn;
+		uint8_t  pidOut;
+		uint16_t mps;
+		uint16_t cpu;
+	};
+	OutRecord                fOutHist[kOutHistory];
+	uint32_t                 fOutHistNext;     // total records written
+	uint32_t                 fOutStallDumps;
+	uint32_t                 fDmaMismatches;
+	void                     recordOut(const DWC2Endpoint *ep, uint32_t len, uint32_t done,
+	    IOReturn ret, uint32_t hcint, uint8_t pidIn, uint8_t pidOut);
 
 	/*
 	 * DAR-352: recovery from a confirmed channel-0 wedge. haltChannel()
