@@ -2368,6 +2368,12 @@ else
     echo "+ $PREFS_PLIST already has real NetworkServices config -- leaving as-is"
 fi
 
+# /etc/login.conf: pw(8) wants a login class (else "setting crypt(3) format:
+# No such file or directory"); see tools/userland_staging/login.conf.
+cp tools/userland_staging/login.conf "$MNT/etc/login.conf"
+chmod 644 "$MNT/etc/login.conf"
+echo "+ wrote login.conf to $MNT/etc/"
+
 # /etc/profile: CLICOLOR=1 and a colour-capable TERM default for login shells
 # (serial console and ssh); see tools/userland_staging/profile.
 cp tools/userland_staging/profile "$MNT/etc/profile"
