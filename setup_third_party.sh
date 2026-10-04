@@ -1345,4 +1345,36 @@ if [ -n "$INTER_DEST" ]; then
     rm -rf "$INTER_TMP"
 fi
 
+# shared-mime-info 2.4 (freedesktop.org MIME database, GPL-2.0-or-later): GIO (GLib, and so WebKit) decides the content type of a
+# file by looking it up here; without /usr/share/mime/mime.cache every file is application/octet-stream and, for example,
+# WebKit shows a file:// HTML page as nothing at all. The project's own release archive (the git tag has no generated files
+# either way); build_shared_mime_info.sh compiles update-mime-database for the host and stages the generated data.
+# Verified by SHA-256 before unpacking.
+SMI_VER="2.4"
+SMI_SHA256="531291d0387eb94e16e775d7e73788d06d2b2fdd8cd2ac6b6b15287593b6a2de"
+SMI_DEST="third_party/shared-mime-info-$SMI_VER"
+if [ -d "$SMI_DEST" ]; then
+    if [ "$FORCE" = "1" ]; then
+        echo "+ removing existing $SMI_DEST (--force)"
+        rm -rf "$SMI_DEST"
+    else
+        echo "= $SMI_DEST already exists, skipping (use --force to re-fetch)"
+        SMI_DEST=""
+    fi
+fi
+if [ -n "$SMI_DEST" ]; then
+    echo "+ fetching shared-mime-info-$SMI_VER.tar.gz"
+    SMI_TMP="$(mktemp -d)"
+    curl -fsSL -o "$SMI_TMP/smi.tar.gz" \
+        "https://gitlab.freedesktop.org/xdg/shared-mime-info/-/archive/$SMI_VER/shared-mime-info-$SMI_VER.tar.gz"
+    got="$(shasum -a 256 "$SMI_TMP/smi.tar.gz" | awk '{print $1}')"
+    if [ "$got" != "$SMI_SHA256" ]; then
+        echo "error: shared-mime-info-$SMI_VER.tar.gz SHA-256 is $got, expected $SMI_SHA256" >&2
+        rm -rf "$SMI_TMP"
+        exit 1
+    fi
+    tar -xzf "$SMI_TMP/smi.tar.gz" -C third_party
+    rm -rf "$SMI_TMP"
+fi
+
 echo "done -- third_party/ populated. See docs/roadmap.md and README.md for what to build next."

@@ -585,6 +585,17 @@ if [ -d "$FS_STAGE/bin" ]; then
     done
     echo "+ wrote fontconfig tools to $MNT/usr/X11/bin ($(ls "$FS_STAGE"/bin/fc-*.macho | wc -l | tr -d ' ') of them)"
 fi
+# MIME database (shared-mime-info): GIO looks a file's content type up in /usr/share/mime/mime.cache. build_shared_mime_info.sh
+# generates it on the host with update-mime-database; without it WebKit (and anything on GIO) sees every file as
+# application/octet-stream. ditto keeps the directory layout.
+MIME_STAGE=tools/userland_staging/libc_build/shared_mime_info/root/usr/share/mime
+if [ -f "$MIME_STAGE/mime.cache" ]; then
+    mkdir -p "$MNT/usr/share"
+    ditto "$MIME_STAGE" "$MNT/usr/share/mime"
+    echo "+ wrote MIME database ($(du -sk "$MIME_STAGE" | cut -f1) KB) to $MNT/usr/share/mime"
+else
+    echo "= $MIME_STAGE not built -- run tools/userland_staging/build_shared_mime_info.sh first if wanted, skipping (GIO then types every file application/octet-stream)"
+fi
 # terminfo database (DAR-293): libncurses here is built without one
 # (build_ncurses.sh), so top, vim and libedit fail with "error opening terminal:
 # linux" (Terminal.app exports TERM=linux). build_terminfo.sh compiles a small
