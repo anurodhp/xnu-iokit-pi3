@@ -1,0 +1,61 @@
+Vendored VC4 command-list / shader validators (DARW-295 phase 2)
+================================================================
+
+Origin (permission to vendor given by the project owner, 2026-10-05):
+  Mesa 25.2.8 (tag mesa-25.2.8, third_party/mesa), MIT licensed,
+  Copyright 2014-2015 Broadcom, which mirrors Linux's
+  drivers/gpu/drm/vc4 validators for userspace:
+    src/gallium/drivers/vc4/kernel/vc4_validate.c
+    src/gallium/drivers/vc4/kernel/vc4_validate_shaders.c
+    src/gallium/drivers/vc4/kernel/vc4_render_cl.c
+    src/gallium/drivers/vc4/kernel/vc4_packet.h
+    src/gallium/drivers/vc4/kernel/vc4_drv.h
+    src/gallium/drivers/vc4/vc4_qpu_defines.h
+  The upstream license headers are kept in each file.
+
+Written here (not from Mesa):
+  vc4_simulator_validate.h  compat layer (replaces Mesa's file of that name)
+  v3d_exec.[ch]             submit driver (replaces Mesa's kernel/vc4_gem.c;
+                            follows Linux vc4_gem.c vc4_get_bcl())
+
+Why validators: the VC4 3D engine has no MMU/IOMMU; it DMAs whatever
+addresses its command lists, shader records, uniforms and QPU programs
+contain. Everything a client submits must be parsed, bounded against the
+buffers it named, and rewritten with real GPU addresses before the GPU sees
+it. Shader BOs are validated once at creation and are immutable afterwards.
+
+Local modifications to the vendored files (each marked "V3D local fix" at
+the site; found by comparing with current Linux and by the host tests in
+tools/v3d_validate_test, ASAN + UBSan + fuzzing):
+
+  vc4_validate.c
+    - validate_gl_shader_rec(): shader handle bound was `> bo_count`
+      (one-past-the-end BO read); now `>=`. The BO must also be a validated
+      shader before validated_shader is dereferenced (NULL deref otherwise).
+    - the remaining uniforms size was never decremented, so several shader
+      records could together overrun the uniforms area.
+  vc4_render_cl.c
+    - tile range vs. bin config: `>` -> `>=` (indices, not counts).
+    - tile range is now also bounded by the render target size; with no bin
+      CL the range was unconstrained and the hardware would store outside
+      the surfaces whose size had been checked.
+  vc4_validate_shaders.c
+    - PROG_END in the last two instructions pushed max_ip past the BO end
+      (out-of-bounds reads in both scans); now rejected.
+    - raddr values 32..63 (uniform, varying, VPM...) were used as indices
+      into the 68-entry live-register arrays; now untracked.
+  vc4_qpu_defines.h
+    - includes the compat header instead of Mesa's util/macros.h.
+  vc4_validate_shaders.c: dropped #include "vc4_qpu.h" (unused here).
+
+Known differences from Linux master (deliberate, not bugs):
+  - tile state/alloc memory is a per-job BO (as in Linux 4.4 / Mesa's
+    mirror) rather than Linux's shared binner BO with slots.
+  - render-list MSAA full-res addressing uses exec->tile_width (Mesa's
+    version); Linux uses a fixed 32. Equal for MSAA, which is the only
+    case that emits those packets from Mesa.
+  - Linux's later UBO "direct TMU" etc. fixes are present in this snapshot
+    (is_direct); perfmon, fences and syncobjs are not used.
+
+Testing: tools/v3d_validate_test/run.sh [iterations] [seed].
+Not yet tested against Mesa's real vc4 output or on hardware.

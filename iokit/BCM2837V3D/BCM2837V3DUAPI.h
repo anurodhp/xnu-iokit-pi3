@@ -79,6 +79,14 @@ struct v3d_wait_bo {
 	uint64_t timeout_ns;
 };
 
+/* v3d_submit_rcl_surface.flags */
+#define V3D_SUBMIT_RCL_SURFACE_READ_IS_FULL_RES (1u << 0)
+/* v3d_submit_cl.flags */
+#define V3D_SUBMIT_CL_USE_CLEAR_COLOR           (1u << 0)
+#define V3D_SUBMIT_CL_FIXED_RCL_ORDER           (1u << 1)
+#define V3D_SUBMIT_CL_RCL_ORDER_INCREASING_X    (1u << 2)
+#define V3D_SUBMIT_CL_RCL_ORDER_INCREASING_Y    (1u << 3)
+
 /* Same field set as struct drm_vc4_submit_rcl_surface */
 struct v3d_submit_rcl_surface {
 	uint32_t hindex;    /* index into bo_handles, or ~0 */
