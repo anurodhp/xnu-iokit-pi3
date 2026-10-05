@@ -576,6 +576,14 @@ install_smoketest tools/userland_staging/x11_probe.macho "usr/X11/bin/x11_probe"
 # relative symlinks as symlinks. The fontconfig cache is NOT prebuilt:
 # the first client (or `fc-cache`) writes it on the target.
 FS_STAGE=tools/userland_staging/libc_build/fontstack
+# GlobalDefaults.plist is only copied into the stage by build_fonts.sh, so an
+# image injected without rerunning it shipped the stale copy (no no_desktop,
+# GWorkspace drew the desktop). It is a plain file: refresh it every time.
+GD_SRC=tools/userland_staging/x11_config/gnustep/GlobalDefaults.plist
+if [ -d "$FS_STAGE/root/etc/GNUstep" ] && ! cmp -s "$GD_SRC" "$FS_STAGE/root/etc/GNUstep/GlobalDefaults.plist"; then
+    cp "$GD_SRC" "$FS_STAGE/root/etc/GNUstep/GlobalDefaults.plist"
+    echo "+ refreshed staged GlobalDefaults.plist from $GD_SRC"
+fi
 if [ -d "$FS_STAGE/root" ]; then
     need_kb=$(du -sk "$FS_STAGE/root" | awk '{print $1}')
     free_kb=$(df -k "$MNT" | awk 'NR==2{print $4}')
