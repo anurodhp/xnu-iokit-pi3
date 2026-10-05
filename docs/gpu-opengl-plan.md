@@ -196,9 +196,15 @@ Order matters; each step ends with a script + smoketest per the repo rule.
   write-combined mapping before the driver's explicit-store loop, so that loop
   does not avoid it. Not yet known whether this is a QEMU TCG artifact or a
   real issue; real DC ZVA on Normal non-cacheable memory is architecturally
-  valid, so it is likely QEMU. Options: allocate cacheable, zero, flush, then
-  map write-combined; or patch the xnu fork's IOBMD to avoid ZVA for
-  non-default cache modes.
+  valid, so it is likely QEMU. Tried and ruled out: allocating the descriptor
+  cacheable (IOBMD's bzero then runs on a normal mapping, flush, separate
+  write-combined map): it still stalled (attempt 4 of a repeat run) at the same
+  `dc zva` (`_bzero+0x44`), x3 at the first page boundary of the 16 KiB buffer,
+  PC and registers unchanged over many samples. So the cache attribute is not
+  the cause; reverted. Next step: at the stall run `gva2gpa` on x3 in the
+  monitor and look at what the next page is (fresh QEMU V3D model region? an
+  unmapped PTE the fault path retries?), and check the QEMU fork's DC ZVA
+  helper.
 - **Validator fuzzing from real Mesa output**: 1.2M mutations of 45 real
   submissions and 26 compiled QPU programs under ASAN/UBSan. It found a real
   off-by-one in the multisample full-resolution tile bound (a target one tile
