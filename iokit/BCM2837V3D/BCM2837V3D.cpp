@@ -296,113 +296,27 @@ BCM2837V3D::flushTextureCaches(void)
 	v3dWrite(kV3D_SLCACTL, kV3D_SLCACTL_ClearTex);
 }
 
-static void
-listPopHead(V3DJob **head, V3DJob **tail)
+// Hardware callbacks for V3DQueue. Called with the job lock held.
+static void hwStartBin(void *ctx, uint32_t ca, uint32_t ea)
 {
-	V3DJob *j = *head;
-	if (j != NULL) {
-		*head = j->next;
-		if (*head == NULL) {
-			*tail = NULL;
-		}
-		j->next = NULL;
-	}
-}
-
-static void
-listAppend(V3DJob **head, V3DJob **tail, V3DJob *j)
-{
-	j->next = NULL;
-	if (*tail != NULL) {
-		(*tail)->next = j;
-	} else {
-		*head = j;
-	}
-	*tail = j;
-}
-
-// Completed jobs wait on fDoneHead/fDoneTail until the timer (thread context)
-// frees them: releasing an OSObject can block, which the interrupt handler
-// must not.
-
-/* vc4_submit_next_bin_job() (vc4_gem.c:476-519). Job lock held. */
-void
-BCM2837V3D::submitNextBinJob(void)
-{
-	for (;;) {
-		V3DJob *j = fBinHead;
-		if (j == NULL) {
-			return;
-		}
-		flushCaches();
-		if (j->ct0ca != j->ct0ea) {
-			cpuToGpuBarrier();
-			// Writing the end address is what starts the job (submit_cl(),
-			// vc4_gem.c:376-385).
-			v3dWrite(kV3D_CT0CA, j->ct0ca);
-			v3dWrite(kV3D_CT0EA, j->ct0ea);
-			return;
-		}
-		// No binner work: go straight to the render queue.
-		listPopHead(&fBinHead, &fBinTail);
-		moveJobToRender(j);
-	}
-}
-
-/* vc4_submit_next_render_job() (vc4_gem.c:521-541). Job lock held. */
-void
-BCM2837V3D::submitNextRenderJob(void)
-{
-	V3DJob *j = fRenderHead;
-	if (j == NULL) {
-		return;
-	}
-	flushTextureCaches();
+	BCM2837V3D *d = (BCM2837V3D *)ctx;
 	cpuToGpuBarrier();
-	v3dWrite(kV3D_CT1CA, j->ct1ca);
-	v3dWrite(kV3D_CT1EA, j->ct1ea);
+	// Writing the end address is what starts the job (submit_cl(),
+	// vc4_gem.c:376-385).
+	d->v3dWriteReg(kV3D_CT0CA, ca);
+	d->v3dWriteReg(kV3D_CT0EA, ea);
 }
 
-/* vc4_move_job_to_render() (vc4_gem.c:543-553). Job lock held. */
-void
-BCM2837V3D::moveJobToRender(V3DJob *j)
+static void hwStartRender(void *ctx, uint32_t ca, uint32_t ea)
 {
-	bool wasEmpty = (fRenderHead == NULL);
-	listAppend(&fRenderHead, &fRenderTail, j);
-	if (wasEmpty) {
-		submitNextRenderJob();
-	}
+	BCM2837V3D *d = (BCM2837V3D *)ctx;
+	cpuToGpuBarrier();
+	d->v3dWriteReg(kV3D_CT1CA, ca);
+	d->v3dWriteReg(kV3D_CT1EA, ea);
 }
 
-/* vc4_irq_finish_bin_job() (vc4_irq.c). Job lock held. */
-void
-BCM2837V3D::finishBinJob(void)
-{
-	V3DJob *j = fBinHead;
-	if (j == NULL) {
-		return;
-	}
-	listPopHead(&fBinHead, &fBinTail);
-	moveJobToRender(j);
-	submitNextBinJob();
-}
-
-/* vc4_irq_finish_render_job() (vc4_irq.c). Job lock held. */
-void
-BCM2837V3D::finishRenderJob(void)
-{
-	V3DJob *j = fRenderHead;
-	if (j == NULL) {
-		return;
-	}
-	listPopHead(&fRenderHead, &fRenderTail);
-	fFinishedSeqno = j->seqno;
-	OSMemoryBarrier();
-	listAppend(&fDoneHead, &fDoneTail, j);
-	if (fRenderHead != NULL) {
-		submitNextRenderJob();
-	}
-}
+static void hwFlushCaches(void *ctx) { ((BCM2837V3D *)ctx)->flushCaches(); }
+static void hwFlushTextureCaches(void *ctx) { ((BCM2837V3D *)ctx)->flushTextureCaches(); }
 
 void
 BCM2837V3D::interruptOccurred(OSObject *target, void *, IOService *, int)
@@ -419,12 +333,12 @@ BCM2837V3D::interruptOccurred(OSObject *target, void *, IOService *, int)
 
 	if (intctl & kV3D_INT_FLDONE) {
 		IOInterruptState s = IOSimpleLockLockDisableInterrupt(self->fJobLock);
-		self->finishBinJob();
+		self->fQueue->binDone();
 		IOSimpleLockUnlockEnableInterrupt(self->fJobLock, s);
 	}
 	if (intctl & kV3D_INT_FRDONE) {
 		IOInterruptState s = IOSimpleLockLockDisableInterrupt(self->fJobLock);
-		self->finishRenderJob();
+		self->fQueue->renderDone();
 		IOSimpleLockUnlockEnableInterrupt(self->fJobLock, s);
 	}
 	// kV3D_INT_OUTOMEM is never enabled (see header).
@@ -464,7 +378,8 @@ BCM2837V3D::saveHangState(void)
 	h.fdbgb = v3dRead(kV3D_FDBGB); h.fdbgr = v3dRead(kV3D_FDBGR);
 	h.fdbgs = v3dRead(kV3D_FDBGS); h.errstat = v3dRead(kV3D_ERRSTAT);
 	IOInterruptState s = IOSimpleLockLockDisableInterrupt(fJobLock);
-	h.seqno = fRenderHead ? fRenderHead->seqno : (fBinHead ? fBinHead->seqno : 0);
+	const V3DJob *oldest = fQueue->oldestInFlight();
+	h.seqno = oldest ? oldest->seqno : 0;
 	fHang = h;
 	IOSimpleLockUnlockEnableInterrupt(fJobLock, s);
 }
@@ -490,33 +405,7 @@ BCM2837V3D::resetHW(void)
 	}
 
 	IOInterruptState s = IOSimpleLockLockDisableInterrupt(fJobLock);
-	if (fRenderHead != NULL) {
-		finishRenderJob();                   // fails the hung render job
-	} else if (fBinHead != NULL) {
-		V3DJob *j = fBinHead;
-		listPopHead(&fBinHead, &fBinTail);
-		fFinishedSeqno = j->seqno;
-		OSMemoryBarrier();
-		listAppend(&fDoneHead, &fDoneTail, j);
-	}
-	if (fPowered) {
-		submitNextRenderJob();
-		submitNextBinJob();
-	} else {
-		// Hardware is gone: fail everything still queued.
-		for (;;) {
-			V3DJob *j = fRenderHead;
-			if (j != NULL) {
-				listPopHead(&fRenderHead, &fRenderTail);
-			} else if ((j = fBinHead) != NULL) {
-				listPopHead(&fBinHead, &fBinTail);
-			} else {
-				break;
-			}
-			fFinishedSeqno = j->seqno;
-			listAppend(&fDoneHead, &fDoneTail, j);
-		}
-	}
+	fQueue->resetDone(fPowered);
 	IOSimpleLockUnlockEnableInterrupt(fJobLock, s);
 }
 
@@ -538,9 +427,8 @@ BCM2837V3D::hangcheckTick(OSObject *owner, IOTimerEventSource *)
 	}
 
 	IOInterruptState s = IOSimpleLockLockDisableInterrupt(self->fJobLock);
-	V3DJob *done = self->fDoneHead;
-	self->fDoneHead = self->fDoneTail = NULL;
-	bool busy = (self->fBinHead != NULL || self->fRenderHead != NULL);
+	V3DJob *done = self->fQueue->takeDone();
+	bool busy = !self->fQueue->idle();
 	IOSimpleLockUnlockEnableInterrupt(self->fJobLock, s);
 
 	while (done != NULL) {
@@ -656,20 +544,15 @@ BCM2837V3D::queueJob(V3DJob *j, uint64_t *seqnoOut)
 		return kIOReturnNotReady;
 	}
 	IOInterruptState s = IOSimpleLockLockDisableInterrupt(fJobLock);
-	uint64_t seqno = j->seqno = ++fNextSeqno;
-	for (uint32_t i = 0; i < j->boCount; i++) {
-		j->bos[i]->fBusySeqno = seqno;
-	}
-	bool wasIdle = (fBinHead == NULL && fRenderHead == NULL);
-	bool kick = (fBinHead == NULL);
+	bool wasIdle = fQueue->idle();
 	if (wasIdle) {
 		// Nothing is binning, so the overflow memory can be handed out from
-		// the start again (see initHW's note on the OUTOMEM interrupt).
+		// the start again (see resetBinnerOverflow()).
 		resetBinnerOverflow();
 	}
-	listAppend(&fBinHead, &fBinTail, j);
-	if (kick) {
-		submitNextBinJob();
+	uint64_t seqno = fQueue->submit(j);
+	for (uint32_t i = 0; i < j->boCount; i++) {
+		j->bos[i]->fBusySeqno = seqno;
 	}
 	IOSimpleLockUnlockEnableInterrupt(fJobLock, s);
 
@@ -874,7 +757,7 @@ fail:
 IOReturn
 BCM2837V3D::waitSeqno(uint64_t seqno, uint64_t timeoutNs)
 {
-	if (fFinishedSeqno >= seqno) {
+	if (fQueue->finishedSeqno() >= seqno) {
 		return kIOReturnSuccess;
 	}
 	if (timeoutNs == 0) {
@@ -887,7 +770,7 @@ BCM2837V3D::waitSeqno(uint64_t seqno, uint64_t timeoutNs)
 	clock_get_uptime(&now);
 	nanoseconds_to_absolutetime(timeoutNs, &deadline);
 	deadline += now;
-	while (fFinishedSeqno < seqno) {
+	while (fQueue->finishedSeqno() < seqno) {
 		if (fStopping) {
 			return kIOReturnAborted;
 		}
@@ -963,6 +846,13 @@ BCM2837V3D::start(IOService *provider)
 		return false;
 	}
 
+	{
+		V3DHw hw = { this, hwStartBin, hwStartRender, hwFlushCaches, hwFlushTextureCaches };
+		fQueue = new V3DQueue(hw);
+	}
+	if (fQueue == NULL) {
+		return false;
+	}
 	fOverflowBO = V3DBuffer::withSize(4U * 1024 * 1024);
 	if (fOverflowBO == NULL) {
 		IOLog("BCM2837V3D: no memory for binner overflow\n");
@@ -1024,14 +914,12 @@ BCM2837V3D::stop(IOService *provider)
 		powerOff();
 	}
 	// Anything still queued can never finish now; release it.
-	V3DJob *lists[3] = { fBinHead, fRenderHead, fDoneHead };
-	fBinHead = fBinTail = fRenderHead = fRenderTail = NULL;
-	fDoneHead = fDoneTail = NULL;
-	for (int i = 0; i < 3; i++) {
-		while (lists[i] != NULL) {
-			V3DJob *n = lists[i]->next;
-			freeJob(lists[i]);
-			lists[i] = n;
+	if (fQueue != NULL) {
+		V3DJob *j = fQueue->takeAll();
+		while (j != NULL) {
+			V3DJob *n = j->next;
+			freeJob(j);
+			j = n;
 		}
 	}
 	super::stop(provider);
@@ -1058,6 +946,10 @@ BCM2837V3D::free(void)
 	if (fOverflowBO != NULL) {
 		fOverflowBO->release();
 		fOverflowBO = NULL;
+	}
+	if (fQueue != NULL) {
+		delete fQueue;
+		fQueue = NULL;
 	}
 	if (fRegMap != NULL) { fRegMap->release(); fRegMap = NULL; }
 	if (fPMMap != NULL) { fPMMap->release(); fPMMap = NULL; }

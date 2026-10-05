@@ -43,6 +43,7 @@
 #include <IOKit/IOWorkLoop.h>
 #include "BCM2837V3DUAPI.h"
 #include "BCM2837V3DRegs.h"
+#include "V3DQueue.h"
 
 class BCM2837V3DUserClient;
 struct vc4_validated_shader_info;
@@ -60,15 +61,6 @@ public:
 
 	static V3DBuffer *withSize(uint32_t size);
 	virtual void free(void) APPLE_KEXT_OVERRIDE;
-};
-
-struct V3DJob {
-	V3DJob *next;
-	uint64_t seqno;
-	uint32_t ct0ca, ct0ea;     /* binner list */
-	uint32_t ct1ca, ct1ea;     /* render list */
-	uint32_t boCount;
-	V3DBuffer **bos;           // retained; boCount entries
 };
 
 class BCM2837V3D : public IOService {
@@ -92,7 +84,13 @@ public:
 	IOReturn waitSeqno(uint64_t seqno, uint64_t timeoutNs);
 	void getHangState(v3d_hang_state *out);
 	bool rawSubmitAllowed(void) const { return fRawAllowed; }
-	uint64_t finishedSeqno(void) const { return fFinishedSeqno; }
+	uint64_t finishedSeqno(void) const { return fQueue->finishedSeqno(); }
+
+public:
+	// For the V3DQueue hardware callbacks (BCM2837V3D.cpp).
+	void v3dWriteReg(uint32_t off, uint32_t v) { v3dWrite(off, v); }
+	void flushCaches(void);
+	void flushTextureCaches(void);
 
 private:
 	static void interruptOccurred(OSObject *target, void *refCon, IOService *nub, int source);
@@ -109,13 +107,6 @@ private:
 	void initHW(void);
 	void resetHW(void);          /* thread context only */
 
-	void flushCaches(void);
-	void flushTextureCaches(void);
-	void submitNextBinJob(void);      /* job lock held */
-	void submitNextRenderJob(void);   /* job lock held */
-	void moveJobToRender(V3DJob *j);  /* job lock held */
-	void finishBinJob(void);          /* job lock held */
-	void finishRenderJob(void);       /* job lock held, interrupt or reset */
 	void saveHangState(void);
 	void queueHangcheck(void);
 	void freeJob(V3DJob *j);
@@ -132,11 +123,7 @@ private:
 
 	IOSimpleLock *fJobLock;       /* protects the lists and seqno counters; taken at interrupt level */
 	IOLock *fWaitLock;
-	V3DJob *fBinHead, *fBinTail;
-	V3DJob *fRenderHead, *fRenderTail;
-	V3DJob *fDoneHead, *fDoneTail;      // finished, awaiting release
-	uint64_t fNextSeqno;
-	volatile uint64_t fFinishedSeqno;
+	V3DQueue *fQueue;             // job pipeline state; used with fJobLock held
 
 	V3DBuffer *fOverflowBO;       // binner overflow memory (BPOA/BPOS)
 	uint32_t fIdent0, fIdent1, fIdent2;

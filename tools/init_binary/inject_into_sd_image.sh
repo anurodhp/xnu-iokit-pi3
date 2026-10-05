@@ -524,6 +524,11 @@ install_smoketest tools/userland_staging/x11_bench.macho "usr/X11/bin/x11_bench"
 install_smoketest tools/userland_staging/gl_smoketest.macho "usr/X11/bin/gl_smoketest" \
     "= tools/userland_staging/gl_smoketest.macho not built -- run build_gl_smoketest.sh first if wanted, skipping" \
     "  (tools/userland_staging/build_gl_smoketest.sh: Mesa softpipe GLX/GLSL test)"
+# V3D bring-up tool (DARW-295): needs libdrm.2.dylib (build_libdrm_v3d.sh),
+# installed by the generic loop below.
+install_smoketest tools/userland_staging/v3dprobe.macho "usr/X11/bin/v3dprobe" \
+    "= tools/userland_staging/v3dprobe.macho not built -- run build_v3dprobe.sh first if wanted, skipping" \
+    "  (tools/userland_staging/build_v3dprobe.sh: first-contact test for the V3D kext)"
 # Window Maker Close/Kill driver (DAR-452): QEMU-only diagnostic, no xdotool/xkill here.
 install_smoketest tools/userland_staging/wmclose_probe.macho "usr/X11/bin/wmclose_probe" \
     "= tools/userland_staging/wmclose_probe.macho not built -- run build_wmclose_probe.sh first if wanted, skipping" \

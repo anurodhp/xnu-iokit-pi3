@@ -11,9 +11,13 @@
  * mapping model (IOConnectMapMemory64 type == BO handle, instead of
  * DRM_IOCTL_VC4_MMAP_BO + mmap(offset)) are this project's own.
  *
- * Every struct is explicitly 8-byte aligned and padded, because it is
- * passed as an IOConnectCallStructMethod blob and must have the same
- * layout for an arm64 client and the arm64 kernel.
+ * Every struct is explicitly padded, because it is passed as an
+ * IOConnectCallStructMethod blob and must have the same layout for an
+ * arm64 client and the arm64 kernel. v3d_get_param, v3d_create_bo,
+ * v3d_wait_*, v3d_create_shader_bo, v3d_submit_rcl_surface and
+ * v3d_submit_cl are byte-identical to their struct drm_vc4_* counterparts
+ * in Linux's vc4_drm.h (checked by tools/v3d_validate_test/abi_check.c), so
+ * the libdrm shim passes Mesa's structs straight through.
  */
 #ifndef _BCM2837V3DUAPI_H
 #define _BCM2837V3DUAPI_H
@@ -94,7 +98,6 @@ struct v3d_submit_rcl_surface {
 	uint32_t offset;
 	uint16_t bits;
 	uint16_t flags;
-	uint32_t pad;
 };
 
 /*
@@ -126,8 +129,13 @@ struct v3d_submit_cl {
 	uint8_t clear_s;
 	uint8_t pad8[3];
 	uint32_t flags;
-	uint32_t pad32;
 	uint64_t seqno;     /* out */
+	/* The remaining fields exist for layout compatibility with
+	 * struct drm_vc4_submit_cl and are ignored (no perfmon, no syncobjs). */
+	uint32_t perfmonid;
+	uint32_t in_sync;
+	uint32_t out_sync;
+	uint32_t pad2;
 };
 
 /*
