@@ -73,7 +73,9 @@ missing_from_conf=()
 diverged=()
 copied_files=()
 
-for src in iokit/*/*.cpp iokit/*/*.h; do
+# iokit/<Driver>/validate/*.{c,h} (vendored VC4 validators, BCM2837V3D) land
+# flat in the same destination directory as everything else.
+for src in iokit/*/*.cpp iokit/*/*.h iokit/*/validate/*.c iokit/*/validate/*.h; do
 	[ -e "$src" ] || continue
 	base="$(basename "$src")"
 	dst="$DEST/$base"
@@ -105,7 +107,7 @@ for src in iokit/*/*.cpp iokit/*/*.h; do
 	fi
 
 	case "$base" in
-	*.cpp)
+	*.cpp|*.c)
 		if ! grep -q "iokit/Drivers/BCM2837/$base" "$CONF"; then
 			missing_from_conf+=("$base")
 		fi

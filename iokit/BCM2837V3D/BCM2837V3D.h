@@ -45,6 +45,7 @@
 #include "BCM2837V3DRegs.h"
 
 class BCM2837V3DUserClient;
+struct vc4_validated_shader_info;
 
 /* One buffer object. Refcounted so an in-flight job keeps it alive after
  * the client closes its handle. */
@@ -55,6 +56,7 @@ public:
 	uint32_t fSize;
 	uint32_t fGpuAddr;       /* bus address the GPU uses */
 	volatile uint64_t fBusySeqno;  /* highest seqno of a job using this BO */
+	struct vc4_validated_shader_info *fShader;   /* non-NULL: a validated, immutable shader BO */
 
 	static V3DBuffer *withSize(uint32_t size);
 	virtual void free(void) APPLE_KEXT_OVERRIDE;
@@ -66,7 +68,7 @@ struct V3DJob {
 	uint32_t ct0ca, ct0ea;     /* binner list */
 	uint32_t ct1ca, ct1ea;     /* render list */
 	uint32_t boCount;
-	V3DBuffer *bos[V3D_RAW_MAX_BOS];
+	V3DBuffer **bos;           // retained; boCount entries
 };
 
 class BCM2837V3D : public IOService {
@@ -80,6 +82,13 @@ public:
 	/* Interface for BCM2837V3DUserClient */
 	IOReturn getParam(uint32_t param, uint64_t *value);
 	IOReturn submitRaw(const v3d_raw_submit *in, V3DBuffer **bos, uint64_t *seqnoOut);
+	// Validated submit: `bos` are the caller's looked-up BOs (retained by the
+	// caller), the three buffers are kernel copies of the client's data.
+	// Validates a QPU program (kernel copy, `size` a multiple of 8) and wraps it
+	// in an immutable shader BO. Returns a BO with one reference.
+	IOReturn createShaderBO(const void *code, uint32_t size, V3DBuffer **out);
+	IOReturn submitValidated(v3d_submit_cl *args, V3DBuffer **bos, uint32_t boCount,
+	    const void *binCl, const void *shaderRec, const void *uniforms, uint64_t *seqnoOut);
 	IOReturn waitSeqno(uint64_t seqno, uint64_t timeoutNs);
 	void getHangState(v3d_hang_state *out);
 	bool rawSubmitAllowed(void) const { return fRawAllowed; }
@@ -110,6 +119,8 @@ private:
 	void saveHangState(void);
 	void queueHangcheck(void);
 	void freeJob(V3DJob *j);
+	IOReturn queueJob(V3DJob *j, uint64_t *seqnoOut);
+	void resetBinnerOverflow(void);   // job lock held, binner idle
 
 	static const uint32_t kPMPassword = 0x5a000000U;
 
@@ -127,6 +138,7 @@ private:
 	uint64_t fNextSeqno;
 	volatile uint64_t fFinishedSeqno;
 
+	V3DBuffer *fOverflowBO;       // binner overflow memory (BPOA/BPOS)
 	uint32_t fIdent0, fIdent1, fIdent2;
 	bool fPowered;
 	bool fIRQRegistered;

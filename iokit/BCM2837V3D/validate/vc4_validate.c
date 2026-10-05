@@ -396,7 +396,9 @@ validate_tile_binning_config(VALIDATE_ARGS)
 	 */
 	tile_alloc_size += 1024 * 1024;
 
-	exec->tile_bo = drm_gem_cma_create(dev, exec->tile_alloc_offset +
+	/* V3D local change: no staging copy, this BO is never written through
+	 * vaddr (it can be megabytes). */
+	exec->tile_bo = drm_gem_cma_create_nostage(dev, exec->tile_alloc_offset +
 					   tile_alloc_size);
 	if (!exec->tile_bo)
 		return -ENOMEM;
@@ -741,7 +743,8 @@ validate_gl_shader_rec(struct drm_device *dev,
 		28, /* cs */
 	};
 	uint32_t shader_reloc_count = ARRAY_SIZE(shader_reloc_offsets);
-	struct drm_gem_cma_object *bo[shader_reloc_count + 8];
+	/* V3D local fix: was a variable-length array (xnu builds with -Wvla). */
+	struct drm_gem_cma_object *bo[ARRAY_SIZE(shader_reloc_offsets) + 8];
 	uint32_t nr_attributes, nr_relocs, packet_size;
 	int i;
 

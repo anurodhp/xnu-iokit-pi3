@@ -17,6 +17,9 @@ Written here (not from Mesa):
   vc4_simulator_validate.h  compat layer (replaces Mesa's file of that name)
   v3d_exec.[ch]             submit driver (replaces Mesa's kernel/vc4_gem.c;
                             follows Linux vc4_gem.c vc4_get_bcl())
+  v3d_kglue.[ch]            the only interface the C++ driver sees (the
+                            validator headers define macros such as max/min/
+                            roundup/BIT that must not reach IOKit headers)
 
 Why validators: the VC4 3D engine has no MMU/IOMMU; it DMAs whatever
 addresses its command lists, shader records, uniforms and QPU programs
@@ -34,6 +37,9 @@ tools/v3d_validate_test, ASAN + UBSan + fuzzing):
       shader before validated_shader is dereferenced (NULL deref otherwise).
     - the remaining uniforms size was never decremented, so several shader
       records could together overrun the uniforms area.
+    - the tile BO is created with drm_gem_cma_create_nostage() (no staging
+      copy of megabytes of never-written memory).
+    - the BO array in validate_gl_shader_rec() is fixed-size, not a VLA.
   vc4_render_cl.c
     - tile range vs. bin config: `>` -> `>=` (indices, not counts).
     - tile range is now also bounded by the render target size; with no bin

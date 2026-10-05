@@ -10,8 +10,8 @@ cd "$(dirname "$0")"
 V=../../iokit/BCM2837V3D/validate
 OUT="${TMPDIR:-/tmp}/v3d_validate_test"
 mkdir -p "$OUT"
-cc -std=gnu11 -g -O1 -fsanitize=address,undefined -fno-sanitize=alignment -fno-sanitize-recover=undefined \
+cc -std=gnu11 -I ../../iokit/BCM2837V3D -I $V -g -O1 -fsanitize=address,undefined -fno-sanitize=alignment -fno-sanitize-recover=undefined \
     -Wall -Wno-unused-parameter -Wno-sign-compare -Wno-unused-function \
     -o "$OUT/test_validate" test_validate.c \
-    $V/vc4_validate.c $V/vc4_validate_shaders.c $V/vc4_render_cl.c $V/v3d_exec.c
+    $V/vc4_validate.c $V/vc4_validate_shaders.c $V/vc4_render_cl.c $V/v3d_exec.c $V/v3d_kglue.c
 exec "$OUT/test_validate" "$@"

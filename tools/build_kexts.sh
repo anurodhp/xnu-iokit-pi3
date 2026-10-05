@@ -65,6 +65,19 @@ for kext in "${KEXTS[@]}"; do
 		obj="$OUT_DIR/$(basename "${src%.cpp}").o"
 		"$CLANGXX" -isysroot "$SDK" -arch arm64 -fapple-kext -mkernel \
 			$(grep -v '^-xc++$' compile_flags.txt) \
+			-I "iokit/$kext" -I "iokit/$kext/validate" \
+			-c "$src" \
+			-o "$obj"
+	done
+	# C sources in <dir>/validate/ (the vendored VC4 validators): compiled as
+	# C with the same kernel flags, minus the C++-only ones.
+	for src in "iokit/$kext"/validate/*.c; do
+		[ -e "$src" ] || continue
+		obj="$OUT_DIR/$(basename "${src%.c}").o"
+		"$CLANGXX" -x c -std=gnu11 -isysroot "$SDK" -arch arm64 -fapple-kext -mkernel \
+			$(grep -v -e '^-xc++$' -e '^-std=gnu++14$' -e '^-include$' -e '^compat/decls.h$' compile_flags.txt) \
+			-I "iokit/$kext" -I "iokit/$kext/validate" \
+			-Wall -Wno-unused-parameter -Wno-sign-compare \
 			-c "$src" \
 			-o "$obj"
 	done

@@ -5,10 +5,12 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IODeviceMemory.h>
 #include <libkern/OSAtomic.h>
+#include <sys/errno.h>
 #include <pexpert/pexpert.h>
 #include "BCM2837V3D.h"
 #include "BCM2837V3DRegs.h"
 #include "../BCM2837Mailbox/BCM2837Mailbox.h"
+#include "v3d_kglue.h"
 
 #define super IOService
 OSDefineMetaClassAndFinalStructors(BCM2837V3D, IOService)
@@ -27,6 +29,61 @@ cpuToGpuBarrier(void)
 	// BOs are write-combined: drain the CPU write buffer before the GPU is
 	// told to read them.
 	__asm__ volatile ("dsb sy" ::: "memory");
+}
+
+/* ====================== validator allocation shims ======================
+ * Declared in validate/vc4_simulator_validate.h; the vendored C validators
+ * (built into this kext) allocate through these. Sizes are kept in a
+ * 16-byte header because IOFree needs the size. Zero-filled. */
+extern "C" {
+void *
+v3d_kalloc(size_t n)
+{
+	size_t total = n + 16;
+	if (total < n) {
+		return NULL;
+	}
+	uint8_t *p = (uint8_t *)IOMalloc(total);
+	if (p == NULL) {
+		return NULL;
+	}
+	bzero(p, total);
+	*(size_t *)p = total;
+	return p + 16;
+}
+
+void
+v3d_kfree(void *q)
+{
+	if (q != NULL) {
+		uint8_t *p = (uint8_t *)q - 16;
+		IOFree(p, *(size_t *)p);
+	}
+}
+
+void *
+v3d_krealloc_nosize(void *q, size_t n)
+{
+	if (q == NULL) {
+		return v3d_kalloc(n);
+	}
+	size_t old = *(size_t *)((uint8_t *)q - 16) - 16;
+	void *r = v3d_kalloc(n);
+	if (r != NULL) {
+		memcpy(r, q, old < n ? old : n);
+		v3d_kfree(q);
+	}
+	return r;
+}
+
+// BUG_ON() in the validators guards invariants the host fuzzer has never
+// seen violated (see validate/README); if one ever is, continuing would
+// write outside a buffer.
+void
+v3d_bug_on(const char *file, int line)
+{
+	panic("BCM2837V3D: validator invariant violated at %s:%d", file, line);
+}
 }
 
 /* ============================ V3DBuffer ============================ */
@@ -76,6 +133,10 @@ V3DBuffer::withSize(uint32_t size)
 void
 V3DBuffer::free(void)
 {
+	if (fShader != NULL) {
+		v3d_kglue_free_shader(fShader);
+		fShader = NULL;
+	}
 	if (fMem != NULL) {
 		fMem->release();
 		fMem = NULL;
@@ -210,6 +271,10 @@ BCM2837V3D::initHW(void)
 	// Hand the QPU-user-program VPM space to the rasteriser; there is no
 	// interface for running user QPU programs.
 	v3dWrite(kV3D_VPMBASE, 0);
+	if (fOverflowBO != NULL) {
+		v3dWrite(kV3D_BPOA, fOverflowBO->fGpuAddr);
+		v3dWrite(kV3D_BPOS, fOverflowBO->fSize);
+	}
 	v3dWrite(kV3D_INTCTL, kV3D_DriverIRQs);          // clear stale
 	v3dWrite(kV3D_INTENA, kV3D_INT_FLDONE | kV3D_INT_FRDONE);
 }
@@ -373,6 +438,9 @@ BCM2837V3D::freeJob(V3DJob *j)
 			j->bos[i]->release();
 		}
 	}
+	if (j->bos != NULL) {
+		IOFree(j->bos, j->boCount * sizeof(V3DBuffer *));
+	}
 	IOFree(j, sizeof(*j));
 }
 
@@ -509,7 +577,7 @@ BCM2837V3D::getParam(uint32_t param, uint64_t *value)
 	case kV3DParamSupportsETC1:
 	case kV3DParamSupportsThreadedFS: *value = 1; break;
 	// Only once the validated-submit path exists.
-	case kV3DParamSupportsFixedRCLOrder:
+	case kV3DParamSupportsFixedRCLOrder: *value = 1; break;   // the vendored render-list generator honours it
 	case kV3DParamSupportsMadvise:
 	case kV3DParamSupportsPerfmon: *value = 0; break;
 	default: return kIOReturnBadArgument;
@@ -560,31 +628,247 @@ BCM2837V3D::submitRaw(const v3d_raw_submit *in, V3DBuffer **bos, uint64_t *seqno
 	bzero(j, sizeof(*j));
 	j->ct0ca = in->bin_start;   j->ct0ea = in->bin_end;
 	j->ct1ca = in->render_start; j->ct1ea = in->render_end;
-	j->boCount = in->bo_count;
-	for (uint32_t i = 0; i < in->bo_count; i++) {
-		j->bos[i] = bos[i];
-		bos[i]->retain();
+	if (in->bo_count != 0) {
+		j->bos = (V3DBuffer **)IOMalloc(in->bo_count * sizeof(V3DBuffer *));
+		if (j->bos == NULL) {
+			IOFree(j, sizeof(*j));
+			return kIOReturnNoMemory;
+		}
+		j->boCount = in->bo_count;
+		for (uint32_t i = 0; i < in->bo_count; i++) {
+			j->bos[i] = bos[i];
+			bos[i]->retain();
+		}
 	}
+	return queueJob(j, seqnoOut);
+}
 
+/*
+ * Takes ownership of `j` (freed on every path), assigns its seqno and starts
+ * it. The seqno is read before the lock is dropped: once the job is queued
+ * it can complete, and be reaped, at any time.
+ */
+IOReturn
+BCM2837V3D::queueJob(V3DJob *j, uint64_t *seqnoOut)
+{
+	if (!fPowered || fStopping) {
+		freeJob(j);
+		return kIOReturnNotReady;
+	}
 	IOInterruptState s = IOSimpleLockLockDisableInterrupt(fJobLock);
-	j->seqno = ++fNextSeqno;
+	uint64_t seqno = j->seqno = ++fNextSeqno;
 	for (uint32_t i = 0; i < j->boCount; i++) {
-		j->bos[i]->fBusySeqno = j->seqno;
+		j->bos[i]->fBusySeqno = seqno;
 	}
 	bool wasIdle = (fBinHead == NULL && fRenderHead == NULL);
 	bool kick = (fBinHead == NULL);
+	if (wasIdle) {
+		// Nothing is binning, so the overflow memory can be handed out from
+		// the start again (see initHW's note on the OUTOMEM interrupt).
+		resetBinnerOverflow();
+	}
 	listAppend(&fBinHead, &fBinTail, j);
 	if (kick) {
 		submitNextBinJob();
 	}
 	IOSimpleLockUnlockEnableInterrupt(fJobLock, s);
 
-	*seqnoOut = j->seqno;
+	*seqnoOut = seqno;
 	if (wasIdle) {
 		fLastCt0ca = fLastCt1ca = 0xffffffffU;
 		queueHangcheck();
 	}
 	return kIOReturnSuccess;
+}
+
+static void copyStagingToBO(V3DBuffer *b, const void *src, size_t n);
+
+IOReturn
+BCM2837V3D::createShaderBO(const void *code, uint32_t size, V3DBuffer **out)
+{
+	if (size == 0 || (size & 7) != 0 || size > 64 * 1024) {
+		return kIOReturnBadArgument;
+	}
+	struct vc4_validated_shader_info *info = v3d_kglue_validate_shader(code, size);
+	if (info == NULL) {
+		return kIOReturnNotPermitted;           // the program is not provably safe
+	}
+	V3DBuffer *b = V3DBuffer::withSize(size);
+	if (b == NULL) {
+		v3d_kglue_free_shader(info);
+		return kIOReturnNoMemory;
+	}
+	copyStagingToBO(b, code, size);
+	b->fShader = info;
+	*out = b;
+	return kIOReturnSuccess;
+}
+
+/*
+ * Binner overflow memory. When a frame's tile lists outgrow the job's own
+ * tile BO the binner takes blocks from here (BPOA = base, BPOS = size, as
+ * vc4_v3d.c / vc4_irq.c program them). Linux reallocates on the OUTOMEM
+ * interrupt; this driver keeps one pool and rewinds it whenever the binner
+ * is idle, and leaves OUTOMEM masked: a frame that needs more than the pool
+ * stalls and is reset by the hang detector instead of being served.
+ * Job lock held.
+ */
+void
+BCM2837V3D::resetBinnerOverflow(void)
+{
+	if (fOverflowBO != NULL) {
+		v3dWrite(kV3D_BPOA, fOverflowBO->fGpuAddr);
+		v3dWrite(kV3D_BPOS, fOverflowBO->fSize);
+	}
+}
+
+/* ---- validated submit ---- */
+
+namespace {
+struct V3DCreated {
+	V3DBuffer *buf;
+	void *staging;
+	size_t stagingSize;
+};
+struct V3DAllocCtx {
+	V3DCreated list[8];       // exec, tile and render-list BOs: three in practice
+	uint32_t n;
+};
+}
+
+static int
+allocJobBO(void *ctxp, size_t size, bool stage, uint32_t *gpu, void **staging)
+{
+	V3DAllocCtx *ctx = (V3DAllocCtx *)ctxp;
+	if (ctx->n >= 8 || size == 0 || size > kMaxBOSize) {
+		return ENOMEM;
+	}
+	V3DBuffer *b = V3DBuffer::withSize((uint32_t)size);
+	if (b == NULL) {
+		return ENOMEM;
+	}
+	V3DCreated *c = &ctx->list[ctx->n];
+	c->buf = b;
+	c->staging = NULL;
+	c->stagingSize = 0;
+	if (stage) {
+		c->stagingSize = (size + 15) & ~(size_t)15;
+		c->staging = IOMalloc(c->stagingSize);
+		if (c->staging == NULL) {
+			b->release();
+			return ENOMEM;
+		}
+		bzero(c->staging, c->stagingSize);
+	}
+	ctx->n++;
+	*gpu = b->fGpuAddr;
+	*staging = c->staging;
+	return 0;
+}
+
+// Staging memory is ordinary cacheable memory the validators wrote
+// unaligned fields into; the BO is write-combined GPU memory, so it gets
+// the finished image in one pass of aligned word stores.
+static void
+copyStagingToBO(V3DBuffer *b, const void *src, size_t n)
+{
+	volatile uint32_t *d = (volatile uint32_t *)b->fMem->getBytesNoCopy();
+	const uint32_t *s = (const uint32_t *)src;
+	for (size_t i = 0; i < (n + 3) / 4; i++) {
+		d[i] = s[i];
+	}
+	cpuToGpuBarrier();
+}
+
+IOReturn
+BCM2837V3D::submitValidated(v3d_submit_cl *args, V3DBuffer **bos, uint32_t boCount,
+    const void *binCl, const void *shaderRec, const void *uniforms, uint64_t *seqnoOut)
+{
+	if (!fPowered || fStopping) {
+		return kIOReturnNotReady;
+	}
+	if (boCount > 1024) {
+		return kIOReturnBadArgument;
+	}
+	v3d_kbo_desc *descs = NULL;
+	V3DAllocCtx ctx;
+	bzero(&ctx, sizeof(ctx));
+	IOReturn ret = kIOReturnNoMemory;
+	V3DJob *j = NULL;
+
+	if (boCount != 0) {
+		descs = (v3d_kbo_desc *)IOMalloc(boCount * sizeof(v3d_kbo_desc));
+		if (descs == NULL) {
+			return kIOReturnNoMemory;
+		}
+		for (uint32_t i = 0; i < boCount; i++) {
+			descs[i].size = bos[i]->fSize;
+			descs[i].gpu_addr = bos[i]->fGpuAddr;
+			descs[i].shader = bos[i]->fShader;
+		}
+	}
+
+	v3d_kops ops = { &ctx, allocJobBO };
+	v3d_kresult res;
+	int err = v3d_kglue_validate(args, descs, boCount, binCl, shaderRec, uniforms, &ops, &res);
+	if (err != 0) {
+		ret = (err == ENOMEM) ? kIOReturnNoMemory : kIOReturnBadArgument;
+		goto fail;
+	}
+
+	// Validation succeeded: publish the finished images to the GPU memory.
+	for (uint32_t i = 0; i < ctx.n; i++) {
+		if (ctx.list[i].staging != NULL) {
+			copyStagingToBO(ctx.list[i].buf, ctx.list[i].staging, ctx.list[i].stagingSize);
+		}
+	}
+
+	j = (V3DJob *)IOMalloc(sizeof(V3DJob));
+	if (j == NULL) {
+		goto fail;
+	}
+	bzero(j, sizeof(*j));
+	j->ct0ca = res.ct0ca; j->ct0ea = res.ct0ea;
+	j->ct1ca = res.ct1ca; j->ct1ea = res.ct1ea;
+	j->boCount = boCount + ctx.n;
+	j->bos = (V3DBuffer **)IOMalloc(j->boCount * sizeof(V3DBuffer *));
+	if (j->bos == NULL) {
+		IOFree(j, sizeof(*j));
+		j = NULL;
+		goto fail;
+	}
+	for (uint32_t i = 0; i < boCount; i++) {
+		j->bos[i] = bos[i];
+		bos[i]->retain();
+	}
+	for (uint32_t i = 0; i < ctx.n; i++) {
+		j->bos[boCount + i] = ctx.list[i].buf;      // ownership moves to the job
+		ctx.list[i].buf = NULL;
+	}
+	for (uint32_t i = 0; i < ctx.n; i++) {
+		if (ctx.list[i].staging != NULL) {
+			IOFree(ctx.list[i].staging, ctx.list[i].stagingSize);
+			ctx.list[i].staging = NULL;
+		}
+	}
+	if (descs != NULL) {
+		IOFree(descs, boCount * sizeof(v3d_kbo_desc));
+	}
+	return queueJob(j, seqnoOut);
+
+fail:
+	for (uint32_t i = 0; i < ctx.n; i++) {
+		if (ctx.list[i].buf != NULL) {
+			ctx.list[i].buf->release();
+		}
+		if (ctx.list[i].staging != NULL) {
+			IOFree(ctx.list[i].staging, ctx.list[i].stagingSize);
+		}
+	}
+	if (descs != NULL) {
+		IOFree(descs, boCount * sizeof(v3d_kbo_desc));
+	}
+	return ret;
 }
 
 IOReturn
@@ -679,6 +963,12 @@ BCM2837V3D::start(IOService *provider)
 		return false;
 	}
 
+	fOverflowBO = V3DBuffer::withSize(4U * 1024 * 1024);
+	if (fOverflowBO == NULL) {
+		IOLog("BCM2837V3D: no memory for binner overflow\n");
+		return false;
+	}
+
 	if (!powerOn()) {
 		return false;
 	}
@@ -764,6 +1054,10 @@ BCM2837V3D::free(void)
 	if (fJobLock != NULL) {
 		IOSimpleLockFree(fJobLock);
 		fJobLock = NULL;
+	}
+	if (fOverflowBO != NULL) {
+		fOverflowBO->release();
+		fOverflowBO = NULL;
 	}
 	if (fRegMap != NULL) { fRegMap->release(); fRegMap = NULL; }
 	if (fPMMap != NULL) { fPMMap->release(); fPMMap = NULL; }

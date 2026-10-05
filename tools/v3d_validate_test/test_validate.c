@@ -20,6 +20,7 @@
 #include "../../iokit/BCM2837V3D/validate/vc4_packet.h"
 #include "../../iokit/BCM2837V3D/validate/vc4_qpu_defines.h"
 #include "../../iokit/BCM2837V3D/validate/v3d_exec.h"
+#include "../../iokit/BCM2837V3D/validate/v3d_kglue.h"
 
 /* ---------------------------- fake BO world ---------------------------- */
 
@@ -43,12 +44,26 @@ bo_new(size_t size)
 	return b;
 }
 
-struct drm_gem_cma_object *
-drm_gem_cma_create(struct drm_device *dev, size_t size)
+/* The glue (v3d_kglue.c) provides drm_gem_cma_create(); it allocates through
+ * these callbacks, which also register the BO so the checks can see it. */
+static int
+test_alloc_bo(void *ctx, size_t size, bool stage, uint32_t *gpu, void **staging)
 {
-	(void)dev;
-	return &bo_new(size)->base;
+	(void)ctx;
+	struct drm_vc4_bo *b = bo_new(size);
+	*gpu = b->base.paddr;
+	if (stage) {
+		*staging = b->base.vaddr;
+	} else {
+		free(b->base.vaddr);
+		b->base.vaddr = NULL;
+		*staging = NULL;
+	}
+	return 0;
 }
+static const struct v3d_kops g_ops = { NULL, test_alloc_bo };
+struct glue_ctx_layout { const struct v3d_kops *ops; };      /* mirrors v3d_kglue.c */
+static struct glue_ctx_layout g_glue_ctx = { &g_ops };
 
 void v3d_bug_on(const char *f, int l) { fprintf(stderr, "BUG_ON %s:%d\n", f, l); abort(); }
 
@@ -376,6 +391,12 @@ static int tests_run, tests_failed;
 static void
 cleanup(struct vc4_exec_info *e)
 {
+	struct list_head *n = e->unref_list.next;
+	while (n) {
+		struct list_head *next = n->next;
+		free((char *)n - offsetof(struct drm_vc4_bo, unref_head));
+		n = next;
+	}
 	v3d_exec_release(e);
 }
 
@@ -636,9 +657,46 @@ fuzz_shaders(int iters)
 	printf("fuzz_shaders: %d iterations, %d accepted\n", iters, accepted);
 }
 
+/* The kernel-facing API (v3d_kglue.h): same submission through the glue. */
+static void
+test_glue(void)
+{
+	struct scenario s;
+	scenario_basic(&s);
+	struct v3d_kbo_desc d[MAX_BOS];
+	for (uint32_t i = 0; i < s.nbos; i++) {
+		struct drm_vc4_bo *b = (struct drm_vc4_bo *)s.bos[i];
+		d[i].size = (uint32_t)b->base.base.size;
+		d[i].gpu_addr = b->base.paddr;
+		d[i].shader = b->validated_shader;
+	}
+	struct v3d_kresult r;
+	int ret = v3d_kglue_validate(&s.args, d, s.nbos, s.bin.d, s.rec.d, s.uni.d, &g_ops, &r);
+	EXPECT(ret == 0, "glue: basic submission rejected: %d", ret);
+	EXPECT(r.ct0ca != r.ct0ea && r.ct1ca != r.ct1ea, "glue: empty lists");
+	EXPECT(addr_in_some_bo(r.ct0ca, r.ct0ea - r.ct0ca), "glue: bin list outside created BOs");
+	EXPECT(addr_in_some_bo(r.ct1ca, r.ct1ea - r.ct1ca), "glue: render list outside created BOs");
+
+	/* a bad submission: error comes back as a positive errno */
+	s.bin.d[0] = 200;
+	ret = v3d_kglue_validate(&s.args, d, s.nbos, s.bin.d, s.rec.d, s.uni.d, &g_ops, &r);
+	EXPECT(ret == EINVAL, "glue: bad opcode returned %d", ret);
+
+	uint64_t code[4];
+	simple_shader(code);
+	struct vc4_validated_shader_info *si = v3d_kglue_validate_shader(code, sizeof(code));
+	EXPECT(si != NULL, "glue: simple shader refused");
+	v3d_kglue_free_shader(si);
+	code[0] = qpu_with_waddr(qpu_write(QPU_W_VPM_ADDR), QPU_W_VPM_ADDR);
+	EXPECT(v3d_kglue_validate_shader(code, sizeof(code)) == NULL, "glue: dangerous shader accepted");
+	EXPECT(v3d_kglue_validate_shader(code, 12) == NULL, "glue: odd-size shader accepted");
+	world_reset();
+}
+
 int
 main(int argc, char **argv)
 {
+	g_dev.priv = &g_glue_ctx;
 	int iters = argc > 1 ? atoi(argv[1]) : 20000;
 	if (argc > 2) g_rng = strtoull(argv[2], NULL, 0) | 1;
 	if (!getenv("V3D_TEST_VERBOSE")) { freopen("/dev/null", "w", stderr); }
@@ -672,6 +730,7 @@ main(int argc, char **argv)
 	expect_reject("shader rec count huge", m_shader_rec_overflow);
 	expect_reject("exec size overflow", m_exec_overflow);
 	test_shaders();
+	test_glue();
 	(void)m_shader_state_high_bits;
 	fuzz_submit(iters);
 	fuzz_shaders(iters);

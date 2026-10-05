@@ -84,16 +84,29 @@ BCM2837V3DUserClient::createBO(const v3d_create_bo *in, v3d_create_bo *out)
 	if (b == NULL) {
 		return kIOReturnNoMemory;
 	}
+	uint32_t size = b->fSize, handle = 0;
+	IOReturn ret = installBO(b, &handle);
+	if (ret == kIOReturnSuccess) {
+		bzero(out, sizeof(*out));
+		out->size = size;
+		out->handle = handle;
+	}
+	return ret;
+}
+
+/* Puts `b` in this connection's handle table, consuming the caller's
+ * reference (released on failure). */
+IOReturn
+BCM2837V3DUserClient::installBO(V3DBuffer *b, uint32_t *handleOut)
+{
 	IOReturn ret = kIOReturnNoSpace;
 	IOLockLock(fLock);
 	if (!fClosed && fBytes + b->fSize <= kMaxClientBytes) {
 		for (int i = 0; i < kMaxHandles; i++) {
 			if (fHandles[i] == NULL) {
-				fHandles[i] = b;      // table owns the creation reference
+				fHandles[i] = b;
 				fBytes += b->fSize;
-				bzero(out, sizeof(*out));
-				out->size = b->fSize;
-				out->handle = (uint32_t)i + 1;
+				*handleOut = (uint32_t)i + 1;
 				ret = kIOReturnSuccess;
 				break;
 			}
@@ -102,6 +115,131 @@ BCM2837V3DUserClient::createBO(const v3d_create_bo *in, v3d_create_bo *out)
 	IOLockUnlock(fLock);
 	if (ret != kIOReturnSuccess) {
 		b->release();
+	}
+	return ret;
+}
+
+/* Copies from the calling task's address space (never trusts the pointer:
+ * the memory descriptor validates and wires the range against the task). */
+bool
+BCM2837V3DUserClient::copyIn(uint64_t userAddr, void *dst, size_t len)
+{
+	if (len == 0) {
+		return true;
+	}
+	IOMemoryDescriptor *md = IOMemoryDescriptor::withAddressRange(userAddr, len, kIODirectionOut, fTask);
+	if (md == NULL) {
+		return false;
+	}
+	bool ok = false;
+	if (md->prepare() == kIOReturnSuccess) {
+		ok = (md->readBytes(0, dst, len) == len);
+		md->complete();
+	}
+	md->release();
+	return ok;
+}
+
+IOReturn
+BCM2837V3DUserClient::submitCL(const v3d_submit_cl *in, v3d_submit_cl *out)
+{
+	enum { kMaxBytes = 16 * 1024 * 1024 };
+	if (in->bo_handle_count > kMaxHandles || in->bin_cl_size > kMaxBytes ||
+	    in->shader_rec_size > kMaxBytes || in->uniforms_size > kMaxBytes ||
+	    (uint64_t)in->bin_cl_size + in->shader_rec_size + in->uniforms_size > kMaxBytes) {
+		return kIOReturnBadArgument;
+	}
+	v3d_submit_cl args = *in;      // validated from this private copy
+	args.seqno = 0;
+
+	IOReturn ret = kIOReturnNoMemory;
+	V3DBuffer **bos = NULL;
+	uint32_t nbos = 0;
+	uint32_t *handles = NULL;
+	uint8_t *bin = NULL, *rec = NULL, *uni = NULL;
+	uint64_t seqno = 0;
+	// 8-byte alignment of each copy: the validators read 64-bit QPU words
+	// and 32-bit fields.
+	size_t binAlloc = (args.bin_cl_size + 7) & ~(size_t)7;
+	size_t recAlloc = (args.shader_rec_size + 7) & ~(size_t)7;
+	size_t uniAlloc = (args.uniforms_size + 7) & ~(size_t)7;
+
+	if (args.bo_handle_count != 0) {
+		handles = (uint32_t *)IOMalloc(args.bo_handle_count * sizeof(uint32_t));
+		bos = (V3DBuffer **)IOMalloc(args.bo_handle_count * sizeof(V3DBuffer *));
+		if (handles == NULL || bos == NULL) {
+			goto done;
+		}
+		if (!copyIn(args.bo_handles, handles, args.bo_handle_count * sizeof(uint32_t))) {
+			ret = kIOReturnVMError;
+			goto done;
+		}
+	}
+	bin = (uint8_t *)IOMalloc(binAlloc + 8);
+	rec = (uint8_t *)IOMalloc(recAlloc + 8);
+	uni = (uint8_t *)IOMalloc(uniAlloc + 8);
+	if (bin == NULL || rec == NULL || uni == NULL) {
+		goto done;
+	}
+	bzero(bin, binAlloc + 8); bzero(rec, recAlloc + 8); bzero(uni, uniAlloc + 8);
+	if (!copyIn(args.bin_cl, bin, args.bin_cl_size) ||
+	    !copyIn(args.shader_rec, rec, args.shader_rec_size) ||
+	    !copyIn(args.uniforms, uni, args.uniforms_size)) {
+		ret = kIOReturnVMError;
+		goto done;
+	}
+	for (; nbos < args.bo_handle_count; nbos++) {
+		bos[nbos] = lookup(handles[nbos]);
+		if (bos[nbos] == NULL) {
+			ret = kIOReturnNotFound;
+			goto done;
+		}
+	}
+	ret = fDevice->submitValidated(&args, bos, nbos, bin, rec, uni, &seqno);
+	if (ret == kIOReturnSuccess) {
+		*out = args;
+		out->seqno = seqno;
+	}
+done:
+	for (uint32_t i = 0; i < nbos; i++) {
+		bos[i]->release();
+	}
+	if (bos != NULL) IOFree(bos, args.bo_handle_count * sizeof(V3DBuffer *));
+	if (handles != NULL) IOFree(handles, args.bo_handle_count * sizeof(uint32_t));
+	if (bin != NULL) IOFree(bin, binAlloc + 8);
+	if (rec != NULL) IOFree(rec, recAlloc + 8);
+	if (uni != NULL) IOFree(uni, uniAlloc + 8);
+	return ret;
+}
+
+IOReturn
+BCM2837V3DUserClient::createShaderBO(const v3d_create_shader_bo *in, v3d_create_shader_bo *out)
+{
+	if (in->flags != 0 || in->size == 0 || (in->size & 7) != 0 || in->size > 64 * 1024) {
+		return kIOReturnBadArgument;
+	}
+	uint32_t size = in->size;
+	void *code = IOMalloc(size);
+	if (code == NULL) {
+		return kIOReturnNoMemory;
+	}
+	V3DBuffer *b = NULL;
+	IOReturn ret;
+	if (!copyIn(in->data, code, size)) {
+		ret = kIOReturnVMError;
+	} else {
+		ret = fDevice->createShaderBO(code, size, &b);
+	}
+	IOFree(code, size);
+	if (ret != kIOReturnSuccess) {
+		return ret;
+	}
+	uint32_t handle = 0;
+	ret = installBO(b, &handle);
+	if (ret == kIOReturnSuccess) {
+		bzero(out, sizeof(*out));
+		out->size = size;
+		out->handle = handle;
 	}
 	return ret;
 }
@@ -178,6 +316,12 @@ BCM2837V3DUserClient::clientMemoryForType(UInt32 type, IOOptionBits *options, IO
 	if (b == NULL) {
 		return kIOReturnNotFound;
 	}
+	if (b->fShader != NULL) {
+		// Shader BOs are immutable once validated: a mapping would let the
+		// client rewrite the program after the check.
+		b->release();
+		return kIOReturnNotPermitted;
+	}
 	// The descriptor already carries the write-combine cache mode it was
 	// allocated with; don't override it.
 	*options = 0;
@@ -228,9 +372,17 @@ BCM2837V3DUserClient::externalMethod(uint32_t selector, IOExternalMethodArgument
 	case kV3DMethodWaitBO:
 		NEED_IN(v3d_wait_bo);
 		return waitBO((const v3d_wait_bo *)args->structureInput);
-	case kV3DMethodSubmitCL:
-		// Validated submission is DARW-295 phase 2 (see BCM2837V3D.h).
-		return kIOReturnUnsupported;
+	case kV3DMethodSubmitCL: {
+		NEED_IN(v3d_submit_cl);
+		NEED_OUT(v3d_submit_cl);
+		return submitCL((const v3d_submit_cl *)args->structureInput, (v3d_submit_cl *)args->structureOutput);
+	}
+	case kV3DMethodCreateShaderBO: {
+		NEED_IN(v3d_create_shader_bo);
+		NEED_OUT(v3d_create_shader_bo);
+		return createShaderBO((const v3d_create_shader_bo *)args->structureInput,
+		    (v3d_create_shader_bo *)args->structureOutput);
+	}
 	case kV3DMethodGetHangState: {
 		NEED_OUT(v3d_hang_state);
 		fDevice->getHangState((v3d_hang_state *)args->structureOutput);

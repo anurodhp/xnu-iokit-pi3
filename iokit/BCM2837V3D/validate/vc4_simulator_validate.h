@@ -29,13 +29,23 @@
 #ifndef VC4_SIMULATOR_VALIDATE_H
 #define VC4_SIMULATOR_VALIDATE_H
 
+/* Inside the kernel (the kext is built with -DKERNEL) this is V3D_KERNEL;
+ * the host tests build without it. */
+#if defined(KERNEL) && !defined(V3D_KERNEL)
+#define V3D_KERNEL 1
+#endif
+
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#ifdef V3D_KERNEL
+#include <sys/errno.h>
+#else
 #include <errno.h>
+#endif
 
-#include "../BCM2837V3DUAPI.h"
+#include "BCM2837V3DUAPI.h"
 
 typedef uint8_t u8;
 typedef uint16_t u16;
@@ -165,6 +175,11 @@ to_vc4_bo(struct drm_gem_object *obj)
  * bytes (zeroed) that is also released by the caller after the job. NULL on
  * failure. */
 struct drm_gem_cma_object *drm_gem_cma_create(struct drm_device *dev, size_t size);
+
+/* Same, for a BO the validators never read or write through `vaddr` (the
+ * tile state/alloc memory): no staging copy is made, vaddr is NULL, and the
+ * BO is simply zero-filled GPU memory. */
+struct drm_gem_cma_object *drm_gem_cma_create_nostage(struct drm_device *dev, size_t size);
 
 int vc4_cl_validate(struct drm_device *dev, struct vc4_exec_info *exec);
 

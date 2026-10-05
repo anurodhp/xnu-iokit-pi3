@@ -33,6 +33,7 @@ enum {
 	kV3DMethodGetHangState,    /* out: v3d_hang_state */
 	kV3DMethodRawSubmit,       /* in/out: v3d_raw_submit (root + boot-arg v3d-raw=1) */
 	kV3DMethodGetBOAddress,    /* in: scalar handle  out: scalar GPU address (root only) */
+	kV3DMethodCreateShaderBO,  /* in/out: v3d_create_shader_bo */
 	kV3DMethodCount
 };
 
@@ -98,10 +99,12 @@ struct v3d_submit_rcl_surface {
 
 /*
  * Validated submit. Same inputs as struct drm_vc4_submit_cl; user pointers
- * are 64-bit. Not implemented yet (returns kIOReturnUnsupported): it needs
- * the command-list, shader-record and QPU-shader validators that rewrite
- * handle references into GPU addresses and bound every GPU access
- * (Linux: vc4_validate.c, vc4_validate_shaders.c, vc4_render_cl.c).
+ * are 64-bit addresses in the calling task. The kernel copies the lists in,
+ * validates them with the vendored VC4 validators (validate/), rewrites
+ * handle references into GPU addresses, generates the render list itself,
+ * and queues the job. bo_handles is an array of bo_handle_count uint32
+ * handles (this connection's handle space); command lists name BOs by index
+ * into it.
  */
 struct v3d_submit_cl {
 	uint64_t bin_cl;
@@ -125,6 +128,21 @@ struct v3d_submit_cl {
 	uint32_t flags;
 	uint32_t pad32;
 	uint64_t seqno;     /* out */
+};
+
+/*
+ * Shader BOs hold QPU programs. The kernel validates the program once at
+ * creation (a program that could read or write outside the buffers a job
+ * names is refused) and the BO is immutable afterwards: it cannot be
+ * mapped, and it can only be used as a shader, never as data. `data` is the
+ * address of `size` bytes (a multiple of 8) in the calling task.
+ */
+struct v3d_create_shader_bo {
+	uint32_t size;
+	uint32_t flags;     /* must be 0 */
+	uint64_t data;
+	uint32_t handle;    /* out */
+	uint32_t pad;
 };
 
 /*
