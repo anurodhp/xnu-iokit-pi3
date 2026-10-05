@@ -1,0 +1,20 @@
+QEMU V3D test model (DARW-295)
+==============================
+
+bcm2835_v3d.[ch] are a test model of the VideoCore IV 3D block for the
+qemu-zhuowei fork's raspi3 machine (ASB bridges, PM_GRAFX, V3D registers,
+interrupts, job completion, hang injection, clear-only job emulation).
+install.py copies them into third_party/qemu-zhuowei and wires them in
+(Makefile.objs, bcm2835_peripherals.[ch], bcm2835_powermgt.[ch], the
+mailbox "set clock state" tag). Idempotent; then build with tools/build_qemu.sh.
+
+THIS DIRECTORY IS A STAND-IN. Per the repo rule the change belongs committed
+in the anurodhp/qemu-zhuowei fork; it was made in that fork's working tree from
+a session that could not commit there, so the sources are kept here until
+someone commits them to the fork (then delete this directory).
+
+Tests: tools/v3d_qemu_probe.sh (QEMU_DTB=devicetrees/rpi3-v3dtest.dtb),
+tools/v3d_qemu_hang_test.sh. Properties: -global bcm2835-v3d.hang-job=N
+-global bcm2835-v3d.hang-thread=0|1 -global bcm2835-powermgt.grafx-boot-powered=off.
+It models the driver's own assumptions (written from the same Linux sources),
+so it checks plumbing and driver logic, not hardware truth.

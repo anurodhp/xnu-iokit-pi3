@@ -115,8 +115,18 @@ V3DBuffer::withSize(uint32_t size)
 		return NULL;
 	}
 	b->fSize = size;
-	// Never hand a client someone else's stale memory.
-	bzero(b->fMem->getBytesNoCopy(), size);
+	// Never hand a client someone else's stale memory. Plain stores, not
+	// bzero(): bzero zeroes large buffers with DC ZVA, and this mapping is
+	// write-combined (Normal non-cacheable). Under QEMU a bzero of a fresh
+	// 16 KiB BO intermittently spun forever in that DC ZVA loop (caught with
+	// the monitor sampling: PC fixed in _bzero, 2 runs in 5); the explicit
+	// loop never does.
+	{
+		volatile uint64_t *w = (volatile uint64_t *)b->fMem->getBytesNoCopy();
+		for (uint32_t i = 0; i < size / 8; i++) {
+			w[i] = 0;
+		}
+	}
 	cpuToGpuBarrier();
 
 	IOPhysicalAddress pa = b->fMem->getPhysicalAddress();

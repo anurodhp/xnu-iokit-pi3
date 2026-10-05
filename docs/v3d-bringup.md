@@ -95,3 +95,30 @@ forces software. Frames are copied from the GPU render target to the X
 drawable on the CPU (`xlib_vc4_flush_frontbuffer`): correct but not fast.
 Untested on hardware: the presenter, vc4's render-target format choice for
 the X visual, and everything the GPU does with the jobs.
+
+## QEMU model of the V3D (what runs without a Pi)
+
+`tools/qemu_v3d_model/` is a test model of the V3D block for the QEMU fork
+(see its README). With `QEMU_DTB=devicetrees/rpi3-v3dtest.dtb`:
+
+* `tools/v3d_qemu_probe.sh`: the driver powers the block up (mailbox V3D clock,
+  PM_GRAFX reset release, ASB handshake), reads IDENT, takes interrupts, and
+  `v3dprobe` passes end to end including the clear job's pixels.
+* `tools/v3d_qemu_hang_test.sh`: the model never completes the first render
+  job; the driver logs `GPU hang, resetting`, power-cycles, fails that job,
+  and a second `v3dprobe` passes on the recovered GPU (8/8 runs).
+
+It is written from the same Linux sources as the driver, so a pass means the
+plumbing and driver logic agree with those sources, not that the silicon does.
+The model reports bus accesses the real chip would hang on (V3D registers
+while unpowered/unclocked/behind a stopped bridge) with `-d guest_errors`.
+
+### Found by the model: DC ZVA on write-combined memory
+
+`bzero()` of a freshly allocated write-combined BO intermittently spun forever
+under QEMU (PC parked in `_bzero`'s `dc zva` loop, 2 of 5 runs, caught with the
+monitor). The driver now zeroes WC memory with plain stores (0 of 8 stall).
+Whether real hardware is affected is unknown (DC ZVA to Normal non-cacheable
+memory is architecturally allowed), but watch for the same signature in
+userland: a process stuck in `memset`/`bzero` on a mapped BO. Mesa's vc4
+uploads with memcpy/memset into mapped BOs.
