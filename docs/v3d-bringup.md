@@ -77,3 +77,21 @@ Expected: `V3D_IDENT0 0x2443356`, `ok:` lines, and finally `v3dprobe: PASS`.
 4. The binner overflow pool (4 MiB, rewound when idle) is enough for simple
    frames; `V3D_INT_OUTOMEM` is intentionally masked.
 5. `V3D_L2CACTL`/`SLCACTL` clears before each job as Linux does.
+
+## GL on the GPU (after `v3dprobe` passes)
+
+`MESA_VC4=1 tools/userland_staging/build_mesa.sh` builds the libGL that
+tries the V3D first (`mesa_xlib_vc4/xlib_vc4.c` replaces Mesa's `xlib.c`),
+then falls back to softpipe when there is no V3D. Rebuild without
+`MESA_VC4` for the software-only library. Install and run, on the Pi under
+Xorg/Xvfb:
+
+```
+DISPLAY=:0 /usr/X11/bin/gl_smoketest :0
+```
+
+`GL_RENDERER` should read `VC4 V3D 2.1` (on QEMU: `softpipe`). `MESA_VC4=0`
+forces software. Frames are copied from the GPU render target to the X
+drawable on the CPU (`xlib_vc4_flush_frontbuffer`): correct but not fast.
+Untested on hardware: the presenter, vc4's render-target format choice for
+the X visual, and everything the GPU does with the jobs.

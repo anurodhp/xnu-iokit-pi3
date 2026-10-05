@@ -40,8 +40,27 @@ for d in libX11 libXext libxcb libxcb-randr libz libexpat libc++ libsystem_m; do
 done
 x11_require_sys_dylibs
 
-GEN="$PWD/$X11_ROOT/gen/mesa"
-BUILD="$PWD/$X11_ROOT/gen/mesa-build"
+# MESA_VC4=1: also build Mesa's vc4 gallium driver and link libGL with
+# mesa_xlib_vc4/xlib_vc4.c in place of the stock xlib.c, so libGL renders on
+# the VideoCore IV through libdrm.2.dylib (the shim) when the BCM2837V3D
+# service exists and falls back to softpipe otherwise. Hardware path: not
+# verified on a Pi. Default (unset) is the software-only libGL that is
+# QEMU-verified.
+VC4="${MESA_VC4:-0}"
+SHIM="$PWD/v3d_drm"
+VC4X="$PWD/mesa_xlib_vc4"
+DRIVERS=softpipe
+SUF=""
+if [ "$VC4" = "1" ]; then
+    DRIVERS=softpipe,vc4
+    SUF="-vc4"
+    for d in libdrm libiokituser libCoreFoundation; do
+        [ -f "$OUT/system/$d.dylib" ] || { echo "error: $OUT/system/$d.dylib not found -- build it first (libdrm: build_libdrm_v3d.sh)" >&2; exit 1; }
+    done
+fi
+
+GEN="$PWD/$X11_ROOT/gen/mesa$SUF"
+BUILD="$PWD/$X11_ROOT/gen/mesa$SUF-build"
 INC="$PWD/$X11_INC"
 DEST="$PWD/$OUT/mesa/root"
 SYS="$PWD/$OUT/system"
@@ -73,6 +92,11 @@ TC="$XCODE12/Toolchains/XcodeDefault.xctoolchain/usr/bin"
 LIBCXX="$PWD/$TP/llvm-project/libcxx"
 LIBCXXABI="$PWD/$TP/llvm-project/libcxxabi"
 SYSLIBS=("$OUT/system/libinfo.dylib" "${X11_SYS_DYLIBS[@]}" "$OUT/system/libsystem_m.dylib" "$OUT/system/libc++.dylib")
+if [ "$VC4" = "1" ]; then
+    # the mmap/munmap hook (v3d_mmap_hook.h) reaches every Mesa object, so
+    # every link needs the shim, and through it libiokituser + CoreFoundation
+    SYSLIBS=("$OUT/system/libdrm.dylib" "$OUT/system/libiokituser.dylib" "$OUT/system/libCoreFoundation.dylib" "${SYSLIBS[@]}")
+fi
 {
     echo "[binaries]"
     echo "c = ['$CLANG', '-isysroot', '$SDK', '-target', 'arm64-apple-ios14.4']"
@@ -83,6 +107,12 @@ SYSLIBS=("$OUT/system/libinfo.dylib" "${X11_SYS_DYLIBS[@]}" "$OUT/system/libsyst
     echo "pkg-config = '$(command -v pkg-config)'"
     echo "[built-in options]"
     COMMON="'$X11_OPT', '-fno-builtin', '-fno-stack-protector', '-fno-common', '-D_FORTIFY_SOURCE=0', '-Wno-nullability-completeness', '-Wno-deprecated-declarations', '-I$INC', '-I$PWD/$FS_SYSINC'"
+    # Mesa only looks for libdrm on Linux-like systems, so the shim's headers
+    # come in as plain flags; the force-included hook redirects Mesa's mmap()
+    # of vc4 buffer objects to the shim (no Mesa source changes).
+    if [ "$VC4" = "1" ]; then
+        COMMON="$COMMON, '-I$SHIM/include', '-I$PWD/$TP/mesa/include', '-include', '$SHIM/include/v3d_mmap_hook.h'"
+    fi
     echo "c_args = [$COMMON]"
     echo "cpp_args = [$COMMON, '-nostdinc++', '-isystem', '$LIBCXX/include', '-I$LIBCXXABI/include', '-fexceptions', '-frtti']"
     printf "c_link_args = ['-nostdlib', '-B%s', '-Wl,-fixup_chains', '-Wl,-not_for_dyld_shared_cache'" "$NEWLD_BINDIR"
@@ -103,7 +133,7 @@ SYSLIBS=("$OUT/system/libinfo.dylib" "${X11_SYS_DYLIBS[@]}" "$OUT/system/libsyst
 
 meson setup "$BUILD" "$SRC" --cross-file "$GEN/cross.ini" \
     --prefix=/usr/X11 --buildtype=plain \
-    -Dplatforms=x11 -Dglx=xlib -Dgallium-drivers=softpipe -Dvulkan-drivers= \
+    -Dplatforms=x11 -Dglx=xlib -Dgallium-drivers=$DRIVERS -Dvulkan-drivers= \
     -Dllvm=disabled -Dgallium-rusticl=false -Dopengl=true -Dgles1=disabled -Dgles2=disabled \
     -Degl=disabled -Dgbm=disabled -Dglvnd=disabled -Dshared-glapi=enabled \
     -Dlmsensors=disabled -Dlibunwind=disabled -Dvalgrind=disabled -Dzstd=disabled \
@@ -121,6 +151,70 @@ ninja -C "$BUILD" > "$GEN/ninja.log" 2>&1 || {
 if grep -qE 'implicit declaration|implicitly declaring' "$GEN/ninja.log"; then
     grep -E 'implicit declaration|implicitly declaring' "$GEN/ninja.log" | sort -u >&2
     echo "error: implicit function declarations in the mesa build (above)" >&2; exit 1
+fi
+
+# --- vc4: relink libGL with the hardware-capable screen hook -----------------
+# Meson links the stock softpipe-only libGL; with vc4 enabled the same link
+# line is replayed with mesa_xlib_vc4/xlib_vc4.c.o in place of xlib.c.o and
+# the vc4 driver, the libdrm shim and the debug-hook stubs added.
+if [ "$VC4" = "1" ]; then
+    (cd "$BUILD" && ninja src/gallium/drivers/vc4/libvc4.a > "$GEN/ninja-vc4.log" 2>&1) || {
+        grep -E 'error:|FAILED' "$GEN/ninja-vc4.log" | head -20 >&2; exit 1; }
+    python3 - "$BUILD" "$VC4X" "$OUT" "$SHIM" "$GEN" <<'PY'
+import json, os, shlex, subprocess, sys
+build, vc4x, out, shim, gen = sys.argv[1:6]
+tgt = "src/gallium/targets/libgl-xlib/libGL.1.dylib"
+def cmds(t):
+    return subprocess.check_output(["ninja", "-C", build, "-t", "commands", t]).decode().strip().splitlines()
+# compile xlib_vc4.c and the stubs with the flags meson used for xlib.c
+cc = next(l for l in cmds(tgt + ".p/xlib.c.o") if "xlib.c" in l)
+a = shlex.split(cc)
+def compile_one(src, obj):
+    args = []
+    i = 0
+    while i < len(a):
+        x = a[i]
+        if x in ("-o", "-MF", "-MQ"):
+            i += 2
+            continue
+        if x == "-MD" or x == "-c":
+            i += 1
+            continue
+        if x.endswith("xlib.c") and not x.startswith("-"):
+            i += 1
+            continue
+        if x.endswith("xlib.c.o"):
+            i += 1
+            continue
+        args.append(x)
+        i += 1
+    args += ["-I" + os.path.join(shim, "include"), "-I" + shim,
+             "-I" + os.path.join(os.path.dirname(shim), "..", "..", "third_party", "mesa", "src", "gallium", "drivers"),
+             "-I" + os.path.join(os.path.dirname(shim), "..", "..", "third_party", "mesa", "src", "gallium", "winsys"),
+             "-I" + os.path.join(os.path.dirname(shim), "..", "..", "third_party", "mesa", "src", "gallium", "include"),
+             "-Wno-error", "-Wno-missing-prototypes", "-c", src, "-o", obj]
+    subprocess.check_call(args, cwd=build)
+o1 = os.path.join(gen, "xlib_vc4.o")
+o2 = os.path.join(gen, "mesa_vc4_stubs.o")
+compile_one(os.path.join(vc4x, "xlib_vc4.c"), o1)
+compile_one(os.path.join(vc4x, "mesa_vc4_stubs.c"), o2)
+# replay the link
+link = cmds(tgt)[-1]
+l = shlex.split(link)
+res = []
+for x in l:
+    if x.endswith("xlib.c.o"):
+        res += [o1, o2]
+        continue
+    res.append(x)
+# add vc4 + the shim and its IOKit chain right after the glapi archive
+idx = max(i for i, x in enumerate(res) if x.endswith("libglapi.a"))
+syslib = os.path.abspath(os.path.join(out, "system"))
+extra = [os.path.join(build, "src/gallium/drivers/vc4/libvc4.a")]   # libdrm & co are already on the link line
+res[idx + 1:idx + 1] = extra
+subprocess.check_call(res, cwd=build)
+print("relinked libGL with the vc4 screen hook")
+PY
 fi
 
 # --- stage ---------------------------------------------------------------------
