@@ -666,6 +666,27 @@ if [ -f "$GS_STAGE/usr/GNUstep/System/Library/Libraries/libgnustep-base.dylib" ]
 else
     echo "= $GS_STAGE not built -- run tools/userland_staging/build_gnustep_base.sh first if wanted, skipping"
 fi
+# Florence browser (sibling repo, FLORENCE_DIR, default ../florence): the
+# stripped tree scripts/deploy_pi_webkit.sh stage writes to build/deploy --
+# /Applications/Florence.app, the WPE WebKit dylibs/helpers/data under
+# /usr/local, and the MIME/ssl data. Needs the Mac-layout GNUstep tree above.
+FLORENCE_DIR="${FLORENCE_DIR:-$(cd .. && pwd)/florence}"   # cwd is the repo root (cd above)
+if [ -d "$FLORENCE_DIR/build/root/Applications/Florence.app" ]; then
+    "$FLORENCE_DIR/scripts/deploy_pi_webkit.sh" stage
+    FL_STAGE="$FLORENCE_DIR/build/deploy"
+    need_kb=$(du -sk "$FL_STAGE" | awk '{print $1}')
+    free_kb=$(df -k "$MNT" | awk 'NR==2{print $4}')
+    if [ "$free_kb" -lt $((need_kb + 51200)) ]; then
+        echo "error: $MNT has ${free_kb} KB free; Florence needs ${need_kb} KB (+50 MB headroom)" >&2
+        exit 1
+    fi
+    ditto "$FL_STAGE" "$MNT/"
+    [ -x "$MNT/Applications/Florence.app/Florence" ] ||
+        { echo "error: Florence.app did not land on $MNT" >&2; exit 1; }
+    echo "+ wrote Florence ($need_kb KB: /Applications/Florence.app, /usr/local WebKit libs)"
+else
+    echo "= $FLORENCE_DIR/build/root/Applications/Florence.app not built -- build ../florence (scripts/build_florence.sh pi) first if wanted, skipping"
+fi
 # X servers (DAR-387/389, X11GS 4/7): Xvfb, Xorg, xkbcomp and the test
 # clients in /usr/X11/bin, the puredarwingop video driver and (DAR-391) the
 # iohid input driver under
