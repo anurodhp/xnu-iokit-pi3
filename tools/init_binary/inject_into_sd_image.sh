@@ -711,6 +711,13 @@ fi
 # libfontenc, libxkbfile, libxcvt, ...) are installed by the generic
 # libc_build/system/*.dylib loop below. ditto keeps the xkb symlink.
 XS_STAGE=tools/userland_staging/libc_build/x11/server/root
+# Same stale-stage hazard as GlobalDefaults.plist: build_wmaker.sh is the only thing that copies the menu in.
+WM_MENU_SRC=tools/userland_staging/x11_config/wmaker/WMRootMenu
+WM_MENU_STAGED="$XS_STAGE/usr/X11/etc/WindowMaker/WMRootMenu"
+if [ -d "$(dirname "$WM_MENU_STAGED")" ] && ! cmp -s "$WM_MENU_SRC" "$WM_MENU_STAGED"; then
+    cp "$WM_MENU_SRC" "$WM_MENU_STAGED"
+    echo "+ refreshed staged WMRootMenu from $WM_MENU_SRC"
+fi
 if [ -x "$XS_STAGE/usr/X11/bin/Xvfb" ]; then
     need_kb=$(du -sk "$XS_STAGE" | awk '{print $1}')
     free_kb=$(df -k "$MNT" | awk 'NR==2{print $4}')
