@@ -19,6 +19,7 @@
 #include <unistd.h>
 
 #include "v3d_drm.h"
+#include "xf86drm.h"
 #include "drm-uapi/vc4_drm.h"
 
 static int fails;

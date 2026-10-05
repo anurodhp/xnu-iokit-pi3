@@ -15,7 +15,7 @@ x11_require_sys_dylibs
 OBJ="$X11_ROOT/obj/v3dprobe"
 rm -rf "$OBJ"
 mkdir -p "$OBJ"
-x11_compile "$OBJ" v3dprobe.c -I v3d_drm -I ../../iokit/BCM2837V3D -I "$TP/mesa/include" -DPRIVATE=1
+x11_compile "$OBJ" v3dprobe.c -I v3d_drm -I v3d_drm/include -I ../../iokit/BCM2837V3D -I "$TP/mesa/include" -DPRIVATE=1
 x11_compile_report v3dprobe
 
 LINK=()
