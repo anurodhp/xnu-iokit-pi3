@@ -829,6 +829,21 @@ LOCALTIME_FLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -fno-stack-chec
 # (fbsdcompat/_fbsd_compat_.h:86).
 "$CLANG" $SIGLIST_CFLAGS -include "$LIBC/fbsdcompat/_fbsd_compat_.h" \
     "$LIBC/gen/FreeBSD/usleep.c" -o "$EXTRACT/usleep.o"
+# creat, gethostname, realpath (DARW-282/283/289): Libc's compat-43/FreeBSD/creat.c
+# (open(O_CREAT|O_TRUNC|O_WRONLY)), gen/FreeBSD/gethostname.c (sysctl kern.hostname) and
+# stdlib/FreeBSD/realpath.c, all libsystem_c members on Apple. Until now _creat came
+# only from libsystem_notify, _gethostname only from libresolv and _realpath only
+# from libcopyfile, so every program binding them named the wrong dylib as owner.
+# Those private copies are left alone (existing images bind them).
+for f in compat-43/FreeBSD/creat gen/FreeBSD/gethostname stdlib/FreeBSD/realpath; do
+    "$CLANG" $SIGLIST_CFLAGS -include "$LIBC/fbsdcompat/_fbsd_compat_.h" \
+        "$LIBC/$f.c" -o "$EXTRACT/$(basename $f).o"
+done
+# wcstod/wcstof/wcstold (DARW-288): Apple's locale/FreeBSD/wcstod*.c needs _simple.h,
+# which the pinned Libc lacks (see libcxx_wcstof_compat.c's header), so the same
+# gdtoa-backed wrapper libc++ carries is compiled in here, where Apple exports them.
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    libcxx_wcstof_compat.c -o "$EXTRACT/wcstof_compat.o"
 # clock_gettime family (DAR-416 1b, part of DAR-410): Libc's gen/clock_gettime.c
 # (clock_gettime, clock_gettime_nsec_np, clock_getres, clock_settime).
 # libsystem_c is its home on Apple. Before this, clock_gettime came from

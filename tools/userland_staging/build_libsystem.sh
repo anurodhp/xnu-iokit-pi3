@@ -327,6 +327,8 @@ rm -f "$OUT/system/libSystem.B.dylib"
     -Wl,-reexport_library,"$OUT/system/libsystem_pthread.dylib" \
     -Wl,-reexport_library,"$OUT/system/libsystem_c.dylib" \
     -Wl,-reexport_library,"$OUT/system/libsystem_m.dylib" \
+    `# DARW-284: ___udivti3/___umodti3/___divti3/___modti3, as on real Darwin.` \
+    -Wl,-reexport_library,"$OUT/system/libcompiler_rt.dylib" \
     -Wl,-reexport_library,"$OUT/system/libc++.dylib" \
     -Wl,-reexport_library,"$OUT/system/libunwind.dylib" \
     -Wl,-reexport_library,"$OUT/system/libcopyfile.dylib" \
