@@ -9,7 +9,7 @@
 #include <pexpert/pexpert.h>
 #include "BCM2837V3D.h"
 #include "BCM2837V3DRegs.h"
-#include "../BCM2837Mailbox/BCM2837Mailbox.h"
+#include "BCM2837Mailbox.h"
 #include "v3d_kglue.h"
 
 #define super IOService

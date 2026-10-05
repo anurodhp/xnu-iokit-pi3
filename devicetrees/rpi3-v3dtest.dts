@@ -1,0 +1,10 @@
+/*
+ * QEMU variant of rpi3.dts that DOES define the v3d node (RPI3_HAVE_V3D),
+ * to exercise BCM2837V3D's "no V3D on this machine" path under QEMU raspi3,
+ * which has no V3D: the driver must match, find no ASB bridge, log it and
+ * decline, without faulting. Boot with QEMU_DTB=devicetrees/rpi3-v3dtest.dtb.
+ * (Real hardware uses rpi3-realhw.dts, which defines RPI3_HAVE_V3D too.)
+ */
+#define RPI3_HAVE_V3D 1
+
+#include "rpi3.dts"

@@ -136,3 +136,20 @@ Order matters; each step ends with a script + smoketest per the repo rule.
   `third_party/xnu-7195/iokit/conf/files` (fork change) and synced with
   `tools/sync_iokit_drivers.sh`. `tools/build_kexts.sh` compiles them
   standalone (BCM2837V3D is in its list).
+
+## Status update (V3D kernel integration)
+
+- **Validated submit done in the kext** (not on hardware): vendored Mesa's MIT
+  VC4 validators (`iokit/BCM2837V3D/validate/`, README lists provenance and 9
+  local fixes), host tests with ASAN/UBSan + fuzzer
+  (`tools/v3d_validate_test/run.sh`), `submitCL` and `createShaderBO` user
+  client methods, per-job tile BO, binner overflow pool.
+- **In the kernel:** `iokit/conf/files` in third_party/xnu-7195 lists the V3D
+  sources (that edit is uncommitted in the xnu fork), `sync_iokit_drivers.sh`
+  copies `validate/*.{c,h}` flat, `tools/build_xnu_7195.sh` builds it.
+- **QEMU:** with `devicetrees/rpi3-v3dtest.dtb` (defines the v3d node) the
+  driver matches, logs `no ASB bridge (id 0) - no V3D on this machine`,
+  declines, and the system boots to a shell. With the default dtb the kernel
+  boots and `gl_smoketest` still passes.
+- **Still unverified:** everything past the ASB check (power sequence, IRQ,
+  job pipeline, hang reset, real validated jobs). Hardware only.

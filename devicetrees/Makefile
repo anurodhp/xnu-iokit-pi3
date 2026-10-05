@@ -23,7 +23,7 @@
 # outside this directory.
 
 DTC := ../third_party/dtc-AppleDeviceTree/dtc
-DTS := rpi3 rpi3-realhw
+DTS := rpi3 rpi3-realhw rpi3-v3dtest
 DTBS := $(addsuffix .dtb,$(DTS))
 
 all: $(DTBS)
