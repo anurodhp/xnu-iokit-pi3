@@ -519,6 +519,11 @@ install_smoketest tools/userland_staging/x11_smoketest.macho "usr/X11/bin/x11_sm
 install_smoketest tools/userland_staging/x11_bench.macho "usr/X11/bin/x11_bench" \
     "= tools/userland_staging/x11_bench.macho not built -- run build_x11_bench.sh first if wanted, skipping" \
     "  (tools/userland_staging/build_x11_bench.sh: DAR-438 wrlib/Xlib micro-benchmark)"
+# Software OpenGL smoketest (docs/gpu-opengl-plan.md Tier A): needs
+# libGL.1.dylib from build_mesa.sh, installed by the generic loop below.
+install_smoketest tools/userland_staging/gl_smoketest.macho "usr/X11/bin/gl_smoketest" \
+    "= tools/userland_staging/gl_smoketest.macho not built -- run build_gl_smoketest.sh first if wanted, skipping" \
+    "  (tools/userland_staging/build_gl_smoketest.sh: Mesa softpipe GLX/GLSL test)"
 # Window Maker Close/Kill driver (DAR-452): QEMU-only diagnostic, no xdotool/xkill here.
 install_smoketest tools/userland_staging/wmclose_probe.macho "usr/X11/bin/wmclose_probe" \
     "= tools/userland_staging/wmclose_probe.macho not built -- run build_wmclose_probe.sh first if wanted, skipping" \

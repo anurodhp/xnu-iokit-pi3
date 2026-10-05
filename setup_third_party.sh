@@ -880,6 +880,7 @@ cairo|https://gitlab.freedesktop.org/cairo/cairo.git|1.18.4|
 mkfontscale|https://gitlab.freedesktop.org/xorg/app/mkfontscale.git|mkfontscale-1.2.3|
 libfontenc|https://gitlab.freedesktop.org/xorg/lib/libfontenc.git|libfontenc-1.1.9|
 xserver|https://gitlab.freedesktop.org/xorg/xserver.git|xorg-server-21.1.24|
+mesa|https://gitlab.freedesktop.org/mesa/mesa.git|mesa-25.2.8|
 libXfont2|https://gitlab.freedesktop.org/xorg/lib/libxfont.git|libXfont2-2.0.7|
 libxkbfile|https://gitlab.freedesktop.org/xorg/lib/libxkbfile.git|libxkbfile-1.1.3|
 xkbcomp|https://gitlab.freedesktop.org/xorg/app/xkbcomp.git|xkbcomp-1.5.0|
