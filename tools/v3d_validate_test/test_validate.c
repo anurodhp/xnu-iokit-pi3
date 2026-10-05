@@ -502,6 +502,43 @@ expect_reject(const char *name, mutate_fn fn)
 	world_reset();
 }
 
+
+/* Multisample full-resolution stores: the last tile must fit entirely inside the BO. */
+static int
+run_msaa(uint32_t bo_tiles)
+{
+	struct scenario s; struct vc4_exec_info e;
+	scenario_basic(&s);
+	/* binner list with a 2x2 tile grid (32x32 tiles for a 64x64 multisample target) */
+	memset(&s.bin, 0, sizeof(s.bin));
+	cl_tile_binning_config(&s.bin, 2, 2, 0);
+	cl_start_binning(&s.bin);
+	cl_prim_list_format(&s.bin);
+	cl_gem_handles(&s.bin, 2, 0);
+	cl_shader_state(&s.bin, 1);
+	cl_array_prim(&s.bin, 3, 0);
+	cl_end(&s.bin);
+	s.args.bin_cl_size = s.bin.n;
+	s.args.max_x_tile = 1; s.args.max_y_tile = 1;
+	s.color->base.base.size = (size_t)bo_tiles * 16384;
+	s.args.color_write.hindex = 0xffffffffu;
+	s.args.color_write.bits = (1u << 0) | (1u << 4);          /* MS_MODE_4X | DECIMATE_MODE_4X */
+	s.args.msaa_color_write.hindex = 3;
+	s.args.msaa_color_write.offset = 0;
+	int r = run(&s, &e);
+	cleanup(&e);
+	world_reset();
+	return r;
+}
+
+static void
+test_msaa_last_tile(void)
+{
+	EXPECT(run_msaa(4) == 0, "MSAA target with room for all 4 tiles is accepted");
+	EXPECT(run_msaa(3) != 0, "MSAA target one tile short is refused (last tile would be stored past the BO)");
+	EXPECT(run_msaa(1) != 0, "MSAA target with one tile for a 2x2 grid is refused");
+}
+
 /* --- shader validator tests --- */
 
 static void
@@ -729,6 +766,7 @@ main(int argc, char **argv)
 	expect_reject("bad colour format", m_bad_color_format);
 	expect_reject("shader rec count huge", m_shader_rec_overflow);
 	expect_reject("exec size overflow", m_exec_overflow);
+	test_msaa_last_tile();
 	test_shaders();
 	test_glue();
 	(void)m_shader_state_high_bits;

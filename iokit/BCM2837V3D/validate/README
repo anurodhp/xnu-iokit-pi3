@@ -41,6 +41,12 @@ tools/v3d_validate_test, ASAN + UBSan + fuzzing):
       copy of megabytes of never-written memory).
     - the BO array in validate_gl_shader_rec() is fixed-size, not a VLA.
   vc4_render_cl.c
+    - vc4_full_res_bounds_check(): compared the number of whole tiles in the
+      BO with the INDEX of the last tile, so a multisample target exactly one
+      tile too small passed and the last 16 KiB tile was stored past the end
+      of the BO (an out-of-bounds GPU write). Needs index + 1 tiles. Found by
+      mutating Mesa's own MSAA submissions; Linux has the same condition.
+      Regression test: test_msaa_last_tile() in tools/v3d_validate_test.
     - tile range vs. bin config: `>` -> `>=` (indices, not counts).
     - tile range is now also bounded by the render target size; with no bin
       CL the range was unconstrained and the hardware would store outside

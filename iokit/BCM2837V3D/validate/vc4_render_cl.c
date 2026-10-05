@@ -388,8 +388,15 @@ static int vc4_full_res_bounds_check(struct vc4_exec_info *exec,
 		return -EINVAL;
 	}
 
+	/* V3D local fix: this compared the number of whole tiles in the BO
+	 * against the INDEX of the last tile (stride * max_y + max_x), so a BO
+	 * holding exactly that many tiles passed and the last tile was then
+	 * stored one tile (16 KiB) past the end of the BO. Found by mutating
+	 * Mesa's own MSAA submissions (tools/v3d_validate_test/run_mesa_vc4.sh).
+	 * Linux's vc4_full_res_bounds_check() has the same condition. A tile at
+	 * index i needs i + 1 tiles. */
 	if ((obj->base.size - surf->offset) / VC4_TILE_BUFFER_SIZE <
-	    render_tiles_stride * args->max_y_tile + args->max_x_tile) {
+	    render_tiles_stride * args->max_y_tile + args->max_x_tile + 1) {
 		DRM_ERROR("MSAA tile %d, %d out of bounds "
 			  "(bo size %zd, offset %d).\n",
 			  args->max_x_tile, args->max_y_tile,

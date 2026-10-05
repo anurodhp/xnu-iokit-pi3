@@ -29,7 +29,21 @@ struct kbo {
 	void *mem;
 	struct vc4_validated_shader_info *shader;
 };
+#define KSEEDS 64
+struct kseed {
+	struct v3d_submit_cl args;
+	uint8_t *bin, *rec, *uni;
+	struct v3d_kbo_desc d[64];
+	uint32_t nbos;
+};
+
+struct kshader { uint8_t code[4096]; uint32_t size; };
+
 struct kernel {
+	struct kshader shader_codes[32];
+	int nshader_codes;
+	struct kseed seeds[KSEEDS];
+	int nseeds;
 	int submits, rejected_submits, shaders, rejected_shaders;
 	int jobs_with_bin, jobs_with_recs, jobs_render_only;
 	uint64_t uniform_bytes, bin_bytes;
@@ -92,6 +106,10 @@ k_call_struct(void *ctx, uint32_t sel, const void *in, size_t in_size, void *out
 		if (in_size != sizeof(struct v3d_create_shader_bo) || !out || *out_size != sizeof(struct v3d_create_shader_bo)) return kIOReturnBadArgument;
 		const struct v3d_create_shader_bo *c = in;
 		if (c->flags || !c->size || (c->size & 7) || c->size > 65536) return kIOReturnBadArgument;
+		if (k->nshader_codes < 32 && c->size <= 4096) {
+			memcpy(k->shader_codes[k->nshader_codes].code, (const void *)(uintptr_t)c->data, c->size);
+			k->shader_codes[k->nshader_codes++].size = c->size;
+		}
 		struct vc4_validated_shader_info *si = v3d_kglue_validate_shader((const void *)(uintptr_t)c->data, c->size);
 		if (!si) { k->rejected_shaders++; return kIOReturnNotPermitted; }
 		k->shaders++;
@@ -138,6 +156,15 @@ k_call_struct(void *ctx, uint32_t sel, const void *in, size_t in_size, void *out
 			d[i] = (struct v3d_kbo_desc){ k->bo[h - 1].size, k->bo[h - 1].gpu, k->bo[h - 1].shader };
 		}
 		if (k->corrupt_next && a.bin_cl_size) { ((uint8_t *)(uintptr_t)a.bin_cl)[0] = 200; k->corrupt_next = 0; }
+		if (k->nseeds < KSEEDS && a.bin_cl_size && a.bin_cl_size <= 8192 && a.shader_rec_size <= 8192 && a.uniforms_size <= 8192) {
+			struct kseed *sd = &k->seeds[k->nseeds++];
+			sd->args = a;
+			sd->bin = malloc(a.bin_cl_size ? a.bin_cl_size : 1); memcpy(sd->bin, (void *)(uintptr_t)a.bin_cl, a.bin_cl_size);
+			sd->rec = malloc(a.shader_rec_size ? a.shader_rec_size : 1); memcpy(sd->rec, (void *)(uintptr_t)a.shader_rec, a.shader_rec_size);
+			sd->uni = malloc(a.uniforms_size ? a.uniforms_size : 1); memcpy(sd->uni, (void *)(uintptr_t)a.uniforms, a.uniforms_size);
+			memcpy(sd->d, d, a.bo_handle_count * sizeof(d[0]));
+			sd->nbos = a.bo_handle_count;
+		}
 		struct v3d_kops ops = { k, k_alloc };
 		struct v3d_kresult r;
 		int e = v3d_kglue_validate(&a, d, a.bo_handle_count, (const void *)(uintptr_t)a.bin_cl,
