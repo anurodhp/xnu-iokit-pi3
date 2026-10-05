@@ -73,6 +73,23 @@ if [ ! -f "$KERNEL_DYLIB" ] || [ "$US/cerror_stub.c" -nt "$KERNEL_DYLIB" ] || [ 
     echo "+ libsystem_kernel.dylib missing or older than cerror_stub.c -- rebuilding"
     "$US/build_libsystem_kernel.sh"
 fi
+# DARW-281..290: libSystem export gaps Florence's WebKit needs (getfsstat, fsync, *at family, utimensat, creat,
+# gethostname, realpath, aligned_alloc, wcstod, 128-bit divide, ~60 libm functions). Rebuild any of these whose
+# script/source is newer than its dylib, in dependency order (libSystem.B reexports the rest, so it goes last).
+rebuild_if_stale() {   # rebuild_if_stale <dylib> <script> [extra source ...]
+    local dylib="$US/libc_build/system/$1" script="$US/$2" f; shift 2
+    if [ ! -f "$dylib" ]; then echo "+ $dylib missing -- running $script"; "$script"; return; fi
+    for f in "$script" "$@"; do
+        if [ "$US/$f" -nt "$dylib" ] || [ "$f" -nt "$dylib" ] 2>/dev/null; then
+            echo "+ $(basename "$dylib") older than $f -- running $(basename "$script")"; "$script"; return
+        fi
+    done
+}
+rebuild_if_stale libcompiler_rt.dylib build_compiler_rt_dylib.sh
+rebuild_if_stale libsystem_malloc.dylib build_libsystem_malloc.sh libmalloc_dispatch.c
+rebuild_if_stale libsystem_c.dylib build_libsystem_c.sh libcxx_wcstof_compat.c
+rebuild_if_stale libsystem_m.dylib build_libm_dylib.sh libm_c99_extras.c
+rebuild_if_stale libSystem.B.dylib build_libsystem.sh build_libsystem_kernel.sh build_libsystem_c.sh build_libm_dylib.sh build_compiler_rt_dylib.sh
 if [ ! -f "$US/libc_build/shared_mime_info/root/usr/share/mime/mime.cache" ]; then
     echo "+ MIME database not built -- building"
     "$US/build_shared_mime_info.sh"
@@ -1829,6 +1846,16 @@ for cmd in base64 awk pkill top; do
         echo "= tools/userland_staging/$cmd.macho not built -- run build_simple_cmds.sh first if wanted, skipping"
     fi
 done
+# htop(1): upstream htop 3.5.3's Darwin platform, dynamic, built by build_htop.sh (needs the real libncurses,
+# libiokituser and libCoreFoundation dylibs, like top). Rebuilt here when missing or older than its script, so
+# every image carries it; /usr/share/terminfo (above) supplies the terminal database it reads.
+if [ ! -f "$US/htop.macho" ] || [ "$US/build_htop.sh" -nt "$US/htop.macho" ] || [ "$US/htop_iops_stub.c" -nt "$US/htop.macho" ]; then
+    echo "+ htop.macho missing or older than build_htop.sh -- building"
+    "$US/build_htop.sh"
+fi
+cp "$US/htop.macho" "$MNT/usr/bin/htop"
+chmod 755 "$MNT/usr/bin/htop"
+echo "+ wrote $(wc -c < "$US/htop.macho") bytes to $MNT/usr/bin/htop (upstream htop 3.5.3, tools/userland_staging/build_htop.sh)"
 # pgrep(1) is the same binary as pkill(1) (pkill.c picks its mode from
 # getprogname(), DAR-343); HFS+ symlinks aren't injected yet, so copy.
 if [ -f tools/userland_staging/pkill.macho ]; then

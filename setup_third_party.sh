@@ -848,6 +848,7 @@ configd|git@github.com:anurodhp/configd.git|iokit-port||https://github.com/apple
 PowerManagement|https://github.com/apple-oss-distributions/PowerManagement.git|PowerManagement-1132.81.1|
 chrony|git@github.com:anurodhp/chrony.git|iokit-port||https://github.com/mlichvar/chrony.git
 vim|https://github.com/apple-oss-distributions/vim.git|vim-91.80.1|
+htop|https://github.com/htop-dev/htop.git|3.5.3|
 xorgproto|https://gitlab.freedesktop.org/xorg/proto/xorgproto.git|xorgproto-2025.1|
 xtrans|https://gitlab.freedesktop.org/xorg/lib/libxtrans.git|xtrans-1.6.0|
 xcb-proto|https://gitlab.freedesktop.org/xorg/proto/xcbproto.git|xcb-proto-1.17.0|
@@ -956,11 +957,11 @@ if [ -d "$LLVM_DEST" ]; then
     fi
 fi
 if [ -n "$LLVM_DEST" ]; then
-    echo "+ sparse-cloning llvm-project @ $LLVM_REF (libcxx/libcxxabi only)"
+    echo "+ sparse-cloning llvm-project @ $LLVM_REF (libcxx/libcxxabi + compiler-rt/lib/builtins only)"
     git clone --filter=blob:none --no-checkout --depth 1 --branch "$LLVM_REF" \
         https://github.com/llvm/llvm-project.git "$LLVM_DEST"
     git -C "$LLVM_DEST" sparse-checkout init --cone
-    git -C "$LLVM_DEST" sparse-checkout set libcxx libcxxabi
+    git -C "$LLVM_DEST" sparse-checkout set libcxx libcxxabi compiler-rt/lib/builtins
     git -C "$LLVM_DEST" checkout "$LLVM_REF"
 fi
 
