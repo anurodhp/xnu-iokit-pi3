@@ -188,9 +188,17 @@ Order matters; each step ends with a script + smoketest per the repo rule.
   `docs/v3d-bringup.md`): the real kext runs power-up, interrupts, the job
   pipeline, validated submit and hang recovery in QEMU. `v3dprobe` passes
   including the clear job's pixels; an injected hang is detected, the GPU reset
-  and a second probe passes (8/8). It found a real driver problem: `bzero()` of
-  a fresh write-combined BO intermittently spun in `DC ZVA` under QEMU (fixed
-  with explicit stores).
+  and a second probe passes (8/8). It found an OPEN problem: a fresh write-combined BO
+  intermittently stalls the guest in `_bzero` (`DC ZVA`, PC and registers
+  fixed across samples) under QEMU. The caller is
+  `IOBufferMemoryDescriptor::initWithPhysicalMask`, whose own
+  `bzero(_buffer, capacity)` (xnu `IOBufferMemoryDescriptor.cpp:331`) runs on the
+  write-combined mapping before the driver's explicit-store loop, so that loop
+  does not avoid it. Not yet known whether this is a QEMU TCG artifact or a
+  real issue; real DC ZVA on Normal non-cacheable memory is architecturally
+  valid, so it is likely QEMU. Options: allocate cacheable, zero, flush, then
+  map write-combined; or patch the xnu fork's IOBMD to avoid ZVA for
+  non-default cache modes.
 - **Validator fuzzing from real Mesa output**: 1.2M mutations of 45 real
   submissions and 26 compiled QPU programs under ASAN/UBSan. It found a real
   off-by-one in the multisample full-resolution tile bound (a target one tile
