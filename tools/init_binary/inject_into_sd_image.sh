@@ -64,6 +64,20 @@ fi
 
 python3 tools/pwtool/build.py
 
+# Image-critical prerequisites (FLORENCE-16). Both tools/make_sd_image.sh (QEMU) and tools/make_realhw_sd_image.sh call
+# this script, so building them here covers every image. Without it an image silently shipped a stale libsystem_kernel.dylib
+# (pre per-thread-errno, PR #19: Florence died with X IO error 60) and no /usr/share/mime (PR #20).
+US=tools/userland_staging
+KERNEL_DYLIB=$US/libc_build/system/libsystem_kernel.dylib
+if [ ! -f "$KERNEL_DYLIB" ] || [ "$US/cerror_stub.c" -nt "$KERNEL_DYLIB" ] || [ "$US/build_libsystem_kernel.sh" -nt "$KERNEL_DYLIB" ]; then
+    echo "+ libsystem_kernel.dylib missing or older than cerror_stub.c -- rebuilding"
+    "$US/build_libsystem_kernel.sh"
+fi
+if [ ! -f "$US/libc_build/shared_mime_info/root/usr/share/mime/mime.cache" ]; then
+    echo "+ MIME database not built -- building"
+    "$US/build_shared_mime_info.sh"
+fi
+
 # install_smoketest SRC DEST MISSING_MSG [NOTE...] (DAR-348)
 #
 # The one way this script installs a QEMU-only *_smoketest binary. It
@@ -594,7 +608,8 @@ if [ -f "$MIME_STAGE/mime.cache" ]; then
     ditto "$MIME_STAGE" "$MNT/usr/share/mime"
     echo "+ wrote MIME database ($(du -sk "$MIME_STAGE" | cut -f1) KB) to $MNT/usr/share/mime"
 else
-    echo "= $MIME_STAGE not built -- run tools/userland_staging/build_shared_mime_info.sh first if wanted, skipping (GIO then types every file application/octet-stream)"
+    echo "error: $MIME_STAGE missing after build_shared_mime_info.sh" >&2
+    exit 1
 fi
 # terminfo database (DAR-293): libncurses here is built without one
 # (build_ncurses.sh), so top, vim and libedit fail with "error opening terminal:
