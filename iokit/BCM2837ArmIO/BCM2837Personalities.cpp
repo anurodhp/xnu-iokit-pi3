@@ -524,6 +524,10 @@ BCM2837RegisterBuiltinPersonalities(void)
 	// LAN9514 Ethernet chip is a USB device behind it). See BCM2837DWC2.h
 	// and docs/usb-support-plan.md.
 	OSDictionary *usb = makePersonality("IOPlatformDevice", "BCM2837DWC2", "usb", -1);
+	// "v3d" - the VideoCore IV 3D engine (DARW-295). The DT node exists
+	// only in builds that define RPI3_HAVE_V3D (rpi3-realhw.dts), so this
+	// personality is inert under QEMU.
+	OSDictionary *v3d = makePersonality("IOPlatformDevice", "BCM2837V3D", "v3d", -1);
 	// IOBlockStorageDriver (real apple-oss-distributions/IOStorageFamily,
 	// vendored into iokit/Storage/ and iokit/IOKit/storage/, matching
 	// vintage IOStorageFamily-218.1.4 - the initially-vendored 337.100.1
@@ -690,6 +694,10 @@ BCM2837RegisterBuiltinPersonalities(void)
 	if (usb != NULL) {
 		personalities->setObject(usb);
 		usb->release();
+	}
+	if (v3d != NULL) {
+		personalities->setObject(v3d);
+		v3d->release();
 	}
 	if (blockStorageDriver != NULL) {
 		personalities->setObject(blockStorageDriver);

@@ -30,4 +30,7 @@
  */
 #define RPI3_DRAM_SIZE 0x08000000
 
+/* The Pi 3 has a V3D (DARW-295); QEMU raspi3 does not. */
+#define RPI3_HAVE_V3D 1
+
 #include "rpi3.dts"

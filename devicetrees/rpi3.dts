@@ -305,6 +305,34 @@
 			compatible = "brcm,bcm2835-mbox";
 			reg = <0xb880 0 0x40 0>;
 		};
+
+#ifdef RPI3_HAVE_V3D
+		/*
+		 * VideoCore IV 3D engine (BCM2837V3D, DARW-295). Only defined
+		 * for builds that ask for it (rpi3-realhw.dts does): QEMU's
+		 * raspi3 has no V3D, and the driver's own ASB-bridge check is
+		 * the second line of defence there.
+		 *
+		 * Three register ranges, each as offset-from-arm-io like the
+		 * nodes above (bus 0x7exxxxxx = ARM 0x3fxxxxxx):
+		 *   0: V3D          bus 0x7ec00000, 0x1000  (u-boot bcm283x.dtsi:
+		 *                   v3d@7ec00000 reg = <0x7ec00000 0x1000>)
+		 *   1: power mgr    bus 0x7e100000, 0x114   (pm: watchdog@7e100000)
+		 *   2: ASB bridges  bus 0x7e00a000, 0x24    (pm's second reg)
+		 * Interrupt: u-boot's raw <1 10> = bank 1 ("pending_1") bit 10,
+		 * so BCM2837InterruptController vector 10 with this file's
+		 * pre-flattened convention (see the usb node).
+		 */
+		v3d {
+			device_type = "v3d";
+			compatible = "brcm,bcm2835-v3d";
+			reg = <0xc00000 0 0x1000 0
+			       0x100000 0 0x114 0
+			       0xa000 0 0x24 0>;
+			interrupt-parent = <0x1>;
+			interrupts = <10>;
+		};
+#endif
 	};
 
 	/*

@@ -73,6 +73,10 @@ public:
 	 */
 	enum {
 		kClockIdEMMC = 1,
+		// RPI_FIRMWARE_V3D_CLK_ID: the fifth entry of Linux's clock-id
+		// enum (include/soc/bcm2835/raspberrypi-firmware.h:140-144,
+		// EMMC=1, UART, ARM, CORE, V3D).
+		kClockIdV3D = 5,
 	};
 
 	/*
@@ -94,6 +98,14 @@ public:
 	 * query or another caller.
 	 */
 	static bool getClockRateHz(uint32_t clockId, uint32_t *outHz);
+
+	/*
+	 * Gates one of the VideoCore's clocks on or off (property tag
+	 * 0x00038001, "set clock state"). Returns true only if the firmware
+	 * acknowledges the clock now being in the requested state. Used by
+	 * BCM2837V3D's power-up sequence.
+	 */
+	static bool setClockState(uint32_t clockId, bool on);
 
 	/*
 	 * The VideoCore's 64-bit per-board serial number (property tag

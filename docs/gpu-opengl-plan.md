@@ -114,3 +114,25 @@ Order matters; each step ends with a script + smoketest per the repo rule.
 - Run Step 1 spike in this worktree; note `third_party/` is gitignored and
   lives only in the main checkout, so clone Mesa/libdrm via
   `setup_third_party.sh` entries (fork first).
+
+## Status 2026-10-05
+
+- **Tier A (software GL): done and QEMU-verified** (deb58c5, DARW-293).
+- **Licensing (DARW-299): Linux's vc4 driver may be used as the reference**
+  (project owner, 2026-10-05). Code is written independently with the Linux
+  file/line it follows cited in comments; no Linux source is copied.
+- **V3D kext written, compiles, untested on hardware (DARW-295):**
+  `iokit/BCM2837V3D/` (driver, user client, register map, userland ABI
+  `BCM2837V3DUAPI.h`), `BCM2837Mailbox::setClockState`, `v3d` personality,
+  and a `v3d` DT node under `#ifdef RPI3_HAVE_V3D` (defined only by
+  `rpi3-realhw.dts`). Implemented: power sequence (firmware V3D clock, PM
+  reset release, ASB bridges), IDENT check, IRQ, two-stage bin/render job
+  pipeline, hang detector + reset, BO allocation (contiguous,
+  write-combined, GPU address = phys + 0xC0000000), user client with
+  `IOConnectMapMemory64` BO mapping, root + `v3d-raw=1`-gated raw submit.
+  **Not implemented:** validated submit (the CL/shader validators; Linux
+  `vc4_validate*.c`, `vc4_render_cl.c`), binner OOM handling.
+- **Not yet in the kernel:** the sources must be added to
+  `third_party/xnu-7195/iokit/conf/files` (fork change) and synced with
+  `tools/sync_iokit_drivers.sh`. `tools/build_kexts.sh` compiles them
+  standalone (BCM2837V3D is in its list).

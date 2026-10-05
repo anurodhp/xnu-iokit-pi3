@@ -46,6 +46,7 @@ enum {
 	kTagGetBoardMAC    = 0x00010003,
 	kTagGetBoardSerial = 0x00010004,
 	kTagGetClockRate   = 0x00030002,
+	kTagSetClockState  = 0x00038001,
 	kTagEnd            = 0x00000000,
 
 	kCodeRequest       = 0x00000000,
@@ -464,6 +465,62 @@ queryClockRateLocked(uint32_t clockId, uint32_t *outHz)
 	}
 
 	msgBufFree(&buf);
+	return ok;
+}
+
+/*
+ * Runs one "set clock state" request (tag 0x00038001; Linux:
+ * RPI_FIRMWARE_SET_CLOCK_STATE, include/soc/bcm2835/raspberrypi-firmware.h).
+ * Request {clock id, state}: state bit 0 = on, bit 1 = "clock not present".
+ * The response word 1 carries the resulting state. Caller holds the lock.
+ */
+static bool
+setClockStateLocked(uint32_t clockId, bool on)
+{
+	volatile uint32_t *regs = mailboxRegs();
+	if (regs == NULL) {
+		return false;
+	}
+	struct MailboxMsgBuf buf;
+	if (!msgBufAlloc(&buf)) {
+		return false;
+	}
+	uint32_t *m = buf.words;
+
+	m[kMsgIdxSize] = kMsgBytes;
+	m[kMsgIdxCode] = kCodeRequest;
+	m[kOneIdxTag] = kTagSetClockState;
+	m[kOneIdxBufSize] = 8;
+	m[kOneIdxRespCode] = 0;
+	m[kOneIdxWord0] = clockId;
+	m[kOneIdxWord1] = on ? 1 : 0;
+	m[kOneIdxEnd] = kTagEnd;
+
+	bool ok = false;
+	if (mailboxCall(regs, m, buf.busAddr)) {
+		uint32_t state = m[kOneIdxWord1];
+		if ((m[kOneIdxRespCode] & 0x80000000U) != 0 && (state & 2) == 0 &&
+		    (state & 1) == (on ? 1U : 0U)) {
+			ok = true;
+		} else {
+			IOLog("BCM2837Mailbox: set clock %u %s: resp=%#x state=%#x\n",
+			    clockId, on ? "on" : "off", m[kOneIdxRespCode], state);
+		}
+	}
+	msgBufFree(&buf);
+	return ok;
+}
+
+bool
+BCM2837Mailbox::setClockState(uint32_t clockId, bool on)
+{
+	IOLock *lock = mailboxLock();
+	if (lock == NULL) {
+		return false;
+	}
+	IOLockLock(lock);
+	bool ok = setClockStateLocked(clockId, on);
+	IOLockUnlock(lock);
 	return ok;
 }
 
