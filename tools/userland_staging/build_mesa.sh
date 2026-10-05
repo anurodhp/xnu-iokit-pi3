@@ -51,9 +51,14 @@ SHIM="$PWD/v3d_drm"
 VC4X="$PWD/mesa_xlib_vc4"
 DRIVERS=softpipe
 SUF=""
+# MESA_GLES2=enabled: also build the OpenGL ES 2 API (GLES2 contexts through
+# GLX_EXT_create_context_es2_profile; Mesa's EGL cannot be built here, see
+# docs/gpu-opengl-plan.md).
+GLES2="${MESA_GLES2:-disabled}"
+[ "$GLES2" = "enabled" ] && SUF="-es2"
 if [ "$VC4" = "1" ]; then
     DRIVERS=softpipe,vc4
-    SUF="-vc4"
+    SUF="${SUF}-vc4"
     for d in libdrm libiokituser libCoreFoundation; do
         [ -f "$OUT/system/$d.dylib" ] || { echo "error: $OUT/system/$d.dylib not found -- build it first (libdrm: build_libdrm_v3d.sh)" >&2; exit 1; }
     done
@@ -134,7 +139,7 @@ fi
 meson setup "$BUILD" "$SRC" --cross-file "$GEN/cross.ini" \
     --prefix=/usr/X11 --buildtype=plain \
     -Dplatforms=x11 -Dglx=xlib -Dgallium-drivers=$DRIVERS -Dvulkan-drivers= \
-    -Dllvm=disabled -Dgallium-rusticl=false -Dopengl=true -Dgles1=disabled -Dgles2=disabled \
+    -Dllvm=disabled -Dgallium-rusticl=false -Dopengl=true -Dgles1=disabled -Dgles2=$GLES2 \
     -Degl=disabled -Dgbm=disabled -Dglvnd=disabled -Dshared-glapi=enabled \
     -Dlmsensors=disabled -Dlibunwind=disabled -Dvalgrind=disabled -Dzstd=disabled \
     -Dxmlconfig=disabled -Dbuild-tests=false -Dtools= -Dbuild-aco-tests=false \
@@ -234,3 +239,18 @@ mkdir -p "$X11_INC/KHR"
 cp "$SRC/include/KHR/khrplatform.h" "$X11_INC/KHR/"
 echo "wrote $OUTLIB ($X11_PREFIX/lib/libGL.1.dylib)"
 ./bind_target_audit.sh "$OUTLIB"
+
+# GLES2 API library. Mesa links it against libGL (it uses libGL's dispatch
+# table), so an application creates an ES2-profile context with
+# glXCreateContextAttribsARB and links libGLESv2 + libGL.
+if [ "$GLES2" = "enabled" ]; then
+    ES2="$OUT/system/libGLESv2.dylib"
+    cp "$BUILD/src/mapi/es2api/libGLESv2.2.dylib" "$ES2"
+    install_name_tool -id "$X11_PREFIX/lib/libGLESv2.2.dylib" "$ES2"
+    install_name_tool -change @rpath/libGL.1.dylib "$X11_PREFIX/lib/libGL.1.dylib" "$ES2"
+    mkdir -p "$X11_INC/GLES2" "$X11_INC/GLES3"
+    cp "$SRC"/include/GLES2/*.h "$X11_INC/GLES2/"
+    cp "$SRC"/include/GLES3/*.h "$X11_INC/GLES3/"
+    echo "wrote $ES2 ($X11_PREFIX/lib/libGLESv2.2.dylib)"
+    ./bind_target_audit.sh "$ES2" "$OUTLIB" || true
+fi

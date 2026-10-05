@@ -524,6 +524,29 @@ install_smoketest tools/userland_staging/x11_bench.macho "usr/X11/bin/x11_bench"
 install_smoketest tools/userland_staging/gl_smoketest.macho "usr/X11/bin/gl_smoketest" \
     "= tools/userland_staging/gl_smoketest.macho not built -- run build_gl_smoketest.sh first if wanted, skipping" \
     "  (tools/userland_staging/build_gl_smoketest.sh: Mesa softpipe GLX/GLSL test)"
+# OpenGL ES 2 (GLX ES2 profile + libGLESv2) and libepoxy smoketests. The
+# libraries are installed by the generic loop below.
+install_smoketest tools/userland_staging/gles2_smoketest.macho "usr/X11/bin/gles2_smoketest" \
+    "= tools/userland_staging/gles2_smoketest.macho not built -- run build_gles2_smoketest.sh first if wanted, skipping" \
+    "  (tools/userland_staging/build_gles2_smoketest.sh: needs MESA_GLES2=enabled build_mesa.sh)"
+install_smoketest tools/userland_staging/epoxy_smoketest.macho "usr/X11/bin/epoxy_smoketest" \
+    "= tools/userland_staging/epoxy_smoketest.macho not built -- run build_epoxy_smoketest.sh first if wanted, skipping" \
+    "  (tools/userland_staging/build_epoxy_smoketest.sh: libepoxy GLX dispatch test)"
+# libepoxy (unpatched upstream) loads GLX from the XQuartz path
+# /opt/X11/lib/libGL.1.dylib (src/dispatch_common.c:177) and GL from the macOS
+# OpenGL.framework path (:669-670); this system's X11 is /usr/X11, so give it
+# those paths (symlinks) instead of patching the library.
+if [ -f tools/userland_staging/libc_build/system/libepoxy.dylib ]; then
+    mkdir -p "$MNT/opt"
+    ln -sfn /usr/X11 "$MNT/opt/X11"
+    echo "+ /opt/X11 -> /usr/X11 (libepoxy's GLX path)"
+    # On Darwin libepoxy loads GL itself from the macOS framework path and
+    # aborts if that fails (src/dispatch_common.c:669-670, found by running
+    # epoxy_smoketest), so give it Mesa's libGL there.
+    mkdir -p "$MNT/System/Library/Frameworks/OpenGL.framework/Versions/Current"
+    ln -sfn /usr/X11/lib/libGL.1.dylib "$MNT/System/Library/Frameworks/OpenGL.framework/Versions/Current/OpenGL"
+    echo "+ /System/Library/Frameworks/OpenGL.framework/Versions/Current/OpenGL -> /usr/X11/lib/libGL.1.dylib"
+fi
 # V3D bring-up tool (DARW-295): needs libdrm.2.dylib (build_libdrm_v3d.sh),
 # installed by the generic loop below.
 install_smoketest tools/userland_staging/v3dprobe.macho "usr/X11/bin/v3dprobe" \

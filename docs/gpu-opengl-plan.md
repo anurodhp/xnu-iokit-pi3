@@ -181,3 +181,38 @@ Order matters; each step ends with a script + smoketest per the repo rule.
 - **Bring-up**: `docs/v3d-bringup.md`; `v3dprobe` on the image
   (`/usr/X11/bin/v3dprobe`); `tools/v3d_qemu_probe.sh` shows its clean
   "no V3D" exit under QEMU.
+
+## Status update (V3D model in QEMU, fuzzing, GLES2/EGL/epoxy)
+
+- **QEMU V3D model** (`tools/qemu_v3d_model/`, see its README and
+  `docs/v3d-bringup.md`): the real kext runs power-up, interrupts, the job
+  pipeline, validated submit and hang recovery in QEMU. `v3dprobe` passes
+  including the clear job's pixels; an injected hang is detected, the GPU reset
+  and a second probe passes (8/8). It found a real driver problem: `bzero()` of
+  a fresh write-combined BO intermittently spun in `DC ZVA` under QEMU (fixed
+  with explicit stores).
+- **Validator fuzzing from real Mesa output**: 1.2M mutations of 45 real
+  submissions and 26 compiled QPU programs under ASAN/UBSan. It found a real
+  off-by-one in the multisample full-resolution tile bound (a target one tile
+  too small was accepted and the last tile stored past the BO; Linux has the
+  same condition): fixed, with a regression test that fails without the fix.
+  The Mesa harness now covers primitives, stencil, scissor, mipmap / NPOT /
+  RGB565 / ETC1 / cube textures, discard, dynamic branches, 4x MSAA, blits
+  and 8 attributes: 44 jobs and 26 programs accepted.
+- **GLES2**: works through GLX (`GLX_EXT_create_context_es2_profile`) with
+  Mesa's `libGLESv2`, which links to `libGL` and shares its dispatch.
+  `MESA_GLES2=enabled build_mesa.sh`, `gles2_smoketest`: PASS in QEMU
+  (Mesa reports the highest ES it supports, 3.1).
+- **EGL is blocked, not deferred**: Mesa's meson requires DRI for EGL ("EGL
+  requires DRI ... but GLX is being built with xlib support") and DRI needs
+  libdrm and a KMS system, so Mesa's EGL cannot be built here without changing
+  Mesa. Options if EGL is needed: fork Mesa to allow a surfaceless EGL over the
+  software rasterizer, or give WebKit a stub EGL (its feasibility doc already
+  plans an "EGL-optional" path).
+- **libepoxy 1.5.10**: builds unpatched (GLX only), `epoxy_smoketest` PASS in
+  QEMU. On Darwin it loads GL from the macOS OpenGL.framework path and GLX
+  from /opt/X11, so the image gets symlinks to `/usr/X11/lib/libGL.1.dylib`
+  and `/usr/X11` (inject script) rather than a patch.
+- `tools/gl_suite_qemu_test.sh` runs GL + GLES2 + epoxy under Xvfb (all PASS).
+  The staged `libGL` is now the GLES2-enabled software build; `MESA_VC4=1`
+  builds the V3D-capable one, plain `build_mesa.sh` the minimal software one.
