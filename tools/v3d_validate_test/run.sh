@@ -23,7 +23,7 @@ cc -std=gnu11 -I ../../iokit/BCM2837V3D -I ../../third_party/mesa/include \
 
 # libdrm shim against a mock kernel (real validators behind it)
 SHIM=../userland_staging/v3d_drm
-cc -std=gnu11 -I ../../iokit/BCM2837V3D -I $V -I $SHIM -I ../../third_party/mesa/include \
+cc -std=gnu11 -I ../../iokit/BCM2837V3D -I $V -I $SHIM -I $SHIM/include -I ../../third_party/mesa/include \
     -g -O1 -fsanitize=address,undefined -fno-sanitize=alignment -fno-sanitize-recover=undefined \
     -Wall -Wno-unused-parameter -Wno-sign-compare -Wno-unused-function \
     -o "$OUT/test_drm_shim" test_drm_shim.c $SHIM/v3d_drm.c \

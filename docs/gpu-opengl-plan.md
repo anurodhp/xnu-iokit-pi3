@@ -153,3 +153,31 @@ Order matters; each step ends with a script + smoketest per the repo rule.
   boots and `gl_smoketest` still passes.
 - **Still unverified:** everything past the ASB check (power sequence, IRQ,
   job pipeline, hang reset, real validated jobs). Hardware only.
+
+## Status update (userland + validation without hardware)
+
+- **libdrm shim** (`tools/userland_staging/v3d_drm/`, built as
+  `/usr/X11/lib/libdrm.2.dylib` by `build_libdrm_v3d.sh`): `drmIoctl()` for the
+  vc4 ioctls over the kext's user client (structs byte-identical to Linux's,
+  checked by `tools/v3d_validate_test/abi_check.c`), BO mapping through
+  `IOConnectMapMemory64`, dup()-safe descriptors, ENOSYS stubs for
+  syncobj/prime, and `include/v3d_mmap_hook.h` which redirects Mesa's
+  `mmap()/munmap()` (force-included, so Mesa stays unmodified).
+- **Mesa's real vc4 driver verified against the validators on the host**:
+  `tools/v3d_validate_test/build_mesa_host.sh` builds libvc4 natively;
+  `run_mesa_vc4.sh` drives it (clear, flat/varying triangles, depth + blend,
+  indexed draw, textured draw, uniforms, 20 more frames) through the shim and
+  a mock kernel into the vendored validators: 26 jobs and 7 compiled QPU
+  programs accepted, none refused, and a corrupted list is refused (negative
+  control). This is the most likely failure to cost hardware time, now
+  retired for these feature paths.
+- **Mesa's vc4 driver also compiles for the target** (cross build, stub
+  headers only; no Mesa source changes). Remaining Mesa work for hardware GL is
+  the Xlib presenter: a custom `xlib_create_screen()` target file that makes a
+  vc4 screen and puts rendered frames on the X drawable (the single hook in
+  `src/gallium/targets/libgl-xlib/xlib.c`). Untestable without a GPU.
+- **Queue state machine** (`V3DQueue.h`) extracted and tested against a fake
+  GPU: 300k random submit/complete/reset events.
+- **Bring-up**: `docs/v3d-bringup.md`; `v3dprobe` on the image
+  (`/usr/X11/bin/v3dprobe`); `tools/v3d_qemu_probe.sh` shows its clean
+  "no V3D" exit under QEMU.

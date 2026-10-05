@@ -23,7 +23,7 @@ SRC=v3d_drm
 OBJ="$X11_ROOT/obj/libdrm_v3d"
 rm -rf "$OBJ"
 mkdir -p "$OBJ"
-EXTRA=(-I "$SRC" -I ../../iokit/BCM2837V3D -DPRIVATE=1
+EXTRA=(-I "$SRC" -I "$SRC/include" -I "$TP/mesa/include" -I ../../iokit/BCM2837V3D -DPRIVATE=1
     -I "$OUT/iokitlib_headers" -I "$OUT/compat_include" -I "$OUT/cf_headers"
     -I "$TP/xnu-7195/iokit" -I "$TP/xnu-7195/libkern" -idirafter "$TP/xnu-7195/osfmk")
 x11_compile "$OBJ" "$SRC/v3d_drm.c" "${EXTRA[@]}"

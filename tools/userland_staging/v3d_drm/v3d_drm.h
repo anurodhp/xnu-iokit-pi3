@@ -29,6 +29,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -58,14 +59,17 @@ int v3d_drm_open(void);
 /* Releases the connection and closes the descriptor. */
 int v3d_drm_close(int fd);
 
-/* libdrm entry points Mesa's vc4 driver uses. */
-int drmIoctl(int fd, unsigned long request, void *arg);
-int drmGetCap(int fd, uint64_t capability, uint64_t *value);
+/* libdrm entry points (prototypes in include/xf86drm.h): drmIoctl, drmGetCap,
+ * drmGetVersion/drmFreeVersion, and ENOSYS stubs for syncobjs and prime. */
 
 /* mmap() replacement for BOs: `offset` is the token drmIoctl returned from
  * DRM_IOCTL_VC4_MMAP_BO. Returns MAP_FAILED-style (void *)-1 on error. */
 void *v3d_drm_mmap(int fd, size_t length, uint64_t offset);
 int v3d_drm_munmap(int fd, void *addr, size_t length);
+
+/* Redirection targets for Mesa's mmap()/munmap(); see include/v3d_mmap_hook.h. */
+void *v3d_drm_mmap_hook(void *addr, size_t len, int prot, int flags, int fd, off_t offset);
+int v3d_drm_munmap_hook(void *addr, size_t len);
 
 /* IOReturn -> errno, exposed for tests. */
 int v3d_drm_ioreturn_to_errno(int ioreturn);

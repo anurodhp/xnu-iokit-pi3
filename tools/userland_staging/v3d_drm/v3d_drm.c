@@ -7,9 +7,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "v3d_drm.h"
+#include "xf86drm.h"
 #include "BCM2837V3DUAPI.h"
 
 /* DRM ioctl numbers (low byte of the request), from Linux's drm.h and
@@ -119,6 +121,8 @@ struct mapping {
 
 struct v3d_fd {
 	int fd;
+	dev_t dev;               /* identity of the descriptor's file: dup()ed copies match */
+	ino_t ino;
 	struct v3d_transport t;
 	pthread_mutex_t lock;
 	struct bo_state bo[MAX_BOS];
@@ -128,13 +132,24 @@ struct v3d_fd {
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct v3d_fd *g_fds[MAX_FDS];
 
+/*
+ * Mesa's DRM winsys dup()s the descriptor it is given
+ * (vc4_drm_winsys.c: os_dupfd_cloexec) and calls drmIoctl() on the copy, so
+ * descriptors are matched by the identity of the file behind them, not by
+ * number. Each v3d_drm_open() descriptor is an unlinked temporary file, which
+ * has a unique (st_dev, st_ino) that every dup() shares.
+ */
 static struct v3d_fd *
 fd_lookup(int fd)
 {
+	struct stat st;
 	struct v3d_fd *r = NULL;
+	if (fstat(fd, &st) != 0) {
+		return NULL;
+	}
 	pthread_mutex_lock(&g_lock);
 	for (int i = 0; i < MAX_FDS; i++) {
-		if (g_fds[i] != NULL && g_fds[i]->fd == fd) {
+		if (g_fds[i] != NULL && g_fds[i]->dev == st.st_dev && g_fds[i]->ino == st.st_ino) {
 			r = g_fds[i];
 			break;
 		}
@@ -146,17 +161,23 @@ fd_lookup(int fd)
 int
 v3d_drm_open_transport(const struct v3d_transport *t)
 {
-	int fd = open("/dev/null", O_RDWR);
+	char path[] = "/tmp/.v3d_drm_XXXXXX";
+	int fd = mkstemp(path);
 	if (fd < 0) {
 		return -1;
 	}
+	unlink(path);
+	struct stat st;
 	struct v3d_fd *f = calloc(1, sizeof(*f));
-	if (f == NULL) {
+	if (f == NULL || fstat(fd, &st) != 0) {
+		free(f);
 		close(fd);
 		errno = ENOMEM;
 		return -1;
 	}
 	f->fd = fd;
+	f->dev = st.st_dev;
+	f->ino = st.st_ino;
 	f->t = *t;
 	pthread_mutex_init(&f->lock, NULL);
 	pthread_mutex_lock(&g_lock);
@@ -180,7 +201,7 @@ v3d_drm_close(int fd)
 	struct v3d_fd *f = NULL;
 	pthread_mutex_lock(&g_lock);
 	for (int i = 0; i < MAX_FDS; i++) {
-		if (g_fds[i] != NULL && g_fds[i]->fd == fd) {
+		if (g_fds[i] != NULL && g_fds[i]->fd == fd) {      /* the original, not a dup */
 			f = g_fds[i];
 			g_fds[i] = NULL;
 			break;
@@ -465,4 +486,78 @@ v3d_drm_munmap(int fd, void *addr, size_t length)
 	pthread_mutex_unlock(&f->lock);
 	errno = EINVAL;
 	return -1;
+}
+
+/* ---- libdrm entry points Mesa references but this port cannot provide ---- */
+
+int drmSyncobjCreate(int fd, uint32_t flags, uint32_t *handle) { (void)fd; (void)flags; (void)handle; errno = ENOSYS; return -1; }
+int drmSyncobjDestroy(int fd, uint32_t handle) { (void)fd; (void)handle; errno = ENOSYS; return -1; }
+int drmSyncobjImportSyncFile(int fd, uint32_t handle, int sync_file_fd) { (void)fd; (void)handle; (void)sync_file_fd; errno = ENOSYS; return -1; }
+int drmSyncobjExportSyncFile(int fd, uint32_t handle, int *sync_file_fd) { (void)fd; (void)handle; (void)sync_file_fd; errno = ENOSYS; return -1; }
+int drmPrimeFDToHandle(int fd, int prime_fd, uint32_t *handle) { (void)fd; (void)prime_fd; (void)handle; errno = ENOSYS; return -1; }
+int drmPrimeHandleToFD(int fd, uint32_t handle, uint32_t flags, int *prime_fd) { (void)fd; (void)handle; (void)flags; (void)prime_fd; errno = ENOSYS; return -1; }
+
+/* libsync.h */
+int sync_wait(int fd, int timeout) { (void)fd; (void)timeout; errno = ENOSYS; return -1; }
+int sync_accumulate(const char *name, int *fd1, int fd2) { (void)name; (void)fd1; (void)fd2; errno = ENOSYS; return -1; }
+
+drmVersionPtr
+drmGetVersion(int fd)
+{
+	if (fd_lookup(fd) == NULL) {
+		return NULL;
+	}
+	drmVersionPtr v = calloc(1, sizeof(*v));
+	if (v != NULL) {
+		v->version_major = 0;
+		v->version_minor = 1;
+		v->name_len = 3;
+		v->name = strdup("vc4");
+		v->desc_len = 0;
+		v->desc = strdup("");
+	}
+	return v;
+}
+
+void
+drmFreeVersion(drmVersionPtr v)
+{
+	if (v != NULL) {
+		free(v->name);
+		free(v->desc);
+		free(v->date);
+		free(v);
+	}
+}
+
+/* ---- mmap()/munmap() redirection (include/v3d_mmap_hook.h) ---- */
+
+void *
+v3d_drm_mmap_hook(void *addr, size_t len, int prot, int flags, int fd, off_t offset)
+{
+	if (fd >= 0 && fd_lookup(fd) != NULL) {
+		return v3d_drm_mmap(fd, len, (uint64_t)offset);
+	}
+	return mmap(addr, len, prot, flags, fd, offset);      /* the real one: this file is built without the hook */
+}
+
+int
+v3d_drm_munmap_hook(void *addr, size_t len)
+{
+	pthread_mutex_lock(&g_lock);
+	for (int i = 0; i < MAX_FDS; i++) {
+		struct v3d_fd *f = g_fds[i];
+		if (f == NULL) {
+			continue;
+		}
+		for (int k = 0; k < MAX_MAPS; k++) {
+			if (f->maps[k].addr == addr) {
+				int fd = f->fd;
+				pthread_mutex_unlock(&g_lock);
+				return v3d_drm_munmap(fd, addr, len);
+			}
+		}
+	}
+	pthread_mutex_unlock(&g_lock);
+	return munmap(addr, len);
 }
