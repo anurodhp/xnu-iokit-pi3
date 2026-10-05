@@ -691,7 +691,11 @@ if [ -d "$FLORENCE_DIR/build/root/Applications/Florence.app" ]; then
     ditto "$FL_STAGE" "$MNT/"
     [ -x "$MNT/Applications/Florence.app/Florence" ] ||
         { echo "error: Florence.app did not land on $MNT" >&2; exit 1; }
-    echo "+ wrote Florence ($need_kb KB: /Applications/Florence.app, /usr/local WebKit libs)"
+    # libxkbcommon (WPE's default keymap) has /usr/local/share/X11/xkb baked in as its XKB root; the
+    # keymap database ships with the X servers below, at /usr/X11/share/X11/xkb.
+    mkdir -p "$MNT/usr/local/share/X11"
+    ln -sfn /usr/X11/share/X11/xkb "$MNT/usr/local/share/X11/xkb"
+    echo "+ wrote Florence ($need_kb KB: /Applications/Florence.app, /usr/local WebKit libs, xkb symlink)"
 else
     echo "= $FLORENCE_DIR/build/root/Applications/Florence.app not built -- build ../florence (scripts/build_florence.sh pi) first if wanted, skipping"
 fi
