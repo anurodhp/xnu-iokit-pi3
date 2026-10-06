@@ -19,13 +19,14 @@
 #
 # Usage: tools/make_sd_image.sh [OUTPUT_IMAGE] [SIZE_MB]
 #   OUTPUT_IMAGE: defaults to qemu/hfs_root_test.img (runvm.sh's default)
-#   SIZE_MB:      defaults to 1200 (see above -- don't go below ~1100)
+#   SIZE_MB:      defaults to 3072 (3 GB: the GNUstep tree, X servers and Florence's ~130 MB
+#                 no longer fit in 1200; never go below ~1100, see above)
 set -e
 cd "$(dirname "$0")/.."
 mkdir -p qemu
 
 OUT="${1:-qemu/hfs_root_test.img}"
-SIZE_MB="${2:-1200}"
+SIZE_MB="${2:-3072}"
 
 if [ "$SIZE_MB" -le 1024 ]; then
     echo "error: SIZE_MB=$SIZE_MB is at or below the 1024 MiB SDHC/SDSC threshold" >&2

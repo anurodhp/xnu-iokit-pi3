@@ -563,6 +563,20 @@ MACSDK="$(xcode-select -p)/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 # (libncurses, libcopyfile, libSystemConfiguration, libCoreFoundation,
 # libdispatch for _mach_continuous_time);
 # those copies are left alone here.
+# DARW-281/285/286/289 (Florence's WebKit 2.54 port): _getfsstat64 #347 (carries
+# `.set _getfsstat, _getfsstat64`, read from the generated .s), _futimes #139,
+# _fsync #95 and ___fsync_nocancel #95 (carries `.set _fsync$NOCANCEL, ...`), _fsctl,
+# _truncate #200, _symlink #57 and the *at family (_faccessat #466, _fchmodat #467,
+# _fchownat #468, _linkat #471, ___unlinkat #472, _readlinkat #473, _symlinkat #474,
+# _setattrlistat, _fsetattrlist) are plain generated stubs or raw traps
+# (bsd/kern/syscalls.master). Real Apple exports all of them from libsystem_kernel.
+# _getpriority #100 (htop's darwin/DarwinProcess.c) is a plain stub too; only setpriority has a
+# wrapper in libsyscall/wrappers, and its raw trap was already here.
+# The public unlinkat() is wrappers/unlinkat.c over ___unlinkat and utimensat()/
+# futimens() are wrappers/utimensat.c over fsetattrlist/setattrlistat (xnu-7195 has no
+# utimensat syscall), both compiled below. Until now _fsync/_unlinkat came only from
+# libremovefile, _symlink/_fsetattrlist only from libcopyfile (those private copies
+# are left alone), and the rest from no dylib.
 for s in _geteuid _getegid _getuid _getgid _pread _pwrite _fileport_makefd _fileport_makeport \
     _socket _writev ___chmod ___connect_nocancel ___recvmsg_nocancel ___sendmsg_nocancel \
     ___select_nocancel ___sendto_nocancel ___recvfrom_nocancel _fpathconf _kevent _kqueue _kevent64 _kevent_id ___sigaction \
@@ -576,7 +590,9 @@ for s in _geteuid _getegid _getuid _getgid _pread _pwrite _fileport_makefd _file
     _chdir _readlink _fchown _getpgrp _getppid _setgid _setuid _setpgid \
     ___fchmod ___getrlimit ___setrlimit ___msync _csops _csops_audittoken _sigprocmask \
     _chown _dup _statfs64 ___select ___bind ___getsockname ___getpeername _setsockopt _sendfile ___rename \
-    _chroot _setgroups; do
+    _chroot _setgroups \
+    _getfsstat64 _futimes _fsync ___fsync_nocancel _fsctl _truncate _symlink _faccessat _fchmodat \
+    _fchownat _linkat _readlinkat _symlinkat ___unlinkat _setattrlistat _fsetattrlist ___open _getpriority; do
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
         -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" \
         -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
@@ -1037,6 +1053,15 @@ for w in rename remove-counter; do
         -I "$XNU/libsyscall/wrappers" \
         "$XNU/libsyscall/wrappers/$w.c" -o "$OUT/libsystem_kernel/${w}_wrap.o"
 done
+# unlinkat()/utimensat()/futimens() (DARW-289): Apple's own wrappers over the raw
+# traps above; unlinkat bumps wrappers/remove-counter.c's counter like rename().
+for w in unlinkat utimensat; do
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+        -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
+        -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -idirafter "$XNU/bsd" -I "$LIBC/include" -I "$LIBC/darwin" \
+        -I "$XNU/libsyscall/wrappers" \
+        "$XNU/libsyscall/wrappers/$w.c" -o "$OUT/libsystem_kernel/${w}_wrap.o"
+done
 # setpriority(2) (DAR-334, shutdown(8)): Apple's wrappers/setpriority.c over
 # the raw __setpriority (#96, NO_SYSCALL_STUB, syscalls.master:149). Its
 # PRIO_DARWIN_THREAD branch calls libsystem_pthread's _pthread_clear_qos_tsd,
@@ -1204,6 +1229,19 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     `# is libsystem_malloc.dylib's sys_semwait_signal.o, always loaded` \
     `# alongside this dylib (same class of deferral as the 3 just above).` \
     -Wl,-U,___semwait_signal \
+    `# ___commpage_gettimeofday: utimensat_wrap.o's (wrappers/utimensat.c)` \
+    `# UTIME_NOW path; the owner is libsystem_c.dylib (nm -gU), which links` \
+    `# THIS dylib, so same deferral class as _abort above (DARW-289).` \
+    -Wl,-U,___commpage_gettimeofday \
+    `# fsync$UNIX2003: the SDK's <unistd.h> asm-labels UNIX03 callers to it` \
+    `# (libremovefile's copy, build_removefile_dylib.sh:118, is its only provider` \
+    `# today); base is this link's own sys_fsync.o (DARW-285).` \
+    -Wl,-alias,_fsync,'_fsync$UNIX2003' \
+    `# Libc's creat.c calls the raw ___open trap (#5), and realpath.c, built` \
+    `# -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1, binds getattrlist$UNIX2003 and` \
+    `# statfs$INODE64 (DARW-282/289). Bases are this link's own (___getattrlist.s's` \
+    `# .set _getattrlist, sys_statfs64.o), like the aliases above.` \
+    -Wl,-alias,_getattrlist,'_getattrlist$UNIX2003' -Wl,-alias,_statfs64,'_statfs$INODE64' \
     `# mmap/munmap $UNIX2003 spellings, which this port's xnu-cdefs builds` \
     `# bind (e.g. crontab); libsystem_pthread used to carry these aliases.` \
     -Wl,-alias,_mmap,'_mmap$UNIX2003' -Wl,-alias,_munmap,'_munmap$UNIX2003' \
@@ -1388,6 +1426,9 @@ rm -f "$OUT/system/libsystem_kernel.dylib"
     "$OUT/libsystem_kernel/sys___shmsys.o" \
     "$OUT/libsystem_kernel/sys___sem_open.o" "$OUT/libsystem_kernel/sys___shm_open.o" \
     "$OUT/libsystem_kernel/varargs_wrappers.o" \
+    `# DARW-281/285/286/289: see the stub loop's comment.` \
+    "$OUT/libsystem_kernel/sys_getfsstat64.o" "$OUT/libsystem_kernel/sys_futimes.o" "$OUT/libsystem_kernel/sys_fsync.o" "$OUT/libsystem_kernel/sys___fsync_nocancel.o" "$OUT/libsystem_kernel/sys_fsctl.o" "$OUT/libsystem_kernel/sys_truncate.o" "$OUT/libsystem_kernel/sys_symlink.o" "$OUT/libsystem_kernel/sys_faccessat.o" "$OUT/libsystem_kernel/sys_fchmodat.o" "$OUT/libsystem_kernel/sys_fchownat.o" "$OUT/libsystem_kernel/sys_linkat.o" "$OUT/libsystem_kernel/sys_readlinkat.o" "$OUT/libsystem_kernel/sys_symlinkat.o" "$OUT/libsystem_kernel/sys___unlinkat.o" "$OUT/libsystem_kernel/sys_setattrlistat.o" "$OUT/libsystem_kernel/sys_fsetattrlist.o" "$OUT/libsystem_kernel/sys___open.o" "$OUT/libsystem_kernel/sys_getpriority.o" \
+    "$OUT/libsystem_kernel/unlinkat_wrap.o" "$OUT/libsystem_kernel/utimensat_wrap.o" \
     "$OUT/libsystem_kernel/__sigaltstack_trap.o" "$OUT/libsystem_kernel/__sigreturn_trap.o" \
     "$MACH_IPC_EXTRACT"/*.o
 
