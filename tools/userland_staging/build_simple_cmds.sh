@@ -1755,6 +1755,12 @@ CMD_LIST=(
     # sync(8): Apple's real system_cmds/sync.tproj (one sync(2) call); a
     # Mac installs it at /bin/sync.
     "sync:$SYSTEM_CMDS/sync.tproj/sync.c:"
+    # sysctl(8): Apple's real system_cmds/sysctl.tproj; a Mac installs it at
+    # /usr/sbin/sysctl. Needed for /etc/sysctl.conf, which Apple applies at
+    # boot by running `sysctl -w <line>` for each line
+    # (PureDarwin launchctl/launchctl.c:2312 and apply_sysctls_from_file()
+    # at :4524; here pd_launchd_boot.c does the same).
+    "sysctl:$SYSTEM_CMDS/sysctl.tproj/sysctl.c:"
     "base64:$TEXT_CMDS_BINTRANS/bintrans/bintrans.c:$TEXT_CMDS_BINTRANS/bintrans/apple_base64.c|$TEXT_CMDS_BINTRANS/bintrans/uuencode.c|$TEXT_CMDS_BINTRANS/bintrans/uudecode.c|$TEXT_CMDS_BINTRANS/bintrans/qp.c|../../third_party/libresolv/base64.c|$LIBC/stdlib/FreeBSD/getopt_long.c|$LIBC/gen/FreeBSD/setmode.c|ps_passwd_compat.c|../libinfo_custom/libinfo_custom.c"
 )
 

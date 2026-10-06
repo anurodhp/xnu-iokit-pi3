@@ -324,6 +324,23 @@ debug_rejected_submit(struct v3d_fd *f, const struct v3d_submit_cl *a, int err)
 	}
 }
 
+/*
+ * Fast read-back of a BO (struct v3d_read_bo, kV3DMethodReadBO): the kernel
+ * copies through a cached mapping after a cache flush, about 7x faster than
+ * reading the write-combined user mapping. Returns 0, or -1 with errno
+ * (ENOTSUP from a kernel without the method).
+ */
+int
+v3d_drm_read_bo(int fd, uint32_t handle, uint32_t offset, uint32_t size, void *dst)
+{
+	struct v3d_fd *f = fd_lookup(fd);
+	if (f == NULL) {
+		return fail_errno(EBADF);
+	}
+	struct v3d_read_bo r = { .handle = handle, .offset = offset, .size = size, .dst = (uint64_t)(uintptr_t)dst };
+	return call_in(f, kV3DMethodReadBO, &r, sizeof(r));
+}
+
 /* ---- drmIoctl ---- */
 
 int

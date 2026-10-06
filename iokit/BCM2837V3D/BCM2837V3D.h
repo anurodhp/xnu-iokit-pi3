@@ -65,6 +65,8 @@ public:
 
 	static V3DBuffer *withSize(uint32_t size);
 	static V3DBuffer *empty(void);   /* no memory yet: for binner-pool slices */
+	IOMemoryMap *fCachedMap;   /* cached kernel mapping for readCached(), made on first use */
+	IOReturn readCached(uint32_t offset, uint32_t size, uint64_t userDst);
 	virtual void free(void) APPLE_KEXT_OVERRIDE;
 };
 

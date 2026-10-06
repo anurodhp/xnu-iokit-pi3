@@ -96,6 +96,33 @@ v3d_bug_on(const char *file, int line)
 
 /* ============================ V3DBuffer ============================ */
 
+/* See BCM2837V3DUserClient::readBO() for why the flush makes this correct.
+ * Caller has waited for the GPU and range-checked offset/size. */
+IOReturn
+V3DBuffer::readCached(uint32_t offset, uint32_t size, uint64_t userDst)
+{
+	if (fMem == NULL) {
+		return kIOReturnNotPermitted;
+	}
+	if (fCachedMap == NULL) {
+		IOMemoryMap *m = fMem->createMappingInTask(kernel_task, 0,
+		    kIOMapAnywhere | kIOMapCopybackCache | kIOMapReadOnly);
+		if (m == NULL) {
+			return kIOReturnNoMemory;
+		}
+		// Two readers racing here would each make a map; keep one.
+		if (!OSCompareAndSwapPtr(NULL, m, (void * volatile *)&fCachedMap)) {
+			m->release();
+		}
+	}
+	IOReturn r = fMem->performOperation(kIOMemoryIncoherentIOFlush, offset, size);
+	if (r != kIOReturnSuccess) {
+		return r;
+	}
+	const void *src = (const void *)(fCachedMap->getVirtualAddress() + offset);
+	return copyout(src, (user_addr_t)userDst, size) == 0 ? kIOReturnSuccess : kIOReturnVMError;
+}
+
 V3DBuffer *
 V3DBuffer::empty(void)
 {
@@ -197,6 +224,10 @@ V3DBuffer::free(void)
 	if (fShader != NULL) {
 		v3d_kglue_free_shader(fShader);
 		fShader = NULL;
+	}
+	if (fCachedMap != NULL) {
+		fCachedMap->release();
+		fCachedMap = NULL;
 	}
 	if (fPoolOwner != NULL) {
 		fPoolOwner->freeBinSlots(fPoolSlot, fPoolSlots);
