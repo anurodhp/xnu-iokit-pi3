@@ -73,6 +73,23 @@ if [ ! -f "$KERNEL_DYLIB" ] || [ "$US/cerror_stub.c" -nt "$KERNEL_DYLIB" ] || [ 
     echo "+ libsystem_kernel.dylib missing or older than cerror_stub.c -- rebuilding"
     "$US/build_libsystem_kernel.sh"
 fi
+# DARW-281..290: libSystem export gaps Florence's WebKit needs (getfsstat, fsync, *at family, utimensat, creat,
+# gethostname, realpath, aligned_alloc, wcstod, 128-bit divide, ~60 libm functions). Rebuild any of these whose
+# script/source is newer than its dylib, in dependency order (libSystem.B reexports the rest, so it goes last).
+rebuild_if_stale() {   # rebuild_if_stale <dylib> <script> [extra source ...]
+    local dylib="$US/libc_build/system/$1" script="$US/$2" f; shift 2
+    if [ ! -f "$dylib" ]; then echo "+ $dylib missing -- running $script"; "$script"; return; fi
+    for f in "$script" "$@"; do
+        if [ "$US/$f" -nt "$dylib" ] || [ "$f" -nt "$dylib" ] 2>/dev/null; then
+            echo "+ $(basename "$dylib") older than $f -- running $(basename "$script")"; "$script"; return
+        fi
+    done
+}
+rebuild_if_stale libcompiler_rt.dylib build_compiler_rt_dylib.sh
+rebuild_if_stale libsystem_malloc.dylib build_libsystem_malloc.sh libmalloc_dispatch.c
+rebuild_if_stale libsystem_c.dylib build_libsystem_c.sh libcxx_wcstof_compat.c
+rebuild_if_stale libsystem_m.dylib build_libm_dylib.sh libm_c99_extras.c
+rebuild_if_stale libSystem.B.dylib build_libsystem.sh build_libsystem_kernel.sh build_libsystem_c.sh build_libm_dylib.sh build_compiler_rt_dylib.sh
 if [ ! -f "$US/libc_build/shared_mime_info/root/usr/share/mime/mime.cache" ]; then
     echo "+ MIME database not built -- building"
     "$US/build_shared_mime_info.sh"
@@ -609,6 +626,14 @@ install_smoketest tools/userland_staging/x11_probe.macho "usr/X11/bin/x11_probe"
 # relative symlinks as symlinks. The fontconfig cache is NOT prebuilt:
 # the first client (or `fc-cache`) writes it on the target.
 FS_STAGE=tools/userland_staging/libc_build/fontstack
+# GlobalDefaults.plist is only copied into the stage by build_fonts.sh, so an
+# image injected without rerunning it shipped the stale copy (no no_desktop,
+# GWorkspace drew the desktop). It is a plain file: refresh it every time.
+GD_SRC=tools/userland_staging/x11_config/gnustep/GlobalDefaults.plist
+if [ -d "$FS_STAGE/root/etc/GNUstep" ] && ! cmp -s "$GD_SRC" "$FS_STAGE/root/etc/GNUstep/GlobalDefaults.plist"; then
+    cp "$GD_SRC" "$FS_STAGE/root/etc/GNUstep/GlobalDefaults.plist"
+    echo "+ refreshed staged GlobalDefaults.plist from $GD_SRC"
+fi
 if [ -d "$FS_STAGE/root" ]; then
     need_kb=$(du -sk "$FS_STAGE/root" | awk '{print $1}')
     free_kb=$(df -k "$MNT" | awk 'NR==2{print $4}')
@@ -699,6 +724,31 @@ if [ -f "$GS_STAGE/usr/GNUstep/System/Library/Libraries/libgnustep-base.dylib" ]
 else
     echo "= $GS_STAGE not built -- run tools/userland_staging/build_gnustep_base.sh first if wanted, skipping"
 fi
+# Florence browser (sibling repo, FLORENCE_DIR, default ../florence): the
+# stripped tree scripts/deploy_pi_webkit.sh stage writes to build/deploy --
+# /Applications/Florence.app, the WPE WebKit dylibs/helpers/data under
+# /usr/local, and the MIME/ssl data. Needs the Mac-layout GNUstep tree above.
+FLORENCE_DIR="${FLORENCE_DIR:-$(cd .. && pwd)/florence}"   # cwd is the repo root (cd above)
+if [ -d "$FLORENCE_DIR/build/root/Applications/Florence.app" ]; then
+    "$FLORENCE_DIR/scripts/deploy_pi_webkit.sh" stage
+    FL_STAGE="$FLORENCE_DIR/build/deploy"
+    need_kb=$(du -sk "$FL_STAGE" | awk '{print $1}')
+    free_kb=$(df -k "$MNT" | awk 'NR==2{print $4}')
+    if [ "$free_kb" -lt $((need_kb + 51200)) ]; then
+        echo "error: $MNT has ${free_kb} KB free; Florence needs ${need_kb} KB (+50 MB headroom)" >&2
+        exit 1
+    fi
+    ditto "$FL_STAGE" "$MNT/"
+    [ -x "$MNT/Applications/Florence.app/Florence" ] ||
+        { echo "error: Florence.app did not land on $MNT" >&2; exit 1; }
+    # libxkbcommon (WPE's default keymap) has /usr/local/share/X11/xkb baked in as its XKB root; the
+    # keymap database ships with the X servers below, at /usr/X11/share/X11/xkb.
+    mkdir -p "$MNT/usr/local/share/X11"
+    ln -sfn /usr/X11/share/X11/xkb "$MNT/usr/local/share/X11/xkb"
+    echo "+ wrote Florence ($need_kb KB: /Applications/Florence.app, /usr/local WebKit libs, xkb symlink)"
+else
+    echo "= $FLORENCE_DIR/build/root/Applications/Florence.app not built -- build ../florence (scripts/build_florence.sh pi) first if wanted, skipping"
+fi
 # X servers (DAR-387/389, X11GS 4/7): Xvfb, Xorg, xkbcomp and the test
 # clients in /usr/X11/bin, the puredarwingop video driver and (DAR-391) the
 # iohid input driver under
@@ -711,6 +761,13 @@ fi
 # libfontenc, libxkbfile, libxcvt, ...) are installed by the generic
 # libc_build/system/*.dylib loop below. ditto keeps the xkb symlink.
 XS_STAGE=tools/userland_staging/libc_build/x11/server/root
+# Same stale-stage hazard as GlobalDefaults.plist: build_wmaker.sh is the only thing that copies the menu in.
+WM_MENU_SRC=tools/userland_staging/x11_config/wmaker/WMRootMenu
+WM_MENU_STAGED="$XS_STAGE/usr/X11/etc/WindowMaker/WMRootMenu"
+if [ -d "$(dirname "$WM_MENU_STAGED")" ] && ! cmp -s "$WM_MENU_SRC" "$WM_MENU_STAGED"; then
+    cp "$WM_MENU_SRC" "$WM_MENU_STAGED"
+    echo "+ refreshed staged WMRootMenu from $WM_MENU_SRC"
+fi
 if [ -x "$XS_STAGE/usr/X11/bin/Xvfb" ]; then
     need_kb=$(du -sk "$XS_STAGE" | awk '{print $1}')
     free_kb=$(df -k "$MNT" | awk 'NR==2{print $4}')
@@ -1822,6 +1879,16 @@ for cmd in base64 awk pkill top; do
         echo "= tools/userland_staging/$cmd.macho not built -- run build_simple_cmds.sh first if wanted, skipping"
     fi
 done
+# htop(1): upstream htop 3.5.3's Darwin platform, dynamic, built by build_htop.sh (needs the real libncurses,
+# libiokituser and libCoreFoundation dylibs, like top). Rebuilt here when missing or older than its script, so
+# every image carries it; /usr/share/terminfo (above) supplies the terminal database it reads.
+if [ ! -f "$US/htop.macho" ] || [ "$US/build_htop.sh" -nt "$US/htop.macho" ] || [ "$US/htop_iops_stub.c" -nt "$US/htop.macho" ]; then
+    echo "+ htop.macho missing or older than build_htop.sh -- building"
+    "$US/build_htop.sh"
+fi
+cp "$US/htop.macho" "$MNT/usr/bin/htop"
+chmod 755 "$MNT/usr/bin/htop"
+echo "+ wrote $(wc -c < "$US/htop.macho") bytes to $MNT/usr/bin/htop (upstream htop 3.5.3, tools/userland_staging/build_htop.sh)"
 # pgrep(1) is the same binary as pkill(1) (pkill.c picks its mode from
 # getprogname(), DAR-343); HFS+ symlinks aren't injected yet, so copy.
 if [ -f tools/userland_staging/pkill.macho ]; then

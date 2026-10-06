@@ -166,6 +166,24 @@ for f in s_ceilf s_sinf s_cosf s_frexp e_hypot e_powf s_fabsf s_scalbnf e_atan2f
         "$MSUN_COPY/$f.c" -o "$EXTRACT/msun_$f.o"
 done
 
+# DARW-290: the ~60 libm functions libsystem_m lacked (found building ICU 74 / WebKit for
+# Florence: expf, logf, log2, tanf, cbrtf, roundf, truncf, copysign, lrint, ...), from the same
+# msun sources and recipe as above. The ones msun cannot compile here (s_fmax wants FreeBSD's
+# fpmath.h, s_lround sys/limits.h, s_lrintf a templated math.h clash) and the fenv flag functions
+# are libm_c99_extras.c. msun's own math.h stays out so Darwin's is used. Long-double variants
+# are not built (long double is double on arm64, nothing here needs them yet).
+MSUN_NEW="$OUT/libm_dylib/msun_new"
+rm -rf "$MSUN_NEW"; mkdir -p "$MSUN_NEW"
+cp "$MSUN"/*.c "$MSUN"/*.h "$MSUN_NEW/"; rm -f "$MSUN_NEW/math.h"
+for f in e_expf e_logf e_log2 e_log2f e_log10f s_exp2f s_expm1f s_log1pf s_tanf e_asinf e_acosf \
+         s_cbrtf e_hypotf s_roundf s_truncf s_frexpf s_modff s_copysign s_lrint e_rem_pio2f k_rem_pio2; do
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+        -Wno-everything -I "$MSUN_NEW" -include libm_msun_compat.h \
+        "$MSUN_NEW/$f.c" -o "$EXTRACT/msun_$f.o"
+done
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    -Wno-everything libm_c99_extras.c -o "$EXTRACT/libm_c99_extras.o"
+
 mkdir -p "$OUT/system"
 rm -f "$OUT/system/libsystem_m.dylib"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib -nostdlib \

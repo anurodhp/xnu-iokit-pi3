@@ -190,6 +190,29 @@ int posix_memalign(void **memptr, size_t alignment, size_t size) {
     return 0;
 }
 
+/* aligned_alloc(3) (C11; DARW-288). Apple's owner is libmalloc:
+ * third_party/libmalloc/src/malloc.c:1835-1839 is aligned_alloc() and
+ * :1665-1690 is the _malloc_zone_memalign(MZ_POSIX | MZ_C11) it calls -- the
+ * same alignment checks as posix_memalign above plus C11's "size must be a
+ * multiple of alignment" (:1684-1687), with errno set on failure (:1698-1700).
+ * Dispatches through the same zone vtable as the rest of this file. */
+extern int *__error(void);
+void *aligned_alloc(size_t alignment, size_t size) {
+    int err = 12; /* ENOMEM */
+    void *ptr = 0;
+    malloc_zone_t *z = get_zone();
+    if (alignment < sizeof(void *) || 0 != (alignment & (alignment - 1)) ||
+        (size & (alignment - 1)) != 0) {
+        err = 22; /* EINVAL */
+    } else if (z->version >= 5 && z->memalign) {
+        ptr = z->memalign(z, alignment, size);
+    }
+    if (!ptr) {
+        *__error() = err;
+    }
+    return ptr;
+}
+
 /* Real BSD extension: realloc() but frees ptr on failure too. */
 void *reallocf(void *ptr, size_t size) {
     void *p = realloc(ptr, size);

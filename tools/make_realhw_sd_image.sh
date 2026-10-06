@@ -37,9 +37,8 @@
 #
 # Usage: tools/make_realhw_sd_image.sh [OUTPUT_IMAGE] [SIZE_MB]
 #   OUTPUT_IMAGE: defaults to qemu/realhw_root.img
-#   SIZE_MB:      defaults to 1200 -- large enough for the current
-#                 provisioned root (real commands + timezone data, well
-#                 under a GB) while clearing the 1024 MiB SDHC/SDSC
+#   SIZE_MB:      defaults to 3072 (3 GB) -- room for the
+#                 provisioned root (commands, GNUstep, X, Florence) while clearing the 1024 MiB SDHC/SDSC
 #                 threshold with a safe margin, and small enough to write
 #                 quickly regardless of physical card size. A nominal
 #                 "4 GB" card's real usable capacity is normally a bit
@@ -56,7 +55,7 @@ cd "$(dirname "$0")/.."
 mkdir -p qemu
 
 OUT="${1:-qemu/realhw_root.img}"
-SIZE_MB="${2:-1200}"
+SIZE_MB="${2:-3072}"
 
 KERNEL_SRC="build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped"
 if [ ! -f "$KERNEL_SRC" ]; then
