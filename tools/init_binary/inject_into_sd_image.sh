@@ -1891,6 +1891,35 @@ if [ ! -f tools/userland_staging/sort.macho ] && [ -e "$MNT/bin/sort" ]; then
     echo "= removed stale /bin/sort (not built by any script here; aborted at dyld load)"
 fi
 
+# sysctl(8) (build_simple_cmds.sh, system_cmds/sysctl.tproj): /usr/sbin on a
+# Mac. pd_launchd_boot.c runs `sysctl -w` for each line of /etc/sysctl.conf at
+# boot, as Apple's launchctl bootstrapper does (launchctl.c:2312, :4524).
+mkdir -p "$MNT/usr/sbin"
+if [ -f tools/userland_staging/sysctl.macho ]; then
+    cp tools/userland_staging/sysctl.macho "$MNT/usr/sbin/sysctl"
+    chmod 755 "$MNT/usr/sbin/sysctl"
+    echo "+ wrote $(wc -c < tools/userland_staging/sysctl.macho) bytes to $MNT/usr/sbin/sysctl"
+else
+    echo "= tools/userland_staging/sysctl.macho not built -- run build_simple_cmds.sh first if wanted, skipping"
+fi
+# /etc/sysctl.conf: the SysV shared-memory limits MIT-SHM needs. xnu's
+# defaults (bsd/kern/sysv_shm.c:166-170: shmmax 4 MiB, shmall 1024 pages)
+# are macOS's, and like macOS they are raised here rather than in the
+# kernel. A 1920x1200 32-bit window is 9 MiB; GL clients
+# (mesa_xlib_vc4/xlib_vc4.c) and the GNUstep backend each hold one per window.
+# shmmax must be page-aligned (sysctl_shminfo, sysv_shm.c:1182-1188); shmall
+# is in pages. shmmni cannot change once SysV SHM is in use (:1166-1170), so
+# it is left at its default.
+cat > "$MNT/etc/sysctl.conf" <<'SYSCTL_EOF'
+# Applied at boot by launchd (pd_launchd_boot.c), one `sysctl -w` per line.
+# SysV shared memory for MIT-SHM (X11 clients): 32 MiB per segment,
+# 64 segments' worth of pages in total, 32 segments per process.
+kern.sysv.shmmax=33554432
+kern.sysv.shmall=65536
+kern.sysv.shmseg=32
+SYSCTL_EOF
+echo "+ wrote $MNT/etc/sysctl.conf (SysV SHM limits for MIT-SHM)"
+
 # base64(1) and awk(1): built by build_simple_cmds.sh like the loop above,
 # but a Mac ships them in /usr/bin, not /bin.
 mkdir -p "$MNT/usr/bin"

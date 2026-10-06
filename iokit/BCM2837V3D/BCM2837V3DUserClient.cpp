@@ -276,6 +276,41 @@ BCM2837V3DUserClient::waitBO(const v3d_wait_bo *in)
 	return seqno == 0 ? kIOReturnSuccess : fDevice->waitSeqno(seqno, in->timeout_ns);
 }
 
+/*
+ * Fast CPU read-back (struct v3d_read_bo). Waits for the BO's last job, then
+ * cleans+invalidates the data cache for the range (IOMemoryDescriptor
+ * performOperation kIOMemoryIncoherentIOFlush) and copies out through a
+ * cached kernel mapping of the BO, created on first use. The invalidate is
+ * what makes the cached read correct: the GPU wrote RAM directly, and no
+ * line for these pages can be dirty because nothing writes BOs through a
+ * cached mapping (the kernel and clients write them write-combined).
+ * Lines a speculative fetch brings in after the flush hold the finished
+ * data, since the GPU is done.
+ */
+IOReturn
+BCM2837V3DUserClient::readBO(const v3d_read_bo *in)
+{
+	V3DBuffer *b = lookup(in->handle);
+	if (b == NULL) {
+		return kIOReturnNotFound;
+	}
+	IOReturn ret = kIOReturnSuccess;
+	if (b->fShader != NULL || b->fMem == NULL) {
+		ret = kIOReturnNotPermitted;
+	} else if (in->offset > b->fSize || in->size > b->fSize - in->offset) {
+		ret = kIOReturnBadArgument;
+	} else if (in->size != 0) {
+		if (b->fBusySeqno != 0) {
+			ret = fDevice->waitSeqno(b->fBusySeqno, 2ULL * 1000 * 1000 * 1000);
+		}
+		if (ret == kIOReturnSuccess) {
+			ret = b->readCached(in->offset, in->size, in->dst);
+		}
+	}
+	b->release();
+	return ret;
+}
+
 IOReturn
 BCM2837V3DUserClient::rawSubmit(const v3d_raw_submit *in, v3d_raw_submit *out)
 {
@@ -383,6 +418,9 @@ BCM2837V3DUserClient::externalMethod(uint32_t selector, IOExternalMethodArgument
 		return createShaderBO((const v3d_create_shader_bo *)args->structureInput,
 		    (v3d_create_shader_bo *)args->structureOutput);
 	}
+	case kV3DMethodReadBO:
+		NEED_IN(v3d_read_bo);
+		return readBO((const v3d_read_bo *)args->structureInput);
 	case kV3DMethodGetHangState: {
 		NEED_OUT(v3d_hang_state);
 		fDevice->getHangState((v3d_hang_state *)args->structureOutput);

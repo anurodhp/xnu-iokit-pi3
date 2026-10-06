@@ -38,6 +38,7 @@ enum {
 	kV3DMethodRawSubmit,       /* in/out: v3d_raw_submit (root + boot-arg v3d-raw=1) */
 	kV3DMethodGetBOAddress,    /* in: scalar handle  out: scalar GPU address (root only) */
 	kV3DMethodCreateShaderBO,  /* in/out: v3d_create_shader_bo */
+	kV3DMethodReadBO,          /* in: v3d_read_bo (fast CPU read-back, see the struct) */
 	kV3DMethodCount
 };
 
@@ -180,6 +181,24 @@ struct v3d_hang_state {
 	uint32_t vpmbase, dbge, fdbgo, fdbgb, fdbgr, fdbgs, errstat;
 	uint32_t pad;
 	uint64_t seqno;
+};
+
+/*
+ * Read `size` bytes at `offset` of a BO into `dst` (an address in the
+ * calling task), after the GPU has finished with it. This is the fast way
+ * to read GPU output on the CPU: user mappings of BOs are write-combined,
+ * and CPU reads through them are uncached (about 49 MB/s on a Pi 3 against
+ * about 330 MB/s for ordinary memory). The kernel cleans and invalidates
+ * the data cache for the range and copies it out through a cached mapping.
+ * Not for shader BOs. No DRM equivalent (Linux has no such ioctl; the vc4
+ * display path scans out instead).
+ */
+struct v3d_read_bo {
+	uint32_t handle;
+	uint32_t offset;
+	uint32_t size;
+	uint32_t pad;
+	uint64_t dst;
 };
 
 #endif /* _BCM2837V3DUAPI_H */
