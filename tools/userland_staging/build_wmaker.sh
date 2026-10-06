@@ -10,7 +10,7 @@
 # inject_into_sd_image.sh copies that staged tree and every
 # libc_build/system dylib with a /usr/X11/lib install name, so it needs no
 # entry of its own. The graphical login that starts wmaker at boot is
-# build_xdm.sh's.
+# gsdm (build_gsdm.sh).
 #
 # Toolchain, layout and helpers: x11_common.sh / fontstack_common.sh. As
 # with the other X11 ports, configure is not run. Instead:
@@ -274,11 +274,9 @@ done
 
 # ---- Terminal.app autostart ---------------------------------------------
 # x11_config/session/autostart is wmaker's global init script; it opens
-# Terminal.app. The boot session itself (xdm login screen, Xsession that
-# execs wmaker as the logged-in user, the launchd plist) is staged by
-# build_xdm.sh. The old root-run x11-session script and its staging are
-# gone (build_xdm.sh removes an already-staged copy together with replacing
-# the plist that ran it).
+# Terminal.app. The boot session itself (gsdm's login window, the Xsession
+# that execs wmaker as the logged-in user, the launchd plist) is staged by
+# build_gsdm.sh.
 cp "x11_config/session/autostart" "$PKGDATA/autostart"
 chmod 755 "$PKGDATA/autostart"
 sh -n "$PKGDATA/autostart" || { echo "error: autostart syntax" >&2; exit 1; }

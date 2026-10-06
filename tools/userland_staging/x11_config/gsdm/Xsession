@@ -1,0 +1,78 @@
+#!/bin/sh
+# The user's X session, /etc/gsdm/Xsession (gsdm.conf "session"). gsdm runs
+# it as the logged-in user: daemon/gsdm.c start_session does setgid +
+# setlogin + initgroups + setuid to the account whose password it checked,
+# writes the session's cookie to ~/.Xauthority, then execs this script with
+# DISPLAY, HOME, LOGNAME, USER, SHELL, PATH and XAUTHORITY in the
+# environment -- xdm's StartClient sequence. It must never be started as
+# root by anything but a root login. When it exits the session is over:
+# gsdm terminates the X server and shows the login window on a fresh one.
+#
+# It sets the GNUstep environment, then execs Window Maker, whose global
+# autostart (/usr/X11/share/WindowMaker/autostart) opens Terminal.app.
+
+PATH=/usr/X11/bin:/bin:/usr/bin:/sbin:/usr/sbin
+export PATH
+
+# XAUTHORITY: gsdm always exports it (the file it wrote, normally
+# "$HOME/.Xauthority" for the passwd HOME). The fallback below is for an
+# older display manager that only exported it on its temp-file path (xdm-1.1.17
+# xdm/auth.c:1101, no longer pinned here): pin it before HOME changes below, or
+# clients would look for "$HOME/.Xauthority" of the new HOME
+# (third_party/libXau/AuFileName.c:56-58) and wmaker would fail with
+# "Authorization required".
+if [ -z "$XAUTHORITY" ] && [ -n "$HOME" ]; then
+    XAUTHORITY="${HOME%/}/.Xauthority"
+    export XAUTHORITY
+fi
+
+# HOME: from the passwd entry. root's entry is "/" (no home under /Users),
+# so give root /var/root; any other user whose home is missing or
+# unwritable gets a private directory under /tmp so wmaker and GNUstep can
+# write their state.
+case "$HOME" in
+/|"")
+    if [ "`id -u`" = 0 ]; then HOME=/var/root; fi
+    ;;
+esac
+mkdir -p "$HOME" 2>/dev/null
+if [ ! -d "$HOME" ] || [ ! -w "$HOME" ]; then
+    HOME=/tmp/home-`id -u`
+    ( umask 077; mkdir -p "$HOME" )
+fi
+export HOME
+
+# Session log, as xdm's upstream Xsession.in does (~/.xsession-errors),
+# falling back to a per-uid file in /tmp.
+errfile="$HOME/.xsession-errors"
+if ( umask 077 && cp /dev/null "$errfile" 2>/dev/null ); then
+    exec > "$errfile" 2>&1
+else
+    errfile=/tmp/xsession-errors-`id -u`
+    if ( umask 077 && cp /dev/null "$errfile" 2>/dev/null ); then
+        exec > "$errfile" 2>&1
+    else
+        exec > /dev/null 2>&1
+    fi
+fi
+
+export PATH=/usr/X11/bin:/usr/local/bin:/bin:/usr/bin:/sbin:/usr/sbin
+[ -n "$DISPLAY" ] || export DISPLAY=:0
+
+# GNUstep.sh (gnustep-make) reads GNUSTEP_CONFIG_FILE; it sets the
+# GNUSTEP_* paths and library paths apps need.
+export GNUSTEP_CONFIG_FILE=/etc/GNUstep/GNUstep.conf
+if [ -f /System/Library/Makefiles/GNUstep.sh ]; then
+    . /System/Library/Makefiles/GNUstep.sh
+fi
+
+# As xdm's Xsession.in: a user's own ~/.xsession replaces the default.
+startup="$HOME/.xsession"
+if [ -s "$startup" ]; then
+    if [ -x "$startup" ]; then
+        exec "$startup"
+    else
+        exec /bin/sh "$startup"
+    fi
+fi
+exec /usr/X11/bin/wmaker

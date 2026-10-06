@@ -1,8 +1,8 @@
 #!/bin/sh
 # Window Maker's init script (src/main.c execInitScript: wfindfile of
 # "autostart" in ~/GNUstep/Library/WindowMaker then PKGDATADIR). wmaker
-# waits for it, so everything is backgrounded. The xdm Xsession
-# (x11_config/xdm/Xsession) has already exported DISPLAY and the GNUstep
+# waits for it, so everything is backgrounded. gsdm's Xsession
+# (x11_config/gsdm/Xsession) has already exported DISPLAY and the GNUstep
 # environment, and this runs as the user who logged in.
 T=/Applications/Terminal.app/Terminal
 [ -x "$T" ] && "$T" &

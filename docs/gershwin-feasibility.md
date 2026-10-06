@@ -91,7 +91,7 @@ us.
 | `gershwin-workspace` (`Workspace.app`) | GWorkspace fork (~155k lines of `.m` against ~99k in GWorkspace 1.0): file viewer, Desktop and **Dock**, Spatial mode, DS_Store interop | GWorkspace 1.0 (anurodhp/apps-gworkspace) | Later, optional |
 | Window Maker dock/clip | (no separate Gershwin dock) | wmaker dock | Workspace's Desktop Dock covers it |
 | `gershwin-components/gershwin-session` | 372-line Foundation tool that supervises and restarts `Workspace Menu WindowManager` (uses `ps`, not `/proc`) | xdm `Xsession` exec of wmaker | Cheap to adopt when Menu/Workspace come |
-| `gershwin-components/LoginWindow` | GNUstep login greeter. Links `-lpam -lutil` | xdm 1.1.17 | **No**. Keep xdm (no PAM modules here, DAR-226) |
+| `gershwin-components/LoginWindow` | GNUstep login greeter. Links `-lpam -lutil` | xdm 1.1.17 | **No**. Keep xdm (no PAM modules here, DAR-226). Later replaced by gsdm (anurodhp/gsdm, crypt(3), no PAM) |
 | `gershwin-systempreferences` | GNUstep SystemPreferences fork | none | Optional app |
 | `gershwin-eau-theme` | Default Gershwin GSTheme; also the global-menu client | Eau (anurodhp/gershwin-eau-theme, our default) | Already adopted, see section 4 |
 | `gershwin-terminal`, `gershwin-textedit` | Forks of the GAP Terminal and TextEdit | Terminal (gap), Ink | No need |
@@ -242,8 +242,9 @@ libXft, libXi, libXtst, cairo, pixman, libdispatch, libsystem_blocks
     apart from Gershwin's gui patches (unverified).
   - Not needed to remove wmaker. GWorkspace's own Dock plus Gershwin's WM
     is a complete session.
-- **Boot flow (xdm).** No change to launchd → `xdm-launch` → xdm. Only the
-  last line of `x11_config/xdm/Xsession` (`exec /usr/X11/bin/wmaker`)
+- **Boot flow (xdm; gsdm since 2026-10-06).** No change to launchd → gsdm
+  (it replaced `xdm-launch` → xdm). Only the
+  last line of `x11_config/gsdm/Xsession` (`exec /usr/X11/bin/wmaker`)
   changes: pick the WM from a system default
   (`/etc/x11-session.wm`) with the existing `~/.xsession` override. Launch
   with `WindowManager -dc` plus `Terminal`/`GWorkspace` autostart. Today

@@ -1,4 +1,0 @@
-#!/bin/sh
-# Run as root when the session ends (upstream's Xreset.in only undoes
-# sessreg, which this image does not ship).
-exit 0

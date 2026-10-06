@@ -177,6 +177,19 @@ static-archive/custom-PID-1 bring-up phase below for historical context.
   at `/usr/GNUstep/System/{Applications,Library,Tools}` resolve them.
   `stage_gnustep_mac_layout.sh` does the rearrangement for
   `inject_into_sd_image.sh`. User paths stay `~/GNUstep/...`.
+- **Graphical login: gsdm** (`build_gsdm.sh`, `third_party/gsdm` =
+  `anurodhp/gsdm`, this project's own GNUstep display manager; it replaced
+  xdm on 2026-10-06). launchd runs `/usr/local/sbin/gsdm`
+  (`org.puredarwin.gsdm.plist`), which exits 0 unless the boot-args carry
+  `hdmi_console=1` and `/etc/x11-session.disabled` is absent
+  (`/etc/gsdm/gsdm.conf`). Otherwise it starts Xorg with an
+  MIT-MAGIC-COOKIE-1 `-auth` file, shows
+  `/System/Library/CoreServices/LoginWindow.app` (user tiles, password,
+  Restart/Shut Down via `/sbin/reboot`/`/sbin/halt`), checks the password
+  with `crypt(3)` against `/etc/master.passwd` (as `login` does), runs
+  `/etc/gsdm/Xsession` (Window Maker) as the user, and restarts Xorg after
+  logout -- xdm's own sequence, followed step by step in gsdm's
+  `daemon/gsdm.c`. Log: `/var/log/gsdm.log`.
 
 ## Known structural gaps (context for future work, not bugs to silently fix)
 

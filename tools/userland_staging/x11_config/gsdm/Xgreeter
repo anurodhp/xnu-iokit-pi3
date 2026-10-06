@@ -1,0 +1,11 @@
+#!/bin/sh
+# /etc/gsdm/Xgreeter (gsdm.conf "greeter"): starts gsdm's login window.
+# gsdm runs it as root with DISPLAY, XAUTHORITY (the server's cookie file),
+# HOME=/var/lib/gsdm/greeter (where GNUstep keeps the greeter's defaults),
+# the GSDM_* settings and the gsdm socket on fd 3 -- see daemon/gsdm.c
+# start_greeter. The GNUstep environment is the one Xsession sets up.
+export GNUSTEP_CONFIG_FILE=/etc/GNUstep/GNUstep.conf
+if [ -f /System/Library/Makefiles/GNUstep.sh ]; then
+    . /System/Library/Makefiles/GNUstep.sh
+fi
+exec /System/Library/CoreServices/LoginWindow.app/LoginWindow

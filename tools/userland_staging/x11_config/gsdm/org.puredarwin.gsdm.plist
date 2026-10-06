@@ -3,14 +3,14 @@
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>org.puredarwin.x11-session</string>
+	<string>org.puredarwin.gsdm</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/usr/X11/bin/xdm-launch</string>
+		<string>/usr/local/sbin/gsdm</string>
 	</array>
 	<!-- Without ProcessType this launchd (built for the iPhoneOS SDK,
 	     TARGET_OS_EMBEDDED) runs the job as DAEMON_BACKGROUND
-	     (PureDarwin launchd core.c:2257): xdm, Xorg, wmaker and every app they
+	     (PureDarwin launchd core.c:2257): gsdm, Xorg, wmaker and every app they
 	     start ran at scheduler priority 4 and got the background timer
 	     coalescing, which made the UI sluggish. Interactive maps to
 	     POSIX_SPAWN_PROC_TYPE_DAEMON_INTERACTIVE (core.c:2737-2739); the
@@ -19,11 +19,13 @@
 	<string>Interactive</string>
 	<key>RunAtLoad</key>
 	<true/>
-	<!-- Restart only after a failure. xdm-launch exits 0 without starting
+	<!-- Restart only after a failure. gsdm exits 0 without starting
 	     anything when the kernel boot-args lack hdmi_console=1 (plain QEMU,
-	     no framebuffer) or /etc/x11-session.disabled exists; a plain
-	     KeepAlive=true would respawn that every ThrottleInterval. A
-	     nonzero exit (xdm crash, exec failure) is still retried. -->
+	     no framebuffer) or /etc/x11-session.disabled exists (gsdm.conf
+	     require_bootarg / disable_file), and on SIGTERM and after handing
+	     a Restart/Shut Down to reboot(8)/halt(8); a plain KeepAlive=true
+	     would respawn that every ThrottleInterval. A nonzero exit (an X
+	     server or greeter that keeps failing) is still retried. -->
 	<key>KeepAlive</key>
 	<dict>
 		<key>SuccessfulExit</key>
@@ -32,8 +34,8 @@
 	<key>ThrottleInterval</key>
 	<integer>30</integer>
 	<key>StandardOutPath</key>
-	<string>/var/log/x11-session.log</string>
+	<string>/var/log/gsdm.log</string>
 	<key>StandardErrorPath</key>
-	<string>/var/log/x11-session.log</string>
+	<string>/var/log/gsdm.log</string>
 </dict>
 </plist>

@@ -132,8 +132,9 @@ the `*_cmds` repos, `ncurses`, `OpenSSH`, `vim`, `lzfse`, `xxHash`, and
 the sparse `llvm-project`/`freebsd-src`/`sudo` clones.
 The 17 X.org client-library pins added for DAR-383 (`xorgproto`, `xtrans`,
 `xcb-proto`, `libXau` … `libXft`, freedesktop.org release tags) are in this
-group too, as are `libXpm`, `libXaw` and `xdm` (xdm-login branch; release
-tags, no local changes, so no fork is needed).
+group too, as are `libXpm` and `libXaw` (release tags, no local changes, so
+no fork is needed). `xdm` was in this group until gsdm (`anurodhp/gsdm`,
+this project's own repo, `build_gsdm.sh`) replaced it on 2026-10-06.
 
 A plain `git log --not --remotes` over these reports large "unpushed"
 counts. That's an artifact of shallow/tag clones (release-tag history

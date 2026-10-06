@@ -1,6 +1,6 @@
 /*
  * xtest_type: type text into the focused window of an X display through the
- * XTEST extension (libXtst's XTestFakeKeyEvent), for driving the xdm greeter
+ * XTEST extension (libXtst's XTestFakeKeyEvent), for driving the login window
  * in QEMU boot tests without a keyboard.
  *
  *   xtest_type [-w seconds] TEXT...
@@ -8,8 +8,8 @@
  * Each argument is typed in turn; a Return key is sent after each one, so
  *   xtest_type root darwin
  * answers the greeter's login and password prompts. The display comes from
- * $DISPLAY and the cookie from $XAUTHORITY (for an xdm-owned server, the
- * file under /var/lib/xdm/authdir/authfiles). -w retries XOpenDisplay once a
+ * $DISPLAY and the cookie from $XAUTHORITY (for gsdm's server,
+ * /var/lib/gsdm/auth-0). -w retries XOpenDisplay once a
  * second for up to that many seconds, for a server that is still starting.
  */
 #include <stdio.h>

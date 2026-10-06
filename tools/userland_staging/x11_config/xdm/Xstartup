@@ -1,5 +1,0 @@
-#!/bin/sh
-# Run as root after a successful login, before the session; a nonzero exit
-# refuses the login. Upstream's Xstartup.in runs sessreg (utmp/wtmp) which
-# this image does not ship, so there is nothing to do.
-exit 0
