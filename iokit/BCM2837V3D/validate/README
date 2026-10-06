@@ -51,6 +51,12 @@ tools/v3d_validate_test, ASAN + UBSan + fuzzing):
     - tile range is now also bounded by the render target size; with no bin
       CL the range was unconstrained and the hardware would store outside
       the surfaces whose size had been checked.
+    - TILE_RENDERING_MODE_CONFIG is emitted after CLEAR_COLORS and the
+      None-mode store, as in Linux since 54aec44ab02b ("Fix the clear color
+      for the first tile rendered": on hardware, unlike the simulator, the
+      clear colours must come before the render config). Mesa's mirror is
+      simulator code and kept the old order. Found on the real Pi 3: the
+      clear job stored every tile, as zeros.
   vc4_validate_shaders.c
     - PROG_END in the last two instructions pushed max_ip past the BO end
       (out-of-bounds reads in both scans); now rejected.
@@ -69,5 +75,7 @@ Known differences from Linux master (deliberate, not bugs):
   - Linux's later UBO "direct TMU" etc. fixes are present in this snapshot
     (is_direct); perfmon, fences and syncobjs are not used.
 
-Testing: tools/v3d_validate_test/run.sh [iterations] [seed].
-Not yet tested against Mesa's real vc4 output or on hardware.
+Testing: tools/v3d_validate_test/run.sh [iterations] [seed];
+tools/v3d_validate_test/run_mesa_vc4.sh (Mesa's real vc4 output).
+Mesa's copy of these files is its SIMULATOR's: hardware-only fixes Linux
+made later are missing from it. Compare with Linux, not only with Mesa.

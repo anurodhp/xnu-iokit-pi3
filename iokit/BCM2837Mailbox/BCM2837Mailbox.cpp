@@ -525,6 +525,46 @@ BCM2837Mailbox::setClockState(uint32_t clockId, bool on)
 }
 
 bool
+BCM2837Mailbox::propertyTag2(uint32_t tag, uint32_t a, uint32_t b,
+    uint32_t *respCode, uint32_t *ra, uint32_t *rb)
+{
+	IOLock *lock = mailboxLock();
+	if (lock == NULL) {
+		return false;
+	}
+	IOLockLock(lock);
+	bool ok = false;
+	volatile uint32_t *regs = mailboxRegs();
+	struct MailboxMsgBuf buf;
+	if (regs != NULL && msgBufAlloc(&buf)) {
+		uint32_t *m = buf.words;
+		m[kMsgIdxSize] = kMsgBytes;
+		m[kMsgIdxCode] = kCodeRequest;
+		m[kOneIdxTag] = tag;
+		m[kOneIdxBufSize] = 8;
+		m[kOneIdxRespCode] = 0;
+		m[kOneIdxWord0] = a;
+		m[kOneIdxWord1] = b;
+		m[kOneIdxEnd] = kTagEnd;
+		if (mailboxCall(regs, m, buf.busAddr)) {
+			if (respCode != NULL) {
+				*respCode = m[kOneIdxRespCode];
+			}
+			if (ra != NULL) {
+				*ra = m[kOneIdxWord0];
+			}
+			if (rb != NULL) {
+				*rb = m[kOneIdxWord1];
+			}
+			ok = true;
+		}
+		msgBufFree(&buf);
+	}
+	IOLockUnlock(lock);
+	return ok;
+}
+
+bool
 BCM2837Mailbox::getClockRateHz(uint32_t clockId, uint32_t *outHz)
 {
 	if (outHz == NULL) {

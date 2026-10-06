@@ -89,7 +89,7 @@ v3d_bug_on(const char *file, int line)
 /* ============================ V3DBuffer ============================ */
 
 V3DBuffer *
-V3DBuffer::withSize(uint32_t size)
+V3DBuffer::withSize(uint32_t size, bool binner)
 {
 	if (size == 0 || size > kMaxBOSize) {
 		return NULL;
@@ -107,20 +107,58 @@ V3DBuffer::withSize(uint32_t size)
 	// Physically contiguous (the GPU has no MMU), write-combined, and below
 	// the 0x3f000000 VideoCore bus-alias window. Mask 0x3FFFF000: page-
 	// aligned addresses up to 1 GiB, inside the dma-ranges window.
-	b->fMem = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
-	    kIODirectionInOut | kIOMemoryPhysicallyContiguous | kIOMapWriteCombineCache,
-	    size, 0x3FFFF000ULL);
+	//
+	// And not crossing a 256 MiB boundary: vc4_v3d_allocate_bin_bo()
+	// (vc4_v3d.c:247-273) retries until the binner's memory "won't trigger
+	// the addressing bug" ((addr & 0xf0000000) == ((addr + size - 1) &
+	// 0xf0000000)). Every BO gets that rule; like Linux, failed candidates
+	// are held until one fits so the next attempt cannot return the same
+	// memory.
+	//
+	// Binner memory (`binner`: the overflow pool and each job's tile
+	// alloc/state BO) needs more: the binner takes the top 4 bits of tile
+	// alloc and overflow addresses from the tile state array's address
+	// (Linux 553c942f8b2c, "the hardware addressing bug between the tile
+	// binner and the tile alloc memory (where the top 4 bits come from the
+	// tile state data array's address)"). Linux keeps all of it in one BO;
+	// here it is several BOs, so all of them are confined to the same
+	// window, the first 256 MiB (mask 0x0FFFF000) -- what Linux did before
+	// that commit by limiting CMA to 256 MiB.
+	const uint64_t mask = binner ? 0x0FFFF000ULL : 0x3FFFF000ULL;
+	{
+		IOBufferMemoryDescriptor *rejected[8];
+		uint32_t nRejected = 0;
+		for (;;) {
+			IOBufferMemoryDescriptor *m = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
+			    kIODirectionInOut | kIOMemoryPhysicallyContiguous | kIOMapWriteCombineCache,
+			    size, mask);
+			if (m == NULL) {
+				break;
+			}
+			uint64_t pa0 = m->getPhysicalAddress();
+			if ((pa0 & 0xf0000000ULL) == ((pa0 + size - 1) & 0xf0000000ULL)) {
+				b->fMem = m;
+				break;
+			}
+			if (nRejected == sizeof(rejected) / sizeof(rejected[0])) {
+				m->release();
+				break;
+			}
+			rejected[nRejected++] = m;
+		}
+		while (nRejected > 0) {
+			rejected[--nRejected]->release();
+		}
+	}
 	if (b->fMem == NULL) {
 		b->release();
 		return NULL;
 	}
 	b->fSize = size;
-	// Never hand a client someone else's stale memory. Plain stores, not
-	// bzero(): bzero zeroes large buffers with DC ZVA, and this mapping is
-	// write-combined (Normal non-cacheable). Under QEMU a bzero of a fresh
-	// 16 KiB BO intermittently spun forever in that DC ZVA loop (caught with
-	// the monitor sampling: PC fixed in _bzero, 2 runs in 5); the explicit
-	// loop never does.
+	// Never hand a client someone else's stale memory. Note this does NOT
+	// avoid the QEMU-only DC ZVA stall seen in testing: that stall is in
+	// IOBufferMemoryDescriptor's own bzero() (IOBufferMemoryDescriptor.cpp:331)
+	// during allocation, before this loop runs (docs/gpu-opengl-plan.md).
 	{
 		volatile uint64_t *w = (volatile uint64_t *)b->fMem->getBytesNoCopy();
 		for (uint32_t i = 0; i < size / 8; i++) {
@@ -137,6 +175,7 @@ V3DBuffer::withSize(uint32_t size)
 	}
 	b->fGpuAddr = (uint32_t)pa + kV3D_BusAliasBase;
 	b->fBusySeqno = 0;
+	b->fWriteSeqno = 0;
 	return b;
 }
 
@@ -177,13 +216,102 @@ BCM2837V3D::asbControl(uint32_t reg, bool enable)
 }
 
 /*
- * The V3D power-on path of Linux's bcm2835_power_pd_power_on() for
- * BCM2835_POWER_DOMAIN_GRAFX_V3D (bcm2835-power.c:366-380), preceded by the
- * GRAFX domain's own bcm2835_power_power_on(PM_GRAFX) (:214-275) which
- * Linux runs because the V3D domain's parent is GRAFX.
+ * Who powers the V3D.
+ *
+ * On a board running the Raspberry Pi firmware the VideoCore owns the PM
+ * block, and Linux never touches PM_GRAFX or the ASB bridges: every Pi DT
+ * (bcm2837-rpi-3-b.dts -> bcm2836-rpi.dtsi -> bcm2835-rpi-common.dtsi:23-25,
+ * and the downstream bcm270x.dtsi:140-144) gives the v3d node
+ * `power-domains = <&power RPI_POWER_DOMAIN_V3D>`, served by
+ * drivers/pmdomain/bcm/raspberrypi-power.c, which asks the firmware with
+ * RPI_FIRMWARE_SET_DOMAIN_STATE. The PM-block sequence (bcm2835-power.c) is
+ * only for boards without that firmware. Found on the first real Pi 3 boot:
+ * with the PM-block sequence GRAFX took POWUP but POWOK never rose
+ * (PM_GRAFX 0x1000 -> 0x1001 at every inrush step, also after a 10 ms wait
+ * and with the firmware's V3D clock on).
+ *
+ * The firmware path is used when the firmware has the domain interface;
+ * otherwise (no Raspberry Pi firmware, e.g. the QEMU V3D model) the
+ * PM-block path.
  */
+enum {
+	kTagGetDomainState = 0x00030030,   // RPI_FIRMWARE_GET_DOMAIN_STATE
+	kTagSetDomainState = 0x00038030,   // RPI_FIRMWARE_SET_DOMAIN_STATE
+	// RPI_POWER_DOMAIN_V3D is 10 in dt-bindings/power/raspberrypi-power.h,
+	// and the firmware's index is that plus one (raspberrypi-power.c:112-113,
+	// "The DT binding index is the firmware's domain index minus one").
+	kFwDomainV3D = 10 + 1,
+	kRpiPowerDomainARM = 22,           // RPI_POWER_DOMAIN_ARM, used as-is by the probe
+};
+
+/*
+ * rpi_has_new_domain_support() (raspberrypi-power.c:130-152): the firmware
+ * does not fail an unknown tag, it skips it, so put ~0 in the answer word
+ * and see whether the firmware overwrote it.
+ */
+static bool
+firmwareHasDomainInterface(void)
+{
+	uint32_t resp = 0, a = 0, b = 0;
+	if (!BCM2837Mailbox::propertyTag2(kTagGetDomainState, kRpiPowerDomainARM, ~0U, &resp, &a, &b)) {
+		return false;
+	}
+	return b != ~0U;
+}
+
+/* rpi_firmware_set_power() (raspberrypi-power.c:51-62), new interface. */
+static bool
+firmwareSetV3DPower(bool on)
+{
+	uint32_t resp = 0, a = 0, b = 0;
+	if (!BCM2837Mailbox::propertyTag2(kTagSetDomainState, kFwDomainV3D, on ? 1 : 0, &resp, &a, &b)) {
+		return false;
+	}
+	return (resp & 0x80000000U) != 0;
+}
+
 bool
 BCM2837V3D::powerOn(void)
+{
+	if (fFwPowerChecked == false) {
+		fFwPower = firmwareHasDomainInterface();
+		fFwPowerChecked = true;
+		IOLog("BCM2837V3D: power through %s\n", fFwPower ?
+		    "the firmware (domain V3D)" : "the PM block (no firmware domain interface)");
+	}
+	if (fFwPower) {
+		if (!firmwareSetV3DPower(true)) {
+			IOLog("BCM2837V3D: firmware would not power the V3D domain\n");
+			return false;
+		}
+		fPowered = true;
+		return true;
+	}
+	return powerOnPM();
+}
+
+void
+BCM2837V3D::powerOff(void)
+{
+	if (fFwPower) {
+		fPowered = false;
+		if (!firmwareSetV3DPower(false)) {
+			IOLog("BCM2837V3D: firmware would not power the V3D domain off\n");
+		}
+		return;
+	}
+	powerOffPM();
+}
+
+/*
+ * Boards without the Raspberry Pi firmware: the V3D power-on path of Linux's
+ * bcm2835_power_pd_power_on() for BCM2835_POWER_DOMAIN_GRAFX_V3D
+ * (bcm2835-power.c:366-380), preceded by the GRAFX domain's own
+ * bcm2835_power_power_on(PM_GRAFX) (:214-275) which Linux runs because the
+ * V3D domain's parent is GRAFX.
+ */
+bool
+BCM2837V3D::powerOnPM(void)
 {
 	if ((pmRead(kPM_GRAFX) & kPM_POWUP) == 0) {
 		// Firmware did not leave GRAFX powered. Ramp the inrush current up
@@ -202,7 +330,7 @@ BCM2837V3D::powerOn(void)
 			}
 		}
 		if (!powok) {
-			IOLog("BCM2837V3D: GRAFX power never reported POWOK\n");
+			IOLog("BCM2837V3D: GRAFX power never reported POWOK (PM_GRAFX %#x)\n", pmRead(kPM_GRAFX));
 			pmWrite(kPM_GRAFX, pmRead(kPM_GRAFX) & ~(kPM_POWUP | kPM_InrushMask));
 			return false;
 		}
@@ -261,7 +389,7 @@ fail_clk:
 
 /* bcm2835_asb_power_off() (:332-358): slave, master, clock, reset. */
 void
-BCM2837V3D::powerOff(void)
+BCM2837V3D::powerOffPM(void)
 {
 	fPowered = false;
 	if (!asbControl(kASB_V3D_S_CTRL, false)) {
@@ -547,7 +675,7 @@ BCM2837V3D::submitRaw(const v3d_raw_submit *in, V3DBuffer **bos, uint64_t *seqno
  * it can complete, and be reaped, at any time.
  */
 IOReturn
-BCM2837V3D::queueJob(V3DJob *j, uint64_t *seqnoOut)
+BCM2837V3D::queueJob(V3DJob *j, uint64_t *seqnoOut, V3DBuffer *const *writes, uint32_t nWrites)
 {
 	if (!fPowered || fStopping) {
 		freeJob(j);
@@ -563,6 +691,9 @@ BCM2837V3D::queueJob(V3DJob *j, uint64_t *seqnoOut)
 	uint64_t seqno = fQueue->submit(j);
 	for (uint32_t i = 0; i < j->boCount; i++) {
 		j->bos[i]->fBusySeqno = seqno;
+	}
+	for (uint32_t i = 0; i < nWrites; i++) {
+		writes[i]->fWriteSeqno = seqno;
 	}
 	IOSimpleLockUnlockEnableInterrupt(fJobLock, s);
 
@@ -636,7 +767,10 @@ allocJobBO(void *ctxp, size_t size, bool stage, uint32_t *gpu, void **staging)
 	if (ctx->n >= 8 || size == 0 || size > kMaxBOSize) {
 		return ENOMEM;
 	}
-	V3DBuffer *b = V3DBuffer::withSize((uint32_t)size);
+	// The validators allocate exactly one BO without a staging copy: the
+	// tile alloc/state BO (vc4_validate.c, drm_gem_cma_create_nostage()).
+	// That is binner memory and must share the overflow pool's window.
+	V3DBuffer *b = V3DBuffer::withSize((uint32_t)size, !stage);
 	if (b == NULL) {
 		return ENOMEM;
 	}
@@ -709,6 +843,30 @@ BCM2837V3D::submitValidated(v3d_submit_cl *args, V3DBuffer **bos, uint32_t boCou
 		goto fail;
 	}
 
+	// Bin dependency (Linux 7edabee06a56, vc4_gem.c:905-911): with bin and
+	// render pipelined, this job's binning can start while an earlier job's
+	// render is still writing a BO this job reads (VBO, IB, coordinate-
+	// shader textures), and bin from stale memory. Linux tracks exactly
+	// those reads (exec->bin_dep_seqno); the vendored validators predate
+	// that, so this waits on the superset: every BO of the job that an
+	// earlier render wrote. Correct, at the cost of not overlapping a job
+	// with an earlier render of a BO it also renders to.
+	{
+		uint64_t dep = 0;
+		for (uint32_t i = 0; i < boCount; i++) {
+			if (bos[i]->fWriteSeqno > dep) {
+				dep = bos[i]->fWriteSeqno;
+			}
+		}
+		if (dep != 0) {
+			IOReturn w = waitSeqno(dep, 10ULL * 1000 * 1000 * 1000);
+			if (w != kIOReturnSuccess) {
+				ret = w;
+				goto fail;
+			}
+		}
+	}
+
 	// Validation succeeded: publish the finished images to the GPU memory.
 	for (uint32_t i = 0; i < ctx.n; i++) {
 		if (ctx.list[i].staging != NULL) {
@@ -747,7 +905,21 @@ BCM2837V3D::submitValidated(v3d_submit_cl *args, V3DBuffer **bos, uint32_t boCou
 	if (descs != NULL) {
 		IOFree(descs, boCount * sizeof(v3d_kbo_desc));
 	}
-	return queueJob(j, seqnoOut);
+	{
+		// The render stage's surface writes (vc4_render_cl.c: color_write,
+		// zs_write, msaa_color_write, msaa_zs_write); the validators have
+		// already checked these indices against the BO list.
+		V3DBuffer *writes[4];
+		uint32_t nWrites = 0;
+		const uint32_t idx[4] = { args->color_write.hindex, args->zs_write.hindex,
+		    args->msaa_color_write.hindex, args->msaa_zs_write.hindex };
+		for (uint32_t k = 0; k < 4; k++) {
+			if (idx[k] < boCount) {
+				writes[nWrites++] = bos[idx[k]];
+			}
+		}
+		return queueJob(j, seqnoOut, writes, nWrites);
+	}
 
 fail:
 	for (uint32_t i = 0; i < ctx.n; i++) {
@@ -863,7 +1035,7 @@ BCM2837V3D::start(IOService *provider)
 	if (fQueue == NULL) {
 		return false;
 	}
-	fOverflowBO = V3DBuffer::withSize(4U * 1024 * 1024);
+	fOverflowBO = V3DBuffer::withSize(4U * 1024 * 1024, true);
 	if (fOverflowBO == NULL) {
 		IOLog("BCM2837V3D: no memory for binner overflow\n");
 		return false;

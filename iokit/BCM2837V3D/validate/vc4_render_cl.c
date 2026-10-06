@@ -328,15 +328,6 @@ static int vc4_create_rcl_bo(struct drm_device *dev, struct vc4_exec_info *exec,
 	list_addtail(&to_vc4_bo(&setup->rcl->base)->unref_head,
 		     &exec->unref_list);
 
-	rcl_u8(setup, VC4_PACKET_TILE_RENDERING_MODE_CONFIG);
-	rcl_u32(setup,
-		(setup->color_write ? (setup->color_write->paddr +
-				       args->color_write.offset) :
-		 0));
-	rcl_u16(setup, args->width);
-	rcl_u16(setup, args->height);
-	rcl_u16(setup, args->color_write.bits);
-
 	/* The tile buffer gets cleared when the previous tile is stored.  If
 	 * the clear values changed between frames, then the tile buffer has
 	 * stale clear values in it, so we have to do a store in None mode (no
@@ -355,6 +346,24 @@ static int vc4_create_rcl_bo(struct drm_device *dev, struct vc4_exec_info *exec,
 		rcl_u16(setup, VC4_LOADSTORE_TILE_BUFFER_NONE);
 		rcl_u32(setup, 0); /* no address, since we're in None mode */
 	}
+
+	/* V3D local fix: the render config comes AFTER the clear colours and
+	 * the None-mode store. Mesa's simulator mirror emits it first; Linux
+	 * moved it in 54aec44ab02b ("drm/vc4: Fix the clear color for the first
+	 * tile rendered"): "Apparently in hardware (as opposed to simulation),
+	 * the clear colors need to be uploaded before the render config,
+	 * otherwise they won't take effect." Seen on the real Pi 3: the clear
+	 * job stored every tile, as zeros. Order now matches Linux v6.6
+	 * vc4_render_cl.c:337-363.
+	 */
+	rcl_u8(setup, VC4_PACKET_TILE_RENDERING_MODE_CONFIG);
+	rcl_u32(setup,
+		(setup->color_write ? (setup->color_write->paddr +
+				       args->color_write.offset) :
+		 0));
+	rcl_u16(setup, args->width);
+	rcl_u16(setup, args->height);
+	rcl_u16(setup, args->color_write.bits);
 
 	for (yi = 0; yi < ytiles; yi++) {
 		int y = positive_y ? min_y_tile + yi : max_y_tile - yi;

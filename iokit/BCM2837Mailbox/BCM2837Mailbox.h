@@ -108,6 +108,17 @@ public:
 	static bool setClockState(uint32_t clockId, bool on);
 
 	/*
+	 * One property tag with a two-word request {a, b} and a two-word
+	 * response (power-domain get/set 0x00030030 / 0x00038030, Linux
+	 * RPI_FIRMWARE_GET/SET_DOMAIN_STATE). Returns true if the mailbox call
+	 * completed; *respCode is the tag's response word (bit 31 = answered)
+	 * and *ra/*rb the two answer words. Used by BCM2837V3D bring-up to ask
+	 * the firmware about RPI_POWER_DOMAIN_V3D (10).
+	 */
+	static bool propertyTag2(uint32_t tag, uint32_t a, uint32_t b,
+	    uint32_t *respCode, uint32_t *ra, uint32_t *rb);
+
+	/*
 	 * The VideoCore's 64-bit per-board serial number (property tag
 	 * 0x00010004). Returns false if the mailbox call fails or the
 	 * firmware returns zero - the latter is a real, expected case under
