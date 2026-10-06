@@ -727,6 +727,18 @@ if [ -x "$XS_STAGE/usr/X11/bin/Xvfb" ]; then
 else
     echo "= $XS_STAGE/usr/X11/bin/Xvfb not built -- run build_xserver.sh (and build_xkbcomp.sh, build_xkeyboard_config.sh) first if wanted, skipping"
 fi
+# glxinfo and glxgears (Mesa demos 9.0.0, build_mesa_demos.sh): real tools,
+# installed on real-hardware images too.
+for d in glxinfo glxgears; do
+    if [ -f "tools/userland_staging/$d.macho" ]; then
+        mkdir -p "$MNT/usr/X11/bin"
+        cp "tools/userland_staging/$d.macho" "$MNT/usr/X11/bin/$d"
+        chmod 755 "$MNT/usr/X11/bin/$d"
+        echo "+ wrote $(wc -c < "tools/userland_staging/$d.macho") bytes to $MNT/usr/X11/bin/$d (build_mesa_demos.sh)"
+    else
+        echo "= tools/userland_staging/$d.macho not built -- run build_mesa_demos.sh first if wanted, skipping"
+    fi
+done
 install_smoketest tools/userland_staging/cairo_smoketest.macho "usr/X11/bin/cairo_smoketest" \
     "= tools/userland_staging/cairo_smoketest.macho not built -- run build_cairo_smoketest.sh first if wanted, skipping" \
     "  (tools/userland_staging/build_cairo_smoketest.sh)"
