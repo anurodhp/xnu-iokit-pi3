@@ -159,3 +159,30 @@ stores land, and that the driver's code paths work.
   delayed rather than lost. The Xorg screendumps (`-retro`) are black.
   Not pursued further: DAR-443 is canceled. QEMU cannot show X output;
   use the Pi for anything visual.
+
+## Real Pi 3 results (DARW-302, 2026-10-06)
+
+Write-combining works on the Pi: with X stopped, `fb_cache_test` and
+`fb_bench` write the 1280x720 framebuffer at ~1.1 GB/s (3.35 ms per full
+frame) with the driver's own copy loop, against ~30 MB/s for reads.
+
+Inside Xorg the same copy ran at only ~105 MB/s (ShadowStats: ~32 ms per
+full-screen update). Cause: the X server and its modules are built with
+`-fno-builtin` (`build_xserver.sh`), so `PDGOPCopyRun`'s
+`memcpy(&a, src, 16)` became a real call per 16 bytes (about 216,000 calls
+per update). PureDarwin#5 uses `__builtin_memcpy`, which is inlined
+regardless. After it: ~830 MB/s in the shadow update, `XShmPutImage` of a
+1280x720 frame 53 -> 11.8 ms, glxgears on HDMI 1280x720 7.3 -> 16.1 fps,
+1000x700 12.2 -> 20.4 fps, 300x300 62 -> 87 fps. Every X11 client on the HDMI
+screen benefits.
+
+Tools: `build_fb_bench.sh` (`fb_bench`: VRAM/RAM bandwidth with the driver's
+loop; needs X stopped, the framebuffer service allows one client;
+`FB_BENCH_CFLAGS=-fno-builtin` reproduces the slow build), and
+`PDGOP_DRV_SRC=<file> build_xf86_video_puredarwingop.sh` to build the driver
+from a local file before a fork change is merged.
+
+Note: the shared X server build tree had been configured from a checkout
+that no longer existed (`compile_commands.json` pointed at a deleted
+directory), so no module could be rebuilt; `build_xserver.sh` was re-run from
+the main checkout. Configure shared build trees from a path that will stay.

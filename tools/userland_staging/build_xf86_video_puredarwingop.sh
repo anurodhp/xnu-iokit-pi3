@@ -59,7 +59,14 @@ SRC="$PWD/$OUT/pdgop_drv_src"
 OBJ="$PWD/$OUT/pdgop_drv_obj"
 rm -rf "$SRC" "$OBJ"
 mkdir -p "$SRC/include" "$OBJ" "$DEST"
-git -C "$T/PureDarwin" show "$PD_REF":src/Userspace/xf86-video-puredarwingop/puredarwingop_drv.c > "$SRC/puredarwingop_drv.c"
+# PDGOP_DRV_SRC=<file>: build the driver from that file instead of the fork
+# branch (to test a change on the target before it is merged into the fork).
+if [ -n "${PDGOP_DRV_SRC:-}" ]; then
+    cp "$PDGOP_DRV_SRC" "$SRC/puredarwingop_drv.c"
+    echo "+ driver source from $PDGOP_DRV_SRC (PDGOP_DRV_SRC), not $PD_REF"
+else
+    git -C "$T/PureDarwin" show "$PD_REF":src/Userspace/xf86-video-puredarwingop/puredarwingop_drv.c > "$SRC/puredarwingop_drv.c"
+fi
 git -C "$T/PureDarwin" show "$PD_REF":src/Libraries/PDGOP/PDGOP.c > "$SRC/PDGOP.c"
 git -C "$T/PureDarwin" show "$PD_REF":src/Libraries/PDGOP/include/PDGOP.h > "$SRC/include/PDGOP.h"
 
