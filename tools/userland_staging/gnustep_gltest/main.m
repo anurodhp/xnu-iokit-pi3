@@ -18,6 +18,12 @@
 #include <string.h>
 
 static int fails;
+/* progress marks, so a hang shows which AppKit/GLX step it is in */
+static void step(const char *what)
+{
+	printf("step: %s\n", what);
+	fflush(stdout);
+}
 static void check(BOOL ok, NSString *what)
 {
 	printf("%s %s\n", ok ? "ok:  " : "FAIL:", [what UTF8String]);
@@ -99,14 +105,24 @@ static void check(BOOL ok, NSString *what)
 		return;
 	}
 	NSRect frame = NSMakeRect(40, 40, 128, 128);
+	step("creating the window");
 	window = [[NSWindow alloc] initWithContentRect: frame
 	    styleMask: NSTitledWindowMask backing: NSBackingStoreBuffered defer: NO];
 	[window setTitle: @"GLTest"];
+	step("creating the NSOpenGLView");
 	view = [[GLTestView alloc] initWithFrame: NSMakeRect(0, 0, 128, 128) pixelFormat: pf];
-	check([view openGLContext] != nil, @"NSOpenGLContext created");
+	/* The view must be in a window before its context is created:
+	 * gnustep-back attaches the GLX drawable at that point and asserts
+	 * otherwise (XGGLContext.m:81, "Request of an X window attachment on a
+	 * view that is not on a NSWindow"). */
 	[window setContentView: view];
+	step("asking the view for its NSOpenGLContext");
+	check([view openGLContext] != nil, @"NSOpenGLContext created");
+	step("ordering the window front");
 	[window makeKeyAndOrderFront: nil];
+	step("first display");
 	[view display];
+	step("first display returned");
 	/* the first draw may wait for the window to be mapped */
 	[self performSelector: @selector(afterFirstDraw) withObject: nil afterDelay: 0.5];
 	[self performSelector: @selector(timeout) withObject: nil afterDelay: 30.0];

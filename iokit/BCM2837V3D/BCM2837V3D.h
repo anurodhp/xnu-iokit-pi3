@@ -46,6 +46,7 @@
 #include "V3DQueue.h"
 
 class BCM2837V3DUserClient;
+class BCM2837V3D;
 struct vc4_validated_shader_info;
 
 /* One buffer object. Refcounted so an in-flight job keeps it alive after
@@ -59,8 +60,11 @@ public:
 	volatile uint64_t fBusySeqno;  /* highest seqno of a job using this BO */
 	volatile uint64_t fWriteSeqno; /* seqno of the last job whose render stage wrote this BO */
 	struct vc4_validated_shader_info *fShader;   /* non-NULL: a validated, immutable shader BO */
+	BCM2837V3D *fPoolOwner;  /* non-NULL: a slice of the binner pool (fMem is NULL) */
+	uint32_t fPoolSlot, fPoolSlots;
 
-	static V3DBuffer *withSize(uint32_t size, bool binner = false);
+	static V3DBuffer *withSize(uint32_t size);
+	static V3DBuffer *empty(void);   /* no memory yet: for binner-pool slices */
 	virtual void free(void) APPLE_KEXT_OVERRIDE;
 };
 
@@ -128,7 +132,13 @@ private:
 	IOLock *fWaitLock;
 	V3DQueue *fQueue;             // job pipeline state; used with fJobLock held
 
-	V3DBuffer *fOverflowBO;       // binner overflow memory (BPOA/BPOS)
+	V3DBuffer *fBinPool;          // binner memory: overflow + per-job tile slots
+	IOSimpleLock *fBinLock;       // protects fBinSlotsUsed
+	uint32_t fBinSlotsUsed;       // bit i: slot i handed to a job
+public:
+	V3DBuffer *allocBinSlice(uint32_t size);
+	void freeBinSlots(uint32_t first, uint32_t n);
+private:
 	uint32_t fIdent0, fIdent1, fIdent2;
 	bool fPowered;
 	bool fFwPower;          /* the firmware owns V3D power (Raspberry Pi firmware) */

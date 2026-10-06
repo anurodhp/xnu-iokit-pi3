@@ -16,6 +16,14 @@
 OSDefineMetaClassAndFinalStructors(BCM2837V3D, IOService)
 OSDefineMetaClassAndFinalStructors(V3DBuffer, OSObject)
 
+// Binner pool layout (see allocBinSlice()).
+enum {
+	kBinPoolSize  = 16U * 1024 * 1024,   // vc4_v3d_allocate_bin_bo: 16 MiB
+	kBinOverflow  = 4U * 1024 * 1024,
+	kBinSlotSize  = 512U * 1024,          // vc4->bin_alloc_size
+	kBinSlotCount = (kBinPoolSize - kBinOverflow) / kBinSlotSize,   // 24
+};
+
 enum {
 	kMaxBOSize   = 16U * 1024 * 1024,
 	// Hang detector period. Linux vc4_queue_hangcheck(): 100 ms
@@ -89,7 +97,18 @@ v3d_bug_on(const char *file, int line)
 /* ============================ V3DBuffer ============================ */
 
 V3DBuffer *
-V3DBuffer::withSize(uint32_t size, bool binner)
+V3DBuffer::empty(void)
+{
+	V3DBuffer *b = new V3DBuffer;
+	if (b != NULL && !b->init()) {
+		b->release();
+		b = NULL;
+	}
+	return b;
+}
+
+V3DBuffer *
+V3DBuffer::withSize(uint32_t size)
 {
 	if (size == 0 || size > kMaxBOSize) {
 		return NULL;
@@ -115,16 +134,9 @@ V3DBuffer::withSize(uint32_t size, bool binner)
 	// are held until one fits so the next attempt cannot return the same
 	// memory.
 	//
-	// Binner memory (`binner`: the overflow pool and each job's tile
-	// alloc/state BO) needs more: the binner takes the top 4 bits of tile
-	// alloc and overflow addresses from the tile state array's address
-	// (Linux 553c942f8b2c, "the hardware addressing bug between the tile
-	// binner and the tile alloc memory (where the top 4 bits come from the
-	// tile state data array's address)"). Linux keeps all of it in one BO;
-	// here it is several BOs, so all of them are confined to the same
-	// window, the first 256 MiB (mask 0x0FFFF000) -- what Linux did before
-	// that commit by limiting CMA to 256 MiB.
-	const uint64_t mask = binner ? 0x0FFFF000ULL : 0x3FFFF000ULL;
+	// Binner memory (tile state, tile alloc, overflow) is not allocated
+	// here: it comes from one pool, see allocBinSlice().
+	const uint64_t mask = 0x3FFFF000ULL;
 	{
 		IOBufferMemoryDescriptor *rejected[8];
 		uint32_t nRejected = 0;
@@ -185,6 +197,11 @@ V3DBuffer::free(void)
 	if (fShader != NULL) {
 		v3d_kglue_free_shader(fShader);
 		fShader = NULL;
+	}
+	if (fPoolOwner != NULL) {
+		fPoolOwner->freeBinSlots(fPoolSlot, fPoolSlots);
+		fPoolOwner->release();
+		fPoolOwner = NULL;
 	}
 	if (fMem != NULL) {
 		fMem->release();
@@ -409,9 +426,9 @@ BCM2837V3D::initHW(void)
 	// Hand the QPU-user-program VPM space to the rasteriser; there is no
 	// interface for running user QPU programs.
 	v3dWrite(kV3D_VPMBASE, 0);
-	if (fOverflowBO != NULL) {
-		v3dWrite(kV3D_BPOA, fOverflowBO->fGpuAddr);
-		v3dWrite(kV3D_BPOS, fOverflowBO->fSize);
+	if (fBinPool != NULL) {
+		v3dWrite(kV3D_BPOA, fBinPool->fGpuAddr);
+		v3dWrite(kV3D_BPOS, kBinOverflow);
 	}
 	v3dWrite(kV3D_INTCTL, kV3D_DriverIRQs);          // clear stale
 	v3dWrite(kV3D_INTENA, kV3D_INT_FLDONE | kV3D_INT_FRDONE);
@@ -740,9 +757,9 @@ BCM2837V3D::createShaderBO(const void *code, uint32_t size, V3DBuffer **out)
 void
 BCM2837V3D::resetBinnerOverflow(void)
 {
-	if (fOverflowBO != NULL) {
-		v3dWrite(kV3D_BPOA, fOverflowBO->fGpuAddr);
-		v3dWrite(kV3D_BPOS, fOverflowBO->fSize);
+	if (fBinPool != NULL) {
+		v3dWrite(kV3D_BPOA, fBinPool->fGpuAddr);
+		v3dWrite(kV3D_BPOS, kBinOverflow);
 	}
 }
 
@@ -755,9 +772,83 @@ struct V3DCreated {
 	size_t stagingSize;
 };
 struct V3DAllocCtx {
+	BCM2837V3D *dev;
 	V3DCreated list[8];       // exec, tile and render-list BOs: three in practice
 	uint32_t n;
 };
+}
+
+/*
+ * Binner memory, Linux's design (553c942f8b2c, vc4_v3d.c
+ * vc4_v3d_allocate_bin_bo / bin_alloc_size, vc4_gem.c
+ * vc4_v3d_get_bin_slot): ONE buffer allocated when the driver starts, not
+ * crossing a 256 MiB boundary (the binner takes the top 4 address bits of
+ * tile alloc and overflow memory from the tile state array), handed out in
+ * 512 KiB slots. Each job's tile state + tile alloc BO is a run of slots;
+ * the first 4 MiB are the overflow pool (BPOA/BPOS). A fresh contiguous
+ * allocation per job does not work: on the real Pi 3 the 1 MiB tile BOs
+ * glxgears needs failed (vm_page_find_contiguous found nothing) once memory
+ * was fragmented, and the job was rejected.
+ */
+V3DBuffer *
+BCM2837V3D::allocBinSlice(uint32_t size)
+{
+	if (fBinPool == NULL || size == 0) {
+		return NULL;
+	}
+	uint32_t n = (size + kBinSlotSize - 1) / kBinSlotSize;
+	if (n > kBinSlotCount) {
+		return NULL;
+	}
+	uint32_t first = kBinSlotCount;
+	IOInterruptState s = IOSimpleLockLockDisableInterrupt(fBinLock);
+	uint32_t want = (n == 32) ? ~0U : ((1U << n) - 1);
+	for (uint32_t i = 0; i + n <= kBinSlotCount; i++) {
+		if ((fBinSlotsUsed & (want << i)) == 0) {
+			fBinSlotsUsed |= want << i;
+			first = i;
+			break;
+		}
+	}
+	IOSimpleLockUnlockEnableInterrupt(fBinLock, s);
+	if (first == kBinSlotCount) {
+		return NULL;
+	}
+	V3DBuffer *b = V3DBuffer::empty();
+	if (b == NULL) {
+		freeBinSlots(first, n);
+		return NULL;
+	}
+	uint32_t off = kBinOverflow + first * kBinSlotSize;
+	b->fMem = NULL;
+	b->fSize = n * kBinSlotSize;
+	b->fGpuAddr = fBinPool->fGpuAddr + off;
+	b->fBusySeqno = 0;
+	b->fWriteSeqno = 0;
+	b->fPoolSlot = first;
+	b->fPoolSlots = n;
+	b->fPoolOwner = this;
+	retain();
+	// The tile state data array must start zeroed for every bin job (Linux
+	// 48a570c964d8: the PTB acts on stale tile state left by a slot's
+	// previous user despite the auto-initialise flag). Slots are reused, so
+	// clear what the job asked for, with plain stores on the write-combined
+	// pool mapping.
+	volatile uint64_t *w = (volatile uint64_t *)((uint8_t *)fBinPool->fMem->getBytesNoCopy() + off);
+	for (uint32_t i = 0; i < (size + 7) / 8; i++) {
+		w[i] = 0;
+	}
+	cpuToGpuBarrier();
+	return b;
+}
+
+void
+BCM2837V3D::freeBinSlots(uint32_t first, uint32_t n)
+{
+	uint32_t want = (n == 32) ? ~0U : ((1U << n) - 1);
+	IOInterruptState s = IOSimpleLockLockDisableInterrupt(fBinLock);
+	fBinSlotsUsed &= ~(want << first);
+	IOSimpleLockUnlockEnableInterrupt(fBinLock, s);
 }
 
 static int
@@ -769,8 +860,8 @@ allocJobBO(void *ctxp, size_t size, bool stage, uint32_t *gpu, void **staging)
 	}
 	// The validators allocate exactly one BO without a staging copy: the
 	// tile alloc/state BO (vc4_validate.c, drm_gem_cma_create_nostage()).
-	// That is binner memory and must share the overflow pool's window.
-	V3DBuffer *b = V3DBuffer::withSize((uint32_t)size, !stage);
+	// That is binner memory, so it comes from the binner pool.
+	V3DBuffer *b = stage ? V3DBuffer::withSize((uint32_t)size) : ctx->dev->allocBinSlice((uint32_t)size);
 	if (b == NULL) {
 		return ENOMEM;
 	}
@@ -820,6 +911,7 @@ BCM2837V3D::submitValidated(v3d_submit_cl *args, V3DBuffer **bos, uint32_t boCou
 	v3d_kbo_desc *descs = NULL;
 	V3DAllocCtx ctx;
 	bzero(&ctx, sizeof(ctx));
+	ctx.dev = this;
 	IOReturn ret = kIOReturnNoMemory;
 	V3DJob *j = NULL;
 
@@ -1035,9 +1127,10 @@ BCM2837V3D::start(IOService *provider)
 	if (fQueue == NULL) {
 		return false;
 	}
-	fOverflowBO = V3DBuffer::withSize(4U * 1024 * 1024, true);
-	if (fOverflowBO == NULL) {
-		IOLog("BCM2837V3D: no memory for binner overflow\n");
+	fBinLock = IOSimpleLockAlloc();
+	fBinPool = (fBinLock != NULL) ? V3DBuffer::withSize(kBinPoolSize) : NULL;
+	if (fBinPool == NULL) {
+		IOLog("BCM2837V3D: no memory for the %u MiB binner pool\n", kBinPoolSize >> 20);
 		return false;
 	}
 
@@ -1125,9 +1218,13 @@ BCM2837V3D::free(void)
 		IOSimpleLockFree(fJobLock);
 		fJobLock = NULL;
 	}
-	if (fOverflowBO != NULL) {
-		fOverflowBO->release();
-		fOverflowBO = NULL;
+	if (fBinPool != NULL) {
+		fBinPool->release();
+		fBinPool = NULL;
+	}
+	if (fBinLock != NULL) {
+		IOSimpleLockFree(fBinLock);
+		fBinLock = NULL;
 	}
 	if (fQueue != NULL) {
 		delete fQueue;
