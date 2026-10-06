@@ -842,6 +842,46 @@ BCM2837V3D::allocBinSlice(uint32_t size)
 	return b;
 }
 
+/*
+ * vc4_v3d_get_bin_slot() (vc4_v3d.c): "Couldn't find an open slot. Wait for
+ * render to complete and try again." Finished jobs only give their slots
+ * back when they are freed, which hangcheckTick() does every 100 ms; at
+ * 60+ frames a second that left the pool empty and about a third of
+ * glxgears' frames were rejected on the real Pi 3. So: free what has
+ * finished, and if that is not enough, wait for the oldest job in flight.
+ * Submit path only (no locks held).
+ */
+V3DBuffer *
+BCM2837V3D::allocBinSliceWaiting(uint32_t size)
+{
+	for (int attempt = 0; attempt < 64; attempt++) {
+		V3DBuffer *b = allocBinSlice(size);
+		if (b != NULL) {
+			return b;
+		}
+		IOInterruptState s = IOSimpleLockLockDisableInterrupt(fJobLock);
+		V3DJob *done = fQueue->takeDone();
+		uint64_t finished = fQueue->finishedSeqno();
+		uint64_t last = fQueue->lastSeqno();
+		IOSimpleLockUnlockEnableInterrupt(fJobLock, s);
+		if (done != NULL) {
+			while (done != NULL) {
+				V3DJob *n = done->next;
+				freeJob(done);
+				done = n;
+			}
+			continue;
+		}
+		if (finished >= last) {
+			return NULL;   // nothing in flight holds a slot: the pool is too small
+		}
+		if (waitSeqno(finished + 1, 2ULL * 1000 * 1000 * 1000) != kIOReturnSuccess) {
+			return NULL;
+		}
+	}
+	return NULL;
+}
+
 void
 BCM2837V3D::freeBinSlots(uint32_t first, uint32_t n)
 {
@@ -861,7 +901,7 @@ allocJobBO(void *ctxp, size_t size, bool stage, uint32_t *gpu, void **staging)
 	// The validators allocate exactly one BO without a staging copy: the
 	// tile alloc/state BO (vc4_validate.c, drm_gem_cma_create_nostage()).
 	// That is binner memory, so it comes from the binner pool.
-	V3DBuffer *b = stage ? V3DBuffer::withSize((uint32_t)size) : ctx->dev->allocBinSlice((uint32_t)size);
+	V3DBuffer *b = stage ? V3DBuffer::withSize((uint32_t)size) : ctx->dev->allocBinSliceWaiting((uint32_t)size);
 	if (b == NULL) {
 		return ENOMEM;
 	}
@@ -1081,6 +1121,10 @@ BCM2837V3D::start(IOService *provider)
 		return false;
 	}
 	fRawAllowed = PE_parse_boot_argn("v3d-raw", &arg, sizeof(arg)) && arg == 1;
+	// v3d-debug=1: print why the validators reject a submission (their
+	// DRM_ERROR/DRM_INFO messages; off by default, user-triggerable).
+	arg = 0;
+	v3d_kglue_debug = PE_parse_boot_argn("v3d-debug", &arg, sizeof(arg)) && arg == 1;
 
 	IODeviceMemory *mem0 = provider->getDeviceMemoryWithIndex(0);   // V3D
 	IODeviceMemory *mem1 = provider->getDeviceMemoryWithIndex(1);   // power manager

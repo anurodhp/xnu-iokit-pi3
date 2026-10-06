@@ -57,6 +57,9 @@ int v3d_kglue_validate(const struct v3d_submit_cl *args, const struct v3d_kbo_de
 struct vc4_validated_shader_info *v3d_kglue_validate_shader(const void *code, uint32_t size);
 void v3d_kglue_free_shader(struct vc4_validated_shader_info *info);
 
+/* Kernel only: nonzero prints the validators' rejection messages. */
+extern int v3d_kglue_debug;
+
 #ifdef __cplusplus
 }
 #endif

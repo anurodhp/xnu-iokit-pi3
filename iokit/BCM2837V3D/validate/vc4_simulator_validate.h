@@ -77,8 +77,13 @@ typedef uint32_t u32;
 void *v3d_kalloc(size_t size);               /* zero-filled */
 void *v3d_krealloc(void *p, size_t old_size, size_t new_size);
 void v3d_kfree(void *p);
-#define DRM_INFO(...) do { } while (0)
-#define DRM_ERROR(...) do { } while (0)
+/* The validators' rejection messages, printed only with the boot-arg
+ * v3d-debug=1 (BCM2837V3D::start sets v3d_kglue_debug): user-triggerable,
+ * so off by default, as Linux's DRM_DEBUG is. */
+extern int v3d_kglue_debug;
+int printf(const char *, ...);
+#define DRM_INFO(...) do { if (v3d_kglue_debug) printf("v3d validate: " __VA_ARGS__); } while (0)
+#define DRM_ERROR(...) do { if (v3d_kglue_debug) printf("v3d validate: " __VA_ARGS__); } while (0)
 #define kmalloc(size, arg) v3d_kalloc(size)
 #define kcalloc(count, size, arg) v3d_kalloc((size_t)(count) * (size_t)(size))
 #define kfree(ptr) v3d_kfree(ptr)

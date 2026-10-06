@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -278,6 +279,51 @@ bo_note_created(struct v3d_fd *f, uint32_t handle, uint32_t size)
 	}
 }
 
+/*
+ * V3D_DRM_DEBUG=1: describe a submission the kernel rejected (to stderr),
+ * since the kernel's validators do not log why. Enough to rebuild the case
+ * on the host (tools/v3d_validate_test).
+ */
+static void
+debug_surf(const char *name, const struct v3d_submit_rcl_surface *s)
+{
+	if (s->hindex != ~0u)
+		fprintf(stderr, "  %-16s hindex %u offset %#x bits %#x flags %#x\n",
+		    name, s->hindex, s->offset, s->bits, s->flags);
+}
+
+static void
+debug_rejected_submit(struct v3d_fd *f, const struct v3d_submit_cl *a, int err)
+{
+	fprintf(stderr, "v3d_drm: SUBMIT_CL rejected (errno %d)\n", err);
+	fprintf(stderr, "  bin_cl %u B, shader_rec %u B x%u, uniforms %u B, %u BOs\n",
+	    a->bin_cl_size, a->shader_rec_size, a->shader_rec_count, a->uniforms_size, a->bo_handle_count);
+	fprintf(stderr, "  %ux%u tiles x %u..%u y %u..%u flags %#x clear %#x/%#x z %#x s %u\n",
+	    a->width, a->height, a->min_x_tile, a->max_x_tile, a->min_y_tile, a->max_y_tile,
+	    a->flags, a->clear_color[0], a->clear_color[1], a->clear_z, a->clear_s);
+	debug_surf("color_read", &a->color_read);
+	debug_surf("color_write", &a->color_write);
+	debug_surf("zs_read", &a->zs_read);
+	debug_surf("zs_write", &a->zs_write);
+	debug_surf("msaa_color_write", &a->msaa_color_write);
+	debug_surf("msaa_zs_write", &a->msaa_zs_write);
+	const uint32_t *h = (const uint32_t *)(uintptr_t)a->bo_handles;
+	for (uint32_t i = 0; h != NULL && i < a->bo_handle_count && i < 32; i++) {
+		pthread_mutex_lock(&f->lock);
+		struct bo_state *b = bo_get(f, h[i]);
+		uint32_t size = b ? b->size : 0;
+		pthread_mutex_unlock(&f->lock);
+		fprintf(stderr, "  bo[%u] handle %u size %u\n", i, h[i], size);
+	}
+	const uint8_t *cl = (const uint8_t *)(uintptr_t)a->bin_cl;
+	if (cl != NULL && a->bin_cl_size != 0) {
+		fprintf(stderr, "  bin_cl head:");
+		for (uint32_t i = 0; i < a->bin_cl_size && i < 64; i++)
+			fprintf(stderr, " %02x", cl[i]);
+		fprintf(stderr, "\n");
+	}
+}
+
 /* ---- drmIoctl ---- */
 
 int
@@ -296,8 +342,12 @@ drmIoctl(int fd, unsigned long request, void *arg)
 	}
 
 	switch (nr) {
-	case NR_VC4_SUBMIT_CL:
-		return call_inout(f, kV3DMethodSubmitCL, arg, sizeof(struct v3d_submit_cl));
+	case NR_VC4_SUBMIT_CL: {
+		int r = call_inout(f, kV3DMethodSubmitCL, arg, sizeof(struct v3d_submit_cl));
+		if (r != 0 && getenv("V3D_DRM_DEBUG") != NULL)
+			debug_rejected_submit(f, arg, errno);
+		return r;
+	}
 	case NR_VC4_WAIT_SEQNO:
 		return call_in(f, kV3DMethodWaitSeqno, arg, sizeof(struct v3d_wait_seqno));
 	case NR_VC4_WAIT_BO:

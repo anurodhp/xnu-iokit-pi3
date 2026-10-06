@@ -137,6 +137,7 @@ private:
 	uint32_t fBinSlotsUsed;       // bit i: slot i handed to a job
 public:
 	V3DBuffer *allocBinSlice(uint32_t size);
+	V3DBuffer *allocBinSliceWaiting(uint32_t size);
 	void freeBinSlots(uint32_t first, uint32_t n);
 private:
 	uint32_t fIdent0, fIdent1, fIdent2;

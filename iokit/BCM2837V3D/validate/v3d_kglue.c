@@ -8,6 +8,11 @@
 #include "v3d_kglue.h"
 #include "v3d_exec.h"
 
+#ifdef V3D_KERNEL
+/* boot-arg v3d-debug=1: print the validators' rejection reasons */
+int v3d_kglue_debug;
+#endif
+
 struct glue_ctx {
 	const struct v3d_kops *ops;
 };
