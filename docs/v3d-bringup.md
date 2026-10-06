@@ -147,3 +147,30 @@ First hardware runs, Pi 3 B, stock `start.elf`, `gpu_mem=64`:
 Not yet run on hardware: the hang recovery (firmware power off/on), Xorg on
 HDMI with GL, anything heavier than the smoketests (glmark2, the GNUstep
 stack), and performance.
+
+## X11 and GNUstep on the GPU (real Pi 3, 2026-10-05)
+
+- gnustep-back is built with GLX (`build_gnustep_back.sh`), so
+  `NSOpenGLView`/`NSOpenGLContext` run on Mesa's libGL. Note: gnustep-back
+  asserts if a view's GL context is created before the view is in a window
+  (`XGGLContext.m:81`); AppKit catches the exception, which looks like a hang.
+- `GLTest.app` (`build_gnustep_gltest.sh`): GSGLTEST PASS on `VC4 V3D 2.1`,
+  180 fps for a 128x128 view (softpipe: 80 fps).
+- `glxinfo`/`glxgears` (`build_mesa_demos.sh`, mesa-demos 9.0.0) in
+  /usr/X11/bin: glxgears about 61 fps on the V3D, 8.4 fps on softpipe
+  (300x300, Xvfb).
+- Binner memory is one 16 MiB pool (4 MiB overflow + 24 x 512 KiB slots), as
+  in Linux; a submit waits for a slot rather than failing. Without the wait,
+  a third of glxgears' frames were rejected (shown as EINVAL: the validator
+  turns any packet-handler failure into EINVAL).
+
+Diagnostics:
+- boot-arg `v3d-debug=1` (uEnv.txt `extra_bootargs`): the validators print
+  why they reject a submission (`v3d validate: ...` on the console).
+- `V3D_DRM_DEBUG=1` in an app's environment: the libdrm shim describes each
+  rejected SUBMIT_CL on stderr.
+- Mesa prints "Draw call returned Invalid argument" only once per process;
+  count rejections with `V3D_DRM_DEBUG=1`, not from that message.
+
+Not yet done: Xorg on HDMI with GL, MyGL (needs GLU), a faster present path
+than the CPU copy.
