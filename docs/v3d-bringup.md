@@ -24,9 +24,11 @@ least confusion. Background: `docs/gpu-opengl-plan.md`; sources:
 | `Kext __kernel__ registered class BCM2837V3D` | driver compiled in |
 | *(nothing from BCM2837V3D)* | the `v3d` node is missing from the DTB, or the personality did not match: check `BCM2837Personalities.cpp` and the DTB |
 | `BCM2837V3D: no ASB bridge (id X) - no V3D on this machine` | the ASB block at ARM `0x3f00a000` did not read `0x62726467` ('brdg'). Wrong base address, or the PM/ASB `reg` entries in the DT node are off |
-| `BCM2837V3D: GRAFX power never reported POWOK` / `memory repair timed out` | firmware left GRAFX off and the manual power-up failed (`powerOn()`, from `bcm2835-power.c`) |
-| `BCM2837V3D: firmware would not enable the V3D clock` | mailbox tag `0x00038001` (clock id 5) refused |
-| `BCM2837V3D: ASB master did not ack` / `ASB slave did not ack` | bridge handshake failed; the V3D block is not reachable |
+| `BCM2837V3D: power through the firmware (domain V3D)` | expected on a Pi: the firmware has the power-domain interface and powers V3D (firmware domain 11), as Linux's `raspberrypi-power.c` does |
+| `BCM2837V3D: power through the PM block (...)` | no firmware domain interface (QEMU model, or very old firmware): the `bcm2835-power.c` sequence is used |
+| `BCM2837V3D: firmware would not power the V3D domain` | `SET_DOMAIN_STATE {11, 1}` was not answered |
+| `BCM2837V3D: GRAFX power never reported POWOK (PM_GRAFX ...)` | PM-block path only. On a real Pi 3 this is what the PM-block path does (`0x1000 -> 0x1001`): the firmware owns the domain |
+| `BCM2837V3D: ASB master did not ack` / `ASB slave did not ack` / `... V3D clock` | PM-block path only |
 | `BCM2837V3D: IDENT0 0x... , expected 0x02443356` | V3D window at ARM `0x3fc00000` reads something else: do not go further |
 | `BCM2837V3D: V3D rev N, 3 slices, 12 QPUs, 6 TMUs, raw submit off` | success (VideoCore IV has 3 slices of 4 QPUs; the decode is `vc4_v3d.c`'s v3d_ident) |
 
@@ -122,3 +124,26 @@ Whether real hardware is affected is unknown (DC ZVA to Normal non-cacheable
 memory is architecturally allowed), but watch for the same signature in
 userland: a process stuck in `memset`/`bzero` on a mapped BO. Mesa's vc4
 uploads with memcpy/memset into mapped BOs.
+
+## Real Pi 3 results (2026-10-05)
+
+First hardware runs, Pi 3 B, stock `start.elf`, `gpu_mem=64`:
+
+1. PM-block power-up (as first written, from `bcm2835-power.c`): GRAFX off at
+   entry (`PM_GRAFX 0x1000`), POWUP latches, POWOK never rises at any inrush
+   step, not with a 10 ms wait, not with the firmware's V3D clock on. Cause:
+   on Pi boards the firmware owns the domain; every Pi DT routes the v3d
+   node's power domain to `raspberrypi-power.c` (firmware
+   `SET_DOMAIN_STATE`). Fixed: `a01c638`.
+2. Firmware power: `V3D rev 1, 3 slices, 12 QPUs, 6 TMUs`; BO map, validated
+   shader, job submit and completion all pass, but the clear job stored
+   zeros. Cause: the vendored render-list code is Mesa's simulator copy,
+   missing Linux 54aec44ab02b (clear colours must precede the render config
+   on hardware). Fixed: `a01c638`.
+3. With both fixes: `v3dprobe` PASS; under Xvfb `gl_smoketest` PASS on
+   `VC4 V3D 2.1` (GL 2.1), `gles2_smoketest` PASS (ES 2.0),
+   `epoxy_smoketest` PASS; `MESA_VC4=0` falls back to softpipe.
+
+Not yet run on hardware: the hang recovery (firmware power off/on), Xorg on
+HDMI with GL, anything heavier than the smoketests (glmark2, the GNUstep
+stack), and performance.

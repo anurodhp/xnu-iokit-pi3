@@ -230,3 +230,15 @@ Order matters; each step ends with a script + smoketest per the repo rule.
 - `tools/gl_suite_qemu_test.sh` runs GL + GLES2 + epoxy under Xvfb (all PASS).
   The staged `libGL` is now the GLES2-enabled software build; `MESA_VC4=1`
   builds the V3D-capable one, plain `build_mesa.sh` the minimal software one.
+
+## Status update (real Pi 3, 2026-10-05)
+
+Hardware 3D works on a real Pi 3: GL 2.1 and GLES 2.0 through Mesa's vc4
+driver on the V3D (`VC4 V3D 2.1`), smoketests pass, libepoxy works on top.
+Two hardware-only bugs were found and fixed (firmware-owned V3D power; the
+clear-colour order Mesa's simulator copy of the render-list code lacks),
+plus two gaps from auditing Linux's vc4 history (binner memory window, bin
+dependency). Details: `docs/v3d-bringup.md`, "Real Pi 3 results".
+Lesson: the QEMU model and Mesa's kernel mirror both reproduce the same
+sources the driver was written from, so they cannot catch a wrong choice of
+source; compare against what Linux actually runs on the board.
