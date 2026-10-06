@@ -272,3 +272,26 @@ the tracker for them:
    sat in `libc_build/` for weeks while `build_launchctl.sh` could not
    actually produce it (**d17**). The repo rule that every artifact needs
    a reproducing script exists precisely for this.
+
+## Crash diagnosis: `crashdiag.dylib` / `objc_throwdiag.dylib`
+
+Every SD image (QEMU and real hardware) ships two diagnostic dylibs in
+`/usr/lib/`, built by `tools/userland_staging/build_crashdiag.sh` and
+installed by `inject_into_sd_image.sh` (DARW-301). Neither is loaded
+unless asked for.
+
+- **A crash that only says `Failed to send exception EXC_CORPSE_NOTIFY`:**
+  run the binary by hand from the root shell with
+  `DYLD_INSERT_LIBRARIES=/usr/lib/crashdiag.dylib <cmd>`. On
+  SIGTRAP/SEGV/BUS/ILL/ABRT it prints pc/lr/far/esr, an fp-chain
+  backtrace with `dladdr` symbols and every image's `__crash_info`
+  message to stderr, then re-raises with the default action.
+- **A hang:** start the process with crashdiag inserted as above, then
+  from another shell `kill -SEGV <pid>` prints the backtrace of the
+  thread that takes the signal (the process then dies), or
+  `kill -USR2 <pid>` dumps pc/lr/backtrace of every thread and leaves it
+  running.
+- **Objective-C exceptions:**
+  `DYLD_INSERT_LIBRARIES=/usr/lib/objc_throwdiag.dylib <cmd>` logs the
+  class and a backtrace of every `objc_exception_throw` before it
+  unwinds. Both can be inserted together, colon-separated.

@@ -94,6 +94,18 @@ if [ ! -f "$US/libc_build/shared_mime_info/root/usr/share/mime/mime.cache" ]; th
     echo "+ MIME database not built -- building"
     "$US/build_shared_mime_info.sh"
 fi
+# DARW-301: crashdiag.dylib / objc_throwdiag.dylib (installed to /usr/lib below). Rebuild when missing or older than
+# their sources. Diagnostics only: a failed build (e.g. libobjc.A.dylib not built yet) warns, it does not stop the image.
+CD_US=tools/userland_staging
+for d in crashdiag.dylib objc_throwdiag.dylib; do
+    out="$CD_US/libc_build/$d"
+    if [ ! -f "$out" ] || [ "$CD_US/crashdiag.c" -nt "$out" ] || [ "$CD_US/objc_throwdiag.c" -nt "$out" ] \
+        || [ "$CD_US/build_crashdiag.sh" -nt "$out" ]; then
+        echo "+ $d missing or older than its sources -- running build_crashdiag.sh"
+        "$CD_US/build_crashdiag.sh" || echo "warning: build_crashdiag.sh failed -- crashdiag dylibs may be missing or stale on this image" >&2
+        break
+    fi
+done
 
 # install_smoketest SRC DEST MISSING_MSG [NOTE...] (DAR-348)
 #
@@ -2056,6 +2068,18 @@ if [ -f tools/userland_staging/libc_build/dyld_inject_probe.dylib ]; then
     chmod 755 "$MNT/usr/lib/dyld_inject_probe.dylib"
     echo "+ wrote $MNT/usr/lib/dyld_inject_probe.dylib"
 fi
+
+# DARW-301: crash/hang diagnostics, on every image (real hardware included, so NOT install_smoketest).
+# DYLD_INSERT_LIBRARIES=/usr/lib/crashdiag.dylib <cmd>; see docs/launchd-pid1-postmortem.md's "Crash diagnosis".
+for d in crashdiag.dylib objc_throwdiag.dylib; do
+    if [ -f "tools/userland_staging/libc_build/$d" ]; then
+        cp "tools/userland_staging/libc_build/$d" "$MNT/usr/lib/$d"
+        chmod 755 "$MNT/usr/lib/$d"
+        echo "+ wrote $(wc -c < "tools/userland_staging/libc_build/$d") bytes to $MNT/usr/lib/$d"
+    else
+        echo "= tools/userland_staging/libc_build/$d not built -- run build_crashdiag.sh first if wanted, skipping"
+    fi
+done
 
 # su's own real openpam_configure.c defaults every uncovered PAM
 # facility to "required pam_deny.so" (checked directly) -- without a
