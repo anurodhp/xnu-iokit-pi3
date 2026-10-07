@@ -749,6 +749,14 @@ mkdir -p third_party
 #     gnustep/gap master 220860a9 (2026-09-08; gap has no release tags).
 #     Source of Terminal.app (system-apps/Terminal): one commit adding the
 #     Darwin pty include and link libraries. build_gnustep_terminal.sh.
+#     rome: anurodhp/rome (this project's own repo, private), tag v0.1:
+#     Rome.app, a small fast GNUstep terminal written for this port
+#     (build_rome.sh). Not a fork: there is no upstream.
+#     libvterm 0.3.3: github.com/neovim/libvterm tag v0.3.3 (9d6d2112), the
+#     git mirror of Paul Evans' bzr upstream (lp:libvterm) that carries its
+#     release tags; MIT. Rome's VT220/xterm emulator. Apple ships no
+#     terminal emulation library, so upstream is the source. Unmodified;
+#     built by build_libvterm.sh.
 #     gnustep-gworkspace (DAR-392): our fork anurodhp/apps-gworkspace
 #     branch iokit-port, off gnustep/apps-gworkspace tag gworkspace-1_0_0
 #     (2025-02-12, 14ea9f49): typed IMP function pointers at five call
@@ -906,6 +914,8 @@ gnustep-back|https://github.com/gnustep/libs-back.git|back-0_32_0|
 gnustep-examples|git@github.com:anurodhp/tests-examples.git|iokit-port||https://github.com/gnustep/tests-examples.git
 libtiff|https://gitlab.com/libtiff/libtiff.git|v4.7.1|
 gnustep-gap|git@github.com:anurodhp/gap.git|iokit-port||https://github.com/gnustep/gap.git
+rome|git@github.com:anurodhp/rome.git|v0.1|
+libvterm|https://github.com/neovim/libvterm.git|v0.3.3|
 gnustep-gworkspace|git@github.com:anurodhp/apps-gworkspace.git|iokit-port||https://github.com/gnustep/apps-gworkspace.git
 gnustep-eau-theme|git@github.com:anurodhp/gershwin-eau-theme.git|iokit-port||https://github.com/gershwin-desktop/gershwin-eau-theme.git
 gershwin-windowmanager|git@github.com:anurodhp/gershwin-windowmanager.git|iokit-port||https://github.com/gershwin-desktop/gershwin-windowmanager.git
