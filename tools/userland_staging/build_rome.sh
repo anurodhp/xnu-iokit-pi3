@@ -28,4 +28,6 @@ nm -gU "$SYS/libsystem_c.dylib" | grep " _forkpty$" > /dev/null ||
 GS_APP_LIBS=("$SYS/libvterm.dylib" "$SYS/libfontconfig.dylib" "$SYS/libfreetype.dylib"
     "$SYS/libGL.dylib" "$SYS/libXext.dylib" "$SYS/libX11.dylib")
 GS_APP_CPPFLAGS="-I$OUT/x11/include -I$OUT/x11/include/freetype2 -I$OUT/libvterm_include"
-gs_build_app Rome "$HERE/../../third_party/rome"
+# ROME_SRC=<dir> builds another checkout of rome (development); the default
+# is the pinned third_party/rome.
+gs_build_app Rome "${ROME_SRC:-$HERE/../../third_party/rome}"
