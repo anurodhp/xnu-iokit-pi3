@@ -358,7 +358,13 @@ BCM2837V3DUserClient::clientMemoryForType(UInt32 type, IOOptionBits *options, IO
 		return kIOReturnNotPermitted;
 	}
 	// The descriptor already carries the write-combine cache mode it was
-	// allocated with; don't override it.
+	// allocated with; don't override it. Cache bits returned here would be
+	// discarded anyway: IOUserClient::mapClientMemory64 replaces everything
+	// in kIOMapUserOptionsMask (0xfff, which includes kIOMapCacheMask) with
+	// the caller's mapFlags (iokit/Kernel/IOUserClient.cpp:2020). DARW-303
+	// tried cacheable BOs + an explicit WC client mapping; that flag was
+	// dropped, the client mapped the BOs cacheable, and v3dprobe read stale
+	// pixels (4080/4096 wrong) on a Pi 3.
 	*options = 0;
 	b->fMem->retain();
 	*memory = b->fMem;

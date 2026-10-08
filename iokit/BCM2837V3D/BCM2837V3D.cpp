@@ -5,6 +5,7 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IODeviceMemory.h>
 #include <libkern/OSAtomic.h>
+#include <kern/clock.h>
 #include <sys/errno.h>
 #include <pexpert/pexpert.h>
 #include "BCM2837V3D.h"
@@ -115,12 +116,33 @@ V3DBuffer::readCached(uint32_t offset, uint32_t size, uint64_t userDst)
 			m->release();
 		}
 	}
+	uint64_t t0 = mach_absolute_time();
 	IOReturn r = fMem->performOperation(kIOMemoryIncoherentIOFlush, offset, size);
 	if (r != kIOReturnSuccess) {
 		return r;
 	}
+	uint64_t t1 = mach_absolute_time();
 	const void *src = (const void *)(fCachedMap->getVirtualAddress() + offset);
-	return copyout(src, (user_addr_t)userDst, size) == 0 ? kIOReturnSuccess : kIOReturnVMError;
+	r = copyout(src, (user_addr_t)userDst, size) == 0 ? kIOReturnSuccess : kIOReturnVMError;
+	uint64_t t2 = mach_absolute_time();
+	if (v3d_kglue_debug) {
+		// v3d-debug=1: average cost of each step every 64 reads (DARW-303).
+		static uint64_t sFlush, sCopy, sBytes;
+		static uint32_t sCount;
+		sFlush += t1 - t0;
+		sCopy += t2 - t1;
+		sBytes += size;
+		if (++sCount == 64) {
+			uint64_t fl, cp;
+			absolutetime_to_nanoseconds(sFlush, &fl);
+			absolutetime_to_nanoseconds(sCopy, &cp);
+			IOLog("V3D readBO: %llu KB/read, flush %llu us, copyout %llu us (avg of 64)\n",
+			    sBytes / 64 / 1024, fl / 64 / 1000, cp / 64 / 1000);
+			sFlush = sCopy = sBytes = 0;
+			sCount = 0;
+		}
+	}
+	return r;
 }
 
 V3DBuffer *
