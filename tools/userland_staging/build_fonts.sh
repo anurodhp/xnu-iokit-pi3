@@ -36,6 +36,7 @@ JBM_SRC="$TP/jetbrains-mono-2.304/fonts/ttf"
 JBM_FACES="Regular Italic Bold BoldItalic"
 UNIFONT_OTF="$TP/unifont-16.0.01/unifont-16.0.01.otf"
 NOTOEMOJI_TTF="$TP/noto-emoji/NotoEmoji.ttf"
+NOTOCJK_SRC="$TP/noto-sans-cjk-Sans2.004"
 if [ ! -f "$FONTS_SRC/DejaVuSans.ttf" ]; then
     echo "error: $FONTS_SRC not found -- run setup_third_party.sh first" >&2
     exit 1
@@ -98,12 +99,13 @@ cp "$FONTS_SRC"/*.ttf "$FONTS/"
 for f in $INTER_FACES; do cp "$INTER_SRC/Inter-$f.ttf" "$FONTS/"; done
 for f in $JBM_FACES; do cp "$JBM_SRC/JetBrainsMono-$f.ttf" "$FONTS/"; done
 cp "$UNIFONT_OTF" "$NOTOEMOJI_TTF" "$FONTS/"
-chmod 644 "$FONTS"/*.ttf "$FONTS"/*.otf
+cp "$NOTOCJK_SRC"/NotoSansCJK-*.ttc "$FONTS/"
+chmod 644 "$FONTS"/*.ttf "$FONTS"/*.otf "$FONTS"/*.ttc
 "$HOST/mkfontscale" "$FONTS"             # mkfontscale .  -> fonts.scale
 "$HOST/mkfontscale" -b -s -l "$FONTS"    # mkfontdir .    -> fonts.dir
 n=$(ls "$FONTS"/*.ttf | wc -l | tr -d ' ')
-[ "$n" -eq 33 ] && [ "$(ls "$FONTS"/*.otf | wc -l | tr -d ' ')" -eq 1 ] || {
-    echo "error: expected 22 DejaVu + 6 Inter + 4 JetBrains Mono + NotoEmoji TTFs and the Unifont OTF, staged $n TTFs" >&2; exit 1; }
+[ "$n" -eq 33 ] && [ "$(ls "$FONTS"/*.otf | wc -l | tr -d ' ')" -eq 1 ] && [ "$(ls "$FONTS"/*.ttc | wc -l | tr -d ' ')" -eq 7 ] || {
+    echo "error: expected 22 DejaVu + 6 Inter + 4 JetBrains Mono + NotoEmoji TTFs the Unifont OTF and 7 Noto Sans CJK TTCs, staged $n TTFs" >&2; exit 1; }
 [ "$(head -1 "$FONTS/fonts.scale")" -gt 0 ] && [ "$(head -1 "$FONTS/fonts.dir")" -gt 0 ] || {
     echo "error: fonts.scale/fonts.dir came out empty" >&2; exit 1; }
 echo "staged $n fonts in $FONTS ($(du -sk "$FONTS" | awk '{print $1}') KB): fonts.scale $(head -1 "$FONTS/fonts.scale") entries, fonts.dir $(head -1 "$FONTS/fonts.dir") entries"

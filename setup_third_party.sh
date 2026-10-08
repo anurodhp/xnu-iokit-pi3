@@ -716,7 +716,7 @@ mkdir -p third_party
 #     build_libXaw.sh.
 #     gsdm (graphical login; replaced xdm 1.1.17 on 2026-10-06): this
 #     project's own GNUstep display manager, anurodhp/gsdm (MIT), branch
-#     main. It was written for this port, so there is no Apple or upstream
+#     master. It was written for this port, so there is no Apple or upstream
 #     version to prefer; its daemon follows xdm's code step by step (see
 #     its README). Built by build_gsdm.sh.
 #     Window Maker 0.96.0 (DAR-424): upstream window-maker/wmaker, tag
@@ -933,7 +933,7 @@ libvterm|https://github.com/neovim/libvterm.git|v0.3.3|
 gnustep-gworkspace|git@github.com:anurodhp/apps-gworkspace.git|iokit-port||https://github.com/gnustep/apps-gworkspace.git
 gnustep-eau-theme|git@github.com:anurodhp/gershwin-eau-theme.git|iokit-port||https://github.com/gershwin-desktop/gershwin-eau-theme.git
 gershwin-windowmanager|git@github.com:anurodhp/gershwin-windowmanager.git|iokit-port||https://github.com/gershwin-desktop/gershwin-windowmanager.git
-gsdm|git@github.com:anurodhp/gsdm.git|main|
+gsdm|git@github.com:anurodhp/gsdm.git|master|
 '
 
 echo "$REPOS" | while IFS='|' read -r name url ref patch upstream_url; do
@@ -1425,6 +1425,38 @@ if [ -n "$JBM_DEST" ]; then
     unzip -q -o "$JBM_TMP/jbm.zip" 'fonts/ttf/JetBrainsMono-Regular.ttf' 'fonts/ttf/JetBrainsMono-Bold.ttf' \
         'fonts/ttf/JetBrainsMono-Italic.ttf' 'fonts/ttf/JetBrainsMono-BoldItalic.ttf' OFL.txt AUTHORS.txt -d "$JBM_DEST"
     rm -rf "$JBM_TMP"
+fi
+
+# Noto Sans CJK Sans2.004 (notofonts/noto-cjk release asset 03_NotoSansCJK-OTC.zip): all seven weights
+# (Thin..Black) as OpenType collections, each holding the JP/KR/SC/TC/HK faces. Fallback for Han, kana and
+# Hangul behind Inter (61-inter-sans.conf). SIL OFL-1.1 (LICENSE in the zip). Verified by SHA-256;
+# build_fonts.sh stages the TTCs.
+NOTOCJK_VER="Sans2.004"
+NOTOCJK_SHA256="528f4e1b25ff3badb0321b38d015d954c4c0de926c7830ef50e4a1948f6a3eed"
+NOTOCJK_DEST="third_party/noto-sans-cjk-$NOTOCJK_VER"
+if [ -d "$NOTOCJK_DEST" ]; then
+    if [ "$FORCE" = "1" ]; then
+        echo "+ removing existing $NOTOCJK_DEST (--force)"
+        rm -rf "$NOTOCJK_DEST"
+    else
+        echo "= $NOTOCJK_DEST already exists, skipping (use --force to re-fetch)"
+        NOTOCJK_DEST=""
+    fi
+fi
+if [ -n "$NOTOCJK_DEST" ]; then
+    echo "+ fetching 03_NotoSansCJK-OTC.zip ($NOTOCJK_VER)"
+    NOTOCJK_TMP="$(mktemp -d)"
+    curl -fsSL -o "$NOTOCJK_TMP/cjk.zip" \
+        "https://github.com/notofonts/noto-cjk/releases/download/$NOTOCJK_VER/03_NotoSansCJK-OTC.zip"
+    got="$(shasum -a 256 "$NOTOCJK_TMP/cjk.zip" | awk '{print $1}')"
+    if [ "$got" != "$NOTOCJK_SHA256" ]; then
+        echo "error: 03_NotoSansCJK-OTC.zip SHA-256 is $got, expected $NOTOCJK_SHA256" >&2
+        rm -rf "$NOTOCJK_TMP"
+        exit 1
+    fi
+    mkdir -p "$NOTOCJK_DEST"
+    unzip -q -o "$NOTOCJK_TMP/cjk.zip" -d "$NOTOCJK_DEST"
+    rm -rf "$NOTOCJK_TMP"
 fi
 
 # GNU Unifont 16.0.01 (GNU Unifont Project, github mirror: unifoundry.com): one OpenType font with a glyph
