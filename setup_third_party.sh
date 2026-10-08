@@ -774,6 +774,9 @@ mkdir -p third_party
 #     sites for objc4; branch dar-451-daemon-start-wait adds a longer wait
 #     for a just-launched fswatcher/ddbd to register (DAR-451). Source of GWorkspace.app, Recycler.app,
 #     FSNode/DBKit and the ddbd/fswatcher tools (build_gnustep_gworkspace.sh).
+#     libjpeg-turbo 3.0.4: github.com/libjpeg-turbo/libjpeg-turbo tag 3.0.4,
+#     unmodified (IJG and zlib licences); gnustep-gui reads .jpg/.jpeg through it
+#     (build_libjpeg.sh, build_gnustep_gui.sh). Apple's ImageIO is closed.
 #     libtiff 4.7.1 (DAR-390): gitlab.com/libtiff/libtiff tag v4.7.1,
 #     unmodified; gnustep-gui requires it. Apple publishes no libtiff.
 #     gnustep-eau-theme (DAR-461): our fork anurodhp/gershwin-eau-theme
@@ -923,6 +926,7 @@ gnustep-gui|git@github.com:anurodhp/libs-gui.git|iokit-port||https://github.com/
 gnustep-back|https://github.com/gnustep/libs-back.git|back-0_32_0|
 gnustep-examples|git@github.com:anurodhp/tests-examples.git|iokit-port||https://github.com/gnustep/tests-examples.git
 libtiff|https://gitlab.com/libtiff/libtiff.git|v4.7.1|
+libjpeg-turbo|https://github.com/libjpeg-turbo/libjpeg-turbo.git|3.0.4|
 rome|git@github.com:anurodhp/rome.git|v0.1|
 milan|git@github.com:anurodhp/milan.git|v0.4|
 libvterm|https://github.com/neovim/libvterm.git|v0.3.3|

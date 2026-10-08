@@ -6,7 +6,8 @@
 #
 # Source: third_party/gnustep-gui, gnustep/libs-gui tag gui-0_32_0, released
 # with base 1.31 (both 2025-02). Image formats: TIFF (required,
-# configure.ac:307, build_libtiff.sh) and PNG (build_libpng.sh). JPEG, GIF,
+# configure.ac:307, build_libtiff.sh), PNG (build_libpng.sh) and JPEG
+# (build_libjpeg.sh, libjpeg-turbo; NSBitmapImageRep reads .jpg/.jpeg). GIF,
 # ImageMagick, ICU, aspell, sound, speech and CUPS are off: none of their
 # libraries is built here. gui's configure has no run tests, so no
 # cross-config file is needed.
@@ -18,10 +19,10 @@ cd "$(dirname "$0")"
 GUI_SRC="$HERE/../../third_party/gnustep-gui"
 X11_INC="$OUT/x11/include"
 [ -f "$GUI_SRC/configure" ] || { echo "error: $GUI_SRC not found -- run setup_third_party.sh" >&2; exit 1; }
-for f in "$GS_SYS_LIBS/libgnustep-base.dylib" "$X11_INC/tiffio.h" "$X11_INC/png.h"; do
-    [ -e "$f" ] || { echo "error: $f not found -- run build_gnustep_base.sh, build_libtiff.sh and build_libpng.sh first" >&2; exit 1; }
+for f in "$GS_SYS_LIBS/libgnustep-base.dylib" "$X11_INC/tiffio.h" "$X11_INC/png.h" "$X11_INC/jpeglib.h" "$SYS/libjpeg.dylib"; do
+    [ -e "$f" ] || { echo "error: $f not found -- run build_gnustep_base.sh, build_libtiff.sh, build_libpng.sh and build_libjpeg.sh first" >&2; exit 1; }
 done
-gs_setup_link "$SYS/libtiff.dylib" "$SYS/libpng16.dylib" "${GS_BASE_SYSLIBS[@]}"
+gs_setup_link "$SYS/libtiff.dylib" "$SYS/libpng16.dylib" "$SYS/libjpeg.dylib" "${GS_BASE_SYSLIBS[@]}"
 # configure.ac:326 checks -lpng.
 ln -s "$SYS/libpng16.dylib" "$LINKDIR/libpng.dylib"
 gs_build_env
@@ -41,7 +42,7 @@ cd "$G/gui-src"
 # host's libpng-config and link the host libpng; the -lpng path below
 # (configure.ac:334-335) finds ours in LINKDIR.
 ./configure --host=aarch64-apple-darwin20 ac_cv_prog_HAVE_LIBPNG_CONFIG=no \
-    --disable-jpeg --disable-ungif --disable-libgif --disable-imagemagick --disable-icu \
+    --enable-jpeg --disable-ungif --disable-libgif --disable-imagemagick --disable-icu \
     --disable-aspell --disable-sound --disable-speech --disable-speech-recognizer --disable-cups \
     CC="$CLANG" OBJC="$CLANG" CXX="$CLANG++" \
     CPPFLAGS="$GUI_CPPFLAGS" \
