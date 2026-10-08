@@ -25,7 +25,6 @@ done
 gs_setup_link "$SYS/libtiff.dylib" "$SYS/libpng16.dylib" "$SYS/libjpeg.dylib" "${GS_BASE_SYSLIBS[@]}"
 # configure.ac:326 checks -lpng.
 ln -s "$SYS/libpng16.dylib" "$LINKDIR/libpng.dylib"
-ln -s "$SYS/libjpeg.dylib" "$LINKDIR/libjpeg.dylib"
 gs_build_env
 
 # -I root/'s headers: gnustep-make points at the target's
