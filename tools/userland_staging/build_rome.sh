@@ -5,7 +5,8 @@
 # (/Applications/Rome.app on the image, stage_gnustep_mac_layout.sh).
 #
 # Rome runs the login shell on a pty (forkpty, libsystem_c), emulates the
-# terminal with libghostty-vt (build_libghostty_vt.sh), rasterises DejaVu Sans Mono
+# terminal with libghostty-vt (build_libghostty_vt.sh), rasterises JetBrains Mono (with Inter,
+# DejaVu, GNU Unifont and Noto Emoji behind it for glyphs it lacks)
 # with fontconfig + FreeType into a glyph atlas, and draws only the cells
 # that changed, into a child X window on its own X connection: by default
 # with the CPU into an MIT-SHM image (Xext), or with -RomeRenderer gl through

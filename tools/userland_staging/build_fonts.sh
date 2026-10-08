@@ -32,6 +32,10 @@ FS_ROOT="$OUT/fontstack"
 FONTS_SRC="$TP/dejavu-fonts-ttf-2.37/ttf"
 INTER_SRC="$TP/inter-fonts-4.0/extras/ttf"
 INTER_FACES="Regular Italic Medium SemiBold Bold BoldItalic"
+JBM_SRC="$TP/jetbrains-mono-2.304/fonts/ttf"
+JBM_FACES="Regular Italic Bold BoldItalic"
+UNIFONT_OTF="$TP/unifont-16.0.01/unifont-16.0.01.otf"
+NOTOEMOJI_TTF="$TP/noto-emoji/NotoEmoji.ttf"
 if [ ! -f "$FONTS_SRC/DejaVuSans.ttf" ]; then
     echo "error: $FONTS_SRC not found -- run setup_third_party.sh first" >&2
     exit 1
@@ -39,6 +43,11 @@ fi
 for f in $INTER_FACES; do
     [ -f "$INTER_SRC/Inter-$f.ttf" ] || { echo "error: $INTER_SRC/Inter-$f.ttf not found -- run setup_third_party.sh first" >&2; exit 1; }
 done
+for f in $JBM_FACES; do
+    [ -f "$JBM_SRC/JetBrainsMono-$f.ttf" ] || { echo "error: $JBM_SRC/JetBrainsMono-$f.ttf not found -- run setup_third_party.sh first" >&2; exit 1; }
+done
+[ -f "$UNIFONT_OTF" ] || { echo "error: $UNIFONT_OTF not found -- run setup_third_party.sh first" >&2; exit 1; }
+[ -f "$NOTOEMOJI_TTF" ] || { echo "error: $NOTOEMOJI_TTF not found -- run setup_third_party.sh first" >&2; exit 1; }
 for d in mkfontscale libfontenc freetype; do
     [ -d "$TP/$d" ] || { echo "error: $TP/$d not found -- run setup_third_party.sh first" >&2; exit 1; }
 done
@@ -87,17 +96,21 @@ rm -rf "$FONTS"
 mkdir -p "$FONTS"
 cp "$FONTS_SRC"/*.ttf "$FONTS/"
 for f in $INTER_FACES; do cp "$INTER_SRC/Inter-$f.ttf" "$FONTS/"; done
-chmod 644 "$FONTS"/*.ttf
+for f in $JBM_FACES; do cp "$JBM_SRC/JetBrainsMono-$f.ttf" "$FONTS/"; done
+cp "$UNIFONT_OTF" "$NOTOEMOJI_TTF" "$FONTS/"
+chmod 644 "$FONTS"/*.ttf "$FONTS"/*.otf
 "$HOST/mkfontscale" "$FONTS"             # mkfontscale .  -> fonts.scale
 "$HOST/mkfontscale" -b -s -l "$FONTS"    # mkfontdir .    -> fonts.dir
 n=$(ls "$FONTS"/*.ttf | wc -l | tr -d ' ')
-[ "$n" -eq 28 ] || { echo "error: expected 22 DejaVu + 6 Inter TTFs, staged $n" >&2; exit 1; }
+[ "$n" -eq 33 ] && [ "$(ls "$FONTS"/*.otf | wc -l | tr -d ' ')" -eq 1 ] || {
+    echo "error: expected 22 DejaVu + 6 Inter + 4 JetBrains Mono + NotoEmoji TTFs and the Unifont OTF, staged $n TTFs" >&2; exit 1; }
 [ "$(head -1 "$FONTS/fonts.scale")" -gt 0 ] && [ "$(head -1 "$FONTS/fonts.dir")" -gt 0 ] || {
     echo "error: fonts.scale/fonts.dir came out empty" >&2; exit 1; }
 echo "staged $n fonts in $FONTS ($(du -sk "$FONTS" | awk '{print $1}') KB): fonts.scale $(head -1 "$FONTS/fonts.scale") entries, fonts.dir $(head -1 "$FONTS/fonts.dir") entries"
 
 # --- font defaults (Mac-like look) -------------------------------------
-# Inter for sans-serif / system UI, DejaVu Sans Mono for monospace. Run
+# Inter for sans-serif / system UI, JetBrains Mono for monospace (DejaVu Sans Mono and, for
+# every script and emoji they lack, Unifont and Noto Emoji behind it). Run
 # build_fontconfig.sh first: it wipes and recreates /etc/fonts, so the
 # conf.d file below has to be added after it.
 # Sources: x11_config/fonts/61-inter-sans.conf (fontconfig; Window Maker's

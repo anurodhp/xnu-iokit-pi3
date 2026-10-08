@@ -270,7 +270,7 @@ build-script + smoketest loop.
 | libgcrypt + libgpg-error, libtasn1 | missing | M | libgcrypt asm/cross-config is fiddly; it can be built without asm. |
 | libepoxy | missing | S | Builds without GL; WPE needs the headers/symbols only. |
 | libxkbcommon | missing | S–M | Data from our pinned `xkeyboard-config`. Alternative: a custom `WPEKeymap` fed from GNUstep key events. |
-| FreeType, fontconfig, expat, zlib, libpng | **present** (2.14.3, 2.17.1, 2.2.8, 1.2.11, 1.6.58) | — | Fonts: DejaVu (22 faces) + Inter (6) staged by `build_fonts.sh`. |
+| FreeType, fontconfig, expat, zlib, libpng | **present** (2.14.3, 2.17.1, 2.2.8, 1.2.11, 1.6.58) | — | Fonts: DejaVu (22 faces) + Inter (6) + JetBrains Mono (4) + GNU Unifont + Noto Emoji staged by `build_fonts.sh`. |
 | Skia | in-tree (WebKit ThirdParty) | in WPE build | CPU raster only; `USE_SKIA_OPENTYPE_SVG` optional. |
 | CoreFoundation, libdispatch, libxpc, objc4, gnustep-* | present | — | Not needed by WPE itself, except that `bmalloc/ProcessCheck.mm` pulls Foundation/libobjc on Apple (patch it out, like MacPorts does). |
 | libSystem export gaps | partial | S | §5.2 list: malloc zone API, `memset_pattern*`, `sys_icache_invalidate`, `mincore`, ~43 libm float/long-double functions, `ldiv`/`lldiv`, `*at` syscalls, `getfsstat`, `lchmod`/`lchown`, `close$NOCANCEL`, CommonCrypto (`CC_SHA256`, `CCHmac`, `CCRandomGenerateBytes`), `CFNotificationCenter*`. |
