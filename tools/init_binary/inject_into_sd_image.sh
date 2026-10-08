@@ -796,6 +796,31 @@ if [ -x "$XS_STAGE/usr/X11/bin/Xvfb" ]; then
 else
     echo "= $XS_STAGE/usr/X11/bin/Xvfb not built -- run build_xserver.sh (and build_xkbcomp.sh, build_xkeyboard_config.sh) first if wanted, skipping"
 fi
+# Graphical login: gsdm (build_gsdm.sh) replaced xdm on 2026-10-06. Its
+# daemon (/usr/local/sbin/gsdm) and greeter
+# (/System/Library/CoreServices/LoginWindow.app) came with the GNUstep tree
+# above; this adds /etc/gsdm and the launchd job. xdm is removed first --
+# from an image made before the switch, and from what an X server stage
+# built by the old build_xdm.sh still carries (the ditto above copies it).
+for f in usr/X11/bin/xdm usr/X11/bin/xdm-launch usr/X11/lib/X11/xdm \
+         usr/X11/share/X11/app-defaults/Xlogin usr/X11/share/X11/app-defaults/Chooser \
+         var/lib/xdm var/run/xdm.pid var/log/xdm.log var/log/x11-session.log \
+         Library/LaunchDaemons/org.puredarwin.x11-session.plist; do
+    if [ -e "$MNT/$f" ] || [ -L "$MNT/$f" ]; then
+        rm -rf "${MNT:?}/$f"
+        echo "- removed xdm leftover /$f"
+    fi
+done
+GSDM_STAGE=tools/userland_staging/libc_build/gsdm/root
+if [ -f "$GSDM_STAGE/etc/gsdm/gsdm.conf" ] && [ -x "$MNT/usr/local/sbin/gsdm" ] &&
+   [ -x "$MNT/System/Library/CoreServices/LoginWindow.app/LoginWindow" ]; then
+    ditto "$GSDM_STAGE" "$MNT/"
+    echo "+ wrote gsdm config (/etc/gsdm/{gsdm.conf,Xgreeter,Xsession}) and org.puredarwin.gsdm.plist"
+    [ -e "$MNT/etc/x11-session.disabled" ] &&
+        echo "  (/etc/x11-session.disabled exists: gsdm will not start X at boot until it is removed)"
+else
+    echo "= gsdm not built (or the GNUstep tree is missing) -- run build_gsdm.sh first if wanted, skipping"
+fi
 # glxinfo and glxgears (Mesa demos 9.0.0, build_mesa_demos.sh): real tools,
 # installed on real-hardware images too.
 for d in glxinfo glxgears; do

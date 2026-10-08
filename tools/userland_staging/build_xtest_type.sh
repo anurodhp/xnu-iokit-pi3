@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds xtest_type.macho: a small XTEST client that types text (plus
-# Return) into an X display, used to drive the xdm greeter in QEMU boot
-# tests (log in, log out, log in again). Installed on the SD image at
+# Return) into an X display, used to drive the login window (gsdm's
+# LoginWindow.app) in QEMU boot tests (log in, log out, log in again). Installed on the SD image at
 # /usr/X11/bin/xtest_type by inject_into_sd_image.sh.
 #
 # Same dynamic-executable link recipe and gates as build_x11_smoketest.sh.

@@ -143,8 +143,8 @@ echo "  -- same rename convention as the kernel above, NOT sdcard/'s frozen copy
 # Default: fb_width=1280 fb_height=720 cpus=4 (cpus=4 starts cores 1-3, DAR-455; verified on the real Pi 2026-10-02; drop it for a single-core boot). Without the fb args the kernel framebuffer
 # is 640x480 (third_party/xnu-7195 pexpert/arm/pe_init.c,
 # bcm2837_video_init: commit c2383ed9e reads the two boot-args, clamped to
-# 320..1920 x 200..1200, and logs "requested WxH, granted WxH"); the xdm
-# greeter is clipped at 640 wide. Override:
+# 320..1920 x 200..1200, and logs "requested WxH, granted WxH"); the login
+# window is clipped at 640 wide. Override:
 #   REALHW_EXTRA_BOOTARGS="-user_fault_debug fb_width=1280 fb_height=720" tools/make_realhw_sd_image.sh out.img
 # or REALHW_EXTRA_BOOTARGS= (set but empty) for no uEnv.txt at all.
 REALHW_EXTRA_BOOTARGS="${REALHW_EXTRA_BOOTARGS-fb_width=1280 fb_height=720 cpus=4}"
