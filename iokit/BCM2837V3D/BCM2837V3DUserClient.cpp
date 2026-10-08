@@ -80,7 +80,7 @@ BCM2837V3DUserClient::createBO(const v3d_create_bo *in, v3d_create_bo *out)
 	if (in->flags != 0 || in->size == 0) {
 		return kIOReturnBadArgument;
 	}
-	V3DBuffer *b = V3DBuffer::withSize(in->size, true);   // cpuReadable: see V3DBuffer::withSize
+	V3DBuffer *b = V3DBuffer::withSize(in->size);
 	if (b == NULL) {
 		return kIOReturnNoMemory;
 	}
@@ -357,12 +357,9 @@ BCM2837V3DUserClient::clientMemoryForType(UInt32 type, IOOptionBits *options, IO
 		b->release();
 		return kIOReturnNotPermitted;
 	}
-	// Client mappings are write-combined. A cpuReadable BO's memory is
-	// cacheable (its kernel mapping is used for fast read-back), so ask for
-	// WC explicitly: explicit WIMG flags win over the page's attributes for
-	// a managed page (osfmk/arm/pmap.c:8432-8436). Other BOs were allocated
-	// WC and keep it.
-	*options = b->fCpuReadable ? kIOMapWriteCombineCache : 0;
+	// The descriptor already carries the write-combine cache mode it was
+	// allocated with; don't override it.
+	*options = 0;
 	b->fMem->retain();
 	*memory = b->fMem;
 	b->release();
