@@ -28,9 +28,16 @@ with_root() {
     diskutil unmount "$slice" >/dev/null 2>&1 || true
     hdiutil detach "$disk" >/dev/null
 }
+# alice's password, hashed the way inject_into_sd_image.sh hashes root's.
+HASHTOOL="$(mktemp -t hash_password_host)"
+clang -I tools/pwtool -o "$HASHTOOL" tools/pwtool/hash_password_host.c tools/libinfo_custom/crypt_des.c
+ALICE_HASH=$("$HASHTOOL" wonderland)
+rm -f "$HASHTOOL"
+[ -n "$ALICE_HASH" ] || { echo "error: hashing the test password failed" >&2; exit 1; }
 put_script() {
     mkdir -p "$MNT/var/root"
     cp tools/gsdm_verify_guest.sh "$MNT/var/root/gsdm_verify.sh"
+    printf '%s\n' "$ALICE_HASH" > "$MNT/var/root/gsdm_alice.hash"
     rm -rf "$MNT/var/root/gsdmtest"
 }
 get_results() {
