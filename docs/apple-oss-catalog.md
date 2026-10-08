@@ -643,5 +643,6 @@ Apple ships neither of these, and GNUstep is the chosen GUI layer
 | `gnustep-examples` | fork `anurodhp/tests-examples` `iokit-port` (upstream master 46ef973) | DAR-390: Ink.app; unmodified, the fork branch pins the commit |
 | `libtiff` | `gitlab.com/libtiff/libtiff` `v4.7.1` | DAR-390: gnustep-gui requires it; Apple publishes no libtiff |
 | `rome` | own repo `anurodhp/rome` tag `v0.1` | Rome.app, GNUstep terminal (`build_rome.sh`) |
-| `libvterm` | `neovim/libvterm` `v0.3.3` (git mirror of lp:libvterm) | Rome's terminal emulator, MIT; unmodified, `build_libvterm.sh` |
+| `libvterm` | `neovim/libvterm` `v0.3.3` (git mirror of lp:libvterm) | Rome's former terminal emulator, MIT; unmodified, `build_libvterm.sh` (no longer used by Rome) |
+| `ghostty` | `ghostty-org/ghostty` commit `a60e9e2` (main, 1.3.2-dev) | libghostty-vt, Rome's terminal emulation, MIT; unmodified, `build_libghostty_vt.sh` (Zig 0.16) |
 | `gnustep-gworkspace` | fork `anurodhp/apps-gworkspace` `iokit-port` (off tag gworkspace-1_0_0, 14ea9f49) | DAR-392: GWorkspace.app, Recycler, FSNode/DBKit, ddbd/fswatcher; typed IMPs for objc4 |

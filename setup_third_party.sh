@@ -758,6 +758,13 @@ mkdir -p third_party
 #     release tags; MIT. Rome's VT220/xterm emulator. Apple ships no
 #     terminal emulation library, so upstream is the source. Unmodified;
 #     built by build_libvterm.sh.
+#     ghostty (libghostty-vt, Rome's terminal emulation): github.com/
+#     ghostty-org/ghostty at commit a60e9e2 (main, 1.3.2-dev, 2026-10), MIT.
+#     Pinned by commit, not tag: the render-state, selection, key/mouse
+#     encoder and paste C APIs Rome uses are newer than the newest release
+#     (v1.3.1), so the generic REPOS loop (branch/tag only) cannot name it;
+#     it has its own block below. Unmodified; built by build_libghostty_vt.sh
+#     (needs Zig 0.16.x).
 #     gnustep-gworkspace (DAR-392): our fork anurodhp/apps-gworkspace
 #     branch iokit-port, off gnustep/apps-gworkspace tag gworkspace-1_0_0
 #     (2025-02-12, 14ea9f49): typed IMP function pointers at five call
@@ -976,6 +983,26 @@ if [ -n "$LLVM_DEST" ]; then
     git -C "$LLVM_DEST" sparse-checkout init --cone
     git -C "$LLVM_DEST" sparse-checkout set libcxx libcxxabi compiler-rt/lib/builtins
     git -C "$LLVM_DEST" checkout "$LLVM_REF"
+fi
+
+# ghostty: one commit, shallow (see the header comment above).
+GHOSTTY_REF="a60e9e2a57f73e1eef2bd1cf2995a467f69e7fb0"
+GHOSTTY_DEST="third_party/ghostty"
+if [ -d "$GHOSTTY_DEST" ]; then
+    if [ "$FORCE" = "1" ]; then
+        echo "+ removing existing $GHOSTTY_DEST (--force)"
+        rm -rf "$GHOSTTY_DEST"
+    else
+        echo "= $GHOSTTY_DEST already exists, skipping (use --force to re-clone)"
+        GHOSTTY_DEST=""
+    fi
+fi
+if [ -n "$GHOSTTY_DEST" ]; then
+    echo "+ fetching ghostty @ ${GHOSTTY_REF:0:7}"
+    git init -q "$GHOSTTY_DEST"
+    git -C "$GHOSTTY_DEST" remote add origin https://github.com/ghostty-org/ghostty.git
+    git -C "$GHOSTTY_DEST" fetch -q --depth 1 origin "$GHOSTTY_REF"
+    git -C "$GHOSTTY_DEST" checkout -q FETCH_HEAD
 fi
 
 # PureDarwin: sparse-checkout only src/Libraries/XPC (launchd/libxpc/

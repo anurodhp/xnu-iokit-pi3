@@ -5,7 +5,7 @@
 # (/Applications/Rome.app on the image, stage_gnustep_mac_layout.sh).
 #
 # Rome runs the login shell on a pty (forkpty, libsystem_c), emulates the
-# terminal with libvterm (build_libvterm.sh), rasterises DejaVu Sans Mono
+# terminal with libghostty-vt (build_libghostty_vt.sh), rasterises DejaVu Sans Mono
 # with fontconfig + FreeType into a glyph atlas, and draws only the cells
 # that changed, into a child X window on its own X connection: by default
 # with the CPU into an MIT-SHM image (Xext), or with -RomeRenderer gl through
@@ -16,8 +16,8 @@ cd "$(dirname "$0")"
 . ./gnustep_common.sh
 # gs_build_app checks this; the line is here so gen_build_order.py sees the
 # edge: run build_gnustep_host_tools.sh and build_gnustep_back.sh first.
-[ -f "$SYS/libvterm.dylib" ] && [ -f "$OUT/libvterm_include/vterm.h" ] ||
-    { echo "error: libvterm not built -- run build_libvterm.sh first" >&2; exit 1; }
+[ -f "$SYS/libghostty-vt.dylib" ] && [ -f "$OUT/libghostty_vt_include/ghostty/vt.h" ] ||
+    { echo "error: libghostty-vt not built -- run build_libghostty_vt.sh first" >&2; exit 1; }
 [ -f "$OUT/x11/include/GL/gl.h" ] && [ -f "$SYS/libGL.dylib" ] ||
     { echo "error: libGL not built -- run build_mesa.sh first" >&2; exit 1; }
 for l in libfontconfig libfreetype libXext libX11; do
@@ -25,9 +25,9 @@ for l in libfontconfig libfreetype libXext libX11; do
 done
 nm -gU "$SYS/libsystem_c.dylib" | grep " _forkpty$" > /dev/null ||
     { echo "error: libsystem_c.dylib does not export _forkpty -- run build_libc_gen.sh and build_libsystem_c.sh first" >&2; exit 1; }
-GS_APP_LIBS=("$SYS/libvterm.dylib" "$SYS/libfontconfig.dylib" "$SYS/libfreetype.dylib"
+GS_APP_LIBS=("$SYS/libghostty-vt.dylib" "$SYS/libfontconfig.dylib" "$SYS/libfreetype.dylib"
     "$SYS/libGL.dylib" "$SYS/libXext.dylib" "$SYS/libX11.dylib")
-GS_APP_CPPFLAGS="-I$OUT/x11/include -I$OUT/x11/include/freetype2 -I$OUT/libvterm_include"
+GS_APP_CPPFLAGS="-I$OUT/x11/include -I$OUT/x11/include/freetype2 -I$OUT/libghostty_vt_include"
 # ROME_SRC=<dir> builds another checkout of rome (development); the default
 # is the pinned third_party/rome.
 gs_build_app Rome "${ROME_SRC:-$HERE/../../third_party/rome}"
