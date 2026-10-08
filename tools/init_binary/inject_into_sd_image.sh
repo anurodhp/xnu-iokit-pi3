@@ -521,6 +521,17 @@ else
     echo "= tools/userland_staging/ps.macho not built -- run build_ps.sh first if wanted, skipping"
 fi
 
+# clear(1): Apple's own, from the ncurses package, against libncurses.dylib
+# (build_clear.sh). Needs /usr/share/terminfo for the TERM in use.
+if [ -f tools/userland_staging/clear.macho ]; then
+    mkdir -p "$MNT/usr/bin"
+    cp tools/userland_staging/clear.macho "$MNT/usr/bin/clear"
+    chmod 755 "$MNT/usr/bin/clear"
+    echo "+ wrote $(wc -c < tools/userland_staging/clear.macho) bytes to $MNT/usr/bin/clear"
+else
+    echo "= tools/userland_staging/clear.macho not built -- run build_clear.sh first if wanted, skipping"
+fi
+
 # reboot(8)/halt(8)/shutdown(8) (DAR-334), all in /sbin as on a Mac. reboot
 # and halt are one binary (reboot.c picks halt from argv[0]); both, and
 # shutdown -r/-h, hand the request to launchd's reboot2().
