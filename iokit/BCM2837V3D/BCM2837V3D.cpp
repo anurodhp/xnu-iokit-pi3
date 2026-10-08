@@ -5,7 +5,6 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IODeviceMemory.h>
 #include <libkern/OSAtomic.h>
-#include <kern/clock.h>
 #include <sys/errno.h>
 #include <pexpert/pexpert.h>
 #include "BCM2837V3D.h"
@@ -105,7 +104,7 @@ V3DBuffer::readCached(uint32_t offset, uint32_t size, uint64_t userDst)
 	if (fMem == NULL) {
 		return kIOReturnNotPermitted;
 	}
-	if (!fCpuReadable && fCachedMap == NULL) {
+	if (fCachedMap == NULL) {
 		IOMemoryMap *m = fMem->createMappingInTask(kernel_task, 0,
 		    kIOMapAnywhere | kIOMapCopybackCache | kIOMapReadOnly);
 		if (m == NULL) {
@@ -116,39 +115,12 @@ V3DBuffer::readCached(uint32_t offset, uint32_t size, uint64_t userDst)
 			m->release();
 		}
 	}
-	uint64_t t0 = mach_absolute_time();
 	IOReturn r = fMem->performOperation(kIOMemoryIncoherentIOFlush, offset, size);
 	if (r != kIOReturnSuccess) {
 		return r;
 	}
-	uint64_t t1 = mach_absolute_time();
-	// A cpuReadable BO's own kernel mapping is cached. For the others the
-	// separate mapping does not help: arm64 pmap takes a managed page's
-	// cache attributes from the page unless the mapping passes explicit WIMG
-	// flags (osfmk/arm/pmap.c:8432-8436), and this mapping read at ~100 MB/s
-	// on a Pi 3 (uncached speed; v3d-debug=1 timing), not RAM speed.
-	const void *src = fCpuReadable ? (const void *)((const uint8_t *)fMem->getBytesNoCopy() + offset)
-	    : (const void *)(fCachedMap->getVirtualAddress() + offset);
-	r = copyout(src, (user_addr_t)userDst, size) == 0 ? kIOReturnSuccess : kIOReturnVMError;
-	uint64_t t2 = mach_absolute_time();
-	if (v3d_kglue_debug) {
-		// v3d-debug=1: average cost of each step every 64 reads (DARW-303).
-		static uint64_t sFlush, sCopy, sBytes;
-		static uint32_t sCount;
-		sFlush += t1 - t0;
-		sCopy += t2 - t1;
-		sBytes += size;
-		if (++sCount == 64) {
-			uint64_t fl, cp;
-			absolutetime_to_nanoseconds(sFlush, &fl);
-			absolutetime_to_nanoseconds(sCopy, &cp);
-			IOLog("V3D readBO: %llu KB/read, flush %llu us, copyout %llu us (avg of 64)\n",
-			    sBytes / 64 / 1024, fl / 64 / 1000, cp / 64 / 1000);
-			sFlush = sCopy = sBytes = 0;
-			sCount = 0;
-		}
-	}
-	return r;
+	const void *src = (const void *)(fCachedMap->getVirtualAddress() + offset);
+	return copyout(src, (user_addr_t)userDst, size) == 0 ? kIOReturnSuccess : kIOReturnVMError;
 }
 
 V3DBuffer *
@@ -162,21 +134,8 @@ V3DBuffer::empty(void)
 	return b;
 }
 
-/*
- * cpuReadable (user BOs, created through the user client): the memory is
- * allocated cacheable, so the kernel's own mapping of it is cached and
- * readCached() copies at RAM speed; the client's mapping is still
- * write-combined (clientMemoryForType asks for it). Coherency: the GPU
- * reads and writes RAM directly; clients write through the WC mapping
- * (straight to RAM); the kernel writes these BOs only when zeroing them
- * below, and that is cleaned to RAM before the BO is handed out, so no
- * dirty line can later overwrite what the GPU wrote; readCached() cleans
- * and invalidates the range before copying, so stale lines are dropped.
- * Kernel-internal BOs (command lists, shader records, the binner pool) are
- * written by the kernel for the GPU and stay write-combined.
- */
 V3DBuffer *
-V3DBuffer::withSize(uint32_t size, bool cpuReadable)
+V3DBuffer::withSize(uint32_t size)
 {
 	if (size == 0 || size > kMaxBOSize) {
 		return NULL;
@@ -210,8 +169,7 @@ V3DBuffer::withSize(uint32_t size, bool cpuReadable)
 		uint32_t nRejected = 0;
 		for (;;) {
 			IOBufferMemoryDescriptor *m = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
-			    kIODirectionInOut | kIOMemoryPhysicallyContiguous |
-			    (cpuReadable ? 0 : kIOMapWriteCombineCache),
+			    kIODirectionInOut | kIOMemoryPhysicallyContiguous | kIOMapWriteCombineCache,
 			    size, mask);
 			if (m == NULL) {
 				break;
@@ -245,15 +203,6 @@ V3DBuffer::withSize(uint32_t size, bool cpuReadable)
 		for (uint32_t i = 0; i < size / 8; i++) {
 			w[i] = 0;
 		}
-	}
-	if (cpuReadable) {
-		// Push the zeroing (and IOBufferMemoryDescriptor's own bzero) out of
-		// the cache before the GPU or a WC client mapping touches the BO.
-		if (b->fMem->performOperation(kIOMemoryIncoherentIOFlush, 0, size) != kIOReturnSuccess) {
-			b->release();
-			return NULL;
-		}
-		b->fCpuReadable = true;
 	}
 	cpuToGpuBarrier();
 

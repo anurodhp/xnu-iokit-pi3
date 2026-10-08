@@ -63,8 +63,7 @@ public:
 	BCM2837V3D *fPoolOwner;  /* non-NULL: a slice of the binner pool (fMem is NULL) */
 	uint32_t fPoolSlot, fPoolSlots;
 
-	static V3DBuffer *withSize(uint32_t size, bool cpuReadable = false);
-	bool fCpuReadable;         /* cacheable memory, WC client mapping (see withSize) */
+	static V3DBuffer *withSize(uint32_t size);
 	static V3DBuffer *empty(void);   /* no memory yet: for binner-pool slices */
 	IOMemoryMap *fCachedMap;   /* cached kernel mapping for readCached(), made on first use */
 	IOReturn readCached(uint32_t offset, uint32_t size, uint64_t userDst);
