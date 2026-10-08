@@ -36,6 +36,17 @@
 		<string>/usr/sbin/sshd</string>
 		<string>-D</string>
 	</array>
+	<!--
+		launchd here is built with the embedded defaults: a job with no
+		ProcessType runs as POSIX_SPAWN_PROC_TYPE_DAEMON_BACKGROUND (priority 4,
+		throttled, and in xnu's background timer-coalescing class, where a 20 ms
+		timer fires anywhere from 20 to 120 ms late). sshd's children inherit it,
+		so everything started from an ssh session (builds, benchmarks, a shell)
+		ran that way, and measured slower than the same program started from
+		the desktop. Standard is what a macOS job without the key gets.
+	-->
+	<key>ProcessType</key>
+	<string>Standard</string>
 	<key>KeepAlive</key>
 	<true/>
 	<key>RunAtLoad</key>
