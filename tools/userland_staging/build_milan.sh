@@ -7,4 +7,6 @@
 # Build, install and audit: gnustep_common.sh's gs_build_app.
 cd "$(dirname "$0")"
 . ./gnustep_common.sh
+GS_APP_LIBS=("$SYS/libjpeg.dylib")
+GS_APP_CPPFLAGS="-I$OUT/x11/include"
 gs_build_app Milan "${MILAN_SRC:-$HERE/../../third_party/milan}"
