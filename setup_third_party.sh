@@ -1390,6 +1390,99 @@ if [ -n "$INTER_DEST" ]; then
     rm -rf "$INTER_TMP"
 fi
 
+# JetBrains Mono 2.304 (the monospace UI/terminal font): the project's own release zip
+# (JetBrains/JetBrainsMono v2.304), the four static TTFs of the upright and italic Regular and
+# Bold (fonts/ttf/). OFL-1.1 licensed (OFL.txt in the zip). Verified by SHA-256 before unpacking;
+# build_fonts.sh stages the TTFs.
+JBM_VER="2.304"
+JBM_SHA256="6f6376c6ed2960ea8a963cd7387ec9d76e3f629125bc33d1fdcd7eb7012f7bbf"
+JBM_DEST="third_party/jetbrains-mono-$JBM_VER"
+if [ -d "$JBM_DEST" ]; then
+    if [ "$FORCE" = "1" ]; then
+        echo "+ removing existing $JBM_DEST (--force)"
+        rm -rf "$JBM_DEST"
+    else
+        echo "= $JBM_DEST already exists, skipping (use --force to re-fetch)"
+        JBM_DEST=""
+    fi
+fi
+if [ -n "$JBM_DEST" ]; then
+    echo "+ fetching JetBrainsMono-$JBM_VER.zip"
+    JBM_TMP="$(mktemp -d)"
+    curl -fsSL -o "$JBM_TMP/jbm.zip" \
+        "https://github.com/JetBrains/JetBrainsMono/releases/download/v$JBM_VER/JetBrainsMono-$JBM_VER.zip"
+    got="$(shasum -a 256 "$JBM_TMP/jbm.zip" | awk '{print $1}')"
+    if [ "$got" != "$JBM_SHA256" ]; then
+        echo "error: JetBrainsMono-$JBM_VER.zip SHA-256 is $got, expected $JBM_SHA256" >&2
+        rm -rf "$JBM_TMP"
+        exit 1
+    fi
+    mkdir -p "$JBM_DEST"
+    unzip -q -o "$JBM_TMP/jbm.zip" 'fonts/ttf/JetBrainsMono-Regular.ttf' 'fonts/ttf/JetBrainsMono-Bold.ttf' \
+        'fonts/ttf/JetBrainsMono-Italic.ttf' 'fonts/ttf/JetBrainsMono-BoldItalic.ttf' OFL.txt AUTHORS.txt -d "$JBM_DEST"
+    rm -rf "$JBM_TMP"
+fi
+
+# GNU Unifont 16.0.01 (GNU Unifont Project, github mirror: unifoundry.com): one OpenType font with a glyph
+# for every code point of the Basic Multilingual Plane (CJK, Hangul, kana, Thai, Indic, Arabic, Hebrew, ...).
+# It is only a fallback: Rome and fontconfig reach for it when Inter or JetBrains Mono lack the character.
+# GPL-2.0-or-later with the font-embedding exception, or SIL OFL-1.1 (your choice, per the project).
+# Verified by SHA-256; build_fonts.sh stages the OTF.
+UNIFONT_VER="16.0.01"
+UNIFONT_SHA256="ea39a0e614e7486490239c5759e1a0cd86fd49e335c4b08d2fd13e313147f022"
+UNIFONT_DEST="third_party/unifont-$UNIFONT_VER"
+if [ -d "$UNIFONT_DEST" ]; then
+    if [ "$FORCE" = "1" ]; then
+        echo "+ removing existing $UNIFONT_DEST (--force)"
+        rm -rf "$UNIFONT_DEST"
+    else
+        echo "= $UNIFONT_DEST already exists, skipping (use --force to re-fetch)"
+        UNIFONT_DEST=""
+    fi
+fi
+if [ -n "$UNIFONT_DEST" ]; then
+    echo "+ fetching unifont-$UNIFONT_VER.otf"
+    mkdir -p "$UNIFONT_DEST"
+    curl -fsSL -o "$UNIFONT_DEST/unifont-$UNIFONT_VER.otf" \
+        "https://unifoundry.com/pub/unifont/unifont-$UNIFONT_VER/font-builds/unifont-$UNIFONT_VER.otf"
+    got="$(shasum -a 256 "$UNIFONT_DEST/unifont-$UNIFONT_VER.otf" | awk '{print $1}')"
+    if [ "$got" != "$UNIFONT_SHA256" ]; then
+        echo "error: unifont-$UNIFONT_VER.otf SHA-256 is $got, expected $UNIFONT_SHA256" >&2
+        rm -rf "$UNIFONT_DEST"
+        exit 1
+    fi
+fi
+
+# Noto Emoji (monochrome, variable weight; Google, OFL-1.1) from google/fonts at a pinned commit: emoji for
+# terminals and UIs whose glyph atlas is single-channel (Rome's). The colour font (CBDT/COLRv1) needs colour
+# glyph support in the renderers and is not used. Verified by SHA-256; build_fonts.sh stages it.
+NOTOEMOJI_COMMIT="2eb0b48d5f760f62e286216f0859a8c540dbc1bd"
+NOTOEMOJI_SHA256="de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551"
+NOTOEMOJI_DEST="third_party/noto-emoji"
+if [ -d "$NOTOEMOJI_DEST" ]; then
+    if [ "$FORCE" = "1" ]; then
+        echo "+ removing existing $NOTOEMOJI_DEST (--force)"
+        rm -rf "$NOTOEMOJI_DEST"
+    else
+        echo "= $NOTOEMOJI_DEST already exists, skipping (use --force to re-fetch)"
+        NOTOEMOJI_DEST=""
+    fi
+fi
+if [ -n "$NOTOEMOJI_DEST" ]; then
+    echo "+ fetching NotoEmoji ${NOTOEMOJI_COMMIT:0:7}"
+    mkdir -p "$NOTOEMOJI_DEST"
+    curl -fsSL -o "$NOTOEMOJI_DEST/NotoEmoji.ttf" \
+        "https://raw.githubusercontent.com/google/fonts/$NOTOEMOJI_COMMIT/ofl/notoemoji/NotoEmoji%5Bwght%5D.ttf"
+    curl -fsSL -o "$NOTOEMOJI_DEST/OFL.txt" \
+        "https://raw.githubusercontent.com/google/fonts/$NOTOEMOJI_COMMIT/ofl/notoemoji/OFL.txt"
+    got="$(shasum -a 256 "$NOTOEMOJI_DEST/NotoEmoji.ttf" | awk '{print $1}')"
+    if [ "$got" != "$NOTOEMOJI_SHA256" ]; then
+        echo "error: NotoEmoji.ttf SHA-256 is $got, expected $NOTOEMOJI_SHA256" >&2
+        rm -rf "$NOTOEMOJI_DEST"
+        exit 1
+    fi
+fi
+
 # shared-mime-info 2.4 (freedesktop.org MIME database, GPL-2.0-or-later): GIO (GLib, and so WebKit) decides the content type of a
 # file by looking it up here; without /usr/share/mime/mime.cache every file is application/octet-stream and, for example,
 # WebKit shows a file:// HTML page as nothing at all. The project's own release archive (the git tag has no generated files

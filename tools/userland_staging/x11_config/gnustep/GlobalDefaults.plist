@@ -13,7 +13,7 @@
     NSPaletteFont = "Inter-Regular";
     NSTitleBarFont = "Inter-Bold";
     NSToolTipsFont = "Inter-Regular";
-    NSUserFixedPitchFont = "DejaVuSansMono";
-    NSFixedPitchFont = "DejaVuSansMono";
+    NSUserFixedPitchFont = "JetBrainsMono-Regular";
+    NSFixedPitchFont = "JetBrainsMono-Regular";
     NSUserFixedPitchFontSize = 13;
 }
