@@ -16,8 +16,4 @@
     NSUserFixedPitchFont = "DejaVuSansMono";
     NSFixedPitchFont = "DejaVuSansMono";
     NSUserFixedPitchFontSize = 13;
-    TerminalFont = "DejaVuSansMono";
-    TerminalFontSize = 13;
-    BoldTerminalFont = "DejaVuSansMono-Bold";
-    BoldTerminalFontSize = 13;
 }

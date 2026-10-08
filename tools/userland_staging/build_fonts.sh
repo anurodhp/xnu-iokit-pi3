@@ -105,8 +105,7 @@ echo "staged $n fonts in $FONTS ($(du -sk "$FONTS" | awk '{print $1}') KB): font
 # x11_config/gnustep/GlobalDefaults.plist (GNUstep system-wide defaults,
 # read from next to GNUstep.conf -- gnustep-base NSUserDefaults.m: the
 # GlobalDefaults.plist "stored in the same directory as the system wide
-# GNUstep.conf file"; NSFont roles, and Terminal.app's TerminalFont keys,
-# gnustep-gap system-apps/Terminal TerminalViewPrefs.m:41-44).
+# GNUstep.conf file"; NSFont roles).
 [ -d "$FS_ROOT/root/etc/fonts/conf.d" ] || {
     echo "error: $FS_ROOT/root/etc/fonts/conf.d missing -- run build_fontconfig.sh first" >&2; exit 1; }
 cp x11_config/fonts/61-inter-sans.conf "$FS_ROOT/root/etc/fonts/conf.d/61-inter-sans.conf"

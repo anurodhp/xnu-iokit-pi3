@@ -179,7 +179,7 @@ than the CPU copy.
 
 `Rome.app` (repo `anurodhp/rome`, pinned in `setup_third_party.sh`; built by
 `build_libvterm.sh` + `build_rome.sh`; installs as `/Applications/Rome.app`,
-the existing Terminal.app stays) draws its cells either with the CPU into an
+Terminal.app is gone, Rome replaced it) draws its cells either with the CPU into an
 MIT-SHM image (`x11`, the default) or through Mesa's libGL (`-RomeRenderer gl`,
 the V3D with `MESA_VC4=1`, softpipe otherwise). Both redraw only the changed
 cells and present only the changed box (`glXCopySubBufferMESA` for GL), and a
@@ -188,12 +188,12 @@ the default are in the repo's README.
 
 Measured so far, QEMU only (softpipe, emulated CPU, so relative):
 `seq 1 2000` takes 4.2 s in Rome x11 (80x24), 8.1 s (150x45), 7.7 s / 47.5 s in
-Rome gl, 32 s in Terminal.app. Rome x11 on the real Pi, 80x24: 8.2 ms per
+Rome gl. Rome x11 on the real Pi, 80x24: 8.2 ms per
 frame (draw 3.9, present 3.1).
 
 Still to measure on the Pi (it was off): GL on the V3D against the CPU renderer
 at 80x24 and 150x45 with `XLIB_VC4_STATS=1` and `ROME_STATS=1`; Rome against
-Terminal.app for scrolling, typing latency and full-screen `top`. The harness
+the old Terminal.app numbers for scrolling, typing latency and full-screen `top`. The harness
 is `tools/bench.sh` in the rome repo (`OUT=... R=... XPID=... DISPLAY=...`).
 Expected from the present path above: the GL renderer's frame cost is bounded
 by the whole-frame GPU read-back, so it should not beat x11 at normal sizes

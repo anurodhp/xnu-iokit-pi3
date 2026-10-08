@@ -272,9 +272,9 @@ for f in $(am_data "$SRC/WINGs/Resources/Makefile.am" resdata_DATA); do
     cp "$SRC/WINGs/Resources/$f" "$STAGE/share/WINGs/"
 done
 
-# ---- Terminal.app autostart ---------------------------------------------
+# ---- Rome.app autostart ---------------------------------------------
 # x11_config/session/autostart is wmaker's global init script; it opens
-# Terminal.app. The boot session itself (gsdm's login window, the Xsession
+# Rome.app. The boot session itself (gsdm's login window, the Xsession
 # that execs wmaker as the logged-in user, the launchd plist) is staged by
 # build_gsdm.sh.
 cp "x11_config/session/autostart" "$PKGDATA/autostart"

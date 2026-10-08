@@ -9,7 +9,7 @@
 #     idle CPU/state (ps TIME delta over IDLE seconds), WM_EVENT_STATS wait
 #     counters over the same window, wmlat rt/burst latency.
 #  3. (full) under the kqueue wmaker: root menu, window open/close, xev key
-#     and pointer input, Terminal and Ink launch; fb snapshots in /var/root.
+#     and pointer input, Rome and Ink launch; fb snapshots in /var/root.
 export DISPLAY=:0 HOME=/var/root
 X=/usr/X11/bin
 IDLE=${IDLE:-60}
@@ -111,11 +111,11 @@ echo "-- wmclose delete xev"
 $X/wmclose_probe delete Event; sleep 5
 $X/wmclose_probe list | grep -ci "Event Tester"
 kill $XEVP 2>/dev/null
-echo "-- Terminal"
+echo "-- Rome"
 . /usr/GNUstep/System/Library/Makefiles/GNUstep.sh 2>/dev/null
 export GNUSTEP_CONFIG_FILE=/etc/GNUstep/GNUstep.conf
 CD=/usr/lib/crashdiag.dylib
-DYLD_INSERT_LIBRARIES=$CD /Applications/Terminal.app/Terminal > /tmp/term.log 2>&1 &
+DYLD_INSERT_LIBRARIES=$CD /Applications/Rome.app/Rome > /tmp/term.log 2>&1 &
 sleep 60
 cp $F /var/root/kq_2_term.xwd
 $X/wmclose_probe list
@@ -127,7 +127,7 @@ echo "-- close the Ink document window via its titlebar close button"
 $X/wmclose_probe closebtn Untitled; sleep 8
 $X/wmclose_probe list
 ps -p $WP -o pid,state,time,command
-ps ax | grep -E "Xvfb|wmaker|Terminal|Ink" | grep -v grep
+ps ax | grep -E "Xvfb|wmaker|Rome|Ink" | grep -v grep
 grep -E "event stats" /tmp/wm_$LAST.$n.log | tail -2
 stopwm; tail -1 /tmp/wm_$LAST.$n.log
 sync; sync

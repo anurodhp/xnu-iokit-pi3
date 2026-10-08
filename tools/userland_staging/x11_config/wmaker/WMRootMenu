@@ -1,6 +1,6 @@
 ("Applications",
  ("Info Panel", INFO_PANEL),
- ("Terminal", EXEC, "/Applications/Terminal.app/Terminal"),
+ ("Rome", EXEC, "/Applications/Rome.app/Rome"),
  ("Ink", EXEC, "/Applications/Ink.app/Ink"),
  ("GWorkspace", EXEC, "/Applications/GWorkspace.app/GWorkspace"),
  ("Florence", EXEC, "/Applications/Florence.app/Florence"),

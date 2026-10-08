@@ -9,7 +9,7 @@
 # gsdm terminates the X server and shows the login window on a fresh one.
 #
 # It sets the GNUstep environment, then execs Window Maker, whose global
-# autostart (/usr/X11/share/WindowMaker/autostart) opens Terminal.app.
+# autostart (/usr/X11/share/WindowMaker/autostart) opens Rome.app.
 
 PATH=/usr/X11/bin:/bin:/usr/bin:/sbin:/usr/sbin
 export PATH

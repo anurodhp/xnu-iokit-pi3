@@ -750,10 +750,6 @@ mkdir -p third_party
 #     iokit-port, upstream master 46ef973 (2026-06-28) unmodified -- the
 #     repo has no release tag newer than 2000, so the fork branch is what
 #     pins the commit. Source of Ink.app (build_gnustep_ink.sh).
-#     gnustep-gap (DAR-394): our fork anurodhp/gap branch iokit-port, off
-#     gnustep/gap master 220860a9 (2026-09-08; gap has no release tags).
-#     Source of Terminal.app (system-apps/Terminal): one commit adding the
-#     Darwin pty include and link libraries. build_gnustep_terminal.sh.
 #     rome: anurodhp/rome (this project's own repo, private), tag v0.1:
 #     Rome.app, a small fast GNUstep terminal written for this port
 #     (build_rome.sh). Not a fork: there is no upstream.
@@ -917,7 +913,6 @@ gnustep-gui|git@github.com:anurodhp/libs-gui.git|iokit-port||https://github.com/
 gnustep-back|https://github.com/gnustep/libs-back.git|back-0_32_0|
 gnustep-examples|git@github.com:anurodhp/tests-examples.git|iokit-port||https://github.com/gnustep/tests-examples.git
 libtiff|https://gitlab.com/libtiff/libtiff.git|v4.7.1|
-gnustep-gap|git@github.com:anurodhp/gap.git|iokit-port||https://github.com/gnustep/gap.git
 rome|git@github.com:anurodhp/rome.git|v0.1|
 libvterm|https://github.com/neovim/libvterm.git|v0.3.3|
 gnustep-gworkspace|git@github.com:anurodhp/apps-gworkspace.git|iokit-port||https://github.com/gnustep/apps-gworkspace.git

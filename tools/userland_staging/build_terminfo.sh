@@ -1,8 +1,8 @@
 #!/bin/bash
 # Builds a small terminfo database for the image (DAR-293): top, vim, libedit
 # and the shell tools (ncurses, built without a database, build_ncurses.sh)
-# otherwise fail with "error opening terminal: linux" (Terminal.app exports
-# TERM=linux, gnustep-gap system-apps/Terminal/TerminalView.m:2352; the serial
+# otherwise fail with "error opening terminal: linux" (Rome.app exports
+# TERM=xterm-256color, third_party/rome/RomeTerm.c:537; the serial
 # console and ssh give linux/xterm).
 #
 # Source: the real ncurses misc/terminfo.src (third_party/ncurses, Apple's

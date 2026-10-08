@@ -683,7 +683,7 @@ else
 fi
 # terminfo database (DAR-293): libncurses here is built without one
 # (build_ncurses.sh), so top, vim and libedit fail with "error opening terminal:
-# linux" (Terminal.app exports TERM=linux). build_terminfo.sh compiles a small
+# linux" (Rome.app exports TERM=xterm-256color). build_terminfo.sh compiles a small
 # set of real ncurses terminfo.src entries with the host tic; ditto keeps the
 # hex-named directories.
 TI_STAGE=tools/userland_staging/libc_build/terminfo/root
