@@ -753,7 +753,7 @@ mkdir -p third_party
 #     milan: anurodhp/milan (this project's own repo), tag v0.4: Milan.app, a
 #     small fast Finder-style GNUstep file manager (build_milan.sh). Not a
 #     fork: there is no upstream.
-#     rome: anurodhp/rome (this project's own repo, private), tag v0.1:
+#     rome: anurodhp/rome (this project's own repo, private), tag v0.2:
 #     Rome.app, a small fast GNUstep terminal written for this port
 #     (build_rome.sh). Not a fork: there is no upstream.
 #     libvterm 0.3.3: github.com/neovim/libvterm tag v0.3.3 (9d6d2112), the
@@ -927,7 +927,7 @@ gnustep-back|https://github.com/gnustep/libs-back.git|back-0_32_0|
 gnustep-examples|git@github.com:anurodhp/tests-examples.git|iokit-port||https://github.com/gnustep/tests-examples.git
 libtiff|https://gitlab.com/libtiff/libtiff.git|v4.7.1|
 libjpeg-turbo|https://github.com/libjpeg-turbo/libjpeg-turbo.git|3.0.4|
-rome|git@github.com:anurodhp/rome.git|v0.1|
+rome|git@github.com:anurodhp/rome.git|v0.2|
 milan|git@github.com:anurodhp/milan.git|v0.4|
 libvterm|https://github.com/neovim/libvterm.git|v0.3.3|
 gnustep-gworkspace|git@github.com:anurodhp/apps-gworkspace.git|iokit-port||https://github.com/gnustep/apps-gworkspace.git
