@@ -20,8 +20,14 @@
  *     and the QEMU model must cross-check them.
  *   - PWM clock: the VideoCore firmware owns the clock manager on this
  *     board, so the rate is requested through the mailbox ("set clock
- *     rate", clock id 10, BCM2837Mailbox::kClockIdPWM) rather than by
- *     writing CM_PWMCTL/CM_PWMDIV behind its back.
+ *     rate", clock id 10, BCM2837Mailbox::kClockIdPWM; u-boot
+ *     arch/arm/mach-bcm283x/include/mach/mbox.h:228-238 has
+ *     BCM2835_MBOX_CLOCK_ID_PWM 10) rather than by writing CM_PWMCTL/
+ *     CM_PWMDIV behind its back. That the firmware owns this clock is a
+ *     design choice, not something a tree source states.
+ *   - GPFSEL4 is read-modify-written here and by BCM2837SDHCI::pinmuxSDSlot()
+ *     (GPIO48/49) with no shared lock; they run at different times in
+ *     practice (the PWM mux only when audio is configured).
  *
  * Not done here: the audio engine (DARW-315), DMA wiring (uses BCM2837DMA).
  */
@@ -29,6 +35,7 @@
 #define BCM2837PWM_H
 
 #include <IOKit/IOService.h>
+#include <IOKit/IOLocks.h>
 
 #define kBCM2837PWMBusBase  0x7e20c000ULL
 #define kBCM2837PWMFifoBus  (kBCM2837PWMBusBase + 0x18)
@@ -43,11 +50,15 @@ public:
 	virtual void stop(IOService *provider) APPLE_KEXT_OVERRIDE;
 
 	// Sets the PWM clock for `rateHz` stereo frames/s, muxes GPIO40/41, and
-	// programs both channels (FIFO + DMA mode, output idling at mid-scale,
-	// not yet enabled). *rngOut is the range (one frame = rng clocks) and
+	// programs both channels (FIFO + DMA mode, not yet enabled). Output idles
+	// low while disabled (DAT is unused in FIFO mode), so enabling/disabling
+	// steps the line; the engine ramps its first/last samples. *rngOut is the range (one frame = rng clocks) and
 	// *actualRateOut the resulting frame rate.
 	IOReturn configure(uint32_t rateHz, uint32_t *rngOut, uint32_t *actualRateOut);
-	// Enable / disable both channels and the DMA request.
+	// Enable / disable both channels and the DMA request. Order contract: prime
+	// the DMA ring first, then startOutput(); stop the DMA channel first, then
+	// stopOutput(). All public entry points are serialised by one lock and may
+	// sleep (mailbox).
 	IOReturn startOutput();
 	void     stopOutput();
 	bool     isConfigured() const { return fRng != 0; }
@@ -57,10 +68,14 @@ public:
 
 private:
 	void     writeReg(uint32_t offset, uint32_t value);
+	IOReturn configureLocked(uint32_t rateHz, uint32_t *rngOut, uint32_t *actualRateOut);
+	IOReturn startOutputLocked();
+	void     stopOutputLocked();
 	bool     muxPins();
 	void     dumpRegs(const char *tag);
 	void     selfTest();
 
+	IOLock            *fLock;
 	IOMemoryMap       *fRegMap;
 	volatile uint32_t *fRegs;
 	uint32_t           fClockHz;

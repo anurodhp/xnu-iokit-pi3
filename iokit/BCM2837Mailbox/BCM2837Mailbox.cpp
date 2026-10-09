@@ -515,8 +515,10 @@ setClockStateLocked(uint32_t clockId, bool on)
 /*
  * Set clock rate (tag 0x00038002): request {clock id, rate Hz, skip_turbo},
  * response {clock id, rate Hz actually set}. A 12-byte value buffer, unlike
- * the two-word tags above (QEMU's bcm2835_property.c reads id at value+12 and
- * only logs "set clock rates NYI" for this tag, echoing the request).
+ * the two-word tags above. The layout is from the firmware interface as
+ * remembered (u-boot's mbox.h has only the get-rate tag); QEMU's
+ * bcm2835_property.c:128-133 just logs "set clock rates NYI" and never writes
+ * the buffer, so on QEMU this returns the request unchanged.
  */
 static bool
 setClockRateLocked(uint32_t clockId, uint32_t hz, uint32_t *actualHz)
@@ -543,7 +545,7 @@ setClockRateLocked(uint32_t clockId, uint32_t hz, uint32_t *actualHz)
 
 	bool ok = false;
 	if (mailboxCall(regs, m, buf.busAddr)) {
-		if ((m[4] & 0x80000000U) != 0 && m[6] != 0) {
+		if ((m[4] & 0x80000000U) != 0 && (m[4] & 0x7FFFFFFFU) >= 8 && m[6] != 0) {
 			if (actualHz) {
 				*actualHz = m[6];
 			}

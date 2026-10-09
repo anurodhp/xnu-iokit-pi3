@@ -22,6 +22,8 @@ enum {
 	// CTL (datasheet ch. 9, see the header's caveat)
 	kCtlPwen1 = 1U << 0,
 	kCtlMode1 = 1U << 1,    // 0 = PWM, 1 = serialiser
+	kCtlRptl1 = 1U << 2,    // repeat the last word when the FIFO runs dry
+	kCtlRptl2 = 1U << 10,
 	kCtlUsef1 = 1U << 5,    // take data from the FIFO
 	kCtlClrf1 = 1U << 6,    // clear the FIFO
 	kCtlMsen1 = 1U << 7,    // mark-space instead of the balanced algorithm
@@ -52,6 +54,11 @@ BCM2837PWM::start(IOService *provider)
 		return false;
 	}
 	fRegs = (volatile uint32_t *)fRegMap->getVirtualAddress();
+	fLock = IOLockAlloc();
+	if (fLock == NULL) {
+		OSSafeReleaseNULL(fRegMap);
+		return false;
+	}
 	fClockHz = 0;
 	fRng = 0;
 	fRunning = false;
@@ -75,6 +82,10 @@ BCM2837PWM::stop(IOService *provider)
 	}
 	OSSafeReleaseNULL(fRegMap);
 	fRegs = NULL;
+	if (fLock) {
+		IOLockFree(fLock);
+		fLock = NULL;
+	}
 	super::stop(provider);
 }
 
@@ -130,21 +141,36 @@ BCM2837PWM::configure(uint32_t rateHz, uint32_t *rngOut, uint32_t *actualRateOut
 	if (fRegs == NULL || rateHz < 8000 || rateHz > 192000) {
 		return kIOReturnBadArgument;
 	}
-	if (fRunning) {
-		stopOutput();
-	}
+	IOLockLock(fLock);
+	IOReturn r = configureLocked(rateHz, rngOut, actualRateOut);
+	IOLockUnlock(fLock);
+	return r;
+}
 
-	// The firmware must know this clock (a 0 answer means the id is wrong or
-	// the clock is absent); do not touch the block otherwise.
+IOReturn
+BCM2837PWM::configureLocked(uint32_t rateHz, uint32_t *rngOut, uint32_t *actualRateOut)
+{
+	if (fRunning) {
+		stopOutputLocked();
+	}
+	// Forget the old configuration first: a failure below must not leave
+	// startOutput() able to run an old range against a changed clock.
+	fRng = 0;
+	fClockHz = 0;
+
+	// Note the firmware's current rate (0 can just mean the clock is idle, so
+	// it is not an error), then ask for ours and make sure the clock runs.
 	uint32_t cur = 0;
 	if (!BCM2837Mailbox::getClockRateHz(BCM2837Mailbox::kClockIdPWM, &cur)) {
-		IOLog("BCM2837PWM: firmware reports no PWM clock (id %u); not configuring\n",
+		IOLog("BCM2837PWM: firmware gave no current rate for the PWM clock (id %u); trying to set it\n",
 		    (unsigned)BCM2837Mailbox::kClockIdPWM);
-		return kIOReturnNotFound;
 	}
 	uint32_t want = pwmTargetClockHz(rateHz), got = 0;
 	if (!BCM2837Mailbox::setClockRateHz(BCM2837Mailbox::kClockIdPWM, want, &got)) {
 		return kIOReturnIOError;
+	}
+	if (!BCM2837Mailbox::setClockState(BCM2837Mailbox::kClockIdPWM, true)) {
+		IOLog("BCM2837PWM: firmware did not confirm the PWM clock running; continuing\n");
 	}
 	uint32_t rng = pwmRangeFor(got, rateHz);
 	if (rng == 0) {
@@ -161,8 +187,6 @@ BCM2837PWM::configure(uint32_t rateHz, uint32_t *rngOut, uint32_t *actualRateOut
 	writeReg(0x00, kCtlClrf1);
 	writeReg(0x10, rng);
 	writeReg(0x20, rng);
-	writeReg(0x14, rng / 2);        // idle at mid-scale: no step when it starts
-	writeReg(0x24, rng / 2);
 	writeReg(0x08, 0);              // DMA request off until startOutput()
 
 	fClockHz = got;
@@ -181,10 +205,25 @@ BCM2837PWM::configure(uint32_t rateHz, uint32_t *rngOut, uint32_t *actualRateOut
 IOReturn
 BCM2837PWM::startOutput()
 {
+	IOLockLock(fLock);
+	IOReturn r = startOutputLocked();
+	IOLockUnlock(fLock);
+	return r;
+}
+
+// Order contract: the caller primes the DMA ring (so the first words are
+// ready the moment DREQ asserts) before this; this clears stale errors and
+// the FIFO, then enables DMAC, then the channels. RPTL repeats the last word
+// on an underrun instead of dropping to the idle (low) level.
+IOReturn
+BCM2837PWM::startOutputLocked()
+{
 	if (fRng == 0) {
 		return kIOReturnNotReady;
 	}
-	uint32_t ctl = kCtlPwen1 | kCtlUsef1 | kCtlPwen2 | kCtlUsef2;
+	writeReg(0x04, kStaErrors);
+	writeReg(0x00, kCtlClrf1);
+	uint32_t ctl = kCtlPwen1 | kCtlUsef1 | kCtlRptl1 | kCtlPwen2 | kCtlUsef2 | kCtlRptl2;
 	uint32_t ms = 0;
 	if (PE_parse_boot_argn("pwm-ms", &ms, sizeof(ms)) && ms) {
 		ctl |= kCtlMsen1 | kCtlMsen2;       // mark-space, to compare by ear
@@ -198,10 +237,21 @@ BCM2837PWM::startOutput()
 void
 BCM2837PWM::stopOutput()
 {
+	IOLockLock(fLock);
+	stopOutputLocked();
+	IOLockUnlock(fLock);
+}
+
+// The caller stops its DMA channel first (a channel still running would stall
+// mid-block on the cleared request, and could refill the FIFO after CLRF).
+// In FIFO mode DAT is unused and the idle level with the channels off is low,
+// so stopping and starting step the line between low and the signal: the
+// audio engine ramps the first/last words to hide that (DARW-315).
+void
+BCM2837PWM::stopOutputLocked()
+{
 	writeReg(0x08, 0);
 	writeReg(0x00, kCtlClrf1);              // channels off, FIFO flushed
-	writeReg(0x14, fRng / 2);
-	writeReg(0x24, fRng / 2);
 	fRunning = false;
 }
 
@@ -216,7 +266,7 @@ BCM2837PWM::selfTest()
 	IOLog("BCM2837PWM: self-test configure: %#x range %u rate %u\n", r, rng, rate);
 	dumpRegs("after configure");
 	if (r == kIOReturnSuccess) {
-		bool ok = readReg(0x10) == rng && readReg(0x20) == rng && readReg(0x14) == rng / 2;
+		bool ok = readReg(0x10) == rng && readReg(0x20) == rng;
 		IOLog("BCM2837PWM: self-test readback: %s\n", ok ? "PASS" : "FAIL");
 	}
 }

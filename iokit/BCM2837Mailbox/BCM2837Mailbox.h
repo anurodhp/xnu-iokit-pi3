@@ -74,14 +74,12 @@ public:
 	enum {
 		kClockIdEMMC = 1,
 		// RPI_FIRMWARE_V3D_CLK_ID: the fifth entry of Linux's clock-id
-		// enum (include/soc/bcm2835/raspberrypi-firmware.h:140-144,
+		// enum (u-boot mach/mbox.h:228-232; Linux include/soc/bcm2835/raspberrypi-firmware.h:140-144,
 		// EMMC=1, UART, ARM, CORE, V3D).
 		kClockIdV3D = 5,
-		// RPI_FIRMWARE_PWM_CLK_ID: tenth in the same enum (EMMC=1, UART,
-		// ARM, CORE, V3D, H264, ISP, SDRAM, PIXEL, PWM). That header is not
-		// vendored in this tree, so the number is from memory of the
-		// enum order; BCM2837PWM checks the firmware gives it a non-zero
-		// rate before using it and fails safe otherwise.
+		// third_party/u-boot/arch/arm/mach-bcm283x/include/mach/mbox.h:
+		// 228-238, BCM2835_MBOX_CLOCK_ID_PWM 10 (EMMC=1, UART=2, ARM=3,
+		// CORE=4, V3D=5, H264=6, ISP=7, SDRAM=8, PIXEL=9, PWM=10).
 		kClockIdPWM = 10,
 	};
 
