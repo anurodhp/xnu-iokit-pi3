@@ -61,6 +61,7 @@ BCM2837DMA::start(IOService *provider)
 	bzero(fCallbackRef, sizeof(fCallbackRef));
 	bzero((void *)fIrqCount, sizeof(fIrqCount));
 	bzero((void *)fInFlight, sizeof(fInFlight));
+	fHandlersActive = 0;
 	bzero((void *)fErrorCount, sizeof(fErrorCount));
 
 	fAllocLock = IOLockAlloc();
@@ -137,6 +138,14 @@ BCM2837DMA::unwind()
 	}
 	fIrqMask = 0;
 	fFreeMask = 0;
+	// disable/unregisterInterrupt do not wait for a handler already running on
+	// another CPU; let it finish before the lock and mapping go away.
+	for (int i = 0; i < 1000 && fHandlersActive; i++) {
+		IOSleep(1);
+	}
+	if (fHandlersActive) {
+		IOLog("BCM2837DMA: an interrupt handler is still running at teardown\n");
+	}
 	OSSafeReleaseNULL(fRegMap);
 	fRegs = NULL;
 	if (fCbLock) {
@@ -214,6 +223,9 @@ BCM2837DMA::freeChannel(uint32_t channel)
 	for (int i = 0; i < 1000 && fInFlight[channel]; i++) {
 		IOSleep(1);
 	}
+	if (fInFlight[channel]) {
+		IOLog("BCM2837DMA: channel %u: callback still running after 1s, freeing anyway\n", channel);
+	}
 	IOLockLock(fAllocLock);
 	fAllocatedMask &= ~(1U << channel);
 	fFreeMask |= 1U << channel;
@@ -231,6 +243,7 @@ BCM2837DMA::startChannel(uint32_t channel, uint32_t firstCbBus, uint32_t csFlags
 	for (int i = 0; i < 1000 && (*chan(channel) & kDMACsReset); i++) {
 		IODelay(1);
 	}
+	chan(channel)[kRegDebug] = kDebugErrors;     // drop error flags left by a previous run
 	dmaBarrier();       // control blocks (NC memory) visible before the engine fetches them
 	chan(channel)[kRegConblkAd] = firstCbBus;
 	dmaBarrier();
@@ -284,6 +297,7 @@ BCM2837DMA::interruptOccurred(OSObject *target, void *refCon, IOService *, int)
 void
 BCM2837DMA::handleChannelInterrupt(uint32_t channel)
 {
+	__sync_fetch_and_add(&fHandlersActive, 1);
 	volatile uint32_t *cs = chan(channel);
 	uint32_t v = *cs;
 	if (v & kDMACsError) {
@@ -303,13 +317,14 @@ BCM2837DMA::handleChannelInterrupt(uint32_t channel)
 	BCM2837DMACallback cb = fCallback[channel];
 	void *ref = fCallbackRef[channel];
 	if (cb) {
-		fInFlight[channel]++;
+		__sync_fetch_and_add(&fInFlight[channel], 1);
 	}
 	IOSimpleLockUnlockEnableInterrupt(fCbLock, s);
 	if (cb) {
 		cb(ref, channel, v);
 		__sync_fetch_and_sub(&fInFlight[channel], 1);
 	}
+	__sync_fetch_and_sub(&fHandlersActive, 1);
 }
 
 IOBufferMemoryDescriptor *

@@ -72,7 +72,7 @@ struct BCM2837DMAControlBlock {
 } __attribute__((aligned(32)));
 
 // Completion callback, run from the channel's primary interrupt handler:
-// keep it short, no locks that sleep, no IOLog. `cs` is CS as read before
+// keep it short, no locks that sleep, no IOLog, and never call freeChannel()/stopChannel() from it (freeChannel waits for the callback to return). `cs` is CS as read before
 // the interrupt was acknowledged.
 typedef void (*BCM2837DMACallback)(void *ref, uint32_t channel, uint32_t cs);
 
@@ -102,6 +102,8 @@ public:
 	void     stopChannel(uint32_t channel);
 
 	uint32_t readChannelReg(uint32_t channel, uint32_t offset);
+	// Number of interrupts on which the channel reported ERROR (flags are cleared).
+	uint32_t getErrorCount(uint32_t channel) { return channel < 16 ? fErrorCount[channel] : 0; }
 
 	// Physically contiguous, low-1GB, write-combine (Normal Non-Cacheable)
 	// memory the controller can read and write without cache maintenance;
@@ -124,6 +126,7 @@ private:
 	IOSimpleLock            *fCbLock;          // guards fCallback/fCallbackRef/fInFlight
 	uint32_t                 fFreeMask;        // channels available to allocate
 	uint32_t                 fAllocatedMask;   // channels handed out
+	volatile uint32_t        fHandlersActive;  // interrupt handlers currently running
 	volatile uint32_t        fInFlight[16];    // callbacks currently running
 	volatile uint32_t        fErrorCount[16];  // channel ERROR seen in the interrupt
 	uint32_t                 fIrqMask;         // channels with a registered interrupt
