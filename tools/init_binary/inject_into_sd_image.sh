@@ -716,6 +716,17 @@ fi
 # still resolve. stage_gnustep_mac_layout.sh builds that tree (see its
 # header for why no library is rebuilt). ditto keeps the version symlinks.
 GS_STAGE=tools/userland_staging/libc_build/gnustep/root
+# The graphical login (gsdm + LoginWindow.app + Eau.theme) must be in the
+# stage before it is copied: without it the image boots with no X session at
+# all and the gsdm step below used to skip silently. Build what is missing.
+if [ -f "$GS_STAGE/usr/GNUstep/System/Library/Libraries/libgnustep-base.dylib" ]; then
+    [ -d "$GS_STAGE/usr/GNUstep/System/Library/Themes/Eau.theme" ] ||
+        tools/userland_staging/build_gnustep_eau_theme.sh || exit 1
+    [ -x "$GS_STAGE/usr/GNUstep/System/Tools/Admin/gsdm" ] &&
+    [ -x "$GS_STAGE/usr/GNUstep/System/Library/CoreServices/LoginWindow.app/LoginWindow" ] &&
+    [ -f tools/userland_staging/libc_build/gsdm/root/etc/gsdm/gsdm.conf ] ||
+        tools/userland_staging/build_gsdm.sh || exit 1
+fi
 if [ -f "$GS_STAGE/usr/GNUstep/System/Library/Libraries/libgnustep-base.dylib" ]; then
     GS_MAC=$(mktemp -d "${TMPDIR:-/tmp}/gnustep-mac.XXXXXX")
     tools/userland_staging/stage_gnustep_mac_layout.sh "$GS_STAGE" "$GS_MAC/root"
@@ -843,6 +854,9 @@ if [ -f "$GSDM_STAGE/etc/gsdm/gsdm.conf" ] && [ -x "$MNT/usr/local/sbin/gsdm" ] 
     echo "+ wrote gsdm config (/etc/gsdm/{gsdm.conf,Xgreeter,Xsession}) and org.puredarwin.gsdm.plist"
     [ -e "$MNT/etc/x11-session.disabled" ] &&
         echo "  (/etc/x11-session.disabled exists: gsdm will not start X at boot until it is removed)"
+elif [ -x "$MNT/usr/X11/bin/Xorg" ]; then
+    echo "error: X is on the image but gsdm/LoginWindow/$GSDM_STAGE is missing -- the image would never reach X11; run build_gsdm.sh" >&2
+    exit 1
 else
     echo "= gsdm not built (or the GNUstep tree is missing) -- run build_gsdm.sh first if wanted, skipping"
 fi
