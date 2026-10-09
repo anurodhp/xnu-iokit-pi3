@@ -77,6 +77,12 @@ public:
 		// enum (include/soc/bcm2835/raspberrypi-firmware.h:140-144,
 		// EMMC=1, UART, ARM, CORE, V3D).
 		kClockIdV3D = 5,
+		// RPI_FIRMWARE_PWM_CLK_ID: tenth in the same enum (EMMC=1, UART,
+		// ARM, CORE, V3D, H264, ISP, SDRAM, PIXEL, PWM). That header is not
+		// vendored in this tree, so the number is from memory of the
+		// enum order; BCM2837PWM checks the firmware gives it a non-zero
+		// rate before using it and fails safe otherwise.
+		kClockIdPWM = 10,
 	};
 
 	/*
@@ -106,6 +112,15 @@ public:
 	 * BCM2837V3D's power-up sequence.
 	 */
 	static bool setClockState(uint32_t clockId, bool on);
+
+	/*
+	 * Asks the firmware to set a clock to `hz` (property tag 0x00038002,
+	 * "set clock rate"). On success *actualHz (if given) is the rate the
+	 * firmware really programmed, which can differ from the request (its PLL
+	 * divider is fractional but finite). Returns false on a mailbox failure
+	 * or a zero answer.
+	 */
+	static bool setClockRateHz(uint32_t clockId, uint32_t hz, uint32_t *actualHz);
 
 	/*
 	 * One property tag with a two-word request {a, b} and a two-word

@@ -521,6 +521,9 @@ BCM2837RegisterBuiltinPersonalities(void)
 	OSDictionary *sdhci = makePersonality("IOPlatformDevice", "BCM2837SDHCI", "sdhci", -1);
 	// "dma" - the DMA controller (DARW-313), used by the audio engine.
 	OSDictionary *dma = makePersonality("IOPlatformDevice", "BCM2837DMA", "dma", -1);
+	// "pwm" - the PWM block, the 3.5mm audio jack (DARW-314). The DT node is
+	// only present in builds that define RPI3_HAVE_PWM.
+	OSDictionary *pwm = makePersonality("IOPlatformDevice", "BCM2837PWM", "pwm", -1);
 	// "usb" - the DWC2 USB 2.0 OTG host controller, the board's only USB
 	// silicon and therefore the gate on all Phase 6 networking (the SMSC
 	// LAN9514 Ethernet chip is a USB device behind it). See BCM2837DWC2.h
@@ -696,6 +699,10 @@ BCM2837RegisterBuiltinPersonalities(void)
 	if (dma != NULL) {
 		personalities->setObject(dma);
 		dma->release();
+	}
+	if (pwm != NULL) {
+		personalities->setObject(pwm);
+		pwm->release();
 	}
 	if (usb != NULL) {
 		personalities->setObject(usb);

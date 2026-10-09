@@ -323,6 +323,22 @@
 			interrupts = <16 17 18 19 20 21 22 23 24 25 26>;
 		};
 
+#ifdef RPI3_HAVE_PWM
+		/*
+		 * PWM block (BCM2837PWM, DARW-314), the Pi 3's 3.5mm audio jack
+		 * (GPIO40/41). u-boot bcm283x.dtsi:534: pwm@7e20c000 reg
+		 * <0x7e20c000 0x28>. Only defined for builds that ask for it
+		 * (rpi3-realhw.dts; the QEMU test variant once QEMU has a PWM
+		 * model, DARW-318): QEMU's raspi3 does not map this range, so
+		 * touching it there takes an external abort.
+		 */
+		pwm {
+			device_type = "pwm";
+			compatible = "brcm,bcm2835-pwm";
+			reg = <0x20c000 0 0x28 0>;
+		};
+#endif
+
 #ifdef RPI3_HAVE_V3D
 		/*
 		 * VideoCore IV 3D engine (BCM2837V3D, DARW-295). Only defined

@@ -47,6 +47,7 @@ enum {
 	kTagGetBoardSerial = 0x00010004,
 	kTagGetClockRate   = 0x00030002,
 	kTagSetClockState  = 0x00038001,
+	kTagSetClockRate   = 0x00038002,
 	kTagEnd            = 0x00000000,
 
 	kCodeRequest       = 0x00000000,
@@ -508,6 +509,64 @@ setClockStateLocked(uint32_t clockId, bool on)
 		}
 	}
 	msgBufFree(&buf);
+	return ok;
+}
+
+/*
+ * Set clock rate (tag 0x00038002): request {clock id, rate Hz, skip_turbo},
+ * response {clock id, rate Hz actually set}. A 12-byte value buffer, unlike
+ * the two-word tags above (QEMU's bcm2835_property.c reads id at value+12 and
+ * only logs "set clock rates NYI" for this tag, echoing the request).
+ */
+static bool
+setClockRateLocked(uint32_t clockId, uint32_t hz, uint32_t *actualHz)
+{
+	volatile uint32_t *regs = mailboxRegs();
+	if (regs == NULL) {
+		return false;
+	}
+	struct MailboxMsgBuf buf;
+	if (!msgBufAlloc(&buf)) {
+		return false;
+	}
+	uint32_t *m = buf.words;
+
+	m[kMsgIdxSize] = kMsgBytes;
+	m[kMsgIdxCode] = kCodeRequest;
+	m[2] = kTagSetClockRate;
+	m[3] = 12;
+	m[4] = 0;
+	m[5] = clockId;
+	m[6] = hz;
+	m[7] = 0;               // skip_turbo
+	m[8] = kTagEnd;
+
+	bool ok = false;
+	if (mailboxCall(regs, m, buf.busAddr)) {
+		if ((m[4] & 0x80000000U) != 0 && m[6] != 0) {
+			if (actualHz) {
+				*actualHz = m[6];
+			}
+			ok = true;
+		} else {
+			IOLog("BCM2837Mailbox: set clock %u rate %u: resp=%#x rate=%u\n",
+			    clockId, hz, m[4], m[6]);
+		}
+	}
+	msgBufFree(&buf);
+	return ok;
+}
+
+bool
+BCM2837Mailbox::setClockRateHz(uint32_t clockId, uint32_t hz, uint32_t *actualHz)
+{
+	IOLock *lock = mailboxLock();
+	if (lock == NULL) {
+		return false;
+	}
+	IOLockLock(lock);
+	bool ok = setClockRateLocked(clockId, hz, actualHz);
+	IOLockUnlock(lock);
 	return ok;
 }
 
