@@ -782,12 +782,6 @@ mkdir -p third_party
 #     (v1.3.1), so the generic REPOS loop (branch/tag only) cannot name it;
 #     it has its own block below. Unmodified; built by build_libghostty_vt.sh
 #     (needs Zig 0.16.x).
-#     gnustep-gworkspace (DAR-392): our fork anurodhp/apps-gworkspace
-#     branch iokit-port, off gnustep/apps-gworkspace tag gworkspace-1_0_0
-#     (2025-02-12, 14ea9f49): typed IMP function pointers at five call
-#     sites for objc4; branch dar-451-daemon-start-wait adds a longer wait
-#     for a just-launched fswatcher/ddbd to register (DAR-451). Source of GWorkspace.app, Recycler.app,
-#     FSNode/DBKit and the ddbd/fswatcher tools (build_gnustep_gworkspace.sh).
 #     libjpeg-turbo 3.0.4: github.com/libjpeg-turbo/libjpeg-turbo tag 3.0.4,
 #     unmodified (IJG and zlib licences); gnustep-gui reads .jpg/.jpeg through it
 #     (build_libjpeg.sh, build_gnustep_gui.sh). Apple's ImageIO is closed.
@@ -946,7 +940,6 @@ milan|git@github.com:anurodhp/milan.git|v0.6|
 naples|git@github.com:anurodhp/naples.git|v0.1|
 libvterm|https://github.com/neovim/libvterm.git|v0.3.3|
 optimized-routines|https://github.com/ARM-software/optimized-routines.git|v26.07|
-gnustep-gworkspace|git@github.com:anurodhp/apps-gworkspace.git|iokit-port||https://github.com/gnustep/apps-gworkspace.git
 gnustep-eau-theme|git@github.com:anurodhp/gershwin-eau-theme.git|iokit-port||https://github.com/gershwin-desktop/gershwin-eau-theme.git
 gershwin-windowmanager|git@github.com:anurodhp/gershwin-windowmanager.git|iokit-port||https://github.com/gershwin-desktop/gershwin-windowmanager.git
 gsdm|git@github.com:anurodhp/gsdm.git|master|

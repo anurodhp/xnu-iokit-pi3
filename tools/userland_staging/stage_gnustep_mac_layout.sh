@@ -17,8 +17,7 @@
 #
 # The libraries are NOT rebuilt. Their install names (and every
 # LC_LOAD_DYLIB naming them: /usr/GNUstep/System/Library/Libraries/./
-# libgnustep-base.1.31.dylib, .../Frameworks/FSNode.framework/Versions/1/
-# ./FSNode, ...) stay the old paths, and resolve through the compatibility
+# libgnustep-base.1.31.dylib, .../Libraries/./libgnustep-gui.0.32.dylib, ...) stay the old paths, and resolve through the compatibility
 # symlinks left at the old locations:
 #   /usr/GNUstep/System/Applications -> ../../../Applications
 #   /usr/GNUstep/System/Library      -> ../../../System/Library
