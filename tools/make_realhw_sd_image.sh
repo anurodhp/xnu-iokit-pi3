@@ -140,14 +140,16 @@ echo "  -- same rename convention as the kernel above, NOT sdcard/'s frozen copy
 # 0:1 if present, `env import -t`s it and appends ${extra_bootargs}
 # (anurodhp/u-boot configs/rpi3_xnu_defconfig), so this needs no u-boot
 # rebuild and never drives u-boot over serial.
-# Default: fb_width=1280 fb_height=720 cpus=4 (cpus=4 starts cores 1-3, DAR-455; verified on the real Pi 2026-10-02; drop it for a single-core boot). Without the fb args the kernel framebuffer
-# is 640x480 (third_party/xnu-7195 pexpert/arm/pe_init.c,
-# bcm2837_video_init: commit c2383ed9e reads the two boot-args, clamped to
-# 320..1920 x 200..1200, and logs "requested WxH, granted WxH"); the login
-# window is clipped at 640 wide. Override:
+# Default: cpus=4 (starts cores 1-3, DAR-455; verified on the real Pi 2026-10-02; drop it for a single-core boot).
+# No fb args: the kernel framebuffer is the monitor's native size, asked of the
+# VideoCore firmware (Get Physical W/H, tag 0x00040003; third_party/xnu-7195
+# pexpert/arm/pe_init.c bcm2837_video_init), capped to 1920x1080 above the
+# gpu_mem-backed bounds, and 640x480 where the firmware reports nothing (QEMU).
+# fb_width/fb_height boot-args (clamped to 320..1920 x 200..1200) still force a
+# size, e.g. when the monitor's EDID is wrong. Override:
 #   REALHW_EXTRA_BOOTARGS="-user_fault_debug fb_width=1280 fb_height=720" tools/make_realhw_sd_image.sh out.img
 # or REALHW_EXTRA_BOOTARGS= (set but empty) for no uEnv.txt at all.
-REALHW_EXTRA_BOOTARGS="${REALHW_EXTRA_BOOTARGS-fb_width=1280 fb_height=720 cpus=4}"
+REALHW_EXTRA_BOOTARGS="${REALHW_EXTRA_BOOTARGS-cpus=4}"
 if [ -n "$REALHW_EXTRA_BOOTARGS" ]; then
     printf 'extra_bootargs=%s\n' "$REALHW_EXTRA_BOOTARGS" > "$BOOT_MNT/uEnv.txt"
     echo "+ wrote $BOOT_MNT/uEnv.txt: extra_bootargs=$REALHW_EXTRA_BOOTARGS"
