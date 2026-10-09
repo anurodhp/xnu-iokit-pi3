@@ -791,6 +791,17 @@ if [ -d "$(dirname "$WM_MENU_STAGED")" ] && ! cmp -s "$WM_MENU_SRC" "$WM_MENU_ST
     cp "$WM_MENU_SRC" "$WM_MENU_STAGED"
     echo "+ refreshed staged WMRootMenu from $WM_MENU_SRC"
 fi
+# Likewise the session autostart (Naples, Milan, Rome) and the dock/clip/miniwindow overrides in the global defaults.
+WM_AUTOSTART_SRC=tools/userland_staging/x11_config/session/autostart
+WM_AUTOSTART_STAGED="$XS_STAGE/usr/X11/share/WindowMaker/autostart"
+if [ -d "$(dirname "$WM_AUTOSTART_STAGED")" ] && ! cmp -s "$WM_AUTOSTART_SRC" "$WM_AUTOSTART_STAGED"; then
+    cp "$WM_AUTOSTART_SRC" "$WM_AUTOSTART_STAGED"
+    chmod 755 "$WM_AUTOSTART_STAGED"
+    echo "+ refreshed staged autostart from $WM_AUTOSTART_SRC"
+fi
+if [ -f "$XS_STAGE/usr/X11/etc/WindowMaker/WindowMaker" ]; then
+    tools/userland_staging/x11_config/wmaker/apply_defaults.sh "$XS_STAGE/usr/X11/etc/WindowMaker/WindowMaker"
+fi
 if [ -x "$XS_STAGE/usr/X11/bin/Xvfb" ]; then
     need_kb=$(du -sk "$XS_STAGE" | awk '{print $1}')
     free_kb=$(df -k "$MNT" | awk 'NR==2{print $4}')

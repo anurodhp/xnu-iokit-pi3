@@ -4,6 +4,18 @@
 # waits for it, so everything is backgrounded. gsdm's Xsession
 # (x11_config/gsdm/Xsession) has already exported DISPLAY and the GNUstep
 # environment, and this runs as the user who logged in.
+#
+# Naples first: it is the dock, the global menu bar and the menu server the
+# Eau theme of every later GNUstep app looks up when it starts (apps that
+# start earlier find it within 30 s). Window Maker's own dock, clip and
+# miniwindows are off (build_wmaker.sh).
+N=/Applications/Naples.app/Naples
+[ -x "$N" ] && "$N" &
+sleep 1
+# Milan draws the desktop (wallpaper and ~/Desktop icons) and opens no
+# browser window; the dock's Milan icon opens one.
+M=/Applications/Milan.app/Milan
+[ -x "$M" ] && "$M" -MilanDesktop YES -MilanOpenBrowser NO &
 T=/Applications/Rome.app/Rome
 [ -x "$T" ] && "$T" &
 exit 0

@@ -252,6 +252,8 @@ done
 sed -e "s:#extension#:xpm:" "$WMD/Defaults/WMWindowAttributes.in" > "$PKGCONF/WMWindowAttributes"
 sed -e "s:#pkgdatadir#:$X11_PREFIX/share/WindowMaker:" -e "s:#pixmapdir#:$X11_PREFIX/share/pixmaps:" \
     "$WMD/Defaults/WindowMaker.in" > "$PKGCONF/WindowMaker"
+# Naples replaces Window Maker's dock, clip, workspace UI and miniwindows (x11_config/wmaker/apply_defaults.sh).
+x11_config/wmaker/apply_defaults.sh "$PKGCONF/WindowMaker"
 sed -e "s:#wprefs#:$X11_PREFIX/bin/WPrefs:" "$WMD/Defaults/WMState.in" > "$PKGCONF/WMState"
 # Stock Window Maker look: the generated global defaults above, unmodified.
 # Their "Sans" fonts resolve to Inter through x11_config/fonts/61-inter-sans.conf
@@ -272,8 +274,9 @@ for f in $(am_data "$SRC/WINGs/Resources/Makefile.am" resdata_DATA); do
     cp "$SRC/WINGs/Resources/$f" "$STAGE/share/WINGs/"
 done
 
-# ---- Rome.app autostart ---------------------------------------------
+# ---- session autostart ----------------------------------------------
 # x11_config/session/autostart is wmaker's global init script; it opens
+# Naples.app (dock, menu bar, menu server), Milan.app (draws the desktop) and
 # Rome.app. The boot session itself (gsdm's login window, the Xsession
 # that execs wmaker as the logged-in user, the launchd plist) is staged by
 # build_gsdm.sh.
