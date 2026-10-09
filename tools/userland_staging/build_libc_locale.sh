@@ -144,7 +144,7 @@ EOF
 #   symbols anywhere, so there's no equivalent duplicate-export risk from
 #   a second producer -- still macro-gated rather than widened
 #   unconditionally, for the same auditability precedent.
-CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness \
     -DXLOCALE_STATE_EXPORTED=1 \
     -DCOLLATE_STATE_EXPORTED=1 \
@@ -231,8 +231,20 @@ done
 # listing exactly the files this loop compiled, matching the `for f in`
 # list above verbatim, instead of a wildcard over a directory this
 # script doesn't fully own.
+# Arm's AArch64 routines (build_armstring.sh) in place of the FreeBSD C for the functions it has, as in build_libc_string.sh (this script
+# writes the same freebsd_string/ directory, and this archive's copies are the ones libsystem_c.dylib links: build_libsystem_c.sh extracts
+# libc_locale_for_stdio.a after libc_string.a, so they win). The names without an Arm routine (strncpy, strlcpy, strlcat, ffs) stay.
+if [ ! -f "$OUT/armstring/libc/memset.o" ]; then
+    echo "error: $OUT/armstring not built -- run build_armstring.sh first" >&2
+    exit 1
+fi
+for g in "$OUT"/armstring/libc/*.o "$OUT"/armstring/body/*.o; do
+    cp "$g" "$OUT/freebsd_string/$(basename "$g")"
+done
+
 rm -f "$OUT/libc_locale.a"
 ar rcs "$OUT/libc_locale.a" \
+    "$OUT"/armstring/body/*.o \
     "$OUT"/apple_locale/*.o \
     "$OUT/freebsd_string/bcopy.o" "$OUT/freebsd_string/memcpy.o" "$OUT/freebsd_string/memmove.o" \
     "$OUT/freebsd_string/memset.o" "$OUT/freebsd_string/bzero.o" "$OUT/freebsd_string/memcmp.o" \

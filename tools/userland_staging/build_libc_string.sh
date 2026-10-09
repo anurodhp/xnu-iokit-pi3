@@ -66,7 +66,7 @@ cat > "$OUT/compat_include/sys/limits.h" <<'EOF'
 #endif
 EOF
 
-CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 -w \
+CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 -w \
     -D_LIBC_NO_FEATURE_VERIFICATION -D_FORTIFY_SOURCE=0 \
     -I $LIBC/include -I $LIBC/darwin -I $LIBC/fbsdcompat -I $LIBC/locale \
     -I $OUT/compat_include"
@@ -127,6 +127,20 @@ cat > "$OUT/freebsd_string/index.c" <<'EOF'
 char *index(const char *s, int c) { return strchr(s, c); }
 EOF
 "$CLANG" $CFLAGS -I "$OUT/compat_include" "$OUT/freebsd_string/index.c" -o "$OUT/freebsd_string/index.o"
+
+# Arm's AArch64 routines (build_armstring.sh) in place of the FreeBSD C for the functions it has: one glue object per name, under the same
+# member name (memcpy.o, memset.o, ... so build_libsystem_c.sh's per-name handling holds), plus the routines' own objects. The generic C
+# ran memset at 24 MB/s and unaligned memcpy at 47 MB/s (-O2 above helps the rest of this archive, but a byte loop stays a byte loop).
+if [ ! -f "$OUT/armstring/libc/memset.o" ]; then
+    echo "error: $OUT/armstring not built -- run build_armstring.sh first" >&2
+    exit 1
+fi
+for g in "$OUT"/armstring/libc/*.o; do
+    cp "$g" "$OUT/freebsd_string/$(basename "$g")"
+done
+for g in "$OUT"/armstring/body/*.o; do
+    cp "$g" "$OUT/freebsd_string/$(basename "$g")"
+done
 
 rm -f "$OUT/libc_string.a"
 ar rcs "$OUT/libc_string.a" "$OUT"/apple_string/*.o "$OUT"/freebsd_string/*.o

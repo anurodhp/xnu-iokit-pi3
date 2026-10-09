@@ -1242,6 +1242,8 @@ rm -f "$OUT/system/libsystem_c.dylib"
     -Wl,-alias,'_setenv$UNIX2003',_setenv \
     -Wl,-alias,'_unsetenv$UNIX2003',_unsetenv \
     -Wl,-alias,'_putenv$UNIX2003',_putenv \
+    `# Arm's string routines (build_armstring.sh, via libc_string.a) are linked in under Apple's names; their own symbols stay private` \
+    -Wl,-unexported_symbols_list,"$OUT/armstring/hidden.txt" \
     -o "$OUT/system/libsystem_c.dylib" \
     "$EXTRACT"/*.o \
     "$OUT/system/libsystem_kernel.dylib" "$OUT/system/libsystem_platform.dylib" \

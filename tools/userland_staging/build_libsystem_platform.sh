@@ -68,7 +68,7 @@ fi
 
 # Identical to build_libplatform.sh's own CFLAGS (not re-derived --
 # same real header graph).
-CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness -Wno-availability -Wno-deprecated-declarations \
     -D__API_AVAILABLE_PLATFORM_bridgeos(x)=ios,introduced=x \
     -DPRIVATE=1 -DSWITCH_OPTION_OSLOCK_DEPRESS=4 -DSWITCH_OPTION_OSLOCK_WAIT=5 -DLONG_BIT=64 \
@@ -153,6 +153,18 @@ PLATCFLAGS_VARIANT_STATIC="$CFLAGS -DVARIANT_STATIC=1"
     -o "$OUT/libsystem_platform/apple_platform/memmove.o"
 echo "apple_platform: bzero.o/memmove.o recompiled with -DVARIANT_STATIC=1 (real public memcpy/memset/memmove/bzero/__bzero wrappers, DAR-13)"
 
+# Arm's AArch64 string routines in place of libplatform's generic C (built before, build_armstring.sh): the generic _platform_memset
+# goes through _platform_memset_pattern4 and a memmove call per 4 bytes (24 MB/s); memmove/memcmp/strlen/strcmp/strchr were byte loops.
+# The glue defines the same symbols the removed objects did (the __platform_* names, public _memset/_memcpy, local _memmove/_bzero/___bzero),
+# so the unexported list below and every client are unchanged. memset_pattern*.o stays: it now calls the fast _platform_memmove.
+if [ ! -f "$OUT/armstring/platform/platform_memset.o" ]; then
+    echo "error: $OUT/armstring not built -- run build_armstring.sh first" >&2
+    exit 1
+fi
+rm -f "$OUT"/libsystem_platform/apple_platform/{bzero,memmove,memcmp,strcmp,strlen,strchr}.o
+cp "$OUT"/armstring/body/*.o "$OUT"/armstring/platform/*.o "$OUT/libsystem_platform/apple_platform/"
+echo "apple_platform: generic bzero/memmove/memcmp/strcmp/strlen/strchr replaced by the Arm routines"
+
 
 # setjmp(3) family (DAR-383, 2026-09-26): real, unmodified libplatform
 # src/setjmp/arm64/setjmp.s (_setjmp/_longjmp/_sigsetjmp/_siglongjmp and
@@ -227,6 +239,7 @@ rm -f "$OUT/system/libsystem_platform.dylib"
     `# ticket's real scope. See this file's own header comment above the` \
     `# VARIANT_STATIC=1 compiles for the full rationale.` \
     -Wl,-unexported_symbol,_memmove -Wl,-unexported_symbol,_bzero -Wl,-unexported_symbol,___bzero \
+    -Wl,-unexported_symbols_list,"$OUT/armstring/hidden.txt" \
     `# DAR-383 setjmp family: see the setjmp.s compile's comment above.` \
     -Wl,-unexported_symbol,__sigtramp -Wl,-unexported_symbol,___in_sigtramp \
     -o "$OUT/system/libsystem_platform.dylib" \

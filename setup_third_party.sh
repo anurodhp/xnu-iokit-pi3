@@ -766,6 +766,15 @@ mkdir -p third_party
 #     release tags; MIT. Rome's VT220/xterm emulator. Apple ships no
 #     terminal emulation library, so upstream is the source. Unmodified;
 #     built by build_libvterm.sh.
+#     optimized-routines: github.com/ARM-software/optimized-routines tag v26.07
+#     (4be260a), MIT OR Apache-2.0 WITH LLVM-exception. Arm's tested AArch64
+#     string routines (the code behind glibc's, Android's and FreeBSD's arm64
+#     libc): memcpy/memmove, memset, memcmp, memchr, strlen, strcmp, strncmp,
+#     strchr, strchrnul, strcpy, strnlen. Apple's arm64 string assembly is not
+#     published (libplatform up to 375.120.2 has only src/string/generic), and
+#     the generic C fallbacks ran at 24 MB/s (memset) to 330 MB/s (memcpy).
+#     Unmodified; its asmdefs.h already has a Mach-O (__APPLE__) mode; built by
+#     build_armstring.sh, whose per-symbol glue gives them Apple's names.
 #     ghostty (libghostty-vt, Rome's terminal emulation): github.com/
 #     ghostty-org/ghostty at commit a60e9e2 (main, 1.3.2-dev, 2026-10), MIT.
 #     Pinned by commit, not tag: the render-state, selection, key/mouse
@@ -936,6 +945,7 @@ rome|git@github.com:anurodhp/rome.git|v0.2|
 milan|git@github.com:anurodhp/milan.git|v0.6|
 naples|git@github.com:anurodhp/naples.git|v0.1|
 libvterm|https://github.com/neovim/libvterm.git|v0.3.3|
+optimized-routines|https://github.com/ARM-software/optimized-routines.git|v26.07|
 gnustep-gworkspace|git@github.com:anurodhp/apps-gworkspace.git|iokit-port||https://github.com/gnustep/apps-gworkspace.git
 gnustep-eau-theme|git@github.com:anurodhp/gershwin-eau-theme.git|iokit-port||https://github.com/gershwin-desktop/gershwin-eau-theme.git
 gershwin-windowmanager|git@github.com:anurodhp/gershwin-windowmanager.git|iokit-port||https://github.com/gershwin-desktop/gershwin-windowmanager.git
