@@ -13,15 +13,7 @@
  * two-level-namespace binding is what actually matters, not which
  * physical dylib "owns" it architecturally.
  *
- * strstr(3): no real Apple/FreeBSD source exists anywhere in this
- * project's pinned Libc checkout (confirmed via grep, not assumed) --
- * a real, if surprising, gap (already worked around per-consumer via
- * ncurses's own bundled copy, see build_launchd_core.sh's
- * launchd_libc_extras.a narrowing). Plain, well-known, textbook naive
- * substring search -- no numerical precision concerns (unlike the
- * still-open real libm gaps, see docs/backlog.md item d10's own
- * writeup), a legitimate last resort per CLAUDE.md's source-priority
- * rule.
+ * strstr(3): was a hand-written naive loop here (no source in the pinned Libc); now FreeBSD 15's two-way strstr.c, built by build_armstring.sh.
  */
 #include <stddef.h>
 #include <stdint.h>
@@ -32,23 +24,7 @@ long __stack_chk_guard = 0x0BADC0DEDEADBEEFL;
 void __stack_chk_fail(void) { extern void abort(void); abort(); }
 void __chkstk_darwin(void) {}
 
-char *strstr(const char *haystack, const char *needle) {
-    if (*needle == '\0') {
-        return (char *)haystack;
-    }
-    for (; *haystack != '\0'; haystack++) {
-        const char *h = haystack;
-        const char *n = needle;
-        while (*h != '\0' && *n != '\0' && *h == *n) {
-            h++;
-            n++;
-        }
-        if (*n == '\0') {
-            return (char *)haystack;
-        }
-    }
-    return NULL;
-}
+/* strstr() is FreeBSD 15's two-way implementation now (build_armstring.sh); the naive loop that was here is gone. */
 
 /* div(): plain C integer division, exact (C99 truncates toward zero,
  * which is div_t's required semantics).

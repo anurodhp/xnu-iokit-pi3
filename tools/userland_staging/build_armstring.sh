@@ -17,7 +17,7 @@
 #
 # Also assembled here: FreeBSD's own arm64 NEON additions (third_party/freebsd-src-15, release/15.0.0, lib/libc/aarch64/string, BSD-2-Clause,
 # Getz Mikalsen): strlcpy, strspn, strcspn, memccpy, timingsafe_bcmp, timingsafe_memcmp, and their C wrappers strcat, strncat, strlcat,
-# strpbrk, strsep. Unmodified but for the ELF-only .weak/.set alias lines, which are stripped (the aliases are the glue below), and three
+# strpbrk, strsep, and the two-way strstr/memmem. Unmodified but for the ELF-only .weak/.set alias lines, which are stripped (the aliases are the glue below), and three
 # branches to libc's strlen/strchrnul, which need Mach-O names (they go to the Arm routines in this set); FreeBSD's
 # <machine/asm.h> ENTRY/END are provided for Mach-O by a three-line shim written here.
 #
@@ -106,6 +106,19 @@ glue libc strlcpy   _strlcpy     "$(b ___strlcpy)"
 glue libc strspn    _strspn      "$(b ___strspn)"
 glue libc strcspn   _strcspn     "$(b ___strcspn)"
 glue libc memccpy   _memccpy     "$(b ___memccpy)"
+
+# FreeBSD's two-way strstr and memmem (MIT, from musl; the image's strstr was a hand-written naive loop in libsystem_c_gap_compat.c, Apple's memmem a
+# memchr loop), and strncpy/stpncpy over the fast primitives (armstring_strncpy.c)
+FS="../../third_party/freebsd-src-15/lib/libc/string"
+[ -f "$FS/strstr.c" ] || { echo "error: $FS/strstr.c not found -- run setup_third_party.sh (freebsd-src-15)" >&2; exit 1; }
+for f in strstr memmem; do
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -O2 -ffreestanding -fno-builtin -fno-stack-protector -w \
+        -D_FORTIFY_SOURCE=0 -D_LIBC_NO_FEATURE_VERIFICATION "$FS/$f.c" -o "$D/libc/$f.o"
+done
+for def in strncpy stpncpy; do
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -O2 -ffreestanding -fno-builtin -fno-stack-protector -w -D_FORTIFY_SOURCE=0 \
+        -DWANT_$(echo $def | tr a-z A-Z) armstring_strncpy.c -o "$D/libc/$def.o"
+done
 
 # FreeBSD's C wrappers over those routines, compiled like the rest of libc (-O2, freestanding, no fortify so the wrappers cannot rewrite into themselves)
 for f in strcat strncat strlcat strpbrk strsep; do

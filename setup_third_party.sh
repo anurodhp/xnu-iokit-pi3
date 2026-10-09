@@ -1291,7 +1291,8 @@ if [ -n "$FREEBSD_DEST" ]; then
     git -C "$FREEBSD_DEST" checkout "$FREEBSD_REF"
 fi
 
-# freebsd-src-15: a second, sparse checkout of FreeBSD release/15.0.0 (2025-12), only lib/libc/aarch64/string. FreeBSD's arm64 libc has NEON
+# freebsd-src-15: a second, sparse checkout of FreeBSD release/15.0.0 (2025-12): lib/libc/aarch64/string, and lib/libc/string/strstr.c + memmem.c (MIT,
+# the two-way algorithm from musl; the image's strstr was a hand-written naive loop, Apple's memmem a naive memchr loop). FreeBSD's arm64 libc has NEON
 # string routines the pinned 13.2 checkout predates: strlcpy, strspn, strcspn, memccpy, timingsafe_bcmp, timingsafe_memcmp (Getz Mikalsen,
 # BSD-2-Clause, SPDX-tagged) and the C wrappers built on them (strcat, strncat, strlcat, strpbrk, strsep). Built unmodified (except the ELF
 # .weak/.set alias lines, which Mach-O has no equivalent of) by build_armstring.sh together with Arm's optimized-routines.
@@ -1311,7 +1312,7 @@ if [ -n "$FREEBSD15_DEST" ]; then
     git clone --filter=blob:none --no-checkout --depth 1 --branch "$FREEBSD15_REF" \
         https://github.com/freebsd/freebsd-src.git "$FREEBSD15_DEST"
     git -C "$FREEBSD15_DEST" sparse-checkout init --no-cone
-    printf '/lib/libc/aarch64/string/*\n' > "$FREEBSD15_DEST/.git/info/sparse-checkout"
+    printf '/lib/libc/aarch64/string/*\n/lib/libc/string/strstr.c\n/lib/libc/string/memmem.c\n' > "$FREEBSD15_DEST/.git/info/sparse-checkout"
     git -C "$FREEBSD15_DEST" checkout "$FREEBSD15_REF"
 fi
 
