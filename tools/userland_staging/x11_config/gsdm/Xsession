@@ -75,4 +75,19 @@ if [ -s "$startup" ]; then
         exec /bin/sh "$startup"
     fi
 fi
-exec /usr/X11/bin/wmaker
+# Naples' Hexley menu (Log Out, Restart, Shut Down) ends the window manager; for Restart and Shut Down it first leaves the
+# request in ~/.session-request. gsdm turns exit status 10 into a restart and 11 into a shut down (gsdm README), so this
+# script cannot exec the window manager: it has to be around to read the request after it ends.
+request="$HOME/.session-request"
+rm -f "$request"
+/usr/X11/bin/wmaker
+status=$?
+if [ -f "$request" ]; then
+    action=`cat "$request" 2>/dev/null`
+    rm -f "$request"
+    case "$action" in
+    restart) exit 10 ;;
+    shutdown) exit 11 ;;
+    esac
+fi
+exit $status
