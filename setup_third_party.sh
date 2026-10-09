@@ -750,11 +750,11 @@ mkdir -p third_party
 #     iokit-port, upstream master 46ef973 (2026-06-28) unmodified -- the
 #     repo has no release tag newer than 2000, so the fork branch is what
 #     pins the commit. Source of Ink.app (build_gnustep_ink.sh).
-#     milan: anurodhp/milan (this project's own repo), tag v0.6: Milan.app, a
+#     milan: anurodhp/milan (this project's own repo), tag v0.7: Milan.app, a
 #     small fast Finder-style GNUstep file manager (build_milan.sh). Not a
 #     fork: there is no upstream. v0.6 draws the desktop (-MilanDesktop), which
 #     the session autostart uses.
-#     naples: anurodhp/naples (this project's own repo), tag v0.1: Naples.app,
+#     naples: anurodhp/naples (this project's own repo), tag v0.2: Naples.app,
 #     the dock (apps, running programs, minimized windows, Trash), the global
 #     menu bar (Hexley, the frontmost app's menu, clock) and the menu server for
 #     the Eau theme (build_naples.sh). Not a fork: there is no upstream.
@@ -942,8 +942,8 @@ gnustep-examples|git@github.com:anurodhp/tests-examples.git|iokit-port||https://
 libtiff|https://gitlab.com/libtiff/libtiff.git|v4.7.1|
 libjpeg-turbo|https://github.com/libjpeg-turbo/libjpeg-turbo.git|3.0.4|
 rome|git@github.com:anurodhp/rome.git|v0.2|
-milan|git@github.com:anurodhp/milan.git|v0.6|
-naples|git@github.com:anurodhp/naples.git|v0.1|
+milan|git@github.com:anurodhp/milan.git|v0.7|
+naples|git@github.com:anurodhp/naples.git|v0.2|
 libvterm|https://github.com/neovim/libvterm.git|v0.3.3|
 optimized-routines|https://github.com/ARM-software/optimized-routines.git|v26.07|
 gnustep-gworkspace|git@github.com:anurodhp/apps-gworkspace.git|iokit-port||https://github.com/gnustep/apps-gworkspace.git

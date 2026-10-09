@@ -642,7 +642,7 @@ Apple ships neither of these, and GNUstep is the chosen GUI layer
 | `gnustep-back` | `gnustep/libs-back` `back-0_32_0` | DAR-390: x11 server, cairo graphics; unmodified |
 | `gnustep-examples` | fork `anurodhp/tests-examples` `iokit-port` (upstream master 46ef973) | DAR-390: Ink.app; unmodified, the fork branch pins the commit |
 | `libtiff` | `gitlab.com/libtiff/libtiff` `v4.7.1` | DAR-390: gnustep-gui requires it; Apple publishes no libtiff |
-| `naples` | own repo `anurodhp/naples` tag `v0.1` | Naples.app: dock, global menu bar and Eau menu server for GNUstep + Window Maker (`build_naples.sh`) |
+| `naples` | own repo `anurodhp/naples` tag `v0.2` | Naples.app: dock, global menu bar and Eau menu server for GNUstep + Window Maker (`build_naples.sh`) |
 | `rome` | own repo `anurodhp/rome` tag `v0.1` | Rome.app, GNUstep terminal (`build_rome.sh`) |
 | `libvterm` | `neovim/libvterm` `v0.3.3` (git mirror of lp:libvterm) | Rome's former terminal emulator, MIT; unmodified, `build_libvterm.sh` (no longer used by Rome) |
 | `ghostty` | `ghostty-org/ghostty` commit `a60e9e2` (main, 1.3.2-dev) | libghostty-vt, Rome's terminal emulation, MIT; unmodified, `build_libghostty_vt.sh` (Zig 0.16) |
