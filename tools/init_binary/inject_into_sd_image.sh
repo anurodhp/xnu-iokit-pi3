@@ -802,6 +802,9 @@ fi
 if [ -f "$XS_STAGE/usr/X11/etc/WindowMaker/WindowMaker" ]; then
     tools/userland_staging/x11_config/wmaker/apply_defaults.sh "$XS_STAGE/usr/X11/etc/WindowMaker/WindowMaker"
 fi
+if [ -f "$XS_STAGE/usr/X11/etc/WindowMaker/WMWindowAttributes" ]; then
+    tools/userland_staging/x11_config/wmaker/apply_window_attributes.sh "$XS_STAGE/usr/X11/etc/WindowMaker/WMWindowAttributes"
+fi
 if [ -x "$XS_STAGE/usr/X11/bin/Xvfb" ]; then
     need_kb=$(du -sk "$XS_STAGE" | awk '{print $1}')
     free_kb=$(df -k "$MNT" | awk 'NR==2{print $4}')

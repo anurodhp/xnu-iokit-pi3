@@ -250,6 +250,8 @@ done
 # WindowMaker/Defaults/Makefile.am: ICONEXT=xpm (no libtiff,
 # configure.ac:830-832), pkgdatadir/pixmapdir per config-paths.h.
 sed -e "s:#extension#:xpm:" "$WMD/Defaults/WMWindowAttributes.in" > "$PKGCONF/WMWindowAttributes"
+# No application icons: Window Maker's dock is off and Naples is the dock (x11_config/wmaker/apply_window_attributes.sh).
+x11_config/wmaker/apply_window_attributes.sh "$PKGCONF/WMWindowAttributes"
 sed -e "s:#pkgdatadir#:$X11_PREFIX/share/WindowMaker:" -e "s:#pixmapdir#:$X11_PREFIX/share/pixmaps:" \
     "$WMD/Defaults/WindowMaker.in" > "$PKGCONF/WindowMaker"
 # Naples replaces Window Maker's dock, clip, workspace UI and miniwindows (x11_config/wmaker/apply_defaults.sh).
