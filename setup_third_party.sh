@@ -754,7 +754,7 @@ mkdir -p third_party
 #     small fast Finder-style GNUstep file manager (build_milan.sh). Not a
 #     fork: there is no upstream. v0.6 draws the desktop (-MilanDesktop), which
 #     the session autostart uses.
-#     naples: anurodhp/naples (this project's own repo), tag v0.2: Naples.app,
+#     naples: anurodhp/naples (this project's own repo), tag v0.3: Naples.app,
 #     the dock (apps, running programs, minimized windows, Trash), the global
 #     menu bar (Hexley, the frontmost app's menu, clock) and the menu server for
 #     the Eau theme (build_naples.sh). Not a fork: there is no upstream.
@@ -932,7 +932,7 @@ libtiff|https://gitlab.com/libtiff/libtiff.git|v4.7.1|
 libjpeg-turbo|https://github.com/libjpeg-turbo/libjpeg-turbo.git|3.0.4|
 rome|git@github.com:anurodhp/rome.git|v0.2|
 milan|git@github.com:anurodhp/milan.git|v0.7|
-naples|git@github.com:anurodhp/naples.git|v0.2|
+naples|git@github.com:anurodhp/naples.git|v0.3|
 libvterm|https://github.com/neovim/libvterm.git|v0.3.3|
 optimized-routines|https://github.com/ARM-software/optimized-routines.git|v26.07|
 gnustep-eau-theme|git@github.com:anurodhp/gershwin-eau-theme.git|iokit-port||https://github.com/gershwin-desktop/gershwin-eau-theme.git
