@@ -90,6 +90,26 @@ def release_lock():
         pass
 
 
+def monitor_send(cmds):
+    """Send QEMU monitor commands to qemu/mon.sock (runvm.sh's -monitor)."""
+    import socket
+    c = socket.socket(socket.AF_UNIX)
+    c.settimeout(5)
+    c.connect(os.path.join(REPO, "qemu", "mon.sock"))
+    try:
+        c.recv(65536)
+    except OSError:
+        pass
+    for cmd in cmds:
+        c.sendall((cmd + "\n").encode())
+        time.sleep(0.5)
+        try:
+            c.recv(65536)
+        except OSError:
+            pass
+    c.close()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--timeout", type=float, default=180,
@@ -106,6 +126,13 @@ def main():
     ap.add_argument("--cmd", action="append", default=[],
                     help="shell command to type once the prompt appears; "
                          "repeatable, sent in order")
+    ap.add_argument("--on-match", action="append", default=[],
+                    metavar="REGEX=MONCMD[;MONCMD...]",
+                    help="when REGEX first appears on the console, send "
+                         "the ';'-separated QEMU monitor commands to "
+                         "qemu/mon.sock (device_add, sendkey, mouse_move...), "
+                         "0.5s apart. For hot-plug tests where the guest "
+                         "prints a marker and the host reacts.")
     ap.add_argument("--login", action="store_true",
                     help="log in at the 'login:' prompt before sending any "
                          "--cmd (see tools/init_binary/inject_into_sd_image.sh "
@@ -127,6 +154,10 @@ def main():
         args.expect_fail.append(r"panic\(")
     expect_fail = [(p, re.compile(p)) for p in args.expect_fail]
     pending_cmds = list(args.cmd)
+    on_match = []
+    for spec in args.on_match:
+        rx_s, _, cmds = spec.partition("=")
+        on_match.append([re.compile(rx_s), [c.strip() for c in cmds.split(";") if c.strip()], False])
     need_login = args.login
     need_password = False
 
@@ -196,6 +227,11 @@ def main():
                     logf.write(chunk)
                     logf.flush()
                 break
+            for om in on_match:
+                if not om[2] and om[0].search(text):
+                    om[2] = True
+                    print(f"[boot_test] on-match {om[0].pattern!r}: monitor {om[1]}")
+                    monitor_send(om[1])
             for pat, rx in expect:
                 if pat not in matched and rx.search(text):
                     matched.add(pat)
