@@ -820,6 +820,8 @@ IOSerialFamily|https://github.com/apple-oss-distributions/IOSerialFamily.git|IOS
 AppleUSBCDCDriver|git@github.com:anurodhp/AppleUSBCDCDriver.git|iokit-port||https://github.com/apple-oss-distributions/AppleUSBCDCDriver.git
 IONetworkingFamily|https://github.com/apple-oss-distributions/IONetworkingFamily.git|IONetworkingFamily-151.40.1|
 IOGraphics|git@github.com:anurodhp/IOGraphics.git|iokit-port||https://github.com/apple-oss-distributions/IOGraphics.git
+# IOAudioFamily-300.6.1 is the macos-112 manifest tag (distribution-macOS commit 63c6ce08). DARW-310: audio out. Fork carries the two kernel-build gap fixes.
+IOAudioFamily|git@github.com:anurodhp/IOAudioFamily.git|iokit-port||https://github.com/apple-oss-distributions/IOAudioFamily.git
 IOHIDFamily|git@github.com:anurodhp/IOHIDFamily.git|iokit-port||https://github.com/apple-oss-distributions/IOHIDFamily.git
 xxHash|https://github.com/Cyan4973/xxHash.git|v0.8.2|
 lzfse|https://github.com/lzfse/lzfse.git|lzfse-1.0|
