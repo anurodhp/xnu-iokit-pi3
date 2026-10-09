@@ -17,8 +17,7 @@
 #
 # The libraries are NOT rebuilt. Their install names (and every
 # LC_LOAD_DYLIB naming them: /usr/GNUstep/System/Library/Libraries/./
-# libgnustep-base.1.31.dylib, .../Frameworks/FSNode.framework/Versions/1/
-# ./FSNode, ...) stay the old paths, and resolve through the compatibility
+# libgnustep-base.1.31.dylib, .../Libraries/./libgnustep-gui.0.32.dylib, ...) stay the old paths, and resolve through the compatibility
 # symlinks left at the old locations:
 #   /usr/GNUstep/System/Applications -> ../../../Applications
 #   /usr/GNUstep/System/Library      -> ../../../System/Library
@@ -95,7 +94,7 @@ for t in "$S/Tools"/*; do
         l="$(readlink "$t")"
         case "$l" in
             ../Applications/*) ln -s "../../../Applications/${l#../Applications/}" "$OUT/usr/local/bin/$n" ;;
-            # Apps installed under Library/CoreServices (Gershwin's WindowManager).
+            # Apps installed under Library/CoreServices.
             ../Library/*) ln -s "../../../System/Library/${l#../Library/}" "$OUT/usr/local/bin/$n" ;;
             *) echo "error: $t -> $l is a symlink this script does not know how to move" >&2; exit 1 ;;
         esac

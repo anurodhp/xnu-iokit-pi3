@@ -649,4 +649,3 @@ Apple ships neither of these, and GNUstep is the chosen GUI layer
 | `jetbrains-mono-2.304` | `JetBrains/JetBrainsMono` release `v2.304` zip, SHA-256 pinned | monospace font for terminals and the system `monospace`/`NSFixedPitchFont` (Regular, Bold, Italic, BoldItalic); OFL-1.1; `setup_third_party.sh`, staged by `build_fonts.sh` |
 | `unifont-16.0.01` | GNU Unifont 16.0.01 OTF from unifoundry.com, SHA-256 pinned | fallback font with a glyph for every Basic Multilingual Plane code point (CJK, Hangul, kana, Thai, Indic, Arabic, Hebrew); GPL-2.0+ with font-embedding exception or OFL-1.1; `build_fonts.sh` |
 | `noto-emoji` | `google/fonts` commit `2eb0b48`, `ofl/notoemoji/NotoEmoji[wght].ttf`, SHA-256 pinned | monochrome emoji fallback; OFL-1.1; `build_fonts.sh` |
-| `gnustep-gworkspace` | fork `anurodhp/apps-gworkspace` `iokit-port` (off tag gworkspace-1_0_0, 14ea9f49) | DAR-392: GWorkspace.app, Recycler, FSNode/DBKit, ddbd/fswatcher; typed IMPs for objc4 |

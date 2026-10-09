@@ -56,9 +56,7 @@ The main repo itself is `anurodhp/xnu-iokit-pi3`.
 | `gnustep-examples` | `anurodhp/tests-examples` | `iokit-port` | gnustep/tests-examples (master 46ef973, unmodified; pins the commit) |
 | `naples` | `anurodhp/naples` | `v0.2` (tag) | none: this project's own repo (Naples.app dock and menu bar, build_naples.sh) |
 | `rome` | `anurodhp/rome` | `v0.1` (tag) | none: this project's own repo (Rome.app terminal, build_rome.sh) |
-| `gnustep-gworkspace` | `anurodhp/apps-gworkspace` | `iokit-port` | gnustep/apps-gworkspace tag gworkspace-1_0_0 (14ea9f49); typed IMPs for objc4 DAR-392, longer fswatcher/ddbd start wait DAR-451 |
 | `gnustep-eau-theme` | `anurodhp/gershwin-eau-theme` | `iokit-port` | gershwin-desktop/gershwin-eau-theme main 3d741fbc (LGPL-2.1); no NSRegularExpression, GWDialog via class_addMethod, EAU_NO_TEST (DAR-461) |
-| `gershwin-windowmanager` | `anurodhp/gershwin-windowmanager` | `iokit-port` | gershwin-desktop/gershwin-windowmanager main 10b6797 (MIT); compositing off by default, IOKIT_PORT=1 build (Gershwin M2) |
 
 On-disk remote naming varies. Repos converted from patch files keep
 Apple as `origin` and the fork as `fork`, so push with `git push fork

@@ -3,7 +3,6 @@
  ("Milan", EXEC, "/Applications/Milan.app/Milan"),
  ("Rome", EXEC, "/Applications/Rome.app/Rome"),
  ("Ink", EXEC, "/Applications/Ink.app/Ink"),
- ("GWorkspace", EXEC, "/Applications/GWorkspace.app/GWorkspace"),
  ("Florence", EXEC, "/Applications/Florence.app/Florence"),
  ("X Events", EXEC, "/usr/X11/bin/xev"),
  ("Commands",

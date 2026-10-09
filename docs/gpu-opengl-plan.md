@@ -12,7 +12,7 @@ on them.
    exactly what we already use: Xorg built via nix (`xorg-server` 21.1.24,
    xvfb.nix) with the busless 2D DDX `xf86-video-puredarwingop` (shadow fb
    into the PDGOP VRAM map) and `xf86-input-iohid`. Their Wayland effort
-   (`gershwin-desktop`) is 2D too. So "use what they've done" covers the X
+   is 2D too. So "use what they've done" covers the X
    server only, which we already ship.
 2. **Our X build deliberately has no GL (V).** `build_xserver.sh:190-191`:
    `-Dglamor=false -Dglx=false -Ddri1/2/3=false -Ddrm=false`. No Mesa, libdrm,
