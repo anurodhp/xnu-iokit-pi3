@@ -86,11 +86,17 @@ public:
 
 	// Takes a free, ARM-usable channel with its own interrupt. The callback
 	// fires on every channel interrupt until freeChannel().
-	IOReturn allocateChannel(uint32_t *channelOut, BCM2837DMACallback cb, void *ref);
+	// needNormalChannel: only channels 0-6 (full DMA; 7-14 are DMA-Lite with a
+	// 16-bit length and no 2D mode).
+	IOReturn allocateChannel(uint32_t *channelOut, BCM2837DMACallback cb, void *ref,
+	    bool needNormalChannel = false);
+	// Stops the channel, waits for a running callback to return, then releases it.
 	void     freeChannel(uint32_t channel);
 
 	// Resets the channel, points it at a control-block chain (bus address of
-	// the first block) and sets ACTIVE. `csFlags` is ORed into CS (priority).
+	// the first block, in the 0xc0000000 alias, 32-byte aligned) and sets
+	// ACTIVE. `csFlags` may carry only the priority fields and
+	// WAIT_FOR_OUTSTANDING_WRITES. The channel must be allocated.
 	IOReturn startChannel(uint32_t channel, uint32_t firstCbBus, uint32_t csFlags = 0);
 	// Abort + reset; safe on an idle channel.
 	void     stopChannel(uint32_t channel);
@@ -109,12 +115,17 @@ private:
 	void handleChannelInterrupt(uint32_t channel);
 	volatile uint32_t *chan(uint32_t channel) const;
 	void selfTest();
+	void unwind();
 
 	IOService               *fProvider;
 	IOMemoryMap             *fRegMap;
 	volatile uint8_t        *fRegs;
 	IOLock                  *fAllocLock;
+	IOSimpleLock            *fCbLock;          // guards fCallback/fCallbackRef/fInFlight
 	uint32_t                 fFreeMask;        // channels available to allocate
+	uint32_t                 fAllocatedMask;   // channels handed out
+	volatile uint32_t        fInFlight[16];    // callbacks currently running
+	volatile uint32_t        fErrorCount[16];  // channel ERROR seen in the interrupt
 	uint32_t                 fIrqMask;         // channels with a registered interrupt
 	BCM2837DMACallback       fCallback[16];
 	void                    *fCallbackRef[16];

@@ -16,9 +16,26 @@ enum {
 	kRegEnable    = 0xff0,
 
 	kMaxIrqChannels = 11,       // channels 0-10 have a dedicated IRQ
+	kNormalChannels = 7,        // 0-6 are full channels, 7-14 DMA-Lite
+	kCsDisDebug     = 1U << 29,
+	// CS fields a client may set: PRIORITY [19:16], PANIC_PRIORITY [23:20],
+	// WAIT_FOR_OUTSTANDING_WRITES [28].
+	kCsClientMask   = (0xfU << 16) | (0xfU << 20) | (1U << 28),
+	// DEBUG register error flags (write 1 to clear): READ_LAST_NOT_SET_ERROR,
+	// FIFO_ERROR, READ_ERROR.
+	kDebugErrors    = 0x7,
 	// brcm,dma-channel-mask, see the header.
 	kArmChannelMask = 0x7f35,
 };
+
+// Orders the control-block stores (Normal non-cacheable mapping) before the
+// register writes that make the engine fetch them (Device mapping), as
+// BCM2837DWC2 does before kicking a channel ("dsb sy").
+static inline void
+dmaBarrier(void)
+{
+	__asm__ volatile ("dsb sy" ::: "memory");
+}
 
 volatile uint32_t *
 BCM2837DMA::chan(uint32_t channel) const
@@ -35,33 +52,42 @@ BCM2837DMA::start(IOService *provider)
 	fProvider = provider;
 	fRegMap = NULL;
 	fRegs = NULL;
+	fAllocLock = NULL;
+	fCbLock = NULL;
 	fFreeMask = 0;
 	fIrqMask = 0;
+	fAllocatedMask = 0;
 	bzero(fCallback, sizeof(fCallback));
 	bzero(fCallbackRef, sizeof(fCallbackRef));
 	bzero((void *)fIrqCount, sizeof(fIrqCount));
+	bzero((void *)fInFlight, sizeof(fInFlight));
+	bzero((void *)fErrorCount, sizeof(fErrorCount));
 
 	fAllocLock = IOLockAlloc();
-	if (fAllocLock == NULL) {
+	fCbLock = IOSimpleLockAlloc();
+	if (fAllocLock == NULL || fCbLock == NULL) {
+		unwind();
 		return false;
 	}
 
 	fRegMap = provider->mapDeviceMemoryWithIndex(0);
 	if (fRegMap == NULL) {
 		IOLog("BCM2837DMA: cannot map the register block\n");
+		unwind();
 		return false;
 	}
 	fRegs = (volatile uint8_t *)fRegMap->getVirtualAddress();
 
-	// Enable the channels (ENABLE bit n, reset default: all on) and reset
-	// the ones we will hand out so none starts from firmware-left state.
-	*(volatile uint32_t *)(fRegs + kRegEnable) = 0x7fff;
+	// Enable only the channels we may use (ENABLE bit n), leaving the
+	// firmware's alone, and reset the ones we will hand out so none starts
+	// from firmware-left state.
+	volatile uint32_t *enable = (volatile uint32_t *)(fRegs + kRegEnable);
+	*enable = *enable | (kArmChannelMask & 0x7fff);
 	for (uint32_t ch = 0; ch < kMaxIrqChannels; ch++) {
 		if (!(kArmChannelMask & (1U << ch))) {
 			continue;
 		}
 		*chan(ch) = kDMACsReset;
-		// RESET self-clears; bounded wait.
 		for (int i = 0; i < 1000 && (*chan(ch) & kDMACsReset); i++) {
 			IODelay(1);
 		}
@@ -82,6 +108,7 @@ BCM2837DMA::start(IOService *provider)
 	}
 	if (fFreeMask == 0) {
 		IOLog("BCM2837DMA: no usable channel\n");
+		unwind();
 		return false;
 	}
 	IOLog("BCM2837DMA: channels available %#x\n", fFreeMask);
@@ -95,43 +122,77 @@ BCM2837DMA::start(IOService *provider)
 	return true;
 }
 
+// Releases whatever start() acquired; safe on any partial state.
 void
-BCM2837DMA::stop(IOService *provider)
+BCM2837DMA::unwind()
 {
-	for (uint32_t ch = 0; ch < kMaxIrqChannels; ch++) {
-		if (fIrqMask & (1U << ch)) {
-			*chan(ch) = kDMACsReset;
-			provider->disableInterrupt((int)ch);
-			provider->unregisterInterrupt((int)ch);
+	if (fProvider && fRegs) {
+		for (uint32_t ch = 0; ch < kMaxIrqChannels; ch++) {
+			if (fIrqMask & (1U << ch)) {
+				*chan(ch) = kDMACsReset;
+				fProvider->disableInterrupt((int)ch);
+				fProvider->unregisterInterrupt((int)ch);
+			}
 		}
 	}
 	fIrqMask = 0;
+	fFreeMask = 0;
 	OSSafeReleaseNULL(fRegMap);
+	fRegs = NULL;
+	if (fCbLock) {
+		IOSimpleLockFree(fCbLock);
+		fCbLock = NULL;
+	}
 	if (fAllocLock) {
 		IOLockFree(fAllocLock);
 		fAllocLock = NULL;
 	}
+}
+
+void
+BCM2837DMA::stop(IOService *provider)
+{
+	// Clients should have freed their channels. Force-free any that did not
+	// so no interrupt can call into a client that is going away.
+	for (uint32_t ch = 0; ch < kMaxIrqChannels; ch++) {
+		if (fAllocatedMask & (1U << ch)) {
+			IOLog("BCM2837DMA: channel %u still allocated at stop, freeing it\n", ch);
+			freeChannel(ch);
+		}
+	}
+	unwind();
 	super::stop(provider);
 }
 
 IOReturn
-BCM2837DMA::allocateChannel(uint32_t *channelOut, BCM2837DMACallback cb, void *ref)
+BCM2837DMA::allocateChannel(uint32_t *channelOut, BCM2837DMACallback cb, void *ref,
+    bool needNormalChannel)
 {
+	if (channelOut == NULL || cb == NULL || fAllocLock == NULL) {
+		return kIOReturnBadArgument;
+	}
 	IOLockLock(fAllocLock);
-	if (fFreeMask == 0) {
+	uint32_t avail = fFreeMask;
+	if (needNormalChannel) {
+		avail &= (1U << kNormalChannels) - 1;
+	}
+	if (avail == 0) {
 		IOLockUnlock(fAllocLock);
 		return kIOReturnNoResources;
 	}
-	uint32_t ch = __builtin_ctz(fFreeMask);
+	uint32_t ch = __builtin_ctz(avail);
 	fFreeMask &= ~(1U << ch);
+	fAllocatedMask |= 1U << ch;
 	IOLockUnlock(fAllocLock);
 
 	*chan(ch) = kDMACsReset;
 	for (int i = 0; i < 1000 && (*chan(ch) & kDMACsReset); i++) {
 		IODelay(1);
 	}
+	IOInterruptState s = IOSimpleLockLockDisableInterrupt(fCbLock);
+	fCallback[ch] = cb;
 	fCallbackRef[ch] = ref;
-	fCallback[ch] = cb;      // last: the handler checks this
+	IOSimpleLockUnlockEnableInterrupt(fCbLock, s);
 	*channelOut = ch;
 	return kIOReturnSuccess;
 }
@@ -139,13 +200,22 @@ BCM2837DMA::allocateChannel(uint32_t *channelOut, BCM2837DMACallback cb, void *r
 void
 BCM2837DMA::freeChannel(uint32_t channel)
 {
-	if (channel >= kMaxIrqChannels || !(fIrqMask & (1U << channel))) {
+	if (channel >= kMaxIrqChannels || !(fAllocatedMask & (1U << channel))) {
 		return;
 	}
 	stopChannel(channel);
+	// No new callback from here on...
+	IOInterruptState s = IOSimpleLockLockDisableInterrupt(fCbLock);
 	fCallback[channel] = NULL;
 	fCallbackRef[channel] = NULL;
+	IOSimpleLockUnlockEnableInterrupt(fCbLock, s);
+	// ...and wait for one that was already running on another CPU, so the
+	// client's context can be destroyed when this returns.
+	for (int i = 0; i < 1000 && fInFlight[channel]; i++) {
+		IOSleep(1);
+	}
 	IOLockLock(fAllocLock);
+	fAllocatedMask &= ~(1U << channel);
 	fFreeMask |= 1U << channel;
 	IOLockUnlock(fAllocLock);
 }
@@ -153,14 +223,17 @@ BCM2837DMA::freeChannel(uint32_t channel)
 IOReturn
 BCM2837DMA::startChannel(uint32_t channel, uint32_t firstCbBus, uint32_t csFlags)
 {
-	if (channel >= kMaxIrqChannels || !(fIrqMask & (1U << channel)) || (firstCbBus & 0x1f)) {
+	if (channel >= kMaxIrqChannels || !(fAllocatedMask & (1U << channel)) ||
+	    (firstCbBus & 0x1f) || firstCbBus < kBCM2837DMABusAlias || (csFlags & ~kCsClientMask)) {
 		return kIOReturnBadArgument;
 	}
 	*chan(channel) = kDMACsReset;
 	for (int i = 0; i < 1000 && (*chan(channel) & kDMACsReset); i++) {
 		IODelay(1);
 	}
+	dmaBarrier();       // control blocks (NC memory) visible before the engine fetches them
 	chan(channel)[kRegConblkAd] = firstCbBus;
+	dmaBarrier();
 	*chan(channel) = kDMACsActive | csFlags;
 	return kIOReturnSuccess;
 }
@@ -168,15 +241,21 @@ BCM2837DMA::startChannel(uint32_t channel, uint32_t firstCbBus, uint32_t csFlags
 void
 BCM2837DMA::stopChannel(uint32_t channel)
 {
-	if (channel >= kMaxIrqChannels || !(fIrqMask & (1U << channel))) {
+	if (channel >= kMaxIrqChannels || !(fAllocatedMask & (1U << channel))) {
 		return;
 	}
-	// Abort the current control block first so RESET does not race a write
-	// in flight (Linux bcm2835_dma_abort()).
+	// A looping ring would otherwise continue into the next control block on
+	// ABORT (QEMU bcm2835_dma.c:18 documents ABORT as "stop the current CB,
+	// go to the next"), so zero the chain pointer first, abort, wait for
+	// ACTIVE to drop, then reset. The CS/CONBLK_AD semantics are those of the
+	// BCM2835 datasheet chapter 4 and the QEMU model; the exact Linux
+	// bcm2835-dma.c sequence is not vendored here and was not checked.
 	volatile uint32_t *cs = chan(channel);
-	if (*cs & kDMACsActive) {
-		*cs = kDMACsAbort;
-		IODelay(100);
+	chan(channel)[kRegConblkAd] = 0;
+	dmaBarrier();
+	*cs = kDMACsAbort | kCsDisDebug;
+	for (int i = 0; i < 1000 && (*cs & kDMACsActive); i++) {
+		IODelay(1);
 	}
 	*cs = kDMACsReset;
 	for (int i = 0; i < 1000 && (*cs & kDMACsReset); i++) {
@@ -187,7 +266,7 @@ BCM2837DMA::stopChannel(uint32_t channel)
 uint32_t
 BCM2837DMA::readChannelReg(uint32_t channel, uint32_t offset)
 {
-	if (channel >= kMaxIrqChannels || offset >= kChanStride) {
+	if (channel >= kMaxIrqChannels || !(fAllocatedMask & (1U << channel)) || offset >= kChanStride) {
 		return 0;
 	}
 	return *(volatile uint32_t *)(fRegs + kChanStride * channel + offset);
@@ -207,19 +286,38 @@ BCM2837DMA::handleChannelInterrupt(uint32_t channel)
 {
 	volatile uint32_t *cs = chan(channel);
 	uint32_t v = *cs;
+	if (v & kDMACsError) {
+		// Clear the DEBUG error flags (write 1 to clear) so the channel is
+		// not left wedged; the count lets a client notice (cs has ERROR set).
+		chan(channel)[kRegDebug] = kDebugErrors;
+		fErrorCount[channel]++;
+	}
 	if (v & kDMACsInt) {
-		*cs = kDMACsInt;            // acknowledge, as Linux bcm2835_dma_callback()
+		*cs = kDMACsInt;            // acknowledge by writing INT only
 	}
 	fIrqCount[channel]++;
+
+	// Take cb and ref together, and mark the call in flight, so freeChannel()
+	// can wait for it.
+	IOInterruptState s = IOSimpleLockLockDisableInterrupt(fCbLock);
 	BCM2837DMACallback cb = fCallback[channel];
+	void *ref = fCallbackRef[channel];
 	if (cb) {
-		cb(fCallbackRef[channel], channel, v);
+		fInFlight[channel]++;
+	}
+	IOSimpleLockUnlockEnableInterrupt(fCbLock, s);
+	if (cb) {
+		cb(ref, channel, v);
+		__sync_fetch_and_sub(&fInFlight[channel], 1);
 	}
 }
 
 IOBufferMemoryDescriptor *
 BCM2837DMA::allocateBuffer(uint32_t size, uint32_t align, void **virtOut, uint32_t *busOut)
 {
+	if (size == 0 || (align & (align - 1))) {
+		return NULL;
+	}
 	if (align < 4) {
 		align = 4;
 	}
@@ -244,6 +342,13 @@ BCM2837DMA::allocateBuffer(uint32_t size, uint32_t align, void **virtOut, uint32
 		return NULL;
 	}
 	*virtOut = bmd->getBytesNoCopy();
+	// The 0x3fffffff physical mask above keeps this inside the low 1GB, so the
+	// bus address fits 32 bits; assert that rather than assume it.
+	if ((uint64_t)phys + size > 0x40000000ULL) {
+		bmd->complete();
+		bmd->release();
+		return NULL;
+	}
 	*busOut = (uint32_t)(kBCM2837DMABusAlias | (uint64_t)phys);
 	return bmd;
 }
