@@ -67,7 +67,7 @@ done
 # "tre.h"/"tre-internal.h"/etc with no subdirectory prefix), TRE's top
 # level (tre-config.h, config.h, tre-last-matched.h), and FreeBSD/ (for
 # regerror.c's own cname.h/utils.h).
-CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness \
     -include regex_availability_override.h -include libc_build_prototypes.h -include $LIBC/regex/TRE/config.h \
     -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \

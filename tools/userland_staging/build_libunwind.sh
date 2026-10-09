@@ -165,7 +165,7 @@ fi
 # just the leaf smoketest frame this file's own earlier comment already
 # covers. Empirically required: LLVM libc++abi's throw/catch smoketest
 # aborted via std::terminate() with this flag only on ITS OWN frame.
-C_FLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+C_FLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -funwind-tables \
     -Wno-nullability-completeness \
     -D_LIBC_NO_FEATURE_VERIFICATION -D_FORTIFY_SOURCE=0 \
@@ -187,7 +187,7 @@ done
 # compiled as plain C above, is what actually implements
 # _Unwind_RaiseException; the C++ engine files below only implement
 # unw_step()'s frame-walking, never throw/catch themselves).
-CXX_FLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+CXX_FLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -std=c++14 -fno-exceptions -fno-rtti -fno-threadsafe-statics -funwind-tables \
     -Wno-nullability-completeness -Wno-unused-command-line-argument \
     -D_LIBC_NO_FEATURE_VERIFICATION -D_FORTIFY_SOURCE=0 \
@@ -206,7 +206,7 @@ echo "libunwind: $ok compiled, $skip skipped"
 
 # This tier's own real (last-resort, see header comment) dyld-unwind-
 # sections shim + honest-failure dladdr() stand-in.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -D_LIBC_NO_FEATURE_VERIFICATION -D_FORTIFY_SOURCE=0 \
     -I $LIBC/include \
     libunwind_dyld_shim.c -o "$OUT/unwind/libunwind_dyld_shim.o"
@@ -217,7 +217,7 @@ echo "libunwind: $ok compiled, $skip skipped"
 # libunwind's RWMutex.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
     libunwind_sched_yield.s -o "$OUT/unwind/libunwind_sched_yield_trap.o"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     libunwind_sched_yield.c -o "$OUT/unwind/libunwind_sched_yield.o"
 
 rm -f "$OUT/libunwind.a"
@@ -273,7 +273,7 @@ if [ "$NEED_LATER_TIER" = "1" ]; then
     echo "      needs this script's libunwind.a first. libunwind.a is written;"
     echo "      re-run this script later for real smoketest coverage.)"
 else
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -funwind-tables \
     -Wno-nullability-completeness -include libc_build_prototypes.h \
     -D_LIBC_NO_FEATURE_VERIFICATION -D_FORTIFY_SOURCE=0 \

@@ -525,7 +525,7 @@ rm -f "$OUT/dispatch_dylib_extract/gettimeofday_trap_raw.o"
 # SIGSEGV. Found 2026-08-27 the first time this dylib's real dependents
 # (syslogd) actually exercised plain snprintf()/vsnprintf() at runtime.
 LIBC="../../third_party/Libc"
-CFLAGS_SECURE=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+CFLAGS_SECURE=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -D_FORTIFY_SOURCE=0 \
     -Wno-nullability-completeness -I "$LIBC/secure")
 # The _chk tier is no longer compiled here (static-linking cleanup,
@@ -552,7 +552,7 @@ XNU_FOR_GAPS="../../third_party/xnu-7195"
 # against the same syscalls.master -- reused, not regenerated). Only
 # real deps: ___persona (this trap) and ___strlcpy_chk (already compiled
 # above in this exact script).
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -DPRIVATE=1 \
     -I "$XNU_FOR_GAPS/libsyscall/wrappers/string" -I "$XNU_FOR_GAPS/bsd" -I "$XNU_FOR_GAPS/BUILD.hdrs/dst/usr/include" \
     "$XNU_FOR_GAPS/libsyscall/wrappers/persona.c" -o "$OUT/dispatch_dylib_extract/persona.o"
@@ -622,7 +622,7 @@ rm -f "$OUT/dispatch_dylib_extract/vm_mapUser_raw.o"
 # mach_semaphore_traps.s; and 2 narrow-but-real Apple-source-matching
 # fallback bodies for functionality this project's curated libmalloc
 # never built, not fabrications).
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     dispatch_gap_closures3.c -o "$OUT/dispatch_dylib_extract/dispatch_gap_closures3.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
     dispatch_gap_closures3.s -o "$OUT/dispatch_dylib_extract/dispatch_gap_closures3_trap.o"
@@ -631,7 +631,7 @@ rm -f "$OUT/dispatch_dylib_extract/vm_mapUser_raw.o"
 # own header comment for the full real rationale (real algorithm/bodies,
 # narrowed against symbols that actually exist in this project rather
 # than the exact real internal split Apple's own source assumes).
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -DPRIVATE=1 -I "$XNU_FOR_GAPS/osfmk" \
     dispatch_gap_closures4.c -o "$OUT/dispatch_dylib_extract/dispatch_gap_closures4.o"
 
@@ -677,13 +677,13 @@ mkdir -p "$OUT/mach_eventlink_mig"
     -server /dev/null -sheader /dev/null \
     "$XNU_FOR_GAPS/osfmk/mach/mach_eventlink.defs"
 echo "mig: mach_eventlink.defs regenerated cleanly (client side)"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     -I "$XNU_FOR_GAPS/libsyscall/mach" -idirafter "$XNU_FOR_GAPS/osfmk" -I "$OUT/mach_eventlink_mig" \
     -include "$XNU_FOR_GAPS/osfmk/mach/mach_eventlink_types.h" \
     "$OUT/mach_eventlink_mig/mach_eventlinkUser.c" -o "$OUT/dispatch_dylib_extract/mach_eventlinkUser.o"
 
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -DPRIVATE=1 -I "$XNU_FOR_GAPS/osfmk" -I "$XNU_FOR_GAPS/bsd" \
     "$XNU_FOR_GAPS/libsyscall/mach/mach_eventlink.c" -o "$OUT/dispatch_dylib_extract/mach_eventlink.o"
 
@@ -699,7 +699,7 @@ done
 PTHREAD_FOR_GAPS="../../third_party/libpthread"
 PLATFORM_FOR_GAPS="../../third_party/libplatform"
 MALLOC_FOR_GAPS="../../third_party/libmalloc"
-CFLAGS_PTHREAD_GAP=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+CFLAGS_PTHREAD_GAP=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness -Wno-availability -Wno-deprecated-declarations \
     -D__LIBC__ -D__POSIX_LIB__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_NON_CANCELABLE=1 \
     -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 -D__PTHREAD_BUILDING_PTHREAD__=1 -D__PTHREAD_EXPOSE_INTERNALS__ \

@@ -284,7 +284,7 @@ EOF
 # third_party/libpthread/xcodescripts/pthread.xcconfig
 # (BASE_PREPROCESSOR_MACROS), not reinvented. _os_xbs_chrooted=0: see
 # this script's header comment.
-CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness -Wno-availability -Wno-deprecated-declarations \
     -D__LIBC__ -D__POSIX_LIB__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_NON_CANCELABLE=1 \
     -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 -D__PTHREAD_BUILDING_PTHREAD__=1 -D__PTHREAD_EXPOSE_INTERNALS__ \
@@ -338,13 +338,13 @@ done
 # Real Apple libplatform source: _simple_getenv (getenv.c) - pulled in
 # transitively by real pthread_mutex.c's _pthread_mutex_global_init(),
 # never actually called (see header comment on forcing use_ulock
-# directly instead) but still a real compiled reference at -O0 - and
+# directly instead) but still a real compiled reference at -O2 - and
 # _platform_memcmp (string/generic/memcmp.c), getenv.c's own real
 # dependency (grep confirmed, not guessed).
-$CLANG -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+$CLANG -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -DPRIVATE=1 -I "$PLATFORM/private" -I "$PLATFORM/internal" -I "$PLATFORM/include" -I "$OUT/compat_include" \
     "$PLATFORM/src/simple/getenv.c" -o "$OUT/pthread_simple_getenv.o"
-$CLANG -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+$CLANG -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -DPRIVATE=1 -I "$PLATFORM/private" -I "$PLATFORM/internal" -I "$PLATFORM/include" \
     "$PLATFORM/src/string/generic/memcmp.c" -o "$OUT/pthread_platform_memcmp.o"
 

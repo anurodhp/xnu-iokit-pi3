@@ -248,6 +248,9 @@
 # - Wiring this dylib into configd.macho/IPMonitor.m/QoSMarking.m --
 #   that's DAR-170's job to resume separately once this ticket is done;
 #   deliberately not attempted this pass per explicit scope boundary.
+# NOTE (2026-10-09): left at -O0 on purpose. Built at -O2 (like the string, malloc, pthread, dispatch, dyld and libm tiers, which all went from
+# -O0 to -O2 the same day) the link succeeds but the post-link markgc step fails: "libobjc.A.dylib has no __objc_init_offs section".
+# Whoever takes this on needs to see why -O2 drops that section (the _objc_init initializer offsets) first.
 set -e
 cd "$(dirname "$0")"
 

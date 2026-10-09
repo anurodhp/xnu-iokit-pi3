@@ -74,7 +74,7 @@ for f in "$OUT/malloc_mig/mach/mach_vm_internal.h" \
     fi
 done
 
-CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     -I $XNU/libsyscall/mach -idirafter $XNU/osfmk -I $LIBC/include -I $LIBC/darwin -I $OUT/compat_include \
     -I $OUT/malloc_mig"
@@ -84,7 +84,7 @@ CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builti
     "$XNU/libsyscall/mach/mach_init.c" -o "$OUT/libsystem_kernel/mach_init.o"
 "$CLANG" $CFLAGS -include "$OUT/compat_include/mach_reply_port_decl.h" -I "$XNU/libsyscall" -I "$XNU/libsyscall/os" \
     "$XNU/libsyscall/mach/mig_reply_port.c" -o "$OUT/libsystem_kernel/mig_reply_port.o"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 -I "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" -I "$OUT/compat_include" \
     "$XNU/libsyscall/wrappers/init_cpu_capabilities.c" -o "$OUT/libsystem_kernel/init_cpu_capabilities.o"
 
@@ -120,7 +120,7 @@ for d in mach_vm vm_map; do
         -user "$OUT/libsystem_kernel/vm_mig/${d}User.c" \
         -server /dev/null -sheader /dev/null \
         "$XNU/libsyscall/mach/${d}.defs"
-    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
         -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
         -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$OUT/libsystem_kernel/vm_mig" \
         "$OUT/libsystem_kernel/vm_mig/${d}User.c" -o "$OUT/libsystem_kernel/vm_mig/${d}User.o"
@@ -144,7 +144,7 @@ done
 # its OWN, separate static-archive consumers -- copied here rather than
 # linking the whole of libmalloc_dispatch.c (which also carries a lot of
 # malloc-specific glue with no business being in the kernel-trap dylib).
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     libsystem_kernel_compat.c -o "$OUT/libsystem_kernel/compat.o"
 
 # Real gap found 2026-08-25 auditing the libplatform/libclosure migration
@@ -163,7 +163,7 @@ done
 # against instead. Static, single-image binaries (bash, ls, cron, etc)
 # are unaffected -- they never had a duplication problem in the first
 # place (one process, one image, one errno already).
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -DCERROR_STUB_LIBKERNEL_FUNCPTR cerror_stub.c -o "$OUT/libsystem_kernel/cerror_stub.o"
 
 # Real gap found batch 2 (static-to-dylib migration step 3, docs/
@@ -180,7 +180,7 @@ done
 # actual separate table-definition half of the same subsystem, split
 # across the two repos) -- compiled here as real, unmodified source, not
 # a hand-rolled stand-in.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     "$XNU/libsyscall/os/alloc_once.c" -o "$OUT/libsystem_kernel/os_alloc_once_table.o"
 
 # geteuid/getegid: plain generated BSD syscall traps, added 2026-08-29
@@ -279,10 +279,10 @@ fi
 # build_libxpc_syscalls.sh / build_corefoundation.sh, inverting the real
 # dependency order. Compile flags match those scripts' own recipes
 # exactly (CFLAGS_XNU / CFLAGS_MACH_PORT there).
-CFLAGS_XNU_TRAPS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+CFLAGS_XNU_TRAPS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk")
-CFLAGS_MACH_PORT=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+CFLAGS_MACH_PORT=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     -I "$XNU/libsyscall/mach" -I "$XNU/libsyscall/os" -idirafter "$XNU/osfmk" \
     -I "$LIBC/include" -I "$LIBC/darwin")
@@ -355,7 +355,7 @@ mkdir -p "$OUT/libsystem_kernel/mach_port_mig"
     -user "$OUT/libsystem_kernel/mach_port_mig/mach_portUser.c" \
     -server /dev/null -sheader /dev/null \
     "$XNU/osfmk/mach/mach_port.defs"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$OUT/libsystem_kernel/mach_port_mig" \
     "$OUT/libsystem_kernel/mach_port_mig/mach_portUser.c" \
@@ -894,7 +894,7 @@ D423_OBJS=$(ls "$OUT"/libsystem_kernel/d423*.o)
 #    private copy). It also provides posix_spawnattr_get/set_qos_clamp_np,
 #    which libpthread's qos.c calls.
 rm -f "$OUT"/libsystem_kernel/lk416*.o
-LK_FLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+LK_FLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -D_FORTIFY_SOURCE=0 -DPRIVATE=1 \
     -I $OUT/compat_include -include machine/limits.h -include $XNU/libsyscall/wrappers/string/strings.h \
     -I $XNU/libsyscall/wrappers/string -I $XNU/libsyscall/wrappers \
@@ -906,7 +906,7 @@ done
 for f in "$XNU"/libsyscall/wrappers/string/*.c; do
     "$CLANG" $LK_FLAGS "$f" -o "$OUT/libsystem_kernel/lk416_str_$(basename "$f" .c).o"
 done
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -D_FORTIFY_SOURCE=0 -DPRIVATE=1 \
     -idirafter "$XNU/bsd" -idirafter "$XNU/osfmk" -idirafter "$XNU/libsyscall/mach" -idirafter "$XNU/libsyscall" \
     -I "$XNU/libsyscall/wrappers/spawn" "$XNU/libsyscall/wrappers/spawn/posix_spawn.c" \
@@ -952,7 +952,7 @@ for s in ___mmap ___munmap _getrusage ___settimeofday ___gettid ___settid _fchdi
         "$SYSGEN/${s}.s" -o "$OUT/libsystem_kernel/lk416${s}.o"
 done
 for f in mmap munmap; do
-    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
         -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
         -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" -I "$OUT/compat_include" \
         -I "$OUT/malloc_mig" -I "$XNU/libsyscall/wrappers" \
@@ -968,7 +968,7 @@ done
 #    ld -r to the one function (the same precedent as the
 #    mach_port_set_attributes narrowing above). libsystem_pthread's
 #    libpthread_qos_compat.o used to export hand-written copies.
-LK_MACH_FLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+LK_MACH_FLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     -I $OUT/compat_include -I $XNU/libsyscall -I $XNU/libsyscall/mach -I $XNU/libsyscall/os -I $OUT/libsystem_kernel/pt416_internal_hdr \
     -I $OUT/malloc_mig -I $XNU/osfmk -idirafter $XNU/bsd"
@@ -987,7 +987,7 @@ done
 # _os_workgroup_dispose() calls work_interval_destroy()
 # (libdispatch/src/workgroup.c:105), which it needs once object.m is built
 # (DAR-237). No dylib exported any of these before.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     -idirafter "$XNU/bsd" -idirafter "$XNU/osfmk" -idirafter "$XNU/libsyscall/mach" -idirafter "$XNU/libsyscall" \
     "$XNU/libsyscall/wrappers/work_interval.c" -o "$OUT/libsystem_kernel/lk416_work_interval.o"
@@ -1029,7 +1029,7 @@ LIBKERNEL_OBJS=$(ls "$OUT"/libsystem_kernel/lk416*.o)
 #   - libsystem_kernel_sendto_compat.c: new this session, same real
 #     curation shape as the two files above, for sendto()/send() (see
 #     that file's own header for the full citation).
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" -I "$OUT/compat_include" \
     -I "$OUT/malloc_mig" -I "$XNU/libsyscall/wrappers" \
@@ -1038,7 +1038,7 @@ LIBKERNEL_OBJS=$(ls "$OUT"/libsystem_kernel/lk416*.o)
 # (wrappers/reboot.c:28-40) over the raw __reboot trap. syscalls.master:108
 # marks #55 NO_SYSCALL_STUB, so the generator emits only ___reboot (built
 # in the stub loop above) and the public reboot() comes from this file.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -idirafter "$XNU/bsd" -I "$LIBC/include" -I "$LIBC/darwin" \
     -I "$XNU/libsyscall/wrappers" \
@@ -1047,7 +1047,7 @@ LIBKERNEL_OBJS=$(ls "$OUT"/libsystem_kernel/lk416*.o)
 # trap (stub loop above; #128 is NO_SYSCALL_STUB). It bumps the counter in
 # wrappers/remove-counter.c, which Apple's libsystem_kernel also builds.
 for w in rename remove-counter; do
-    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
         -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
         -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -idirafter "$XNU/bsd" -I "$LIBC/include" -I "$LIBC/darwin" \
         -I "$XNU/libsyscall/wrappers" \
@@ -1056,7 +1056,7 @@ done
 # unlinkat()/utimensat()/futimens() (DARW-289): Apple's own wrappers over the raw
 # traps above; unlinkat bumps wrappers/remove-counter.c's counter like rename().
 for w in unlinkat utimensat; do
-    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
         -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
         -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -idirafter "$XNU/bsd" -I "$LIBC/include" -I "$LIBC/darwin" \
         -I "$XNU/libsyscall/wrappers" \
@@ -1066,7 +1066,7 @@ done
 # the raw __setpriority (#96, NO_SYSCALL_STUB, syscalls.master:149). Its
 # PRIO_DARWIN_THREAD branch calls libsystem_pthread's _pthread_clear_qos_tsd,
 # which resolves at load like this dylib's other pthread references.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -idirafter "$XNU/bsd" -I "$LIBC/include" -I "$LIBC/darwin" \
     -I "$XNU/libsyscall/wrappers" \
@@ -1076,7 +1076,7 @@ done
 # retries without S_ISUID/S_ISGID on EPERM; getrlimit.c/setrlimit.c OR in
 # _RLIMIT_POSIX_FLAG (getrlimit.c:36-43).
 for w in fchmod getrlimit setrlimit; do
-    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
         -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
         -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" -I "$OUT/compat_include" \
         -I "$OUT/malloc_mig" -I "$XNU/libsyscall/wrappers" \
@@ -1112,28 +1112,28 @@ printf '#include <arm/cpu_capabilities.h>\n' > "$OUT/libsystem_kernel/compat_inc
     -I "$XNU/libsyscall/custom" -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -idirafter "$MACSDK/usr/include" \
     "$XNU/libsyscall/custom/__thread_selfusage.s" -o "$OUT/libsystem_kernel/thread_selfusage_trap.o"
 for w in mach_boottime mach_continuous_time mach_approximate_time; do
-    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
         -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
         -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" \
         -I "$OUT/libsystem_kernel/compat_include" \
         "$XNU/libsyscall/wrappers/$w.c" -o "$OUT/libsystem_kernel/${w}.o"
 done
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" -I "$OUT/compat_include" \
     -I "$OUT/malloc_mig" \
     xpc_syscall_wrappers_compat.c -o "$OUT/libsystem_kernel/xpc_syscall_wrappers_compat.o"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" -I "$OUT/compat_include" \
     -I "$OUT/malloc_mig" \
     xpc_select_compat.c -o "$OUT/libsystem_kernel/select_wrap.o"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" -I "$OUT/compat_include" \
     -I "$OUT/malloc_mig" \
     libsystem_kernel_sendto_compat.c -o "$OUT/libsystem_kernel/sendto_wrap.o"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" -I "$OUT/compat_include" \
     -I "$OUT/malloc_mig" \
@@ -1163,7 +1163,7 @@ done
 # else) shares this ONE real, canonical copy instead of each bundling
 # their own -- matching how mach_task_self_ was fixed, at the actual
 # architectural root rather than patching each consumer separately.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk" -I "$LIBC/include" -I "$LIBC/darwin" \
     -include mach_msg_trap_decl.h \
@@ -1196,7 +1196,7 @@ done
 # the reverse would be circular) -- same "flat-namespace, always loaded
 # alongside" reasoning this script's own -Wl,-U,_abort/_memcpy/
 # _pthread_tsd_shim_bootstrap already use just below, not a new pattern.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -I "$XNU/osfmk" -I ../../generated \
     simple_cmds_nanosleep_pub_compat.c -o "$OUT/libsystem_kernel/nanosleep_compat.o"
 

@@ -132,7 +132,7 @@ mkdir -p "$OUT/libsystem_malloc/extracted"
 # build_libmalloc.sh's own original build of this file, writing to the
 # same extracted/ path so the rest of this script's narrowing step below
 # is unaffected.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness -include libc_build_prototypes.h \
     pthread_tsd_shim.c -o "$OUT/libsystem_malloc/extracted/pthread_tsd_shim.o"
 # Not `ar x`-extracted above (see comment there) -- added back to
@@ -168,7 +168,7 @@ void os_crash(const char *format, ...) {
 	__builtin_trap();
 }
 EOF
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     "$OUT/libsystem_malloc/os_crash_impl.c" -o "$OUT/libsystem_malloc/extracted/os_crash_impl.o"
 MEMBERS="$MEMBERS os_crash_impl.o"
 
@@ -186,7 +186,7 @@ MEMBERS="$MEMBERS os_crash_impl.o"
 # libmalloc_dispatch.c's own header comment on this exact guard) compiles
 # a variant without those 3, so this dylib falls through to the real
 # libsystem_kernel.dylib sibling it already links below instead.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -DPRIVATE=1 -D_LIBC_NO_FEATURE_VERIFICATION -DLIBMALLOC_DISPATCH_DYLIB_VARIANT=1 -I libc_build/compat_include \
     libmalloc_dispatch.c -o "$OUT/libsystem_malloc/extracted/libmalloc_dispatch_dylib.o"
 

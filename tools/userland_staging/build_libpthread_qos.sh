@@ -148,7 +148,7 @@ echo "mig: regenerated mach_voucher.h/mach_voucherUser.c from real xnu-7195 mach
     "$XNU_ABS/osfmk/mach/host_priv.defs" >/dev/null
 echo "mig: regenerated host_priv.h/host_privUser.c from real xnu-7195 host_priv.defs"
 
-CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness -Wno-availability -Wno-deprecated-declarations \
     -D__LIBC__ -D__POSIX_LIB__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_NON_CANCELABLE=1 \
     -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 -D__PTHREAD_BUILDING_PTHREAD__=1 -D__PTHREAD_EXPOSE_INTERNALS__ \
@@ -179,7 +179,7 @@ for src in "$PTHREAD/src/qos.c" libpthread_qos_compat.c libpthread_attr_compat.c
         echo "  gap: $base -- $(grep -m1 'error:' "$OUT/pthread_qos_obj/${base}.err")"
     fi
 done
-CFLAGS_MIG=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+CFLAGS_MIG=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     -I "$MIGOUT" -I "$XNU/libsyscall/mach" -idirafter "$XNU/osfmk")
 if "$CLANG" "${CFLAGS_MIG[@]}" "$MIGOUT/mach_voucherUser.c" -o "$OUT/pthread_qos_obj/mach_voucherUser.o" 2>"$OUT/pthread_qos_obj/mach_voucherUser.err"; then

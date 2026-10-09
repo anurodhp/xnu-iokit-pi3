@@ -161,7 +161,7 @@ cp "$MSUN"/*.c "$MSUN/math_private.h" "$MSUN_COPY/"
 for f in s_ceilf s_sinf s_cosf s_frexp e_hypot e_powf s_fabsf s_scalbnf e_atan2f s_atanf \
          s_sin s_cos s_tan k_sin k_cos k_tan k_rem_pio2 s_atan e_atan2 e_log s_ceil s_floor s_round \
          s_floorf s_rintf; do
-    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
         -Wno-nullability-completeness -include libm_msun_compat.h \
         "$MSUN_COPY/$f.c" -o "$EXTRACT/msun_$f.o"
 done
@@ -177,11 +177,11 @@ rm -rf "$MSUN_NEW"; mkdir -p "$MSUN_NEW"
 cp "$MSUN"/*.c "$MSUN"/*.h "$MSUN_NEW/"; rm -f "$MSUN_NEW/math.h"
 for f in e_expf e_logf e_log2 e_log2f e_log10f s_exp2f s_expm1f s_log1pf s_tanf e_asinf e_acosf \
          s_cbrtf e_hypotf s_roundf s_truncf s_frexpf s_modff s_copysign s_lrint e_rem_pio2f k_rem_pio2; do
-    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
         -Wno-everything -I "$MSUN_NEW" -include libm_msun_compat.h \
         "$MSUN_NEW/$f.c" -o "$EXTRACT/msun_$f.o"
 done
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-everything libm_c99_extras.c -o "$EXTRACT/libm_c99_extras.o"
 
 mkdir -p "$OUT/system"

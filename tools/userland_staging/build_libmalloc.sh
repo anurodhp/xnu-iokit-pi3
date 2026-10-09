@@ -364,7 +364,7 @@ MACH_VM_DEFS="$(cd "$(dirname "$XNU/osfmk/mach/mach_vm.defs")" && pwd)/$(basenam
 # own real call sites) avoids the conflict entirely rather than fighting
 # mig's namespacing.
 
-CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness -Wno-availability -Wno-deprecated-declarations \
     -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 -DDARWINTEST=1 -D_FORTIFY_SOURCE=0 \
     -D__API_UNAVAILABLE_PLATFORM_bridgeos=ios,unavailable \
@@ -415,22 +415,22 @@ fi
 # above minus -include libmalloc_compat.h (not needed -- these don't
 # touch nano_zone.h/dyld-slide territory) plus the mach_reply_port_decl.h
 # workaround for mig_reply_port.c specifically.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     -I $XNU/libsyscall/mach -idirafter $XNU/osfmk -I $LIBC/include -I $LIBC/darwin -I libc_build/compat_include \
     -I $OUT/malloc_mig \
     "$XNU/libsyscall/mach/mach_vm.c" -o "$OUT/mach_vm.o"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     -include libc_build/compat_include/mach_reply_port_decl.h \
     -I $XNU/libsyscall/mach -I $XNU/libsyscall -idirafter $XNU/osfmk -I $LIBC/include -I $LIBC/darwin -I libc_build/compat_include \
     "$XNU/libsyscall/mach/mach_init.c" -o "$OUT/mach_init.o"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     -include libc_build/compat_include/mach_reply_port_decl.h \
     -I $XNU/libsyscall/mach -I $XNU/libsyscall -I $XNU/libsyscall/os -idirafter $XNU/osfmk -I $LIBC/include -I $LIBC/darwin -I libc_build/compat_include \
     "$XNU/libsyscall/mach/mig_reply_port.c" -o "$OUT/mig_reply_port.o"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 -I $XNU/osfmk -I $LIBC/include -I $LIBC/darwin -I libc_build/compat_include \
     "$XNU/libsyscall/wrappers/init_cpu_capabilities.c" -o "$OUT/init_cpu_capabilities.o"
 
@@ -441,7 +441,7 @@ fi
 # string_io.c (the _simple.h string-builder implementation locale/stdio
 # work already depends on this header for, now also needed by
 # malloc_printf.c's real error-reporting path).
-PLATCFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+PLATCFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -DPRIVATE=1 -D_LIBC_NO_FEATURE_VERIFICATION -DLONG_BIT=64 -I libc_build/compat_include"
 "$CLANG" $PLATCFLAGS -I $PLATFORM/private -I $PLATFORM/internal -I $PLATFORM/include \
     "$PLATFORM/src/string/generic/strcmp.c" -o "$OUT/platform_strcmp.o"
@@ -492,10 +492,10 @@ PLATCFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-bu
 # function"). That is infinite recursion -> stack exhaustion -> SIGSEGV.
 # This was the real root cause of launchd bug #6; see
 # build_launchd_core.sh's fuller write-up above its own secure/ compiles.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 -D_FORTIFY_SOURCE=0 -I libc_build/compat_include -I $LIBC/include -I $LIBC/darwin \
     -D_FORTIFY_SOURCE=0 "$LIBC/secure/memcpy_chk.c" -o "$OUT/memcpy_chk.o"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 -D_FORTIFY_SOURCE=0 -I libc_build/compat_include -I $LIBC/include -I $LIBC/darwin \
     -D_FORTIFY_SOURCE=0 "$LIBC/secure/memset_chk.c" -o "$OUT/memset_chk.o"
 # os_assumes_malloc_shim.h: real gap, found 2026-09-12 (DAR-301
@@ -543,7 +543,7 @@ __attribute__((noreturn, format(printf, 1, 2)))
 void os_crash(const char *format, ...);
 #endif
 EOF
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 -D_FORTIFY_SOURCE=0 \
     -include libc_build/compat_include/os_assumes_malloc_shim.h \
     -I libc_build/compat_include -I $LIBC/include -I $LIBC/darwin \
@@ -571,7 +571,7 @@ void os_crash(const char *format, ...) {
 	__builtin_trap();
 }
 EOF
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     "$OUT/os_crash_impl.c" -o "$OUT/os_crash_impl.o"
 mkdir -p "$OUT/freebsd_string"
 for f in memcpy memset; do
@@ -579,7 +579,7 @@ for f in memcpy memset; do
     if [ ! -f "$dst" ]; then
         curl -sf -o "$dst" "https://raw.githubusercontent.com/freebsd/freebsd-src/main/lib/libc/string/${f}.c"
     fi
-    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
         -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 -I libc_build/compat_include -I "$OUT/freebsd_string" \
         "$dst" -o "$OUT/freebsd_string/${f}.o"
 done
@@ -588,12 +588,12 @@ done
 # tier needs that no prior tier's build script generated yet -- see this
 # script's header comment for exact provenance of each.
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c libmalloc_vm_traps.s -o "$OUT/libmalloc_vm_traps.o"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -I libc_build/compat_include -I $OUT/malloc_mig \
     libmalloc_vm_mig_stubs.c -o "$OUT/libmalloc_vm_mig_stubs.o"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     libmalloc_sleep_shim.c -o "$OUT/libmalloc_sleep_shim.o"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -DPRIVATE=1 -D_LIBC_NO_FEATURE_VERIFICATION -I libc_build/compat_include \
     libmalloc_dispatch.c -o "$OUT/libmalloc_dispatch.o"
 
@@ -606,7 +606,7 @@ done
 # pthread_tsd_shim_bootstrap() explicitly, same as
 # pthread_tsd_shim_smoketest.c already does). Same real source, same
 # flags as build_libplatform.sh's own build of this file.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness -include libc_build_prototypes.h \
     pthread_tsd_shim.c -o "$OUT/pthread_tsd_shim.o"
 
@@ -694,7 +694,7 @@ if [ "$NEED_LIBC_STDIO_TIER" = "1" ]; then
     echo "      real cycle: build_libc_stdio.sh itself needs this script's libmalloc.a first."
     echo "      libmalloc.a is written; re-run this script after build_libc_stdio.sh for real smoketest coverage.)"
 else
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     libmalloc_smoketest.c -o "$OUT/libmalloc_smoketest.o"
 # $UNIX2003-suffixed link aliases -- see this script's header comment.
 # DAR-264: -Wl,-U,_pthread_main_thread_bootstrap is the same real,

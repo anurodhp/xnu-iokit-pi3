@@ -239,6 +239,7 @@ if [ ! -f "$OUT/armstring/libc/memset.o" ]; then
     exit 1
 fi
 for g in "$OUT"/armstring/libc/*.o "$OUT"/armstring/body/*.o; do
+    rm -f "$OUT/apple_locale/$(basename "$g")"      # strrchr/rindex/stpcpy are Apple's generic C (apple_locale/), not FreeBSD's
     cp "$g" "$OUT/freebsd_string/$(basename "$g")"
 done
 
@@ -252,6 +253,7 @@ ar rcs "$OUT/libc_locale.a" \
     "$OUT/freebsd_string/memchr.o" "$OUT/freebsd_string/strchr.o" "$OUT/freebsd_string/strchrnul.o" \
     "$OUT/freebsd_string/strcpy.o" "$OUT/freebsd_string/strncpy.o" "$OUT/freebsd_string/strlcpy.o" \
     "$OUT/freebsd_string/strlcat.o" "$OUT/freebsd_string/strnlen.o" "$OUT/freebsd_string/ffs.o" \
+    "$OUT/freebsd_string/strrchr.o" "$OUT/freebsd_string/rindex.o" "$OUT/freebsd_string/stpcpy.o" \
     "$OUT/pthread_tsd_shim.o" "$OUT/pthread_tsd_shim_libc_bootstrap.o" \
     "$OUT/compat_stubs.o" "$OUT/libc_locale_syscalls.o" \
     "$OUT/libc_locale_env_stubs.o" "$OUT/libc_locale_stdio.o" "$OUT/cerror_stub.o"

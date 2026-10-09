@@ -4,9 +4,10 @@
 #
 #   libc_build/armstring/body/arm_*.o   the Arm routines: ___memset_aarch64, ___memmove_aarch64 (also ___memcpy_aarch64, overlap-safe),
 #                                       ___memcmp_aarch64, ___memchr_aarch64, ___strlen_aarch64, ___strcmp_aarch64, ___strncmp_aarch64,
-#                                       ___strchr_aarch64, ___strchrnul_aarch64, ___strcpy_aarch64, ___strnlen_aarch64
+#                                       ___strchr_aarch64, ___strchrnul_aarch64, ___strrchr_aarch64, ___strcpy_aarch64, ___stpcpy_aarch64,
+#                                       ___strnlen_aarch64
 #   libc_build/armstring/libc/*.o       one object per name FreeBSD's libc string files define (_memcpy, _memmove, _memset, _bzero, _bcopy,
-#                                       _memcmp, _memchr, _strlen, _strcmp, _strncmp, _strchr, ___strchrnul, _strcpy, _strnlen): same one
+#                                       _memcmp, _memchr, _strlen, _strcmp, _strncmp, _strchr, ___strchrnul, _strrchr, _rindex, _strcpy, _stpcpy, _strnlen): same one
 #                                       symbol each, a branch into the routine. build_libc_string.sh archives them in place of the FreeBSD
 #                                       objects (same member names, so build_libsystem_c.sh's per-name handling of memcpy.o/memset.o holds).
 #   libc_build/armstring/platform/*.o   the libplatform names: __platform_memset/_bzero/_memmove/_memcmp/_strlen/_strcmp/_strchr and the
@@ -40,7 +41,7 @@ mkdir -p "$D/body" "$D/libc" "$D/platform"
 
 # WANT_GNU_PROPERTY=0: the ELF .note.gnu.property section does not exist in Mach-O. asmdefs.h has a __APPLE__ mode for the rest.
 AFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -DWANT_GNU_PROPERTY=0"
-for f in memset memcpy memcmp memchr strlen strcmp strncmp strchr strchrnul strcpy strnlen; do
+for f in memset memcpy memcmp memchr strlen strcmp strncmp strchr strchrnul strrchr strcpy stpcpy strnlen; do
     "$CLANG" $AFLAGS "$ARM/$f.S" -o "$D/body/arm_$f.o"
 done
 
@@ -72,6 +73,9 @@ glue libc strncmp   _strncmp     "$(b ___strncmp_aarch64)"
 glue libc strchr    _strchr      "$(b ___strchr_aarch64)"
 glue libc strchrnul ___strchrnul "$(b ___strchrnul_aarch64)"
 glue libc strcpy    _strcpy      "$(b ___strcpy_aarch64)"
+glue libc stpcpy    _stpcpy      "$(b ___stpcpy_aarch64)"
+glue libc strrchr   _strrchr     "$(b ___strrchr_aarch64)"
+glue libc rindex    _rindex      "$(b ___strrchr_aarch64)"
 glue libc strnlen   _strnlen     "$(b ___strnlen_aarch64)"
 
 # the names libplatform's generic bzero.c/memmove.c/memcmp.c/strlen.c/strcmp.c/strchr.c define

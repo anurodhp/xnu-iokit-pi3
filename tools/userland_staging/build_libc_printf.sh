@@ -188,7 +188,7 @@ EOF
 # lives in stdio/ not stdio/FreeBSD/; gdtoa.h lives in gdtoa/FreeBSD/) and
 # compat_include_printf listed FIRST so its os/assumes.h shadow wins over
 # both the real Libc one and the shared empty stand-in.
-CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness \
     -include libc_build_prototypes.h -include $OUT/compat_include/stdio_flockfile_compat.h \
     -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
@@ -360,7 +360,7 @@ else
 # hitting the exact "undefined ___snprintf_chk" error first, not guessed;
 # every archive-side CFLAGS above already sets this, only the smoketest's
 # own compile line hadn't).
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness -include libc_build_prototypes.h \
     -D_LIBC_NO_FEATURE_VERIFICATION -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
     -DVARIANT_STATIC -DVARIANT_CANCELABLE -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \
@@ -368,7 +368,7 @@ else
     libc_printf_smoketest.c -o "$OUT/libc_printf_smoketest.o"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
     libunwind_sched_yield.s -o "$OUT/libc_printf_sched_yield_trap.o"
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     libunwind_sched_yield.c -o "$OUT/libc_printf_sched_yield.o"
 # ___gdtoa_locks is a COMMON symbol in libc_printf.a(glue.o), which ld64 never
 # pulls from an archive: extract it (same as build_ps.sh; never -force_load).

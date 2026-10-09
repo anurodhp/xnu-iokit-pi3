@@ -14,7 +14,7 @@
 #
 # Real toolchain (same as every other tier in this directory): Xcode-12's
 # iPhoneOS SDK, target arm64-apple-ios14.4, clang invoked directly,
-# -ffreestanding -fno-builtin -fno-stack-protector -O0.
+# -ffreestanding -fno-builtin -fno-stack-protector -O2.
 #
 # Real per-file selection method: third_party/Libm/Source/ARM/*.s (real
 # armv6/armv7 32-bit ARM assembly, ~40 files -- fabs, trunc, pow, sin,
@@ -120,7 +120,7 @@ if [ ! -d "$LIBM/Source/ARM" ]; then
     exit 1
 fi
 
-CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness"
 
 # Real per-file compile loop (build_libc_regex.sh's own pattern) over the

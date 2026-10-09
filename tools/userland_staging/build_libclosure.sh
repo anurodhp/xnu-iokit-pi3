@@ -87,7 +87,7 @@ if [ ! -f "$OUT/libmalloc.a" ]; then
     exit 1
 fi
 
-CFLAGS_COMMON="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+CFLAGS_COMMON="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -I $CLOSURE -I $PLATFORM/private -I $OUT/compat_include"
 
 ok=0
@@ -147,7 +147,7 @@ if [ "$NEED_LIBC_STDIO_TIER" = "1" ]; then
     echo "      real cycle: build_libc_stdio.sh itself needs this script's libclosure.a first."
     echo "      libclosure.a is written; re-run this script after build_libc_stdio.sh for real smoketest coverage.)"
 else
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -fblocks -I "$CLOSURE" \
     libclosure_smoketest.c -o "$OUT/libclosure_smoketest.o"
 # Same real dependency set + $UNIX2003 aliases as

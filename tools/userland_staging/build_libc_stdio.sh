@@ -180,7 +180,7 @@ EOF
 # VARIANT_DARWINEXTSN, this flag was never actually load-bearing for
 # correctness here, just copied from build_libc_locale.sh's flag set
 # without re-deriving whether it applied.
-CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness \
     -include libc_build_prototypes.h -include $OUT/compat_include/stdio_flockfile_compat.h \
     -D_LIBC_NO_FEATURE_VERIFICATION -D__LIBC__ -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 -D_FORTIFY_SOURCE=0 \
@@ -273,7 +273,7 @@ echo "wrote $OUT/libc_locale_for_stdio.a (libc_locale.a minus its now-redundant 
 # self-selecting the EXTSN-aliased branch, fopen.o/fdopen.o now export
 # their plain, unsuffixed names, matching what a plain #include <stdio.h>
 # here expects with no special defines at all.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness -include libc_build_prototypes.h \
     -D_LIBC_NO_FEATURE_VERIFICATION -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 \
     -DVARIANT_STATIC -DVARIANT_CANCELABLE -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \

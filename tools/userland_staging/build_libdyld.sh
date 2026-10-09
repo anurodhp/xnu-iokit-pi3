@@ -216,7 +216,7 @@ DEFS="-DBUILDING_DYLD=0 -DDYLD_VERSION=940 -DPRIVATE=1 -D_LIBCPP_NO_EXCEPTIONS=1
     -include dyld_compat/dyld_deny_list_compat.h \
     -include dyld_compat/dyld_platform_compat.h"
 
-CXX_FLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+CXX_FLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -std=c++17 -fno-exceptions $DEFS \
     -nostdinc++ -isystem $LIBCXX/include -I $LIBCXXABI/include \
     $INCLUDES \
@@ -237,18 +237,18 @@ done
 # Real gap (see dyld_compat/System/atexit.h's own comment): this
 # project's pinned upstream libcxxabi never grew Apple's own
 # `__cxa_finalize_ranges` dlclose-time extension.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     libdyld_compat_cxa_finalize_ranges.c -o "$OUT/libdyld/cxa_finalize_ranges_compat.o"
 
 # Real gap (see dyld_compat/vproc_priv.h's own comment): no launchd on
 # this port; vproc_swap_integer() only ever asks "am I launchd-managed".
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     libdyld_vproc_compat.c -o "$OUT/libdyld/vproc_compat.o"
 
 # Real gap: __cxa_atexit/malloc_size/pthread-fork-child/mkdirat -- see
 # libdyld_compat_misc.c's own per-function comments for the full
 # real-vs-honest-stub breakdown of each.
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     libdyld_compat_misc.c -o "$OUT/libdyld/compat_misc.o"
 
 # Real arm64 __thread / Thread-Local Variable support (DAR-279).

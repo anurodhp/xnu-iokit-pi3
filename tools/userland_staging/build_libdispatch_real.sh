@@ -227,7 +227,7 @@ echo "mig: protocol.defs regenerated cleanly"
 mkdir -p "$OUT/dispatch_compat_system/System/machine"
 printf '#include <arm/cpu_capabilities.h>\n' > "$OUT/dispatch_compat_system/System/machine/cpu_capabilities.h"
 
-CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+CFLAGS=(-isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness -D_LIBC_NO_FEATURE_VERIFICATION -DPRIVATE=1 \
     `# DAR-237: no -DOS_OBJECT_USE_OBJC=0 any more. HAVE_OBJC=1` \
     `# (config_ac.h) and internal.h:80-96 set it per file, 1 for .m,` \

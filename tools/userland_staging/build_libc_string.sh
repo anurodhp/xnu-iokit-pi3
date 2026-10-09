@@ -136,6 +136,7 @@ if [ ! -f "$OUT/armstring/libc/memset.o" ]; then
     exit 1
 fi
 for g in "$OUT"/armstring/libc/*.o; do
+    rm -f "$OUT/apple_string/$(basename "$g")"      # strrchr/rindex/stpcpy are Apple's generic C, not FreeBSD's
     cp "$g" "$OUT/freebsd_string/$(basename "$g")"
 done
 for g in "$OUT"/armstring/body/*.o; do

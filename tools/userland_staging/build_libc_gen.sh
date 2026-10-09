@@ -99,7 +99,7 @@ fi
 # Same real flags as build_libc_stdio.sh (see that script's own CFLAGS
 # comment for why VARIANT_DARWINEXTSN is deliberately NOT set) plus
 # gen/FreeBSD's own include dir for telldir.h.
-CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+CFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness \
     -include libc_build_prototypes.h -include $OUT/compat_include/stdio_flockfile_compat.h \
     -include $LIBC/gen/__dirent.h -include $OUT/compat_include/getdirentries64_compat.h \
@@ -264,7 +264,7 @@ if [ ! -f "$OUT/libc_stdio.a" ] || [ ! -f "$OUT/libc_locale_for_stdio.a" ]; then
     echo "      first, so this script must run before it. libc_gen.a is written;"
     echo "      re-run this script later for real smoketest coverage.)"
 else
-"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O0 \
+"$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -ffreestanding -fno-builtin -fno-stack-protector -O2 \
     -Wno-nullability-completeness -include libc_build_prototypes.h \
     -D_LIBC_NO_FEATURE_VERIFICATION -D__DARWIN_UNIX03=1 -D__DARWIN_64_BIT_INO_T=1 -D__DARWIN_VERS_1050=1 \
     -DVARIANT_STATIC -DVARIANT_CANCELABLE -U__DARWIN_NON_CANCELABLE -D__DARWIN_NON_CANCELABLE=0 \
