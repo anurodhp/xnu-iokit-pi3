@@ -306,6 +306,22 @@
 			reg = <0xb880 0 0x40 0>;
 		};
 
+		/*
+		 * BCM2835 DMA controller (BCM2837DMA, DARW-313). Linux/u-boot:
+		 * dma@7e007000, reg <0x7e007000 0xf00> (channels 0-14),
+		 * third_party/u-boot/arch/arm/dts/bcm283x.dtsi:76. Interrupts:
+		 * raw <1 16>..<1 26> are channels 0-10, bank 1 bits 16-26, so
+		 * BCM2837InterruptController vectors 16-26 (flattened like the
+		 * nodes above); channels 11-14 share IRQ 27 and are not used.
+		 */
+		dma {
+			device_type = "dma";
+			compatible = "brcm,bcm2835-dma";
+			reg = <0x7000 0 0xf00 0>;
+			interrupt-parent = <0x1>;
+			interrupts = <16 17 18 19 20 21 22 23 24 25 26>;
+		};
+
 #ifdef RPI3_HAVE_V3D
 		/*
 		 * VideoCore IV 3D engine (BCM2837V3D, DARW-295). Only defined

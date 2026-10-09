@@ -519,6 +519,8 @@ BCM2837RegisterBuiltinPersonalities(void)
 	OSDictionary *armio = makePersonality("IOPlatformDevice", "BCM2837ArmIO", "arm-io", -1);
 	OSDictionary *intc = makePersonality("IOPlatformDevice", "BCM2837InterruptController", "intc", -1);
 	OSDictionary *sdhci = makePersonality("IOPlatformDevice", "BCM2837SDHCI", "sdhci", -1);
+	// "dma" - the DMA controller (DARW-313), used by the audio engine.
+	OSDictionary *dma = makePersonality("IOPlatformDevice", "BCM2837DMA", "dma", -1);
 	// "usb" - the DWC2 USB 2.0 OTG host controller, the board's only USB
 	// silicon and therefore the gate on all Phase 6 networking (the SMSC
 	// LAN9514 Ethernet chip is a USB device behind it). See BCM2837DWC2.h
@@ -690,6 +692,10 @@ BCM2837RegisterBuiltinPersonalities(void)
 	if (sdhci != NULL) {
 		personalities->setObject(sdhci);
 		sdhci->release();
+	}
+	if (dma != NULL) {
+		personalities->setObject(dma);
+		dma->release();
 	}
 	if (usb != NULL) {
 		personalities->setObject(usb);
