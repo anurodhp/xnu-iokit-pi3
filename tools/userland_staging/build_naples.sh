@@ -15,4 +15,6 @@ for l in libX11 libXext libxcb libXau libXdmcp; do
 done
 GS_APP_LIBS=("$SYS/libX11.dylib" "$SYS/libXext.dylib" "$SYS/libxcb.dylib" "$SYS/libXau.dylib" "$SYS/libXdmcp.dylib")
 GS_APP_CPPFLAGS="-I$OUT/x11/include"
+# make does not notice a changed VERSION, application icon or resource list in the kept work copy: start the bundle afresh
+rm -rf "$G/naples-src/Naples.app"
 gs_build_app Naples "${NAPLES_SRC:-$HERE/../../third_party/naples}"
