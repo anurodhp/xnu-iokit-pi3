@@ -985,7 +985,7 @@ fi
 # same class of mismatch fstatfs() already had to work around). Hand-
 # written correctly in simple_cmds_statfs64_compat.c instead, alongside a
 # correct getfsstat() (also never in this list -- same file).
-SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access _getuid _execve _link _symlink _getegid _geteuid _getgid _getgroups _chflags _chown _mknod _mkfifo _futimes _readlink _pread _pwrite _pathconf _faccessat _getentropy _dup2 _getpriority _chroot _setgroups _setgid _setuid _chdir _fgetattrlist _fsetattrlist _dup _readlinkat _poll _fsync _getrusage _getsid"
+SYS_STUBS_NEEDED="___getlogin ___mmap ___munmap _kevent _kqueue _ftruncate _mkdir _utimes ___chmod _sigprocmask _fchmodat _fstatat64 _mkdirat _umask _access _getuid _execve _link _symlink _getegid _geteuid _getgid _getgroups _chflags _chown _mknod _mkfifo _futimes _readlink _pread _pwrite _pathconf _faccessat _getentropy _dup2 _getpriority _chroot _setgroups _setgid _setuid _chdir _fgetattrlist _fsetattrlist _dup _readlinkat _poll _fsync _getrusage _getsid _mount _unmount"
 # DAR-343: the old single sentinel (simple_getlogin_trap.o) made this whole
 # block run exactly once per libc_build, so a stub added to
 # SYS_STUBS_NEEDED later (_getsid, for pkill) was silently never generated
@@ -1755,6 +1755,11 @@ CMD_LIST=(
     # sync(8): Apple's real system_cmds/sync.tproj (one sync(2) call); a
     # Mac installs it at /bin/sync.
     "sync:$SYSTEM_CMDS/sync.tproj/sync.c:"
+    # mount(8)/umount(8): custom thin front-end over mount(2)/unmount(2),
+    # see mount_cmd.c's header for why Apple's mount.c/mount_msdos.c are
+    # not usable here. One binary; inject_into_sd_image.sh installs it as
+    # /sbin/mount and /sbin/umount (argv[0] picks the mode).
+    "mount:mount_cmd.c:"
     # sysctl(8): Apple's real system_cmds/sysctl.tproj; a Mac installs it at
     # /usr/sbin/sysctl. Needed for /etc/sysctl.conf, which Apple applies at
     # boot by running `sysctl -w <line>` for each line
@@ -2152,6 +2157,9 @@ for spec in "${CMD_LIST[@]}"; do
             # implementation instead of going undefined.
             extra_libs="$OUT/system/libremovefile.dylib $OUT/system/libcopyfile.dylib $OUT/system/libinfo.dylib"
             common_read_compat=""
+            ;;
+        mount)
+            extra_libs="$OUT/simple_obj/sys__mount.o $OUT/simple_obj/sys__unmount.o"
             ;;
         df)
             # Real fabs()/trunc()/ilogb() (see this command's own

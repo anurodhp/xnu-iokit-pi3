@@ -1945,6 +1945,17 @@ for cmd in true false yes pwd basename dirname echo printf hostname logname cat 
     fi
 done
 
+# mount(8)/umount(8): one binary (mount_cmd.c), argv[0] selects the mode.
+mkdir -p "$MNT/sbin"
+if [ -f tools/userland_staging/mount.macho ]; then
+    cp tools/userland_staging/mount.macho "$MNT/sbin/mount"
+    cp tools/userland_staging/mount.macho "$MNT/sbin/umount"
+    chmod 755 "$MNT/sbin/mount" "$MNT/sbin/umount"
+    echo "+ wrote mount.macho to $MNT/sbin/{mount,umount}"
+else
+    echo "= tools/userland_staging/mount.macho not built -- run build_simple_cmds.sh first if wanted, skipping"
+fi
+
 # /bin/sort: a stale leftover in older base images (qemu/hfs_root_test.img).
 # No script here builds sort (it is not in the loop above; the real source,
 # third_party/text_cmds/sort, is not ported yet), and the leftover copy
