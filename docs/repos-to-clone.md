@@ -57,7 +57,6 @@ The main repo itself is `anurodhp/xnu-iokit-pi3`.
 | `naples` | `anurodhp/naples` | `v0.1` (tag) | none: this project's own repo (Naples.app dock and menu bar, build_naples.sh) |
 | `rome` | `anurodhp/rome` | `v0.1` (tag) | none: this project's own repo (Rome.app terminal, build_rome.sh) |
 | `gnustep-eau-theme` | `anurodhp/gershwin-eau-theme` | `iokit-port` | gershwin-desktop/gershwin-eau-theme main 3d741fbc (LGPL-2.1); no NSRegularExpression, GWDialog via class_addMethod, EAU_NO_TEST (DAR-461) |
-| `gershwin-windowmanager` | `anurodhp/gershwin-windowmanager` | `iokit-port` | gershwin-desktop/gershwin-windowmanager main 10b6797 (MIT); compositing off by default, IOKIT_PORT=1 build (Gershwin M2) |
 
 On-disk remote naming varies. Repos converted from patch files keep
 Apple as `origin` and the fork as `fork`, so push with `git push fork

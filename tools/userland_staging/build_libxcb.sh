@@ -12,9 +12,9 @@
 #                        /usr/X11/lib/libxcb-<ext>.<major>.dylib
 # shm/render are the two extension libraries cairo's xcb surface uses
 # (cairo-xcb-shm / cairo-xcb pkg-config requirements). composite, damage,
-# xfixes, randr, shape and present are what Gershwin's WindowManager links
-# (WindowManager/GNUmakefile; docs/gershwin-feasibility.md M1); sync is
-# present.xml's <import> (present.h includes sync.h), and dri3 is imported
+# xfixes, randr, shape and present are extension libraries for programs that
+# speak XCB directly (they were first built for a window manager that has since
+# been dropped); sync is present.xml's <import> (present.h includes sync.h), and dri3 is imported
 # too, so only its header is generated and staged (no libxcb-dri3). Every
 # other XCB_EXTENSION(...) in configure.ac:222-248 is left for whoever first
 # needs it -- each is the same one-generated-file shape as these.

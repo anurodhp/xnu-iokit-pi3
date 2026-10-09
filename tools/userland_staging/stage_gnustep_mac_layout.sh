@@ -94,7 +94,7 @@ for t in "$S/Tools"/*; do
         l="$(readlink "$t")"
         case "$l" in
             ../Applications/*) ln -s "../../../Applications/${l#../Applications/}" "$OUT/usr/local/bin/$n" ;;
-            # Apps installed under Library/CoreServices (Gershwin's WindowManager).
+            # Apps installed under Library/CoreServices.
             ../Library/*) ln -s "../../../System/Library/${l#../Library/}" "$OUT/usr/local/bin/$n" ;;
             *) echo "error: $t -> $l is a symlink this script does not know how to move" >&2; exit 1 ;;
         esac
