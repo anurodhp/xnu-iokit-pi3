@@ -1291,6 +1291,30 @@ if [ -n "$FREEBSD_DEST" ]; then
     git -C "$FREEBSD_DEST" checkout "$FREEBSD_REF"
 fi
 
+# freebsd-src-15: a second, sparse checkout of FreeBSD release/15.0.0 (2025-12), only lib/libc/aarch64/string. FreeBSD's arm64 libc has NEON
+# string routines the pinned 13.2 checkout predates: strlcpy, strspn, strcspn, memccpy, timingsafe_bcmp, timingsafe_memcmp (Getz Mikalsen,
+# BSD-2-Clause, SPDX-tagged) and the C wrappers built on them (strcat, strncat, strlcat, strpbrk, strsep). Built unmodified (except the ELF
+# .weak/.set alias lines, which Mach-O has no equivalent of) by build_armstring.sh together with Arm's optimized-routines.
+FREEBSD15_REF="release/15.0.0"
+FREEBSD15_DEST="third_party/freebsd-src-15"
+if [ -d "$FREEBSD15_DEST" ]; then
+    if [ "$FORCE" = "1" ]; then
+        echo "+ removing existing $FREEBSD15_DEST (--force)"
+        rm -rf "$FREEBSD15_DEST"
+    else
+        echo "= $FREEBSD15_DEST already exists, skipping (use --force to re-clone)"
+        FREEBSD15_DEST=""
+    fi
+fi
+if [ -n "$FREEBSD15_DEST" ]; then
+    echo "+ sparse-cloning freebsd-src @ $FREEBSD15_REF (lib/libc/aarch64/string only)"
+    git clone --filter=blob:none --no-checkout --depth 1 --branch "$FREEBSD15_REF" \
+        https://github.com/freebsd/freebsd-src.git "$FREEBSD15_DEST"
+    git -C "$FREEBSD15_DEST" sparse-checkout init --no-cone
+    printf '/lib/libc/aarch64/string/*\n' > "$FREEBSD15_DEST/.git/info/sparse-checkout"
+    git -C "$FREEBSD15_DEST" checkout "$FREEBSD15_REF"
+fi
+
 # sudo (DAR-340): unlike every other command this project has ported,
 # sudo is in NEITHER apple-oss-distributions (never open-sourced by
 # Apple, confirmed -- this project's own docs/apple-oss-catalog.md has

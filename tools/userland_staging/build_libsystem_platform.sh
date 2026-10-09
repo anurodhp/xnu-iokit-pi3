@@ -161,9 +161,9 @@ if [ ! -f "$OUT/armstring/platform/platform_memset.o" ]; then
     echo "error: $OUT/armstring not built -- run build_armstring.sh first" >&2
     exit 1
 fi
-rm -f "$OUT"/libsystem_platform/apple_platform/{bzero,memmove,memcmp,strcmp,strlen,strchr}.o
+rm -f "$OUT"/libsystem_platform/apple_platform/{bzero,memmove,memcmp,strcmp,strlen,strchr,strlcpy}.o
 cp "$OUT"/armstring/body/*.o "$OUT"/armstring/platform/*.o "$OUT/libsystem_platform/apple_platform/"
-echo "apple_platform: generic bzero/memmove/memcmp/strcmp/strlen/strchr replaced by the Arm routines"
+echo "apple_platform: generic bzero/memmove/memcmp/strcmp/strlen/strchr/strlcpy replaced by the Arm and FreeBSD routines"
 
 
 # setjmp(3) family (DAR-383, 2026-09-26): real, unmodified libplatform

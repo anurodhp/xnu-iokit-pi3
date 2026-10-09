@@ -15,6 +15,12 @@
 #   libc_build/armstring/hidden.txt     the Arm routines' own names, for -unexported_symbols_list: each dylib that links them keeps them private,
 #                                       so no two dylibs export the same symbol.
 #
+# Also assembled here: FreeBSD's own arm64 NEON additions (third_party/freebsd-src-15, release/15.0.0, lib/libc/aarch64/string, BSD-2-Clause,
+# Getz Mikalsen): strlcpy, strspn, strcspn, memccpy, timingsafe_bcmp, timingsafe_memcmp, and their C wrappers strcat, strncat, strlcat,
+# strpbrk, strsep. Unmodified but for the ELF-only .weak/.set alias lines, which are stripped (the aliases are the glue below), and three
+# branches to libc's strlen/strchrnul, which need Mach-O names (they go to the Arm routines in this set); FreeBSD's
+# <machine/asm.h> ENTRY/END are provided for Mach-O by a three-line shim written here.
+#
 # Why: Apple publishes no arm64 string assembly (libplatform up to 375.120.2 has only src/string/generic), and the generic C
 # fallbacks built -O0 ran memset at 24 MB/s, unaligned memcpy at 47 MB/s, memcmp at 53 MB/s (florence tests/pi/mem_bench.c).
 # Arm's code is the tested set behind glibc's, Android's and FreeBSD's arm64 libc; its own test programs
@@ -44,6 +50,25 @@ AFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -DWANT_GNU_PROPERTY=0"
 for f in memset memcpy memcmp memchr strlen strcmp strncmp strchr strchrnul strrchr strcpy stpcpy strnlen; do
     "$CLANG" $AFLAGS "$ARM/$f.S" -o "$D/body/arm_$f.o"
 done
+
+# FreeBSD's additions. ENTRY/END for Mach-O (their asm.h also adds CFI and BTI, not needed here); %% is clang's statement separator on Darwin.
+FB="../../third_party/freebsd-src-15/lib/libc/aarch64/string"
+[ -f "$FB/strlcpy.S" ] || { echo "error: $FB/strlcpy.S not found -- run setup_third_party.sh (freebsd-src-15)" >&2; exit 1; }
+mkdir -p "$D/shim/machine" "$D/fbsd"
+cat > "$D/shim/machine/asm.h" <<'EOF'
+/* Mach-O stand-in for FreeBSD's <machine/asm.h>: just ENTRY and END. */
+#define ENTRY(x)	.text %% .globl _ ## x %% .p2align 4 %% _ ## x:
+#define END(x)
+EOF
+for f in strlcpy strspn strcspn memccpy timingsafe_bcmp timingsafe_memcmp; do
+    # ELF-only alias lines out; and the calls they make to libc's strlen/strchrnul go to the Arm routines (Mach-O names, private to the dylib)
+    grep -v -E '^[[:space:]]*\.(weak|set)[[:space:]]' "$FB/$f.S" \
+        | sed -E 's/^([[:space:]]*bl?[[:space:]]+)strlen([[:space:]]|$)/\1___strlen_aarch64\2/; s/^([[:space:]]*bl?[[:space:]]+)strchrnul([[:space:]]|$)/\1___strchrnul_aarch64\2/' > "$D/fbsd/$f.S"
+    "$CLANG" $AFLAGS -I "$D/shim" "$D/fbsd/$f.S" -o "$D/body/fb_$f.o"
+done
+# the two timingsafe functions are public as they are (ENTRY(timingsafe_bcmp)): their own objects are the libc members
+mv "$D/body/fb_timingsafe_bcmp.o" "$D/libc/timingsafe_bcmp.o"
+mv "$D/body/fb_timingsafe_memcmp.o" "$D/libc/timingsafe_memcmp.o"
 
 # every global the routines define, one per line
 nm -g "$D"/body/*.o | awk '$2 == "T" { print $3 }' | sort -u > "$D/hidden.txt"
@@ -77,6 +102,16 @@ glue libc stpcpy    _stpcpy      "$(b ___stpcpy_aarch64)"
 glue libc strrchr   _strrchr     "$(b ___strrchr_aarch64)"
 glue libc rindex    _rindex      "$(b ___strrchr_aarch64)"
 glue libc strnlen   _strnlen     "$(b ___strnlen_aarch64)"
+glue libc strlcpy   _strlcpy     "$(b ___strlcpy)"
+glue libc strspn    _strspn      "$(b ___strspn)"
+glue libc strcspn   _strcspn     "$(b ___strcspn)"
+glue libc memccpy   _memccpy     "$(b ___memccpy)"
+
+# FreeBSD's C wrappers over those routines, compiled like the rest of libc (-O2, freestanding, no fortify so the wrappers cannot rewrite into themselves)
+for f in strcat strncat strlcat strpbrk strsep; do
+    "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c -O2 -ffreestanding -fno-builtin -fno-stack-protector -w \
+        -D_FORTIFY_SOURCE=0 -D_LIBC_NO_FEATURE_VERIFICATION "$FB/$f.c" -o "$D/libc/$f.o"
+done
 
 # the names libplatform's generic bzero.c/memmove.c/memcmp.c/strlen.c/strcmp.c/strchr.c define
 glue platform platform_memset  __platform_memset  "$(b ___memset_aarch64)"
@@ -86,6 +121,7 @@ glue platform platform_memcmp  __platform_memcmp  "$(b ___memcmp_aarch64)"
 glue platform platform_strlen  __platform_strlen  "$(b ___strlen_aarch64)"
 glue platform platform_strcmp  __platform_strcmp  "$(b ___strcmp_aarch64)"
 glue platform platform_strchr  __platform_strchr  "$(b ___strchr_aarch64)"
+glue platform platform_strlcpy __platform_strlcpy "$(b ___strlcpy)"
 glue platform pub_memset       _memset            "$(b ___memset_aarch64)"
 glue platform pub_memcpy       _memcpy            "$(b ___memmove_aarch64)"
 glue platform pub_memmove      _memmove           "$(b ___memmove_aarch64)"

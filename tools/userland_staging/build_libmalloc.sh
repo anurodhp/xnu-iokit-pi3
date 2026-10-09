@@ -454,6 +454,19 @@ PLATCFLAGS="-isysroot $SDK -target arm64-apple-ios14.4 -c -ffreestanding -fno-bu
 "$CLANG" $PLATCFLAGS -I $PLATFORM/private -I $PLATFORM/internal -I $PLATFORM/include -idirafter $XNU/osfmk -idirafter $XNU/libkern -I $XNU/libsyscall \
     "$PLATFORM/src/simple/string_io.c" -o "$OUT/simple_string_io.o"
 
+# Arm's AArch64 string routines (build_armstring.sh) in place of the four generic C primitives just compiled (same object names and symbols:
+# __platform_strcmp/strlen/memmove/strchr), and for the memcpy/memset members archived below. The routines' own objects go into libmalloc.a
+# and the smoketest link too, since this archive is linked without libc_string.a.
+if [ ! -f "$OUT/armstring/platform/platform_memmove.o" ]; then
+    echo "error: $OUT/armstring not built -- run build_armstring.sh first" >&2
+    exit 1
+fi
+for n in strcmp strlen memmove strchr; do
+    cp "$OUT/armstring/platform/platform_$n.o" "$OUT/platform_$n.o"
+done
+mkdir -p "$OUT/freebsd_string"
+cp "$OUT/armstring/libc/memcpy.o" "$OUT/armstring/libc/memset.o" "$OUT/freebsd_string/"
+
 # Real Apple fortify-source wrappers (memcpy_chk/memset_chk/chk_fail)
 # plus the two real portable memcpy/memset primitives themselves,
 # correctly built under the iOS14.4 target this time (see this script's
@@ -641,7 +654,7 @@ ar rcs "$OUT/libmalloc.a" \
     "$OUT/platform_strcmp.o" "$OUT/platform_strlen.o" "$OUT/platform_memmove.o" "$OUT/platform_strchr.o" \
     "$OUT/simple_string_io.o" \
     "$OUT/memcpy_chk.o" "$OUT/memset_chk.o" "$OUT/chk_fail.o" \
-    "$OUT/freebsd_string/memcpy.o" "$OUT/freebsd_string/memset.o" \
+    "$OUT/freebsd_string/memcpy.o" "$OUT/freebsd_string/memset.o" "$OUT"/armstring/body/*.o \
     "$OUT/libmalloc_vm_traps.o" "$OUT/libmalloc_vm_mig_stubs.o" \
     "$OUT/libmalloc_sleep_shim.o" "$OUT/libmalloc_dispatch.o" "$OUT/pthread_tsd_shim.o" \
     "$OUT/sys_getpid.o" "$OUT/sys_mprotect.o" "$OUT/sys_kill.o" "$OUT/sys_write.o" \
@@ -718,7 +731,7 @@ else
     "$OUT"/apple_malloc/*.o \
     "$OUT/mach_vm.o" "$OUT/mach_init.o" "$OUT/mig_reply_port.o" "$OUT/init_cpu_capabilities.o" \
     "$OUT/platform_strcmp.o" "$OUT/platform_strlen.o" "$OUT/platform_memmove.o" "$OUT/platform_strchr.o" \
-    "$OUT/simple_string_io.o" \
+    "$OUT/simple_string_io.o" "$OUT"/armstring/body/*.o \
     "$OUT/libmalloc_vm_traps.o" "$OUT/libmalloc_vm_mig_stubs.o" "$OUT/libmalloc_sleep_shim.o" \
     "$OUT/pthread_tsd_shim.o" \
     "$OUT/sys_getpid.o" "$OUT/sys_mprotect.o" "$OUT/sys_kill.o" "$OUT/sys_write.o" \
