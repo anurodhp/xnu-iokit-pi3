@@ -278,8 +278,7 @@ done
 
 # ---- session autostart ----------------------------------------------
 # x11_config/session/autostart is wmaker's global init script; it opens
-# Naples.app (dock, menu bar, menu server), Milan.app (draws the desktop) and
-# Rome.app. The boot session itself (gsdm's login window, the Xsession
+# Naples.app (dock, menu bar, menu server) and Milan.app (draws the desktop). The boot session itself (gsdm's login window, the Xsession
 # that execs wmaker as the logged-in user, the launchd plist) is staged by
 # build_gsdm.sh.
 cp "x11_config/session/autostart" "$PKGDATA/autostart"

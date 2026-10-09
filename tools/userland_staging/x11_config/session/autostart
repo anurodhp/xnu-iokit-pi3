@@ -13,9 +13,7 @@ N=/Applications/Naples.app/Naples
 [ -x "$N" ] && "$N" &
 sleep 1
 # Milan draws the desktop (wallpaper and ~/Desktop icons) and opens no
-# browser window; the dock's Milan icon opens one.
+# browser window; the dock's Milan icon opens one. Nothing else opens at login.
 M=/Applications/Milan.app/Milan
 [ -x "$M" ] && "$M" -MilanDesktop YES -MilanOpenBrowser NO &
-T=/Applications/Rome.app/Rome
-[ -x "$T" ] && "$T" &
 exit 0
