@@ -87,6 +87,7 @@ private:
 	volatile uint32_t fSimThreadRunning;
 	void updateGain();
 	void calibrateRate();
+	void applyCachedRange();
 	uint32_t fCalRange[2];      // calibrated range per rate: [0] 44100, [1] 48000 (0 = not yet)
 	void buildGainTable();
 	void startToneTest(uint32_t seconds);
@@ -128,6 +129,7 @@ private:
 	volatile uint32_t        fClipFrames;
 	volatile uint32_t        fClipPeak;
 	volatile uint32_t        fLastPosition;
+	volatile uint32_t        fLastPositionLoop;
 	volatile uint32_t        fDmaErrors;
 	volatile uint32_t        fGainQ16;           // 0..65536, volume * mute
 	SInt32                   fVolume;

@@ -314,8 +314,8 @@
 		 * raw <1 16>..<1 26> are channels 0-10, bank 1 bits 16-26, so
 		 * BCM2837InterruptController vectors 16-26 (flattened like the
 		 * nodes above); channels 11-14 share IRQ 27 and are not used.
-		 * Inert by default: BCM2837DMA only starts with the boot-arg audio=1
-		 * or dma-test=1 (docs/audio-bringup.md).
+		 * On by default; boot-arg audio=0 turns BCM2837DMA off
+		 * (docs/audio-bringup.md).
 		 */
 		dma {
 			device_type = "dma";
@@ -332,13 +332,16 @@
 		 * <0x7e20c000 0x28>. Only defined for builds that ask for it
 		 * (rpi3-realhw.dts; the QEMU test variant once QEMU has a PWM
 		 * model, DARW-318): QEMU's raspi3 does not map this range, so
-		 * touching it there takes an external abort. Inert unless audio=1
-		 * (or pwm-sim=1 / pwm-test=1) is given (docs/audio-bringup.md).
+		 * touching it there takes an external abort. On by default; boot-arg audio=0
+		 * turns it off (docs/audio-bringup.md).
 		 */
 		pwm {
 			device_type = "pwm";
 			compatible = "brcm,bcm2835-pwm";
 			reg = <0x20c000 0 0x28 0>;
+#ifdef RPI3_PWM_SIM_ONLY
+			sim-only = <1>;	/* QEMU: BCM2837PWM only starts with pwm-sim=1 */
+#endif
 		};
 #endif
 

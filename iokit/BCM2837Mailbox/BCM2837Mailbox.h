@@ -118,6 +118,9 @@ public:
 	 * divider is fractional but finite). Returns false on a mailbox failure
 	 * or a zero answer.
 	 */
+	// Note: has no effect on the PWM clock (id 10) on a real Pi 3, although the
+	// firmware acknowledges it (DARW-317); BCM2837PWM programs the clock
+	// manager instead. Kept for other clocks.
 	static bool setClockRateHz(uint32_t clockId, uint32_t hz, uint32_t *actualHz);
 
 	/*

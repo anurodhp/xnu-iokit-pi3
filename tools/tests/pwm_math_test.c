@@ -18,7 +18,6 @@ int main(void)
 		assert(err * 1000 <= want[i].rate);          // within 0.1%
 	}
 	assert(pwmRangeFor(kPWMClockHz, 8000) == 0);     // range 31250 > max
-	assert(pwmRangeFor(kPWMClockHz, 30000) == 8333 ? 0 : 1); // 8333 > 8192: rejected
 	assert(pwmRangeFor(kPWMClockHz, 30000) == 0);
 	assert(pwmRangeFor(1, 0) == 0);
 	assert(pwmDatFromS16(-32768, 2083) == 0);

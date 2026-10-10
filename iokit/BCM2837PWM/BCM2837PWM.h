@@ -19,13 +19,11 @@
  *     as remembered; the first run on a Pi (pwm-test=1 logs the registers)
  *     and the QEMU model must cross-check them.
  *   - PWM clock: programmed directly in the clock manager (CM_PWMCTL/
- *     CM_PWMDIV at 0x3f1010a0, PLLD 500 MHz / 5 = 100 MHz; programClock()).
- *     The VideoCore mailbox "set clock rate" for clock id 10 (u-boot
- *     arch/arm/mach-bcm283x/include/mach/mbox.h:228-238,
- *     BCM2835_MBOX_CLOCK_ID_PWM) was tried first and does not take effect for
- *     this clock: on a real Pi the firmware acknowledged 98.304 MHz while the
- *     ring ran at 64% speed (62.5 MHz = PLLD/8), measured by the loop rate of
- *     the DMA ring (DARW-317).
+ *     CM_PWMDIV, plld_per / 2; programClock(), citations there). The
+ *     VideoCore mailbox "set clock rate" for clock id 10 (u-boot mach/mbox.h:
+ *     228-238) is acknowledged but has no effect on this clock. plld_per is
+ *     nominally 500 MHz but measured at 5/8 of that on a real Pi 3, so the
+ *     audio engine trims the range at start (DARW-317).
  *   - GPFSEL4 is read-modify-written here and by BCM2837SDHCI::pinmuxSDSlot()
  *     (GPIO48/49) with no shared lock; they run at different times in
  *     practice (the PWM mux only when audio is configured).
@@ -58,8 +56,7 @@ public:
 	IOReturn configure(uint32_t rateHz, uint32_t *rngOut, uint32_t *actualRateOut);
 	// Enable / disable both channels and the DMA request. Order contract: prime
 	// the DMA ring first, then startOutput(); stop the DMA channel first, then
-	// stopOutput(). All public entry points are serialised by one lock and may
-	// sleep (mailbox).
+	// stopOutput(). All public entry points are serialised by one lock.
 	IOReturn startOutput();
 	void     stopOutput();
 	bool     isConfigured() const { return fRng != 0; }

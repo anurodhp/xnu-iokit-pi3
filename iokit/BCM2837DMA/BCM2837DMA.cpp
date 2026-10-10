@@ -10,6 +10,7 @@ OSDefineMetaClassAndStructors(BCM2837DMA, IOService)
 enum {
 	kRegCs        = 0x00 / 4,
 	kRegConblkAd  = 0x04 / 4,
+	kRegNextCb    = 0x1c / 4,
 	kRegDebug     = 0x20 / 4,
 	kChanStride   = 0x100,
 	kRegIntStatus = 0xfe0,
@@ -51,12 +52,11 @@ BCM2837DMA::start(IOService *provider)
 	if (!super::start(provider)) {
 		return false;
 	}
-	// Opt-in while audio is brought up (DARW-316): only audio=1 or the dma-test
-	// debug arg enables the controller; otherwise it is left as the firmware
-	// set it.
-	uint32_t optin = 0, testArg = 0;
-	if (!((PE_parse_boot_argn("audio", &optin, sizeof(optin)) && optin) ||
-	    (PE_parse_boot_argn("dma-test", &testArg, sizeof(testArg)) && testArg))) {
+	// On by default for audio; boot-arg audio=0 turns it off (dma-test=1
+	// still starts it, for the self-test).
+	uint32_t audioArg = 1, testArg = 0;
+	PE_parse_boot_argn("audio", &audioArg, sizeof(audioArg));
+	if (audioArg == 0 && !(PE_parse_boot_argn("dma-test", &testArg, sizeof(testArg)) && testArg)) {
 		return false;
 	}
 	fProvider = provider;
@@ -267,18 +267,20 @@ BCM2837DMA::stopChannel(uint32_t channel)
 	if (channel >= kMaxIrqChannels || !(fAllocatedMask & (1U << channel))) {
 		return;
 	}
-	// A looping ring would otherwise continue into the next control block on
-	// ABORT (QEMU bcm2835_dma.c:18 documents ABORT as "stop the current CB,
-	// go to the next"), so zero the chain pointer first, abort, wait for
-	// ACTIVE to drop, then reset. The CS/CONBLK_AD semantics are those of the
-	// BCM2835 datasheet chapter 4 and the QEMU model; the exact Linux
-	// bcm2835-dma.c sequence is not vendored here and was not checked.
+	// Linux bcm2835_dma_abort() (raspberrypi/linux rpi-6.6.y
+	// drivers/dma/bcm2835-dma.c:711-745): nothing to do if no control block
+	// is loaded; otherwise end the chain after the current block (NEXTCONBK =
+	// 0), ABORT with ACTIVE kept set ("needs to be enabled to complete"), wait
+	// for ABORT to clear, clear ACTIVE, then RESET.
 	volatile uint32_t *cs = chan(channel);
-	chan(channel)[kRegConblkAd] = 0;
-	dmaBarrier();
-	*cs = kDMACsAbort | kCsDisDebug;
-	for (int i = 0; i < 1000 && (*cs & kDMACsActive); i++) {
-		IODelay(1);
+	if (chan(channel)[kRegConblkAd] != 0) {
+		chan(channel)[kRegNextCb] = 0;
+		dmaBarrier();
+		*cs = *cs | kDMACsAbort | kDMACsActive;
+		for (int i = 0; i < 10000 && (*cs & kDMACsAbort); i++) {
+			IODelay(1);
+		}
+		*cs = *cs & ~kDMACsActive;
 	}
 	*cs = kDMACsReset;
 	for (int i = 0; i < 1000 && (*cs & kDMACsReset); i++) {
@@ -317,13 +319,15 @@ BCM2837DMA::handleChannelInterrupt(uint32_t channel)
 		fErrorCount[channel]++;
 	}
 	if (v & kDMACsInt) {
-		// Acknowledge INT (write 1 to clear) but write back ACTIVE and the
-		// configuration bits as they are: a CS write with ACTIVE = 0 stops the
-		// channel. Found on a real Pi 3 (DARW-317): writing INT alone stopped
-		// the audio ring after its first interrupt (CS read back 0x1a, ACTIVE
-		// clear, the source address parked 32 bytes into the first control
-		// block). END is left as it is, which is harmless (sticky status).
-		*cs = (v & (kDMACsActive | kCsConfigMask)) | kDMACsInt;
+		// Acknowledge INT (write 1 to clear) with ACTIVE always set and the
+		// configuration bits kept, as Linux does (bcm2835-dma.c:792-808:
+		// INT | ACTIVE | CS_FLAGS). ACTIVE is read/write and writing 0 pauses
+		// the channel (:729-731): the first version wrote INT alone and that
+		// stopped the audio ring after its first interrupt on a real Pi 3
+		// (DARW-317). A channel whose chain has ended stays idle despite
+		// ACTIVE being set (:796-801), and the ACTIVE read-back is not reliable
+		// (:711-713), so it is not copied from v.
+		*cs = kDMACsInt | kDMACsActive | (v & kCsConfigMask);
 	}
 	fIrqCount[channel]++;
 

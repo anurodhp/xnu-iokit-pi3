@@ -46,13 +46,15 @@ BCM2837PWM::start(IOService *provider)
 	if (!super::start(provider)) {
 		return false;
 	}
-	// Opt-in while audio is brought up (DARW-316): audio=1 (or the pwm-sim /
-	// pwm-test debug args) enables it; otherwise the block is left alone.
-	uint32_t optin = 0, simArg = 0, testArg = 0;
-	bool wanted = (PE_parse_boot_argn("audio", &optin, sizeof(optin)) && optin) ||
-	    (PE_parse_boot_argn("pwm-sim", &simArg, sizeof(simArg)) && simArg) ||
-	    (PE_parse_boot_argn("pwm-test", &testArg, sizeof(testArg)) && testArg);
-	if (!wanted) {
+	// Audio is on by default; boot-arg audio=0 turns it off (DARW-320). A node
+	// marked "sim-only" (devicetrees/rpi3-pwmtest.dts, for QEMU, which maps no
+	// PWM block) is only used with pwm-sim=1, since touching the registers
+	// there takes an external abort.
+	uint32_t audioArg = 1, simArg = 0, testArg = 0;
+	PE_parse_boot_argn("audio", &audioArg, sizeof(audioArg));
+	bool wantSim = PE_parse_boot_argn("pwm-sim", &simArg, sizeof(simArg)) && simArg;
+	bool wantTest = PE_parse_boot_argn("pwm-test", &testArg, sizeof(testArg)) && testArg;
+	if ((audioArg == 0 && !wantTest && !wantSim) || (provider->getProperty("sim-only") && !wantSim)) {
 		return false;
 	}
 	fRegMap = provider->mapDeviceMemoryWithIndex(0);
@@ -126,17 +128,21 @@ BCM2837PWM::dumpRegs(const char *tag)
 	    readReg(0x20), readReg(0x24));
 }
 
-// CM_PWMCTL / CM_PWMDIV, in the clock manager block at 0x3f101000 (u-boot
-// bcm283x.dtsi cprman@7e101000). Offsets 0xa0 and 0xa4, the 0x5a000000
-// password in the top byte of every write, SRC [3:0] (6 = PLLD), ENAB bit 4,
-// KILL bit 5, BUSY bit 7, MASH [10:9], DIVI [23:12] / DIVF [11:0]: from the
-// BCM2835 datasheet as remembered (not vendored). Verified only by effect: the
-// ring's loop rate on a real Pi. PLLD is 500 MHz on this SoC.
+// CM_PWMCTL / CM_PWMDIV in the clock manager (cprman, bus 0x7e101000, u-boot
+// bcm283x.dtsi:138-141). From Linux raspberrypi/linux rpi-6.6.y
+// drivers/clk/bcm/clk-bcm2835.c: password 0x5a000000 (:41), CM_PWMCTL 0xa0 /
+// CM_PWMDIV 0xa4 (:86-87), ENAB bit 4, KILL 5, GATE 6, BUSY 7 (:124-130), SRC
+// [3:0] with 6 = plld_per (:144, parent list :1623-1632), 12.12 divider (:2206-
+// 2214) so DIVI is [23:12]. The disable step is Linux's bcm2835_clock_off()
+// (:1089-1101); the start sequence is Circle's CGPIOClock::Start() (lib/
+// gpioclock.cpp:66-85) with GATE set alongside ENAB as Linux's
+// bcm2835_clock_on() does (:1104-1115). plld_per is set by the firmware, nominally
+// 500 MHz (Circle machineinfo.cpp), measured at 5/8 of that on a real Pi 3.
 bool
 BCM2837PWM::programClock()
 {
 	const IOPhysicalAddress kCmPwm = 0x3f101000 + 0xa0;
-	const uint32_t kPw = 0x5a000000, kEnab = 1U << 4, kKill = 1U << 5, kBusy = 1U << 7, kSrcPllD = 6;
+	const uint32_t kPw = 0x5a000000, kEnab = 1U << 4, kKill = 1U << 5, kGate = 1U << 6, kBusy = 1U << 7, kSrcPllD = 6;
 	IODeviceMemory *mem = IODeviceMemory::withRange(kCmPwm, 2 * sizeof(uint32_t));
 	if (mem == NULL) {
 		return false;
@@ -148,7 +154,6 @@ BCM2837PWM::programClock()
 	}
 	volatile uint32_t *ctl = (volatile uint32_t *)map->getVirtualAddress();
 	volatile uint32_t *div = ctl + 1;
-	IOLog("BCM2837PWM: clock manager before: CM_PWMCTL=%#x CM_PWMDIV=%#x\n", *ctl, *div);
 
 	// Stop the clock and wait for it to idle (KILL if it will not).
 	*ctl = kPw | (*ctl & ~kEnab & 0xffffff);
@@ -163,23 +168,18 @@ BCM2837PWM::programClock()
 	}
 	bool ok = !(*ctl & kBusy);
 	if (ok) {
-		// pwm-div=<n> overrides the divisor (bring-up experiment, DARW-317).
-		uint32_t divisor = kPWMClockDivisor, dArg = 0;
-		if (PE_parse_boot_argn("pwm-div", &dArg, sizeof(dArg)) && dArg >= 2 && dArg < 4096) {
-			divisor = dArg;
-			IOLog("BCM2837PWM: pwm-div=%u override (%u Hz)\n", divisor, kPWMPllDHz / divisor);
-		}
-		*div = kPw | (divisor << 12);                   // integer divide, DIVF = 0
+		*div = kPw | (kPWMClockDivisor << 12);          // integer divide, DIVF = 0
 		*ctl = kPw | kSrcPllD;                          // source PLLD, MASH off
 		IODelay(10);
-		*ctl = kPw | kSrcPllD | kEnab;
+		*ctl = kPw | kSrcPllD | kEnab | kGate;
 		for (int i = 0; i < 1000 && !(*ctl & kBusy); i++) {
 			IODelay(1);
 		}
 		ok = (*ctl & kBusy) != 0;
 	}
-	IOLog("BCM2837PWM: clock manager after: CM_PWMCTL=%#x CM_PWMDIV=%#x (%s), expected %u Hz\n", *ctl, *div,
-	    ok ? "running" : "NOT running", kPWMClockHz);
+	if (!ok) {
+		IOLog("BCM2837PWM: PWM clock did not start (CM_PWMCTL=%#x CM_PWMDIV=%#x)\n", *ctl, *div);
+	}
 	map->release();
 	return ok;
 }
@@ -248,9 +248,9 @@ BCM2837PWM::configureLocked(uint32_t rateHz, uint32_t *rngOut, uint32_t *actualR
 	}
 
 	// Clock: program the clock manager directly (programClock()). The mailbox
-	// "set clock rate" for clock id 10 was tried first and does not work for
-	// the PWM clock here: the firmware reported the requested 98.304 MHz as
-	// set, yet the ring ran at 64% speed, i.e. the clock stayed at 62.5 MHz.
+	// "set clock rate" for clock id 10 was tried first and has no effect on
+	// the PWM clock here (acknowledged, clock unchanged; Minoca's UEFI PWM
+	// driver notes the same).
 	uint32_t want = pwmTargetClockHz(rateHz), got = 0;
 	if (!programClock()) {
 		return kIOReturnIOError;
