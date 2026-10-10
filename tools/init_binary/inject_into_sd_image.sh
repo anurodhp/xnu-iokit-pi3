@@ -1474,6 +1474,22 @@ install_smoketest tools/userland_staging/libc_build/hid_event_smoketest.macho "u
 install_smoketest tools/userland_staging/libc_build/audio_play.macho "usr/local/bin/audio_play" \
     "= audio_play.macho not built -- run tools/userland_staging/build_audio_play.sh first if wanted, skipping" \
     "  (DARW-319 plays a tone through IOAudioEngineUserClient; needs audio=1 or pwm-sim=1)"
+# coreaudio/ (audio daemon + CoreAudio HAL subset): libaudiohal.dylib is installed by the generic
+# libc_build/system loop above; the daemon, its launchd job and the smoketest client are here.
+# Built by coreaudio/build_libaudiohal.sh, build_audiod.sh, build_ca_play.sh.
+if [ -f tools/userland_staging/libc_build/audiod.macho ]; then
+    mkdir -p "$MNT/usr/sbin" "$MNT/Library/LaunchDaemons" "$MNT/var/log"
+    cp tools/userland_staging/libc_build/audiod.macho "$MNT/usr/sbin/audiod"
+    chmod 755 "$MNT/usr/sbin/audiod"
+    cp coreaudio/org.puredarwin.coreaudiod.plist "$MNT/Library/LaunchDaemons/org.puredarwin.coreaudiod.plist"
+    chmod 644 "$MNT/Library/LaunchDaemons/org.puredarwin.coreaudiod.plist"
+    echo "+ wrote /usr/sbin/audiod and org.puredarwin.coreaudiod.plist (on-demand MachServices job; see coreaudio/README.md)"
+else
+    echo "= audiod.macho not built -- run coreaudio/build_audiod.sh first if wanted, skipping"
+fi
+install_smoketest tools/userland_staging/libc_build/ca_play.macho "usr/local/bin/ca_play" \
+    "= ca_play.macho not built -- run coreaudio/build_ca_play.sh first if wanted, skipping" \
+    "  (coreaudio/ plays a tone through libaudiohal -> audiod; needs audio=1 or pwm-sim=1)"
 install_smoketest tools/userland_staging/libc_build/kqueue_poll_smoketest.macho "usr/local/bin/kqueue_poll_smoketest" \
     "= kqueue_poll_smoketest.macho not built -- run tools/userland_staging/build_kqueue_poll_smoketest.sh first if wanted, skipping" \
     "  (DAR-417 poll() readiness of a kqueue fd)"
