@@ -54,6 +54,26 @@ running).
 - NOT verified: real Pi (by ear), IOProc timing (under TCG the IOProc thread ran at about half real time, so streams
   underrun on QEMU; frame counts at the engine are still right).
 
+## Real Pi 3 results (2026-10-10, audio on the 3.5mm jack)
+- Kernel path (`audio_play`) and the two-client case (`audio_play` x2, the old panic) run on hardware: no panic, two kernel-mixed
+  0.25 sines peak at 16383 (exactly the sum; the 23600 seen on QEMU is a QEMU artifact, DARW-325).
+- `ca_proto_test` PASS; kill -9 client reaped; `killall audiod` mid-playback recovers (client finishes, exit 0).
+- **Choppy "telegraph" sound, fixed: the job needs `ProcessType` = `Interactive` in its launchd plist.** This launchd build gives a
+  job with no `ProcessType` the class `POSIX_SPAWN_PROC_TYPE_DAEMON_BACKGROUND` (core.c:2257, 4710): throttled, and in xnu's
+  background timer-coalescing class, where `usleep(1500)` took up to 50 ms. The mixer thread (and `audio_play` started as a launchd
+  job) then woke late 14 times a second and the engine played silence in between. Evidence, before -> after on the Pi, 8 s tone:
+  resyncs 52 -> 0; longest gap between chunks 60 ms -> 11-17 ms; gaps over 40 ms 100+ -> 0; longest `usleep` 49.5 ms -> 1.7 ms;
+  IOProc calls 52% of real time -> 100%. The same program run from an ssh shell (sshd's plist sets ProcessType Standard) was always
+  fine, which is what pointed at the launchd environment. `LegacyTimers` was tried first and made no difference.
+- Real-time scheduling (`include/ca_rt.h`, THREAD_TIME_CONSTRAINT_POLICY) is applied to audiod's mixer and request threads and to
+  the libaudiohal IO thread. On the Pi it tightens sleeps (nanosleep(4 ms): 5.0 ms normal, 4.02 ms real-time) but was not what fixed
+  the stalls.
+- Round trips are cheap on the Pi: Mach RPC to audiod about 100 us (QEMU: about 1 ms).
+- Deploying to a running Pi without re-flashing: `scp` works (sshd up, password login), but **delete the old file first**
+  (`rm`, then `scp`): overwriting an executable in place left the old code-signature state and the audio entitlement was refused
+  (`registerClientBuffer 0xe00002c1`). `launchctl load` does not work (DARW-241), so a changed plist needs a reboot.
+- The kernel's real-hardware serial driver loop for tests is `tools/realhw_serial_test.py --login root:darwin --cmd ...`.
+
 ## Kernel finding (DARW-322, fixed)
 Two concurrent engine clients (two `audio_play`, or `audio_play` + anything) used to PANIC the kernel on QEMU: data abort in
 `IOAudioEngine::mixOutputSamples` (from `IOAudioStream::processOutputSamples`), far = sourceBuf + 0xff0. Root cause: the

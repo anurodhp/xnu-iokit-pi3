@@ -8,6 +8,13 @@
 	No KeepAlive: the daemon exits by itself after 10 s without streams.
 	StandardOutPath/ErrorPath for the same reason org.chrony.chronyd.plist
 	documents: launchd does not wire an unconfigured job's stdio anywhere.
+
+	ProcessType Interactive: THE fix for the audio stalls. This launchd build defaults a job with no
+	ProcessType to POSIX_SPAWN_PROC_TYPE_DAEMON_BACKGROUND (core.c:2257, 4710): priority 4, throttled, and
+	in xnu's background timer-coalescing class, where a 1.5 ms usleep took up to 50 ms. Measured on a Pi: the
+	same audio_play that is clean from an ssh shell (sshd's plist sets ProcessType Standard) showed 49 resyncs
+	and 60 ms gaps in 8 s when started by launchd. Interactive (core.c:2737-2745) is the class for latency-
+	critical daemons (the loginwindow-style bootstrapper uses it, core.c:7284).
 -->
 <plist version="1.0">
 <dict>
@@ -17,6 +24,8 @@
 	<array>
 		<string>/usr/sbin/audiod</string>
 	</array>
+	<key>ProcessType</key>
+	<string>Interactive</string>
 	<key>ThrottleInterval</key>
 	<integer>2</integer>
 	<key>MachServices</key>

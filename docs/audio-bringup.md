@@ -65,6 +65,11 @@ and faulted on a not-yet-touched page of the client mapping (vm_fault fails with
 Also fixed: `BCM2837PWMAudioEngine::eraseOutputSamples` now clears the float mix buffer too (it accumulated across ring loops with
 several clients; two 0.25 sines peaked at 32767, now 23533 on QEMU vs 16383 ideal, likely erase-head lag under TCG).
 
+**launchd jobs need ProcessType (found on the Pi, 2026-10-10):** a job with no `ProcessType` runs as
+`DAEMON_BACKGROUND` here (throttled, background timer coalescing: a 1.5 ms sleep took up to 50 ms). Anything audio from a launchd job
+(`org.puredarwin.coreaudiod.plist`) must set `<key>ProcessType</key><string>Interactive</string>`. Details and numbers in
+`coreaudio/README.md`.
+
 ## Running the QEMU checks
 
 ```

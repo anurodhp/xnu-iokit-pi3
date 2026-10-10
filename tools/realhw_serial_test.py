@@ -152,6 +152,8 @@ def main():
     ap.add_argument("--raw", action="store_true",
                     help="send nothing, just capture output")
     ap.add_argument("--log", default=None)
+    ap.add_argument("--login", default=None, metavar="USER:PASSWORD",
+                    help="the board is at a login: prompt; log in first (typed with the same per-character delay)")
     ap.add_argument("--char-delay", type=float, default=0.012,
                     help="seconds between typed characters; see send() on why "
                          "this cannot be 0 for this target")
@@ -175,6 +177,14 @@ def main():
             # Wake the shell and establish where the prompt is.
             send(fd, "\r", args.char_delay)
             drain(fd, 3.0, transcript, stop_on_prompt=True)
+            if args.login:
+                user, _, password = args.login.partition(":")
+                if "login:" in "".join(transcript)[-200:]:
+                    send(fd, user + "\r", args.char_delay)
+                    drain(fd, 4.0, transcript)
+                    send(fd, password + "\r", args.char_delay)
+                    if not drain(fd, 20.0, transcript, stop_on_prompt=True):
+                        sys.exit("error: no shell prompt after login")
             for cmd in args.cmd:
                 print(f"\n[realhw] === {cmd} ===", flush=True)
                 send(fd, cmd + "\r", args.char_delay)

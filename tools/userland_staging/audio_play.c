@@ -234,6 +234,7 @@ int main(int argc, char **argv)
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
     uint64_t resyncs = 0;
+    uint64_t trap_sum_us = 0, trap_max_us = 0, gap_max_us = 0, last_iter_t = 0, slow_iters = 0;
     while (next < end && !g_stop) {
         // Fell behind (a scheduling hiccup): this chunk's frames are already
         // being played, so queueing it would be rejected as too old. Skip ahead
@@ -264,6 +265,7 @@ int main(int argc, char **argv)
         }
         uint32_t first = (uint32_t)(next % kRingFrames);
         uint32_t loop = (uint32_t)(next / kRingFrames);
+        uint64_t t_trap0 = mach_absolute_time();
         kr = IOConnectTrap6(conn, kTrapPerformClientIO, first, loop, 0, 1,
             (uintptr_t)(interval >> 32), (uintptr_t)(interval & 0xffffffffu));
         if (kr) {
@@ -274,6 +276,17 @@ int main(int argc, char **argv)
                     (unsigned long long)chunks, kr, (unsigned long long)PLAY_FRAME(), st->fCurrentLoopCount,
                     (unsigned long long)next);
             }
+        }
+        {   // timing diagnostics (DARW-324): how long the trap takes and how late each iteration starts
+            uint64_t now_t = mach_absolute_time();
+            uint64_t trap_us = ticks_to_ns(now_t - t_trap0, &tb) / 1000;
+            trap_sum_us += trap_us; if (trap_us > trap_max_us) trap_max_us = trap_us;
+            if (last_iter_t) {
+                uint64_t gap_us = ticks_to_ns(t_trap0 - last_iter_t, &tb) / 1000;
+                if (gap_us > gap_max_us) gap_max_us = gap_us;
+                if (gap_us > 40000) slow_iters++;
+            }
+            last_iter_t = t_trap0;
         }
         chunks++;
         next += kChunkFrames;
@@ -293,6 +306,9 @@ int main(int argc, char **argv)
     IOConnectCallScalarMethod(conn, kCallUnregister, un, 2, NULL, NULL);
     printf("audio_play: %s amplitude %.2f for %.1f s: %llu chunks, %llu errors (last 0x%x), %llu resyncs, stop 0x%x, loops %u\n",
         wav ? wav : "sine", amp, seconds, (unsigned long long)chunks, (unsigned long long)errors, lastkr, (unsigned long long)resyncs, kr, st->fCurrentLoopCount);
+    printf("audio_play: trap avg %llu us, max %llu us; longest gap between chunks %llu us; %llu gaps over 40 ms\n",
+        (unsigned long long)(chunks ? trap_sum_us / chunks : 0), (unsigned long long)trap_max_us,
+        (unsigned long long)gap_max_us, (unsigned long long)slow_iters);
     IOConnectUnmapMemory64(conn, kStatusBuffer, mach_task_self(), saddr);
     IOServiceClose(conn);
     IOObjectRelease(svc);

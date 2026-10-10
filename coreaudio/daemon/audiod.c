@@ -26,6 +26,7 @@
 #include <IOKit/IOKitLib.h>
 #include "mixer.h"
 #include "ca_protocol.h"
+#include "ca_rt.h"
 
 extern mach_port_t bootstrap_port;
 extern kern_return_t bootstrap_check_in(mach_port_t bp, const char *name, mach_port_t *sp);
@@ -108,6 +109,12 @@ static void close_locked(stream_t *s)
 static void *mixer_thread(void *unused)
 {
     (void)unused;
+    /* One chunk is 510 frames = 10.6 ms. Measured on a Pi: the same loop as a normal-priority thread woke up to 60 ms late
+     * while other threads ran, which the engine plays as gaps. A time-constraint (real-time) thread is dispatched ahead of
+     * normal threads. Its work per chunk is under 0.5 ms. */
+    kern_return_t rtkr = ca_make_realtime(10625000ULL, 1500000ULL, 6000000ULL);
+    printf("audiod: mixer thread real-time policy: 0x%x\n", rtkr);
+    fflush(stdout);
     io_connect_t conn = 0;
     io_service_t svc = 0;
     mach_vm_address_t saddr = 0;
@@ -115,7 +122,10 @@ static void *mixer_thread(void *unused)
     AudioBufferDataDescriptor *desc = NULL;
     volatile AudioEngineStatus *st = NULL;
     int engine_up = 0;
-    uint64_t next = 0, chunks = 0, errors = 0;
+    uint64_t next = 0, chunks = 0, errors = 0, resyncs = 0;
+    uint64_t trap_sum_us = 0, trap_max_us = 0, gap_max_us = 0, last_iter_t = 0, slow_iters = 0, loop_max_us = 0;
+    uint64_t lock_max_us = 0, sleep_max_us = 0, lock_slow = 0, sleep_slow = 0;
+#define US_SINCE(t0) ((mach_absolute_time() - (t0)) * g_tb.numer / g_tb.denom / 1000)
     const uint64_t interval = (1000000000ULL / CA_DEVICE_RATE) * g_tb.denom / g_tb.numer;
     float mix[kChunkFrames * 2];
 
@@ -147,8 +157,13 @@ static void *mixer_thread(void *unused)
                 IOObjectRelease(svc);
                 free(desc);
                 engine_up = 0;
-                printf("audiod: engine released (%llu chunks, %llu errors)\n",
-                    (unsigned long long)chunks, (unsigned long long)errors);
+                printf("audiod: engine released (%llu chunks, %llu errors, %llu resyncs; trap avg %llu us max %llu us; mix+trap max %llu us; longest gap %llu us, %llu gaps over 40 ms; lock wait max %llu us (%llu over 5 ms); usleep max %llu us (%llu over 10 ms))\n",
+                    (unsigned long long)chunks, (unsigned long long)errors, (unsigned long long)resyncs,
+                    (unsigned long long)(chunks ? trap_sum_us / chunks : 0), (unsigned long long)trap_max_us,
+                    (unsigned long long)loop_max_us, (unsigned long long)gap_max_us, (unsigned long long)slow_iters,
+                    (unsigned long long)lock_max_us, (unsigned long long)lock_slow, (unsigned long long)sleep_max_us, (unsigned long long)sleep_slow);
+                lock_max_us = sleep_max_us = lock_slow = sleep_slow = 0;
+                chunks = errors = resyncs = trap_sum_us = trap_max_us = gap_max_us = last_iter_t = slow_iters = loop_max_us = 0;
                 fflush(stdout);
             }
             if (idle && now_ns() - idle > (uint64_t)IDLE_EXIT_S * 1000000000ULL) {
@@ -209,11 +224,20 @@ static void *mixer_thread(void *unused)
 
         /* Fell behind: this chunk's frames are already playing; skip to a fresh lead. */
         uint64_t pf = PLAY_FRAME();
-        if (next < pf + 512) next = pf + kLeadFrames;
+        if (next < pf + 512) { next = pf + kLeadFrames; resyncs++; }
+        uint64_t t_iter0 = mach_absolute_time();
+        if (last_iter_t) {
+            uint64_t gap_us = (t_iter0 - last_iter_t) * g_tb.numer / g_tb.denom / 1000;
+            if (gap_us > gap_max_us) gap_max_us = gap_us;
+            if (gap_us > 40000) slow_iters++;
+        }
+        last_iter_t = t_iter0;
 
         memset(mix, 0, sizeof mix);
         float vol; int mute;
+        uint64_t t_lock0 = mach_absolute_time();
         pthread_mutex_lock(&g_mu);
+        { uint64_t w = US_SINCE(t_lock0); if (w > lock_max_us) lock_max_us = w; if (w > 5000) lock_slow++; }
         uint64_t t = now_ns();
         for (int i = 0; i < CA_MAX_STREAMS; i++) {
             stream_t *s = &g_streams[i];
@@ -234,15 +258,27 @@ static void *mixer_thread(void *unused)
 
         uint32_t first = (uint32_t)(next % kRingFrames);
         uint32_t loop = (uint32_t)(next / kRingFrames);
+        uint64_t t_trap0 = mach_absolute_time();
         kern_return_t kr = IOConnectTrap6(conn, kTrapPerformClientIO, first, loop, 0, 1,
             (uintptr_t)(interval >> 32), (uintptr_t)(interval & 0xffffffffu));
         if (kr) {
             errors++;
             if (errors <= 4) { printf("audiod: trap rc 0x%x at play frame %llu\n", kr, (unsigned long long)pf); fflush(stdout); }
         }
+        {
+            uint64_t t1 = mach_absolute_time();
+            uint64_t trap_us = (t1 - t_trap0) * g_tb.numer / g_tb.denom / 1000;
+            uint64_t work_us = (t1 - t_iter0) * g_tb.numer / g_tb.denom / 1000;   // mix + trap, without the pacing sleep
+            trap_sum_us += trap_us; if (trap_us > trap_max_us) trap_max_us = trap_us;
+            if (work_us > loop_max_us) loop_max_us = work_us;
+        }
         chunks++;
         next += kChunkFrames;
-        while (!g_stop && PLAY_FRAME() + kLeadFrames < next) usleep(1500);
+        while (!g_stop && PLAY_FRAME() + kLeadFrames < next) {
+            uint64_t t_s0 = mach_absolute_time();
+            usleep(1500);
+            uint64_t w = US_SINCE(t_s0); if (w > sleep_max_us) sleep_max_us = w; if (w > 10000) sleep_slow++;
+        }
     engine_fail_next: ;
     }
     if (engine_up) {
@@ -362,6 +398,9 @@ int main(void)
     pthread_mutex_unlock(&g_mu);
     printf("audiod: up\n");
 
+    /* The request thread also sits in the audio path (every WRITE waits for it). */
+    kern_return_t rtkr = ca_make_realtime(10625000ULL, 500000ULL, 4000000ULL);
+    printf("audiod: request thread real-time policy: 0x%x\n", rtkr);
     pthread_t mt;
     if (pthread_create(&mt, NULL, mixer_thread, NULL)) { fprintf(stderr, "audiod: pthread_create failed\n"); return 1; }
 

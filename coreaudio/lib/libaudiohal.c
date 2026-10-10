@@ -25,6 +25,7 @@
 #include <unistd.h>
 #include <time.h>
 #include "ca_protocol.h"
+#include "ca_rt.h"
 
 extern mach_port_t bootstrap_port;
 extern mach_port_t mach_reply_port(void);
@@ -417,6 +418,9 @@ static void *io_thread(void *arg)
     ca_reply_t r;
     mach_timebase_info_data_t tb;
     mach_timebase_info(&tb);
+    /* Like Apple's HAL, run the IO thread in the real-time class: period = one IO buffer, computation = a guess at the
+     * IOProc's cost (it is the client's code), constraint = half the period. Failure is harmless (normal priority). */
+    (void)ca_make_realtime((uint64_t)IO_FRAMES * 1000000000ULL / rate, 2000000ULL, (uint64_t)IO_FRAMES * 500000000ULL / rate);
 
     while (p->run) {
         /* Pace: keep about TARGET_FILL frames queued in the daemon. A zero-frame WRITE reports the room. */

@@ -8,7 +8,12 @@
 #include <stddef.h>
 #include <unistd.h>
 #include <mach/mach.h>
+#include <mach/mach_time.h>
+#include <time.h>
+#include <pthread.h>
+#include <string.h>
 #include "ca_protocol.h"
+#include "ca_rt.h"
 
 extern mach_port_t bootstrap_port;
 extern kern_return_t bootstrap_look_up(mach_port_t, const char *, mach_port_t *);
@@ -50,17 +55,101 @@ static int32_t op(uint32_t o, uint32_t id, uint32_t token, uint32_t a, uint32_t 
     return r->kr;
 }
 
-int main(void)
+/* ca_proto_test -b: timing, not correctness. Mach RPC round trip to audiod, nanosleep()/usleep() granularity. */
+static double now_us(void)
+{
+    static mach_timebase_info_data_t tb;
+    if (!tb.denom) mach_timebase_info(&tb);
+    return (double)mach_absolute_time() * tb.numer / tb.denom / 1000.0;
+}
+
+static void sleeps(const char *label)
+{
+    double sum = 0, worst = 0;
+    for (int i = 0; i < 50; i++) {
+        struct timespec ts = { 0, 4000000L };
+        double t0 = now_us();
+        nanosleep(&ts, NULL);
+        double d = now_us() - t0;
+        sum += d; if (d > worst) worst = d;
+    }
+    printf("ca_proto_test bench [%s]: nanosleep(4 ms): avg %.0f us, worst %.0f us\n", label, sum / 50, worst);
+    sum = worst = 0;
+    for (int i = 0; i < 50; i++) {
+        double t0 = now_us();
+        usleep(1500);
+        double d = now_us() - t0;
+        sum += d; if (d > worst) worst = d;
+    }
+    printf("ca_proto_test bench [%s]: usleep(1500): avg %.0f us, worst %.0f us\n", label, sum / 50, worst);
+}
+
+static void *sleeps_thread(void *arg)
+{
+    sleeps((const char *)arg);
+    return NULL;
+}
+
+static int bench(void)
+{
+    ca_reply_t r;
+    if (op(CA_OP_OPEN, 0, 0, 48000, 2, 0, 0, 0, NULL, 0, &r) != KERN_SUCCESS) return 1;
+    uint32_t id = r.id, tok = r.token;
+    double worst = 0, sum = 0;
+    const int n = 200;
+    for (int i = 0; i < n; i++) {
+        double t0 = now_us();
+        op(CA_OP_WRITE, id, tok, 0, 0, 0, 0, 2, NULL, 0, &r);
+        double d = now_us() - t0;
+        sum += d; if (d > worst) worst = d;
+    }
+    printf("ca_proto_test bench: zero-frame WRITE RPC: avg %.0f us, worst %.0f us (%d calls)\n", sum / n, worst, n);
+    float pcm[512 * 2]; memset(pcm, 0, sizeof pcm);
+    sum = worst = 0;
+    for (int i = 0; i < 20; i++) {
+        double t0 = now_us();
+        op(CA_OP_WRITE, id, tok, 0, 0, 0, 512, 2, pcm, sizeof pcm, &r);
+        double d = now_us() - t0;
+        sum += d; if (d > worst) worst = d;
+    }
+    printf("ca_proto_test bench: 512-frame WRITE RPC: avg %.0f us, worst %.0f us (20 calls)\n", sum / 20, worst);
+    sleeps("main thread, normal");
+    {   /* the same measurement on a secondary pthread: audiod's mixer is one */
+        pthread_t th;
+        pthread_create(&th, NULL, sleeps_thread, (void *)"secondary pthread, normal");
+        pthread_join(th, NULL);
+    }
+    kern_return_t rt = ca_make_realtime(10666667ULL, 2000000ULL, 8000000ULL);
+    printf("ca_proto_test bench: ca_make_realtime -> 0x%x\n", rt);
+    sleeps(rt == KERN_SUCCESS ? "real-time thread" : "(real-time FAILED, still normal)");
+    sum = worst = 0;
+    for (int i = 0; i < 200; i++) {
+        double t0 = now_us();
+        op(CA_OP_WRITE, id, tok, 0, 0, 0, 0, 2, NULL, 0, &r);
+        double d = now_us() - t0;
+        sum += d; if (d > worst) worst = d;
+    }
+    printf("ca_proto_test bench: zero-frame WRITE RPC (after realtime): avg %.0f us, worst %.0f us\n", sum / 200, worst);
+    op(CA_OP_CLOSE, id, tok, 0, 0, 0, 0, 0, NULL, 0, &r);
+    return 0;
+}
+
+int main(int argc, char **argv)
 {
     ca_reply_t r;
     float pcm[200];
     memset(pcm, 0, sizeof pcm);
+    if (argc > 1 && !strcmp(argv[1], "-s")) {      /* sleep latency only, no daemon: run it next to a player */
+        for (int round = 0; round < 6; round++) sleeps("sleeps only");
+        return 0;
+    }
     for (int i = 0; i < 5; i++) {
         if (bootstrap_look_up(bootstrap_port, CA_SERVICE_NAME, &g_svc) == KERN_SUCCESS) break;
         usleep(200000);
     }
     if (!g_svc) { printf("ca_proto_test: FAIL cannot look up %s\n", CA_SERVICE_NAME); return 1; }
     g_reply = mach_reply_port();
+    if (argc > 1 && !strcmp(argv[1], "-b")) return bench();
 
     /* argument validation */
     CHECK(op(CA_OP_OPEN, 0, 0, 5, 2, 0, 0, 0, NULL, 0, &r) == KERN_INVALID_ARGUMENT, "rate 5");
