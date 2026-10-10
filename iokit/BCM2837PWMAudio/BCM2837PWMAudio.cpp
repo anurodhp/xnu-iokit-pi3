@@ -414,8 +414,8 @@ BCM2837PWMAudioEngine::performAudioEngineStart()
 IOReturn
 BCM2837PWMAudioEngine::performAudioEngineStop()
 {
-	IOLog("BCM2837PWMAudio: stop: %u frames through clipOutputSamples, peak %u/32767, %u DMA errors\n",
-	    (unsigned)fClipFrames, (unsigned)fClipPeak, (unsigned)fDmaErrors);
+	IOLog("BCM2837PWMAudio: stop: %u frames through clipOutputSamples, peak %u/32767\n",
+	    (unsigned)fClipFrames, (unsigned)fClipPeak);
 	fClipFrames = 0;
 	fClipPeak = 0;
 	if (fSim) {
@@ -501,8 +501,10 @@ BCM2837PWMAudioEngine::clipOutputSamples(const void *mixBuf, void *sampleBuf, UI
 	_enable_preemption();
 	// Statistics for the stop log: how much audio actually went through the
 	// clip path (userland-driven runs have no other visible evidence on QEMU).
-	if (peak > fClipPeak) {
-		fClipPeak = peak;
+	for (uint32_t old = fClipPeak; peak > old; old = fClipPeak) {
+		if (OSCompareAndSwap(old, peak, &fClipPeak)) {
+			break;
+		}
 	}
 	__sync_fetch_and_add(&fClipFrames, numSampleFrames);
 	return kIOReturnSuccess;

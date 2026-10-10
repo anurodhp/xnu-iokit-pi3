@@ -41,6 +41,6 @@ otool -l "$M" | grep -q "cmd LC_MAIN" || { echo "error: no LC_MAIN" >&2; exit 1;
 # code-signature blob (IOUserClient.cpp:1481-1484, cs_entitlements_blob_get).
 codesign -s - -f --entitlements audio_play.entitlements "$M" 2>&1 | grep -v "replacing existing signature" || true
 codesign -d --entitlements - "$M" 2>/dev/null | grep -q "com.apple.private.audio.driver-host" || {
-    echo "error: $M is not signed with the HID entitlement" >&2; exit 1; }
+    echo "error: $M is not signed with the audio entitlement" >&2; exit 1; }
 echo "wrote $M"
 

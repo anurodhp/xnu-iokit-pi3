@@ -46,6 +46,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <math.h>
+#include <signal.h>
 #include <mach/mach.h>
 #include <mach/mach_time.h>
 #include <IOKit/IOKitLib.h>
@@ -80,6 +81,9 @@ typedef struct {
     volatile uint32_t fEraseHeadSampleFrame;
 } AudioEngineStatus;
 
+static volatile sig_atomic_t g_stop;
+static void on_signal(int sig) { (void)sig; g_stop = 1; }
+
 static uint64_t ticks_to_ns(uint64_t t, const mach_timebase_info_data_t *tb)
 {
     return t * tb->numer / tb->denom;
@@ -94,10 +98,11 @@ static int16_t *load_wav(const char *path, uint32_t *frames, int *chans)
     fseek(f, 0, SEEK_END);
     long len = ftell(f);
     fseek(f, 0, SEEK_SET);
+    if (len < 44 || len > (64L << 20)) { fprintf(stderr, "audio_play: %s: size %ld not supported\n", path, len); fclose(f); return NULL; }
     uint8_t *d = malloc(len);
-    if (!d || fread(d, 1, len, f) != (size_t)len) { fprintf(stderr, "audio_play: read %s\n", path); fclose(f); return NULL; }
+    if (!d || fread(d, 1, len, f) != (size_t)len) { fprintf(stderr, "audio_play: read %s\n", path); free(d); fclose(f); return NULL; }
     fclose(f);
-    if (len < 44 || memcmp(d, "RIFF", 4) || memcmp(d + 8, "WAVE", 4)) { fprintf(stderr, "audio_play: not a WAV file\n"); return NULL; }
+    if (memcmp(d, "RIFF", 4) || memcmp(d + 8, "WAVE", 4)) { fprintf(stderr, "audio_play: not a WAV file\n"); free(d); return NULL; }
     int fmt_ok = 0, ch = 0;
     for (long o = 12; o + 8 <= len;) {
         uint32_t sz = d[o + 4] | d[o + 5] << 8 | d[o + 6] << 16 | (uint32_t)d[o + 7] << 24;
@@ -109,6 +114,7 @@ static int16_t *load_wav(const char *path, uint32_t *frames, int *chans)
             if (tag != 1 || bits != 16 || (ch != 1 && ch != 2) || rate != kRate) {
                 fprintf(stderr, "audio_play: need 16-bit PCM, 1-2 channels, %d Hz (got tag %u, %u bit, %d ch, %u Hz)\n",
                     kRate, tag, bits, ch, rate);
+                free(d);
                 return NULL;
             }
             fmt_ok = 1;
@@ -121,6 +127,7 @@ static int16_t *load_wav(const char *path, uint32_t *frames, int *chans)
         o += 8 + sz + (sz & 1);
     }
     fprintf(stderr, "audio_play: no data chunk\n");
+    free(d);
     return NULL;
 }
 
@@ -128,17 +135,19 @@ int main(int argc, char **argv)
 {
     double freq = 440.0, seconds = 3.0, amp = 0.25;
     const char *wav = NULL;
-    int c;
-    for (int i = 1; i + 1 < argc; i += 2) {
-        if (!strcmp(argv[i], "-w")) wav = argv[i + 1];
-        else if (!strcmp(argv[i], "-f")) freq = atof(argv[i + 1]);
-        else if (!strcmp(argv[i], "-s")) seconds = atof(argv[i + 1]);
-        else if (!strcmp(argv[i], "-a")) amp = atof(argv[i + 1]);
+    for (int i = 1; i < argc; i += 2) {
+        char *end = NULL;
+        if (i + 1 >= argc) { fprintf(stderr, "audio_play: %s needs a value\n", argv[i]); return 64; }
+        if (!strcmp(argv[i], "-w")) { wav = argv[i + 1]; continue; }
+        double v = strtod(argv[i + 1], &end);
+        if (*end || !isfinite(v)) { fprintf(stderr, "audio_play: bad value '%s' for %s\n", argv[i + 1], argv[i]); return 64; }
+        if (!strcmp(argv[i], "-f")) freq = v;
+        else if (!strcmp(argv[i], "-s")) seconds = v;
+        else if (!strcmp(argv[i], "-a")) amp = v;
         else { fprintf(stderr, "usage: audio_play [-f hz] [-s seconds] [-a amplitude] | -w file.wav\n"); return 64; }
     }
-    (void)c;
-    if (amp < 0 || amp > 1 || freq < 20 || freq > 20000 || seconds <= 0) {
-        fprintf(stderr, "audio_play: bad argument\n");
+    if (amp < 0 || amp > 1 || freq < 20 || freq > 20000 || seconds <= 0 || seconds > 3600) {
+        fprintf(stderr, "audio_play: argument out of range\n");
         return 64;
     }
 
@@ -169,7 +178,10 @@ int main(int argc, char **argv)
     printf("audio_play: status buffer v%u, %llu bytes\n", st->fVersion, (unsigned long long)ssize);
 
     const size_t dataBytes = kChunkFrames * kChannels * sizeof(float);
-    AudioBufferDataDescriptor *desc = calloc(1, sizeof(*desc) + dataBytes);
+    // Page-aligned and page-sized: the kernel wires and maps whole pages.
+    AudioBufferDataDescriptor *desc = NULL;
+    if (posix_memalign((void **)&desc, 4096, 8192) || !desc) { fprintf(stderr, "audio_play: out of memory\n"); return 1; }
+    memset(desc, 0, 8192);
     desc->fActualDataByteSize = (uint32_t)dataBytes;
     desc->fActualNumSampleFrames = kChunkFrames;
     // registerClientBuffer64 requires fTotalDataByteSize == the registered size,
@@ -194,10 +206,20 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    // Absolute frame number of the play position, from the last wrap time.
+    // Absolute frame number of the play position. The kernel updates the loop
+    // count and the wrap time together with one 128-bit compare-and-swap
+    // (IOAudioEngine.cpp takeTimeStamp), so read them as a consistent pair
+    // (count, time, count again) and never let the time be in the future.
     #define PLAY_FRAME() ({ \
-        uint64_t el = ticks_to_ns(mach_absolute_time() - st->fLastLoopTime, &tb); \
-        (uint64_t)st->fCurrentLoopCount * kRingFrames + (el * kRate / 1000000000ULL); })
+        uint32_t c1, c2; uint64_t t, now; \
+        do { \
+            c1 = st->fCurrentLoopCount; __asm__ volatile ("dmb ishld" ::: "memory"); \
+            t = st->fLastLoopTime;      __asm__ volatile ("dmb ishld" ::: "memory"); \
+            c2 = st->fCurrentLoopCount; \
+        } while (c1 != c2); \
+        now = mach_absolute_time(); \
+        if (now < t) now = t; \
+        (uint64_t)c1 * kRingFrames + (ticks_to_ns(now - t, &tb) * kRate / 1000000000ULL); })
 
     uint64_t total_frames = (uint64_t)(seconds * kRate);
     uint64_t next = PLAY_FRAME() + kLeadFrames;
@@ -209,7 +231,18 @@ int main(int argc, char **argv)
     // One frame in mach ticks (the kernel multiplies this by a frame count).
     uint64_t interval = (1000000000ULL / kRate) * tb.denom / tb.numer;
 
-    while (next < end) {
+    signal(SIGINT, on_signal);
+    signal(SIGTERM, on_signal);
+    uint64_t resyncs = 0;
+    while (next < end && !g_stop) {
+        // Fell behind (a scheduling hiccup): this chunk's frames are already
+        // being played, so queueing it would be rejected as too old. Skip ahead
+        // to a fresh lead instead of failing every following chunk too.
+        uint64_t pf = PLAY_FRAME();
+        if (next < pf + 512) {
+            next = pf + kLeadFrames;
+            resyncs++;
+        }
         for (int f = 0; f < kChunkFrames; f++) {
             if (pcm) {
                 uint64_t idx = (next - first_frame) + f;
@@ -233,7 +266,15 @@ int main(int argc, char **argv)
         uint32_t loop = (uint32_t)(next / kRingFrames);
         kr = IOConnectTrap6(conn, kTrapPerformClientIO, first, loop, 0, 1,
             (uintptr_t)(interval >> 32), (uintptr_t)(interval & 0xffffffffu));
-        if (kr) { errors++; lastkr = kr; }
+        if (kr) {
+            errors++;
+            lastkr = kr;
+            if (errors <= 4) {      // enough to tell a startup transient from a wrap-time race
+                printf("audio_play: trap #%llu rc 0x%x at play frame %llu (loop %u, queued frame %llu)\n",
+                    (unsigned long long)chunks, kr, (unsigned long long)PLAY_FRAME(), st->fCurrentLoopCount,
+                    (unsigned long long)next);
+            }
+        }
         chunks++;
         next += kChunkFrames;
         // Sleep until the chunk before the one we just queued has played.
@@ -242,11 +283,16 @@ int main(int argc, char **argv)
         }
     }
 
+    // Let what was queued play out (the last chunk ends lead + chunk ahead of the
+    // play position) before stopping, or the tail is cut off with a click.
+    while (!g_stop && PLAY_FRAME() < next) {
+        usleep(2000);
+    }
     kr = IOConnectCallScalarMethod(conn, kCallStop, NULL, 0, NULL, NULL);
     uint64_t un[2] = { (uint64_t)(uintptr_t)desc, 1 };
     IOConnectCallScalarMethod(conn, kCallUnregister, un, 2, NULL, NULL);
-    printf("audio_play: %s amplitude %.2f for %.1f s: %llu chunks, %llu errors (last 0x%x), stop 0x%x, loops %u\n",
-        wav ? wav : "sine", amp, seconds, (unsigned long long)chunks, (unsigned long long)errors, lastkr, kr, st->fCurrentLoopCount);
+    printf("audio_play: %s amplitude %.2f for %.1f s: %llu chunks, %llu errors (last 0x%x), %llu resyncs, stop 0x%x, loops %u\n",
+        wav ? wav : "sine", amp, seconds, (unsigned long long)chunks, (unsigned long long)errors, lastkr, (unsigned long long)resyncs, kr, st->fCurrentLoopCount);
     IOConnectUnmapMemory64(conn, kStatusBuffer, mach_task_self(), saddr);
     IOServiceClose(conn);
     IOObjectRelease(svc);
