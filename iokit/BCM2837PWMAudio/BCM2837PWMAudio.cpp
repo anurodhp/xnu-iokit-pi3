@@ -82,6 +82,8 @@ BCM2837PWMAudioEngine::initHardware(IOService *provider)
 	fSimGen = 0;
 	fClipFrames = 0;
 	fClipPeak = 0;
+	fEraseFrames = 0;
+	fEraseCalls = 0;
 	fLastPosition = 0;
 	fDmaErrors = 0;
 	fSimActive = false;
@@ -420,10 +422,12 @@ BCM2837PWMAudioEngine::performAudioEngineStart()
 IOReturn
 BCM2837PWMAudioEngine::performAudioEngineStop()
 {
-	IOLog("BCM2837PWMAudio: stop: %u frames through clipOutputSamples, peak %u/32767\n",
-	    (unsigned)fClipFrames, (unsigned)fClipPeak);
+	IOLog("BCM2837PWMAudio: stop: %u frames through clipOutputSamples, peak %u/32767, erased %u frames in %u calls\n",
+	    (unsigned)fClipFrames, (unsigned)fClipPeak, (unsigned)fEraseFrames, (unsigned)fEraseCalls);
 	fClipFrames = 0;
 	fClipPeak = 0;
+	fEraseFrames = 0;
+	fEraseCalls = 0;
 	if (fSim) {
 		fSimActive = false;
 	}
@@ -535,6 +539,8 @@ BCM2837PWMAudioEngine::eraseOutputSamples(const void *mixBuf, void *sampleBuf, U
 	// (IOAudioEngineMixer.cpp), so a mix buffer that is never erased accumulates every
 	// ring loop and saturates (two 0.25 sines peaked at 32767; DARW-322). A single
 	// client's mix is a bcopy, which hid this.
+	__sync_fetch_and_add(&fEraseFrames, numSampleFrames);
+	__sync_fetch_and_add(&fEraseCalls, 1);
 	if (mixBuf != NULL) {
 		bzero((float *)(uintptr_t)mixBuf + (size_t)firstSampleFrame * kPWMAudioChannels,
 		    (size_t)numSampleFrames * kPWMAudioChannels * sizeof(float));

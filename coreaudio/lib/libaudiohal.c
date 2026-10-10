@@ -113,14 +113,14 @@ static kern_return_t rpc_locked(uint32_t op, mach_msg_size_t size, ca_reply_t *o
     return KERN_FAILURE;
 }
 
-typedef struct { uint32_t id, a, b, nframes, channels; float f; const void *data; size_t data_bytes; } call_t;
+typedef struct { uint32_t id, token, a, b, nframes, channels; float f; const void *data; size_t data_bytes; } call_t;
 
 static kern_return_t call(uint32_t op, const call_t *c, ca_reply_t *out)
 {
     pthread_mutex_lock(&g_rpc_mu);
     ca_request_t *rq = &g_buf.m;
     memset(rq, 0, offsetof(ca_request_t, data));
-    rq->id = c->id; rq->a = c->a; rq->b = c->b; rq->f = c->f;
+    rq->id = c->id; rq->token = c->token; rq->a = c->a; rq->b = c->b; rq->f = c->f;
     rq->nframes = c->nframes; rq->channels_check = c->channels;
     if (c->data_bytes) memcpy(rq->data, c->data, c->data_bytes);
     kern_return_t kr = rpc_locked(op, CA_REQ_SIZE(c->data_bytes), out);
@@ -143,14 +143,23 @@ static kern_return_t get_info(ca_reply_t *r) { call_t c = {0}; return call(CA_OP
 static int is_global(const AudioObjectPropertyAddress *a) { return a->mScope == kAudioObjectPropertyScopeGlobal; }
 static int is_output(const AudioObjectPropertyAddress *a)  { return a->mScope == kAudioObjectPropertyScopeOutput; }
 
+/* The stream format clients see and may change (kAudioStreamPropertyVirtualFormat, settable like a real HAL's: the
+ * HAL converts between the client's format and the device's). audiod converts any 8-192 kHz mono/stereo Float32 to the
+ * device's 48 kHz stereo. Applies to IOProcs started afterwards. Guarded by g_fmt_mu. */
+static pthread_mutex_t g_fmt_mu = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t g_vfmt_rate = CA_DEVICE_RATE, g_vfmt_ch = 2;
+
 static AudioStreamBasicDescription device_format(void)
 {
     AudioStreamBasicDescription f = {0};
-    f.mSampleRate = CA_DEVICE_RATE;
+    pthread_mutex_lock(&g_fmt_mu);
+    const uint32_t rate = g_vfmt_rate, ch = g_vfmt_ch;
+    pthread_mutex_unlock(&g_fmt_mu);
+    f.mSampleRate = rate;
     f.mFormatID = kAudioFormatLinearPCM;
     f.mFormatFlags = kAudioFormatFlagsNativeFloatPacked;     /* interleaved: kAudioFormatFlagIsNonInterleaved unset */
-    f.mBytesPerPacket = 8; f.mFramesPerPacket = 1; f.mBytesPerFrame = 8;
-    f.mChannelsPerFrame = 2; f.mBitsPerChannel = 32;
+    f.mBytesPerPacket = 4 * ch; f.mFramesPerPacket = 1; f.mBytesPerFrame = 4 * ch;
+    f.mChannelsPerFrame = ch; f.mBitsPerChannel = 32;
     return f;
 }
 
@@ -161,13 +170,21 @@ static int prop_size(AudioObjectID obj, const AudioObjectPropertyAddress *a, int
     if (!a) return -1;
     switch (obj) {
     case OBJ_SYSTEM:
+        if (a->mSelector == kAudioObjectPropertyClass || a->mSelector == kAudioObjectPropertyBaseClass) return (int)sizeof(AudioClassID);
         if (a->mSelector == kAudioHardwarePropertyDevices) return is_global(a) ? (int)sizeof(AudioObjectID) : -1;
         if (a->mSelector == kAudioHardwarePropertyDefaultOutputDevice ||
             a->mSelector == kAudioHardwarePropertyDefaultSystemOutputDevice) return (int)sizeof(AudioObjectID);
         return -1;
     case OBJ_DEVICE:
         switch (a->mSelector) {
-        case kAudioObjectPropertyName:           return (int)sizeof(CFStringRef);
+        case kAudioObjectPropertyClass:
+        case kAudioObjectPropertyBaseClass:      return (int)sizeof(AudioClassID);
+        case kAudioObjectPropertyOwner:          return (int)sizeof(AudioObjectID);
+        case kAudioObjectPropertyName:
+        case kAudioObjectPropertyManufacturer:
+        case kAudioDevicePropertyDeviceUID:      return (int)sizeof(CFStringRef);
+        case kAudioDevicePropertyTransportType:  return (int)sizeof(UInt32);
+        case kAudioDevicePropertyBufferFrameSizeRange: return (int)sizeof(AudioValueRange);
         case kAudioDevicePropertyNominalSampleRate: return (int)sizeof(Float64);
         case kAudioDevicePropertyStreams:        return (is_output(a) || is_global(a)) ? (int)sizeof(AudioObjectID) : 0;
         case kAudioDevicePropertyStreamConfiguration:
@@ -184,7 +201,10 @@ static int prop_size(AudioObjectID obj, const AudioObjectPropertyAddress *a, int
         return -1;
     case OBJ_STREAM:
         switch (a->mSelector) {
-        case kAudioStreamPropertyVirtualFormat:
+        case kAudioObjectPropertyClass:
+        case kAudioObjectPropertyBaseClass:      return (int)sizeof(AudioClassID);
+        case kAudioObjectPropertyOwner:          return (int)sizeof(AudioObjectID);
+        case kAudioStreamPropertyVirtualFormat:  *settable = 1; return (int)sizeof(AudioStreamBasicDescription);
         case kAudioStreamPropertyPhysicalFormat: return (int)sizeof(AudioStreamBasicDescription);
         case kAudioStreamPropertyDirection:      return (int)sizeof(UInt32);
         }
@@ -230,10 +250,23 @@ EXPORT OSStatus AudioObjectGetPropertyData(AudioObjectID obj, const AudioObjectP
     if (obj < OBJ_SYSTEM || obj > OBJ_STREAM) return kAudioHardwareBadObjectError;
     int need = prop_size(obj, a, &s);
     if (need < 0) return kAudioHardwareUnknownPropertyError;
+    const int is_list = (obj == OBJ_SYSTEM && a->mSelector == kAudioHardwarePropertyDevices) ||
+                        (obj == OBJ_DEVICE && a->mSelector == kAudioDevicePropertyStreams);
+    if (is_list && (int)*io_size < need) { *io_size = 0; return kAudioHardwareNoError; }   /* a list copies as many whole items as fit */
     if ((int)*io_size < need) return kAudioHardwareBadPropertySizeError;
     *io_size = (UInt32)need;
     ca_reply_t r;
 
+    if (a->mSelector == kAudioObjectPropertyClass || a->mSelector == kAudioObjectPropertyBaseClass) {
+        const int base = a->mSelector == kAudioObjectPropertyBaseClass;
+        *(AudioClassID *)out = base ? kAudioObjectClassID
+            : (obj == OBJ_SYSTEM ? kAudioSystemObjectClassID : obj == OBJ_DEVICE ? kAudioDeviceClassID : kAudioStreamClassID);
+        return kAudioHardwareNoError;
+    }
+    if (a->mSelector == kAudioObjectPropertyOwner) {
+        *(AudioObjectID *)out = obj == OBJ_STREAM ? OBJ_DEVICE : OBJ_SYSTEM;
+        return kAudioHardwareNoError;
+    }
     if (obj == OBJ_SYSTEM) {
         *(AudioObjectID *)out = OBJ_DEVICE;
         return kAudioHardwareNoError;
@@ -247,6 +280,18 @@ EXPORT OSStatus AudioObjectGetPropertyData(AudioObjectID obj, const AudioObjectP
     case kAudioObjectPropertyName:
         *(CFStringRef *)out = CFStringCreateWithCString(NULL, CA_DEVICE_NAME, kCFStringEncodingUTF8);
         return kAudioHardwareNoError;
+    case kAudioObjectPropertyManufacturer:
+        *(CFStringRef *)out = CFStringCreateWithCString(NULL, "PureDarwin", kCFStringEncodingUTF8);
+        return kAudioHardwareNoError;
+    case kAudioDevicePropertyDeviceUID:          /* choice: stable, one device */
+        *(CFStringRef *)out = CFStringCreateWithCString(NULL, "org.puredarwin.coreaudiod.bcm2837pwm0", kCFStringEncodingUTF8);
+        return kAudioHardwareNoError;
+    case kAudioDevicePropertyTransportType:      *(UInt32 *)out = kAudioDeviceTransportTypeBuiltIn; return kAudioHardwareNoError;
+    case kAudioDevicePropertyBufferFrameSizeRange: {
+        AudioValueRange *r = out;
+        r->mMinimum = r->mMaximum = IO_FRAMES;   /* v1: the IO buffer size is fixed */
+        return kAudioHardwareNoError;
+    }
     case kAudioDevicePropertyNominalSampleRate: *(Float64 *)out = CA_DEVICE_RATE; return kAudioHardwareNoError;
     case kAudioDevicePropertyStreams:
         if (need) *(AudioObjectID *)out = OBJ_STREAM;
@@ -294,6 +339,19 @@ EXPORT OSStatus AudioObjectSetPropertyData(AudioObjectID obj, const AudioObjectP
     if ((int)size != need) return kAudioHardwareBadPropertySizeError;
     ca_reply_t r;
     call_t c = {0};
+    if (obj == OBJ_STREAM) {                                    /* only VirtualFormat is settable on the stream */
+        const AudioStreamBasicDescription *f = data;
+        if (f->mFormatID != kAudioFormatLinearPCM || f->mFramesPerPacket != 1 ||
+            !(f->mFormatFlags & kAudioFormatFlagIsFloat) || (f->mFormatFlags & kAudioFormatFlagIsNonInterleaved) ||
+            f->mBitsPerChannel != 32 || (f->mChannelsPerFrame != 1 && f->mChannelsPerFrame != 2) ||
+            f->mBytesPerFrame != 4 * f->mChannelsPerFrame || f->mBytesPerPacket != f->mBytesPerFrame ||
+            !(f->mSampleRate >= CA_MIN_RATE && f->mSampleRate <= CA_MAX_RATE) ||
+            f->mSampleRate != (Float64)(uint32_t)f->mSampleRate) return kAudioDeviceUnsupportedFormatError;
+        pthread_mutex_lock(&g_fmt_mu);
+        g_vfmt_rate = (uint32_t)f->mSampleRate; g_vfmt_ch = f->mChannelsPerFrame;
+        pthread_mutex_unlock(&g_fmt_mu);
+        return kAudioHardwareNoError;
+    }
     if (a->mSelector == kAudioDevicePropertyVolumeScalar) {
         float v = *(const Float32 *)data;
         if (!(v >= 0.0f && v <= 1.0f)) return kAudioHardwareIllegalOperationError;
@@ -314,7 +372,8 @@ typedef struct ioproc {
     volatile int        destroy_pending; /* Destroy came from inside an IOProc: the thread frees the slot as it exits */
     int                 started;         /* a thread exists (guarded by g_procs_mu except at its own exit) */
     pthread_t           th;
-    uint32_t            stream;
+    uint32_t            stream, token;
+    uint32_t            rate, chans;     /* stream format this IOProc was started with */
 } ioproc_t;
 
 static pthread_mutex_t g_procs_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -326,7 +385,7 @@ static void sleep_ms(long ms) { struct timespec ts = { 0, ms * 1000000L }; nanos
 static void atfork_child(void)
 {
     pthread_mutex_t fresh = PTHREAD_MUTEX_INITIALIZER;
-    g_rpc_mu = fresh; g_procs_mu = fresh;
+    g_rpc_mu = fresh; g_procs_mu = fresh; g_fmt_mu = fresh;
     g_svc = MACH_PORT_NULL; g_reply = MACH_PORT_NULL;
     memset(g_procs, 0, sizeof(g_procs));
 }
@@ -335,9 +394,10 @@ __attribute__((constructor)) static void libaudiohal_init(void) { pthread_atfork
 static int open_stream(ioproc_t *p)
 {
     ca_reply_t r;
-    call_t oc = { .a = CA_DEVICE_RATE, .b = 2 };
+    call_t oc = { .a = p->rate, .b = p->chans };
     if (call(CA_OP_OPEN, &oc, &r) != KERN_SUCCESS) return -1;
     p->stream = r.id;
+    p->token = r.token;
     return 0;
 }
 
@@ -348,8 +408,9 @@ static void *io_thread(void *arg)
     AudioBufferList noinput = { 0 };          /* output only: zero input buffers */
     AudioBufferList abl;                      /* one buffer: AudioBufferList already holds mBuffers[1] */
     abl.mNumberBuffers = 1;
-    abl.mBuffers[0].mNumberChannels = 2;
-    abl.mBuffers[0].mDataByteSize = sizeof(buf);
+    const uint32_t ch = p->chans, rate = p->rate;
+    abl.mBuffers[0].mNumberChannels = ch;
+    abl.mBuffers[0].mDataByteSize = IO_FRAMES * ch * sizeof(float);
     abl.mBuffers[0].mData = buf;
     uint64_t frames_done = 0;
     int stream_started = 0;
@@ -359,7 +420,7 @@ static void *io_thread(void *arg)
 
     while (p->run) {
         /* Pace: keep about TARGET_FILL frames queued in the daemon. A zero-frame WRITE reports the room. */
-        call_t pc = { .id = p->stream, .channels = 2 };
+        call_t pc = { .id = p->stream, .token = p->token, .channels = ch };
         kern_return_t kr = call(CA_OP_WRITE, &pc, &r);
         if (kr == KERN_INVALID_NAME) {
             /* The daemon dropped our stream (it reaped it after a stall, or restarted): open a new one. */
@@ -369,7 +430,7 @@ static void *io_thread(void *arg)
         }
         if (kr != KERN_SUCCESS) { sleep_ms(20); continue; }
         if (CA_STREAM_RING_FRAMES - r.b > TARGET_FILL) {
-            if (!stream_started) { call_t sc = { .id = p->stream }; call(CA_OP_START, &sc, &r); stream_started = 1; }
+            if (!stream_started) { call_t sc = { .id = p->stream, .token = p->token }; call(CA_OP_START, &sc, &r); stream_started = 1; }
             sleep_ms(4);
             continue;
         }
@@ -379,16 +440,16 @@ static void *io_thread(void *arg)
         now.mSampleTime = (Float64)frames_done; now.mHostTime = h;
         now.mFlags = kAudioTimeStampSampleTimeValid | kAudioTimeStampHostTimeValid;
         out = now;
-        out.mSampleTime = (Float64)(frames_done + 2560 + TARGET_FILL);
-        out.mHostTime = h + (uint64_t)((2560 + TARGET_FILL) * (1e9 / CA_DEVICE_RATE)) * tb.denom / tb.numer;
-        memset(buf, 0, sizeof(buf));         /* choice: an IOProc that writes nothing produces silence */
+        out.mSampleTime = (Float64)(frames_done + 2560ULL * rate / CA_DEVICE_RATE + TARGET_FILL);     /* engine lead + queued, in stream frames */
+        out.mHostTime = h + (uint64_t)(2560 * (1e9 / CA_DEVICE_RATE) + TARGET_FILL * (1e9 / rate)) * tb.denom / tb.numer;
+        memset(buf, 0, IO_FRAMES * ch * sizeof(float));         /* choice: an IOProc that writes nothing produces silence */
         p->proc(OBJ_DEVICE, &now, &noinput, &now, &abl, &out, p->client);
         frames_done += IO_FRAMES;
 
         uint32_t off = 0;
         while (off < IO_FRAMES && p->run) {
             uint32_t n = IO_FRAMES - off;
-            call_t wc = { .id = p->stream, .nframes = n, .channels = 2, .data = buf + off * 2, .data_bytes = n * 8 };
+            call_t wc = { .id = p->stream, .token = p->token, .nframes = n, .channels = ch, .data = buf + off * ch, .data_bytes = n * ch * sizeof(float) };
             kr = call(CA_OP_WRITE, &wc, &r);
             if (kr == KERN_INVALID_NAME) { if (open_stream(p) == 0) stream_started = 0; else sleep_ms(50); break; }
             if (kr != KERN_SUCCESS) { sleep_ms(10); continue; }
@@ -396,7 +457,7 @@ static void *io_thread(void *arg)
             if (r.a < n) sleep_ms(4);
         }
     }
-    call_t cc = { .id = p->stream };
+    call_t cc = { .id = p->stream, .token = p->token };
     call(CA_OP_CLOSE, &cc, &r);
     if (p->destroy_pending) {                 /* Destroy was called from an IOProc: nobody will join us */
         pthread_detach(pthread_self());
@@ -451,11 +512,14 @@ EXPORT OSStatus AudioDeviceStart(AudioObjectID dev, AudioDeviceIOProcID id)
         pthread_join(p->th, NULL);
         p->started = 0;
     }
+    pthread_mutex_lock(&g_fmt_mu);
+    p->rate = g_vfmt_rate; p->chans = g_vfmt_ch;
+    pthread_mutex_unlock(&g_fmt_mu);
     if (open_stream(p)) { pthread_mutex_unlock(&g_procs_mu); return kAudioHardwareNotRunningError; }
     p->run = 1;
     if (pthread_create(&p->th, NULL, io_thread, p)) {
         p->run = 0;
-        ca_reply_t r; call_t cc = { .id = p->stream }; call(CA_OP_CLOSE, &cc, &r);
+        ca_reply_t r; call_t cc = { .id = p->stream, .token = p->token }; call(CA_OP_CLOSE, &cc, &r);
         pthread_mutex_unlock(&g_procs_mu);
         return kAudioHardwareUnspecifiedError;
     }

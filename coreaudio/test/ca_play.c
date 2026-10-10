@@ -1,7 +1,8 @@
 /*
  * ca_play: plays a sine tone through the public CoreAudio HAL API
  * (libaudiohal -> audiod -> engine). Doubles as the smoketest.
- *   ca_play [-f hz] [-s seconds] [-a amplitude 0..1] [-v device_volume 0..1]
+ *   ca_play [-f hz] [-s seconds] [-a amplitude 0..1] [-v device_volume 0..1] [-r rate_hz] [-c channels]
+ * -r/-c set the stream's virtual format through the public API (the daemon converts to 48 kHz stereo).
  */
 #include <CoreAudio/AudioHardware.h>
 #include <CoreFoundation/CoreFoundation.h>
@@ -34,12 +35,13 @@ static OSStatus ioproc(AudioObjectID dev, const AudioTimeStamp *now, const Audio
 
 int main(int argc, char **argv)
 {
-    double freq = 440, seconds = 3, amp = 0.25, vol = -1;
+    double freq = 440, seconds = 3, amp = 0.25, vol = -1, want_rate = 0, want_ch = 0;
     for (int i = 1; i + 1 < argc; i += 2) {
         double v = atof(argv[i + 1]);
         if (!strcmp(argv[i], "-f")) freq = v; else if (!strcmp(argv[i], "-s")) seconds = v;
         else if (!strcmp(argv[i], "-a")) amp = v; else if (!strcmp(argv[i], "-v")) vol = v;
-        else { fprintf(stderr, "usage: ca_play [-f hz] [-s sec] [-a amp] [-v volume]\n"); return 64; }
+        else if (!strcmp(argv[i], "-r")) want_rate = v; else if (!strcmp(argv[i], "-c")) want_ch = v;
+        else { fprintf(stderr, "usage: ca_play [-f hz] [-s sec] [-a amp] [-v volume] [-r rate] [-c channels]\n"); return 64; }
     }
     if (amp < 0 || amp > 1 || freq < 20 || freq > 20000 || seconds <= 0 || seconds > 3600) { fprintf(stderr, "ca_play: argument out of range\n"); return 64; }
 
@@ -58,6 +60,27 @@ int main(int argc, char **argv)
     st = AudioObjectGetPropertyData(dev, &a, 0, NULL, &sz, &rate);
     if (st || rate < 8000) { fprintf(stderr, "ca_play: sample rate: %d\n", (int)st); return 1; }
     printf("ca_play: device %u \"%s\" %.0f Hz\n", (unsigned)dev, nbuf, rate);
+
+    /* The stream (id 3 on this HAL) is found through the device's stream list, as a real client would. */
+    AudioObjectPropertyAddress sa = { kAudioDevicePropertyStreams, kAudioObjectPropertyScopeOutput, kAudioObjectPropertyElementMaster };
+    AudioObjectID stream = 0; sz = sizeof(stream);
+    st = AudioObjectGetPropertyData(dev, &sa, 0, NULL, &sz, &stream);
+    if (st || !stream) { fprintf(stderr, "ca_play: stream list: %d\n", (int)st); return 1; }
+    AudioObjectPropertyAddress fa = { kAudioStreamPropertyVirtualFormat, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMaster };
+    AudioStreamBasicDescription fmt; sz = sizeof(fmt);
+    st = AudioObjectGetPropertyData(stream, &fa, 0, NULL, &sz, &fmt);
+    if (st) { fprintf(stderr, "ca_play: stream format: %d\n", (int)st); return 1; }
+    if (want_rate > 0 || want_ch > 0) {
+        if (want_rate > 0) fmt.mSampleRate = want_rate;
+        if (want_ch > 0) { fmt.mChannelsPerFrame = (UInt32)want_ch; fmt.mBytesPerFrame = fmt.mBytesPerPacket = 4 * fmt.mChannelsPerFrame; }
+        st = AudioObjectSetPropertyData(stream, &fa, 0, NULL, sizeof(fmt), &fmt);
+        if (st) { fprintf(stderr, "ca_play: set stream format: %d\n", (int)st); return 1; }
+        sz = sizeof(fmt);
+        st = AudioObjectGetPropertyData(stream, &fa, 0, NULL, &sz, &fmt);
+        if (st) return 1;
+    }
+    rate = fmt.mSampleRate;
+    printf("ca_play: stream format %.0f Hz, %u ch, float32\n", fmt.mSampleRate, (unsigned)fmt.mChannelsPerFrame);
 
     if (vol >= 0) {
         AudioObjectPropertyAddress va = { kAudioDevicePropertyVolumeScalar, kAudioObjectPropertyScopeOutput, kAudioObjectPropertyElementMaster };

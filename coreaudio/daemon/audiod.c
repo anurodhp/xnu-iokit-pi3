@@ -47,6 +47,8 @@ typedef struct {
     int                active;
     int                running;
     uint32_t           id;
+    uint32_t           token;
+    int                closing;       /* CLOSE received: drain what is queued, then free */
     ca_stream_ring     ring;
     uint64_t           last_write_ns;
 } stream_t;
@@ -65,6 +67,13 @@ typedef struct { uint32_t fActualDataByteSize, fActualNumSampleFrames, fTotalDat
 typedef struct { uint32_t fVersion; volatile uint32_t fCurrentLoopCount; volatile uint64_t fLastLoopTime; volatile uint32_t fEraseHeadSampleFrame; } AudioEngineStatus;
 
 static mach_timebase_info_data_t g_tb;
+static uint64_t g_rng;                          /* xorshift64* state, seeded from /dev/urandom; guarded by g_mu */
+static uint32_t next_token(void)
+{
+    g_rng ^= g_rng >> 12; g_rng ^= g_rng << 25; g_rng ^= g_rng >> 27;
+    uint32_t t = (uint32_t)((g_rng * 2685821657736338717ULL) >> 32);
+    return t ? t : 1;
+}
 static uint64_t now_ns(void) { return mach_absolute_time() * g_tb.numer / g_tb.denom; }
 static void on_signal(int s) { (void)s; g_stop = 1; }
 
@@ -75,10 +84,12 @@ static int count_streams_locked(void)
     return n;
 }
 
-static stream_t *find_locked(uint32_t id)
+/* A stream is only reachable with its id AND its token (a guessable id alone is not enough), and not once CLOSE was received. */
+static stream_t *find_locked(uint32_t id, uint32_t token)
 {
     for (int i = 0; i < CA_MAX_STREAMS; i++)
-        if (g_streams[i].active && g_streams[i].id == id) return &g_streams[i];
+        if (g_streams[i].active && !g_streams[i].closing && g_streams[i].id == id && g_streams[i].token == token)
+            return &g_streams[i];
     return NULL;
 }
 
@@ -204,13 +215,14 @@ static void *mixer_thread(void *unused)
         for (int i = 0; i < CA_MAX_STREAMS; i++) {
             stream_t *s = &g_streams[i];
             if (!s->active) continue;
-            if (t - s->last_write_ns > (uint64_t)STREAM_STALE_S * 1000000000ULL) {
+            if (t - s->last_write_ns > (uint64_t)(s->closing ? 5 : STREAM_STALE_S) * 1000000000ULL) {   /* a drain that cannot finish is also given up */
                 printf("audiod: reaping stale stream %u\n", s->id);
                 fflush(stdout);
                 close_locked(s);
                 continue;
             }
             if (s->running) ca_ring_mix_into(&s->ring, mix, kChunkFrames, CA_DEVICE_RATE, 1.0f);
+            if (s->closing && ca_ring_avail(&s->ring) <= 1) close_locked(s);     /* drained (a resampler keeps one frame back) */
         }
         vol = g_volume; mute = g_mute;
         pthread_mutex_unlock(&g_mu);
@@ -261,14 +273,16 @@ static void handle(const ca_request_t *rq, mach_msg_size_t rq_size, ca_reply_t *
         if (ca_ring_init(&s->ring, CA_STREAM_RING_FRAMES, rq->b, rq->a)) { rp->kr = KERN_RESOURCE_SHORTAGE; break; }
         s->active = 1;
         s->id = g_next_id++;
+        s->token = next_token();
         if (g_next_id == 0) g_next_id = 1;
         s->last_write_ns = now_ns();
         g_idle_since_ns = 0;
         rp->id = s->id;
+        rp->token = s->token;
         break;
     }
     case CA_OP_WRITE: {
-        stream_t *s = find_locked(rq->id);
+        stream_t *s = find_locked(rq->id, rq->token);
         if (!s) { rp->kr = KERN_INVALID_NAME; break; }
         /* The declared frame count must match the bytes that actually arrived. */
         size_t bytes = (size_t)rq->nframes * s->ring.ch * sizeof(float);
@@ -282,22 +296,24 @@ static void handle(const ca_request_t *rq, mach_msg_size_t rq_size, ca_reply_t *
         break;
     }
     case CA_OP_START: {
-        stream_t *s = find_locked(rq->id);
+        stream_t *s = find_locked(rq->id, rq->token);
         if (!s) { rp->kr = KERN_INVALID_NAME; break; }
         s->running = 1;
         s->last_write_ns = now_ns();
         break;
     }
     case CA_OP_STOP: {
-        stream_t *s = find_locked(rq->id);
+        stream_t *s = find_locked(rq->id, rq->token);
         if (!s) { rp->kr = KERN_INVALID_NAME; break; }
         s->running = 0;
         break;
     }
     case CA_OP_CLOSE: {
-        stream_t *s = find_locked(rq->id);
+        stream_t *s = find_locked(rq->id, rq->token);
         if (!s) { rp->kr = KERN_INVALID_NAME; break; }
-        close_locked(s);
+        s->closing = 1;                 /* the mixer plays out what is queued, then frees the stream */
+        s->last_write_ns = now_ns();
+        s->running = 1;
         break;
     }
     case CA_OP_SET_VOLUME:
@@ -332,6 +348,14 @@ int main(void)
     }
     pthread_mutex_lock(&g_mu);
     g_idle_since_ns = now_ns();
+    g_rng = now_ns() ^ ((uint64_t)getpid() << 32) ^ 0x9E3779B97F4A7C15ULL;
+    {
+        FILE *ur = fopen("/dev/urandom", "rb");
+        uint64_t r = 0;
+        if (ur && fread(&r, sizeof r, 1, ur) == 1) g_rng ^= r;
+        if (ur) fclose(ur);
+        if (!g_rng) g_rng = 88172645463325252ULL;
+    }
     pthread_mutex_unlock(&g_mu);
     printf("audiod: up\n");
 

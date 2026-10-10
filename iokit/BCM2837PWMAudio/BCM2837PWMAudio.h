@@ -128,6 +128,8 @@ private:
 	volatile uint32_t        fSimGen;
 	volatile uint32_t        fClipFrames;
 	volatile uint32_t        fClipPeak;
+	volatile uint32_t        fEraseFrames;    // diagnostics for DARW-322: frames and calls through eraseOutputSamples
+	volatile uint32_t        fEraseCalls;
 	volatile uint32_t        fLastPosition;
 	volatile uint32_t        fLastPositionLoop;
 	volatile uint32_t        fDmaErrors;

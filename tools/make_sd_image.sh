@@ -77,8 +77,14 @@ fi
 echo "+ populating boot partition ($BOOT_MNT) from sdcard/ (real-hardware parity;"
 echo "  QEMU itself boots via -kernel/-dtb and ignores this)"
 cp sdcard/bootcode.bin sdcard/start.elf sdcard/fixup.dat sdcard/config.txt \
-   sdcard/rpi3.dtb sdcard/u-boot.bin sdcard/kernel.development.bcm2837.unstripped \
-   "$BOOT_MNT/"
+   sdcard/rpi3.dtb sdcard/u-boot.bin "$BOOT_MNT/"
+# The Pi-boot kernel copy is only for real-hardware parity (QEMU ignores the boot partition); sdcard/ does not always
+# have it, and its absence used to abort the whole image build (and leave the disk attached).
+if [ -f sdcard/kernel.development.bcm2837.unstripped ]; then
+  cp sdcard/kernel.development.bcm2837.unstripped "$BOOT_MNT/"
+else
+  echo "= sdcard/kernel.development.bcm2837.unstripped missing -- boot partition has no kernel copy (fine for QEMU)"
+fi
 
 echo "+ creating base root directory structure on ($ROOT_MNT)"
 mkdir -p "$ROOT_MNT/sbin" "$ROOT_MNT/bin" "$ROOT_MNT/usr/bin" \

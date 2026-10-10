@@ -30,23 +30,29 @@ Object 1 = system, 2 = the one output device ("Raspberry Pi 3.5mm Output",
 stream. Volume and mute are output scope, master element, settable and
 device-wide (held by the daemon).
 
-## Limits (v1)
-Output only; one device; the public API runs at 48 kHz (the daemon resamples any
-8-192 kHz stream but only the private protocol can ask for one, so the resampler
-is exercised by the host test, not end to end); no authentication (any local
-process can use or close any stream id); client-death detection is a 3 s write
-timeout, not dead-name notification; latency about 2560 (engine lead) + 2048
-(queued) frames, roughly 100 ms; no AudioQueue/AudioUnit/AudioConverter.
-The stock IOAudioEngine nominally mixes several user clients, but that path panics here (see "Kernel finding"), so the daemon's mixer is currently the only safe way to play two sounds at once.
+## Limits
+Output only; one device (48 kHz stereo); no AudioQueue/AudioUnit/AudioConverter; no property listeners
+(`AudioObjectAddPropertyListener` is deliberately not exported, so a port fails at link time instead of waiting for a
+callback that never comes). The stream's virtual format is settable (Float32 interleaved, 1 or 2 channels, 8-192 kHz);
+audiod converts it to the device format with linear interpolation. Stream ids are protected by a per-stream random token
+(anyone who can reach the Mach service can still open streams and change the device-wide volume; there is no per-user
+policy). A client that dies is detected by a 3 s write timeout, not by a dead-name notification. Latency is about 2560
+(engine lead) + 2048 (queued) frames, roughly 100 ms. Property reads cost an RPC (and a daemon start when it is not
+running).
 
 ## Verified (QEMU, `pwm-sim=1`, 2026-10-10)
-- launchd starts `audiod` on the first `bootstrap_look_up` (MachServices, no RunAtLoad).
+- launchd starts `audiod` on the first `bootstrap_look_up` (MachServices, no RunAtLoad); it exits after 10 s idle.
 - `ca_play -v 0.8`: volume set/read-back through the public API; engine peak 6553/32767 = 0.25 x 0.8.
-- Two concurrent `ca_play` (440 + 660 Hz): one engine session, peak 12820/32767 (sum of both, volume 0.8 kept by the daemon).
-- `audiod` releases the engine and exits after 10 s idle.
+- Two concurrent `ca_play` (440 + 660 Hz): one engine session, peak about the sum of both.
+- `ca_play -r 44100 -c 1`: virtual format set through the public API; 3 s of 44.1 kHz mono plays as 3.4 s at the engine
+  with peak 8191, so the resampler works end to end.
+- Closing a stream drains it: a 1 s tone ends with its tail (1.3 s through the engine, peak as set).
+- `ca_proto_test`: wrong token/id, bad sizes/counts/rates/channels/volume/version, ops after close, the stream table limit.
+- A client killed with `kill -9` is reaped (`reaping stale stream`); `killall audiod` during playback: launchd restarts
+  the daemon, the client reopens its stream and finishes (`ca_play` exit 0).
 - Host: `mixer_test` PASS; `bind_target_audit.sh` (all images) and `weak_def_audit.sh` (new images) clean.
-- NOT verified: real Pi (by ear), IOProc timing (under TCG the IOProc thread ran at about half real time, so streams underrun
-  on QEMU; frame counts at the engine are still right), client crash reaping, the daemon-exit-during-request retry path.
+- NOT verified: real Pi (by ear), IOProc timing (under TCG the IOProc thread ran at about half real time, so streams
+  underrun on QEMU; frame counts at the engine are still right).
 
 ## Kernel finding (DARW-322, fixed)
 Two concurrent engine clients (two `audio_play`, or `audio_play` + anything) used to PANIC the kernel on QEMU: data abort in
@@ -58,6 +64,8 @@ Single-client mixing is a bcopy with preemption enabled, so it faulted the page 
 anurodhp/IOAudioFamily, IOAudioEngineMixer.cpp): touch every page of the source and mix ranges before
 `_disable_preemption()`. Verified on QEMU with the original 512-frame chunks: two `audio_play` and two `ca_play` run clean.
 Second bug, also fixed: `BCM2837PWMAudioEngine::eraseOutputSamples` did not clear the float mix buffer (the family's version does), so with
-several clients the mixer's add accumulated every ring loop and two 0.25 sines peaked at 32767. Now cleared; two clients peak at
-23533 on QEMU (a single client 8191). That is still above the in-phase sum (16383), probably erase-head lag under QEMU's slow
-timer leaving some of the previous loop in the mix buffer; not chased.
+several clients the mixer's add accumulated every ring loop and two 0.25 sines peaked at 32767. Now cleared; one client peaks at
+8191, two at about 23600 on QEMU, still above the in-phase sum (16383). Diagnostics added to the engine's stop line
+(`erased N frames in M calls`) show the erase head is NOT lagging (erased 162132 frames for 152706 clipped), so the surplus
+(about one extra 0.25 contribution at some frames) looks like a chunk being mixed twice around a client resync under QEMU's slow
+time stamps; undecided, and worth checking on a real Pi.

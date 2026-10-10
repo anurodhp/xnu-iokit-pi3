@@ -1487,6 +1487,9 @@ if [ -f tools/userland_staging/libc_build/audiod.macho ]; then
 else
     echo "= audiod.macho not built -- run coreaudio/build_audiod.sh first if wanted, skipping"
 fi
+install_smoketest tools/userland_staging/libc_build/ca_proto_test.macho "usr/local/bin/ca_proto_test" \
+    "= ca_proto_test.macho not built -- run coreaudio/build_ca_proto_test.sh first if wanted, skipping" \
+    "  (coreaudio/ raw-protocol negative tests against audiod)"
 install_smoketest tools/userland_staging/libc_build/ca_play.macho "usr/local/bin/ca_play" \
     "= ca_play.macho not built -- run coreaudio/build_ca_play.sh first if wanted, skipping" \
     "  (coreaudio/ plays a tone through libaudiohal -> audiod; needs audio=1 or pwm-sim=1)"

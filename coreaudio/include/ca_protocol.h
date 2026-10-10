@@ -14,7 +14,7 @@
 #define CA_PROTO_VERSION  1
 
 enum {
-    CA_OP_OPEN       = 0x4341,   /* a = rate_hz, b = channels             -> id */
+    CA_OP_OPEN       = 0x4341,   /* a = rate_hz, b = channels             -> id, token */
     CA_OP_WRITE      = 0x4342,   /* id, nframes, data (float32 interleaved) -> a = accepted, b = free frames */
     CA_OP_START      = 0x4343,   /* id */
     CA_OP_STOP       = 0x4344,   /* id */
@@ -38,6 +38,7 @@ typedef struct {
     uint32_t version;
     uint32_t seq;          /* echoed in the reply */
     uint32_t id;           /* stream id (WRITE/START/STOP/CLOSE) */
+    uint32_t token;        /* per-stream secret returned by OPEN; every stream op must present it */
     uint32_t a, b;
     float    f;
     uint32_t nframes;      /* WRITE: frames in data[] */
@@ -51,6 +52,7 @@ typedef struct {
     uint32_t version;
     uint32_t seq;
     uint32_t id;
+    uint32_t token;        /* OPEN: the stream's secret */
     uint32_t a, b;
     float    f;
     uint32_t rate;

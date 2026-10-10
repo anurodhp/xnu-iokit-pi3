@@ -820,7 +820,7 @@ IOSerialFamily|https://github.com/apple-oss-distributions/IOSerialFamily.git|IOS
 AppleUSBCDCDriver|git@github.com:anurodhp/AppleUSBCDCDriver.git|iokit-port||https://github.com/apple-oss-distributions/AppleUSBCDCDriver.git
 IONetworkingFamily|https://github.com/apple-oss-distributions/IONetworkingFamily.git|IONetworkingFamily-151.40.1|
 IOGraphics|git@github.com:anurodhp/IOGraphics.git|iokit-port||https://github.com/apple-oss-distributions/IOGraphics.git
-# IOAudioFamily-300.6.1 is the macos-112 manifest tag (distribution-macOS commit 63c6ce08). DARW-310: audio out. Fork carries the two kernel-build gap fixes.
+# IOAudioFamily-300.6.1 is the macos-112 manifest tag (distribution-macOS commit 63c6ce08). DARW-310: audio out. Fork (branch iokit-port, tip 69309ee or later) carries the two kernel-build gap fixes, the float add with preemption disabled (58830ce) and the page prefault before it (69309ee, DARW-322: vm_fault fails at preemption level != 0, so the multi-client mix panicked).
 IOAudioFamily|git@github.com:anurodhp/IOAudioFamily.git|iokit-port||https://github.com/apple-oss-distributions/IOAudioFamily.git
 IOHIDFamily|git@github.com:anurodhp/IOHIDFamily.git|iokit-port||https://github.com/apple-oss-distributions/IOHIDFamily.git
 xxHash|https://github.com/Cyan4973/xxHash.git|v0.8.2|
