@@ -524,6 +524,8 @@ BCM2837RegisterBuiltinPersonalities(void)
 	// "pwm" - the PWM block, the 3.5mm audio jack (DARW-314). The DT node is
 	// only present in builds that define RPI3_HAVE_PWM.
 	OSDictionary *pwm = makePersonality("IOPlatformDevice", "BCM2837PWM", "pwm", -1);
+	// The audio device matches on the PWM service itself (DARW-315).
+	OSDictionary *pwmAudio = makePersonality("BCM2837PWM", "BCM2837PWMAudioDevice", NULL, -1);
 	// "usb" - the DWC2 USB 2.0 OTG host controller, the board's only USB
 	// silicon and therefore the gate on all Phase 6 networking (the SMSC
 	// LAN9514 Ethernet chip is a USB device behind it). See BCM2837DWC2.h
@@ -703,6 +705,10 @@ BCM2837RegisterBuiltinPersonalities(void)
 	if (pwm != NULL) {
 		personalities->setObject(pwm);
 		pwm->release();
+	}
+	if (pwmAudio != NULL) {
+		personalities->setObject(pwmAudio);
+		pwmAudio->release();
 	}
 	if (usb != NULL) {
 		personalities->setObject(usb);

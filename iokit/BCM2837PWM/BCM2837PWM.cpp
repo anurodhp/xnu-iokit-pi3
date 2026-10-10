@@ -54,6 +54,13 @@ BCM2837PWM::start(IOService *provider)
 		return false;
 	}
 	fRegs = (volatile uint32_t *)fRegMap->getVirtualAddress();
+	uint32_t sim = 0;
+	fSim = PE_parse_boot_argn("pwm-sim", &sim, sizeof(sim)) && sim;
+	if (fSim) {
+		bzero(fSimRegs, sizeof(fSimRegs));
+		fRegs = fSimRegs;       // never touch the (unmapped on QEMU) hardware
+		IOLog("BCM2837PWM: simulated (pwm-sim=1), registers in RAM\n");
+	}
 	fLock = IOLockAlloc();
 	if (fLock == NULL) {
 		OSSafeReleaseNULL(fRegMap);
@@ -157,6 +164,22 @@ BCM2837PWM::configureLocked(uint32_t rateHz, uint32_t *rngOut, uint32_t *actualR
 	// startOutput() able to run an old range against a changed clock.
 	fRng = 0;
 	fClockHz = 0;
+
+	if (fSim) {
+		uint32_t simClock = pwmTargetClockHz(rateHz);
+		uint32_t simRng = pwmRangeFor(simClock, rateHz);
+		writeReg(0x10, simRng);
+		writeReg(0x20, simRng);
+		fClockHz = simClock;
+		fRng = simRng;
+		if (rngOut) {
+			*rngOut = simRng;
+		}
+		if (actualRateOut) {
+			*actualRateOut = pwmActualRateHz(simClock, simRng);
+		}
+		return kIOReturnSuccess;
+	}
 
 	// Note the firmware's current rate (0 can just mean the clock is idle, so
 	// it is not an error), then ask for ours and make sure the clock runs.

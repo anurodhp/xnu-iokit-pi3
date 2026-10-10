@@ -1,0 +1,11 @@
+/*
+ * QEMU variant of rpi3.dts that DOES define the pwm node (RPI3_HAVE_PWM),
+ * for exercising the PWM audio path on QEMU, which maps no PWM block.
+ * Boot with QEMU_DTB=devicetrees/rpi3-pwmtest.dtb and the boot-arg pwm-sim=1
+ * (registers then live in RAM and the audio engine is timer-driven); without
+ * pwm-sim=1 the driver would touch an unmapped range and take an external
+ * abort. Real hardware uses rpi3-realhw.dts.
+ */
+#define RPI3_HAVE_PWM 1
+
+#include "rpi3.dts"

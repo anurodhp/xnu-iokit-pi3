@@ -62,6 +62,9 @@ public:
 	IOReturn startOutput();
 	void     stopOutput();
 	bool     isConfigured() const { return fRng != 0; }
+	// pwm-sim=1: registers live in RAM and no clock, pin or hardware is touched
+	// (QEMU has no PWM block). For exercising the audio path off-hardware.
+	bool     isSimulated() const { return fSim; }
 	uint32_t getRange() const { return fRng; }
 
 	uint32_t readReg(uint32_t offset);
@@ -81,6 +84,8 @@ private:
 	uint32_t           fClockHz;
 	uint32_t           fRng;
 	bool               fRunning;
+	bool               fSim;
+	uint32_t           fSimRegs[0x28 / 4];
 };
 
 #endif
