@@ -38,7 +38,8 @@ extern kern_return_t bootstrap_check_in(mach_port_t bp, const char *name, mach_p
 #define kCallStop             4
 #define kTrapPerformClientIO  0
 #define kRingFrames           4096       /* BCM2837PWMAudio.h kPWMAudioFrames */
-#define kChunkFrames          512
+#define kChunkFrames          510       /* 16 B descriptor + 510*8 B = exactly one 4096 B page: see DARW-322 (a registered buffer
+                                         * that spills into a second page makes the kernel read past its mapping) */
 #define kLeadFrames           2560       /* audio_play.c: aim this far ahead of the play position */
 #define IDLE_EXIT_S           10
 #define STREAM_STALE_S        3          /* a RUNNING stream with no WRITE for this long is reaped */

@@ -59,6 +59,10 @@ lead the play position (the tool uses 2560 frames of the 4096-frame ring), or
 `kIOReturnIsoTooOld` (0xe00002ee) is returned for chunks that miss their
 watchdog deadline.
 
+**Client buffer size (DARW-322):** keep a registered client buffer within ONE 4096 B page (16 B header + at most 510
+stereo float frames). With 512 frames (4112 B) two concurrent clients panic the kernel in
+`IOAudioEngine::mixOutputSamples` (read 16 bytes past the mapping); `audio_play` and `coreaudio/audiod` use 510.
+
 ## Running the QEMU checks
 
 ```

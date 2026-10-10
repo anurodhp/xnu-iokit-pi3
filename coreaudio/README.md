@@ -48,9 +48,13 @@ The stock IOAudioEngine nominally mixes several user clients, but that path pani
 - NOT verified: real Pi (by ear), IOProc timing (under TCG the IOProc thread ran at about half real time, so streams underrun
   on QEMU; frame counts at the engine are still right), client crash reaping, the daemon-exit-during-request retry path.
 
-## Kernel finding (not fixed here)
-Two concurrent `audio_play` processes (two IOAudioEngineUserClients on the same engine) PANIC the kernel on QEMU:
-data abort in `IOAudioEngine::mixOutputSamples` called from `IOAudioStream::processOutputSamples`
-(esr 0x96000007, far = one page past x28; pc/lr resolved with nm on the unstripped kernel). So the kernel-side
-multi-client mix path is not usable today, and `audiod` (a single engine client that mixes in userland) is the safe way
-to play more than one sound until that is fixed. Not investigated further.
+## Kernel finding (DARW-322)
+Two concurrent `audio_play` processes used to PANIC the kernel on QEMU: data abort in `IOAudioEngine::mixOutputSamples`
+(called from `IOAudioStream::processOutputSamples`), far = sourceBuf + 0xff0, i.e. the read of the client buffer's last
+16 bytes touched a page that is not mapped. The registered buffer was 16 B descriptor + 512 frames * 8 B = 4112 B, one
+page plus 16 bytes. Registering a buffer that fits ONE page (510 frames = 4096 B) made two concurrent clients run without
+a panic (two `audio_play`, and two `ca_play` through `audiod`). `audiod` and `audio_play` therefore use 510-frame chunks.
+Not found yet: why the second page of a two-page registration is unmapped (stock `IOMemoryDescriptor::map` rounds to
+pages). With one client the same over-read goes unnoticed, so a single client was reading 16 bytes past its mapping.
+Also open: with two kernel-mixed clients the engine reports peak 32767 for two 0.25 sines (expected ~16383), while the
+daemon's userland mix peaks at 15613, so the kernel mix buffer seems to accumulate more than it should.
