@@ -2,6 +2,7 @@
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/IOLib.h>
+#include "BCM2837Mailbox.h"
 
 OSDefineMetaClassAndStructors(BCM2837PlatformExpert, IODTPlatformExpert);
 
@@ -127,6 +128,20 @@ BCM2837PlatformExpert::start(IOService *provider)
 		    "will hang instead of resetting\n");
 	}
 	OSSafeReleaseNULL(mem);
+
+	// Log the framebuffer format the firmware is really scanning out (read-only
+	// queries): pixel order 0 = BGR is what XNU's console and Xorg need (they
+	// write 0x00RRGGBB); 1 = RGB swaps red and blue on screen. Early-boot
+	// kprintf from bcm2837_video_init() does not reach the serial console, so
+	// this is the readable record (tags 0x00040006 / 0x00040003 / 0x00040004,
+	// u-boot mach/mbox.h).
+	uint32_t resp = 0, a = 0, b = 0, w = 0, h = 0, vw = 0, vh = 0;
+	if (BCM2837Mailbox::propertyTag2(0x00040003, 0, 0, &resp, &w, &h) &&
+	    BCM2837Mailbox::propertyTag2(0x00040004, 0, 0, &resp, &vw, &vh) &&
+	    BCM2837Mailbox::propertyTag2(0x00040006, 0, 0, &resp, &a, &b)) {
+		IOLog("BCM2837PlatformExpert: framebuffer %ux%u (virtual %ux%u), pixel order %u (%s)\n", w, h, vw, vh, a,
+		    a == 0 ? "BGR: colours correct" : "RGB: red and blue swapped");
+	}
 	return true;
 }
 
