@@ -47,6 +47,15 @@ BCM2837PWM::start(IOService *provider)
 	if (!super::start(provider)) {
 		return false;
 	}
+	// Opt-in while audio is brought up (DARW-316): audio=1 (or the pwm-sim /
+	// pwm-test debug args) enables it; otherwise the block is left alone.
+	uint32_t optin = 0, simArg = 0, testArg = 0;
+	bool wanted = (PE_parse_boot_argn("audio", &optin, sizeof(optin)) && optin) ||
+	    (PE_parse_boot_argn("pwm-sim", &simArg, sizeof(simArg)) && simArg) ||
+	    (PE_parse_boot_argn("pwm-test", &testArg, sizeof(testArg)) && testArg);
+	if (!wanted) {
+		return false;
+	}
 	fRegMap = provider->mapDeviceMemoryWithIndex(0);
 	if (fRegMap == NULL || fRegMap->getLength() < kRegLen) {
 		IOLog("BCM2837PWM: cannot map the register block\n");
