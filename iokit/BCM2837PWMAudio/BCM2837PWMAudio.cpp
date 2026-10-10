@@ -191,7 +191,11 @@ BCM2837PWMAudioEngine::initHardware(IOService *provider)
 	}
 	uint32_t tone = 0;
 	if (PE_parse_boot_argn("audio-test", &tone, sizeof(tone)) && tone) {
-		startToneTest(tone == 1 ? 10 : tone);
+		if (test) {
+			IOLog("BCM2837PWMAudio: audio-test ignored: audio-selftest=1 drives the engine\n");
+		} else {
+			startToneTest(tone == 1 ? 10 : (tone > 600 ? 600 : tone));
+		}
 	}
 	return true;
 }
@@ -596,11 +600,12 @@ BCM2837PWMAudioEngine::selfTestRun(bool ok)
 	// IOAudioEngine::performFlush() (driven by its erase timer) stops a running
 	// engine that has no active user client, so stand in for one.
 	// Engine operations belong on the work loop, as the user-client path does.
-	incrementActiveUserClients();
-	IOReturn r = getCommandGate() ? getCommandGate()->runAction(&BCM2837PWMAudioEngine::selfTestStartAction) : startAudioEngine();
+	// incrementActiveUserClients() itself starts the engine on the 0 -> 1
+	// transition (IOAudioEngine.cpp:1324-1326) and undoes the increment if
+	// that start fails, so its return value is the start result.
+	IOReturn r = incrementActiveUserClients();
 	if (r != kIOReturnSuccess) {
 		IOLog("BCM2837PWMAudio: selftest startAudioEngine %#x\n", r);
-		decrementActiveUserClients();
 		ok = false;
 	} else {
 		IOSleep(400);
@@ -636,11 +641,11 @@ BCM2837PWMAudioEngine::selfTestStopAction(OSObject *owner, void *, void *, void 
 }
 
 // ---------------------------------------------------------------------------
-// Boot-arg audio-test=<seconds> (DARW-317; 1 means 10 s): the kernel plays a
+// Boot-arg audio-test=<seconds> (DARW-317; 1 means 10 s, at most 600): the kernel plays a
 // fixed tone with no userland involved, so the hardware path (PWM clock, pin
 // mux, looping DMA ring, FIFO) can be proved before any user client exists.
 //
-// The tone is 375 Hz: 48000 / 128 = exactly 128 frames per cycle, so 32 whole
+// The tone is rate/128 Hz, 375 Hz at the default 48 kHz: 48000 / 128 = exactly 128 frames per cycle, so 32 whole
 // cycles fit the 4096-frame ring and the looping DMA replays it seamlessly
 // without any refill. Amplitude 8192/32768 = 0.25 (-12 dB), kept low because
 // PWM audio into headphones or an amplifier is loud. The table is
@@ -695,22 +700,27 @@ BCM2837PWMAudioEngine::toneTestThread(void *p0, wait_result_t)
 void
 BCM2837PWMAudioEngine::toneTestRun()
 {
-	IOLog("BCM2837PWMAudio: audio-test: playing a 375 Hz tone for %u s (%s)\n", toneSeconds,
+	IOLog("BCM2837PWMAudio: audio-test: playing a %u Hz tone for %u s (%s)\n", fRate / 128, toneSeconds,
 	    fSim ? "simulated" : "PWM+DMA");
-	// Same stand-in client as the self-test: performFlush() would stop an
-	// engine with none.
-	incrementActiveUserClients();
-	IOReturn r = getCommandGate() ? getCommandGate()->runAction(&BCM2837PWMAudioEngine::selfTestStartAction)
-	    : startAudioEngine();
+	// The family's erase head (timer-driven performErase()) rewrites the ring
+	// behind the play position with mid-scale whether or not a client exists,
+	// so it would wipe the tone within one ring trip. Switch it off for the
+	// test, restore it after.
+	const bool hadErase = getRunEraseHead();
+	setRunEraseHead(false);
+	// incrementActiveUserClients() starts the engine itself on the 0 -> 1
+	// transition (IOAudioEngine.cpp:1324-1329) and undoes the increment if
+	// that fails, so a failure here needs no decrement of ours. The stand-in
+	// client keeps performFlush() from stopping the engine.
+	IOReturn r = incrementActiveUserClients();
 	if (r != kIOReturnSuccess) {
 		IOLog("BCM2837PWMAudio: audio-test: start failed %#x\n", r);
-		decrementActiveUserClients();
+		setRunEraseHead(hadErase);
 		return;
 	}
-	// Fill after start: performAudioEngineStart() sets the range (and fills
-	// the ring with mid-scale), so the tone must be written with the final
-	// fRng. The DMA is already looping over mid-scale; the tone replaces it
-	// a few microseconds later, with no pop beyond the start-up step.
+	// performAudioEngineStart() has set the range and filled the ring with
+	// mid-scale, and the DMA is looping over it; the tone replaces it a moment
+	// later (a one-time step at an arbitrary phase, harmless).
 	int16_t *s = (int16_t *)fSampleBuffer;
 	for (uint32_t f = 0; f < kPWMAudioFrames; f++) {
 		int16_t v = kToneTable[f & 127];
@@ -720,18 +730,24 @@ BCM2837PWMAudioEngine::toneTestRun()
 		fRing[f * 2] = w;
 		fRing[f * 2 + 1] = w;
 	}
+	__asm__ volatile ("dsb sy" ::: "memory");
 	for (uint32_t t = 1; t <= toneSeconds; t++) {
 		IOSleep(1000);
+		// Is the tone still in the ring (i.e. nothing erased it)?
+		bool intact = true;
+		for (uint32_t f = 0; f < 128 && intact; f++) {
+			intact = fRing[f * 2] == pwmDatFromS16(kToneTable[f], fRng);
+		}
 		const IOAudioEngineStatus *st = getStatus();
-		IOLog("BCM2837PWMAudio: audio-test: t=%us pos=%u loops=%u PWM STA=%#x CTL=%#x dmaErrors=%u\n", t,
+		IOLog("BCM2837PWMAudio: audio-test: t=%us pos=%u loops=%u PWM STA=%#x CTL=%#x dmaErrors=%u tone %s\n", t,
 		    (unsigned)getCurrentSampleFrame(), st ? (unsigned)st->fCurrentLoopCount : 0,
-		    fPWM->readReg(0x04), fPWM->readReg(0x00), (unsigned)fDmaErrors);
+		    fPWM->readReg(0x04), fPWM->readReg(0x00), (unsigned)fDmaErrors, intact ? "intact" : "ERASED");
 	}
+	// The last client going away stops the engine (the family's own path).
 	decrementActiveUserClients();
-	if (getCommandGate()) {
-		getCommandGate()->runAction(&BCM2837PWMAudioEngine::selfTestStopAction);
-	} else {
+	if (getState() == kIOAudioEngineRunning) {
 		stopAudioEngine();
 	}
+	setRunEraseHead(hadErase);
 	IOLog("BCM2837PWMAudio: audio-test: done\n");
 }
