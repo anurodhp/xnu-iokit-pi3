@@ -1,6 +1,5 @@
 #include "BCM2837PWM.h"
 #include "BCM2837PWMMath.h"
-#include "BCM2837Mailbox.h"
 
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/IOLib.h>
@@ -127,6 +126,64 @@ BCM2837PWM::dumpRegs(const char *tag)
 	    readReg(0x20), readReg(0x24));
 }
 
+// CM_PWMCTL / CM_PWMDIV, in the clock manager block at 0x3f101000 (u-boot
+// bcm283x.dtsi cprman@7e101000). Offsets 0xa0 and 0xa4, the 0x5a000000
+// password in the top byte of every write, SRC [3:0] (6 = PLLD), ENAB bit 4,
+// KILL bit 5, BUSY bit 7, MASH [10:9], DIVI [23:12] / DIVF [11:0]: from the
+// BCM2835 datasheet as remembered (not vendored). Verified only by effect: the
+// ring's loop rate on a real Pi. PLLD is 500 MHz on this SoC.
+bool
+BCM2837PWM::programClock()
+{
+	const IOPhysicalAddress kCmPwm = 0x3f101000 + 0xa0;
+	const uint32_t kPw = 0x5a000000, kEnab = 1U << 4, kKill = 1U << 5, kBusy = 1U << 7, kSrcPllD = 6;
+	IODeviceMemory *mem = IODeviceMemory::withRange(kCmPwm, 2 * sizeof(uint32_t));
+	if (mem == NULL) {
+		return false;
+	}
+	IOMemoryMap *map = mem->map(kIOMapInhibitCache);
+	mem->release();
+	if (map == NULL) {
+		return false;
+	}
+	volatile uint32_t *ctl = (volatile uint32_t *)map->getVirtualAddress();
+	volatile uint32_t *div = ctl + 1;
+	IOLog("BCM2837PWM: clock manager before: CM_PWMCTL=%#x CM_PWMDIV=%#x\n", *ctl, *div);
+
+	// Stop the clock and wait for it to idle (KILL if it will not).
+	*ctl = kPw | (*ctl & ~kEnab & 0xffffff);
+	for (int i = 0; i < 1000 && (*ctl & kBusy); i++) {
+		IODelay(1);
+	}
+	if (*ctl & kBusy) {
+		*ctl = kPw | kKill;
+		for (int i = 0; i < 1000 && (*ctl & kBusy); i++) {
+			IODelay(1);
+		}
+	}
+	bool ok = !(*ctl & kBusy);
+	if (ok) {
+		// pwm-div=<n> overrides the divisor (bring-up experiment, DARW-317).
+		uint32_t divisor = kPWMClockDivisor, dArg = 0;
+		if (PE_parse_boot_argn("pwm-div", &dArg, sizeof(dArg)) && dArg >= 2 && dArg < 4096) {
+			divisor = dArg;
+			IOLog("BCM2837PWM: pwm-div=%u override (%u Hz)\n", divisor, kPWMPllDHz / divisor);
+		}
+		*div = kPw | (divisor << 12);                   // integer divide, DIVF = 0
+		*ctl = kPw | kSrcPllD;                          // source PLLD, MASH off
+		IODelay(10);
+		*ctl = kPw | kSrcPllD | kEnab;
+		for (int i = 0; i < 1000 && !(*ctl & kBusy); i++) {
+			IODelay(1);
+		}
+		ok = (*ctl & kBusy) != 0;
+	}
+	IOLog("BCM2837PWM: clock manager after: CM_PWMCTL=%#x CM_PWMDIV=%#x (%s), expected %u Hz\n", *ctl, *div,
+	    ok ? "running" : "NOT running", kPWMClockHz);
+	map->release();
+	return ok;
+}
+
 // GPIO40/41 -> ALT0 (GPFSEL4 bits 2:0 and 5:3, function 0b100), the same
 // phys-mapped access BCM2837SDHCI::pinmuxSDSlot() uses for the GPIO block.
 bool
@@ -190,20 +247,15 @@ BCM2837PWM::configureLocked(uint32_t rateHz, uint32_t *rngOut, uint32_t *actualR
 		return kIOReturnSuccess;
 	}
 
-	// Note the firmware's current rate (0 can just mean the clock is idle, so
-	// it is not an error), then ask for ours and make sure the clock runs.
-	uint32_t cur = 0;
-	if (!BCM2837Mailbox::getClockRateHz(BCM2837Mailbox::kClockIdPWM, &cur)) {
-		IOLog("BCM2837PWM: firmware gave no current rate for the PWM clock (id %u); trying to set it\n",
-		    (unsigned)BCM2837Mailbox::kClockIdPWM);
-	}
+	// Clock: program the clock manager directly (programClock()). The mailbox
+	// "set clock rate" for clock id 10 was tried first and does not work for
+	// the PWM clock here: the firmware reported the requested 98.304 MHz as
+	// set, yet the ring ran at 64% speed, i.e. the clock stayed at 62.5 MHz.
 	uint32_t want = pwmTargetClockHz(rateHz), got = 0;
-	if (!BCM2837Mailbox::setClockRateHz(BCM2837Mailbox::kClockIdPWM, want, &got)) {
+	if (!programClock()) {
 		return kIOReturnIOError;
 	}
-	if (!BCM2837Mailbox::setClockState(BCM2837Mailbox::kClockIdPWM, true)) {
-		IOLog("BCM2837PWM: firmware did not confirm the PWM clock running; continuing\n");
-	}
+	got = want;
 	uint32_t rng = pwmRangeFor(got, rateHz);
 	if (rng == 0) {
 		IOLog("BCM2837PWM: clock %u Hz (asked %u) gives no usable range for %u Hz\n", got, want, rateHz);
@@ -232,6 +284,24 @@ BCM2837PWM::configureLocked(uint32_t rateHz, uint32_t *rngOut, uint32_t *actualR
 	IOLog("BCM2837PWM: configured: clock asked %u got %u Hz, range %u, frame rate %u Hz\n",
 	    want, got, rng, pwmActualRateHz(got, rng));
 	return kIOReturnSuccess;
+}
+
+IOReturn
+BCM2837PWM::setRange(uint32_t rng)
+{
+	if (rng < kPWMMinRange || rng > kPWMMaxRange) {
+		return kIOReturnBadArgument;
+	}
+	IOLockLock(fLock);
+	IOReturn r = kIOReturnNotReady;
+	if (fRng != 0) {
+		writeReg(0x10, rng);
+		writeReg(0x20, rng);
+		fRng = rng;
+		r = kIOReturnSuccess;
+	}
+	IOLockUnlock(fLock);
+	return r;
 }
 
 IOReturn

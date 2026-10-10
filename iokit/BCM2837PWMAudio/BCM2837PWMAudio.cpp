@@ -21,7 +21,6 @@ OSDefineMetaClassAndStructors(BCM2837PWMAudioEngine, IOAudioEngine)
 enum {
 	kRegSourceAd = 0x0c,
 	kDefaultRate = 48000,
-	kDefaultRng  = kPWMTargetRange,
 	kBytesPerRingFrame = kPWMAudioChannels * sizeof(uint32_t),
 	kBytesPerSampleFrame = kPWMAudioChannels * sizeof(int16_t),
 	kVolumeMax   = 100,
@@ -72,13 +71,14 @@ BCM2837PWMAudioEngine::initHardware(IOService *provider)
 	fSim = false;
 	fHaveChannel = false;
 	fRate = kDefaultRate;
-	fRng = kDefaultRng;
+	fRng = pwmRangeFor(kPWMClockHz, kDefaultRate);
 	fSampleBuffer = NULL;
 	fRingMem = NULL;
 	fRing = NULL;
 	fCbMem = NULL;
 	fCb = NULL;
 	fSimThreadRunning = 0;
+	fCalRange[0] = fCalRange[1] = 0;
 	fSimGen = 0;
 	fClipFrames = 0;
 	fClipPeak = 0;
@@ -403,10 +403,42 @@ BCM2837PWMAudioEngine::performAudioEngineStart()
 		return r;
 	}
 	takeTimeStamp(false);
+	// Bring-up (DARW-317): sample the DMA channel just before and just after the
+	// PWM is enabled, to see when and why it stops (audio-dbg=1).
+	uint32_t dbg = 0;
+	bool dbgOn = PE_parse_boot_argn("audio-dbg", &dbg, sizeof(dbg)) && dbg;
+	enum { kSamples = 24 };
+	uint32_t smp[kSamples][6];
+	if (dbgOn) {
+		smp[0][0] = fDMA->readChannelReg(fChannel, 0x00);
+		smp[0][1] = fDMA->readChannelReg(fChannel, 0x0c);
+		smp[0][2] = fDMA->readChannelReg(fChannel, 0x04);
+		smp[0][3] = fPWM->readReg(0x04);
+		smp[0][4] = fPWM->readReg(0x08);
+		smp[0][5] = fDMA->readChannelReg(fChannel, 0x20);
+	}
 	r = fPWM->startOutput();
+	if (dbgOn) {
+		for (int i = 1; i < kSamples; i++) {
+			IODelay(250);
+			smp[i][0] = fDMA->readChannelReg(fChannel, 0x00);
+			smp[i][1] = fDMA->readChannelReg(fChannel, 0x0c);
+			smp[i][2] = fDMA->readChannelReg(fChannel, 0x04);
+			smp[i][3] = fPWM->readReg(0x04);
+			smp[i][4] = fPWM->readReg(0x08);
+			smp[i][5] = fDMA->readChannelReg(fChannel, 0x20);
+		}
+		IOLog("BCM2837PWMAudio: audio-dbg: sample 0 is before PWM enable, then every ~250us\n");
+		for (int i = 0; i < kSamples; i++) {
+			IOLog("BCM2837PWMAudio: audio-dbg: %2d CS=%#x SRC=%#x CONBLK=%#x PWM.STA=%#x DMAC=%#x DEBUG=%#x\n", i,
+			    smp[i][0], smp[i][1], smp[i][2], smp[i][3], smp[i][4], smp[i][5]);
+		}
+	}
 	if (r != kIOReturnSuccess) {
 		fDMA->freeChannel(fChannel);
 		fHaveChannel = false;
+	} else {
+		calibrateRate();        // needs the PWM draining the ring
 	}
 	return r;
 }
@@ -549,7 +581,7 @@ BCM2837PWMAudioEngine::selfTest()
 	}
 	_enable_preemption();
 
-	fRng = kDefaultRng;
+	fRng = pwmRangeFor(kPWMClockHz, kDefaultRate);
 	fGainQ16 = 0x10000;
 	if (clipOutputSamples(mix, fSampleBuffer, 0, kN, &fmt, NULL) != kIOReturnSuccess) {
 		ok = false;
@@ -758,9 +790,18 @@ BCM2837PWMAudioEngine::toneTestRun()
 			intact = fRing[f * 2] == pwmDatFromS16(kToneTable[f], fRng);
 		}
 		const IOAudioEngineStatus *st = getStatus();
-		IOLog("BCM2837PWMAudio: audio-test: t=%us pos=%u loops=%u PWM STA=%#x CTL=%#x dmaErrors=%u tone %s\n", t,
+		IOLog("BCM2837PWMAudio: audio-test: t=%us pos=%u loops=%u PWM STA=%#x CTL=%#x DMAC=%#x dmaErrors=%u tone %s\n", t,
 		    (unsigned)getCurrentSampleFrame(), st ? (unsigned)st->fCurrentLoopCount : 0,
-		    fPWM->readReg(0x04), fPWM->readReg(0x00), (unsigned)fDmaErrors, intact ? "intact" : "ERASED");
+		    fPWM->readReg(0x04), fPWM->readReg(0x00), fPWM->readReg(0x08), (unsigned)fDmaErrors,
+		    intact ? "intact" : "ERASED");
+		if (fHaveChannel && !fSim && t <= 3) {
+			// Raw DMA channel registers (BCM2837DMA.h): where is it and why?
+			IOLog("BCM2837PWMAudio: audio-test: DMA ch%u CS=%#x CONBLK=%#x TI=%#x SRC=%#x DST=%#x LEN=%#x NEXT=%#x DEBUG=%#x (ring %#x cb %#x)\n",
+			    fChannel, fDMA->readChannelReg(fChannel, 0x00), fDMA->readChannelReg(fChannel, 0x04),
+			    fDMA->readChannelReg(fChannel, 0x08), fDMA->readChannelReg(fChannel, 0x0c),
+			    fDMA->readChannelReg(fChannel, 0x10), fDMA->readChannelReg(fChannel, 0x14),
+			    fDMA->readChannelReg(fChannel, 0x1c), fDMA->readChannelReg(fChannel, 0x20), fRingBus, fCbBus);
+		}
 	}
 	// The last client going away stops the engine (the family's own path).
 	decrementActiveUserClients();
@@ -769,4 +810,74 @@ BCM2837PWMAudioEngine::toneTestRun()
 	}
 	setRunEraseHead(hadErase);
 	IOLog("BCM2837PWMAudio: audio-test: done\n");
+}
+
+// The frame rate the PWM really runs at is not clock / RANGE as computed from
+// the clock manager settings: measured on a real Pi 3 (DARW-317) the DMA ring
+// completed at about 63% of that, at both a /5 and a /10 divisor (so the clock
+// manager does control the PWM, but with a constant factor I could not explain
+// from the documents available here). Rather than hard-code a factor, measure
+// it: with the PWM running, watch how fast the DMA's source address moves
+// round the ring, and trim the range so the frame rate matches the one
+// asked for. Frame rate is proportional to 1 / RANGE, so one correction is
+// enough; the result is cached per sample rate.
+void
+BCM2837PWMAudioEngine::calibrateRate()
+{
+	if (fSim || !fHaveChannel) {
+		return;
+	}
+	const uint32_t idx = fRate == 44100 ? 0 : 1;
+	if (fCalRange[idx] != 0) {
+		if (fCalRange[idx] != fRng && fPWM->setRange(fCalRange[idx]) == kIOReturnSuccess) {
+			fRng = fCalRange[idx];
+			fillRingMidScale(0, kPWMAudioFrames);
+		}
+		return;
+	}
+	const uint32_t ringBytes = kPWMAudioFrames * kBytesPerRingFrame;
+	uint64_t frames = 0, spanTicks = 0;
+	uint32_t prevPos = 0;
+	uint64_t prevT = 0;
+	bool have = false;
+	IOSleep(5);
+	for (int i = 0; i < 40; i++) {
+		uint32_t src = fDMA->readChannelReg(fChannel, kRegSourceAd);
+		uint64_t now = mach_absolute_time();
+		if (src >= fRingBus && src < fRingBus + ringBytes) {
+			uint32_t pos = (src - fRingBus) / kBytesPerRingFrame;
+			if (have) {
+				uint32_t d = (pos + kPWMAudioFrames - prevPos) % kPWMAudioFrames;
+				// ~10 ms apart is ~480 frames; a glitched read shows up as an
+				// implausible step and is skipped (its time is not counted).
+				if (d <= 1500) {
+					frames += d;
+					spanTicks += now - prevT;
+				}
+			}
+			prevPos = pos;
+			prevT = now;
+			have = true;
+		}
+		IOSleep(10);
+	}
+	uint64_t ns = 0;
+	absolutetime_to_nanoseconds(spanTicks, &ns);
+	if (frames < 4000 || ns < 100000000ULL) {
+		IOLog("BCM2837PWMAudio: rate calibration: not enough data (%llu frames in %llu ms), keeping range %u\n",
+		    frames, ns / 1000000, fRng);
+		return;
+	}
+	uint64_t measured = frames * 1000000000ULL / ns;       // frames per second
+	uint32_t newRng = (uint32_t)(((uint64_t)fRng * measured + fRate / 2) / fRate);
+	IOLog("BCM2837PWMAudio: rate calibration: measured %llu frames/s at range %u (wanted %u); new range %u\n",
+	    measured, fRng, fRate, newRng);
+	if (newRng >= kPWMMinRange && newRng <= kPWMMaxRange && newRng != fRng &&
+	    fPWM->setRange(newRng) == kIOReturnSuccess) {
+		fRng = newRng;
+		fillRingMidScale(0, kPWMAudioFrames);
+		fCalRange[idx] = newRng;
+	} else {
+		fCalRange[idx] = fRng;
+	}
 }

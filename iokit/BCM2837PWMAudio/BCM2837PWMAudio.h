@@ -86,6 +86,8 @@ private:
 	static void simThread(void *p0, wait_result_t w);
 	volatile uint32_t fSimThreadRunning;
 	void updateGain();
+	void calibrateRate();
+	uint32_t fCalRange[2];      // calibrated range per rate: [0] 44100, [1] 48000 (0 = not yet)
 	void buildGainTable();
 	void startToneTest(uint32_t seconds);
 	void toneTestRun();

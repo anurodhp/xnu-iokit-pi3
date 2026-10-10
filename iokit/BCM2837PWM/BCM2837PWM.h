@@ -18,13 +18,14 @@
  *     QEMU has no PWM model yet (DARW-318), so these are from the datasheet
  *     as remembered; the first run on a Pi (pwm-test=1 logs the registers)
  *     and the QEMU model must cross-check them.
- *   - PWM clock: the VideoCore firmware owns the clock manager on this
- *     board, so the rate is requested through the mailbox ("set clock
- *     rate", clock id 10, BCM2837Mailbox::kClockIdPWM; u-boot
- *     arch/arm/mach-bcm283x/include/mach/mbox.h:228-238 has
- *     BCM2835_MBOX_CLOCK_ID_PWM 10) rather than by writing CM_PWMCTL/
- *     CM_PWMDIV behind its back. That the firmware owns this clock is a
- *     design choice, not something a tree source states.
+ *   - PWM clock: programmed directly in the clock manager (CM_PWMCTL/
+ *     CM_PWMDIV at 0x3f1010a0, PLLD 500 MHz / 5 = 100 MHz; programClock()).
+ *     The VideoCore mailbox "set clock rate" for clock id 10 (u-boot
+ *     arch/arm/mach-bcm283x/include/mach/mbox.h:228-238,
+ *     BCM2835_MBOX_CLOCK_ID_PWM) was tried first and does not take effect for
+ *     this clock: on a real Pi the firmware acknowledged 98.304 MHz while the
+ *     ring ran at 64% speed (62.5 MHz = PLLD/8), measured by the loop rate of
+ *     the DMA ring (DARW-317).
  *   - GPFSEL4 is read-modify-written here and by BCM2837SDHCI::pinmuxSDSlot()
  *     (GPIO48/49) with no shared lock; they run at different times in
  *     practice (the PWM mux only when audio is configured).
@@ -62,6 +63,10 @@ public:
 	IOReturn startOutput();
 	void     stopOutput();
 	bool     isConfigured() const { return fRng != 0; }
+	// Changes the range (frame period) of a configured block, even while running
+	// (the new value applies from the next period). Used by the engine to trim the
+	// frame rate after measuring it.
+	IOReturn setRange(uint32_t rng);
 	// pwm-sim=1: registers live in RAM and no clock, pin or hardware is touched
 	// (QEMU has no PWM block). For exercising the audio path off-hardware.
 	bool     isSimulated() const { return fSim; }
@@ -75,6 +80,7 @@ private:
 	IOReturn startOutputLocked();
 	void     stopOutputLocked();
 	bool     muxPins();
+	bool     programClock();
 	void     dumpRegs(const char *tag);
 	void     selfTest();
 

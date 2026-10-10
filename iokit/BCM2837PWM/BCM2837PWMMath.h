@@ -12,16 +12,28 @@
 #include <stdint.h>
 
 // Range limits: below 1024 steps (10 bits) the quantisation noise is too
-// high to bother, above 4096 the clock gets needlessly fast.
+// high to bother; 8192 (13 bits) leaves room for the nominal PLLD/2 setting.
 #define kPWMMinRange 1024U
-#define kPWMMaxRange 4096U
-// Preferred range, 11 bits: 48000 * 2048 = 98.304 MHz.
-#define kPWMTargetRange 2048U
+#define kPWMMaxRange 8192U
+// PWM clock: PLLD (500 MHz nominal on the BCM2837) divided by 2, an integer
+// divide so there is no fractional-divider (MASH) jitter; the same choice as
+// Circle (lib/sound/pwmsoundbasedevice.cpp, CLOCK_RATE 250000000 for Pi 1-3,
+// with machineinfo.cpp's PLLD = 500 MHz). Nominal frame rate 250 MHz / RANGE
+// (5208 at 48 kHz). On a real Pi 3 the PWM actually runs at 5/8 of the nominal
+// rate (measured, DARW-317), so BCM2837PWMAudioEngine::calibrateRate() trims
+// RANGE at start; with /2 that lands near 3255 at 48 kHz, about 11.7 bits.
+// (A first version asked the firmware for rate * 2048 through the mailbox; on a
+// real Pi the firmware acknowledged it but the clock stayed at 62.5 MHz
+// (PLLD/8): the ring ran at 64% speed. See BCM2837PWM::programClock().)
+#define kPWMPllDHz       500000000U
+#define kPWMClockDivisor 2U
+#define kPWMClockHz      (kPWMPllDHz / kPWMClockDivisor)
 
 static inline uint32_t
 pwmTargetClockHz(uint32_t rateHz)
 {
-	return rateHz * kPWMTargetRange;
+	(void)rateHz;
+	return kPWMClockHz;
 }
 
 // Range for the clock the firmware actually gave us, rounded to nearest.

@@ -140,7 +140,9 @@ echo "  -- same rename convention as the kernel above, NOT sdcard/'s frozen copy
 # 0:1 if present, `env import -t`s it and appends ${extra_bootargs}
 # (anurodhp/u-boot configs/rpi3_xnu_defconfig), so this needs no u-boot
 # rebuild and never drives u-boot over serial.
-# Default: cpus=4 (starts cores 1-3, DAR-455; verified on the real Pi 2026-10-02; drop it for a single-core boot).
+# Default: audio=1 cpus=4. audio=1 starts the DMA, PWM and audio-engine drivers for the 3.5mm jack (DARW-310;
+# docs/audio-bringup.md; without it they stay off and never touch the hardware; add audio-test=<s> for a
+# kernel-played tone). cpus=4 starts cores 1-3 (DAR-455; verified on the real Pi 2026-10-02; drop it for a single-core boot).
 # No fb args: the kernel framebuffer is the monitor's native size, asked of the
 # VideoCore firmware (Get Physical W/H, tag 0x00040003; third_party/xnu-7195
 # pexpert/arm/pe_init.c bcm2837_video_init), capped to 1920x1080 above the
@@ -149,7 +151,7 @@ echo "  -- same rename convention as the kernel above, NOT sdcard/'s frozen copy
 # size, e.g. when the monitor's EDID is wrong. Override:
 #   REALHW_EXTRA_BOOTARGS="-user_fault_debug fb_width=1280 fb_height=720" tools/make_realhw_sd_image.sh out.img
 # or REALHW_EXTRA_BOOTARGS= (set but empty) for no uEnv.txt at all.
-REALHW_EXTRA_BOOTARGS="${REALHW_EXTRA_BOOTARGS-cpus=4}"
+REALHW_EXTRA_BOOTARGS="${REALHW_EXTRA_BOOTARGS-audio=1 cpus=4}"
 if [ -n "$REALHW_EXTRA_BOOTARGS" ]; then
     printf 'extra_bootargs=%s\n' "$REALHW_EXTRA_BOOTARGS" > "$BOOT_MNT/uEnv.txt"
     echo "+ wrote $BOOT_MNT/uEnv.txt: extra_bootargs=$REALHW_EXTRA_BOOTARGS"

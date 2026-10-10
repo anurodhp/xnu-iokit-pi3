@@ -21,6 +21,8 @@ enum {
 	// CS fields a client may set: PRIORITY [19:16], PANIC_PRIORITY [23:20],
 	// WAIT_FOR_OUTSTANDING_WRITES [28].
 	kCsClientMask   = (0xfU << 16) | (0xfU << 20) | (1U << 28),
+	// Writable CS bits other than ACTIVE: priorities and WAIT_FOR_OUTSTANDING_WRITES.
+	kCsConfigMask   = kCsClientMask,
 	// DEBUG register error flags (write 1 to clear): READ_LAST_NOT_SET_ERROR,
 	// FIFO_ERROR, READ_ERROR.
 	kDebugErrors    = 0x7,
@@ -315,7 +317,13 @@ BCM2837DMA::handleChannelInterrupt(uint32_t channel)
 		fErrorCount[channel]++;
 	}
 	if (v & kDMACsInt) {
-		*cs = kDMACsInt;            // acknowledge by writing INT only
+		// Acknowledge INT (write 1 to clear) but write back ACTIVE and the
+		// configuration bits as they are: a CS write with ACTIVE = 0 stops the
+		// channel. Found on a real Pi 3 (DARW-317): writing INT alone stopped
+		// the audio ring after its first interrupt (CS read back 0x1a, ACTIVE
+		// clear, the source address parked 32 bytes into the first control
+		// block). END is left as it is, which is harmless (sticky status).
+		*cs = (v & (kDMACsActive | kCsConfigMask)) | kDMACsInt;
 	}
 	fIrqCount[channel]++;
 

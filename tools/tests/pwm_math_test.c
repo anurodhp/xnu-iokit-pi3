@@ -6,29 +6,28 @@
 
 int main(void)
 {
-	uint32_t rates[] = { 44100, 48000 };
-	for (int i = 0; i < 2; i++) {
-		uint32_t want = pwmTargetClockHz(rates[i]);
-		assert(pwmRangeFor(want, rates[i]) == kPWMTargetRange);
-		// A firmware clock off by up to ~0.5% still gives a range within one
-		// step, and an actual rate within 0.1% of the requested one.
-		uint32_t got = want - want / 200;
-		uint32_t rng = pwmRangeFor(got, rates[i]);
-		assert(rng != 0);
-		uint32_t actual = pwmActualRateHz(got, rng);
-		int64_t err = (int64_t)actual - rates[i];
+	assert(kPWMClockHz == 250000000U);
+	struct { uint32_t rate, rng; } want[] = { { 44100, 5669 }, { 48000, 5208 }, { 32000, 7813 }, { 96000, 2604 } };
+	for (int i = 0; i < 4; i++) {
+		uint32_t rng = pwmRangeFor(pwmTargetClockHz(want[i].rate), want[i].rate);
+		uint32_t actual = pwmActualRateHz(kPWMClockHz, rng);
+		int64_t err = (int64_t)actual - want[i].rate;
 		if (err < 0) err = -err;
-		printf("rate %u: clock %u rng %u actual %u err %lld Hz\n", rates[i], got, rng, actual, (long long)err);
-		assert(err * 1000 <= rates[i]);
+		printf("rate %u: range %u actual %u err %lld Hz\n", want[i].rate, rng, actual, (long long)err);
+		assert(rng == want[i].rng);
+		assert(err * 1000 <= want[i].rate);          // within 0.1%
 	}
-	assert(pwmRangeFor(1000000, 48000) == 0);       // clock far too slow
-	assert(pwmRangeFor(1000000000U, 48000) == 0);   // far too fast
+	assert(pwmRangeFor(kPWMClockHz, 8000) == 0);     // range 31250 > max
+	assert(pwmRangeFor(kPWMClockHz, 30000) == 8333 ? 0 : 1); // 8333 > 8192: rejected
+	assert(pwmRangeFor(kPWMClockHz, 30000) == 0);
 	assert(pwmRangeFor(1, 0) == 0);
-	assert(pwmDatFromS16(-32768, 2048) == 0);
-	assert(pwmDatFromS16(0, 2048) == 1024);
-	assert(pwmDatFromS16(32767, 2048) == 2047);
-	for (int s = -32768; s <= 32767; s++) {
-		assert(pwmDatFromS16((int16_t)s, 2083) < 2083);
+	assert(pwmDatFromS16(-32768, 2083) == 0);
+	assert(pwmDatFromS16(0, 2083) == 1041);
+	assert(pwmDatFromS16(32767, 2083) == 2082);
+	for (int r = 1024; r <= 8192; r += 7) {
+		for (int s = -32768; s <= 32767; s += 13) {
+			assert(pwmDatFromS16((int16_t)s, (uint32_t)r) < (uint32_t)r);
+		}
 	}
 	puts("pwm_math_test: PASS");
 	return 0;
