@@ -3,7 +3,7 @@
 host, with no image library: `tools/xwd_to_png.py in.xwd out.png`.
 
 Handles what Xvfb/Xorg on this port produce: XWD version 7 (X11/XWDFile.h),
-ZPixmap, TrueColor, 32 bits per pixel, either byte order. The header is 25
+ZPixmap, TrueColor, 24 or 32 bits per pixel, either byte order. The header is 25
 big-endian CARD32s, then the window name, then ncolors 12-byte XWDColor
 entries, then the pixels. Prints the geometry and the most common colours,
 so a boot test can be checked from the terminal too.
@@ -13,8 +13,8 @@ d = open(sys.argv[1], 'rb').read()
 h = struct.unpack('>25I', d[:100])
 (hsize, ver, fmt, depth, w, ht, xoff, byte_order, unit, bit_order, pad, bpp, bpl,
  vclass, rmask, gmask, bmask, bprgb, cmap_entries, ncolors, ww, wh, wx, wy, bw) = h
-if ver != 7 or fmt != 2 or bpp != 32:
-    sys.exit(f"unsupported xwd: version {ver}, format {fmt}, {bpp} bpp (want 7, ZPixmap=2, 32)")
+if ver != 7 or fmt != 2 or bpp not in (24, 32):
+    sys.exit(f"unsupported xwd: version {ver}, format {fmt}, {bpp} bpp (want 7, ZPixmap=2, 24 or 32)")
 print(f"xwd v{ver} {w}x{ht} depth {depth} bpp {bpp} bpl {bpl} byte_order {byte_order} masks {rmask:x}/{gmask:x}/{bmask:x} ncolors {ncolors}")
 off = hsize + ncolors * 12
 px = d[off:off + bpl * ht]
@@ -28,8 +28,8 @@ counts = {}
 for y in range(ht):
     row = bytearray([0])
     for x in range(w):
-        o = y * bpl + x * 4
-        v = int.from_bytes(px[o:o+4], 'big' if byte_order else 'little')
+        o = y * bpl + x * (bpp // 8)
+        v = int.from_bytes(px[o:o + bpp // 8], 'big' if byte_order else 'little')
         r, g, b = (v & rmask) >> rs, (v & gmask) >> gs, (v & bmask) >> bs
         row += bytes((r, g, b))
         counts[(r, g, b)] = counts.get((r, g, b), 0) + 1
