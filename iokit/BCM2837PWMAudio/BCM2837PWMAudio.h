@@ -87,6 +87,10 @@ private:
 	volatile uint32_t fSimThreadRunning;
 	void updateGain();
 	void buildGainTable();
+	void startToneTest(uint32_t seconds);
+	void toneTestRun();
+	static void toneTestThread(void *p0, wait_result_t w);
+	uint32_t toneSeconds;
 	static IOReturn selfTestStartAction(OSObject *owner, void *, void *, void *, void *);
 	static IOReturn selfTestStopAction(OSObject *owner, void *, void *, void *, void *);
 	void selfTest();

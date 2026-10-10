@@ -189,6 +189,10 @@ BCM2837PWMAudioEngine::initHardware(IOService *provider)
 	if (PE_parse_boot_argn("audio-selftest", &test, sizeof(test)) && test) {
 		selfTest();
 	}
+	uint32_t tone = 0;
+	if (PE_parse_boot_argn("audio-test", &tone, sizeof(tone)) && tone) {
+		startToneTest(tone == 1 ? 10 : tone);
+	}
 	return true;
 }
 
@@ -629,4 +633,105 @@ BCM2837PWMAudioEngine::selfTestStopAction(OSObject *owner, void *, void *, void 
 {
 	BCM2837PWMAudioEngine *me = OSDynamicCast(BCM2837PWMAudioEngine, owner);
 	return me ? me->stopAudioEngine() : kIOReturnBadArgument;
+}
+
+// ---------------------------------------------------------------------------
+// Boot-arg audio-test=<seconds> (DARW-317; 1 means 10 s): the kernel plays a
+// fixed tone with no userland involved, so the hardware path (PWM clock, pin
+// mux, looping DMA ring, FIFO) can be proved before any user client exists.
+//
+// The tone is 375 Hz: 48000 / 128 = exactly 128 frames per cycle, so 32 whole
+// cycles fit the 4096-frame ring and the looping DMA replays it seamlessly
+// without any refill. Amplitude 8192/32768 = 0.25 (-12 dB), kept low because
+// PWM audio into headphones or an amplifier is loud. The table is
+// round(8192 * sin(2*pi*k/128)), k = 0..127, generated offline so no FP or
+// libm is needed here.
+// Each second the thread logs the DMA read position, the time-stamp loop
+// count, the PWM STA/CTL registers and DMA error interrupts: on hardware those
+// numbers, as well as the sound, are the evidence.
+static const int16_t kToneTable[128] = {
+	0, 402, 803, 1202, 1598, 1990, 2378, 2760,
+	3135, 3503, 3862, 4212, 4551, 4880, 5197, 5501,
+	5793, 6070, 6333, 6580, 6811, 7027, 7225, 7405,
+	7568, 7713, 7839, 7946, 8035, 8103, 8153, 8182,
+	8192, 8182, 8153, 8103, 8035, 7946, 7839, 7713,
+	7568, 7405, 7225, 7027, 6811, 6580, 6333, 6070,
+	5793, 5501, 5197, 4880, 4551, 4212, 3862, 3503,
+	3135, 2760, 2378, 1990, 1598, 1202, 803, 402,
+	0, -402, -803, -1202, -1598, -1990, -2378, -2760,
+	-3135, -3503, -3862, -4212, -4551, -4880, -5197, -5501,
+	-5793, -6070, -6333, -6580, -6811, -7027, -7225, -7405,
+	-7568, -7713, -7839, -7946, -8035, -8103, -8153, -8182,
+	-8192, -8182, -8153, -8103, -8035, -7946, -7839, -7713,
+	-7568, -7405, -7225, -7027, -6811, -6580, -6333, -6070,
+	-5793, -5501, -5197, -4880, -4551, -4212, -3862, -3503,
+	-3135, -2760, -2378, -1990, -1598, -1202, -803, -402,
+};
+
+void
+BCM2837PWMAudioEngine::startToneTest(uint32_t seconds)
+{
+	toneSeconds = seconds;
+	retain();
+	thread_t th = THREAD_NULL;
+	if (kernel_thread_start(&BCM2837PWMAudioEngine::toneTestThread, this, &th) != KERN_SUCCESS) {
+		release();
+		IOLog("BCM2837PWMAudio: audio-test: cannot start the test thread\n");
+		return;
+	}
+	thread_deallocate(th);
+}
+
+void
+BCM2837PWMAudioEngine::toneTestThread(void *p0, wait_result_t)
+{
+	BCM2837PWMAudioEngine *me = (BCM2837PWMAudioEngine *)p0;
+	IOSleep(1000);          // let the device finish start()
+	me->toneTestRun();
+	me->release();
+	thread_terminate(current_thread());
+}
+
+void
+BCM2837PWMAudioEngine::toneTestRun()
+{
+	IOLog("BCM2837PWMAudio: audio-test: playing a 375 Hz tone for %u s (%s)\n", toneSeconds,
+	    fSim ? "simulated" : "PWM+DMA");
+	// Same stand-in client as the self-test: performFlush() would stop an
+	// engine with none.
+	incrementActiveUserClients();
+	IOReturn r = getCommandGate() ? getCommandGate()->runAction(&BCM2837PWMAudioEngine::selfTestStartAction)
+	    : startAudioEngine();
+	if (r != kIOReturnSuccess) {
+		IOLog("BCM2837PWMAudio: audio-test: start failed %#x\n", r);
+		decrementActiveUserClients();
+		return;
+	}
+	// Fill after start: performAudioEngineStart() sets the range (and fills
+	// the ring with mid-scale), so the tone must be written with the final
+	// fRng. The DMA is already looping over mid-scale; the tone replaces it
+	// a few microseconds later, with no pop beyond the start-up step.
+	int16_t *s = (int16_t *)fSampleBuffer;
+	for (uint32_t f = 0; f < kPWMAudioFrames; f++) {
+		int16_t v = kToneTable[f & 127];
+		s[f * 2] = v;
+		s[f * 2 + 1] = v;
+		uint32_t w = pwmDatFromS16(v, fRng);
+		fRing[f * 2] = w;
+		fRing[f * 2 + 1] = w;
+	}
+	for (uint32_t t = 1; t <= toneSeconds; t++) {
+		IOSleep(1000);
+		const IOAudioEngineStatus *st = getStatus();
+		IOLog("BCM2837PWMAudio: audio-test: t=%us pos=%u loops=%u PWM STA=%#x CTL=%#x dmaErrors=%u\n", t,
+		    (unsigned)getCurrentSampleFrame(), st ? (unsigned)st->fCurrentLoopCount : 0,
+		    fPWM->readReg(0x04), fPWM->readReg(0x00), (unsigned)fDmaErrors);
+	}
+	decrementActiveUserClients();
+	if (getCommandGate()) {
+		getCommandGate()->runAction(&BCM2837PWMAudioEngine::selfTestStopAction);
+	} else {
+		stopAudioEngine();
+	}
+	IOLog("BCM2837PWMAudio: audio-test: done\n");
 }

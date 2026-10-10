@@ -26,6 +26,7 @@ the DMA controller, the PWM block or GPIO40/41.
 | `audio-selftest=1` | with `pwm-sim=1` (QEMU) or `audio=1` (Pi) | conversion/volume/mute checks, then engine run 400 ms with time stamps; logs `selftest PASS/FAIL` | as above |
 | `dma-test=1` | any (`rpi3.dtb` has the `dma` node) | starts BCM2837DMA and copies 4 KB memory to memory, expects the completion interrupt | DMA registers |
 | `pwm-test=1` | `rpi3-realhw.dtb` only | starts BCM2837PWM and runs `configure(48000)`, logging the registers; **real hardware only**: on QEMU it reads an unmapped range and takes an external abort | yes |
+| `audio-test=<s>` | with `pwm-sim=1` (QEMU) or `audio=1` (Pi) | the engine plays a fixed 375 Hz tone at -12 dB for `<s>` seconds (1 = 10 s) with no userland, logging once a second the DMA read position, ring loop count, PWM STA/CTL and DMA error interrupts (DARW-317) | as above |
 | `pwm-ms=1` | with a running engine | mark-space PWM instead of the balanced algorithm, to compare by ear | PWM CTL |
 
 `rpi3-pwmtest.dtb` without `pwm-sim=1` and with `audio=1` or `pwm-test=1`
