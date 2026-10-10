@@ -21,6 +21,9 @@
 # env vars to boot the older single-partition msdosfs image instead, e.g.:
 #   SD_IMAGE=qemu/fat32_test.dmg ROOT_DEV=disk0 ./runvm.sh
 #
+# Audio bring-up boot-args (audio=1, pwm-sim=1, ...) are listed in
+# docs/audio-bringup.md; pass them through EXTRA_BOOT_ARGS.
+#
 # EXTRA_BOOT_ARGS appends to the baked-in boot-args below, for kernel
 # debug switches that should NOT be on by default. Added 2026-09-03
 # (DAR-222) so `-user_fault_debug` -- osfmk/kern/exception.c's opt-in
