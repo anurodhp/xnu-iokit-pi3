@@ -523,12 +523,21 @@ BCM2837PWMAudioEngine::clipOutputSamples(const void *mixBuf, void *sampleBuf, UI
 }
 
 IOReturn
-BCM2837PWMAudioEngine::eraseOutputSamples(const void *, void *sampleBuf, UInt32 firstSampleFrame,
+BCM2837PWMAudioEngine::eraseOutputSamples(const void *mixBuf, void *sampleBuf, UInt32 firstSampleFrame,
     UInt32 numSampleFrames, const IOAudioStreamFormat *, IOAudioStream *)
 {
 	if (sampleBuf == NULL || firstSampleFrame >= kPWMAudioFrames ||
 	    numSampleFrames > kPWMAudioFrames - firstSampleFrame) {
 		return kIOReturnBadArgument;
+	}
+	// The family's own eraseOutputSamples (IOAudioEngine.cpp:371-382) zeroes the float
+	// mix buffer as well. With several clients the mixer ADDS into it
+	// (IOAudioEngineMixer.cpp), so a mix buffer that is never erased accumulates every
+	// ring loop and saturates (two 0.25 sines peaked at 32767; DARW-322). A single
+	// client's mix is a bcopy, which hid this.
+	if (mixBuf != NULL) {
+		bzero((float *)(uintptr_t)mixBuf + (size_t)firstSampleFrame * kPWMAudioChannels,
+		    (size_t)numSampleFrames * kPWMAudioChannels * sizeof(float));
 	}
 	bzero((int16_t *)sampleBuf + firstSampleFrame * kPWMAudioChannels,
 	    numSampleFrames * kBytesPerSampleFrame);

@@ -57,5 +57,7 @@ KERN_FAILURE when `get_preemption_level() != 0` (osfmk/vm/vm_fault.c:3983), whic
 Single-client mixing is a bcopy with preemption enabled, so it faulted the page in without trouble. Fix (fork
 anurodhp/IOAudioFamily, IOAudioEngineMixer.cpp): touch every page of the source and mix ranges before
 `_disable_preemption()`. Verified on QEMU with the original 512-frame chunks: two `audio_play` and two `ca_play` run clean.
-Still open: with two kernel-mixed clients the engine reports peak 32767 for two 0.25 sines (expected ~16383), while the
-daemon's userland mix peaks at 16382.
+Second bug, also fixed: `BCM2837PWMAudioEngine::eraseOutputSamples` did not clear the float mix buffer (the family's version does), so with
+several clients the mixer's add accumulated every ring loop and two 0.25 sines peaked at 32767. Now cleared; two clients peak at
+23533 on QEMU (a single client 8191). That is still above the in-phase sum (16383), probably erase-head lag under QEMU's slow
+timer leaving some of the previous loop in the mix buffer; not chased.

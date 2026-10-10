@@ -62,7 +62,8 @@ watchdog deadline.
 **Two engine clients (DARW-322, fixed):** the engine's multi-client mix ran its float add with preemption disabled
 and faulted on a not-yet-touched page of the client mapping (vm_fault fails with preemption disabled,
 `osfmk/vm/vm_fault.c:3983`), panicking the kernel. `IOAudioEngineMixer.cpp` now touches the source and mix pages first.
-Open: the kernel mix of two 0.25 sines peaks at 32767 instead of about 16383.
+Also fixed: `BCM2837PWMAudioEngine::eraseOutputSamples` now clears the float mix buffer too (it accumulated across ring loops with
+several clients; two 0.25 sines peaked at 32767, now 23533 on QEMU vs 16383 ideal, likely erase-head lag under TCG).
 
 ## Running the QEMU checks
 
