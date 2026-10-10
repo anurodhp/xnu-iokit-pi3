@@ -16,9 +16,14 @@
  * getCurrentSampleFrame() is the DMA channel's current source address.
  *
  * Floating point in the kernel. FP/NEON is enabled at EL1 (osfmk/arm64/
- * start.s:367 sets CPACR_EL1.FPEN) but a kernel thread's FP registers are not
- * saved across a context switch, so every FP section here (and the mixer in
- * the IOAudioFamily fork) runs with preemption disabled and is short.
+ * start.s:367,937 set CPACR_EL1.FPEN). A context switch saves only the
+ * callee-saved d8-d15 and FPCR (osfmk/arm64/cswitch.s:87-101) and an EL1
+ * exception saves only general registers (locore.s:193-365), so v0-v7/v16-v31
+ * are not preserved across a switch. Every FP section here, and the float
+ * mixer in the IOAudioFamily fork, therefore runs with preemption disabled
+ * and is bounded by the clip size (at most 8192 floats). An interrupt handler
+ * on the same CPU that itself used NEON could still clobber them; none here
+ * does, and xnu's NEON asm (e.g. lz4) is not reached from interrupt context.
  *
  * pwm-sim=1 boot-arg: BCM2837PWM keeps its registers in RAM and this engine
  * replaces the DMA ring with a timer that advances the position and calls
@@ -81,6 +86,9 @@ private:
 	static void simThread(void *p0, wait_result_t w);
 	volatile uint32_t fSimThreadRunning;
 	void updateGain();
+	void buildGainTable();
+	static IOReturn selfTestStartAction(OSObject *owner, void *, void *, void *, void *);
+	static IOReturn selfTestStopAction(OSObject *owner, void *, void *, void *, void *);
 	void selfTest();
 	void selfTestRun(bool ok);
 	static void selfTestThread(void *p0, wait_result_t w);
@@ -109,6 +117,10 @@ private:
 	uint64_t                 fSimStartNs;
 	AbsoluteTime             fSimStartAbs;
 
+	uint32_t                 fGainTable[101];    // Q16, index = volume value
+	volatile uint32_t        fSimGen;
+	volatile uint32_t        fLastPosition;
+	volatile uint32_t        fDmaErrors;
 	volatile uint32_t        fGainQ16;           // 0..65536, volume * mute
 	SInt32                   fVolume;
 	bool                     fMute;
