@@ -60,7 +60,7 @@
 #define kTrapPerformClientIO  0
 
 #define kRingFrames   4096       // BCM2837PWMAudio.h kPWMAudioFrames
-#define kChunkFrames  510        // 16 B descriptor + 510*8 B = one 4096 B page; a larger registered buffer panics the kernel with 2 clients (DARW-322)
+#define kChunkFrames  512
 #define kChannels     2
 #define kRate         48000
 #define kLeadFrames   2560       // aim this far ahead of the play position (53 ms; the ring is 4096)

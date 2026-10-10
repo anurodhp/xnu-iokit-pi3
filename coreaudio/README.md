@@ -48,13 +48,14 @@ The stock IOAudioEngine nominally mixes several user clients, but that path pani
 - NOT verified: real Pi (by ear), IOProc timing (under TCG the IOProc thread ran at about half real time, so streams underrun
   on QEMU; frame counts at the engine are still right), client crash reaping, the daemon-exit-during-request retry path.
 
-## Kernel finding (DARW-322)
-Two concurrent `audio_play` processes used to PANIC the kernel on QEMU: data abort in `IOAudioEngine::mixOutputSamples`
-(called from `IOAudioStream::processOutputSamples`), far = sourceBuf + 0xff0, i.e. the read of the client buffer's last
-16 bytes touched a page that is not mapped. The registered buffer was 16 B descriptor + 512 frames * 8 B = 4112 B, one
-page plus 16 bytes. Registering a buffer that fits ONE page (510 frames = 4096 B) made two concurrent clients run without
-a panic (two `audio_play`, and two `ca_play` through `audiod`). `audiod` and `audio_play` therefore use 510-frame chunks.
-Not found yet: why the second page of a two-page registration is unmapped (stock `IOMemoryDescriptor::map` rounds to
-pages). With one client the same over-read goes unnoticed, so a single client was reading 16 bytes past its mapping.
-Also open: with two kernel-mixed clients the engine reports peak 32767 for two 0.25 sines (expected ~16383), while the
-daemon's userland mix peaks at 15613, so the kernel mix buffer seems to accumulate more than it should.
+## Kernel finding (DARW-322, fixed)
+Two concurrent engine clients (two `audio_play`, or `audio_play` + anything) used to PANIC the kernel on QEMU: data abort in
+`IOAudioEngine::mixOutputSamples` (from `IOAudioStream::processOutputSamples`), far = sourceBuf + 0xff0. Root cause: the
+multi-client add loop ran with preemption disabled (added for the kernel-FP rule) and the client's wired source mapping had
+only its first page touched (by registration); the first read of the second page faulted, and `vm_fault()` returns
+KERN_FAILURE when `get_preemption_level() != 0` (osfmk/vm/vm_fault.c:3983), which the abort handler turns into the panic.
+Single-client mixing is a bcopy with preemption enabled, so it faulted the page in without trouble. Fix (fork
+anurodhp/IOAudioFamily, IOAudioEngineMixer.cpp): touch every page of the source and mix ranges before
+`_disable_preemption()`. Verified on QEMU with the original 512-frame chunks: two `audio_play` and two `ca_play` run clean.
+Still open: with two kernel-mixed clients the engine reports peak 32767 for two 0.25 sines (expected ~16383), while the
+daemon's userland mix peaks at 16382.

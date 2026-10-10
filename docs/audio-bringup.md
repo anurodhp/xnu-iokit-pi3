@@ -59,9 +59,10 @@ lead the play position (the tool uses 2560 frames of the 4096-frame ring), or
 `kIOReturnIsoTooOld` (0xe00002ee) is returned for chunks that miss their
 watchdog deadline.
 
-**Client buffer size (DARW-322):** keep a registered client buffer within ONE 4096 B page (16 B header + at most 510
-stereo float frames). With 512 frames (4112 B) two concurrent clients panic the kernel in
-`IOAudioEngine::mixOutputSamples` (read 16 bytes past the mapping); `audio_play` and `coreaudio/audiod` use 510.
+**Two engine clients (DARW-322, fixed):** the engine's multi-client mix ran its float add with preemption disabled
+and faulted on a not-yet-touched page of the client mapping (vm_fault fails with preemption disabled,
+`osfmk/vm/vm_fault.c:3983`), panicking the kernel. `IOAudioEngineMixer.cpp` now touches the source and mix pages first.
+Open: the kernel mix of two 0.25 sines peaks at 32767 instead of about 16383.
 
 ## Running the QEMU checks
 
