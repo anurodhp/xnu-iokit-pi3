@@ -928,7 +928,7 @@ libffi|https://github.com/apple-oss-distributions/libffi.git|libffi-27|
 gnustep-make|git@github.com:anurodhp/tools-make.git|iokit-port||https://github.com/gnustep/tools-make.git
 gnustep-base|git@github.com:anurodhp/libs-base.git|iokit-port||https://github.com/gnustep/libs-base.git
 gnustep-gui|git@github.com:anurodhp/libs-gui.git|iokit-port||https://github.com/gnustep/libs-gui.git
-gnustep-back|https://github.com/gnustep/libs-back.git|back-0_32_0|
+gnustep-back|git@github.com:anurodhp/libs-back.git|iokit-port||https://github.com/gnustep/libs-back.git
 gnustep-examples|git@github.com:anurodhp/tests-examples.git|iokit-port||https://github.com/gnustep/tests-examples.git
 libtiff|https://gitlab.com/libtiff/libtiff.git|v4.7.1|
 libjpeg-turbo|https://github.com/libjpeg-turbo/libjpeg-turbo.git|3.0.4|
