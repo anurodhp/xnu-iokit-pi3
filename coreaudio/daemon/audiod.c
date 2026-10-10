@@ -95,6 +95,9 @@ static stream_t *find_locked(uint32_t id, uint32_t token)
 
 static void close_locked(stream_t *s)
 {
+    /* One line per stream so a listening test has numbers to go with it (underrun frames = silence inserted for lack of data). */
+    printf("audiod: stream %u closed, %u Hz, %llu underrun frames\n", s->id, s->ring.rate, (unsigned long long)s->ring.underrun_frames);
+    fflush(stdout);
     ca_ring_free(&s->ring);
     memset(s, 0, sizeof(*s));
     if (count_streams_locked() == 0) g_idle_since_ns = now_ns();

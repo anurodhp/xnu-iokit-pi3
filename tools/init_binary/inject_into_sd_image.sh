@@ -1471,9 +1471,15 @@ install_smoketest tools/userland_staging/libc_build/fb_cache_test.macho "usr/loc
 install_smoketest tools/userland_staging/libc_build/hid_event_smoketest.macho "usr/local/bin/hid_event_smoketest" \
     "= hid_event_smoketest.macho not built -- run tools/userland_staging/build_hid_event_smoketest.sh first if wanted, skipping" \
     "  (DAR-391 keyboard/pointer events from IOHIDEventServiceUserClient)"
-install_smoketest tools/userland_staging/libc_build/audio_play.macho "usr/local/bin/audio_play" \
-    "= audio_play.macho not built -- run tools/userland_staging/build_audio_play.sh first if wanted, skipping" \
-    "  (DARW-319 plays a tone through IOAudioEngineUserClient; needs audio=1 or pwm-sim=1)"
+# Audio test tools are installed on real-hardware images too (SKIP_SMOKETESTS does not apply): they are the only way to test audio on the Pi.
+if [ -f tools/userland_staging/libc_build/audio_play.macho ]; then
+    mkdir -p "$MNT/usr/local/bin"
+    cp tools/userland_staging/libc_build/audio_play.macho "$MNT/usr/local/bin/audio_play"
+    chmod 755 "$MNT/usr/local/bin/audio_play"
+    echo "+ wrote /usr/local/bin/audio_play (DARW-319 plays a tone through IOAudioEngineUserClient)"
+else
+    echo "= audio_play.macho not built -- run tools/userland_staging/build_audio_play.sh first if wanted, skipping"
+fi
 # coreaudio/ (audio daemon + CoreAudio HAL subset): libaudiohal.dylib is installed by the generic
 # libc_build/system loop above; the daemon, its launchd job and the smoketest client are here.
 # Built by coreaudio/build_libaudiohal.sh, build_audiod.sh, build_ca_play.sh.
@@ -1487,12 +1493,22 @@ if [ -f tools/userland_staging/libc_build/audiod.macho ]; then
 else
     echo "= audiod.macho not built -- run coreaudio/build_audiod.sh first if wanted, skipping"
 fi
-install_smoketest tools/userland_staging/libc_build/ca_proto_test.macho "usr/local/bin/ca_proto_test" \
-    "= ca_proto_test.macho not built -- run coreaudio/build_ca_proto_test.sh first if wanted, skipping" \
-    "  (coreaudio/ raw-protocol negative tests against audiod)"
-install_smoketest tools/userland_staging/libc_build/ca_play.macho "usr/local/bin/ca_play" \
-    "= ca_play.macho not built -- run coreaudio/build_ca_play.sh first if wanted, skipping" \
-    "  (coreaudio/ plays a tone through libaudiohal -> audiod; needs audio=1 or pwm-sim=1)"
+if [ -f tools/userland_staging/libc_build/ca_proto_test.macho ]; then
+    mkdir -p "$MNT/usr/local/bin"
+    cp tools/userland_staging/libc_build/ca_proto_test.macho "$MNT/usr/local/bin/ca_proto_test"
+    chmod 755 "$MNT/usr/local/bin/ca_proto_test"
+    echo "+ wrote /usr/local/bin/ca_proto_test (coreaudio/ raw-protocol negative tests against audiod)"
+else
+    echo "= ca_proto_test.macho not built -- run coreaudio/build_ca_proto_test.sh first if wanted, skipping"
+fi
+if [ -f tools/userland_staging/libc_build/ca_play.macho ]; then
+    mkdir -p "$MNT/usr/local/bin"
+    cp tools/userland_staging/libc_build/ca_play.macho "$MNT/usr/local/bin/ca_play"
+    chmod 755 "$MNT/usr/local/bin/ca_play"
+    echo "+ wrote /usr/local/bin/ca_play (coreaudio/ plays a tone through libaudiohal -> audiod)"
+else
+    echo "= ca_play.macho not built -- run coreaudio/build_ca_play.sh first if wanted, skipping"
+fi
 install_smoketest tools/userland_staging/libc_build/kqueue_poll_smoketest.macho "usr/local/bin/kqueue_poll_smoketest" \
     "= kqueue_poll_smoketest.macho not built -- run tools/userland_staging/build_kqueue_poll_smoketest.sh first if wanted, skipping" \
     "  (DAR-417 poll() readiness of a kqueue fd)"
