@@ -123,6 +123,8 @@ private:
 
 	uint32_t                 fGainTable[101];    // Q16, index = volume value
 	volatile uint32_t        fSimGen;
+	volatile uint32_t        fClipFrames;
+	volatile uint32_t        fClipPeak;
 	volatile uint32_t        fLastPosition;
 	volatile uint32_t        fDmaErrors;
 	volatile uint32_t        fGainQ16;           // 0..65536, volume * mute

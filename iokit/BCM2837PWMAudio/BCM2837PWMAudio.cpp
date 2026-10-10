@@ -80,6 +80,8 @@ BCM2837PWMAudioEngine::initHardware(IOService *provider)
 	fCb = NULL;
 	fSimThreadRunning = 0;
 	fSimGen = 0;
+	fClipFrames = 0;
+	fClipPeak = 0;
 	fLastPosition = 0;
 	fDmaErrors = 0;
 	fSimActive = false;
@@ -412,6 +414,10 @@ BCM2837PWMAudioEngine::performAudioEngineStart()
 IOReturn
 BCM2837PWMAudioEngine::performAudioEngineStop()
 {
+	IOLog("BCM2837PWMAudio: stop: %u frames through clipOutputSamples, peak %u/32767, %u DMA errors\n",
+	    (unsigned)fClipFrames, (unsigned)fClipPeak, (unsigned)fDmaErrors);
+	fClipFrames = 0;
+	fClipPeak = 0;
 	if (fSim) {
 		fSimActive = false;
 	}
@@ -472,6 +478,7 @@ BCM2837PWMAudioEngine::clipOutputSamples(const void *mixBuf, void *sampleBuf, UI
 	const uint32_t n = numSampleFrames * kPWMAudioChannels;
 	const int32_t gain = (int32_t)fGainQ16;
 	const uint32_t rng = fRng;
+	uint32_t peak = 0;
 
 	// Kernel FP registers are not preserved across a context switch.
 	_disable_preemption();
@@ -486,8 +493,18 @@ BCM2837PWMAudioEngine::clipOutputSamples(const void *mixBuf, void *sampleBuf, UI
 		s = (s * gain) >> 16;
 		out[i] = (int16_t)s;
 		ring[i] = pwmDatFromS16((int16_t)s, rng);
+		int32_t a = s < 0 ? -s : s;
+		if ((uint32_t)a > peak) {
+			peak = (uint32_t)a;
+		}
 	}
 	_enable_preemption();
+	// Statistics for the stop log: how much audio actually went through the
+	// clip path (userland-driven runs have no other visible evidence on QEMU).
+	if (peak > fClipPeak) {
+		fClipPeak = peak;
+	}
+	__sync_fetch_and_add(&fClipFrames, numSampleFrames);
 	return kIOReturnSuccess;
 }
 

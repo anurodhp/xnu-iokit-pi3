@@ -33,6 +33,30 @@ the DMA controller, the PWM block or GPIO40/41.
 aborts on QEMU for the same reason: QEMU maps no PWM block (DARW-318 adds a
 model).
 
+## Userland: `audio_play` (DARW-319)
+
+`/usr/local/bin/audio_play` plays through `IOAudioEngineUserClient` the way the
+CoreAudio HAL would (this port has no CoreAudio):
+
+```
+audio_play [-f hz] [-s seconds] [-a amplitude]      # sine, default 440 Hz, 3 s, 0.25
+audio_play -w file.wav [-a amplitude]               # 16-bit PCM, mono/stereo, 48000 Hz
+```
+
+Build: `tools/userland_staging/build_audio_play.sh` (ad-hoc signed with
+`com.apple.private.audio.driver-host`, which the user client demands of every
+caller); `inject_into_sd_image.sh` installs it. Needs the engine, i.e. `audio=1`
+on the Pi or `pwm-sim=1` on QEMU. On QEMU the evidence is the kernel line
+`BCM2837PWMAudio: stop: N frames through clipOutputSamples, peak P/32767`.
+Protocol notes (all from `third_party/IOAudioFamily`): the registered client
+buffer starts with a 16-byte `IOAudioBufferDataDescriptor` whose
+`fTotalDataByteSize` must equal the registered size; the play position comes
+from the mapped status buffer (loop count + `fLastLoopTime`); the trap
+`performClientIO` takes the sample interval in mach ticks per frame; calls must
+lead the play position (the tool uses 2560 frames of the 4096-frame ring), or
+`kIOReturnIsoTooOld` (0xe00002ee) is returned for chunks that miss their
+watchdog deadline.
+
 ## Running the QEMU checks
 
 ```
@@ -41,6 +65,9 @@ EXTRA_BOOT_ARGS="dma-test=1" tools/boot_test.py --expect 'BCM2837DMA: self-test'
 # audio engine, simulated
 QEMU_DTB=devicetrees/rpi3-pwmtest.dtb EXTRA_BOOT_ARGS="pwm-sim=1 audio-selftest=1" \
     tools/boot_test.py --expect 'PWMAudio: selftest (PASS|FAIL)'
+# userland tool through the user client (after inject_into_sd_image.sh)
+QEMU_DTB=devicetrees/rpi3-pwmtest.dtb EXTRA_BOOT_ARGS="audio=1 pwm-sim=1" \
+    tools/boot_test.py --login --cmd 'audio_play -f 440 -s 3' --expect 'PWMAudio: stop'
 # host-side arithmetic
 cc -I iokit/BCM2837PWM -o /tmp/pwm_math_test tools/tests/pwm_math_test.c && /tmp/pwm_math_test
 ```

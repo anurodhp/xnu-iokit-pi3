@@ -1471,6 +1471,9 @@ install_smoketest tools/userland_staging/libc_build/fb_cache_test.macho "usr/loc
 install_smoketest tools/userland_staging/libc_build/hid_event_smoketest.macho "usr/local/bin/hid_event_smoketest" \
     "= hid_event_smoketest.macho not built -- run tools/userland_staging/build_hid_event_smoketest.sh first if wanted, skipping" \
     "  (DAR-391 keyboard/pointer events from IOHIDEventServiceUserClient)"
+install_smoketest tools/userland_staging/libc_build/audio_play.macho "usr/local/bin/audio_play" \
+    "= audio_play.macho not built -- run tools/userland_staging/build_audio_play.sh first if wanted, skipping" \
+    "  (DARW-319 plays a tone through IOAudioEngineUserClient; needs audio=1 or pwm-sim=1)"
 install_smoketest tools/userland_staging/libc_build/kqueue_poll_smoketest.macho "usr/local/bin/kqueue_poll_smoketest" \
     "= kqueue_poll_smoketest.macho not built -- run tools/userland_staging/build_kqueue_poll_smoketest.sh first if wanted, skipping" \
     "  (DAR-417 poll() readiness of a kqueue fd)"
