@@ -11,7 +11,10 @@
  * launchd starts it on demand through the MachServices entry in
  * org.puredarwin.coreaudiod.plist and the daemon claims the port with ONE
  * bootstrap_check_in (a second returns BOOTSTRAP_SERVICE_ACTIVE; DAR-270).
- * It exits (status 0) after IDLE_EXIT_S seconds with no streams.
+ * It exits (status 0) after IDLE_EXIT_S seconds with no streams. The device
+ * volume and mute outlive that: they are read from VOLUME_FILE at start and
+ * written back when the daemon exits (idle or SIGTERM), not on every change,
+ * so the request thread never touches the disk.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,6 +46,7 @@ extern kern_return_t bootstrap_check_in(mach_port_t bp, const char *name, mach_p
 #define kLeadFrames           2560       /* audio_play.c: aim this far ahead of the play position */
 #define IDLE_EXIT_S           10
 #define STREAM_STALE_S        3          /* a RUNNING stream with no WRITE for this long is reaped */
+#define VOLUME_FILE           "/var/db/audiod.volume"   /* "<scalar> <mute>\n" */
 
 typedef struct {
     int                active;
@@ -77,6 +81,27 @@ static uint32_t next_token(void)
 }
 static uint64_t now_ns(void) { return mach_absolute_time() * g_tb.numer / g_tb.denom; }
 static void on_signal(int s) { (void)s; g_stop = 1; }
+
+/* Choice: a missing or malformed file leaves the defaults (volume 1, not muted). */
+static void load_volume(void)
+{
+    FILE *f = fopen(VOLUME_FILE, "r");
+    float v; int m;
+    if (!f) return;
+    if (fscanf(f, "%f %d", &v, &m) == 2 && v >= 0.0f && v <= 1.0f) { g_volume = v; g_mute = m ? 1 : 0; }
+    fclose(f);
+}
+
+static void save_volume(void)
+{
+    FILE *f = fopen(VOLUME_FILE ".tmp", "w");
+    int ok;
+    if (!f) { fprintf(stderr, "audiod: cannot write %s\n", VOLUME_FILE ".tmp"); return; }
+    pthread_mutex_lock(&g_mu);
+    ok = fprintf(f, "%.4f %d\n", g_volume, g_mute) > 0;
+    pthread_mutex_unlock(&g_mu);
+    if (fclose(f) || !ok || rename(VOLUME_FILE ".tmp", VOLUME_FILE)) fprintf(stderr, "audiod: cannot save the volume\n");
+}
 
 static int count_streams_locked(void)
 {
@@ -396,7 +421,8 @@ int main(void)
         if (!g_rng) g_rng = 88172645463325252ULL;
     }
     pthread_mutex_unlock(&g_mu);
-    printf("audiod: up\n");
+    load_volume();
+    printf("audiod: up (volume %.2f%s)\n", g_volume, g_mute ? ", muted" : "");
 
     /* The request thread also sits in the audio path (every WRITE waits for it). */
     kern_return_t rtkr = ca_make_realtime(10625000ULL, 500000ULL, 4000000ULL);
@@ -431,5 +457,6 @@ int main(void)
     }
     g_stop = 1;
     pthread_join(mt, NULL);
+    save_volume();
     return 0;
 }

@@ -28,7 +28,8 @@ installs `/usr/sbin/audiod`, the LaunchDaemons plist, `/usr/lib/libaudiohal.dyli
 Object 1 = system, 2 = the one output device ("Raspberry Pi 3.5mm Output",
 48 kHz, interleaved Float32 stereo, IOProc buffer 512 frames), 3 = its output
 stream. Volume and mute are output scope, master element, settable and
-device-wide (held by the daemon).
+device-wide (held by the daemon, saved to `/var/db/audiod.volume` when it exits and read back at start, so a
+volume survives the idle exit and a reboot; a `kill -9` loses the last change).
 
 ## Limits
 Output only; one device (48 kHz stereo); no AudioQueue/AudioUnit/AudioConverter; no property listeners
