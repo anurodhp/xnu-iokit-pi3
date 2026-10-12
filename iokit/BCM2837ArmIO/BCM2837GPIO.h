@@ -13,9 +13,12 @@
  * cycles, clear GPPUD and GPPUDCLKn. 150 cycles of the 250 MHz VPU clock
  * is 0.6 us; Linux waits 1 us (udelay(1)), as does this.
  *
- * Callers serialize among themselves: the only users run once at start()
- * on distinct pins, and the read-modify-write of a GPFSEL word is not
- * atomic against another CPU touching a pin in the same word.
+ * One spinlock covers every GPFSEL read-modify-write and the GPPUD
+ * sequence: pins in the same GPFSEL word (sdhost's GPIO48/49 and PWM's
+ * GPIO40/41 share GPFSEL4) are otherwise a lost update between two
+ * drivers starting on different CPUs. BCM2837SDHCI::pinmuxSDSlot() still
+ * writes GPFSEL3-5 directly, without it; it is the default-boot path and
+ * runs before anything else here touches those words.
  */
 #ifndef _BCM2837GPIO_H
 #define _BCM2837GPIO_H
@@ -23,6 +26,8 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/IOMemoryDescriptor.h>
+#include <IOKit/IOLocks.h>
+#include <libkern/OSAtomic.h>
 
 class BCM2837GPIO {
 public:
@@ -50,12 +55,18 @@ public:
 		if (regs == NULL) {
 			return false;
 		}
+		IOSimpleLock *lock = regLock();
+		if (lock == NULL) {
+			return false;
+		}
+		IOInterruptState st = IOSimpleLockLockDisableInterrupt(lock);
 		for (unsigned pin = first; pin < first + count; pin++) {
 			unsigned word = pin / 10, shift = (pin % 10) * 3;
 			uint32_t v = regs[word];
 			v = (v & ~(0x7U << shift)) | ((fsel & 0x7U) << shift);
 			regs[word] = v;
 		}
+		IOSimpleLockUnlockEnableInterrupt(lock, st);
 		return true;
 	}
 
@@ -73,6 +84,11 @@ public:
 				clk1 |= 1U << (pin - 32);
 			}
 		}
+		IOSimpleLock *lock = regLock();
+		if (lock == NULL) {
+			return false;
+		}
+		IOInterruptState st = IOSimpleLockLockDisableInterrupt(lock);
 		regs[kGPPUD / 4] = pull & 0x3U;
 		IODelay(1);
 		regs[kGPPUDCLK0 / 4] = clk0;
@@ -81,6 +97,7 @@ public:
 		regs[kGPPUD / 4] = 0;
 		regs[kGPPUDCLK0 / 4] = 0;
 		regs[kGPPUDCLK1 / 4] = 0;
+		IOSimpleLockUnlockEnableInterrupt(lock, st);
 		return true;
 	}
 
@@ -101,6 +118,23 @@ private:
 		kGPPUDCLK1 = 0x9C,
 		kMapLen    = 0xA0,
 	};
+
+	// Created on first use; the loser of a creation race frees its copy.
+	static IOSimpleLock *regLock(void)
+	{
+		static IOSimpleLock *volatile sLock = NULL;
+		if (sLock != NULL) {
+			return sLock;
+		}
+		IOSimpleLock *l = IOSimpleLockAlloc();
+		if (l == NULL) {
+			return NULL;
+		}
+		if (!OSCompareAndSwapPtr(NULL, l, (void *volatile *)&sLock)) {
+			IOSimpleLockFree(l);
+		}
+		return sLock;
+	}
 
 	// arm-io's "ranges" maps child 0 to parent 0x3f000000, and "gpio" is at
 	// child 0x200000 (devicetrees/rpi3.dts).

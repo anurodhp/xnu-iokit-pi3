@@ -65,6 +65,7 @@ private:
 	uint32_t fRCA;
 	uint64_t fBlockCount;
 	uint32_t fBlockSize;
+	uint32_t fLatchedDataErr;  // SDHSTS transfer-error bits seen during the current read/write
 
 	enum {
 		kRegCmd   = 0x00,
@@ -134,7 +135,17 @@ private:
 		kFifoWords = 16,
 	};
 
-	// Response type for sendCommand().
+	// R1 card-status error bits, Linux drivers/mmc/core/block.c
+	// CMD_ERRORS / CMD_ERRORS_EXCL_OOR (bit values from
+	// include/linux/mmc/mmc.h): ADDRESS_ERROR 30, BLOCK_LEN_ERROR 29,
+	// WP_VIOLATION 26, CARD_ECC_FAILED 21, CC_ERROR 20, ERROR 19, and
+	// OUT_OF_RANGE 31.
+	enum : uint32_t {
+		kR1CmdErrorsExclOOR = (1U << 30) | (1U << 29) | (1U << 26) | (1U << 21) | (1U << 20) | (1U << 19),
+		kR1CmdErrors = kR1CmdErrorsExclOOR | (1U << 31),
+	};
+
+		// Response type for sendCommand().
 	enum {
 		kRespNone = 0,
 		kRespShort,       // R1/R6/R7
@@ -165,6 +176,8 @@ private:
 	bool cardIdentify(void);
 	bool readBlocks(uint64_t start, uint32_t n, void *buf);
 	bool writeBlocks(uint64_t start, uint32_t n, const void *buf);
+	bool r1Ok(uint8_t idx, uint32_t r1, uint32_t mask);
+	bool dataOk(const char *what, uint64_t start, uint32_t n);
 	void dumpRegs(const char *why);
 	void publishVerdict(const char *host);
 

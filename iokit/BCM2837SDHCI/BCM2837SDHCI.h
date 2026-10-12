@@ -430,7 +430,7 @@ private:
 	// SDIO host mode (docs/wifi-plan.md W2, boot-arg wifi=1 with the SD
 	// card on sdhost). The controller then drives GPIO34-39 (the BCM43438)
 	// and publishes a BCM2837SDIODevice nub instead of registering itself
-	// as a block device. Implementation in BCM2837SDHCISDIO.cpp.
+	// as a block device. Implementation in BCM2837SDIODevice.cpp.
 	bool fSDIOMode;
 	BCM2837SDIODevice *fSDIONub;
 	uint32_t fIntEnableShadow;          // INT_ENABLE == SIGNAL_ENABLE value, under fStatusLock

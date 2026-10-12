@@ -52,6 +52,7 @@ public:
 	virtual IOReturn disable(IONetworkInterface *netif) APPLE_KEXT_OVERRIDE;
 	virtual UInt32   outputPacket(mbuf_t m, void *param) APPLE_KEXT_OVERRIDE;
 	virtual IOOutputQueue *createOutputQueue(void) APPLE_KEXT_OVERRIDE;
+	virtual bool configureInterface(IONetworkInterface *netif) APPLE_KEXT_OVERRIDE;
 	virtual IOReturn getPacketFilters(const OSSymbol *group, UInt32 *filters) const APPLE_KEXT_OVERRIDE;
 	virtual IOReturn setMulticastMode(bool active) APPLE_KEXT_OVERRIDE;
 	virtual IOReturn setMulticastList(IOEthernetAddress *addrs, UInt32 count) APPLE_KEXT_OVERRIDE;
@@ -80,6 +81,7 @@ private:
 	IOEthernetInterface *fNetif;
 	IONetworkMedium *fMedium;
 	bool fNetifEnabled;
+	IONetworkStats *fNetStats;   // outputPackets/outputErrors; the family counts input itself
 
 	// Chip (ether4330 Ctlr).
 	uint32_t fState;
@@ -96,6 +98,7 @@ private:
 
 	// SDPCM.
 	uint8_t fTxSeq, fTxWindow, fFcMask;
+	volatile bool fCtlWaiting;   // a control frame waits for credit; data leaves 2 (brcmfmac TXCTL_CREDITS)
 	uint16_t fReqId;
 	uint8_t *fRxBuf;             // threadMain only
 	uint8_t *fCmdBuf;            // under fCmdLock

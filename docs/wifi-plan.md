@@ -1,13 +1,34 @@
 # WiFi on the Pi 3 (BCM43438 over SDIO): plan
 
-Status (2026-10-12): W0-W4 implemented, not yet reviewed. Real Pi, boot-arg
-wifi=1: root disk on sdhost (50 MB write verified), firmware boots, scan
-works, WPA2-PSK join via the firmware supplicant, DHCP lease on en1, ping
-and interactive ssh over WiFi. Open: bulk TCP over WiFi failed with EPERM
-(TX ring full returned Dropped; fixed with an IOBasicOutputQueue + Stall,
-not yet run); `wifi status` RSSI reads 0; en1 output counters stay 0; no
-boot-time autostart (launchd job, en1 DHCP service) yet; the Pi hung on the
-reboot into the queue fix (cause unknown, no capture).
+Status (2026-10-12): W0-W4 implemented and working on a real Pi with
+boot-arg wifi=1:
+- the root disk runs on sdhost; the write self-test passes on every boot
+  with `sdhost-write-test=1`;
+- the firmware boots and scans;
+- WPA2-PSK joins through the firmware supplicant;
+- en1 gets a DHCP lease from `org.puredarwin.wifi` at boot;
+- RSSI and Opkts report real values;
+- bulk scp works in both directions with en0 down (8 MB, md5 matches;
+  about 0.7 MB/s up and 1 MB/s down).
+
+The earlier boot failure was sdhost corrupting the tail of every
+multi-block write: CMD12 went out before the FIFO drained, which damaged
+the kernel file and the HFS catalog. It is fixed by `waitWriteDrained()`,
+and the self-test guards it when booted with `sdhost-write-test=1`.
+
+Code review (2026-10-12) found 8 bugs, all fixed:
+- sdhost lost data errors latched after the last word;
+- sdhost ignored R1 card-status errors;
+- sdhost had one 500 ms deadline for a whole 128 KB chunk;
+- a firmware scan record could wrap the IE bounds check;
+- control frames ignored the SDPCM credit window;
+- GPFSEL read-modify-write raced between sdhost and PWM;
+- the EROM walk read past its buffer;
+- the join input could be missing its NUL.
+
+After the fixes, all of these still pass on the Pi: the self-test, WiFi
+autostart, the bulk scp both ways with en0 down, and 40 `wifi status`
+ioctls during bulk TX.
 
 Plan written 2026-10-11. Target board: Raspberry Pi 3 Model B (LAN9514
 Ethernet, `0424:ec00`, so the radio is the CYW43438 / BCM43430A1, 2.4 GHz

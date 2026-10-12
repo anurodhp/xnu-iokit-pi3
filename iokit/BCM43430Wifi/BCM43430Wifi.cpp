@@ -141,6 +141,7 @@ BCM43430Wifi::init(OSDictionary *properties)
 	fThread = NULL;
 	fWake = fCardIrq = false;
 	fNetif = NULL;
+	fNetStats = NULL;
 	fMedium = NULL;
 	fNetifEnabled = false;
 	fState = kWifiStateNone;
@@ -154,6 +155,7 @@ BCM43430Wifi::init(OSDictionary *properties)
 	bzero(fMAC, sizeof(fMAC));
 	fFwVersion[0] = fLastError[0] = 0;
 	fTxSeq = fTxWindow = fFcMask = 0;
+	fCtlWaiting = false;
 	fReqId = 0;
 	fRespWant = 0;
 	fRespReady = false;
@@ -480,7 +482,8 @@ BCM43430Wifi::coreScan(uint32_t erom)
 			i = 512;
 			break;
 		case 0x1:
-			if ((buf[i + 4] & 0xF) != 0x1) {
+			// Two-word descriptor: the second word must be inside the buffer.
+			if (i + 8 > 512 || (buf[i + 4] & 0xF) != 0x1) {
 				break;
 			}
 			coreid = (buf[i + 1] | buf[i + 2] << 8) & 0xFFF;
@@ -625,9 +628,10 @@ bool
 BCM43430Wifi::sbEnable(void)
 {
 	// ether4330 sbenable(), plus brcmfmac's default F2 watermark
-	// (sdio.c brcmf_sdio_bus_preinit(): SBSDIO_WATERMARK = 8). ForceHT stays
-	// on: with this save/restore firmware ("srfast") that is what keeps the
-	// chip awake without KSO handling (wifi-plan.md review, S2).
+	// (sdio.c brcmf_sdio_bus_preinit(): SBSDIO_WATERMARK = 8). ForceHT is set
+	// and left on, as ether4330 sbenable() does (Circle
+	// addon/wlan/ether4330.c:967); that keeps the chip awake without
+	// brcmfmac's KSO handling (wifi-plan.md review, S2).
 	cfgw(kClkCsr, 0);
 	IODelay(1000);
 	cfgw(kClkCsr, kReqHT);
@@ -806,8 +810,11 @@ BCM43430Wifi::boot(void)
 		ok = sbEnable();
 	}
 	if (ok) {
+		// brcmfmac brcmf_sdio_ulp_reinit_fw() (sdio.c:2638-2643: "on FMAC side
+		// tx_max is initially set to 4"): tx_seq 0, tx_max 4, until the
+		// first frame header from the firmware reports the real window.
 		fTxSeq = 0;
-		fTxWindow = 0;
+		fTxWindow = 4;
 		fFcMask = 0;
 		fState = kWifiStateUp;
 	} else {
@@ -1092,7 +1099,9 @@ BCM43430Wifi::handleScanResult(const uint8_t *p, uint32_t len, uint32_t status)
 				s->security |= kWifiSecPrivacy;
 			}
 			uint32_t ieoff = get4(b + 0x74), ielen = get4(b + 0x78);
-			if (ieoff + ielen <= blen) {
+			// Both values come from the chip; compare without a 32-bit sum
+			// that can wrap.
+			if (ieoff >= 0x7c && ieoff <= blen && ielen <= blen - ieoff) {
 				const uint8_t *t = b + ieoff, *te = t + ielen;
 				static const uint8_t wpaoui[4] = {0x00, 0x50, 0xf2, 0x01};
 				while (t + 2 <= te && t + 2 + t[1] <= te) {
@@ -1114,15 +1123,21 @@ void
 BCM43430Wifi::transmitPending(void)
 {
 	for (;;) {
-		// Credit check (ether4330 txstart(); brcmfmac data_ok(): tx_max -
-		// tx_seq nonzero and below 0x80).
-		uint8_t credit = (uint8_t)(fTxWindow - fTxSeq);
+		// Credit check under fBusLock, where fTxSeq (writeFrame) and
+		// fTxWindow (readFrame) change, so a control frame cannot take
+		// the last credit between check and write. brcmfmac data_ok()
+		// (sdio.c): tx_max - tx_seq, less TXCTL_CREDITS (2) while a
+		// control frame waits, must be nonzero and below 0x80.
+		IOLockLock(fBusLock);
+		uint8_t credit = (uint8_t)(fTxWindow - fTxSeq - (fCtlWaiting ? 2 : 0));
 		if (credit == 0 || (credit & 0x80) || (fFcMask & (1 << 2))) {
+			IOLockUnlock(fBusLock);
 			return;
 		}
 		IOInterruptState st = IOSimpleLockLockDisableInterrupt(fTxLock);
 		if (fTxHead == fTxTail) {
 			IOSimpleLockUnlockEnableInterrupt(fTxLock, st);
+			IOLockUnlock(fBusLock);
 			return;
 		}
 		TxSlot *slot = &fTxRing[fTxTail % kTxSlots];
@@ -1140,11 +1155,17 @@ BCM43430Wifi::transmitPending(void)
 		fTxFrame[5] = 2;            // channel 2: data
 		fTxFrame[7] = kSdpcmHdr;    // data offset
 		fTxFrame[kSdpcmHdr] = 0x20;
-		IOLockLock(fBusLock);
 		bool ok = writeFrame(fTxFrame, len);
 		IOLockUnlock(fBusLock);
 		if (!ok) {
 			fTxDrops++;
+		}
+		if (fNetStats != NULL) {
+			if (ok) {
+				fNetStats->outputPackets++;
+			} else {
+				fNetStats->outputErrors++;
+			}
 		}
 	}
 }
@@ -1262,10 +1283,31 @@ BCM43430Wifi::wlcmd(uint32_t cmd, bool set, const void *data, uint32_t dlen, voi
 		memcpy(q + kCdcHdr, data, dlen);
 	}
 
-	IOLockLock(fBusLock);
-	bool ok = writeFrame(fCmdBuf, len);
-	IOLockUnlock(fBusLock);
+	// brcmfmac sends a control frame only when txctl_ok() (sdio.c): a
+	// credit is free. Wait for one without holding fBusLock, which
+	// threadMain needs to read the frames that reopen the window;
+	// fCtlWaiting makes transmitPending() leave 2 credits for us.
+	bool ok = false;
+	for (int tries = 0; ; tries++) {
+		IOLockLock(fBusLock);
+		uint8_t credit = (uint8_t)(fTxWindow - fTxSeq);
+		if (credit != 0 && !(credit & 0x80)) {
+			ok = writeFrame(fCmdBuf, len);
+			IOLockUnlock(fBusLock);
+			break;
+		}
+		IOLockUnlock(fBusLock);
+		if (tries >= 2000) {
+			IOLog("BCM43430Wifi: ioctl %u: no SDPCM credit for 2 s\n", cmd);
+			break;
+		}
+		fCtlWaiting = true;
+		wakeThread();
+		IOSleep(1);
+	}
+	fCtlWaiting = false;
 	wakeThread();
+	bzero(fCmdBuf, len);    // may hold the PMK; the next command only clears its own length
 
 	IOReturn ret = kIOReturnSuccess;
 	IOLockLock(fEventLock);
@@ -1518,10 +1560,17 @@ BCM43430Wifi::join(const wifi_join *req)
 	strlcpy(pass, req->passphrase, sizeof(pass));
 	size_t sl = strlen(ssid), pl = strlen(pass);
 	if (sl == 0) {
+		bzero(pass, sizeof(pass));
 		return kIOReturnBadArgument;
 	}
 	bool wpa = pl > 0;
-	if (wpa && (pl < 8 || pl > 64)) {
+	bool hexOk = true;
+	for (size_t i = 0; pl == 64 && i < pl; i++) {
+		char ch = pass[i];
+		hexOk = hexOk && ((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F'));
+	}
+	if (wpa && (pl < 8 || pl > 64 || !hexOk)) {
+		bzero(pass, sizeof(pass));
 		setError("passphrase must be 8-63 characters (or 64 hex digits)");
 		return kIOReturnBadArgument;
 	}
@@ -1555,7 +1604,9 @@ BCM43430Wifi::join(const wifi_join *req)
 			put2(pmk + 2, pl == 64 ? 0 : 1);
 			memcpy(pmk + 4, pass, pl);
 			r = wlcmd(WLC_SET_WSEC_PMK, true, pmk, sizeof(pmk), NULL, 0);
+			bzero(pmk, sizeof(pmk));
 		}
+		bzero(pass, sizeof(pass));
 		if (r != kIOReturnSuccess) {
 			setError("firmware rejected the WPA2 setup (sup_wpa/PMK)");
 			return r;
@@ -1652,8 +1703,10 @@ BCM43430Wifi::getStatus(wifi_status *out)
 	strlcpy(out->fwversion, fFwVersion, sizeof(out->fwversion));
 	strlcpy(out->lasterror, fLastError, sizeof(out->lasterror));
 	if (out->associated) {
-		// scb_val_t {le32 val; u8 ea[6]}
-		uint8_t scb[10];
+		// brcmfmac fwil_types.h brcmf_scb_val_le {__le32 val; u8 ea[6]},
+		// not packed, so sizeof is 12; the firmware rejects 10 bytes with
+		// BCME_BADARG (-2), seen on real hardware.
+		uint8_t scb[12];
 		bzero(scb, sizeof(scb));
 		if (wlcmd(WLC_GET_RSSI, false, scb, sizeof(scb), scb, sizeof(scb)) == kIOReturnSuccess) {
 			out->rssi = (int32_t)get4(scb);
@@ -1724,6 +1777,20 @@ BCM43430Wifi::disable(IONetworkInterface *)
 		q->flush();
 	}
 	return kIOReturnSuccess;
+}
+
+bool
+BCM43430Wifi::configureInterface(IONetworkInterface *netif)
+{
+	if (!IOEthernetController::configureInterface(netif)) {
+		return false;
+	}
+	// As AppleUSBCDCECMData::configureInterface() does
+	// (AppleUSBCDCECMData.cpp:1802): keep a pointer to the interface's
+	// IONetworkStats buffer and count output in the driver.
+	IONetworkData *nd = netif->getNetworkData(kIONetworkStatsKey);
+	fNetStats = nd != NULL ? (IONetworkStats *)nd->getBuffer() : NULL;
+	return true;
 }
 
 IOOutputQueue *

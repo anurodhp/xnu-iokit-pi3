@@ -80,6 +80,9 @@ BCM43430WifiUserClient::externalMethod(uint32_t selector, IOExternalMethodArgume
 	case kWifiMethodJoin: {
 		NEED_IN(wifi_join);
 		wifi_join req = *(const wifi_join *)args->structureInput;
+		// Userland may send fields without a NUL; join() uses strlcpy.
+		req.ssid[sizeof(req.ssid) - 1] = 0;
+		req.passphrase[sizeof(req.passphrase) - 1] = 0;
 		IOLockLock(fDriver->fOpLock);
 		r = fDriver->join(&req);
 		IOLockUnlock(fDriver->fOpLock);

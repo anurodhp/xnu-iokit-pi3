@@ -65,6 +65,7 @@ BCM2837SDHost::init(OSDictionary *properties)
 	fRCA = 0;
 	fBlockCount = 0;
 	fBlockSize = 512;
+	fLatchedDataErr = 0;
 	fTransferLock = IOLockAlloc();
 	return fTransferLock != NULL;
 }
@@ -240,6 +241,11 @@ BCM2837SDHost::sendCommand(uint8_t idx, uint32_t arg, int respType, uint32_t res
 
 	uint32_t hsts = readReg(kRegHsts);
 	if (hsts & kHstsErrorMask) {
+		// A data error from the transfer before this command (the last
+		// block's CRC arrives after its last word has left the FIFO) is
+		// latched here and checked by readBlocks()/writeBlocks(), not just
+		// cleared.
+		fLatchedDataErr |= hsts & kHstsTransferErrorMask;
 		writeReg(kRegHsts, hsts);
 	}
 
@@ -277,6 +283,7 @@ BCM2837SDHost::sendCommand(uint8_t idx, uint32_t arg, int respType, uint32_t res
 	}
 	if (cmd & kCmdFail) {
 		hsts = readReg(kRegHsts);
+		fLatchedDataErr |= hsts & kHstsTransferErrorMask;
 		writeReg(kRegHsts, kHstsErrorMask);
 		bool crcOnly = (hsts & kHstsErrorMask) == kHstsCrc7;
 		if (!(crcOnly && respType == kRespShortNoCrc)) {
@@ -310,6 +317,7 @@ BCM2837SDHost::sendCommand(uint8_t idx, uint32_t arg, int respType, uint32_t res
 		}
 		writeReg(kRegHsts, kHstsBusyIrpt);
 		if (hsts & kHstsErrorMask) {
+			fLatchedDataErr |= hsts & kHstsTransferErrorMask;
 			writeReg(kRegHsts, kHstsErrorMask);
 			IOLog("BCM2837SDHost: CMD%u error during busy, HSTS=%#x\n", idx, hsts);
 			return false;
@@ -366,6 +374,11 @@ BCM2837SDHost::pioTransfer(bool isRead, uint32_t *buf, uint32_t words)
 		if (avail > words) {
 			avail = words;
 		}
+		// The 500 ms is per block in Linux (bcm2835_transfer_block_pio()
+		// is called once per block), and a card may hold off a block for
+		// up to 250 ms during a multi-block write. Restart it on progress
+		// rather than spending it on the whole chunk.
+		clock_interval_to_deadline(500, kMillisecondScale, &deadline);
 		words -= avail;
 		while (avail--) {
 			if (isRead) {
@@ -392,12 +405,17 @@ BCM2837SDHost::waitCardReady(uint32_t timeoutMs)
 	// mmc core handles that on hosts without busy detection by polling
 	// CMD13 until READY_FOR_DATA (bit 8) and CURRENT_STATE == tran (4)
 	// (drivers/mmc/core/block.c card_busy_detect()). Same here.
+	// The error bits are checked too, as mmc_blk_status_error() does with
+	// the busy-poll status: they are clear-on-read, so a write the card
+	// failed to program shows up only here.
+	uint32_t seen = 0;
 	for (uint32_t ms = 0; ms < timeoutMs; ms++) {
 		uint32_t r[4] = {0};
 		if (sendCommand(13, fRCA << 16, kRespShort, r)) {
+			seen |= r[0] & kR1CmdErrorsExclOOR;
 			uint32_t state = (r[0] >> 9) & 0xf;
 			if ((r[0] & (1U << 8)) && state == 4) {
-				return true;
+				return r1Ok(13, seen, kR1CmdErrorsExclOOR);
 			}
 		}
 		IOSleep(1);
@@ -556,26 +574,59 @@ BCM2837SDHost::cardIdentify(void)
 }
 
 bool
+BCM2837SDHost::r1Ok(uint8_t idx, uint32_t r1, uint32_t mask)
+{
+	if (r1 & mask) {
+		IOLog("BCM2837SDHost: CMD%u card status %#x reports error bits %#x\n", idx, r1, r1 & mask);
+		return false;
+	}
+	return true;
+}
+
+bool
+BCM2837SDHost::dataOk(const char *what, uint64_t start, uint32_t n)
+{
+	// Errors latched by sendCommand() during this transfer (CMD12 clears
+	// SDHSTS before it goes out) plus anything still in SDHSTS now.
+	uint32_t hsts = readReg(kRegHsts);
+	uint32_t err = fLatchedDataErr | (hsts & kHstsTransferErrorMask);
+	fLatchedDataErr = 0;
+	if (err == 0) {
+		return true;
+	}
+	if (hsts & kHstsTransferErrorMask) {
+		writeReg(kRegHsts, kHstsErrorMask);
+	}
+	IOLog("BCM2837SDHost: %s of %u blocks at %llu: data error, HSTS bits %#x\n", what, n, start, err);
+	return false;
+}
+
+bool
 BCM2837SDHost::readBlocks(uint64_t start, uint32_t n, void *buf)
 {
 	uint32_t arg = fCardIsSDHC ? (uint32_t)start : (uint32_t)(start * fBlockSize);
 	uint8_t idx = (n > 1) ? 18 : 17;
-	if (!sendCommand(idx, arg, kRespShort, NULL, kCmdRead, fBlockSize, n)) {
+	uint32_t cr[4] = {0};
+	if (!sendCommand(idx, arg, kRespShort, cr, kCmdRead, fBlockSize, n)) {
 		return false;
 	}
-	bool ok = pioTransfer(true, (uint32_t *)buf, n * (fBlockSize / 4));
+	fLatchedDataErr = 0;
+	bool ok = r1Ok(idx, cr[0], kR1CmdErrors);
+	ok = pioTransfer(true, (uint32_t *)buf, n * (fBlockSize / 4)) && ok;
 	if (n > 1) {
 		// Open-ended multi-block read: Linux sends the stop command
 		// whenever there is no CMD23 (bcm2835_transfer_complete()).
-		uint32_t r[4];
-		if (!sendCommand(12, 0, kRespShortBusy, r)) {
+		// OUT_OF_RANGE in its response is normal for open-ended reads
+		// (block.c mmc_blk_eval_resp_error()).
+		uint32_t r[4] = {0};
+		if (!sendCommand(12, 0, kRespShortBusy, r) || !r1Ok(12, r[0], kR1CmdErrorsExclOOR)) {
 			ok = false;
 		}
 	}
 	if (!waitFsmIdle(true)) {
 		ok = false;
 	}
-	return ok;
+	return dataOk("read", start, n) && ok;
 }
 
 bool
@@ -583,17 +634,19 @@ BCM2837SDHost::waitWriteDrained(void)
 {
 	for (uint32_t ms = 0; ms < 1000; ) {
 		for (int spin = 0; spin < 1000; spin++) {
+			// Errors first: a CRC-status failure on the last block latches
+			// in SDHSTS while the FSM goes back to idle.
 			uint32_t edm = readReg(kRegEdm);
-			uint32_t level = (edm >> 4) & 0x1f;
-			uint32_t fsm = edm & kEdmFsmMask;
-			if (level == 0 && (fsm == kFsmWriteStart1 || fsm == kFsmDataMode || fsm == kFsmIdentMode)) {
-				return true;
-			}
 			uint32_t hsts = readReg(kRegHsts);
 			if (hsts & kHstsErrorMask) {
 				IOLog("BCM2837SDHost: write error while draining, HSTS %#x EDM %#x\n", hsts, edm);
 				writeReg(kRegHsts, kHstsErrorMask);
 				return false;
+			}
+			uint32_t level = (edm >> 4) & 0x1f;
+			uint32_t fsm = edm & kEdmFsmMask;
+			if (level == 0 && (fsm == kFsmWriteStart1 || fsm == kFsmDataMode || fsm == kFsmIdentMode)) {
+				return true;
 			}
 			IODelay(1);
 		}
@@ -690,10 +743,13 @@ BCM2837SDHost::writeBlocks(uint64_t start, uint32_t n, const void *buf)
 {
 	uint32_t arg = fCardIsSDHC ? (uint32_t)start : (uint32_t)(start * fBlockSize);
 	uint8_t idx = (n > 1) ? 25 : 24;
-	if (!sendCommand(idx, arg, kRespShort, NULL, kCmdWrite, fBlockSize, n)) {
+	uint32_t cr[4] = {0};
+	if (!sendCommand(idx, arg, kRespShort, cr, kCmdWrite, fBlockSize, n)) {
 		return false;
 	}
-	bool ok = pioTransfer(false, (uint32_t *)(uintptr_t)buf, n * (fBlockSize / 4));
+	fLatchedDataErr = 0;
+	bool ok = r1Ok(idx, cr[0], kR1CmdErrors);
+	ok = pioTransfer(false, (uint32_t *)(uintptr_t)buf, n * (fBlockSize / 4)) && ok;
 	// The last words are still in the 16-word FIFO when pioTransfer()
 	// returns. Sending CMD12 then cut off the tail of every multi-block
 	// write on a real Pi (QEMU drains instantly): the last bytes of each
@@ -710,8 +766,8 @@ BCM2837SDHost::writeBlocks(uint64_t start, uint32_t n, const void *buf)
 	// with CMD12 (R1b); a single block waits for the FSM to come back to
 	// idle (WRITESTART1 = finished and parked).
 	if (n > 1) {
-		uint32_t r[4];
-		if (!sendCommand(12, 0, kRespShortBusy, r)) {
+		uint32_t r[4] = {0};
+		if (!sendCommand(12, 0, kRespShortBusy, r) || !r1Ok(12, r[0], kR1CmdErrorsExclOOR)) {
 			ok = false;
 		}
 	}
@@ -721,7 +777,7 @@ BCM2837SDHost::writeBlocks(uint64_t start, uint32_t n, const void *buf)
 	if (!waitCardReady(1000)) {
 		ok = false;
 	}
-	return ok;
+	return dataOk("write", start, n) && ok;
 }
 
 void

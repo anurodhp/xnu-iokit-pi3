@@ -2672,6 +2672,42 @@ else
     echo "+ $PREFS_PLIST already has real NetworkServices config -- leaving as-is"
 fi
 
+# On-board WiFi (docs/wifi-plan.md): the wifi(8) control tool
+# (build_wifi.sh), the CYW43438 firmware (fetch_wifi_firmware.sh;
+# gitignored, never committed) and the boot job. The job is a no-op
+# unless /etc/wifi.conf exists and the kernel runs with wifi=1, so it is
+# safe on every image. WIFI_CONF=<local file> (ssid=... / psk=... lines)
+# is copied to /etc/wifi.conf mode 600; it holds a passphrase, so it only
+# ever comes from the caller, never from the repo.
+WIFI_FW=tools/userland_staging/libc_build/wifi_firmware
+if [ -f tools/userland_staging/libc_build/wifi.macho ]; then
+    mkdir -p "$MNT/usr/sbin" "$MNT/usr/share/firmware/wifi" "$MNT/Library/LaunchDaemons"
+    cp tools/userland_staging/libc_build/wifi.macho "$MNT/usr/sbin/wifi"
+    chmod 755 "$MNT/usr/sbin/wifi"
+    for f in brcmfmac43430-sdio.bin brcmfmac43430-sdio.txt brcmfmac43430-sdio.clm_blob; do
+        if [ -f "$WIFI_FW/$f" ]; then
+            cp "$WIFI_FW/$f" "$MNT/usr/share/firmware/wifi/$f"
+            chmod 644 "$MNT/usr/share/firmware/wifi/$f"
+        else
+            echo "= $WIFI_FW/$f missing -- run tools/userland_staging/fetch_wifi_firmware.sh"
+        fi
+    done
+    cp tools/userland_staging/org.puredarwin.wifi.plist "$MNT/Library/LaunchDaemons/org.puredarwin.wifi.plist"
+    chmod 644 "$MNT/Library/LaunchDaemons/org.puredarwin.wifi.plist"
+    echo "+ wrote /usr/sbin/wifi, /usr/share/firmware/wifi/ and org.puredarwin.wifi.plist"
+    if [ -n "${WIFI_CONF:-}" ]; then
+        if [ -f "$WIFI_CONF" ]; then
+            ( umask 077; cp "$WIFI_CONF" "$MNT/etc/wifi.conf" )
+            chmod 600 "$MNT/etc/wifi.conf"
+            echo "+ wrote /etc/wifi.conf from \$WIFI_CONF (mode 600)"
+        else
+            echo "= WIFI_CONF=$WIFI_CONF does not exist -- /etc/wifi.conf not written"
+        fi
+    fi
+else
+    echo "= tools/userland_staging/libc_build/wifi.macho not built -- run build_wifi.sh first if wanted, skipping"
+fi
+
 # /etc/login.conf: pw(8) wants a login class (else "setting crypt(3) format:
 # No such file or directory"); see tools/userland_staging/login.conf.
 cp tools/userland_staging/login.conf "$MNT/etc/login.conf"
