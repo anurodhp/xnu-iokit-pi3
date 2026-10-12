@@ -155,6 +155,8 @@ private:
 	void setClock(uint32_t hz);
 	bool waitCmdIdle(uint32_t timeoutUs, uint32_t *outCmd);
 	bool waitFsmIdle(bool isRead);
+	bool waitWriteDrained(void);
+	bool writeSelfTest(void);
 	bool sendCommand(uint8_t idx, uint32_t arg, int respType, uint32_t resp[4],
 	    uint32_t dataFlags = 0, uint32_t blockSize = 0, uint32_t blockCount = 0);
 	bool pioTransfer(bool isRead, uint32_t *buf, uint32_t words);
