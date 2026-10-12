@@ -1,10 +1,12 @@
 #include "BCM2837SDHCI.h"
 #include "BCM2837Mailbox.h"
+#include "BCM2837SDCardOwner.h"
 
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/storage/IOMedia.h>
 #include <libkern/OSByteOrder.h>
+#include <pexpert/pexpert.h>
 #include <string.h>
 
 #define super IOBlockStorageDevice
@@ -45,6 +47,11 @@ BCM2837SDHCI::init(OSDictionary *properties)
 	fPendingIntStatus = 0;
 	fShadowTransferMode = 0;
 	fPendingBlkSizeCount = 0;
+	fSDIOMode = false;
+	fSDIONub = NULL;
+	fIntEnableShadow = 0;
+	fCardIntHandler = NULL;
+	fCardIntTarget = NULL;
 	fRealInterruptHits = 0;
 	fPollFallbackHits = 0;
 	fLoggedRealInterrupt = false;
@@ -160,6 +167,30 @@ BCM2837SDHCI::interruptOccurred(OSObject *target, void * /*refCon*/, IOService *
 	uint32_t intmask = self->readReg32(kRegIntStatus);
 	if (intmask == 0) {
 		return;
+	}
+
+	// SDIO card interrupt (DAT1 low): level-triggered, so it cannot be
+	// acked here, only masked until the client has serviced the card and
+	// re-enables it (Linux sdhci_irq() -> sdhci_enable_sdio_irq_nolock(host,
+	// false), re-armed by sdio_signal_irq()'s consumer). The client handler
+	// only wakes a thread.
+	if (self->fSDIOMode && (intmask & kIntCardInt) &&
+	    (self->fIntEnableShadow & kIntCardInt)) {
+		IOInterruptState cst = IOSimpleLockLockDisableInterrupt(self->fStatusLock);
+		self->fIntEnableShadow &= ~kIntCardInt;
+		// Leading spacing too: this write can land right after a thread's
+		// register write that this interrupt preempted (DAR-316 erratum).
+		IODelay(kRegWriteSpacingUs);
+		self->writeReg32(kRegIntEnable, self->fIntEnableShadow);
+		self->writeReg32(kRegSignalEnable, self->fIntEnableShadow);
+		IOSimpleLockUnlockEnableInterrupt(self->fStatusLock, cst);
+		if (self->fCardIntHandler != NULL) {
+			self->fCardIntHandler(self->fCardIntTarget);
+		}
+		intmask &= ~kIntCardInt;
+		if (intmask == 0) {
+			return;
+		}
 	}
 
 	// Ack exactly the bits we understand, mirroring sdhci_irq()'s
@@ -438,6 +469,7 @@ BCM2837SDHCI::resetHost(void)
 	// `host->ier` value to both SDHCI_INT_ENABLE and SDHCI_SIGNAL_ENABLE.
 	uint32_t enabledInts = kIntCmdComplete | kIntTransferDone |
 	    kIntBufWriteRdy | kIntBufReadRdy | kIntErrorMask;
+	fIntEnableShadow = enabledInts;
 	writeReg32(kRegIntEnable, enabledInts);
 	writeReg32(kRegSignalEnable, enabledInts);
 
@@ -491,7 +523,11 @@ BCM2837SDHCI::resetDatLine(void)
 	// stuck - that stuck-forever state is exactly the bug this item exists
 	// to fix.
 	uint32_t r[4];
-	sendCommand(12, 0, kCmdRespShortBusy, false, r);
+	// SDIO has no CMD12; a function's transfer is aborted through CCCR
+	// IOABORT (CMD52), which is the SDIO client's job.
+	if (!fSDIOMode) {
+		sendCommand(12, 0, kCmdRespShortBusy, false, r);
+	}
 
 	// SDHCI_SOFTWARE_RESET bit2 = "reset dat" (SOFTWARE_RESET_DAT): resets
 	// the data path (buffer pointers, DAT_INHIBIT, block/transfer-mode
@@ -1338,6 +1374,56 @@ BCM2837SDHCI::cardIdentify(void)
 }
 
 bool
+BCM2837SDHCI::wifiModeEnabled(void)
+{
+	uint32_t wifi = 0;
+	return PE_parse_boot_argn("wifi", &wifi, sizeof(wifi)) && wifi != 0;
+}
+
+const char *
+BCM2837SDHCI::waitForCardHostVerdict(void)
+{
+	// BCM2837SDHost::start() publishes resource "BCM2837SDCardHost" with
+	// "sdhost" or "sdhci" on every path once it has run. If it never runs
+	// (old DTB without an "sdhost" node, driver failed to match) the wait
+	// times out and the card stays here.
+	//
+	// Ownership itself is decided by BCM2837SDCardOwner's compare-and-swap,
+	// not by the timeout: on timeout this claims the card, and only if
+	// sdhost has not already claimed it. If sdhost has, its verdict is on
+	// the way (it publishes on every path after claiming), so keep waiting.
+	// resourceMatching() matches on the key's presence only
+	// (IOService.cpp resourceMatching()), hence the value check below.
+	uint64_t timeout = 15ULL * kSecondScale;
+	for (int round = 0; round < 8; round++) {
+		OSDictionary *match = IOService::resourceMatching("BCM2837SDCardHost");
+		if (match == NULL) {
+			break;
+		}
+		IOService *res = IOService::waitForMatchingService(match, timeout);
+		match->release();
+		if (res != NULL) {
+			OSString *val = OSDynamicCast(OSString, res->getProperty("BCM2837SDCardHost"));
+			bool onSDHost = (val != NULL && val->isEqualTo("sdhost"));
+			res->release();
+			return onSDHost ? "sdhost" : "sdhci";
+		}
+		if (BCM2837SDCardOwner::claim(BCM2837SDCardOwner::kOwnerSDHCI)) {
+			IOLog("BCM2837SDHCI: no sdhost verdict within 15 s - taking the SD card\n");
+			return "sdhci";
+		}
+		if (BCM2837SDCardOwner::owner() == BCM2837SDCardOwner::kOwnerSDHCI) {
+			return "sdhci"; // sdhost handed it back; its verdict is just late
+		}
+		IOLog("BCM2837SDHCI: sdhost owns the SD card but has not finished - waiting\n");
+	}
+	// sdhost claimed the card and never finished within ~2 minutes. The
+	// pins are its; touching them now could corrupt the card.
+	IOLog("BCM2837SDHCI: sdhost never reported - leaving the SD card alone\n");
+	return "sdhost";
+}
+
+bool
 BCM2837SDHCI::start(IOService *provider)
 {
 	if (!super::start(provider)) {
@@ -1350,6 +1436,26 @@ BCM2837SDHCI::start(IOService *provider)
 		return false;
 	}
 	fRegBase = (volatile void *)fRegMap->getVirtualAddress();
+
+	// docs/wifi-plan.md: with boot-arg wifi=1 the SD card belongs to
+	// BCM2837SDHost (GPIO48-53 ALT0) unless that driver reports it could not
+	// bring the card up. Nothing below may touch GPIO48-53 or the card
+	// before that verdict is in.
+	if (wifiModeEnabled()) {
+		if (strcmp(waitForCardHostVerdict(), "sdhost") == 0) {
+			IOLog("BCM2837SDHCI: wifi=1 and the SD card is on sdhost - "
+			    "Arasan controller switching to SDIO (GPIO34-39)\n");
+			if (startSDIOMode(provider)) {
+				return true;
+			}
+			fRegMap->release();
+			fRegMap = NULL;
+			fRegBase = NULL;
+			return false;
+		}
+		IOLog("BCM2837SDHCI: wifi=1 but sdhost does not have the card - "
+		    "driving the SD card from the Arasan controller as before\n");
+	}
 
 	// Real-hardware correctness only - confirmed NOT required for QEMU
 	// (see pinmuxSDSlot()'s own comment) - failure here isn't fatal to

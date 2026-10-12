@@ -255,6 +255,24 @@
 		};
 
 		/*
+		 * Broadcom "sdhost" SD controller (Linux: mmc@7e202000,
+		 * compatible "brcm,bcm2835-sdhost", reg <0x7e202000 0x100>,
+		 * interrupts <2 24>, bcm283x.dtsi). Driven by BCM2837SDHost only
+		 * with boot-arg wifi=1, which moves the SD card here so the
+		 * Arasan "sdhci" controller is free for the WiFi chip
+		 * (docs/wifi-plan.md). Bank 2 bit 24 -> vector 32 + 24 = 56,
+		 * flattened the same way as "sdhci" above. The driver polls and
+		 * does not register the interrupt yet.
+		 */
+		sdhost {
+			device_type = "sdhost";
+			compatible = "brcm,bcm2835-sdhost";
+			reg = <0x202000 0 0x100 0>;
+			interrupt-parent = <0x1>;
+			interrupts = <56>;
+		};
+
+		/*
 		 * Synopsys DesignWare USB 2.0 OTG host controller ("dwc2").
 		 * Linux/u-boot: usb@7e980000, compatible "brcm,bcm2835-usb",
 		 * reg <0x7e980000 0x10000>, interrupts <1 9> - verified against
