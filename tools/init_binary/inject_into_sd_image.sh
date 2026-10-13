@@ -2708,6 +2708,27 @@ else
     echo "= tools/userland_staging/libc_build/wifi.macho not built -- run build_wifi.sh first if wanted, skipping"
 fi
 
+# On-board Bluetooth (docs/bluetooth-plan.md): the bt(8) tool (build_bt.sh),
+# the BCM43430A1 patch (fetch_bt_firmware.sh; gitignored, never committed)
+# and the boot job, a no-op unless the kernel runs with bt=1.
+BT_FW=tools/userland_staging/libc_build/bt_firmware/BCM43430A1.hcd
+if [ -f tools/userland_staging/libc_build/bt.macho ]; then
+    mkdir -p "$MNT/usr/sbin" "$MNT/usr/share/firmware/bluetooth" "$MNT/Library/LaunchDaemons"
+    cp tools/userland_staging/libc_build/bt.macho "$MNT/usr/sbin/bt"
+    chmod 755 "$MNT/usr/sbin/bt"
+    if [ -f "$BT_FW" ]; then
+        cp "$BT_FW" "$MNT/usr/share/firmware/bluetooth/BCM43430A1.hcd"
+        chmod 644 "$MNT/usr/share/firmware/bluetooth/BCM43430A1.hcd"
+    else
+        echo "= $BT_FW missing -- run tools/userland_staging/fetch_bt_firmware.sh"
+    fi
+    cp tools/userland_staging/org.puredarwin.bluetooth.plist "$MNT/Library/LaunchDaemons/org.puredarwin.bluetooth.plist"
+    chmod 644 "$MNT/Library/LaunchDaemons/org.puredarwin.bluetooth.plist"
+    echo "+ wrote /usr/sbin/bt, /usr/share/firmware/bluetooth/ and org.puredarwin.bluetooth.plist"
+else
+    echo "= tools/userland_staging/libc_build/bt.macho not built -- run build_bt.sh first if wanted, skipping"
+fi
+
 # /etc/login.conf: pw(8) wants a login class (else "setting crypt(3) format:
 # No such file or directory"); see tools/userland_staging/login.conf.
 cp tools/userland_staging/login.conf "$MNT/etc/login.conf"

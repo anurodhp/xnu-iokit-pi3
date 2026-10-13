@@ -135,6 +135,24 @@ public:
 	    uint32_t *respCode, uint32_t *ra, uint32_t *rb);
 
 	/*
+	 * One property tag with an n-word value buffer (n <= 8), sent and
+	 * returned in place. Returns true if the mailbox call completed;
+	 * *respCode is the tag's response word (bit 31 = answered).
+	 */
+	static bool propertyTagWords(uint32_t tag, uint32_t *words, unsigned n, uint32_t *respCode);
+
+	/*
+	 * Drives one of the firmware's expander GPIOs as an output, the way
+	 * Linux drivers/gpio/gpio-raspberrypi-exp.c rpi_exp_gpio_dir_out() does
+	 * (property tags 0x00030043 GET_GPIO_CONFIG and 0x00038043
+	 * SET_GPIO_CONFIG; RPI_EXP_GPIO_BASE 128). On the Pi 3B line 0 is BT_ON
+	 * and 1 is WL_ON (bcm2837-rpi-3-b.dts gpio-line-names). The firmware
+	 * overwrites the first request word with a status, 0 = success; the
+	 * tag's own response bit is not checked (see the .cpp).
+	 */
+	static bool setExpGPIO(unsigned line, bool high);
+
+	/*
 	 * The VideoCore's 64-bit per-board serial number (property tag
 	 * 0x00010004). Returns false if the mailbox call fails or the
 	 * firmware returns zero - the latter is a real, expected case under

@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+	Bring up the on-board Bluetooth controller at boot
+	(docs/bluetooth-plan.md): power, patch, speed switch.
+
+	Does nothing unless the kernel was booted with bt=1 (otherwise there is
+	no BCM43430Bluetooth service and `bt info` fails), and skips `bt up`
+	when the controller is already up (the job was re-run).
+
+	RunAtLoad, no KeepAlive. Output goes to a file for the reason every
+	project plist documents (DAR-257/DAR-167): launchd never wires an
+	unconfigured job's stdio to /dev/console.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>org.puredarwin.bluetooth</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/sh</string>
+		<string>-c</string>
+		<string>/usr/sbin/bt info >/dev/null 2>&amp;1 || exit 0; /usr/sbin/bt info | grep -q '^state: *up$' &amp;&amp; exit 0; exec /usr/sbin/bt up</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/var/log/bluetooth.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/bluetooth.log</string>
+</dict>
+</plist>

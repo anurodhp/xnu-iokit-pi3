@@ -273,6 +273,23 @@
 		};
 
 		/*
+		 * PL011 "uart0" at ARM phys 0x3f201000, wired to the CYW43438's
+		 * Bluetooth HCI UART on GPIO32/33 ALT3 (Linux bcm283x.dtsi uart0,
+		 * bcm2837-rpi-3-b.dts "uart0 communicates with the BT module").
+		 * GPU IRQ 57 = bank 2 bit 25 -> vector 32 + 25, flattened like
+		 * "sdhci". Named "bt-uart", not "uart0": pe_serial.c falls back
+		 * to a node called "uart0" as its console. BCM43430Bluetooth
+		 * matches it only with boot-arg bt=1 (docs/bluetooth-plan.md).
+		 */
+		bt-uart {
+			device_type = "bt-uart";
+			compatible = "arm,pl011";
+			reg = <0x201000 0 0x1000 0>;
+			interrupt-parent = <0x1>;
+			interrupts = <57>;
+		};
+
+		/*
 		 * Synopsys DesignWare USB 2.0 OTG host controller ("dwc2").
 		 * Linux/u-boot: usb@7e980000, compatible "brcm,bcm2835-usb",
 		 * reg <0x7e980000 0x10000>, interrupts <1 9> - verified against

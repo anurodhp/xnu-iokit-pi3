@@ -1,6 +1,27 @@
 # Bluetooth on the Raspberry Pi 3 (CYW43438 / BCM43430A1)
 
-Status: plan, reviewed 2026-10-12 (see "Changes after review"), not yet implemented. Companion to `docs/wifi-plan.md`;
+Status (2026-10-12): B1-B5 implemented, reviewed, and working on a real
+Pi 3B with boot-arg bt=1. `org.puredarwin.bluetooth` runs `bt up` at boot.
+- The patch loads (121 records), the link switches to 921600, and the
+  controller reports BD_ADDR b8:27:eb:12:61:de and the name "BCM43438A1
+  37.4MHz Raspberry Pi 3-0141".
+- `bt scan 15` found 24 devices (23 LE, 1 classic with its name).
+- The overrun, framing, ring-drop and resync counters stayed at 0.
+- An 8 MB WiFi scp running during the scan arrived intact (24.5 s instead
+  of 16 s).
+- QEMU: the whole path passes against `tools/bt_h4_responder.py`.
+
+Hardware finding: the firmware leaves the per-tag response bit at 0 for
+the expander GPIO tags. Only the message code and the status word are
+meaningful, as Linux treats them (`raspberrypi.c:121`).
+
+Code review found 5 bugs, all fixed: a short BD_ADDR reply reported
+success; user commands could interleave with `up`; a flush could move the
+ring tail backwards; `bt hci` printed stack on failure; a `start()` failure
+left the interrupt registered.
+
+Open: L2CAP and profiles (out of scope); a long-duration overrun stress
+test. Companion to `docs/wifi-plan.md`;
 the WiFi half of the same chip is done and verified on hardware.
 
 ## What the hardware is

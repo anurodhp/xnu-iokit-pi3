@@ -526,6 +526,10 @@ BCM2837RegisterBuiltinPersonalities(void)
 	// The WiFi driver matches the SDIO nub BCM2837SDHCI publishes in SDIO
 	// mode (wifi=1 only).
 	OSDictionary *wifi = makePersonality("BCM2837SDIODevice", "BCM43430Wifi", NULL, -1);
+	// "bt-uart" - the PL011 wired to the Bluetooth controller.
+	// BCM43430Bluetooth::probe() declines unless boot-arg bt=1
+	// (docs/bluetooth-plan.md).
+	OSDictionary *bt = makePersonality("IOPlatformDevice", "BCM43430Bluetooth", "bt-uart", -1);
 	// "dma" - the DMA controller (DARW-313), used by the audio engine.
 	OSDictionary *dma = makePersonality("IOPlatformDevice", "BCM2837DMA", "dma", -1);
 	// "pwm" - the PWM block, the 3.5mm audio jack (DARW-314). The DT node is
@@ -712,6 +716,10 @@ BCM2837RegisterBuiltinPersonalities(void)
 	if (wifi != NULL) {
 		personalities->setObject(wifi);
 		wifi->release();
+	}
+	if (bt != NULL) {
+		personalities->setObject(bt);
+		bt->release();
 	}
 	if (dma != NULL) {
 		personalities->setObject(dma);
