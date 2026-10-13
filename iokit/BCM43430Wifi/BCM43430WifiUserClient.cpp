@@ -94,6 +94,14 @@ BCM43430WifiUserClient::externalMethod(uint32_t selector, IOExternalMethodArgume
 		r = fDriver->leave();
 		IOLockUnlock(fDriver->fOpLock);
 		return r;
+	case kWifiMethodPower:
+		if (args->scalarInputCount != 1) {
+			return kIOReturnBadArgument;
+		}
+		IOLockLock(fDriver->fOpLock);
+		r = fDriver->setPower(args->scalarInput[0] != 0);
+		IOLockUnlock(fDriver->fOpLock);
+		return r;
 	case kWifiMethodStatus:
 		NEED_OUT(wifi_status);
 		fDriver->getStatus((wifi_status *)args->structureOutput);

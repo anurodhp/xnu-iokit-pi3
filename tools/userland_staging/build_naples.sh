@@ -14,7 +14,9 @@ for l in libX11 libXext libxcb libXau libXdmcp; do
     [ -f "$SYS/$l.dylib" ] || { echo "error: $SYS/$l.dylib not built (X11 stack)" >&2; exit 1; }
 done
 GS_APP_LIBS=("$SYS/libX11.dylib" "$SYS/libXext.dylib" "$SYS/libxcb.dylib" "$SYS/libXau.dylib" "$SYS/libXdmcp.dylib")
-GS_APP_CPPFLAGS="-I$OUT/x11/include"
+# The Wi-Fi panel talks to BCM43430Wifi through its user-client ABI header
+# (NaplesWifi.m); IOKitLib itself is opened with dlopen, so nothing more links.
+GS_APP_CPPFLAGS="-I$OUT/x11/include -I$HERE/../../iokit/BCM43430Wifi"
 # make does not notice a changed VERSION, application icon or resource list in the kept work copy: start the bundle afresh
 rm -rf "$G/naples-src/Naples.app"
 gs_build_app Naples "${NAPLES_SRC:-$HERE/../../third_party/naples}"

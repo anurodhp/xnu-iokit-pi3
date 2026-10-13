@@ -87,6 +87,8 @@ enum {
 
 	// WLC ioctls (brcmfmac fwil.h BRCMF_C_*)
 	WLC_UP           = 2,
+	WLC_DOWN         = 3,
+	WLC_GET_RATE     = 12,    // fwil.h BRCMF_C_GET_RATE, 500 kbps units
 	WLC_SET_PROMISC  = 10,
 	WLC_SET_INFRA    = 20,
 	WLC_SET_AUTH     = 22,
@@ -95,6 +97,7 @@ enum {
 	WLC_DISASSOC     = 52,
 	WLC_SET_PM       = 86,
 	WLC_GET_RSSI     = 127,
+	WLC_GET_BSS_INFO = 136,   // fwil.h BRCMF_C_GET_BSS_INFO
 	WLC_SET_SCAN_CHANNEL_TIME = 185,
 	WLC_SET_SCAN_UNASSOC_TIME = 187,
 	WLC_GET_VAR      = 262,
@@ -154,6 +157,7 @@ BCM43430Wifi::init(OSDictionary *properties)
 	fNvramLen = fClmLen = 0;
 	bzero(fMAC, sizeof(fMAC));
 	fFwVersion[0] = fLastError[0] = 0;
+	fRadioOff = false;
 	fTxSeq = fTxWindow = fFcMask = 0;
 	fCtlWaiting = false;
 	fReqId = 0;
@@ -674,6 +678,11 @@ BCM43430Wifi::uploadBegin(void)
 		setError("firmware already running; reboot to load it again");
 		return kIOReturnBusy;
 	}
+	if (fState == kWifiStateLoading) {
+		// Another client (the boot job) is mid-upload; starting over would
+		// reset the chip under it.
+		return kIOReturnBusy;
+	}
 	if (fState == kWifiStateNone) {
 		return kIOReturnNotReady;
 	}
@@ -816,6 +825,7 @@ BCM43430Wifi::boot(void)
 		fTxSeq = 0;
 		fTxWindow = 4;
 		fFcMask = 0;
+		fRadioOff = false;   // a fresh firmware boots with the radio up (wlInit's WLC_UP)
 		fState = kWifiStateUp;
 	} else {
 		fState = kWifiStateFailed;
@@ -1498,7 +1508,7 @@ BCM43430Wifi::wlInit(void)
 IOReturn
 BCM43430Wifi::scan(wifi_scan_results *out)
 {
-	if (fState != kWifiStateUp) {
+	if (fState != kWifiStateUp || fRadioOff) {
 		return kIOReturnNotReady;
 	}
 	IOLockLock(fEventLock);
@@ -1552,7 +1562,7 @@ BCM43430Wifi::scan(wifi_scan_results *out)
 IOReturn
 BCM43430Wifi::join(const wifi_join *req)
 {
-	if (fState != kWifiStateUp) {
+	if (fState != kWifiStateUp || fRadioOff) {
 		return kIOReturnNotReady;
 	}
 	char ssid[33], pass[65];
@@ -1669,7 +1679,9 @@ BCM43430Wifi::join(const wifi_join *req)
 		setError("join \"%s\" %s", ssid, timedOut ? "timed out" : "failed");
 	}
 	wlcmd(WLC_DISASSOC, true, NULL, 0, NULL, 0);
-	return kIOReturnError;
+	// The associated-but-never-keyed case gets its own code, so a client can
+	// tell "wrong passphrase" (ask again) from "not found / no answer".
+	return (result <= 0 && wpa) ? kIOReturnNotPermitted : kIOReturnError;
 }
 
 IOReturn
@@ -1684,6 +1696,45 @@ BCM43430Wifi::leave(void)
 	fSsid[0] = 0;
 	IOLockUnlock(fEventLock);
 	updateLink();
+	return r;
+}
+
+IOReturn
+BCM43430Wifi::setPower(bool on)
+{
+	// Radio off/on with the firmware kept loaded: this driver's own choice of
+	// mechanism. The commands are BRCMF_C_DOWN / BRCMF_C_UP with 1 (fwil.h:15-16),
+	// which brcmfmac itself sends around reconfiguring the radio, e.g. in
+	// brcmf_cfg80211_start_ap() (raspberrypi/linux 4103a989a461, cfg80211.c:5238,
+	// :5280). Off drops the association first, so the interface sees the link
+	// go down.
+	if (fState != kWifiStateUp) {
+		return kIOReturnNotReady;
+	}
+	if (on == !fRadioOff) {
+		return kIOReturnSuccess;
+	}
+	IOReturn r;
+	if (on) {
+		r = wlcmdint(WLC_UP, 1);
+		if (r == kIOReturnSuccess) {
+			fRadioOff = false;
+		}
+	} else {
+		leave();
+		r = wlcmdint(WLC_DOWN, 1);
+		if (r != kIOReturnSuccess) {
+			// Seen once on a real Pi, the first off right after a scan and the
+			// disassociate (status not captured; wlcmd() logs it). A second try
+			// a moment later has always worked.
+			IOSleep(200);
+			r = wlcmdint(WLC_DOWN, 1);
+		}
+		if (r == kIOReturnSuccess) {
+			fRadioOff = true;
+		}
+	}
+	IOLog("BCM43430Wifi: radio %s%s\n", on ? "on" : "off", r == kIOReturnSuccess ? "" : " failed");
 	return r;
 }
 
@@ -1702,6 +1753,7 @@ BCM43430Wifi::getStatus(wifi_status *out)
 	out->chiprev = fChipRev;
 	strlcpy(out->fwversion, fFwVersion, sizeof(out->fwversion));
 	strlcpy(out->lasterror, fLastError, sizeof(out->lasterror));
+	out->radio_off = fRadioOff ? 1 : 0;
 	if (out->associated) {
 		// brcmfmac fwil_types.h brcmf_scb_val_le {__le32 val; u8 ea[6]},
 		// not packed, so sizeof is 12; the firmware rejects 10 bytes with
@@ -1711,6 +1763,31 @@ BCM43430Wifi::getStatus(wifi_status *out)
 		if (wlcmd(WLC_GET_RSSI, false, scb, sizeof(scb), scb, sizeof(scb)) == kIOReturnSuccess) {
 			out->rssi = (int32_t)get4(scb);
 		}
+		uint32_t rate = 0;
+		if (wlgetint(WLC_GET_RATE, &rate) == kIOReturnSuccess) {
+			out->rate_kbps = rate * 500;
+		}
+		// brcmf_update_bss_info() (cfg80211.c): the first word is the buffer
+		// length, the reply is a brcmf_bss_info_le after it. Field offsets
+		// as in handleScanResult(): chanspec 72, RSSI 78, then phy_noise 80
+		// and n_cap 81 (fwil_types.h). 1536 bytes keep the request inside
+		// one control frame (kRxMax).
+		const uint32_t kBssBuf = 1536;
+		uint8_t *bi = (uint8_t *)IOMalloc(kBssBuf);
+		if (bi != NULL) {
+			bzero(bi, kBssBuf);
+			put4(bi, kBssBuf);
+			if (wlcmd(WLC_GET_BSS_INFO, false, bi, kBssBuf, bi, kBssBuf) == kIOReturnSuccess) {
+				const uint8_t *b = bi + 4;
+				out->channel = get2(b + 72) & 0xFF;   // chanspec's channel; the 43430 runs HT20
+				out->noise = (int8_t)b[80];
+				out->ht = b[81] ? 1 : 0;
+			}
+			IOFree(bi, kBssBuf);
+		}
+		IOLockLock(fEventLock);
+		out->security = fJoinWpa ? kWifiSecWPA2 : 0;
+		IOLockUnlock(fEventLock);
 	}
 }
 

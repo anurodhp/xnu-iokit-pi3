@@ -65,6 +65,7 @@ public:
 	IOReturn scan(wifi_scan_results *out);
 	IOReturn join(const wifi_join *req);
 	IOReturn leave(void);
+	IOReturn setPower(bool on);
 	void     getStatus(wifi_status *out);
 
 private:
@@ -95,6 +96,7 @@ private:
 	uint8_t fMAC[6];
 	char fFwVersion[128];
 	char fLastError[96];
+	volatile bool fRadioOff;     // setPower(false): firmware up, radio down
 
 	// SDPCM.
 	uint8_t fTxSeq, fTxWindow, fFcMask;

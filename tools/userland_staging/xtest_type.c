@@ -4,12 +4,17 @@
  * in QEMU boot tests without a keyboard.
  *
  *   xtest_type [-w seconds] TEXT...
+ *   xtest_type [-w seconds] -c X Y [-o]
  *
  * Each argument is typed in turn; a Return key is sent after each one, so
  *   xtest_type root darwin
  * answers the greeter's login and password prompts. The display comes from
  * $DISPLAY and the cookie from $XAUTHORITY (for gsdm's server,
- * /var/lib/gsdm/auth-0). -w retries XOpenDisplay once a
+ * /var/lib/gsdm/auth-0). -c clicks button 1 at screen position X,Y instead
+ * (XTestFakeMotionEvent + XTestFakeButtonEvent), holding Alt_L with -o: X's
+ * Mod1 on every keymap (Xvfb's has no Alt_R), the PC keyboard's Option key,
+ * i.e. an Option-click (used to screenshot
+ * Naples' menu bar panels on a virtual display). -w retries XOpenDisplay once a
  * second for up to that many seconds, for a server that is still starting.
  */
 #include <stdio.h>
@@ -55,7 +60,7 @@ int main(int argc, char **argv)
         argc -= 2;
     }
     if (argc < 2) {
-        fprintf(stderr, "usage: xtest_type [-w seconds] TEXT...\n");
+        fprintf(stderr, "usage: xtest_type [-w seconds] TEXT... | -c X Y [-o]\n");
         return 2;
     }
     for (i = 0; ; i++) {
@@ -72,6 +77,29 @@ int main(int argc, char **argv)
     if (!XTestQueryExtension(dpy, &ev, &er, &maj, &min)) {
         fprintf(stderr, "xtest_type: server has no XTEST extension\n");
         return 1;
+    }
+    if (strcmp(argv[1], "-c") == 0 && argc < 4) {
+        fprintf(stderr, "usage: xtest_type [-w seconds] -c X Y [-o]\n");
+        return 2;
+    }
+    if (argc >= 4 && strcmp(argv[1], "-c") == 0) {
+        int x = atoi(argv[2]), y = atoi(argv[3]);
+        int option = argc >= 5 && strcmp(argv[4], "-o") == 0;
+        KeyCode alt = XKeysymToKeycode(dpy, XK_Alt_L);
+        XTestFakeMotionEvent(dpy, -1, x, y, 0);
+        XSync(dpy, False);
+        usleep(100000);
+        if (option && alt)
+            XTestFakeKeyEvent(dpy, alt, True, 0);
+        XTestFakeButtonEvent(dpy, 1, True, 0);
+        XSync(dpy, False);
+        usleep(60000);
+        XTestFakeButtonEvent(dpy, 1, False, 0);
+        if (option && alt)
+            XTestFakeKeyEvent(dpy, alt, False, 0);
+        XSync(dpy, False);
+        XCloseDisplay(dpy);
+        return 0;
     }
     for (i = 1; i < argc; i++) {
         const char *p;

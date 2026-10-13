@@ -7,6 +7,7 @@
  *   wifi join <ssid> [passphrase]  open network without a passphrase, else WPA2-PSK
  *   wifi join -f <file>            file with lines ssid=... and psk=... (e.g. /etc/wifi.conf)
  *   wifi leave
+ *   wifi on | off                  radio on/off, firmware kept loaded
  *   wifi status
  *
  * The kernel needs boot-arg wifi=1 (SD card on sdhost, Arasan controller in
@@ -39,6 +40,7 @@ errstr(kern_return_t kr)
 	switch (kr) {
 	case kIOReturnNotReady:      return "not ready";
 	case kIOReturnNotPrivileged: return "must be root";
+	case kIOReturnNotPermitted:  return "wrong passphrase (WPA2 handshake failed)";
 	case kIOReturnTimeout:       return "timed out";
 	case kIOReturnBusy:          return "busy";
 	case kIOReturnBadArgument:   return "bad argument";
@@ -242,6 +244,7 @@ cmdStatus(void)
 		return 1;
 	}
 	printf("state:     %s\n", st.state < 5 ? states[st.state] : "?");
+	if (st.state == kWifiStateUp) printf("radio:     %s\n", st.radio_off ? "off" : "on");
 	printf("chip:      %u rev %u\n", st.chipid, st.chiprev);
 	if (st.fwversion[0]) printf("firmware:  %s\n", st.fwversion);
 	printf("mac:       %02x:%02x:%02x:%02x:%02x:%02x\n",
@@ -251,6 +254,11 @@ cmdStatus(void)
 		printf("bssid:     %02x:%02x:%02x:%02x:%02x:%02x\n",
 		    st.bssid[0], st.bssid[1], st.bssid[2], st.bssid[3], st.bssid[4], st.bssid[5]);
 		printf("rssi:      %d dBm\n", st.rssi);
+		if (st.noise) printf("noise:     %d dBm\n", st.noise);
+		if (st.channel) printf("channel:   %u (%s)\n", st.channel, st.channel <= 14 ? "2.4 GHz" : "5 GHz");
+		if (st.rate_kbps) printf("tx rate:   %u Mbps\n", st.rate_kbps / 1000);
+		printf("phy:       %s\n", st.ht ? "802.11n" : "802.11g");
+		printf("security:  %s\n", st.security & kWifiSecWPA2 ? "WPA2 Personal" : "none");
 	} else {
 		printf("link:      not associated\n");
 	}
@@ -262,7 +270,7 @@ int
 main(int argc, char **argv)
 {
 	if (argc < 2) {
-		fprintf(stderr, "usage: wifi up [dir] | scan | join <ssid> [passphrase] | join -f <file> | leave | status\n");
+		fprintf(stderr, "usage: wifi up [dir] | scan | join <ssid> [passphrase] | join -f <file> | leave | on | off | status\n");
 		return 2;
 	}
 	if (openDriver() != 0) {
@@ -280,6 +288,11 @@ main(int argc, char **argv)
 		kern_return_t kr = IOConnectCallScalarMethod(conn, kWifiMethodLeave, NULL, 0, NULL, NULL);
 		rc = kr == KERN_SUCCESS ? 0 : 1;
 		if (rc) fprintf(stderr, "wifi: leave: %s\n", errstr(kr));
+	} else if (strcmp(c, "on") == 0 || strcmp(c, "off") == 0) {
+		uint64_t on = strcmp(c, "on") == 0;
+		kern_return_t kr = IOConnectCallScalarMethod(conn, kWifiMethodPower, &on, 1, NULL, NULL);
+		rc = kr == KERN_SUCCESS ? 0 : 1;
+		if (rc) fprintf(stderr, "wifi: %s: %s\n", c, errstr(kr));
 	} else if (strcmp(c, "status") == 0) {
 		rc = cmdStatus();
 	} else {

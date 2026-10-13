@@ -30,6 +30,15 @@ After the fixes, all of these still pass on the Pi: the self-test, WiFi
 autostart, the bulk scp both ways with en0 down, and 40 `wifi status`
 ioctls during bulk TX.
 
+Added 2026-10-13: radio on/off with the firmware kept loaded (user-client
+Power method, `wifi on`/`wifi off`, `/etc/wifi.off` honoured by the boot
+job), connection details in `wifi status` (channel, noise, transmit rate,
+802.11n, security; from GET_BSS_INFO and GET_RATE), and a distinct
+`kIOReturnNotPermitted` for a failed WPA2 handshake. Naples' menu-bar Wi-Fi
+panel (github.com/anurodhp/naples, NaplesWifi.m) uses all of it. The panel
+was checked on the Pi on a virtual display; the review fixes since then,
+and the password-dialog join, are not tested on hardware yet.
+
 Plan written 2026-10-11. Target board: Raspberry Pi 3 Model B (LAN9514
 Ethernet, `0424:ec00`, so the radio is the CYW43438 / BCM43430A1, 2.4 GHz
 b/g/n, not the 3B+'s 43455). Real hardware only for the radio itself: QEMU
