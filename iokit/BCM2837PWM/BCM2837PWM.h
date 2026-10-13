@@ -24,9 +24,10 @@
  *     228-238) is acknowledged but has no effect on this clock. plld_per is
  *     nominally 500 MHz but measured at 5/8 of that on a real Pi 3, so the
  *     audio engine trims the range at start (DARW-317).
- *   - GPFSEL4 is read-modify-written here and by BCM2837SDHCI::pinmuxSDSlot()
- *     (GPIO48/49) with no shared lock; they run at different times in
- *     practice (the PWM mux only when audio is configured).
+ *   - GPIO40/41 are muxed through BCM2837GPIO, whose lock also covers
+ *     sdhost's GPIO48/49 in the same GPFSEL4 word. BCM2837SDHCI::
+ *     pinmuxSDSlot() still writes GPFSEL4 directly; it runs at boot, the PWM
+ *     mux only when audio is configured.
  *
  * Not done here: the audio engine (DARW-315), DMA wiring (uses BCM2837DMA).
  */

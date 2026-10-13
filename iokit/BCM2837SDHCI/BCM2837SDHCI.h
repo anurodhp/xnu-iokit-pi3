@@ -140,9 +140,12 @@
 #include <IOKit/IOService.h>
 #include <IOKit/IOLocks.h>
 
+class BCM2837SDIODevice;
+
 class BCM2837SDHCI : public IOBlockStorageDevice
 {
 	OSDeclareDefaultStructors(BCM2837SDHCI);
+	friend class BCM2837SDIODevice;
 
 private:
 	IOMemoryMap *fRegMap;
@@ -424,6 +427,21 @@ private:
 	 */
 	uint32_t fPendingBlkSizeCount;
 
+	// SDIO host mode (docs/wifi-plan.md W2, boot-arg wifi=1 with the SD
+	// card on sdhost). The controller then drives GPIO34-39 (the BCM43438)
+	// and publishes a BCM2837SDIODevice nub instead of registering itself
+	// as a block device. Implementation in BCM2837SDIODevice.cpp.
+	bool fSDIOMode;
+	BCM2837SDIODevice *fSDIONub;
+	uint32_t fIntEnableShadow;          // INT_ENABLE == SIGNAL_ENABLE value, under fStatusLock
+	void (*fCardIntHandler)(OSObject *target);
+	OSObject *fCardIntTarget;
+	enum { kIntCardInt = 1U << 8 };     // SDHCI_INT_CARD_INT (level, not write-1-to-clear)
+
+	bool startSDIOMode(IOService *provider);
+	void setIntEnable(uint32_t bits, bool on);
+	bool sdioData(bool write, uint32_t arg, uint32_t blockSize, uint32_t blocks, void *buf);
+
 	// Pin-muxes GPIO48-53 to ALT3 ("emmc_gpio48" in Linux DT), routing
 	// this controller to the physical SD slot instead of leaving it on
 	// whatever the stock-firmware default is (see header). Maps the GPIO
@@ -522,6 +540,10 @@ public:
 	virtual IOService *probe(IOService *provider, SInt32 *score) APPLE_KEXT_OVERRIDE;
 
 	virtual bool   start(IOService *provider) APPLE_KEXT_OVERRIDE;
+
+	// docs/wifi-plan.md role selection (boot-arg wifi=1).
+	static bool wifiModeEnabled(void);
+	static const char *waitForCardHostVerdict(void);
 	virtual void   stop(IOService *provider) APPLE_KEXT_OVERRIDE;
 	virtual void   free(void) APPLE_KEXT_OVERRIDE;
 

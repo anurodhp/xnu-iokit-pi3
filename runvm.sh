@@ -187,8 +187,13 @@ fi
 # starved a later boot badly enough to look like a boot regression (see
 # tools/boot_test.py's header on why concurrent QEMUs produce exactly that
 # false negative).
+# BT_SERIAL: what the PL011 (serial_hd(0), the Bluetooth UART on a real Pi 3)
+# is wired to; the console mini-UART is serial_hd(1). Default null. For the
+# Bluetooth driver test, tools/bt_h4_responder.py listens on a Unix socket:
+#   BT_SERIAL=unix:qemu/bt.sock EXTRA_BOOT_ARGS=bt=1 ./runvm.sh
+BT_SERIAL="${BT_SERIAL:-null}"
 exec ./third_party/qemu-zhuowei/aarch64-softmmu/qemu-system-aarch64 -M "$QEMU_MACHINE" -m 1024 -display "$QEMU_DISPLAY" \
-  -serial null -serial stdio \
+  -serial "$BT_SERIAL" -serial stdio \
   -kernel build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped \
   -dtb "${QEMU_DTB:-devicetrees/rpi3.dtb}" \
   -drive "file=$SD_IMAGE,if=sd,format=raw" \

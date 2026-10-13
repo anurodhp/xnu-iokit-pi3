@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+	Bring up the on-board WiFi at boot (docs/wifi-plan.md).
+
+	Does nothing unless /etc/wifi.conf exists (ssid=... and psk=...
+	lines, mode 600; inject_into_sd_image.sh copies it from WIFI_CONF and
+	it never lives in the repo) and the kernel was booted with wifi=1
+	(otherwise there is no BCM43430Wifi service and `wifi status` fails).
+
+	`wifi up` is skipped when the firmware is already running (the job
+	was re-run), and otherwise retried because the driver's thread may still be probing
+	the chip when launchd starts this job (the user client answers "not
+	ready" until it reaches "waiting for firmware"). The address comes
+	from IPConfiguration, as en0's does, but via `ipconfig set en1 DHCP`
+	rather than a preferences.plist service: the link only exists after
+	the join, and a service would leave IPConfiguration retrying DHCP on
+	a dead interface until then.
+
+	RunAtLoad, no KeepAlive: a failed join is left for `wifi` by hand.
+	Output goes to a file for the reason every project plist documents
+	(DAR-257/DAR-167): launchd never wires an unconfigured job's stdio to
+	/dev/console.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>org.puredarwin.wifi</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/sh</string>
+		<string>-c</string>
+		<string>test -f /etc/wifi.conf || exit 0; /usr/sbin/wifi status >/dev/null 2>&amp;1 || exit 0; n=0; until /usr/sbin/wifi status | grep -q '^state: *up$' || /usr/sbin/wifi up; do n=$((n+1)); [ $n -ge 30 ] &amp;&amp; exit 1; sleep 1; done; /usr/sbin/wifi join -f /etc/wifi.conf || exit 1; /sbin/ifconfig en1 up; exec /usr/sbin/ipconfig set en1 DHCP</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/var/log/wifi.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/wifi.log</string>
+</dict>
+</plist>

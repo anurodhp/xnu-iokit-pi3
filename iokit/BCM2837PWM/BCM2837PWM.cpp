@@ -1,5 +1,6 @@
 #include "BCM2837PWM.h"
 #include "BCM2837PWMMath.h"
+#include "BCM2837GPIO.h"
 
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/IOLib.h>
@@ -184,28 +185,12 @@ BCM2837PWM::programClock()
 	return ok;
 }
 
-// GPIO40/41 -> ALT0 (GPFSEL4 bits 2:0 and 5:3, function 0b100), the same
-// phys-mapped access BCM2837SDHCI::pinmuxSDSlot() uses for the GPIO block.
+// GPIO40/41 -> ALT0, through BCM2837GPIO so the GPFSEL4 read-modify-write
+// is under the same lock as sdhost's GPIO48/49 in that word.
 bool
 BCM2837PWM::muxPins()
 {
-	const IOPhysicalAddress kGPFSEL4 = 0x3f200010;
-	IODeviceMemory *mem = IODeviceMemory::withRange(kGPFSEL4, sizeof(uint32_t));
-	if (mem == NULL) {
-		return false;
-	}
-	IOMemoryMap *map = mem->map(kIOMapInhibitCache);
-	mem->release();
-	if (map == NULL) {
-		return false;
-	}
-	volatile uint32_t *fsel = (volatile uint32_t *)map->getVirtualAddress();
-	uint32_t v = *fsel;
-	v &= ~((7U << 0) | (7U << 3));      // pins 40, 41
-	v |= (4U << 0) | (4U << 3);         // ALT0 = 0b100
-	*fsel = v;
-	map->release();
-	return true;
+	return BCM2837GPIO::setFunction(40, 2, BCM2837GPIO::kFSelAlt0);
 }
 
 IOReturn
