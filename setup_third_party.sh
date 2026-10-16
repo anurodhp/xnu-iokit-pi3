@@ -758,6 +758,10 @@ mkdir -p third_party
 #     the dock (apps, running programs, minimized windows, Trash), the global
 #     menu bar (Hexley, the frontmost app's menu, clock) and the menu server for
 #     the Eau theme (build_naples.sh). Not a fork: there is no upstream.
+#     turin: anurodhp/turin (this project's own repo), tag v0.1: Turin.app,
+#     System Preferences -- Wi-Fi, Network, Date & Time, Milan's desktop
+#     background and user accounts (build_turin.sh). Not a fork: there is no
+#     upstream.
 #     rome: anurodhp/rome (this project's own repo, private), tag v0.2:
 #     Rome.app, a small fast GNUstep terminal written for this port
 #     (build_rome.sh). Not a fork: there is no upstream.
@@ -935,6 +939,7 @@ libjpeg-turbo|https://github.com/libjpeg-turbo/libjpeg-turbo.git|3.0.4|
 rome|git@github.com:anurodhp/rome.git|v0.2|
 milan|git@github.com:anurodhp/milan.git|v0.9|
 naples|git@github.com:anurodhp/naples.git|v0.7|
+turin|git@github.com:anurodhp/turin.git|v0.1|
 libvterm|https://github.com/neovim/libvterm.git|v0.3.3|
 optimized-routines|https://github.com/ARM-software/optimized-routines.git|v26.07|
 gnustep-eau-theme|git@github.com:anurodhp/gershwin-eau-theme.git|iokit-port||https://github.com/gershwin-desktop/gershwin-eau-theme.git

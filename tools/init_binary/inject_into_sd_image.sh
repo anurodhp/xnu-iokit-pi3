@@ -2424,10 +2424,33 @@ echo "  _PATH_SYSLOGD_LOG target + real asl.conf.osx's aslmanager Logs dir)"
 mkdir -p "$MNT/var/db/timezone/zoneinfo"
 cp tools/userland_staging/zoneinfo_minimal/UTC "$MNT/var/db/timezone/zoneinfo/UTC"
 cp tools/userland_staging/zoneinfo_minimal/GMT "$MNT/var/db/timezone/zoneinfo/GMT"
-cp tools/userland_staging/zoneinfo_minimal/UTC "$MNT/var/db/timezone/localtime"
+# The default zone only on a fresh image: Turin's Time Zone pane replaces it
+# with a symlink into zoneinfo/, and cp through that link would overwrite the
+# chosen zone's own file with UTC.
+if [ ! -e "$MNT/var/db/timezone/localtime" ] && [ ! -L "$MNT/var/db/timezone/localtime" ]; then
+    cp tools/userland_staging/zoneinfo_minimal/UTC "$MNT/var/db/timezone/localtime"
+fi
 echo "+ wrote real Apple UTC/GMT zoneinfo to $MNT/var/db/timezone/zoneinfo/"
 echo "  and $MNT/var/db/timezone/localtime (default TZ, real data, this host's"
 echo "  own /usr/share/zoneinfo -- see docs/roadmap.md Phase 4.6)"
+# The rest of the database, for Turin's Time Zone pane (build_turin.sh), which
+# lists the zones of zone.tab: the same real Apple-shipped TZif files as UTC/GMT
+# above, from this host Mac's /usr/share/zoneinfo (a symlink to
+# /var/db/timezone/zoneinfo on macOS; -L follows it), about 2.5 MB. Without it
+# the pane offers UTC only. /usr/share/zoneinfo is the path gnustep-base and
+# most ports look in (NSTimeZone.m's tzdir list), so it links to the real one.
+if [ -f /usr/share/zoneinfo/zone.tab ]; then
+    rsync -rlL --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r /usr/share/zoneinfo/ "$MNT/var/db/timezone/zoneinfo/"
+    echo "+ wrote the host's zoneinfo database ($(ls /usr/share/zoneinfo | wc -l | tr -d ' ') entries,"
+    echo "  zone.tab included) to $MNT/var/db/timezone/zoneinfo/ (Turin's Time Zone pane)"
+else
+    echo "= no /usr/share/zoneinfo/zone.tab on this host -- the image keeps UTC/GMT only"
+fi
+mkdir -p "$MNT/usr/share"
+if [ ! -e "$MNT/usr/share/zoneinfo" ] && [ ! -L "$MNT/usr/share/zoneinfo" ]; then
+    ln -s /var/db/timezone/zoneinfo "$MNT/usr/share/zoneinfo"
+    echo "+ linked $MNT/usr/share/zoneinfo -> /var/db/timezone/zoneinfo"
+fi
 
 if [ ! -f "$MNT/etc/master.passwd" ]; then
     echo "+ no $MNT/etc/master.passwd -- provisioning real root account (password: darwin)"

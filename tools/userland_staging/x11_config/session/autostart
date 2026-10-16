@@ -5,9 +5,17 @@
 # (x11_config/gsdm/Xsession) has already exported DISPLAY and the GNUstep
 # environment, and this runs as the user who logged in.
 #
-# Naples first: it is the dock, the global menu bar and the menu server the
-# Eau theme of every later GNUstep app looks up when it starts (apps that
-# start earlier find it within 30 s). Window Maker's own dock, clip and
+# gdnc first, the user's distributed notification server (Turin's Background
+# pane tells Milan the desktop background changed through it). Started here, as
+# gnustep-base advises (Source/NSDistributedNotificationCenter.m), so no app has
+# to start it with NSTask on first use: that waits up to 10 s, and NSTask's
+# SIGCHLD handler then reaps the app's other children (waitpid(-1)) and takes
+# their exit status.
+D=/usr/local/bin/gdnc
+[ -x "$D" ] && "$D" &
+# Then Naples, before the other apps: it is the dock, the global menu bar and
+# the menu server the Eau theme of every later GNUstep app looks up when it
+# starts (apps that start earlier find it within 30 s). Window Maker's own dock, clip and
 # miniwindows are off (build_wmaker.sh).
 N=/Applications/Naples.app/Naples
 [ -x "$N" ] && "$N" &

@@ -4,6 +4,7 @@
  ("Rome", EXEC, "/Applications/Rome.app/Rome"),
  ("Ink", EXEC, "/Applications/Ink.app/Ink"),
  ("Florence", EXEC, "/Applications/Florence.app/Florence"),
+ ("System Preferences", EXEC, "/Applications/Turin.app/Turin"),
  ("X Events", EXEC, "/usr/X11/bin/xev"),
  ("Commands",
   ("Hide Others", HIDE_OTHERS),
