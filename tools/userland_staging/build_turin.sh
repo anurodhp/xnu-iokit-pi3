@@ -1,6 +1,6 @@
 #!/bin/bash
 # Builds Turin.app, System Preferences for GNUstep + Window Maker (our repo
-# anurodhp/turin, pinned in setup_third_party.sh as third_party/turin,
+# anurodhp/Turin, pinned in setup_third_party.sh as third_party/turin,
 # TURIN_SRC overrides) and installs it into libc_build/gnustep/root as
 # /usr/GNUstep/System/Applications/Turin.app (/Applications/Turin.app on the
 # image, stage_gnustep_mac_layout.sh).
