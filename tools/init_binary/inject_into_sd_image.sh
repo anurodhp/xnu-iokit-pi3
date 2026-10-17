@@ -2039,6 +2039,10 @@ echo "+ wrote $(wc -c < "$US/libc_build/kmsg.macho") bytes to $MNT/usr/sbin/kmsg
 # shmmax must be page-aligned (sysctl_shminfo, sysv_shm.c:1182-1188); shmall
 # is in pages. shmmni cannot change once SysV SHM is in use (:1166-1170), so
 # it is left at its default.
+# Open files: xnu sizes kern.maxfiles from RAM (12288 on the Pi) and
+# kern.maxfilesperproc at 10240; both are only ceilings. launchd then sets
+# every job's soft RLIMIT_NOFILE to kern.maxfilesperproc
+# (pd_launchd_boot_raise_maxfiles), where xnu would leave it at 256.
 cat > "$MNT/etc/sysctl.conf" <<'SYSCTL_EOF'
 # Applied at boot by launchd (pd_launchd_boot.c), one `sysctl -w` per line.
 # SysV shared memory for MIT-SHM (X11 clients): 32 MiB per segment,
@@ -2046,8 +2050,12 @@ cat > "$MNT/etc/sysctl.conf" <<'SYSCTL_EOF'
 kern.sysv.shmmax=33554432
 kern.sysv.shmall=65536
 kern.sysv.shmseg=32
+# Open files: 65536 in all, 32768 per process. launchd makes the per-process
+# value every job's soft limit (ulimit -n).
+kern.maxfiles=65536
+kern.maxfilesperproc=32768
 SYSCTL_EOF
-echo "+ wrote $MNT/etc/sysctl.conf (SysV SHM limits for MIT-SHM)"
+echo "+ wrote $MNT/etc/sysctl.conf (SysV SHM limits for MIT-SHM, open-file limits)"
 
 # base64(1) and awk(1): built by build_simple_cmds.sh like the loop above,
 # but a Mac ships them in /usr/bin, not /bin.
