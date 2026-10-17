@@ -2021,6 +2021,16 @@ fi
 cp "$US/sysctl.macho" "$MNT/usr/sbin/sysctl"
 chmod 755 "$MNT/usr/sbin/sysctl"
 echo "+ wrote $(wc -c < "$US/sysctl.macho") bytes to $MNT/usr/sbin/sysctl"
+# kmsg(8) (build_kmsg.sh): the kernel message buffer, as dmesg(8) prints it.
+# The only way to read the kernel log over ssh; built here when missing.
+if [ ! -f "$US/libc_build/kmsg.macho" ]; then
+    echo "+ kmsg.macho missing -- building it (build_kmsg.sh)"
+    (cd "$US" && ./build_kmsg.sh)
+fi
+[ -f "$US/libc_build/kmsg.macho" ] || { echo "error: $US/libc_build/kmsg.macho could not be built" >&2; exit 1; }
+cp "$US/libc_build/kmsg.macho" "$MNT/usr/sbin/kmsg"
+chmod 755 "$MNT/usr/sbin/kmsg"
+echo "+ wrote $(wc -c < "$US/libc_build/kmsg.macho") bytes to $MNT/usr/sbin/kmsg"
 # /etc/sysctl.conf: the SysV shared-memory limits MIT-SHM needs. xnu's
 # defaults (bsd/kern/sysv_shm.c:166-170: shmmax 4 MiB, shmall 1024 pages)
 # are macOS's, and like macOS they are raised here rather than in the
