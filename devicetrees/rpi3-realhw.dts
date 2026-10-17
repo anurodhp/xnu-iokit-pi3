@@ -32,6 +32,16 @@
 
 /* The Pi 3 has a V3D (DARW-295); QEMU raspi3 does not. */
 #define RPI3_HAVE_V3D 1
+/*
+ * The Pi 3's ARM generic timer counts at the 19.2 MHz crystal (the firmware
+ * sets CNTFRQ_EL0 and the local timer prescaler for it). Without this XNU
+ * assumed 24 MHz, so time on a real Pi ran at 19.2/24 = 0.80 of real time:
+ * measured 2026-10-17 as a 30 s sleep taking 37.6 s, audio playing about four
+ * semitones flat, and every Pi-timed benchmark reading 1.25x high. QEMU's
+ * generic timer runs at 62.5 MHz (GTIMER_SCALE), a separate question, so
+ * rpi3.dts leaves the default there.
+ */
+#define RPI3_TIMEBASE_HZ 19200000
 #define RPI3_HAVE_PWM 1
 
 #include "rpi3.dts"

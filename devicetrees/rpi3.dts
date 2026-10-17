@@ -121,6 +121,15 @@
 			reg = <0x0>;
 			cpu-id = <0x0>;
 			state = "running";
+#ifdef RPI3_TIMEBASE_HZ
+			/*
+			 * The generic timer's real rate. Without it XNU assumes
+			 * 24 MHz (pexpert/arm/pe_identify_machine.c, the use_dt
+			 * defaults), and it reads the property only from the
+			 * "running" CPU, so it lives here. See rpi3-realhw.dts.
+			 */
+			timebase-frequency = <RPI3_TIMEBASE_HZ>;
+#endif
 		};
 	};
 
