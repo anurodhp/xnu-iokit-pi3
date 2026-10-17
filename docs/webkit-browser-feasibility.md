@@ -263,7 +263,7 @@ build-script + smoketest loop.
 | GLib 2.70+ (+pcre2, proxy-libintl, libffi) | missing | **S–M** | Trial: configured and linked clean for arm64-apple-ios14.4 in 19 s; 8 missing exports (§5.3). Meson cross file; GLib skips Cocoa/Carbon when `subsystem != 'macos'` and explicitly rejects GNUstep (`glib/meson.build:1007-1036`). |
 | libsoup3 (+libpsl, nghttp2, sqlite3, brotli) | missing | M | Meson; GIO-based. |
 | TLS: glib-networking + OpenSSL 3 (or GnuTLS) | **no TLS library at all** (sshd is `--without-openssl`, `build_sshd.sh:16-29`) | M–L | OpenSSL 3 is the simpler cross-build (perl Configure, `ios64-xcrun`-like target); asm OK for arm64. The glib-networking OpenSSL backend is a GIO module loaded with `dlopen` (we have real `dlopen`). |
-| CA bundle `/etc/ssl/cert.pem` | **missing** (no ca-bundle anywhere in `inject_into_sd_image.sh`/build scripts) | S | Mozilla bundle (curl's `cacert.pem`), pinned plus SHA-256, as `build_fonts.sh` does for DejaVu. |
+| CA bundle `/etc/ssl/cert.pem` | **present** (2026-10-17): Mozilla's bundle from curl.se, pinned by date and SHA-256 in `setup_third_party.sh`, installed by `inject_into_sd_image.sh` for curl | — | |
 | HarfBuzz (+ICU) | missing (FreeType built without it, `build_freetype.sh:24-25`) | S | Rebuild FreeType with HarfBuzz + brotli (WOFF2). |
 | libjpeg-turbo, libwebp | missing (GNUstep gui built `--disable-jpeg`) | S each | |
 | sqlite3 | missing | S | |

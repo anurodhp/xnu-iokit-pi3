@@ -748,6 +748,12 @@ if [ -f "$GS_STAGE/usr/GNUstep/System/Library/Libraries/libgnustep-base.dylib" ]
     done
     ditto "$GS_MAC/root" "$MNT/"
     rm -rf "$GS_MAC"
+    # Turin's app is Settings.app since Turin v0.2 (build_turin.sh); ditto only adds, so an image
+    # injected before keeps Turin.app and its /usr/local/bin link beside it unless they go here
+    if [ -e "$MNT/Applications/Turin.app" ] || [ -L "$MNT/usr/local/bin/Turin" ]; then
+        rm -rf "${MNT:?}/Applications/Turin.app" "${MNT:?}/usr/local/bin/Turin"
+        echo "+ removed retired $MNT/Applications/Turin.app (now Settings.app)"
+    fi
     for d in Applications Library Tools; do
         [ -L "$MNT/usr/GNUstep/System/$d" ] ||
             { echo "error: $MNT/usr/GNUstep/System/$d is not the compatibility symlink" >&2; exit 1; }
@@ -2079,6 +2085,25 @@ fi
 cp "$US/htop.macho" "$MNT/usr/bin/htop"
 chmod 755 "$MNT/usr/bin/htop"
 echo "+ wrote $(wc -c < "$US/htop.macho") bytes to $MNT/usr/bin/htop (upstream htop 3.5.3, tools/userland_staging/build_htop.sh)"
+# curl(1): Apple's curl-166.0.0.0.1 (curl 8.7.1) over Mbed TLS, built by build_curl.sh, and the CA
+# bundle it trusts at /etc/ssl/cert.pem (Mozilla's, pinned by setup_third_party.sh). Rebuilt here when
+# missing or older than its script, like htop. libcurl is installed here too: the system-dylib loop above
+# has already run when this builds it.
+if [ ! -f "$US/libc_build/curl.macho" ] || [ "$US/build_curl.sh" -nt "$US/libc_build/curl.macho" ]; then
+    echo "+ curl.macho missing or older than build_curl.sh -- building"
+    "$US/build_curl.sh"
+fi
+cp "$US/libc_build/system/libcurl.dylib" "$MNT/usr/lib/libcurl.4.dylib"
+chmod 755 "$MNT/usr/lib/libcurl.4.dylib"
+cp "$US/libc_build/curl.macho" "$MNT/usr/bin/curl"
+chmod 755 "$MNT/usr/bin/curl"
+echo "+ wrote $(wc -c < "$US/libc_build/curl.macho") bytes to $MNT/usr/bin/curl (Apple curl-166.0.0.0.1 + b679efc, anurodhp/curl iokit-port, tools/userland_staging/build_curl.sh)"
+CACERT="$(ls third_party/ca-certificates/cacert-*.pem 2>/dev/null | tail -1)"
+[ -n "$CACERT" ] || { echo "error: third_party/ca-certificates/cacert-*.pem not found -- run setup_third_party.sh" >&2; exit 1; }
+mkdir -p "$MNT/etc/ssl"
+cp "$CACERT" "$MNT/etc/ssl/cert.pem"
+chmod 644 "$MNT/etc/ssl/cert.pem"
+echo "+ wrote $MNT/etc/ssl/cert.pem ($(basename "$CACERT"), $(grep -c 'BEGIN CERTIFICATE' "$CACERT") certificates)"
 # pgrep(1) is the same binary as pkill(1) (pkill.c picks its mode from
 # getprogname(), DAR-343); HFS+ symlinks aren't injected yet, so copy.
 if [ -f tools/userland_staging/pkill.macho ]; then

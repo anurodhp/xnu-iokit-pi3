@@ -502,10 +502,20 @@ scripting-language runtime as a goal in itself):
 - **Networking daemons/tools with no current use case**: `bind9` (DNS
   *server*, vs. `libresolv`'s client role above, already actionable),
   `net_snmp`, `ppp`, `eap8021x`, `dcerpc`, `gssd`, `rsync`, `subversion`,
-  `curl`, `netcat`/`lsof`/`tcpdump`/`top`/`remote_cmds` (genuinely useful
+  `netcat`/`lsof`/`tcpdump`/`top`/`remote_cmds` (genuinely useful
   diagnostic tools eventually, but no current roadmap item calls for
   them — natural Phase 6c/Tier-C candidates once basic `ping`/`netstat`/
   `arp`/`route` from the already-pinned `network_cmds` land first).
+- **`curl` — NOW PINNED** (2026-10-17): `curl-166.0.0.0.1` (upstream curl
+  8.7.1), deliberately NOT the `macos-112` manifest's `curl-121.40.2`
+  (curl 7.64.1): that version's `lib/vtls/mbedtls.c` includes
+  `<mbedtls/net.h>`/`<mbedtls/certs.h>`, which Mbed TLS 3 removed, and
+  Apple builds it on SecureTransport, which this port lacks. Built by
+  `build_curl.sh` as `/usr/lib/libcurl.4.dylib` and `/usr/bin/curl` over
+  Mbed TLS 3.6.4, trusting Mozilla's CA bundle at `/etc/ssl/cert.pem`.
+  Cloned from the fork `anurodhp/curl` branch `iokit-port`: that tag plus
+  upstream curl's b679efc (8.8.0), without which Mbed TLS 3.6 fails every
+  https:// handshake setup with `MBEDTLS_ERR_SSL_NO_RNG`.
 - **`zlib` and `expat` — NOW PINNED** (2026-09-26, DAR-384, font/2D
   stack): `zlib-76` and `expat-26`, exact `macos-112` manifest matches
   (the manifest's submodule commits `805f40328df8...` and

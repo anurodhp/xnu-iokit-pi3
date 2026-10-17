@@ -678,6 +678,18 @@ mkdir -p third_party
 #       `git ls-remote` resolves to these two tags). Built into
 #       /usr/lib/libz.1.dylib and /usr/lib/libexpat.1.dylib, where macOS 11
 #       has them (tools/userland_staging/build_zlib.sh, build_expat.sh).
+# curl (2026-10-17): Apple's own, apple-oss-distributions curl-166.0.0.0.1
+#   (upstream curl 8.7.1), NOT the macos-112 manifest's curl-121.40.2: that
+#   is curl 7.64.1, which cannot build against the Mbed TLS 3.6.4 this
+#   project has (its lib/vtls/mbedtls.c includes <mbedtls/net.h> and
+#   <mbedtls/certs.h>, both removed in Mbed TLS 3), and Apple builds it on
+#   SecureTransport, which this port lacks. Cloned from this project's own
+#   fork (git@github.com:anurodhp/curl.git, branch iokit-port) = that tag
+#   plus upstream curl's b679efc (curl 8.8.0) cherry-picked under curl/:
+#   8.7.1 calls mbedtls_ssl_setup() before mbedtls_ssl_conf_rng(), which
+#   Mbed TLS 3.6 rejects (MBEDTLS_ERR_SSL_NO_RNG), so every https:// failed
+#   with "(35) mbedTLS: ssl_init failed". build_curl.sh has the config. Its
+#   CA bundle is Mozilla's, fetched below (cacert-*.pem).
 #   freetype, fontconfig, libpng, pixman, cairo, mkfontscale, libfontenc
 #       -- not Apple code (Apple's own 10.5-10.7 X11 shipped the same
 #       upstream projects in /usr/X11/lib), so the source-priority rule's
@@ -754,12 +766,12 @@ mkdir -p third_party
 #     small fast Finder-style GNUstep file manager (build_milan.sh). Not a
 #     fork: there is no upstream. v0.6 draws the desktop (-MilanDesktop), which
 #     the session autostart uses.
-#     naples: anurodhp/naples (this project's own repo), tag v0.7: Naples.app,
+#     naples: anurodhp/naples (this project's own repo), tag v0.8: Naples.app,
 #     the dock (apps, running programs, minimized windows, Trash), the global
 #     menu bar (Hexley, the frontmost app's menu, clock) and the menu server for
 #     the Eau theme (build_naples.sh). Not a fork: there is no upstream.
-#     turin: anurodhp/Turin (this project's own repo), tag v0.1: Turin.app,
-#     System Preferences -- Wi-Fi, Network, Date & Time, Milan's desktop
+#     turin: anurodhp/Turin (this project's own repo), tag v0.2: Settings.app,
+#     the system settings -- Wi-Fi, Network, Date & Time, Milan's desktop
 #     background and user accounts (build_turin.sh). Not a fork: there is no
 #     upstream.
 #     rome: anurodhp/rome (this project's own repo, private), tag v0.2:
@@ -915,6 +927,7 @@ libXmu|https://gitlab.freedesktop.org/xorg/lib/libxmu.git|libXmu-1.3.1|
 libXft|https://gitlab.freedesktop.org/xorg/lib/libxft.git|libXft-2.3.9|
 zlib|https://github.com/apple-oss-distributions/zlib.git|zlib-76|
 expat|https://github.com/apple-oss-distributions/expat.git|expat-26|
+curl|git@github.com:anurodhp/curl.git|iokit-port||https://github.com/apple-oss-distributions/curl.git
 freetype|https://gitlab.freedesktop.org/freetype/freetype.git|VER-2-14-3|
 fontconfig|https://gitlab.freedesktop.org/fontconfig/fontconfig.git|2.17.1|
 libpng|https://github.com/pnggroup/libpng.git|v1.6.58|
@@ -949,8 +962,8 @@ libtiff|https://gitlab.com/libtiff/libtiff.git|v4.7.1|
 libjpeg-turbo|https://github.com/libjpeg-turbo/libjpeg-turbo.git|3.0.4|
 rome|git@github.com:anurodhp/rome.git|v0.2|
 milan|git@github.com:anurodhp/milan.git|v0.9|
-naples|git@github.com:anurodhp/naples.git|v0.7|
-turin|git@github.com:anurodhp/Turin.git|v0.1|
+naples|git@github.com:anurodhp/naples.git|v0.8|
+turin|git@github.com:anurodhp/Turin.git|v0.2|
 libvterm|https://github.com/neovim/libvterm.git|v0.3.3|
 optimized-routines|https://github.com/ARM-software/optimized-routines.git|v26.07|
 gnustep-eau-theme|git@github.com:anurodhp/gershwin-eau-theme.git|iokit-port||https://github.com/gershwin-desktop/gershwin-eau-theme.git
@@ -1625,6 +1638,28 @@ if [ -n "$SMI_DEST" ]; then
     fi
     tar -xzf "$SMI_TMP/smi.tar.gz" -C third_party
     rm -rf "$SMI_TMP"
+fi
+
+# Mozilla's CA certificates as curl.se publishes them (https://curl.se/docs/caextract.html; MPL-2.0),
+# the dated file so the pin stays fixed, verified by SHA-256 (the same value curl.se publishes
+# beside it). inject_into_sd_image.sh installs it as /etc/ssl/cert.pem, the bundle curl
+# (build_curl.sh) trusts. Refresh: take the newest cacert-<date>.pem there and its .sha256.
+CACERT_DATE="2026-09-25"
+CACERT_SHA256="a41b5d356aea97a529fe27e0f7316d2f9d946d75927476cf9cf1b90637d00505"
+CACERT_DEST="third_party/ca-certificates"
+if [ -f "$CACERT_DEST/cacert-$CACERT_DATE.pem" ] && [ "$FORCE" != "1" ]; then
+    echo "= $CACERT_DEST/cacert-$CACERT_DATE.pem already exists, skipping (use --force to re-fetch)"
+else
+    echo "+ fetching cacert-$CACERT_DATE.pem"
+    rm -rf "$CACERT_DEST"
+    mkdir -p "$CACERT_DEST"
+    curl -fsSL -o "$CACERT_DEST/cacert-$CACERT_DATE.pem" "https://curl.se/ca/cacert-$CACERT_DATE.pem"
+    got="$(shasum -a 256 "$CACERT_DEST/cacert-$CACERT_DATE.pem" | awk '{print $1}')"
+    if [ "$got" != "$CACERT_SHA256" ]; then
+        echo "error: cacert-$CACERT_DATE.pem SHA-256 is $got, expected $CACERT_SHA256" >&2
+        rm -rf "$CACERT_DEST"
+        exit 1
+    fi
 fi
 
 echo "done -- third_party/ populated. See docs/roadmap.md and README.md for what to build next."
