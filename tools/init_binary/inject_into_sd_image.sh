@@ -2007,14 +2007,20 @@ fi
 # sysctl(8) (build_simple_cmds.sh, system_cmds/sysctl.tproj): /usr/sbin on a
 # Mac. pd_launchd_boot.c runs `sysctl -w` for each line of /etc/sysctl.conf at
 # boot, as Apple's launchctl bootstrapper does (launchctl.c:2312, :4524).
+# Required, not optional: without it /etc/sysctl.conf (below) is never
+# applied, the SysV SHM limits stay at xnu's 4 MiB, and every MIT-SHM client
+# falls back to XPutImage over the socket. That was found on a real Pi
+# (2026-10-16): Venice's GL present took 41 ms a frame at 854x480 through
+# XPutImage, 3.6 ms with MIT-SHM. So it is built here when missing, as htop is.
 mkdir -p "$MNT/usr/sbin"
-if [ -f tools/userland_staging/sysctl.macho ]; then
-    cp tools/userland_staging/sysctl.macho "$MNT/usr/sbin/sysctl"
-    chmod 755 "$MNT/usr/sbin/sysctl"
-    echo "+ wrote $(wc -c < tools/userland_staging/sysctl.macho) bytes to $MNT/usr/sbin/sysctl"
-else
-    echo "= tools/userland_staging/sysctl.macho not built -- run build_simple_cmds.sh first if wanted, skipping"
+if [ ! -f "$US/sysctl.macho" ]; then
+    echo "+ sysctl.macho missing -- building it (ONLY_CMDS=sysctl build_simple_cmds.sh)"
+    (cd "$US" && ONLY_CMDS=sysctl ./build_simple_cmds.sh)
 fi
+[ -f "$US/sysctl.macho" ] || { echo "error: $US/sysctl.macho could not be built; /etc/sysctl.conf would never be applied" >&2; exit 1; }
+cp "$US/sysctl.macho" "$MNT/usr/sbin/sysctl"
+chmod 755 "$MNT/usr/sbin/sysctl"
+echo "+ wrote $(wc -c < "$US/sysctl.macho") bytes to $MNT/usr/sbin/sysctl"
 # /etc/sysctl.conf: the SysV shared-memory limits MIT-SHM needs. xnu's
 # defaults (bsd/kern/sysv_shm.c:166-170: shmmax 4 MiB, shmall 1024 pages)
 # are macOS's, and like macOS they are raised here rather than in the
