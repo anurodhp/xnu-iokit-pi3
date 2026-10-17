@@ -43,5 +43,7 @@
  */
 #define RPI3_TIMEBASE_HZ 19200000
 #define RPI3_HAVE_PWM 1
+/* The VPU firmware is there to talk to over VCHIQ; not on QEMU. */
+#define RPI3_HAVE_VCHIQ 1
 
 #include "rpi3.dts"

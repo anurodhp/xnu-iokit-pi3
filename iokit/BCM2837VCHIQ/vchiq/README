@@ -1,0 +1,28 @@
+Vendored VCHIQ core, for BCM2837VCHIQ (docs/video-decode.md).
+
+From github.com/raspberrypi/linux, branch rpi-6.6.y, commit bba53a1
+(2025-03-26), drivers/staging/vc04_services/:
+  interface/vchiq_arm/vchiq_core.c, vchiq_core.h, vchiq_arm.c,
+  vchiq_arm.h, vchiq_dev.c, vchiq_cfg.h, vchiq_pagelist.h, vchiq_ioctl.h
+  include/linux/raspberrypi/vchiq.h
+Licence: "SPDX-License-Identifier: GPL-2.0 OR BSD-3-Clause" (each file's
+first line); used here under BSD-3-Clause.
+
+What changed:
+  - #includes: vchiq_xnu.h instead of the Linux headers;
+  - vchiq_core.h: remote_event's u32 __unused is unused_ (__unused is an
+    attribute macro on XNU, which removed the field from a struct shared
+    with the VPU);
+  - vchiq_core.c: `current == ...slot_handler_thread` is
+    vchiq_xnu_is_current();
+  - vchiq_arm.c: only the instance/service/keepalive half is kept; the
+    platform half (probe, DT, dma mapping, doorbell, pagelists, chrdev) is
+    BCM2837VCHIQ.cpp, reached through vchiq_xnu_platform.h;
+  - vchiq_dev.c: the file operations are entry points for
+    BCM2837VCHIQUserClient (vchiq_xnu_open/release/ioctl), the argument
+    struct is a kernel copy (reads and writes of it marked "XNU:"), no
+    32-bit compat ioctls; current->pid/tgid are thread/process ids.
+New: vchiq_xnu.h, vchiq_xnu.c (the Linux API on XNU), vchiq_xnu_platform.h,
+vchiq_debugfs.h (no debugfs).
+
+tools/sync_iokit_drivers.sh copies these flat into the XNU tree.

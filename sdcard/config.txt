@@ -29,12 +29,16 @@ enable_uart=1
 # value.
 core_freq=250
 
-# gpu_mem is otherwise irrelevant to XNU (bootxnu.c hardcodes
-# boot_args->mem_size to a fixed 128MB regardless of this value - see
-# README.md and devicetrees/rpi3-realhw.dts) but pinned explicitly anyway
-# so the number is documented and not left to whatever this firmware
-# version's default happens to be.
-gpu_mem=64
+# The VideoCore's share of RAM. The firmware keeps it at the top of the 1 GB;
+# u-boot's bootxnu hands XNU the rest (boot_args->mem_size from the
+# firmware's GET_ARM_MEMORY answer, third_party/u-boot/cmd/bootxnu.c - it
+# used to be a fixed 128 MB, which an older version of this comment said).
+# 128 MB rather than 64: the VPU's H.264 decoder (MMAL vc.ril.video_decode,
+# reached through BCM2837VCHIQ for Venice's hardware decoding) allocates its
+# reference frames and output buffers from this memory, and 64 MB is not
+# enough for 1080p; 128 is what Raspberry Pi OS sets for video playback.
+# XNU gets 896 MB instead of 960.
+gpu_mem=128
 
 # Run the ARM cores at their rated 1.2 GHz all the time. The firmware only
 # raises the ARM clock above its 600 MHz floor when the OS asks (Linux's

@@ -809,6 +809,17 @@ mkdir -p third_party
 #       Vulkan-Headers submodules; LGPL-2.1+), libass 0.17.4 (ISC), HarfBuzz
 #       11.2.1 (MIT), fribidi v1.0.16 (LGPL-2.1+), Mbed TLS v3.6.4 (with its
 #       framework submodule; Apache-2.0). Apple ships none of these.
+#     userland (2026-10-17): the Raspberry Pi userland libraries FFmpeg's
+#       h264_mmal needs for the Pi's hardware video decoder (vcos,
+#       vchiq_arm, bcm_host + vchostif, MMAL; BSD-3-Clause), from this
+#       project's fork (git@github.com:anurodhp/userland.git, branch
+#       iokit-port) of github.com/raspberrypi/userland a54a0db (master,
+#       2024-12-23; the project has no release tags). Not Apple code and
+#       not something Apple ships an equivalent of, so the real-upstream
+#       fallback. Fork changes: VCHIQ over the BCM2837VCHIQ IOKit service
+#       instead of /dev/vchiq, Darwin semaphores for vcos, and a 64-bit
+#       MMAL client (upstream builds none for arm64). Built by
+#       tools/userland_staging/build_rpi_userland.sh.
 #     libjpeg-turbo 3.0.4: github.com/libjpeg-turbo/libjpeg-turbo tag 3.0.4,
 #     unmodified (IJG and zlib licences); gnustep-gui reads .jpg/.jpeg through it
 #     (build_libjpeg.sh, build_gnustep_gui.sh). Apple's ImageIO is closed.
@@ -928,6 +939,7 @@ libXft|https://gitlab.freedesktop.org/xorg/lib/libxft.git|libXft-2.3.9|
 zlib|https://github.com/apple-oss-distributions/zlib.git|zlib-76|
 expat|https://github.com/apple-oss-distributions/expat.git|expat-26|
 curl|git@github.com:anurodhp/curl.git|iokit-port||https://github.com/apple-oss-distributions/curl.git
+userland|git@github.com:anurodhp/userland.git|iokit-port||https://github.com/raspberrypi/userland.git
 freetype|https://gitlab.freedesktop.org/freetype/freetype.git|VER-2-14-3|
 fontconfig|https://gitlab.freedesktop.org/fontconfig/fontconfig.git|2.17.1|
 libpng|https://github.com/pnggroup/libpng.git|v1.6.58|

@@ -546,6 +546,10 @@ BCM2837RegisterBuiltinPersonalities(void)
 	// only in builds that define RPI3_HAVE_V3D (rpi3-realhw.dts), so this
 	// personality is inert under QEMU.
 	OSDictionary *v3d = makePersonality("IOPlatformDevice", "BCM2837V3D", "v3d", -1);
+	// "vchiq" - the VCHIQ message queue to the VPU firmware (its video
+	// decoder, for one). The DT node exists only in builds that define
+	// RPI3_HAVE_VCHIQ (rpi3-realhw.dts); QEMU raspi3 has no VPU.
+	OSDictionary *vchiq = makePersonality("IOPlatformDevice", "BCM2837VCHIQ", "vchiq", -1);
 	// IOBlockStorageDriver (real apple-oss-distributions/IOStorageFamily,
 	// vendored into iokit/Storage/ and iokit/IOKit/storage/, matching
 	// vintage IOStorageFamily-218.1.4 - the initially-vendored 337.100.1
@@ -740,6 +744,10 @@ BCM2837RegisterBuiltinPersonalities(void)
 	if (v3d != NULL) {
 		personalities->setObject(v3d);
 		v3d->release();
+	}
+	if (vchiq != NULL) {
+		personalities->setObject(vchiq);
+		vchiq->release();
 	}
 	if (blockStorageDriver != NULL) {
 		personalities->setObject(blockStorageDriver);

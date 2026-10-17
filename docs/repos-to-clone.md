@@ -44,6 +44,7 @@ The main repo itself is `anurodhp/xnu-iokit-pi3`.
 | `Csu` | `anurodhp/Csu` | `bcm2837-bringup` | apple-oss-distributions |
 | `bash` | `anurodhp/bash` | `iokit-port` | apple-oss-distributions |
 | `cron` | `anurodhp/cron` | `iokit-port` | apple-oss-distributions |
+| `userland` | `anurodhp/userland` | `iokit-port` | raspberrypi/userland (off `a54a0db`; VCHIQ over IOKit, 64-bit MMAL) |
 | `BSM` | `anurodhp/bsm` | `iokit-port` | apple-oss-distributions |
 | `ICU` | `anurodhp/ICU` | `iokit-port` | apple-oss-distributions |
 | `configd` | `anurodhp/configd` | `iokit-port` | apple-oss-distributions |

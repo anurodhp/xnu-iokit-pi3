@@ -1486,6 +1486,26 @@ if [ -f tools/userland_staging/libc_build/audio_play.macho ]; then
 else
     echo "= audio_play.macho not built -- run tools/userland_staging/build_audio_play.sh first if wanted, skipping"
 fi
+# Hardware video decoding test tools, real-hardware images too (QEMU has no
+# VPU): tools/userland_staging/build_hwdec_smoketest.sh. The libraries they
+# use (libmmal, libbcm_host, libvchiq_arm, libvcos) are system dylibs,
+# installed by the generic loop above.
+for t in hwdec_compare mmal_example_basic_1; do
+    if [ -f tools/userland_staging/libc_build/$t.macho ]; then
+        mkdir -p "$MNT/usr/local/bin"
+        cp tools/userland_staging/libc_build/$t.macho "$MNT/usr/local/bin/$t"
+        chmod 755 "$MNT/usr/local/bin/$t"
+        echo "+ wrote /usr/local/bin/$t (VPU H.264 decoding over BCM2837VCHIQ)"
+    else
+        echo "= $t.macho not built -- run tools/userland_staging/build_hwdec_smoketest.sh first if wanted, skipping"
+    fi
+done
+if [ -f tools/userland_staging/libc_build/hwdec/hwdec_test_720p.mp4 ]; then
+    mkdir -p "$MNT/usr/local/share/hwdec"
+    cp tools/userland_staging/libc_build/hwdec/hwdec_test_720p.mp4 tools/userland_staging/libc_build/hwdec/hwdec_test_720p.h264 \
+        "$MNT/usr/local/share/hwdec/"
+    echo "+ wrote /usr/local/share/hwdec/hwdec_test_720p.{mp4,h264}"
+fi
 # coreaudio/ (audio daemon + CoreAudio HAL subset): libaudiohal.dylib is installed by the generic
 # libc_build/system loop above; the daemon, its launchd job and the smoketest client are here.
 # Built by coreaudio/build_libaudiohal.sh, build_audiod.sh, build_ca_play.sh.

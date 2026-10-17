@@ -73,9 +73,11 @@ missing_from_conf=()
 diverged=()
 copied_files=()
 
-# iokit/<Driver>/validate/*.{c,h} (vendored VC4 validators, BCM2837V3D) land
-# flat in the same destination directory as everything else.
-for src in iokit/*/*.cpp iokit/*/*.h iokit/*/validate/*.c iokit/*/validate/*.h; do
+# iokit/<Driver>/validate/*.{c,h} (vendored VC4 validators, BCM2837V3D) and
+# iokit/<Driver>/vchiq/*.{c,h} (vendored VCHIQ core, BCM2837VCHIQ) land flat
+# in the same destination directory as everything else.
+for src in iokit/*/*.cpp iokit/*/*.h iokit/*/validate/*.c iokit/*/validate/*.h \
+	iokit/*/vchiq/*.c iokit/*/vchiq/*.h; do
 	[ -e "$src" ] || continue
 	base="$(basename "$src")"
 	dst="$DEST/$base"

@@ -416,6 +416,25 @@
 			interrupts = <10>;
 		};
 #endif
+#ifdef RPI3_HAVE_VCHIQ
+		/*
+		 * VCHIQ, the message queue to the VPU firmware (BCM2837VCHIQ).
+		 * Linux bcm2835-rpi.dtsi: vchiq: mailbox@7e00b840, compatible
+		 * "brcm,bcm2835-vchiq" (bcm2836/7: "brcm,bcm2836-vchiq", 64-byte
+		 * cache lines), reg <0x7e00b840 0x3c> - the ARM doorbell block
+		 * (BELL0 at +0, BELL2 at +8). Interrupt: raw <0 2> is the basic
+		 * bank ("ARM Doorbell 0"), bit 2, so BCM2837InterruptController
+		 * vector 64 + 2 = 66 (kVectorBasicBase, flattened like the nodes
+		 * above). Only real hardware: QEMU raspi3 has no VPU behind it.
+		 */
+		vchiq {
+			device_type = "vchiq";
+			compatible = "brcm,bcm2836-vchiq";
+			reg = <0xb840 0 0x3c 0>;
+			interrupt-parent = <0x1>;
+			interrupts = <66>;
+		};
+#endif
 	};
 
 	/*
