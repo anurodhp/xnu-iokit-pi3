@@ -97,33 +97,84 @@ v3d_bug_on(const char *file, int line)
 
 /* ============================ V3DBuffer ============================ */
 
-/* See BCM2837V3DUserClient::readBO() for why the flush makes this correct.
- * Caller has waited for the GPU and range-checked offset/size. */
+/* io_map_with_prot (osfmk/arm/io_map.c) after VM init: kmem_alloc_pageable()
+ * plus pmap_map() with the given WIMG flags, which pmap_enter_options honours
+ * even for a managed page whose own attribute is different (osfmk/arm/pmap.c,
+ * "if ((flags & (VM_WIMG_MASK | VM_WIMG_USE_DEFAULT)))"). This driver is
+ * compiled into the kernel, so it can use the kernel's own primitives. */
+#include <mach/vm_param.h>
+#ifndef VM_WIMG_COPYBACK
+#define VM_WIMG_COPYBACK 0x2   /* osfmk/arm/memory_types.h: VM_MEM_COHERENT, normal cacheable */
+#endif
+extern "C" vm_offset_t io_map_with_prot(vm_map_offset_t phys_addr, vm_size_t size, unsigned int flags, vm_prot_t prot);
+extern "C" void ml_io_unmap(vm_offset_t addr, vm_size_t sz);
+
+/* Clean and invalidate [va, va+len) to the point of coherency, by VA. Not
+ * xnu's FlushPoC_DcacheRegion: that is empty on APPLE_ARM64_ARCH_FAMILY
+ * builds ("Fully Coherent"), which the Cortex-A53 is not. By-VA maintenance
+ * is broadcast to every core in the inner-shareable domain, so a line any of
+ * the four cores fetched through the alias is dropped too (set/way would only
+ * reach this core's L1). */
+static void
+v3d_dcache_civac(vm_offset_t va, vm_size_t len)
+{
+	uint64_t ctr;
+	__asm__ volatile ("mrs %0, ctr_el0" : "=r" (ctr));
+	const vm_offset_t line = 4UL << ((ctr >> 16) & 0xf);      /* DminLine: log2 words */
+	vm_offset_t p = va & ~(line - 1), end = va + len;
+	__asm__ volatile ("dmb sy" ::: "memory");
+	for (; p < end; p += line) {
+		__asm__ volatile ("dc civac, %0" :: "r" (p) : "memory");
+	}
+	__asm__ volatile ("dsb sy" ::: "memory");
+}
+
+/*
+ * The fast path of BCM2837V3DUserClient::readBO(); the caller has waited for
+ * the GPU and range-checked offset/size.
+ *
+ * The BO is allocated write-combined (kIOMapWriteCombineCache), and that is
+ * an attribute of its physical pages: xnu applies it to every mapping made
+ * from the BO's memory object, the kernel's physical aperture included
+ * (pmap_update_cache_attributes_locked). So a kIOMapCopybackCache mapping of
+ * fMem, which is what this used to read through, still came out
+ * write-combined: the read-back ran at the uncached rate, 98 MB/s on a Pi 3
+ * against 957 MB/s for RAM (v3d_membench, 2026-10-17). The cached alias here
+ * is mapped from the physical address with an explicit VM_WIMG_COPYBACK, so
+ * it really is cacheable, while the BO and every client mapping of it stay
+ * write-combined.
+ *
+ * Coherence of the two aliases: the GPU writes RAM directly, and nothing
+ * writes through this alias (read-only), so no line can be dirty. A line
+ * fetched through it (by the copy, or speculatively) can be stale once the
+ * GPU writes again, which is why every read starts with a clean+invalidate
+ * of the range through the alias, after the GPU is done; lines fetched after
+ * that hold the finished data.
+ */
 IOReturn
 V3DBuffer::readCached(uint32_t offset, uint32_t size, uint64_t userDst)
 {
 	if (fMem == NULL) {
 		return kIOReturnNotPermitted;
 	}
-	if (fCachedMap == NULL) {
-		IOMemoryMap *m = fMem->createMappingInTask(kernel_task, 0,
-		    kIOMapAnywhere | kIOMapCopybackCache | kIOMapReadOnly);
-		if (m == NULL) {
+	if (fCachedVA == 0) {
+		vm_size_t len = round_page(fSize);
+		vm_offset_t va = io_map_with_prot(fMem->getPhysicalAddress(), len, VM_WIMG_COPYBACK, VM_PROT_READ);
+		if (va == 0) {
 			return kIOReturnNoMemory;
 		}
-		// Two readers racing here would each make a map; keep one.
-		if (!OSCompareAndSwapPtr(NULL, m, (void * volatile *)&fCachedMap)) {
-			m->release();
+		// Two readers racing here would each make a mapping; keep one.
+		if (!OSCompareAndSwapPtr(NULL, (void *)va, (void * volatile *)&fCachedVA)) {
+			ml_io_unmap(va, len);
+		} else {
+			fCachedLen = len;
 		}
 	}
 	uint64_t t0 = mach_absolute_time();
-	IOReturn r = fMem->performOperation(kIOMemoryIncoherentIOFlush, offset, size);
-	if (r != kIOReturnSuccess) {
-		return r;
-	}
+	v3d_dcache_civac(fCachedVA + offset, size);
 	uint64_t t1 = mach_absolute_time();
-	const void *src = (const void *)(fCachedMap->getVirtualAddress() + offset);
-	r = copyout(src, (user_addr_t)userDst, size) == 0 ? kIOReturnSuccess : kIOReturnVMError;
+	const void *src = (const void *)(fCachedVA + offset);
+	IOReturn r = copyout(src, (user_addr_t)userDst, size) == 0 ? kIOReturnSuccess : kIOReturnVMError;
 	uint64_t t2 = mach_absolute_time();
 	if (v3d_kglue_debug) {
 		// v3d-debug=1: average cost of each step every 64 reads (DARW-303).
@@ -247,9 +298,9 @@ V3DBuffer::free(void)
 		v3d_kglue_free_shader(fShader);
 		fShader = NULL;
 	}
-	if (fCachedMap != NULL) {
-		fCachedMap->release();
-		fCachedMap = NULL;
+	if (fCachedVA != 0) {
+		ml_io_unmap(fCachedVA, fCachedLen);
+		fCachedVA = 0;
 	}
 	if (fPoolOwner != NULL) {
 		fPoolOwner->freeBinSlots(fPoolSlot, fPoolSlots);

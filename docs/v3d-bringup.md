@@ -200,3 +200,41 @@ by the whole-frame GPU read-back, so it should not beat x11 at normal sizes
 until the driver can read back just the damaged box.
 
 Test: `tools/rome_qemu_test.sh` (Xvfb under QEMU, both renderers).
+
+## Fast read-back: a really cached kernel alias (real Pi 3, 2026-10-17)
+
+The GL present path reads every frame back with `v3d_drm_read_bo()`
+(`mesa_xlib_vc4/xlib_vc4.c`), which was meant to copy through a cached
+kernel mapping after a cache flush. It ran at the uncached rate: 98 MB/s,
+37.7 ms for a 1280x720 frame, against 957 MB/s for RAM (`v3d_membench`, which
+now times `read_bo` too). Cause: BOs are allocated `kIOMapWriteCombineCache`,
+which is an attribute of the physical pages, and xnu applies it to every
+mapping made from the BO's memory object, the physical aperture included
+(`pmap_update_cache_attributes_locked`), so the `kIOMapCopybackCache` mapping
+of `fMem` came out write-combined. That is also why DARW-303's cacheable BOs
+could not work without changing every client mapping.
+
+Fix (`V3DBuffer::readCached`): a read-only alias mapped from the physical
+address with an explicit `VM_WIMG_COPYBACK` (`io_map_with_prot`), which
+`pmap_enter_options` honours for a managed page; the BO and all client
+mappings stay write-combined. Before each copy the range is cleaned and
+invalidated by VA through the alias with the driver's own `dc civac` loop,
+not `FlushPoC_DcacheRegion`, which is empty on `APPLE_ARM64_ARCH_FAMILY`
+builds.
+
+| | before | after |
+|---|---|---|
+| `read_bo` 854x480 (1.6 MB) | 16.9 ms (97 MB/s) | 2.0 ms (833 MB/s) |
+| `read_bo` 1280x720 (3.6 MB) | 37.7 ms (98 MB/s) | 4.1 ms (900 MB/s) |
+| glxgears 300x300, HDMI desktop | 87 fps | 149 fps |
+| glxgears 1000x700 | 20.4 fps | 54 fps |
+| glxgears 1280x720 | 16.1 fps | 49 fps |
+
+(The "before" glxgears numbers are the 2026-10-06 ones in
+`docs/framebuffer-mapping.md`.) Frames checked visually afterwards (Venice
+playing Big Buck Bunny): no stale or torn content.
+
+Not covered: Mesa's own read mappings (`glReadPixels`, `pipe_texture_map` for
+read) still go through the client's write-combined mapping at ~100 MB/s.
+Florence's WebKit readback is one of those; routing them through
+`v3d_drm_read_bo` in the libdrm shim would give it the same speed.

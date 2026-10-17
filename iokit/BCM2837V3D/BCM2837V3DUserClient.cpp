@@ -278,14 +278,9 @@ BCM2837V3DUserClient::waitBO(const v3d_wait_bo *in)
 
 /*
  * Fast CPU read-back (struct v3d_read_bo). Waits for the BO's last job, then
- * cleans+invalidates the data cache for the range (IOMemoryDescriptor
- * performOperation kIOMemoryIncoherentIOFlush) and copies out through a
- * cached kernel mapping of the BO, created on first use. The invalidate is
- * what makes the cached read correct: the GPU wrote RAM directly, and no
- * line for these pages can be dirty because nothing writes BOs through a
- * cached mapping (the kernel and clients write them write-combined).
- * Lines a speculative fetch brings in after the flush hold the finished
- * data, since the GPU is done.
+ * copies out through a read-only cacheable kernel alias of the BO after a
+ * clean+invalidate of the range by VA; V3DBuffer::readCached() has why the
+ * alias must be mapped from the physical address, and why it is coherent.
  */
 IOReturn
 BCM2837V3DUserClient::readBO(const v3d_read_bo *in)

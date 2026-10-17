@@ -65,7 +65,11 @@ public:
 
 	static V3DBuffer *withSize(uint32_t size);
 	static V3DBuffer *empty(void);   /* no memory yet: for binner-pool slices */
-	IOMemoryMap *fCachedMap;   /* cached kernel mapping for readCached(), made on first use */
+	/* Read-only cacheable kernel alias of the BO's (contiguous) pages for
+	 * readCached(), made on first use with io_map_with_prot(VM_WIMG_COPYBACK).
+	 * The BO itself stays write-combined. */
+	vm_offset_t fCachedVA;
+	vm_size_t fCachedLen;
 	IOReturn readCached(uint32_t offset, uint32_t size, uint64_t userDst);
 	virtual void free(void) APPLE_KEXT_OVERRIDE;
 };
