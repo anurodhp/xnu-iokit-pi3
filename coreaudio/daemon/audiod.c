@@ -11,10 +11,14 @@
  * launchd starts it on demand through the MachServices entry in
  * org.puredarwin.coreaudiod.plist and the daemon claims the port with ONE
  * bootstrap_check_in (a second returns BOOTSTRAP_SERVICE_ACTIVE; DAR-270).
- * It exits (status 0) after IDLE_EXIT_S seconds with no streams. The device
- * volume and mute outlive that: they are read from VOLUME_FILE at start and
- * written back when the daemon exits (idle or SIGTERM), not on every change,
- * so the request thread never touches the disk.
+ * It exits (status 0) after IDLE_EXIT_S seconds with no streams, unless
+ * started with -k (keep running: the plist starts it at boot that way, so the
+ * first sound does not wait for a daemon start). Either way the engine is
+ * released while nothing plays. The device volume and mute outlive the
+ * daemon: they are read from VOLUME_FILE at start and written back by the
+ * mixer thread soon after a change and when the daemon exits, so the request
+ * thread never touches the disk and a running daemon does not lose a change
+ * to a power cut.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,6 +70,8 @@ static int             g_mute;
 static volatile sig_atomic_t g_stop;
 static int             g_exiting;            /* mixer decided to exit; guarded by g_mu */
 static uint64_t        g_idle_since_ns;     /* 0 while a stream exists; guarded by g_mu */
+static int             g_keep_running;      /* -k: never exit when idle */
+static int             g_volume_dirty;      /* volume/mute changed since last saved; guarded by g_mu */
 
 /* IOAudioTypes.h:136-142 and :100-108, as in audio_play.c */
 typedef struct { uint32_t fActualDataByteSize, fActualNumSampleFrames, fTotalDataByteSize, fNominalDataByteSize; } AudioBufferDataDescriptor;
@@ -169,7 +175,11 @@ static void *mixer_thread(void *unused)
         pthread_mutex_lock(&g_mu);
         int n = count_streams_locked();
         uint64_t idle = g_idle_since_ns;
+        int dirty = g_volume_dirty;
+        g_volume_dirty = 0;
         pthread_mutex_unlock(&g_mu);
+        if (dirty)
+            save_volume();             /* off the request thread; at most one write per mixer pass */
 
         if (n == 0) {
             if (engine_up) {            /* let the queued tail drain, then release the engine */
@@ -191,7 +201,7 @@ static void *mixer_thread(void *unused)
                 chunks = errors = resyncs = trap_sum_us = trap_max_us = gap_max_us = last_iter_t = slow_iters = loop_max_us = 0;
                 fflush(stdout);
             }
-            if (idle && now_ns() - idle > (uint64_t)IDLE_EXIT_S * 1000000000ULL) {
+            if (!g_keep_running && idle && now_ns() - idle > (uint64_t)IDLE_EXIT_S * 1000000000ULL) {
                 int go = 0;
                 pthread_mutex_lock(&g_mu);
                 if (count_streams_locked() == 0) { g_exiting = 1; go = 1; }   /* an OPEN that won the race keeps us alive */
@@ -384,6 +394,7 @@ static void handle(const ca_request_t *rq, mach_msg_size_t rq_size, ca_reply_t *
         if (!(rq->b & (CA_SET_VOLUME | CA_SET_MUTE)) || ((rq->b & CA_SET_VOLUME) && !(rq->f >= 0.0f && rq->f <= 1.0f))) { rp->kr = KERN_INVALID_ARGUMENT; break; }
         if (rq->b & CA_SET_VOLUME) g_volume = rq->f;
         if (rq->b & CA_SET_MUTE)   g_mute = rq->a ? 1 : 0;
+        g_volume_dirty = 1;            /* the mixer thread saves it */
         break;
     case CA_OP_GET_INFO:
         rp->rate = CA_DEVICE_RATE;
@@ -397,8 +408,12 @@ static void handle(const ca_request_t *rq, mach_msg_size_t rq_size, ca_reply_t *
     pthread_mutex_unlock(&g_mu);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-k") == 0) g_keep_running = 1;
+        else { fprintf(stderr, "usage: audiod [-k]   (-k: keep running when idle)\n"); return 64; }
+    }
     mach_timebase_info(&g_tb);
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
@@ -422,7 +437,7 @@ int main(void)
     }
     pthread_mutex_unlock(&g_mu);
     load_volume();
-    printf("audiod: up (volume %.2f%s)\n", g_volume, g_mute ? ", muted" : "");
+    printf("audiod: up (volume %.2f%s%s)\n", g_volume, g_mute ? ", muted" : "", g_keep_running ? ", kept running" : "");
 
     /* The request thread also sits in the audio path (every WRITE waits for it). */
     kern_return_t rtkr = ca_make_realtime(10625000ULL, 500000ULL, 4000000ULL);

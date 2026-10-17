@@ -2,10 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
 	coreaudio/ audio daemon (project-authored, like org.chrony.chronyd.plist).
-	On demand: declares only the Mach service, so launchd starts it when the
-	first client does bootstrap_look_up. Same MachServices check-in mechanism
-	notifyd and configd use (tools/userland_staging/build_notifyd.sh header).
-	No KeepAlive: the daemon exits by itself after 10 s without streams.
+	Started at boot and kept running (RunAtLoad, KeepAlive, audiod -k), so the
+	first sound after boot, or after a pause, does not wait for launchd to start
+	the daemon. It still claims its Mach service with the same MachServices
+	check-in notifyd and configd use (tools/userland_staging/build_notifyd.sh
+	header), and releases the audio engine while nothing plays. Without -k the
+	daemon exits after 10 s without streams and launchd starts it on demand.
 	StandardOutPath/ErrorPath for the same reason org.chrony.chronyd.plist
 	documents: launchd does not wire an unconfigured job's stdio anywhere.
 
@@ -23,7 +25,12 @@
 	<key>ProgramArguments</key>
 	<array>
 		<string>/usr/sbin/audiod</string>
+		<string>-k</string>
 	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
 	<key>ProcessType</key>
 	<string>Interactive</string>
 	<key>ThrottleInterval</key>

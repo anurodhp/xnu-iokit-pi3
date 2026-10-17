@@ -12,7 +12,7 @@ at build time, not copied here).
 ## Pieces
 | Path | What |
 |---|---|
-| `daemon/audiod.c` | launchd on-demand job `org.puredarwin.coreaudiod`; mixes client streams (resample to 48 kHz, float sum, device volume, clip) and drives `IOAudioEngineUserClient` like `tools/userland_staging/audio_play.c` |
+| `daemon/audiod.c` | launchd job `org.puredarwin.coreaudiod`, started at boot and kept running (`-k`, RunAtLoad + KeepAlive; without `-k` it is on demand and exits after 10 s idle); mixes client streams (resample to 48 kHz, float sum, device volume, clip) and drives `IOAudioEngineUserClient` like `tools/userland_staging/audio_play.c` |
 | `daemon/mixer.[ch]` | pure ring/resample/mix/clip math, host-tested |
 | `lib/libaudiohal.c` | `/usr/lib/libaudiohal.dylib`: exports only `AudioObject{Has,IsSettable,GetSize,Get,Set}Property*` and `AudioDevice{CreateIOProcID,DestroyIOProcID,Start,Stop}` |
 | `include/ca_protocol.h` | project-defined Mach message protocol (PCM inline, no shared memory) |
@@ -23,6 +23,12 @@ Build (Xcode 12 + the `libc_build/system` dylibs): `build_libaudiohal.sh`,
 `build_audiod.sh`, `build_ca_play.sh`; `tools/init_binary/inject_into_sd_image.sh`
 installs `/usr/sbin/audiod`, the LaunchDaemons plist, `/usr/lib/libaudiohal.dylib`
 (generic dylib loop) and `/usr/local/bin/ca_play`.
+
+## Running at boot (2026-10-17)
+The plist starts `audiod -k` at boot and keeps it running, so the first sound does not wait for launchd to start the
+daemon. `-k` only skips the idle exit: the engine is still released while nothing plays. The mixer thread now saves the
+volume soon after each change as well as at exit, so a running daemon does not lose a change to a power cut. Verified on
+the Pi: audiod up from boot, still up after 20 s idle and after playback, a volume change in the file within a second.
 
 ## Device model
 Object 1 = system, 2 = the one output device ("Raspberry Pi 3.5mm Output",
