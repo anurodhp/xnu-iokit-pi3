@@ -4,6 +4,7 @@
  */
 #include <IOKit/IOLib.h>
 #include <IOKit/IODeviceMemory.h>
+#include <IOKit/IOSubMemoryDescriptor.h>
 #include <libkern/OSAtomic.h>
 #include <kern/clock.h>
 #include <sys/errno.h>
@@ -30,6 +31,8 @@ enum {
 	// Hang detector period. Linux vc4_queue_hangcheck(): 100 ms
 	// (vc4_gem.c, the mod_timer in vc4_queue_hangcheck).
 	kHangcheckMs = 100,
+	// GPU memory pool, MiB (boot-arg v3d-pool): see initGpuPool().
+	kGpuPoolDefaultMB = 128,
 };
 
 static inline void
@@ -159,7 +162,7 @@ V3DBuffer::readCached(uint32_t offset, uint32_t size, uint64_t userDst)
 	}
 	if (fCachedVA == 0) {
 		vm_size_t len = round_page(fSize);
-		vm_offset_t va = io_map_with_prot(fMem->getPhysicalAddress(), len, VM_WIMG_COPYBACK, VM_PROT_READ);
+		vm_offset_t va = io_map_with_prot(fPhys, len, VM_WIMG_COPYBACK, VM_PROT_READ);
 		if (va == 0) {
 			return kIOReturnNoMemory;
 		}
@@ -207,6 +210,151 @@ V3DBuffer::empty(void)
 	return b;
 }
 
+/*
+ * The GPU memory pool. The V3D has no MMU, so every BO is physically
+ * contiguous. Allocated one by one, the large ones stopped being available
+ * once memory was fragmented: on a real Pi 3 (2026-10-17) a 1918x1057
+ * window's 8 MB buffers failed in vm_page_find_contiguous ("found 0 pages",
+ * after scanning 233729 pages and a zone_gc) on every frame, so the window
+ * stayed black, and the scan cost every GL client its frame rate (glxgears
+ * at 1280x720: 45 fps on unfragmented memory, 14 after). Linux reserves CMA
+ * for the same reason. So: one contiguous block, reserved when the driver
+ * starts (before memory fragments), the BOs carved out of it in page-sized
+ * units (PAGE_SIZE: a slice must map into a client on page boundaries); a
+ * BO falls back to its own allocation only when the pool is full. Size:
+ * boot-arg v3d-pool=<MiB>, default kGpuPoolDefaultMB; 0 disables it.
+ * Like every BO it is write-combined, below 1 GiB and inside one 256 MiB
+ * window (see withSize()).
+ */
+static IOBufferMemoryDescriptor *sGpuPool;
+static volatile uint8_t *sGpuPoolKva;
+static uint64_t sGpuPoolPhys;
+static uint32_t sGpuPoolPages;
+static uint32_t *sGpuPoolBits;          /* one bit per page, 1 = used */
+static IOSimpleLock *sGpuPoolLock;
+
+static bool
+pool_page_used(uint32_t i)
+{
+	return (sGpuPoolBits[i / 32] >> (i % 32)) & 1;
+}
+
+static void
+pool_mark(uint32_t first, uint32_t n, bool used)
+{
+	for (uint32_t i = first; i < first + n; i++) {
+		if (used) {
+			sGpuPoolBits[i / 32] |= 1U << (i % 32);
+		} else {
+			sGpuPoolBits[i / 32] &= ~(1U << (i % 32));
+		}
+	}
+}
+
+/* First fit; returns the first page, or sGpuPoolPages if no run is free. */
+static uint32_t
+pool_alloc(uint32_t n)
+{
+	uint32_t found = sGpuPoolPages;
+	IOInterruptState s = IOSimpleLockLockDisableInterrupt(sGpuPoolLock);
+	uint32_t run = 0;
+	for (uint32_t i = 0; i < sGpuPoolPages; i++) {
+		if (pool_page_used(i)) {
+			run = 0;
+			continue;
+		}
+		if (++run == n) {
+			found = i + 1 - n;
+			pool_mark(found, n, true);
+			break;
+		}
+	}
+	IOSimpleLockUnlockEnableInterrupt(sGpuPoolLock, s);
+	return found;
+}
+
+static void
+pool_free(uint32_t first, uint32_t n)
+{
+	if (sGpuPoolBits == NULL) {
+		return;          // the driver stopped (freeGpuPool) while the client still held this BO
+	}
+	IOInterruptState s = IOSimpleLockLockDisableInterrupt(sGpuPoolLock);
+	pool_mark(first, n, false);
+	IOSimpleLockUnlockEnableInterrupt(sGpuPoolLock, s);
+}
+
+bool
+V3DBuffer::initGpuPool(uint32_t bytes)
+{
+	if (sGpuPool != NULL || bytes == 0) {
+		return sGpuPool != NULL;
+	}
+	bytes = (bytes + PAGE_SIZE - 1) & ~(uint32_t)(PAGE_SIZE - 1);
+	const uint64_t mask = 0x3FFFF000ULL;
+	IOBufferMemoryDescriptor *rejected[8];
+	uint32_t nRejected = 0;
+	IOBufferMemoryDescriptor *pool = NULL;
+	for (;;) {
+		IOBufferMemoryDescriptor *m = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task,
+		    kIODirectionInOut | kIOMemoryPhysicallyContiguous | kIOMapWriteCombineCache, bytes, mask);
+		if (m == NULL) {
+			break;
+		}
+		uint64_t pa0 = m->getPhysicalAddress();
+		if ((pa0 & 0xf0000000ULL) == ((pa0 + bytes - 1) & 0xf0000000ULL) && pa0 + bytes <= kV3D_BusAliasSize) {
+			pool = m;
+			break;
+		}
+		if (nRejected == sizeof(rejected) / sizeof(rejected[0])) {
+			m->release();
+			break;
+		}
+		rejected[nRejected++] = m;
+	}
+	while (nRejected > 0) {
+		rejected[--nRejected]->release();
+	}
+	if (pool == NULL) {
+		return false;
+	}
+	uint32_t pages = bytes / PAGE_SIZE;
+	uint32_t *bits = (uint32_t *)IOMallocZero((pages + 31) / 32 * sizeof(uint32_t));
+	IOSimpleLock *lock = IOSimpleLockAlloc();
+	if (bits == NULL || lock == NULL) {
+		if (bits != NULL) {
+			IOFree(bits, (pages + 31) / 32 * sizeof(uint32_t));
+		}
+		if (lock != NULL) {
+			IOSimpleLockFree(lock);
+		}
+		pool->release();
+		return false;
+	}
+	sGpuPoolBits = bits;
+	sGpuPoolLock = lock;
+	sGpuPoolPages = pages;
+	sGpuPoolKva = (volatile uint8_t *)pool->getBytesNoCopy();
+	sGpuPoolPhys = pool->getPhysicalAddress();
+	sGpuPool = pool;
+	return true;
+}
+
+void
+V3DBuffer::freeGpuPool(void)
+{
+	if (sGpuPool == NULL) {
+		return;
+	}
+	IOFree(sGpuPoolBits, (sGpuPoolPages + 31) / 32 * sizeof(uint32_t));
+	IOSimpleLockFree(sGpuPoolLock);
+	sGpuPool->release();
+	sGpuPool = NULL;
+	sGpuPoolBits = NULL;
+	sGpuPoolLock = NULL;
+	sGpuPoolPages = 0;
+}
+
 V3DBuffer *
 V3DBuffer::withSize(uint32_t size)
 {
@@ -237,7 +385,24 @@ V3DBuffer::withSize(uint32_t size)
 	// Binner memory (tile state, tile alloc, overflow) is not allocated
 	// here: it comes from one pool, see allocBinSlice().
 	const uint64_t mask = 0x3FFFF000ULL;
-	{
+	if (sGpuPool != NULL) {
+		uint32_t n = size / PAGE_SIZE;
+		uint32_t first = pool_alloc(n);
+		if (first < sGpuPoolPages) {
+			IOMemoryDescriptor *sub = IOSubMemoryDescriptor::withSubRange(sGpuPool,
+			    (IOByteCount)first * PAGE_SIZE, (IOByteCount)n * PAGE_SIZE, kIODirectionInOut);
+			if (sub != NULL) {
+				b->fMem = sub;
+				b->fKva = sGpuPoolKva + (size_t)first * PAGE_SIZE;
+				b->fPhys = sGpuPoolPhys + (uint64_t)first * PAGE_SIZE;
+				b->fGpuPoolFirst = first;
+				b->fGpuPoolPages = n;
+			} else {
+				pool_free(first, n);
+			}
+		}
+	}
+	if (b->fMem == NULL) {
 		IOBufferMemoryDescriptor *rejected[8];
 		uint32_t nRejected = 0;
 		for (;;) {
@@ -250,6 +415,8 @@ V3DBuffer::withSize(uint32_t size)
 			uint64_t pa0 = m->getPhysicalAddress();
 			if ((pa0 & 0xf0000000ULL) == ((pa0 + size - 1) & 0xf0000000ULL)) {
 				b->fMem = m;
+				b->fKva = (volatile uint8_t *)m->getBytesNoCopy();
+				b->fPhys = pa0;
 				break;
 			}
 			if (nRejected == sizeof(rejected) / sizeof(rejected[0])) {
@@ -272,14 +439,14 @@ V3DBuffer::withSize(uint32_t size)
 	// IOBufferMemoryDescriptor's own bzero() (IOBufferMemoryDescriptor.cpp:331)
 	// during allocation, before this loop runs (docs/gpu-opengl-plan.md).
 	{
-		volatile uint64_t *w = (volatile uint64_t *)b->fMem->getBytesNoCopy();
+		volatile uint64_t *w = (volatile uint64_t *)b->fKva;
 		for (uint32_t i = 0; i < size / 8; i++) {
 			w[i] = 0;
 		}
 	}
 	cpuToGpuBarrier();
 
-	IOPhysicalAddress pa = b->fMem->getPhysicalAddress();
+	IOPhysicalAddress pa = (IOPhysicalAddress)b->fPhys;
 	if ((uint64_t)pa + size > kV3D_BusAliasSize) {
 		IOLog("V3DBuffer: physical %#llx+%#x outside the GPU window\n", (uint64_t)pa, size);
 		b->release();
@@ -310,6 +477,10 @@ V3DBuffer::free(void)
 	if (fMem != NULL) {
 		fMem->release();
 		fMem = NULL;
+	}
+	if (fGpuPoolPages != 0) {
+		pool_free(fGpuPoolFirst, fGpuPoolPages);
+		fGpuPoolPages = 0;
 	}
 	OSObject::free();
 }
@@ -938,7 +1109,7 @@ BCM2837V3D::allocBinSlice(uint32_t size)
 	// previous user despite the auto-initialise flag). Slots are reused, so
 	// clear what the job asked for, with plain stores on the write-combined
 	// pool mapping.
-	volatile uint64_t *w = (volatile uint64_t *)((uint8_t *)fBinPool->fMem->getBytesNoCopy() + off);
+	volatile uint64_t *w = (volatile uint64_t *)(fBinPool->fKva + off);
 	for (uint32_t i = 0; i < (size + 7) / 8; i++) {
 		w[i] = 0;
 	}
@@ -1034,7 +1205,7 @@ allocJobBO(void *ctxp, size_t size, bool stage, uint32_t *gpu, void **staging)
 static void
 copyStagingToBO(V3DBuffer *b, const void *src, size_t n)
 {
-	volatile uint32_t *d = (volatile uint32_t *)b->fMem->getBytesNoCopy();
+	volatile uint32_t *d = (volatile uint32_t *)b->fKva;
 	const uint32_t *s = (const uint32_t *)src;
 	for (size_t i = 0; i < (n + 3) / 4; i++) {
 		d[i] = s[i];
@@ -1275,6 +1446,17 @@ BCM2837V3D::start(IOService *provider)
 	if (fQueue == NULL) {
 		return false;
 	}
+	{
+		uint32_t mb = kGpuPoolDefaultMB;
+		PE_parse_boot_argn("v3d-pool", &mb, sizeof(mb));
+		if (mb != 0) {
+			if (V3DBuffer::initGpuPool(mb * 1024U * 1024U)) {
+				IOLog("BCM2837V3D: GPU memory pool %u MiB\n", mb);
+			} else {
+				IOLog("BCM2837V3D: no contiguous %u MiB for the GPU memory pool; BOs are allocated one by one\n", mb);
+			}
+		}
+	}
 	fBinLock = IOSimpleLockAlloc();
 	fBinPool = (fBinLock != NULL) ? V3DBuffer::withSize(kBinPoolSize) : NULL;
 	if (fBinPool == NULL) {
@@ -1370,6 +1552,9 @@ BCM2837V3D::free(void)
 		fBinPool->release();
 		fBinPool = NULL;
 	}
+	// BOs still alive (clients' handles) keep their sub-descriptors, which
+	// retain the pool's descriptor, so its memory outlives this.
+	V3DBuffer::freeGpuPool();
 	if (fBinLock != NULL) {
 		IOSimpleLockFree(fBinLock);
 		fBinLock = NULL;

@@ -54,7 +54,10 @@ struct vc4_validated_shader_info;
 class V3DBuffer : public OSObject {
 	OSDeclareFinalStructors(V3DBuffer)
 public:
-	IOBufferMemoryDescriptor *fMem;
+	IOMemoryDescriptor *fMem;   /* its own IOBufferMemoryDescriptor, or a sub-range of the GPU pool */
+	volatile uint8_t *fKva;     /* kernel write-combined mapping of the BO */
+	uint64_t fPhys;             /* physical address (contiguous) */
+	uint32_t fGpuPoolFirst, fGpuPoolPages;   /* fGpuPoolPages != 0: a slice of the GPU pool */
 	uint32_t fSize;
 	uint32_t fGpuAddr;       /* bus address the GPU uses */
 	volatile uint64_t fBusySeqno;  /* highest seqno of a job using this BO */
@@ -65,6 +68,10 @@ public:
 
 	static V3DBuffer *withSize(uint32_t size);
 	static V3DBuffer *empty(void);   /* no memory yet: for binner-pool slices */
+	/* The GPU memory pool (see initGpuPool() in BCM2837V3D.cpp): BOs come from
+	 * one contiguous block reserved at driver start. */
+	static bool initGpuPool(uint32_t bytes);
+	static void freeGpuPool(void);
 	/* Read-only cacheable kernel alias of the BO's (contiguous) pages for
 	 * readCached(), made on first use with io_map_with_prot(VM_WIMG_COPYBACK).
 	 * The BO itself stays write-combined. */
