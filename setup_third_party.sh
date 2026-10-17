@@ -786,6 +786,17 @@ mkdir -p third_party
 #     (v1.3.1), so the generic REPOS loop (branch/tag only) cannot name it;
 #     it has its own block below. Unmodified; built by build_libghostty_vt.sh
 #     (needs Zig 0.16.x).
+#     The media stack under Venice.app (libmpv; build_libmpv.sh and the
+#     scripts it names), each an unmodified upstream release, shallow-cloned
+#     at its tag by its own block below (FFmpeg's full history alone is
+#     ~500 MB, and libplacebo/mbedtls need submodules):
+#       FFmpeg n7.1.1 (github.com/FFmpeg/FFmpeg; LGPL, built as LGPL-3 with
+#       mbedTLS), mpv v0.40.0 (github.com/mpv-player/mpv; libmpv, built
+#       non-GPL: LGPL-2.1+), libplacebo v7.351.0 (code.videolan.org/videolan/
+#       libplacebo, with its glad, jinja, markupsafe, fast_float and
+#       Vulkan-Headers submodules; LGPL-2.1+), libass 0.17.4 (ISC), HarfBuzz
+#       11.2.1 (MIT), fribidi v1.0.16 (LGPL-2.1+), Mbed TLS v3.6.4 (with its
+#       framework submodule; Apache-2.0). Apple ships none of these.
 #     libjpeg-turbo 3.0.4: github.com/libjpeg-turbo/libjpeg-turbo tag 3.0.4,
 #     unmodified (IJG and zlib licences); gnustep-gui reads .jpg/.jpeg through it
 #     (build_libjpeg.sh, build_gnustep_gui.sh). Apple's ImageIO is closed.
@@ -1022,6 +1033,36 @@ if [ -n "$GHOSTTY_DEST" ]; then
     git -C "$GHOSTTY_DEST" fetch -q --depth 1 origin "$GHOSTTY_REF"
     git -C "$GHOSTTY_DEST" checkout -q FETCH_HEAD
 fi
+
+# The media stack (see the header comment above): one tag each, shallow,
+# with the submodules the builds need.
+MEDIA_REPOS='
+ffmpeg|https://github.com/FFmpeg/FFmpeg.git|n7.1.1|
+mpv|https://github.com/mpv-player/mpv.git|v0.40.0|
+libplacebo|https://code.videolan.org/videolan/libplacebo.git|v7.351.0|3rdparty/glad 3rdparty/jinja 3rdparty/markupsafe 3rdparty/fast_float 3rdparty/Vulkan-Headers
+libass|https://github.com/libass/libass.git|0.17.4|
+harfbuzz|https://github.com/harfbuzz/harfbuzz.git|11.2.1|
+fribidi|https://github.com/fribidi/fribidi.git|v1.0.16|
+mbedtls|https://github.com/Mbed-TLS/mbedtls.git|v3.6.4|framework
+'
+echo "$MEDIA_REPOS" | while IFS='|' read -r name url ref subs; do
+    [ -z "$name" ] && continue
+    dest="third_party/$name"
+    if [ -d "$dest" ]; then
+        if [ "$FORCE" = "1" ]; then
+            echo "+ removing existing $dest (--force)"
+            rm -rf "$dest"
+        else
+            echo "= $dest already exists, skipping (use --force to re-clone)"
+            continue
+        fi
+    fi
+    echo "+ cloning $name @ $ref (shallow) from $url"
+    git -c advice.detachedHead=false clone -q --depth 1 --branch "$ref" "$url" "$dest"
+    if [ -n "$subs" ]; then
+        git -C "$dest" submodule update -q --init --depth 1 $subs
+    fi
+done
 
 # PureDarwin: sparse-checkout only src/Libraries/XPC (launchd/libxpc/
 # notify/libinfo/libnv/launchctl/logd), src/Libraries/CrashReporterClient
