@@ -68,6 +68,30 @@ int main(void)
     CHECK(c[0] == 0.5f && c[2] == 0.25f);
     ca_clip(c, 5, 1.0f, 1);
     CHECK(c[0] == 0.0f && c[4] == 0.0f);
+
+    /* fade: a constant 0.5 stream fades in, holds, then decays to 0 over CA_FADE_FRAMES when it runs dry */
+    {
+        ca_stream_ring fr;
+        ca_fade fd = { 0 };
+        static float src[1000 * 2], fm[1400 * 2];
+        for (int k = 0; k < 2000; k++) src[k] = 0.5f;
+        CHECK(ca_ring_init(&fr, 2048, 2, 48000) == 0);
+        CHECK(ca_ring_write(&fr, src, 1000) == 1000);
+        memset(fm, 0, sizeof fm);
+        uint32_t got = ca_ring_mix_faded(&fr, fm, 1400, 48000, 1.0f, &fd);
+        CHECK(got >= 998 && got <= 1000);
+        CHECK(fm[0] > 0.0f && fm[0] < 0.01f);                       /* first frame: fade-in starts near 0 */
+        CHECK(fabsf(fm[2 * 500] - 0.5f) < 1e-6f);                    /* full level mid-stream */
+        float prev = fm[2 * (got - 1)], worst = 0.0f;
+        for (uint32_t k = got; k < 1400; k++) {                     /* tail: no jump bigger than one fade step */
+            float d = prev - fm[2 * k];
+            if (d > worst) worst = d;
+            prev = fm[2 * k];
+        }
+        CHECK(worst <= 0.5f / CA_FADE_FRAMES + 1e-6f);
+        CHECK(fm[2 * (got + CA_FADE_FRAMES + 1)] == 0.0f && fd.level == 0);   /* silent after the fade */
+        ca_ring_free(&fr);
+    }
     CHECK(ca_ring_init(&r, 0, 2, 48000) != 0 && ca_ring_init(&r, 4, 3, 48000) != 0);
 
     printf(fails ? "mixer_test: %d FAILED\n" : "mixer_test: PASS\n", fails);

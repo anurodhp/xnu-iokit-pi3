@@ -68,6 +68,34 @@ uint32_t ca_ring_mix_into(ca_stream_ring *r, float *mix, uint32_t out_frames,
     return supplied;
 }
 
+uint32_t ca_ring_mix_faded(ca_stream_ring *r, float *mix, uint32_t out_frames,
+                           uint32_t out_rate, float gain, ca_fade *fd)
+{
+    static float tmp[4096 * 2];     /* audiod's mixer thread is the only caller */
+    if (out_frames > 4096) out_frames = 4096;
+    memset(tmp, 0, (size_t)out_frames * 2 * sizeof(float));
+    uint32_t n = ca_ring_mix_into(r, tmp, out_frames, out_rate, 1.0f);
+    for (uint32_t i = 0; i < out_frames; i++) {
+        float l, rr;
+        if (i < n) {                /* data: envelope rises to full */
+            l = tmp[(size_t)i * 2];
+            rr = tmp[(size_t)i * 2 + 1];
+            fd->last_l = l;
+            fd->last_r = rr;
+            if (fd->level < CA_FADE_FRAMES) fd->level++;
+        } else {                    /* none: hold the last sample and decay */
+            if (fd->level == 0) break;
+            l = fd->last_l;
+            rr = fd->last_r;
+            fd->level--;
+        }
+        const float env = (float)fd->level / (float)CA_FADE_FRAMES;
+        mix[(size_t)i * 2]     += l * env * gain;
+        mix[(size_t)i * 2 + 1] += rr * env * gain;
+    }
+    return n;
+}
+
 void ca_clip(float *mix, uint32_t samples, float volume, int mute)
 {
     for (uint32_t i = 0; i < samples; i++) {

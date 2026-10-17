@@ -36,6 +36,24 @@ uint32_t ca_ring_write(ca_stream_ring *r, const float *src, uint32_t frames);
 uint32_t ca_ring_mix_into(ca_stream_ring *r, float *mix, uint32_t out_frames,
                           uint32_t out_rate, float gain);
 
+/*
+ * Per-stream envelope for ca_ring_mix_faded(): the stream fades in over
+ * CA_FADE_FRAMES when it starts or resumes supplying data, and when its data
+ * runs out (pause, end, a glitch) it holds its last sample and decays to
+ * silence over CA_FADE_FRAMES instead of jumping to 0. A jump in the output is
+ * a click on the jack. Zero-initialise (level 0: the first data fades in).
+ */
+#define CA_FADE_FRAMES 240          /* 5 ms at the 48 kHz device rate */
+typedef struct {
+    uint32_t level;                 /* 0..CA_FADE_FRAMES: the envelope is level / CA_FADE_FRAMES (exact) */
+    float last_l, last_r;           /* last sample supplied, held during a fade-out */
+} ca_fade;
+
+/* ca_ring_mix_into() with the envelope above; out_frames up to 4096. Returns
+ * the frames supplied from ring data, like ca_ring_mix_into(). */
+uint32_t ca_ring_mix_faded(ca_stream_ring *r, float *mix, uint32_t out_frames,
+                           uint32_t out_rate, float gain, ca_fade *fd);
+
 /* mix *= volume (0 if mute), then clamp to [-1, 1]; NaN becomes 0. */
 void ca_clip(float *mix, uint32_t samples, float volume, int mute);
 #endif

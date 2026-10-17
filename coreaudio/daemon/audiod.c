@@ -13,8 +13,11 @@
  * bootstrap_check_in (a second returns BOOTSTRAP_SERVICE_ACTIVE; DAR-270).
  * It exits (status 0) after IDLE_EXIT_S seconds with no streams, unless
  * started with -k (keep running: the plist starts it at boot that way, so the
- * first sound does not wait for a daemon start). Either way the engine is
- * released while nothing plays. The device volume and mute outlive the
+ * first sound does not wait for a daemon start). With -k the engine also runs
+ * from launch on silence and is never released, because stopping and
+ * restarting it pops on the jack; without -k it is released while nothing
+ * plays. Streams fade in and out (mixer.h, ca_ring_mix_faded) rather than
+ * starting and stopping on a non-zero sample. The device volume and mute outlive the
  * daemon: they are read from VOLUME_FILE at start and written back by the
  * mixer thread soon after a change and when the daemon exits, so the request
  * thread never touches the disk and a running daemon does not lose a change
@@ -60,6 +63,7 @@ typedef struct {
     int                closing;       /* CLOSE received: drain what is queued, then free */
     ca_stream_ring     ring;
     uint64_t           last_write_ns;
+    ca_fade        fade;          /* click-free start/stop (mixer.h); zeroed with the stream */
 } stream_t;
 
 static pthread_mutex_t g_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -181,7 +185,10 @@ static void *mixer_thread(void *unused)
         if (dirty)
             save_volume();             /* off the request thread; at most one write per mixer pass */
 
-        if (n == 0) {
+        /* With -k the engine is started at launch and kept running on silence: stopping and
+         * restarting the PWM moves the output between 0 V and mid-scale, a pop on the jack at
+         * every pause and every end of playback. Without -k it is released while idle. */
+        if (n == 0 && !g_keep_running) {
             if (engine_up) {            /* let the queued tail drain, then release the engine */
                 usleep(100000);
                 IOConnectCallScalarMethod(conn, kCallStop, NULL, 0, NULL, NULL);
@@ -221,7 +228,12 @@ static void *mixer_thread(void *unused)
             int mapped = 0, registered = 0;
             desc = NULL;
             svc = IOServiceGetMatchingService(kIOMasterPortDefault, IOServiceMatching(kEngineClass));
-            if (!svc) { fprintf(stderr, "audiod: no %s (boot with audio on)\n", kEngineClass); fflush(stderr); sleep(1); continue; }
+            if (!svc) {
+                static int warned;      /* with -k this retries every second: say it once */
+                if (!warned++) { fprintf(stderr, "audiod: no %s (boot with audio on)\n", kEngineClass); fflush(stderr); }
+                sleep(1);
+                continue;
+            }
             kern_return_t kr = IOServiceOpen(svc, mach_task_self(), 0, &conn);
             if (kr) { fprintf(stderr, "audiod: IOServiceOpen 0x%x\n", kr); IOObjectRelease(svc); sleep(1); continue; }
             #define ENGINE_FAIL(...) do { fprintf(stderr, __VA_ARGS__); fflush(stderr); \
@@ -283,8 +295,9 @@ static void *mixer_thread(void *unused)
                 close_locked(s);
                 continue;
             }
-            if (s->running) ca_ring_mix_into(&s->ring, mix, kChunkFrames, CA_DEVICE_RATE, 1.0f);
-            if (s->closing && ca_ring_avail(&s->ring) <= 1) close_locked(s);     /* drained (a resampler keeps one frame back) */
+            if (s->running) ca_ring_mix_faded(&s->ring, mix, kChunkFrames, CA_DEVICE_RATE, 1.0f, &s->fade);
+            /* drained (a resampler keeps one frame back) and faded out: closing earlier would cut the tail, a click */
+            if (s->closing && ca_ring_avail(&s->ring) <= 1 && s->fade.level == 0) close_locked(s);
         }
         vol = g_volume; mute = g_mute;
         pthread_mutex_unlock(&g_mu);
