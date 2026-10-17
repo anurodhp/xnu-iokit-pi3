@@ -35,3 +35,17 @@ core_freq=250
 # so the number is documented and not left to whatever this firmware
 # version's default happens to be.
 gpu_mem=64
+
+# Run the ARM cores at their rated 1.2 GHz all the time. The firmware only
+# raises the ARM clock above its 600 MHz floor when the OS asks (Linux's
+# cpufreq driver does, through the mailbox's set-clock-rate tag); nothing in
+# this port does, so the Pi ran at half speed. Measured on a real Pi 3
+# (2026-10-17): a dependent-add loop ran exactly twice as fast with this set,
+# and H.264 720p decoding went from ~30 to ~60 frames/s (Venice dropped 9 of
+# 300 frames instead of 176). force_turbo only disables dynamic clocking; it
+# does not overvolt (no over_voltage here), and the firmware's own thermal
+# throttling still applies. core_freq above stays 250 for the mini-UART:
+# with it set explicitly, that is also its turbo value. A cpufreq-style
+# driver that asks for the clock (and could lower it when idle) would be the
+# finer-grained alternative.
+force_turbo=1
