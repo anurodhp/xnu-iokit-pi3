@@ -25,6 +25,18 @@
  * on the display, an older kernel). XLIB_VC4_TILED=1 renders tiled again
  * and XLIB_VC4_NOSHM=1 disables MIT-SHM (comparisons); XLIB_VC4_STATS=1
  * prints the per-frame cost of each step every 100 frames.
+ *
+ * The read-back and put run on a presenter thread with its own X
+ * connection, so glXSwapBuffers returns once the frame is handed over and
+ * the caller builds the next one meanwhile (one frame in flight: the swap
+ * after it waits for it). Measured on a Pi 3 (Venice, 1280x720 video): the
+ * read is ~6 ms and the put + XSync ~7 ms of every frame, all of it waiting
+ * on memory or on the server. Mesa's Xlib frontend has already waited for
+ * the GPU (XMesaSwapBuffers' fence_finish) and swaps front and back after
+ * this call, so the next frame renders into the other buffer while this
+ * one is read; the job holds a reference on the resource so a resize
+ * cannot free it under the thread. XLIB_VC4_SYNC=1 presents on the
+ * caller's thread as before.
  */
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -32,6 +44,7 @@
 #include <sys/ipc.h>
 #include <sys/shm.h>
 #include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -56,7 +69,8 @@
 
 struct pipe_screen *xlib_create_screen(Display *display);
 
-static Display *g_display;
+static Display *g_display;          /* the application's connection */
+static Display *g_pdpy;             /* the connection presents go through */
 static struct pipe_context *g_present_ctx;     /* only for callers that pass no context */
 static Drawable g_gc_drawable;
 static GC g_gc;
@@ -71,7 +85,7 @@ env_is_1(const char *name)
 /* ---- XLIB_VC4_STATS ---- */
 
 static int g_stats = -1;
-static double g_t_wait, g_t_read, g_t_put;
+static double g_t_wait, g_t_read, g_t_put, g_t_inflight;
 static unsigned g_frames;
 static const char *g_path = "";
 
@@ -81,6 +95,19 @@ now_ms(void)
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	return ts.tv_sec * 1e3 + ts.tv_nsec / 1e6;
+}
+
+/* Every 100 frames. "in flight" is how long a swap waited for the frame
+ * before it on the presenter thread. */
+static void
+stats_frame(unsigned w, unsigned h)
+{
+	if (++g_frames == 100) {
+		fprintf(stderr, "xlib_vc4: %ux%u %s, per frame: GPU wait+map %.2f ms, read %.2f ms, put %.2f ms, in flight %.2f ms\n",
+		    w, h, g_path, g_t_wait / 100, g_t_read / 100, g_t_put / 100, g_t_inflight / 100);
+		g_frames = 0;
+		g_t_wait = g_t_read = g_t_put = g_t_inflight = 0;
+	}
 }
 
 /* ---- MIT-SHM image, one per window (re-made when the window resizes) ---- */
@@ -115,7 +142,7 @@ static void
 shm_release(void)
 {
 	if (g_shm.img != NULL) {
-		XShmDetach(g_display, &g_shm.info);
+		XShmDetach(g_pdpy, &g_shm.info);
 		g_shm.img->data = NULL;
 		XDestroyImage(g_shm.img);
 		shmdt(g_shm.info.shmaddr);
@@ -128,7 +155,7 @@ static XImage *
 shm_image(struct xlib_drawable *xd, unsigned width, unsigned height)
 {
 	if (g_shm_ok < 0) {
-		g_shm_ok = !env_is_1("XLIB_VC4_NOSHM") && XShmQueryExtension(g_display);
+		g_shm_ok = !env_is_1("XLIB_VC4_NOSHM") && XShmQueryExtension(g_pdpy);
 		if (!g_shm_ok)
 			shm_fail("XShmQueryExtension (or XLIB_VC4_NOSHM)", 0);
 	}
@@ -140,7 +167,7 @@ shm_image(struct xlib_drawable *xd, unsigned width, unsigned height)
 		return g_shm.img;
 	}
 	shm_release();
-	XImage *img = XShmCreateImage(g_display, xd->visual, xd->depth, ZPixmap, NULL,
+	XImage *img = XShmCreateImage(g_pdpy, xd->visual, xd->depth, ZPixmap, NULL,
 	    &g_shm.info, width, height);
 	if (img == NULL) {
 		shm_fail("XShmCreateImage", 0);
@@ -168,8 +195,8 @@ shm_image(struct xlib_drawable *xd, unsigned width, unsigned height)
 	/* A display on another machine refuses the attach: fall back. */
 	g_shm_error = 0;
 	XErrorHandler old = XSetErrorHandler(shm_error_handler);
-	XShmAttach(g_display, &g_shm.info);
-	XSync(g_display, False);
+	XShmAttach(g_pdpy, &g_shm.info);
+	XSync(g_pdpy, False);
 	XSetErrorHandler(old);
 	/* Remove only now: unlike Linux, xnu refuses to find a segment marked
 	 * IPC_RMID (shm_find_segment_by_shmid, bsd/kern/sysv_shm.c:260-264), so
@@ -195,7 +222,7 @@ shm_image(struct xlib_drawable *xd, unsigned width, unsigned height)
 /* ---- present ---- */
 
 static void
-put_boxes(struct xlib_drawable *xd, XImage *img, int shm, unsigned w, unsigned h,
+put_boxes(Display *dpy, GC gc, Drawable d, XImage *img, int shm, unsigned w, unsigned h,
     unsigned nboxes, const struct pipe_box *subbox)
 {
 	struct pipe_box whole = { .x = 0, .y = 0, .width = (int)w, .height = (int)h };
@@ -206,13 +233,127 @@ put_boxes(struct xlib_drawable *xd, XImage *img, int shm, unsigned w, unsigned h
 	for (unsigned i = 0; i < nboxes; i++) {
 		const struct pipe_box *b = &subbox[i];
 		if (shm) {
-			XShmPutImage(g_display, xd->drawable, g_gc, img, b->x, b->y, b->x, b->y,
+			XShmPutImage(dpy, d, gc, img, b->x, b->y, b->x, b->y,
 			    b->width, b->height, False);
 		} else {
-			XPutImage(g_display, xd->drawable, g_gc, img, b->x, b->y, b->x, b->y,
+			XPutImage(dpy, d, gc, img, b->x, b->y, b->x, b->y,
 			    b->width, b->height);
 		}
 	}
+}
+
+/* ---- the presenter thread ---- */
+
+#define MAX_BOXES 16
+
+static struct {
+	pthread_mutex_t lock;
+	pthread_cond_t cond;
+	int started, busy;              /* busy: a job is queued or running */
+	/* the job */
+	struct pipe_resource *res;      /* referenced until the next swap's wait */
+	int fd;
+	uint32_t handle, offset, size;
+	XImage *img;
+	Drawable drawable;
+	GC gc;
+	unsigned w, h, nboxes;
+	struct pipe_box boxes[MAX_BOXES];
+	double t_read, t_put;           /* what the thread measured */
+	int ok;
+} g_pr = { PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER };
+
+static XErrorHandler g_prev_error_handler;
+
+/* Errors on the presenter's connection (a put to a window destroyed
+ * meanwhile) are dropped; the rest go to the handler that was there. The
+ * handler is process-wide in Xlib. */
+static int
+present_error_handler(Display *d, XErrorEvent *e)
+{
+	if (d == g_pdpy) {
+		return 0;
+	}
+	return g_prev_error_handler != NULL ? g_prev_error_handler(d, e) : 0;
+}
+
+static void *
+presenter_main(void *arg)
+{
+	(void)arg;
+	pthread_mutex_lock(&g_pr.lock);
+	for (;;) {
+		while (!g_pr.busy) {
+			pthread_cond_wait(&g_pr.cond, &g_pr.lock);
+		}
+		pthread_mutex_unlock(&g_pr.lock);
+		double t0 = now_ms();
+		g_pr.ok = v3d_drm_read_bo(g_pr.fd, g_pr.handle, g_pr.offset, g_pr.size, g_pr.img->data) == 0;
+		double t1 = now_ms();
+		if (g_pr.ok) {
+			put_boxes(g_pdpy, g_pr.gc, g_pr.drawable, g_pr.img, 1, g_pr.w, g_pr.h, g_pr.nboxes, g_pr.boxes);
+			/* the server must be done with the segment before the next frame */
+			XSync(g_pdpy, False);
+		}
+		g_pr.t_read = t1 - t0;
+		g_pr.t_put = now_ms() - t1;
+		pthread_mutex_lock(&g_pr.lock);
+		g_pr.busy = 0;
+		pthread_cond_broadcast(&g_pr.cond);
+	}
+	return NULL;
+}
+
+/* Waits for the frame in flight, then drops its resource reference (on this
+ * thread: vc4's resource code is not the presenter's to call). Returns
+ * whether the last job's read-back worked. */
+static int
+presenter_wait(void)
+{
+	pthread_mutex_lock(&g_pr.lock);
+	while (g_pr.busy) {
+		pthread_cond_wait(&g_pr.cond, &g_pr.lock);
+	}
+	pthread_mutex_unlock(&g_pr.lock);
+	pipe_resource_reference(&g_pr.res, NULL);
+	return g_pr.ok;
+}
+
+/* The presenter's own connection and thread, made on first use (the
+ * connection on the caller's thread, so Xlib's per-display extension list is
+ * only ever grown here). 0 when either is unavailable: present
+ * synchronously on the application's connection. */
+static int
+presenter_start(void)
+{
+	if (g_pr.started != 0) {
+		return g_pr.started > 0;
+	}
+	g_pr.started = -1;
+	if (env_is_1("XLIB_VC4_SYNC")) {
+		return 0;
+	}
+	Display *d = XOpenDisplay(DisplayString(g_display));
+	if (d == NULL) {
+		return 0;
+	}
+	g_pdpy = d;
+	if (!XShmQueryExtension(d)) {     /* also registers the extension on d */
+		g_pdpy = g_display;
+		XCloseDisplay(d);
+		return 0;
+	}
+	pthread_t th;
+	if (pthread_create(&th, NULL, presenter_main, NULL) != 0) {
+		g_pdpy = g_display;
+		XCloseDisplay(d);
+		return 0;
+	}
+	pthread_detach(th);
+	g_prev_error_handler = XSetErrorHandler(present_error_handler);
+	g_pr.ok = 1;
+	g_pr.started = 1;
+	return 1;
 }
 
 static void
@@ -236,6 +377,16 @@ xlib_vc4_flush_frontbuffer(struct pipe_screen *screen, struct pipe_context *ctx,
 	if (g_stats < 0) {
 		g_stats = env_is_1("XLIB_VC4_STATS");
 	}
+	if (g_pdpy == NULL) {
+		g_pdpy = g_display;
+	}
+	int async = presenter_start();
+	double tw = g_stats ? now_ms() : 0;
+	if (async) {
+		/* the frame before must be out of the segment and the buffer */
+		presenter_wait();
+	}
+	double t_inflight = g_stats ? now_ms() - tw : 0;
 
 	unsigned w = u_minify(res->width0, level), h = u_minify(res->height0, level);
 	double t0 = g_stats ? now_ms() : 0;
@@ -250,9 +401,9 @@ xlib_vc4_flush_frontbuffer(struct pipe_screen *screen, struct pipe_context *ctx,
 
 	if (g_gc_drawable != xd->drawable || g_gc == NULL) {
 		if (g_gc != NULL) {
-			XFreeGC(g_display, g_gc);
+			XFreeGC(g_pdpy, g_gc);
 		}
-		g_gc = XCreateGC(g_display, xd->drawable, 0, NULL);
+		g_gc = XCreateGC(g_pdpy, xd->drawable, 0, NULL);
 		g_gc_drawable = xd->drawable;
 	}
 
@@ -271,7 +422,44 @@ xlib_vc4_flush_frontbuffer(struct pipe_screen *screen, struct pipe_context *ctx,
 		 * which defines struct vc4_bo, drags in compiler headers). It marks
 		 * the BO shared, so vc4 does not recycle it through its BO cache. */
 		struct winsys_handle wh = { .type = WINSYS_HANDLE_TYPE_KMS };
-		if (screen->resource_get_handle(screen, ctx, res, &wh, 0) &&
+		int have_handle = screen->resource_get_handle(screen, ctx, res, &wh, 0);
+		if (async && have_handle && g_pr.ok && nboxes <= MAX_BOXES) {
+			/* hand the frame to the presenter; GPU rendering is done */
+			pipe_resource_reference(&g_pr.res, res);
+			g_pr.fd = vc4_screen(screen)->fd;
+			g_pr.handle = wh.handle;
+			g_pr.offset = off;
+			g_pr.size = stride * h;
+			g_pr.img = simg;
+			g_pr.drawable = xd->drawable;
+			g_pr.gc = g_gc;
+			g_pr.w = w;
+			g_pr.h = h;
+			g_pr.nboxes = subbox != NULL ? nboxes : 0;
+			if (g_pr.nboxes != 0) {
+				memcpy(g_pr.boxes, subbox, nboxes * sizeof(*subbox));
+			}
+			pipe_texture_unmap(ctx, tr);
+			pthread_mutex_lock(&g_pr.lock);
+			g_pr.busy = 1;
+			pthread_cond_signal(&g_pr.cond);
+			pthread_mutex_unlock(&g_pr.lock);
+			g_path = "linear, kernel read, MIT-SHM, presenter thread";
+			if (g_stats) {
+				/* the thread's times are those of the frame before */
+				g_t_wait += t1 - t0;
+				g_t_inflight += t_inflight;
+				g_t_read += g_pr.t_read;
+				g_t_put += g_pr.t_put;
+				stats_frame(w, h);
+			}
+			return;
+		}
+		if (async && !g_pr.ok) {
+			/* the presenter's read failed (an older kernel?): stop using it */
+			g_pr.started = -1;
+		}
+		if (have_handle &&
 		    v3d_drm_read_bo(vc4_screen(screen)->fd, wh.handle, off, stride * h, simg->data) == 0) {
 			g_path = "linear, kernel read, MIT-SHM";
 		} else {
@@ -279,15 +467,15 @@ xlib_vc4_flush_frontbuffer(struct pipe_screen *screen, struct pipe_context *ctx,
 			g_path = "linear, mapped read, MIT-SHM";
 		}
 		t2 = g_stats ? now_ms() : 0;
-		put_boxes(xd, simg, 1, w, h, nboxes, subbox);
+		put_boxes(g_pdpy, g_gc, xd->drawable, simg, 1, w, h, nboxes, subbox);
 		/* the server must be done with the segment before the next frame */
-		XSync(g_display, False);
+		XSync(g_pdpy, False);
 	} else {
 		XImage *img = XCreateImage(g_display, xd->visual, xd->depth, ZPixmap, 0, map, w, h, 32, stride);
 		t2 = g_stats ? now_ms() : 0;
 		if (img != NULL) {
-			put_boxes(xd, img, 0, w, h, nboxes, subbox);
-			XFlush(g_display);
+			put_boxes(g_pdpy, g_gc, xd->drawable, img, 0, w, h, nboxes, subbox);
+			XFlush(g_pdpy);
 			img->data = NULL;                 /* the mapping is not ours to free */
 			XDestroyImage(img);
 		}
@@ -300,12 +488,7 @@ xlib_vc4_flush_frontbuffer(struct pipe_screen *screen, struct pipe_context *ctx,
 		g_t_wait += t1 - t0;
 		g_t_read += t2 - t1;
 		g_t_put += t3 - t2;
-		if (++g_frames == 100) {
-			fprintf(stderr, "xlib_vc4: %ux%u %s, per frame: GPU wait+map %.2f ms, read %.2f ms, put %.2f ms\n",
-			    w, h, g_path, g_t_wait / 100, g_t_read / 100, g_t_put / 100);
-			g_frames = 0;
-			g_t_wait = g_t_read = g_t_put = 0;
-		}
+		stats_frame(w, h);
 	}
 }
 

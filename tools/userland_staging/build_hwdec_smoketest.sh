@@ -7,6 +7,8 @@
 #       upstream's interface/mmal/test/examples/example_basic_1.c,
 #       unmodified: MMAL alone, no FFmpeg (bcm_host_init, a
 #       vc.ril.video_decode component, 500 iterations of its loop)
+#   libc_build/vcgencmd.macho             (/usr/local/bin/vcgencmd)
+#       upstream's gencmd.c: firmware commands over VCHIQ (clocks, memory)
 #   libc_build/hwdec/hwdec_test_720p.h264 and .mp4
 #       (/usr/local/share/hwdec/): 300 frames of FFmpeg's testsrc2 at
 #       1280x720/30, H.264 High (libx264, CRF 23), encoded by the host's
@@ -57,6 +59,18 @@ UINC=(-I "$MEDIA_INC/rpi-userland" -I "$MEDIA_INC/rpi-userland/interface/vcos/pt
     "${UINC[@]}" "$SRC/interface/mmal/test/examples/example_basic_1.c" -o "$OBJ/example_basic_1.o"
 exe mmal_example_basic_1.macho "$OBJ/example_basic_1.o" \
     "$MEDIA_SYS/libmmal.dylib" "$MEDIA_SYS/libbcm_host.dylib" "$MEDIA_SYS/libvchiq_arm.dylib" "$MEDIA_SYS/libvcos.dylib"
+
+# vcgencmd: upstream's host_applications/linux/apps/gencmd/gencmd.c,
+# unmodified -- the firmware's general command service over VCHIQ
+# (`vcgencmd measure_clock v3d`, `vcgencmd get_mem gpu`, ...). Its /dev/vcio
+# mailbox fallback (no VCHIQ) does not exist here. It times -t with clock(),
+# which this system's libsystem_c does not export: Apple's own
+# Libc/gen/FreeBSD/clock.c (getrusage) is linked in for it.
+"${CC[@]}" -c "${MEDIA_CFLAGS[@]}" -Wall -Werror=implicit-function-declaration -Wno-unused-variable \
+    "${UINC[@]}" "$SRC/host_applications/linux/apps/gencmd/gencmd.c" -o "$OBJ/gencmd.o"
+"${CC[@]}" -c "${MEDIA_CFLAGS[@]}" -Werror=implicit-function-declaration "$T/Libc/gen/FreeBSD/clock.c" -o "$OBJ/clock.o"
+exe vcgencmd.macho "$OBJ/gencmd.o" "$OBJ/clock.o" \
+    "$MEDIA_SYS/libbcm_host.dylib" "$MEDIA_SYS/libvchiq_arm.dylib" "$MEDIA_SYS/libvcos.dylib"
 
 # The test clip. testsrc2 is FFmpeg's built-in generator: deterministic, so
 # every build makes the same pictures (the encoder may differ by version,

@@ -15,6 +15,16 @@ of the image). Measured there:
   of 14.6 s (854x480) for the same 12-second clip. Frames drawn per second
   are unchanged: at 1280x720 the GL draw (34 ms/frame) is the limit either
   way.
+- GL present on a presenter thread (`mesa_xlib_vc4/xlib_vc4.c`, opt out
+  with `XLIB_VC4_SYNC=1`): the same run draws in 28-30 ms/frame, 260-271
+  frames shown instead of 238-245 (26.5 ms and ~290 with Xorg's
+  `ShadowFB off`, which is not the default: reads from the framebuffer
+  are ~30 MB/s). What is left is memory bandwidth: ~32 MB of copies per
+  frame plus ~500 MB/s of 1920x1080 scanout; overlapped, each copy runs
+  slower (read-back 6 -> 10 ms, put 7 -> 13-19 ms, mpv's render 12 ->
+  20 ms). Tools: `build_gl_video_bench.sh` (a video frame's GL cost step by
+  step) and `build_sample_prof.sh` (an injected sampling profiler;
+  `SAMPLE_PROF_WALL=1` gives the main thread's wall-clock stacks).
 - Under QEMU (no VPU) the decoder declines and mpv decodes in software.
 
 Found on the Pi and fixed: the fragment line size (see Open risks, now

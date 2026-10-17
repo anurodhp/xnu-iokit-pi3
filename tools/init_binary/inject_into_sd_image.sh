@@ -1490,7 +1490,7 @@ fi
 # VPU): tools/userland_staging/build_hwdec_smoketest.sh. The libraries they
 # use (libmmal, libbcm_host, libvchiq_arm, libvcos) are system dylibs,
 # installed by the generic loop above.
-for t in hwdec_compare mmal_example_basic_1; do
+for t in hwdec_compare mmal_example_basic_1 vcgencmd; do
     if [ -f tools/userland_staging/libc_build/$t.macho ]; then
         mkdir -p "$MNT/usr/local/bin"
         cp tools/userland_staging/libc_build/$t.macho "$MNT/usr/local/bin/$t"
