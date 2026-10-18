@@ -1490,7 +1490,7 @@ fi
 # VPU): tools/userland_staging/build_hwdec_smoketest.sh. The libraries they
 # use (libmmal, libbcm_host, libvchiq_arm, libvcos) are system dylibs,
 # installed by the generic loop above.
-for t in hwdec_compare mmal_example_basic_1 vcgencmd; do
+for t in hwdec_compare mmal_example_basic_1 vcgencmd dispmanx_snapshot; do
     if [ -f tools/userland_staging/libc_build/$t.macho ]; then
         mkdir -p "$MNT/usr/local/bin"
         cp tools/userland_staging/libc_build/$t.macho "$MNT/usr/local/bin/$t"
@@ -1505,6 +1505,10 @@ if [ -f tools/userland_staging/libc_build/hwdec/hwdec_test_720p.mp4 ]; then
     cp tools/userland_staging/libc_build/hwdec/hwdec_test_720p.mp4 tools/userland_staging/libc_build/hwdec/hwdec_test_720p.h264 \
         "$MNT/usr/local/share/hwdec/"
     echo "+ wrote /usr/local/share/hwdec/hwdec_test_720p.{mp4,h264}"
+    if [ -f tools/userland_staging/libc_build/hwdec/hwdec_test_1080p.mp4 ]; then
+        cp tools/userland_staging/libc_build/hwdec/hwdec_test_1080p.mp4 "$MNT/usr/local/share/hwdec/"
+        echo "+ wrote /usr/local/share/hwdec/hwdec_test_1080p.mp4"
+    fi
 fi
 # coreaudio/ (audio daemon + CoreAudio HAL subset): libaudiohal.dylib is installed by the generic
 # libc_build/system loop above; the daemon, its launchd job and the smoketest client are here.

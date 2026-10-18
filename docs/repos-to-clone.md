@@ -45,6 +45,7 @@ The main repo itself is `anurodhp/xnu-iokit-pi3`.
 | `bash` | `anurodhp/bash` | `iokit-port` | apple-oss-distributions |
 | `cron` | `anurodhp/cron` | `iokit-port` | apple-oss-distributions |
 | `userland` | `anurodhp/userland` | `iokit-port` | raspberrypi/userland (off `a54a0db`; VCHIQ over IOKit, 64-bit MMAL) |
+| `mpv` | `anurodhp/mpv` | `iokit-port` | mpv-player/mpv (off `v0.40.0`; Raspberry Pi video overlay, `hwdec_rpi_overlay.c`) |
 | `BSM` | `anurodhp/bsm` | `iokit-port` | apple-oss-distributions |
 | `ICU` | `anurodhp/ICU` | `iokit-port` | apple-oss-distributions |
 | `configd` | `anurodhp/configd` | `iokit-port` | apple-oss-distributions |

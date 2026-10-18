@@ -9,6 +9,9 @@
 #       vc.ril.video_decode component, 500 iterations of its loop)
 #   libc_build/vcgencmd.macho             (/usr/local/bin/vcgencmd)
 #       upstream's gencmd.c: firmware commands over VCHIQ (clocks, memory)
+#   libc_build/dispmanx_snapshot.macho    (/usr/local/bin/dispmanx_snapshot)
+#       the display as the VideoCore composes it, overlays included (PPM)
+#   libc_build/hwdec/hwdec_test_1080p.mp4: the same at 1920x1080
 #   libc_build/hwdec/hwdec_test_720p.h264 and .mp4
 #       (/usr/local/share/hwdec/): 300 frames of FFmpeg's testsrc2 at
 #       1280x720/30, H.264 High (libx264, CRF 23), encoded by the host's
@@ -72,6 +75,13 @@ exe mmal_example_basic_1.macho "$OBJ/example_basic_1.o" \
 exe vcgencmd.macho "$OBJ/gencmd.o" "$OBJ/clock.o" \
     "$MEDIA_SYS/libbcm_host.dylib" "$MEDIA_SYS/libvchiq_arm.dylib" "$MEDIA_SYS/libvcos.dylib"
 
+# dispmanx_snapshot.c: the display as the HVS composes it (overlays
+# included), to a PPM.
+"${CC[@]}" -c "${MEDIA_CFLAGS[@]}" -Wall -Werror=implicit-function-declaration \
+    "${UINC[@]}" dispmanx_snapshot.c -o "$OBJ/dispmanx_snapshot.o"
+exe dispmanx_snapshot.macho "$OBJ/dispmanx_snapshot.o" \
+    "$MEDIA_SYS/libbcm_host.dylib" "$MEDIA_SYS/libvchiq_arm.dylib" "$MEDIA_SYS/libvcos.dylib"
+
 # The test clip. testsrc2 is FFmpeg's built-in generator: deterministic, so
 # every build makes the same pictures (the encoder may differ by version,
 # which hwdec_compare does not care about: it compares two decodes).
@@ -83,3 +93,8 @@ ffmpeg -nostdin -loglevel error -y -f lavfi -i testsrc2=size=1280x720:rate=30 -f
 ffmpeg -nostdin -loglevel error -y -i "$CLIP/hwdec_test_720p.mp4" -c:v copy -bsf:v h264_mp4toannexb \
     -f h264 "$CLIP/hwdec_test_720p.h264"
 echo "wrote $CLIP/hwdec_test_720p.mp4 and .h264"
+# 1080p: the same picture at 1920x1080 (the VPU's limit for H.264 is 1080p,
+# level 4.1), for the display-path measurements (docs/video-decode.md).
+ffmpeg -nostdin -loglevel error -y -f lavfi -i testsrc2=size=1920x1080:rate=30 -frames:v 300 \
+    -c:v libx264 -profile:v high -level 4.1 -pix_fmt yuv420p -crf 23 -bf 2 "$CLIP/hwdec_test_1080p.mp4"
+echo "wrote $CLIP/hwdec_test_1080p.mp4"

@@ -1,6 +1,9 @@
 #!/bin/bash
-# libmpv from mpv 0.40.0 (third_party/mpv, github.com/mpv-player/mpv tag
-# v0.40.0; built without --enable-gpl, so LGPL-2.1+) for Venice.app:
+# libmpv from mpv 0.40.0 (third_party/mpv, github.com/anurodhp/mpv branch
+# iokit-port: tag v0.40.0 plus the Raspberry Pi video overlay, --hwdec=mmal
+# frames shown as a VideoCore display layer, video/out/hwdec/
+# hwdec_rpi_overlay.c, -Drpi-mmal; built without --enable-gpl, so
+# LGPL-2.1+) for Venice.app:
 #   /usr/lib/libmpv.2.dylib, headers in libc_build/media/include/mpv
 # (client.h, render.h, render_gl.h, stream_cb.h).
 #
@@ -76,9 +79,11 @@ PATH="$SHIMS:$PATH" media_meson mpv "$SRC" --default-library=static \
     -Ddvdnav=disabled -Dcdda=disabled -Ddvbin=disabled -Drubberband=disabled -Dvapoursynth=disabled \
     -Dzimg=disabled -Dlcms2=disabled -Djpeg=disabled -Duchardet=disabled -Diconv=disabled -Dshaderc=disabled \
     -Dspirv-cross=disabled -Dlibavdevice=disabled -Dzlib=enabled -Dmanpage-build=disabled \
-    -Dhtml-build=disabled -Dpdf-build=disabled
+    -Dhtml-build=disabled -Dpdf-build=disabled -Drpi-mmal=enabled
 BUILD="$MEDIA_GEN/mpv"
 grep -q '^#define HAVE_OSS_AUDIO 0$' "$BUILD/config.h" || { echo "error: config.h has no HAVE_OSS_AUDIO 0 -- recheck this script" >&2; exit 1; }
+grep -q '^#define HAVE_RPI_MMAL 1$' "$BUILD/config.h" ||
+    { echo "error: mpv configured without the Raspberry Pi overlay (-Drpi-mmal, mmal.pc from build_rpi_userland.sh)" >&2; exit 1; }
 grep -q '^#define HAVE_GL 1$' "$BUILD/config.h" && grep -q 'libmpv_gl.c' "$BUILD/build.ninja" ||
     { echo "error: mpv configured without the GL render API (plain-gl)" >&2; exit 1; }
 # meson regenerates config.h only on a reconfigure, and media_meson always
@@ -111,7 +116,8 @@ done
 
 DYLIBS=("$MEDIA_SYS/libass.dylib" "$MEDIA_SYS/libplacebo.dylib" "$MEDIA_SYS/libavfilter.dylib"
     "$MEDIA_SYS/libavformat.dylib" "$MEDIA_SYS/libavcodec.dylib" "$MEDIA_SYS/libswscale.dylib"
-    "$MEDIA_SYS/libswresample.dylib" "$MEDIA_SYS/libavutil.dylib" "$MEDIA_SYS/libz.dylib")
+    "$MEDIA_SYS/libswresample.dylib" "$MEDIA_SYS/libavutil.dylib" "$MEDIA_SYS/libz.dylib"
+    "$MEDIA_SYS/libmmal.dylib" "$MEDIA_SYS/libbcm_host.dylib" "$MEDIA_SYS/libvchiq_arm.dylib" "$MEDIA_SYS/libvcos.dylib")
 LIB="$MEDIA_SYS/libmpv.dylib"
 rm -f "$LIB"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -dynamiclib "${MEDIA_LDFLAGS[@]}" \

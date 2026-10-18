@@ -799,12 +799,13 @@ mkdir -p third_party
 #     it has its own block below. Unmodified; built by build_libghostty_vt.sh
 #     (needs Zig 0.16.x).
 #     The media stack under Venice.app (libmpv; build_libmpv.sh and the
-#     scripts it names), each an unmodified upstream release, shallow-cloned
-#     at its tag by its own block below (FFmpeg's full history alone is
-#     ~500 MB, and libplacebo/mbedtls need submodules):
+#     scripts it names), each an upstream release (all unmodified but mpv),
+#     shallow-cloned at its tag or branch by its own block below (FFmpeg's
+#     full history alone is ~500 MB, and libplacebo/mbedtls need submodules):
 #       FFmpeg n7.1.1 (github.com/FFmpeg/FFmpeg; LGPL, built as LGPL-3 with
-#       mbedTLS), mpv v0.40.0 (github.com/mpv-player/mpv; libmpv, built
-#       non-GPL: LGPL-2.1+), libplacebo v7.351.0 (code.videolan.org/videolan/
+#       mbedTLS), mpv v0.40.0 (our fork anurodhp/mpv branch iokit-port: the
+#       tag plus the Raspberry Pi video overlay, hwdec_rpi_overlay.c; upstream
+#       github.com/mpv-player/mpv; libmpv, built non-GPL: LGPL-2.1+), libplacebo v7.351.0 (code.videolan.org/videolan/
 #       libplacebo, with its glad, jinja, markupsafe, fast_float and
 #       Vulkan-Headers submodules; LGPL-2.1+), libass 0.17.4 (ISC), HarfBuzz
 #       11.2.1 (MIT), fribidi v1.0.16 (LGPL-2.1+), Mbed TLS v3.6.4 (with its
@@ -1063,7 +1064,7 @@ fi
 # with the submodules the builds need.
 MEDIA_REPOS='
 ffmpeg|https://github.com/FFmpeg/FFmpeg.git|n7.1.1|
-mpv|https://github.com/mpv-player/mpv.git|v0.40.0|
+mpv|git@github.com:anurodhp/mpv.git|iokit-port|
 libplacebo|https://code.videolan.org/videolan/libplacebo.git|v7.351.0|3rdparty/glad 3rdparty/jinja 3rdparty/markupsafe 3rdparty/fast_float 3rdparty/Vulkan-Headers
 libass|https://github.com/libass/libass.git|0.17.4|
 harfbuzz|https://github.com/harfbuzz/harfbuzz.git|11.2.1|

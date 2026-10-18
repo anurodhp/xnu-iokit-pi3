@@ -45,6 +45,40 @@ of the image). Measured there:
 Found on the Pi and fixed: the fragment line size (see Open risks, now
 resolved). Still open: the end of a stream (below).
 
+## Full screen: the video as a display layer (2026-10-18)
+
+In full screen Venice switches mpv from `hwdec=mmal-copy` (frames copied
+back to the ARM, drawn through GL and X) to `hwdec=mmal`: FFmpeg's
+`h264_mmal` hands out opaque VideoCore buffers, and mpv's `rpi-overlay`
+hwdec (our fork anurodhp/mpv, `video/out/hwdec/hwdec_rpi_overlay.c`, mpv
+0.32's `hwdec_rpi.c` ported) sends them to the VPU's `vc.ril.video_render`,
+which shows them as a hardware layer above the X framebuffer; the HVS scales
+and converts them. No ARM copy, no GPU render, no X put. Venice places the
+layer at the video window's screen position (`--rpi-overlay-x/-y`, updated
+when the window moves) and stops presenting GL frames while it is up. The
+layer is above every window, which is why it is only used in full screen
+(`-VeniceOverlay NO` turns it off).
+
+| Real Pi 3, 1920x1080 HDMI | GL path | overlay |
+|---|---|---|
+| 720p clip, full screen | 279 of 300 frames | 299-300, 0 dropped |
+| 1080p clip, full screen | 142 of 300 | 295-300, 0-4 dropped |
+
+The overlay also loses no frames at the end of the file (the early end of
+stream below is a copy-mode effect). Checked with `dispmanx_snapshot` (the
+HVS's composition, overlays included, to a PPM; X cannot see the layer).
+
+Found on the way: full screen never took effect at startup -- Venice resized
+the window to fit the video after asking for full screen -- and once it did,
+gnustep-gui kept the content inset by the window manager's decoration
+offsets (1918x1057 of 1920x1080): the decoration view now asks gnustep-back
+for the window's own `_NET_FRAME_EXTENTS` (anurodhp/libs-gui 657d8f0b1,
+anurodhp/libs-back 36cb030).
+
+VideoCore memory: 1080p through `mmal-copy` uses 95 of the 108 MB of
+relocatable memory `gpu_mem=128` leaves (`vcgencmd get_mem reloc`), the
+overlay 62 MB; it all comes back when the player exits.
+
 ## The path
 
 ```
