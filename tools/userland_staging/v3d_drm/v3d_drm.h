@@ -68,6 +68,10 @@ void *v3d_drm_mmap(int fd, size_t length, uint64_t offset);
 int v3d_drm_munmap(int fd, void *addr, size_t length);
 /* Fast CPU read of a BO's contents (kernel cached copy); see v3d_drm.c. */
 int v3d_drm_read_bo(int fd, uint32_t handle, uint32_t offset, uint32_t size, void *dst);
+/* Zero-copy present: back the unattached SysV segment `shmid` with the BO,
+ * and make the BO's range readable through it; see v3d_drm.c. */
+int v3d_drm_share_bo(int fd, uint32_t handle, int shmid);
+int v3d_drm_prepare_read(int fd, uint32_t handle, uint32_t offset, uint32_t size);
 
 /* Redirection targets for Mesa's mmap()/munmap(); see include/v3d_mmap_hook.h. */
 void *v3d_drm_mmap_hook(void *addr, size_t len, int prot, int flags, int fd, off_t offset);

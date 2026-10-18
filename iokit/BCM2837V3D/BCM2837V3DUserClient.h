@@ -42,6 +42,8 @@ private:
 	IOReturn waitBO(const v3d_wait_bo *in);
 	IOReturn rawSubmit(const v3d_raw_submit *in, v3d_raw_submit *out);
 	IOReturn readBO(const v3d_read_bo *in);
+	IOReturn shareBO(const v3d_share_bo *in);
+	IOReturn prepareRead(const v3d_prepare_read *in);
 	IOReturn submitCL(const v3d_submit_cl *in, v3d_submit_cl *out);
 	IOReturn createShaderBO(const v3d_create_shader_bo *in, v3d_create_shader_bo *out);
 	bool copyIn(uint64_t userAddr, void *dst, size_t len);

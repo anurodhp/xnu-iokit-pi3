@@ -39,6 +39,8 @@ enum {
 	kV3DMethodGetBOAddress,    /* in: scalar handle  out: scalar GPU address (root only) */
 	kV3DMethodCreateShaderBO,  /* in/out: v3d_create_shader_bo */
 	kV3DMethodReadBO,          /* in: v3d_read_bo (fast CPU read-back, see the struct) */
+	kV3DMethodShareBO,         /* in: v3d_share_bo (back a SysV segment with the BO) */
+	kV3DMethodPrepareRead,     /* in: v3d_prepare_read (before a shared BO is read) */
 	kV3DMethodCount
 };
 
@@ -199,6 +201,34 @@ struct v3d_read_bo {
 	uint32_t size;
 	uint32_t pad;
 	uint64_t dst;
+};
+
+/*
+ * Zero-copy present (iokit docs/video-decode.md): make the SysV segment
+ * `shmid` -- created by the caller with shmget(), attached by nobody yet --
+ * the BO's own pages, mapped cacheable wherever the segment is attached
+ * (the BO's other mappings stay write-combined). An X server given the
+ * segment with XShmAttach then reads the GPU's output in place, with no
+ * read-back copy. The caller must own the segment (IPC_M), and the BO must
+ * be at least the segment's size; not for shader BOs. The segment keeps the
+ * BO's memory until it is destroyed, whatever happens to the handle.
+ *
+ * Coherence: the GPU writes RAM and no CPU writes through the segment, so
+ * no line is ever dirty, but a reader's cached lines go stale when the GPU
+ * renders into the BO again. Before each read (each XShmPutImage) call
+ * kV3DMethodPrepareRead: it waits for the BO's last job, then cleans and
+ * invalidates the range from every core's cache.
+ */
+struct v3d_share_bo {
+	uint32_t handle;
+	int32_t shmid;
+};
+
+struct v3d_prepare_read {
+	uint32_t handle;
+	uint32_t offset;
+	uint32_t size;
+	uint32_t pad;
 };
 
 #endif /* _BCM2837V3DUAPI_H */

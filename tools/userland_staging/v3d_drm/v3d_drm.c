@@ -341,6 +341,37 @@ v3d_drm_read_bo(int fd, uint32_t handle, uint32_t offset, uint32_t size, void *d
 	return call_in(f, kV3DMethodReadBO, &r, sizeof(r));
 }
 
+/*
+ * Zero-copy present (struct v3d_share_bo, kV3DMethodShareBO): the SysV
+ * segment `shmid` (shmget'd by the caller, attached by nobody yet) becomes
+ * the BO's own pages, cacheable for whoever attaches it -- an X server
+ * reads the frame in place. v3d_drm_prepare_read (kV3DMethodPrepareRead)
+ * must precede every read of it: it waits for the GPU and drops stale
+ * cache lines. Both return 0, or -1 with errno (ENOSYS from a kernel
+ * without the methods).
+ */
+int
+v3d_drm_share_bo(int fd, uint32_t handle, int shmid)
+{
+	struct v3d_fd *f = fd_lookup(fd);
+	if (f == NULL) {
+		return fail_errno(EBADF);
+	}
+	struct v3d_share_bo r = { .handle = handle, .shmid = shmid };
+	return call_in(f, kV3DMethodShareBO, &r, sizeof(r));
+}
+
+int
+v3d_drm_prepare_read(int fd, uint32_t handle, uint32_t offset, uint32_t size)
+{
+	struct v3d_fd *f = fd_lookup(fd);
+	if (f == NULL) {
+		return fail_errno(EBADF);
+	}
+	struct v3d_prepare_read r = { .handle = handle, .offset = offset, .size = size };
+	return call_in(f, kV3DMethodPrepareRead, &r, sizeof(r));
+}
+
 /* ---- drmIoctl ---- */
 
 int

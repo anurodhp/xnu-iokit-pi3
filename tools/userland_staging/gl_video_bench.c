@@ -13,6 +13,13 @@
  * splits it), and the total. Environment: DISPLAY, and on the Pi the
  * usual XAUTHORITY.
  *
+ * GL_VIDEO_BENCH_CHECK=1: afterwards, checks that what reached the window
+ * is the frame: the window's pixels (XGetImage) against the front buffer
+ * (glReadPixels), every pixel; prints the mismatches, exit status 2 if any.
+ * A test of the present path (xlib_vc4's copy or zero-copy). In this mode
+ * every frame also inverts the whole luma plane, so consecutive frames
+ * differ in every pixel and a stale cache line in the present shows up.
+ *
  * Built by build_gl_video_bench.sh.
  */
 #define GL_GLEXT_PROTOTYPES 1
@@ -20,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <GL/gl.h>
@@ -118,12 +126,18 @@ main(int argc, char **argv)
 	glEnableVertexAttribArray(0);
 	glViewport(0, 0, w, h);
 
+	int check = getenv("GL_VIDEO_BENCH_CHECK") != NULL;
 	double t_up = 0, t_draw = 0, t_gpu = 0, t_swap = 0;
 	double start = now_ms();
 	for (int f = 0; f < frames; f++) {
 		double t0 = now_ms();
 		for (int i = 0; i < 3; i++) {
 			plane[i][f % (pw[i] * ph[i])] ^= 0xff;  /* a changed picture every frame */
+			if (check && i == 0) {
+				for (int k = 0; k < pw[0] * ph[0]; k++) {
+					plane[0][k] ^= 0xff;
+				}
+			}
 			glActiveTexture(GL_TEXTURE0 + i);
 			glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, pw[i], ph[i], GL_LUMINANCE, GL_UNSIGNED_BYTE, plane[i]);
 		}
@@ -140,6 +154,38 @@ main(int argc, char **argv)
 			t_gpu += t3 - t2;
 			t_swap += t4 - t3;
 		}
+	}
+	if (check) {
+		glFinish();
+		XSync(dpy, False);
+		usleep(300 * 1000);      /* xlib_vc4 may present on its own thread and connection */
+		XSync(dpy, False);
+		unsigned char *gl = malloc((size_t)w * h * 4);
+		glReadBuffer(GL_FRONT);
+		glPixelStorei(GL_PACK_ALIGNMENT, 1);
+		glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, gl);
+		XImage *xi = XGetImage(dpy, win, 0, 0, (unsigned)w, (unsigned)h, AllPlanes, ZPixmap);
+		if (xi == NULL) {
+			fprintf(stderr, "check: XGetImage failed\n");
+			return 2;
+		}
+		long bad = 0;
+		for (int y = 0; y < h; y++) {
+			for (int x = 0; x < w; x++) {
+				const unsigned char *g = gl + ((size_t)(h - 1 - y) * w + x) * 4;  /* GL rows are bottom-up */
+				unsigned long px = XGetPixel(xi, x, y);
+				unsigned r = (px >> 16) & 0xff, gg = (px >> 8) & 0xff, b = px & 0xff;
+				if (r != g[0] || gg != g[1] || b != g[2]) {
+					if (bad < 5)
+						printf("check: (%d,%d) window %02x%02x%02x, front buffer %02x%02x%02x\n",
+						    x, y, r, gg, b, g[0], g[1], g[2]);
+					bad++;
+				}
+			}
+		}
+		printf("check: %ld of %d pixels differ: %s\n", bad, w * h, bad ? "FAIL" : "PASS");
+		if (bad)
+			return 2;
 	}
 	int n = frames - 10;
 	double total = now_ms() - start;

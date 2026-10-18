@@ -306,6 +306,45 @@ BCM2837V3DUserClient::readBO(const v3d_read_bo *in)
 	return ret;
 }
 
+/* kV3DMethodShareBO; V3DBuffer::shareWithShm() has how. */
+IOReturn
+BCM2837V3DUserClient::shareBO(const v3d_share_bo *in)
+{
+	V3DBuffer *b = lookup(in->handle);
+	if (b == NULL) {
+		return kIOReturnNotFound;
+	}
+	IOReturn ret = b->shareWithShm(in->shmid);
+	b->release();
+	return ret;
+}
+
+/* kV3DMethodPrepareRead: wait for the BO's last job, then drop the range
+ * from the caches (V3DBuffer::invalidateCached). */
+IOReturn
+BCM2837V3DUserClient::prepareRead(const v3d_prepare_read *in)
+{
+	V3DBuffer *b = lookup(in->handle);
+	if (b == NULL) {
+		return kIOReturnNotFound;
+	}
+	IOReturn ret = kIOReturnSuccess;
+	if (b->fShader != NULL || b->fMem == NULL) {
+		ret = kIOReturnNotPermitted;
+	} else if (in->offset > b->fSize || in->size > b->fSize - in->offset) {
+		ret = kIOReturnBadArgument;
+	} else if (in->size != 0) {
+		if (b->fBusySeqno != 0) {
+			ret = fDevice->waitSeqno(b->fBusySeqno, 2ULL * 1000 * 1000 * 1000);
+		}
+		if (ret == kIOReturnSuccess) {
+			ret = b->invalidateCached(in->offset, in->size);
+		}
+	}
+	b->release();
+	return ret;
+}
+
 IOReturn
 BCM2837V3DUserClient::rawSubmit(const v3d_raw_submit *in, v3d_raw_submit *out)
 {
@@ -422,6 +461,12 @@ BCM2837V3DUserClient::externalMethod(uint32_t selector, IOExternalMethodArgument
 	case kV3DMethodReadBO:
 		NEED_IN(v3d_read_bo);
 		return readBO((const v3d_read_bo *)args->structureInput);
+	case kV3DMethodShareBO:
+		NEED_IN(v3d_share_bo);
+		return shareBO((const v3d_share_bo *)args->structureInput);
+	case kV3DMethodPrepareRead:
+		NEED_IN(v3d_prepare_read);
+		return prepareRead((const v3d_prepare_read *)args->structureInput);
 	case kV3DMethodGetHangState: {
 		NEED_OUT(v3d_hang_state);
 		fDevice->getHangState((v3d_hang_state *)args->structureOutput);

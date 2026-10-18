@@ -37,6 +37,14 @@
  * one is read; the job holds a reference on the resource so a resize
  * cannot free it under the thread. XLIB_VC4_SYNC=1 presents on the
  * caller's thread as before.
+ *
+ * Zero-copy (iokit docs/video-decode.md): with a kernel that has
+ * kV3DMethodShareBO, each window back buffer's BO is itself the MIT-SHM
+ * segment -- the kernel backs the segment with the BO's pages, mapped
+ * cacheable in the X server -- so there is no read-back at all: a present
+ * is a cache invalidate of the frame (v3d_drm_prepare_read) and the put.
+ * One segment per back buffer, kept while the buffer lives (ZC_SLOTS).
+ * XLIB_VC4_ZEROCOPY=0 uses the read-back copy instead.
  */
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -138,6 +146,17 @@ shm_error_handler(Display *d, XErrorEvent *e)
 	return 0;
 }
 
+static int
+shm_usable(void)
+{
+	if (g_shm_ok < 0) {
+		g_shm_ok = !env_is_1("XLIB_VC4_NOSHM") && XShmQueryExtension(g_pdpy);
+		if (!g_shm_ok)
+			shm_fail("XShmQueryExtension (or XLIB_VC4_NOSHM)", 0);
+	}
+	return g_shm_ok;
+}
+
 static void
 shm_release(void)
 {
@@ -154,12 +173,7 @@ shm_release(void)
 static XImage *
 shm_image(struct xlib_drawable *xd, unsigned width, unsigned height)
 {
-	if (g_shm_ok < 0) {
-		g_shm_ok = !env_is_1("XLIB_VC4_NOSHM") && XShmQueryExtension(g_pdpy);
-		if (!g_shm_ok)
-			shm_fail("XShmQueryExtension (or XLIB_VC4_NOSHM)", 0);
-	}
-	if (!g_shm_ok) {
+	if (!shm_usable()) {
 		return NULL;
 	}
 	if (g_shm.img != NULL && g_shm.drawable == xd->drawable &&
@@ -219,6 +233,120 @@ shm_image(struct xlib_drawable *xd, unsigned width, unsigned height)
 	return img;
 }
 
+/* ---- zero-copy: the back buffer's BO is the MIT-SHM segment ---- */
+
+#define ZC_SLOTS 4
+/* The client never attaches the segments: an XImage's data only has to sit
+ * at the right distance from shmaddr (XShmPutImage sends the difference). */
+#define ZC_BASE ((char *)(uintptr_t)0x10000)
+
+static int g_zc_ok = -1;            /* -1 unknown, 0 off/unsupported, 1 usable */
+static struct zc_slot {
+	struct pipe_resource *res;  /* referenced: one segment per live buffer */
+	uint32_t handle, offset, stride, height;
+	Drawable drawable;
+	XImage *img;
+	XShmSegmentInfo info;
+	unsigned long last_use;
+} g_zc[ZC_SLOTS];
+static unsigned long g_zc_clock;
+
+/* Caller: the presenter is idle (its connection is ours to use). */
+static void
+zc_drop(struct zc_slot *z)
+{
+	if (z->img != NULL) {
+		XShmDetach(g_pdpy, &z->info);   /* the segment dies with the server's detach */
+		z->img->data = NULL;
+		XDestroyImage(z->img);
+	}
+	pipe_resource_reference(&z->res, NULL);
+	memset(z, 0, sizeof(*z));
+}
+
+static XImage *
+zc_image(struct xlib_drawable *xd, struct pipe_resource *res, int fd, uint32_t handle,
+    uint32_t offset, unsigned stride, unsigned height)
+{
+	if (g_zc_ok < 0) {
+		const char *e = getenv("XLIB_VC4_ZEROCOPY");
+		g_zc_ok = !(e != NULL && strcmp(e, "0") == 0);
+	}
+	if (!g_zc_ok || !shm_usable()) {
+		return NULL;
+	}
+	struct zc_slot *victim = &g_zc[0];
+	for (int i = 0; i < ZC_SLOTS; i++) {
+		struct zc_slot *z = &g_zc[i];
+		if (z->res == res && z->handle == handle && z->drawable == xd->drawable &&
+		    z->offset == offset && z->stride == stride && z->height == height) {
+			z->last_use = ++g_zc_clock;
+			return z->img;
+		}
+		if (z->last_use < victim->last_use) {
+			victim = z;
+		}
+	}
+	zc_drop(victim);
+
+	/* The image keeps a pointer to its XShmSegmentInfo (image->obdata, read
+	 * by every XShmPutImage): it must be the slot's, not a local. */
+	XShmSegmentInfo *info = &victim->info;
+	XImage *img = XShmCreateImage(g_pdpy, xd->visual, xd->depth, ZPixmap, NULL, info, stride / 4, height);
+	if (img == NULL) {
+		return NULL;
+	}
+	if ((unsigned)img->bytes_per_line != stride) {
+		XDestroyImage(img);
+		memset(victim, 0, sizeof(*victim));
+		return NULL;
+	}
+	info->shmid = shmget(IPC_PRIVATE, (size_t)offset + (size_t)stride * height, IPC_CREAT | 0600);
+	if (info->shmid < 0) {
+		shm_fail("zero-copy shmget", errno);
+		XDestroyImage(img);
+		memset(victim, 0, sizeof(*victim));
+		return NULL;
+	}
+	if (v3d_drm_share_bo(fd, handle, info->shmid) != 0) {
+		int err = errno;
+		shmctl(info->shmid, IPC_RMID, NULL);
+		XDestroyImage(img);
+		memset(victim, 0, sizeof(*victim));
+		if (err == ENOSYS) {
+			g_zc_ok = 0;            /* a kernel without kV3DMethodShareBO */
+		}
+		shm_fail("zero-copy v3d_drm_share_bo", err);
+		return NULL;
+	}
+	info->shmaddr = ZC_BASE;
+	info->readOnly = True;
+	img->data = ZC_BASE + offset;
+	g_shm_error = 0;
+	XErrorHandler old = XSetErrorHandler(shm_error_handler);
+	XShmAttach(g_pdpy, info);
+	XSync(g_pdpy, False);
+	XSetErrorHandler(old);
+	shmctl(info->shmid, IPC_RMID, NULL);    /* after the attach, see shm_image() */
+	if (g_shm_error) {
+		shm_fail("zero-copy XShmAttach", 0);
+		img->data = NULL;
+		XDestroyImage(img);
+		memset(victim, 0, sizeof(*victim));
+		g_zc_ok = 0;
+		return NULL;
+	}
+	pipe_resource_reference(&victim->res, res);
+	victim->handle = handle;
+	victim->offset = offset;
+	victim->stride = stride;
+	victim->height = height;
+	victim->drawable = xd->drawable;
+	victim->img = img;
+	victim->last_use = ++g_zc_clock;
+	return img;
+}
+
 /* ---- present ---- */
 
 static void
@@ -261,6 +389,7 @@ static struct {
 	struct pipe_box boxes[MAX_BOXES];
 	double t_read, t_put;           /* what the thread measured */
 	int ok;
+	int zc;                         /* img is the BO itself: invalidate, no read */
 } g_pr = { PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER };
 
 static XErrorHandler g_prev_error_handler;
@@ -272,6 +401,10 @@ static int
 present_error_handler(Display *d, XErrorEvent *e)
 {
 	if (d == g_pdpy) {
+		static unsigned logged;
+		if (g_stats > 0 && logged++ < 5)
+			fprintf(stderr, "xlib_vc4: X error %d (request %d.%d) on the presenter's connection\n",
+			    e->error_code, e->request_code, e->minor_code);
 		return 0;
 	}
 	return g_prev_error_handler != NULL ? g_prev_error_handler(d, e) : 0;
@@ -288,7 +421,11 @@ presenter_main(void *arg)
 		}
 		pthread_mutex_unlock(&g_pr.lock);
 		double t0 = now_ms();
-		g_pr.ok = v3d_drm_read_bo(g_pr.fd, g_pr.handle, g_pr.offset, g_pr.size, g_pr.img->data) == 0;
+		if (g_pr.zc) {
+			g_pr.ok = v3d_drm_prepare_read(g_pr.fd, g_pr.handle, g_pr.offset, g_pr.size) == 0;
+		} else {
+			g_pr.ok = v3d_drm_read_bo(g_pr.fd, g_pr.handle, g_pr.offset, g_pr.size, g_pr.img->data) == 0;
+		}
 		double t1 = now_ms();
 		if (g_pr.ok) {
 			put_boxes(g_pdpy, g_pr.gc, g_pr.drawable, g_pr.img, 1, g_pr.w, g_pr.h, g_pr.nboxes, g_pr.boxes);
@@ -411,6 +548,62 @@ xlib_vc4_flush_frontbuffer(struct pipe_screen *screen, struct pipe_context *ctx,
 	 * TrueColor visuals of depth 24/32, and vc4 renders them natively. */
 	struct vc4_resource *rsc = vc4_resource(res);
 	unsigned stride = tr->stride;
+
+	if (!rsc->tiled && stride % 4 == 0) {
+		uint32_t off = rsc->slices[level].offset + layer * rsc->cube_map_stride;
+		struct winsys_handle wh = { .type = WINSYS_HANDLE_TYPE_KMS };
+		int fd = vc4_screen(screen)->fd;
+		XImage *zimg = screen->resource_get_handle(screen, ctx, res, &wh, 0) ?
+		    zc_image(xd, res, fd, wh.handle, off, stride, h) : NULL;
+		if (zimg != NULL && async && g_pr.ok && nboxes <= MAX_BOXES) {
+			pipe_resource_reference(&g_pr.res, res);
+			g_pr.zc = 1;
+			g_pr.fd = fd;
+			g_pr.handle = wh.handle;
+			g_pr.offset = off;
+			g_pr.size = stride * h;
+			g_pr.img = zimg;
+			g_pr.drawable = xd->drawable;
+			g_pr.gc = g_gc;
+			g_pr.w = w;
+			g_pr.h = h;
+			g_pr.nboxes = subbox != NULL ? nboxes : 0;
+			if (g_pr.nboxes != 0) {
+				memcpy(g_pr.boxes, subbox, nboxes * sizeof(*subbox));
+			}
+			pipe_texture_unmap(ctx, tr);
+			pthread_mutex_lock(&g_pr.lock);
+			g_pr.busy = 1;
+			pthread_cond_signal(&g_pr.cond);
+			pthread_mutex_unlock(&g_pr.lock);
+			g_path = "linear, zero-copy MIT-SHM, presenter thread";
+			if (g_stats) {
+				g_t_wait += t1 - t0;
+				g_t_inflight += t_inflight;
+				g_t_read += g_pr.t_read;
+				g_t_put += g_pr.t_put;
+				stats_frame(w, h);
+			}
+			return;
+		}
+		if (zimg != NULL && v3d_drm_prepare_read(fd, wh.handle, off, stride * h) == 0) {
+			double tz = g_stats ? now_ms() : 0;
+			put_boxes(g_pdpy, g_gc, xd->drawable, zimg, 1, w, h, nboxes, subbox);
+			XSync(g_pdpy, False);
+			pipe_texture_unmap(ctx, tr);
+			g_pr.ok = 1;            /* a failed invalidate on the thread: try it there again */
+			g_path = "linear, zero-copy MIT-SHM";
+			if (g_stats) {
+				double t3 = now_ms();
+				g_t_wait += t1 - t0;
+				g_t_read += tz - t1;
+				g_t_put += t3 - tz;
+				stats_frame(w, h);
+			}
+			return;
+		}
+	}
+
 	XImage *simg = (!rsc->tiled && stride % 4 == 0) ? shm_image(xd, stride / 4, h) : NULL;
 	double t2;
 	if (simg != NULL && (unsigned)simg->bytes_per_line != stride && g_stats)
@@ -426,6 +619,7 @@ xlib_vc4_flush_frontbuffer(struct pipe_screen *screen, struct pipe_context *ctx,
 		if (async && have_handle && g_pr.ok && nboxes <= MAX_BOXES) {
 			/* hand the frame to the presenter; GPU rendering is done */
 			pipe_resource_reference(&g_pr.res, res);
+			g_pr.zc = 0;
 			g_pr.fd = vc4_screen(screen)->fd;
 			g_pr.handle = wh.handle;
 			g_pr.offset = off;

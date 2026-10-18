@@ -78,7 +78,12 @@ public:
 	vm_offset_t fCachedVA;
 	vm_size_t fCachedLen;
 	IOReturn readCached(uint32_t offset, uint32_t size, uint64_t userDst);
+	/* kV3DMethodShareBO / kV3DMethodPrepareRead (BCM2837V3DUAPI.h) */
+	IOReturn shareWithShm(int shmid);
+	IOReturn invalidateCached(uint32_t offset, uint32_t size);
 	virtual void free(void) APPLE_KEXT_OVERRIDE;
+private:
+	IOReturn mapCachedAlias(void);
 };
 
 class BCM2837V3D : public IOService {

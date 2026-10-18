@@ -155,7 +155,7 @@ v3d_dcache_civac(vm_offset_t va, vm_size_t len)
  * that hold the finished data.
  */
 IOReturn
-V3DBuffer::readCached(uint32_t offset, uint32_t size, uint64_t userDst)
+V3DBuffer::mapCachedAlias(void)
 {
 	if (fMem == NULL) {
 		return kIOReturnNotPermitted;
@@ -172,6 +172,16 @@ V3DBuffer::readCached(uint32_t offset, uint32_t size, uint64_t userDst)
 		} else {
 			fCachedLen = len;
 		}
+	}
+	return kIOReturnSuccess;
+}
+
+IOReturn
+V3DBuffer::readCached(uint32_t offset, uint32_t size, uint64_t userDst)
+{
+	IOReturn ret = mapCachedAlias();
+	if (ret != kIOReturnSuccess) {
+		return ret;
 	}
 	uint64_t t0 = mach_absolute_time();
 	v3d_dcache_civac(fCachedVA + offset, size);
@@ -197,6 +207,91 @@ V3DBuffer::readCached(uint32_t offset, uint32_t size, uint64_t userDst)
 		}
 	}
 	return r;
+}
+
+/*
+ * kV3DMethodPrepareRead: drop the range from every core's cache, so a
+ * reader of the shared segment (shareWithShm) fetches what the GPU wrote.
+ * The caller has waited for the GPU. By-VA maintenance through the cached
+ * alias reaches the segment's lines too: the A53's data caches are
+ * physically indexed and tagged, and the operation is broadcast to the
+ * inner-shareable domain (v3d_dcache_civac). Nothing writes through any
+ * cacheable alias, so the clean half never writes back.
+ */
+IOReturn
+V3DBuffer::invalidateCached(uint32_t offset, uint32_t size)
+{
+	IOReturn ret = mapCachedAlias();
+	if (ret == kIOReturnSuccess) {
+		v3d_dcache_civac(fCachedVA + offset, size);
+	}
+	return ret;
+}
+
+/*
+ * kV3DMethodShareBO. The segment gets a named entry of its own over the
+ * BO's physical pages: a physical IOMemoryDescriptor with an explicit
+ * copyback cache mode, whose device pager maps the pages with that mode
+ * (memoryReferenceCreate's physical branch; the pmap takes an explicit
+ * WIMG per mapping, osfmk/arm/pmap.c pmap_enter_options_internal), so the
+ * BO's other mappings keep write-combining. The segment holds a reference
+ * on this buffer and on the descriptor until it is destroyed
+ * (shm_share_released): until then no mapping of the pages can remain, so
+ * the pages cannot go back to the pool while someone can still read them.
+ */
+struct V3DShmShare {
+	V3DBuffer *buffer;
+	IOMemoryDescriptor *desc;
+};
+
+extern "C" IOReturn IOGeneralMemoryDescriptorCopyNamedEntry(IOMemoryDescriptor *md, ipc_port_t *entry, mach_vm_size_t *size);
+extern "C" int sysv_shm_set_backing(int shmid, ipc_port_t entry, mach_vm_size_t size,
+    void (*release)(void *), void *arg);
+extern "C" void mach_memory_entry_port_release(ipc_port_t port);
+
+static void
+shm_share_released(void *arg)
+{
+	V3DShmShare *s = (V3DShmShare *)arg;
+	s->desc->release();
+	s->buffer->release();
+	IODelete(s, V3DShmShare, 1);
+}
+
+IOReturn
+V3DBuffer::shareWithShm(int shmid)
+{
+	if (fMem == NULL || fShader != NULL) {
+		return kIOReturnNotPermitted;
+	}
+	IOMemoryDescriptor *desc = IOMemoryDescriptor::withAddressRange(fPhys, round_page(fSize),
+	    kIODirectionInOut | (kIOCopybackCache << kIOMemoryBufferCacheShift), TASK_NULL);
+	if (desc == NULL) {
+		return kIOReturnNoMemory;
+	}
+	ipc_port_t entry = IPC_PORT_NULL;
+	mach_vm_size_t size = 0;
+	IOReturn ret = IOGeneralMemoryDescriptorCopyNamedEntry(desc, &entry, &size);
+	if (ret != kIOReturnSuccess) {
+		desc->release();
+		return ret;
+	}
+	V3DShmShare *s = IONew(V3DShmShare, 1);
+	if (s == NULL) {
+		mach_memory_entry_port_release(entry);
+		desc->release();
+		return kIOReturnNoMemory;
+	}
+	retain();
+	s->buffer = this;
+	s->desc = desc;
+	int err = sysv_shm_set_backing(shmid, entry, size, shm_share_released, s);
+	if (err != 0) {
+		mach_memory_entry_port_release(entry);
+		shm_share_released(s);
+		return err == EBUSY ? kIOReturnBusy : err == EACCES || err == EPERM ? kIOReturnNotPrivileged : kIOReturnBadArgument;
+	}
+	return kIOReturnSuccess;
 }
 
 V3DBuffer *

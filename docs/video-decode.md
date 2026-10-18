@@ -25,6 +25,21 @@ of the image). Measured there:
   20 ms). Tools: `build_gl_video_bench.sh` (a video frame's GL cost step by
   step) and `build_sample_prof.sh` (an injected sampling profiler;
   `SAMPLE_PROF_WALL=1` gives the main thread's wall-clock stacks).
+- Zero-copy present (`XLIB_VC4_ZEROCOPY=0` turns it off): each window back
+  buffer's BO is itself the MIT-SHM segment the X server reads. The kernel
+  backs the client's SysV segment with the BO's pages, through a
+  separate physical descriptor mapped cacheable
+  (`sysv_shm_set_backing`, `IOGeneralMemoryDescriptor::copyNamedEntry`,
+  `kV3DMethodShareBO`), and each present is a cache invalidate
+  (`kV3DMethodPrepareRead`, ~0.5 ms) plus the put, instead of the 10 ms
+  read-back. The segment holds the BO until it is destroyed. Venice 720p:
+  279-284 frames of 300 instead of 263-265, ~28 ms/frame; gl_video_bench
+  720p 51.5 -> 57.9 fps. `GL_VIDEO_BENCH_CHECK=1 gl_video_bench` checks
+  every pixel of the window against the front buffer (PASS at 1280x720,
+  640x360, 333x251, both paths; every frame inverts the picture, so stale
+  cache lines would show). The remaining cost is the X server's put into
+  its shadow framebuffer and the shadow copy to the screen, and mpv's
+  upload and render slowed by memory contention.
 - Under QEMU (no VPU) the decoder declines and mpv decodes in software.
 
 Found on the Pi and fixed: the fragment line size (see Open risks, now
