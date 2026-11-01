@@ -5,6 +5,9 @@
  *   x11_probe click X Y [B]   XTest: move the pointer to X,Y and click
  *                             button B (default 1)
  *   x11_probe dclick X Y      XTest: double-click button 1 at X,Y
+ *   x11_probe drag X1 Y1 X2 Y2
+ *                             XTest: press button 1 at X1,Y1, move to X2,Y2
+ *                             in steps (so the app sees drag events), release
  *   x11_probe raise|lower|remap ID
  *                             XRaiseWindow / XLowerWindow / unmap+map on
  *                             window ID (hex or decimal)
@@ -66,6 +69,26 @@ static void click(Display *d, int x, int y, unsigned int b, int times)
     }
 }
 
+static void drag(Display *d, int x1, int y1, int x2, int y2)
+{
+    int i, steps = 12;
+
+    XTestFakeMotionEvent(d, -1, x1, y1, CurrentTime);
+    XSync(d, False);
+    usleep(200000);
+    XTestFakeButtonEvent(d, 1, True, CurrentTime);
+    XSync(d, False);
+    usleep(200000);
+    for (i = 1; i <= steps; i++) {
+        XTestFakeMotionEvent(d, -1, x1 + (x2 - x1) * i / steps, y1 + (y2 - y1) * i / steps, CurrentTime);
+        XSync(d, False);
+        usleep(100000);
+    }
+    XTestFakeButtonEvent(d, 1, False, CurrentTime);
+    XSync(d, False);
+    usleep(100000);
+}
+
 int main(int argc, char **argv)
 {
     Display *d = XOpenDisplay(NULL);
@@ -85,6 +108,13 @@ int main(int argc, char **argv)
         click(d, atoi(argv[2]), atoi(argv[3]), argc >= 5 ? (unsigned)atoi(argv[4]) : 1,
               !strcmp(argv[1], "dclick") ? 2 : 1);
         printf("x11_probe: %s %s,%s done\n", argv[1], argv[2], argv[3]);
+    } else if (argc >= 6 && !strcmp(argv[1], "drag")) {
+        if (!XTestQueryExtension(d, &ev, &er, &maj, &min)) {
+            fprintf(stderr, "x11_probe: no XTEST extension\n");
+            return 1;
+        }
+        drag(d, atoi(argv[2]), atoi(argv[3]), atoi(argv[4]), atoi(argv[5]));
+        printf("x11_probe: drag %s,%s -> %s,%s done\n", argv[2], argv[3], argv[4], argv[5]);
     } else if (argc >= 3 && (!strcmp(argv[1], "raise") || !strcmp(argv[1], "lower") || !strcmp(argv[1], "remap"))) {
         Window w = (Window)strtoul(argv[2], NULL, 0);
 
@@ -125,7 +155,7 @@ int main(int argc, char **argv)
         XSync(d, False);
         printf("x11_probe: fill 0x%lx %dx%d done (render format %s)\n", (unsigned long)w, a.width, a.height, fmt ? "yes" : "no");
     } else {
-        fprintf(stderr, "usage: x11_probe tree | click X Y [button] | dclick X Y | raise|lower|remap ID | move ID X Y | fill ID\n");
+        fprintf(stderr, "usage: x11_probe tree | click X Y [button] | dclick X Y | drag X1 Y1 X2 Y2 | raise|lower|remap ID | move ID X Y | fill ID\n");
         return 2;
     }
     XCloseDisplay(d);
