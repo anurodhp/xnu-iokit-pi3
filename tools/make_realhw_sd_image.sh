@@ -140,8 +140,13 @@ echo "  -- same rename convention as the kernel above, NOT sdcard/'s frozen copy
 # 0:1 if present, `env import -t`s it and appends ${extra_bootargs}
 # (anurodhp/u-boot configs/rpi3_xnu_defconfig), so this needs no u-boot
 # rebuild and never drives u-boot over serial.
-# Default: cpus=4. Audio (3.5mm jack, DARW-310) is on in the kernel by default; add audio=0 to turn it
+# Default: cpus=4 wifi=1 bt=1. Audio (3.5mm jack, DARW-310) is on in the kernel by default; add audio=0 to turn it
 # off, or audio-test=<s> for a kernel-played tone (docs/audio-bringup.md). cpus=4 starts cores 1-3 (DAR-455; verified on the real Pi 2026-10-02; drop it for a single-core boot).
+# wifi=1 starts the on-board WiFi (docs/wifi-plan.md; verified on the real Pi 2026-10-12): it also moves the
+# root SD card from SDHCI to sdhost, so SDHCI can drive the WiFi chip over SDIO (sdhost's multi-block write
+# corruption was fixed before that verification; sdhost-write-test=1 runs its write self-test at boot).
+# The network to join is /etc/wifi.conf (WIFI_CONF=<file> at injection, or the Naples WiFi panel).
+# bt=1 starts Bluetooth (docs/bluetooth-plan.md; verified 2026-10-12). Drop either to leave it off.
 # No fb args: the kernel framebuffer is the monitor's native size, asked of the
 # VideoCore firmware (Get Physical W/H, tag 0x00040003; third_party/xnu-7195
 # pexpert/arm/pe_init.c bcm2837_video_init), capped to 1920x1080 above the
@@ -150,7 +155,7 @@ echo "  -- same rename convention as the kernel above, NOT sdcard/'s frozen copy
 # size, e.g. when the monitor's EDID is wrong. Override:
 #   REALHW_EXTRA_BOOTARGS="-user_fault_debug fb_width=1280 fb_height=720" tools/make_realhw_sd_image.sh out.img
 # or REALHW_EXTRA_BOOTARGS= (set but empty) for no uEnv.txt at all.
-REALHW_EXTRA_BOOTARGS="${REALHW_EXTRA_BOOTARGS-cpus=4}"
+REALHW_EXTRA_BOOTARGS="${REALHW_EXTRA_BOOTARGS-cpus=4 wifi=1 bt=1}"
 if [ -n "$REALHW_EXTRA_BOOTARGS" ]; then
     printf 'extra_bootargs=%s\n' "$REALHW_EXTRA_BOOTARGS" > "$BOOT_MNT/uEnv.txt"
     echo "+ wrote $BOOT_MNT/uEnv.txt: extra_bootargs=$REALHW_EXTRA_BOOTARGS"

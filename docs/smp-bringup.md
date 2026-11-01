@@ -1,8 +1,9 @@
 # SMP bring-up (DAR-455)
 
 Status: **Phase 2 (QEMU) done 2026-10-01.** With `cpus=4` all four cores
-come up, take IPIs and run user threads under QEMU; default boots are
-unchanged. Untested on the real Pi: see `docs/smp-pi-experiment.md`.
+come up, take IPIs and run user threads under QEMU. **Verified on the real
+Pi 3 2026-10-02** (iokit `74da3db`); the real-hardware image boots with
+`cpus=4` by default. See `docs/smp-pi-experiment.md`.
 "Phase 2 results" is at the end. Phase 1 scoping follows; every claim
 cites the file it rests on. Paths are
 relative to the repo root, `third_party/` paths are the pinned forks.

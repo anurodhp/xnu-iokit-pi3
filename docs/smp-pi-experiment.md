@@ -1,7 +1,12 @@
 # SMP on the real Pi 3: experiment for the user (DAR-455)
 
-**Status:** prepared 2026-10-01, **not yet tried**. Everything here was
-verified under QEMU only (see `docs/smp-bringup.md`, "Phase 2 results").
+**Status:** done. **SMP works on the real Pi 3 (2026-10-02, iokit
+`74da3db`):** cores 1-3 come up, four busy loops saturate all four cores, and
+the desktop is much faster. `tools/make_realhw_sd_image.sh` boots with
+`cpus=4` by default; drop it from `extra_bootargs` in `uEnv.txt` for a
+single-core boot. The rest of this file is the experiment as it was prepared
+on 2026-10-01, kept for the record. It was verified under QEMU first (see
+`docs/smp-bringup.md`, "Phase 2 results").
 The Pi has its own risks QEMU cannot reproduce: caches are real (QEMU
 models none), the firmware's armstub may differ from the version read for
 the design, and the four cores are real silicon.

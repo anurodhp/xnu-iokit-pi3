@@ -1,8 +1,11 @@
 # V3D bring-up checklist (first time on a real Pi 3)
 
-Everything below `BCM2837V3D::start()`'s ASB check is unverified on hardware
-(QEMU raspi3 has no V3D). This is the order to find out what is wrong with the
-least confusion. Background: `docs/gpu-opengl-plan.md`; sources:
+**Status:** done. **Hardware 3D works on the real Pi 3 (2026-10-05, iokit
+`a01c638`):** OpenGL 2.1 / OpenGL ES 2.0 run on the V3D through Mesa. See
+"Real Pi 3 results" and the sections after it at the end of this file. The
+checklist below is the bring-up order as it was written before the first
+hardware run, kept for the record: the order to find out what is wrong with the
+least confusion. QEMU raspi3 has no V3D. Background: `docs/gpu-opengl-plan.md`; sources:
 `iokit/BCM2837V3D/`.
 
 ## Before booting

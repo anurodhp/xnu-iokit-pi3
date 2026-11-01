@@ -1,7 +1,8 @@
 # WiFi on the Pi 3 (BCM43438 over SDIO): plan
 
 Status (2026-10-12): W0-W4 implemented and working on a real Pi with
-boot-arg wifi=1:
+boot-arg wifi=1. Since 2026-11-01 `tools/make_realhw_sd_image.sh` puts `wifi=1`
+in the default boot-args (`uEnv.txt`), so a fresh real-hardware image has WiFi on:
 - the root disk runs on sdhost; the write self-test passes on every boot
   with `sdhost-write-test=1`;
 - the firmware boots and scans;

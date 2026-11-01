@@ -1,7 +1,8 @@
 # Bluetooth on the Raspberry Pi 3 (CYW43438 / BCM43430A1)
 
 Status (2026-10-12): B1-B5 implemented, reviewed, and working on a real
-Pi 3B with boot-arg bt=1. `org.puredarwin.bluetooth` runs `bt up` at boot.
+Pi 3B with boot-arg bt=1. `org.puredarwin.bluetooth` runs `bt up` at boot. Since
+2026-11-01 `tools/make_realhw_sd_image.sh` puts `bt=1` in the default boot-args.
 - The patch loads (121 records), the link switches to 921600, and the
   controller reports BD_ADDR b8:27:eb:12:61:de and the name "BCM43438A1
   37.4MHz Raspberry Pi 3-0141".
