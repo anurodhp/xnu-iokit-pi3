@@ -84,4 +84,8 @@ fi
 kill $PP 2>/dev/null; sleep 5
 
 ls -l $T
+# boot_test stops QEMU as soon as it sees SHOTS DONE: flush the last
+# screenshot to the disk image first (once it was listed here but missing
+# on the host)
+sync; sleep 2; sync
 echo "SHOTS DONE"
