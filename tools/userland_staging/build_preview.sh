@@ -11,7 +11,12 @@
 cd "$(dirname "$0")"
 . ./gnustep_common.sh
 # Source: PREVIEW_SRC, else the darwin-util checkout beside this repo
-# (../darwin-util, the same level as ../naples and ../venice).
-PREVIEW_SRC="${PREVIEW_SRC:-$HERE/../../../darwin-util/Preview}"
+# (../darwin-util, the same level as ../naples and ../venice, where the apps
+# are developed), else the pinned third_party/darwin-util clone
+# (setup_third_party.sh).
+if [ -z "${PREVIEW_SRC:-}" ]; then
+    if [ -f "$HERE/../../../darwin-util/Preview/GNUmakefile" ]; then PREVIEW_SRC="$HERE/../../../darwin-util/Preview"
+    else PREVIEW_SRC="$HERE/../../third_party/darwin-util/Preview"; fi
+fi
 echo "Preview source: $PREVIEW_SRC ($(git -C "$PREVIEW_SRC" describe --tags --always --dirty 2>/dev/null || echo 'not a git checkout'))"
 gs_build_app Preview "$PREVIEW_SRC"

@@ -774,6 +774,10 @@ mkdir -p third_party
 #     the system settings -- Wi-Fi, Network, Date & Time, Milan's desktop
 #     background and user accounts (build_turin.sh). Not a fork: there is no
 #     upstream.
+#     darwin-util: anurodhp/darwin-util (this project's own repo), tag v0.2:
+#     small Cocoa utility apps, one folder each -- Console.app, Activity.app,
+#     Preview.app (build_console.sh, build_activity.sh, build_preview.sh). Not
+#     a fork: there is no upstream.
 #     rome: anurodhp/rome (this project's own repo, private), tag v0.2:
 #     Rome.app, a small fast GNUstep terminal written for this port
 #     (build_rome.sh). Not a fork: there is no upstream.
@@ -977,6 +981,7 @@ rome|git@github.com:anurodhp/rome.git|v0.2|
 milan|git@github.com:anurodhp/milan.git|v0.9|
 naples|git@github.com:anurodhp/naples.git|v0.8|
 turin|git@github.com:anurodhp/Turin.git|v0.2|
+darwin-util|git@github.com:anurodhp/darwin-util.git|v0.2|
 libvterm|https://github.com/neovim/libvterm.git|v0.3.3|
 optimized-routines|https://github.com/ARM-software/optimized-routines.git|v26.07|
 gnustep-eau-theme|git@github.com:anurodhp/gershwin-eau-theme.git|iokit-port||https://github.com/gershwin-desktop/gershwin-eau-theme.git

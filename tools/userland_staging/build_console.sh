@@ -10,7 +10,12 @@
 cd "$(dirname "$0")"
 . ./gnustep_common.sh
 # Source: CONSOLE_SRC, else the darwin-util checkout beside this repo
-# (../darwin-util, the same level as ../naples and ../venice).
-CONSOLE_SRC="${CONSOLE_SRC:-$HERE/../../../darwin-util/Console}"
+# (../darwin-util, the same level as ../naples and ../venice, where the apps
+# are developed), else the pinned third_party/darwin-util clone
+# (setup_third_party.sh).
+if [ -z "${CONSOLE_SRC:-}" ]; then
+    if [ -f "$HERE/../../../darwin-util/Console/GNUmakefile" ]; then CONSOLE_SRC="$HERE/../../../darwin-util/Console"
+    else CONSOLE_SRC="$HERE/../../third_party/darwin-util/Console"; fi
+fi
 echo "Console source: $CONSOLE_SRC ($(git -C "$CONSOLE_SRC" describe --tags --always --dirty 2>/dev/null || echo 'not a git checkout'))"
 gs_build_app Console "$CONSOLE_SRC"

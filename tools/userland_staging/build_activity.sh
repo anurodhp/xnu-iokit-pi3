@@ -11,7 +11,12 @@
 cd "$(dirname "$0")"
 . ./gnustep_common.sh
 # Source: ACTIVITY_SRC, else the darwin-util checkout beside this repo
-# (../darwin-util, the same level as ../naples and ../venice).
-ACTIVITY_SRC="${ACTIVITY_SRC:-$HERE/../../../darwin-util/Activity}"
+# (../darwin-util, the same level as ../naples and ../venice, where the apps
+# are developed), else the pinned third_party/darwin-util clone
+# (setup_third_party.sh).
+if [ -z "${ACTIVITY_SRC:-}" ]; then
+    if [ -f "$HERE/../../../darwin-util/Activity/GNUmakefile" ]; then ACTIVITY_SRC="$HERE/../../../darwin-util/Activity"
+    else ACTIVITY_SRC="$HERE/../../third_party/darwin-util/Activity"; fi
+fi
 echo "Activity source: $ACTIVITY_SRC ($(git -C "$ACTIVITY_SRC" describe --tags --always --dirty 2>/dev/null || echo 'not a git checkout'))"
 gs_build_app Activity "$ACTIVITY_SRC"
