@@ -638,6 +638,9 @@ install_smoketest tools/userland_staging/wmlat.macho "usr/X11/bin/wmlat" \
 install_smoketest tools/userland_staging/x11_probe.macho "usr/X11/bin/x11_probe" \
     "= tools/userland_staging/x11_probe.macho not built -- run build_x11_probe.sh first if wanted, skipping" \
     "  (tools/userland_staging/build_x11_probe.sh: window tree / XTest click client)"
+install_smoketest tools/userland_staging/libc_build/memhog.macho "usr/local/bin/memhog" \
+    "= tools/userland_staging/libc_build/memhog.macho not built -- run build_memhog.sh first if wanted, skipping" \
+    "  (tools/userland_staging/build_memhog.sh: memory-pressure test aid for the jetsam bands, jetsam_qemu_test.sh)"
 
 # Font/2D stack (DAR-384). The dylibs (libz, libexpat, freetype, libpng,
 # pixman, fontconfig, cairo, libXft) go in through the generic
@@ -2061,6 +2064,16 @@ fi
 cp "$US/libc_build/kmsg.macho" "$MNT/usr/sbin/kmsg"
 chmod 755 "$MNT/usr/sbin/kmsg"
 echo "+ wrote $(wc -c < "$US/libc_build/kmsg.macho") bytes to $MNT/usr/sbin/kmsg"
+# jetsam_bands(8) (build_jetsam_bands.sh): each process's jetsam band, in
+# the kernel's kill order -- which process memory pressure would kill next.
+if [ ! -f "$US/libc_build/jetsam_bands.macho" ]; then
+    echo "+ jetsam_bands.macho missing -- building it (build_jetsam_bands.sh)"
+    (cd "$US" && ./build_jetsam_bands.sh)
+fi
+[ -f "$US/libc_build/jetsam_bands.macho" ] || { echo "error: $US/libc_build/jetsam_bands.macho could not be built" >&2; exit 1; }
+cp "$US/libc_build/jetsam_bands.macho" "$MNT/usr/sbin/jetsam_bands"
+chmod 755 "$MNT/usr/sbin/jetsam_bands"
+echo "+ wrote $(wc -c < "$US/libc_build/jetsam_bands.macho") bytes to $MNT/usr/sbin/jetsam_bands"
 # /etc/sysctl.conf: the SysV shared-memory limits MIT-SHM needs. xnu's
 # defaults (bsd/kern/sysv_shm.c:166-170: shmmax 4 MiB, shmall 1024 pages)
 # are macOS's, and like macOS they are raised here rather than in the
@@ -2868,6 +2881,34 @@ EOF
 else
     echo "+ $MNT/etc/ttys already exists -- leaving as-is"
 fi
+
+# Jetsam bands for the system daemons. Under memory pressure the kernel kills
+# the lowest band first, and within a band the oldest process first (only band
+# 10 is sorted by size: xnu-7195 bsd/kern/kern_memorystatus.c:2066, :5642).
+# With every process in the default band (18), a low-memory moment killed the
+# daemons, gsdm and the X server before the application using the memory (seen
+# on the real Pi, 2026-11-01: "memorystatus: killing process ... [gsdm]").
+# launchd applies each job's JetsamProperties at spawn (launchd core.c,
+# posix_spawnattr_setjetsam under TARGET_OS_EMBEDDED, which the arm64-apple-ios
+# target sets: the SDK's TargetConditionals.h:231); without the key a job got
+# DEFAULT_JETSAM_PRIORITY, 18. So every daemon here gets 19
+# (JETSAM_PRIORITY_CRITICAL, bsd/sys/kern_memorystatus.h:60), as Apple's own
+# daemon plists carry JetsamProperties. gsdm starts the X server in 19 too;
+# the session stays in 18 and applications start in 10 (their launchers:
+# NSWorkspace, Naples, Milan, Window Maker). A plist that already sets
+# JetsamProperties keeps its own.
+jetsam_set=0
+for plist in "$MNT"/Library/LaunchDaemons/*.plist "$MNT"/System/Library/LaunchDaemons/*.plist; do
+    [ -f "$plist" ] || continue
+    plutil -extract JetsamProperties xml1 -o /dev/null "$plist" >/dev/null 2>&1 && continue
+    if plutil -insert JetsamProperties -json '{"JetsamPriority":19}' "$plist"; then
+        jetsam_set=$((jetsam_set + 1))
+    else
+        echo "error: could not add JetsamProperties to $plist" >&2
+        exit 1
+    fi
+done
+echo "+ JetsamProperties (JetsamPriority 19) added to $jetsam_set launchd job plists"
 
 diskutil unmount "$MNT"
 hdiutil detach "$DISK"

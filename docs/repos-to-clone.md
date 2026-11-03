@@ -57,9 +57,9 @@ The main repo itself is `anurodhp/xnu-iokit-pi3`.
 | `gnustep-make` | `anurodhp/tools-make` | `iokit-port` | gnustep/tools-make (off `make-2_9_3`; extract objc4 class names on Darwin, DAR-451) |
 | `gnustep-gui` | `anurodhp/libs-gui` | `iokit-port` | gnustep/libs-gui (off `gui-0_32_0`; objc4 port, DAR-390) |
 | `gnustep-examples` | `anurodhp/tests-examples` | `iokit-port` | gnustep/tests-examples (master 46ef973, unmodified; pins the commit) |
-| `naples` | `anurodhp/naples` | `v0.8` (tag) | none: this project's own repo (Naples.app dock and menu bar, build_naples.sh) |
+| `naples` | `anurodhp/naples` | `v0.9` (tag) | none: this project's own repo (Naples.app dock and menu bar, build_naples.sh) |
 | `turin` | `anurodhp/Turin` | `v0.2` (tag) | none: this project's own repo (Settings.app, build_turin.sh) |
-| `darwin-util` | `anurodhp/darwin-util` | `v0.2` (tag) | none: this project's own repo (Console.app, Activity.app, Preview.app; build_console.sh, build_activity.sh, build_preview.sh) |
+| `darwin-util` | `anurodhp/darwin-util` | `v0.3` (tag) | none: this project's own repo (Console.app, Activity.app, Preview.app; build_console.sh, build_activity.sh, build_preview.sh) |
 | `rome` | `anurodhp/rome` | `v0.1` (tag) | none: this project's own repo (Rome.app terminal, build_rome.sh) |
 | `gnustep-eau-theme` | `anurodhp/gershwin-eau-theme` | `iokit-port` | gershwin-desktop/gershwin-eau-theme main 3d741fbc (LGPL-2.1); no NSRegularExpression, GWDialog via class_addMethod, EAU_NO_TEST (DAR-461) |
 
