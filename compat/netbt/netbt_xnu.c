@@ -423,13 +423,27 @@ netbt_softint_disestablish(void *cookie)
 
 /* ------------------------------------------------------------ kauth */
 
+static netbt_kauth_cb_t netbt_kauth_cb;
+
+kauth_listener_t
+netbt_kauth_listen(netbt_kauth_cb_t cb)
+{
+	netbt_kauth_cb = cb;
+	return (kauth_listener_t)(uintptr_t)1;  /* hci_init only checks for NULL */
+}
+
 int
 netbt_kauth_authorize_device(kauth_cred_t cred, int action, void *a1, void *a2,
     void *a3, void *a4)
 {
-	(void)action; (void)a1; (void)a2; (void)a3; (void)a4;
-	/* NetBSD's secmodel grants these to root only (secmodel_suser). */
-	return (cred != NOCRED && kauth_cred_issuser(cred)) ? 0 : EPERM;
+	if (cred != NOCRED && kauth_cred_issuser(cred)) {
+		return 0;       /* secmodel_suser: root may do anything */
+	}
+	if (netbt_kauth_cb != NULL &&
+	    netbt_kauth_cb(cred, action, NULL, a1, a2, a3, a4) == KAUTH_RESULT_ALLOW) {
+		return 0;
+	}
+	return EPERM;
 }
 
 kauth_cred_t

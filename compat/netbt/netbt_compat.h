@@ -334,10 +334,11 @@ typedef struct netbt_device *device_t;
 /* ------------------------------------------------------------ kauth */
 
 /*
- * NetBSD's device scope: hci_socket.c authorizes privileged HCI commands
- * through a KAUTH_SCOPE_DEVICE listener (hci_device_cb) that defers to the
- * secmodel, which grants root. Here the check is the secmodel's answer:
- * root (kauth_cred_issuser, bsd/kern/kern_authorization.c).
+ * NetBSD's device scope: hci_socket.c authorizes HCI traffic through a
+ * KAUTH_SCOPE_DEVICE listener (hci_device_cb) that allows the unprivileged
+ * subset and defers the rest to the secmodel, which grants root
+ * (secmodel_suser). Here: root (kauth_cred_issuser,
+ * bsd/kern/kern_authorization.c), else the listener's answer.
  */
 #define KAUTH_SCOPE_DEVICE              "netbt.device"
 #define KAUTH_DEVICE_BLUETOOTH_SETPRIV  1
@@ -347,7 +348,16 @@ typedef struct netbt_device *device_t;
 #define KAUTH_DEVICE_BLUETOOTH_BTUART   5
 /* KAUTH_RESULT_* and kauth_listener_t: xnu bsd/sys/kauth.h:470-486. */
 #define KAUTH_ARG(a)                    ((void *)(uintptr_t)(a))
-#define kauth_listen_scope(sc, cb, cookie)      ((kauth_listener_t)(uintptr_t)1)
+/*
+ * The listener hci_socket.c registers (hci_device_cb: which HCI commands
+ * an unprivileged socket may send and which events it may see) is kept and
+ * consulted by netbt_kauth_authorize_device for non-root callers, as
+ * NetBSD's secmodel allows root and defers others to the listeners.
+ */
+typedef int (*netbt_kauth_cb_t)(kauth_cred_t, kauth_action_t, void *,
+    void *, void *, void *, void *);
+kauth_listener_t netbt_kauth_listen(netbt_kauth_cb_t);
+#define kauth_listen_scope(sc, cb, cookie)      netbt_kauth_listen(cb)
 #define kauth_unlisten_scope(l)                 do { } while (0)
 int netbt_kauth_authorize_device(kauth_cred_t, int, void *, void *, void *, void *);
 #define kauth_authorize_device(c, a, a1, a2, a3, a4) \
