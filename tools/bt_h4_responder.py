@@ -29,6 +29,27 @@ configuration exchange both ways, then boot-keyboard input reports
 ("h", "i" pressed and released) on the interrupt channel. Every ACL packet
 from the host is acknowledged with Number_Of_Completed_Packets.
 
+The keyboard pairs the legacy way (tools/bt_pair_qemu_test.sh): on
+Authentication_Requested it asks the host for a link key; with none
+(Link_Key_Request_Negative_Reply) it asks for a PIN and accepts only
+HID_PIN, then issues a link key (Link_Key_Notification) and completes
+authentication; later connections must present that key
+(Link_Key_Request_Reply). This is what bthcid(8) answers. Once the host
+enables Secure Simple Pairing (Write_Simple_Pairing_Mode 1, `btconfig
+bcmbt0 ssp`), it pairs that way instead, as a keyboard with KeyboardOnly
+IO capability: IO Capability Request/Response, then Passkey Entry -- the
+host is told the passkey (User_Passkey_Notification, HID_PASSKEY), the
+"user" types it on the keyboard, Simple Pairing Complete, an authenticated
+link key. It encrypts the
+link on Set_Connection_Encryption (btdevctl gives keyboards link mode
+"encrypt").
+
+It also serves SDP on PSM 1, enough for btdevctl(8)'s query
+(usr.sbin/btdevctl/sdp.c cfg_search): ServiceSearchAttributeRequest finds
+no PnP Information record and one HID record with the control PSM (0x11,
+protocol descriptor list), interrupt PSM (0x13, additional list),
+HIDReconnectInitiate true, and HIDDescriptorList holding KBD_DESC.
+
 It tests framing, parsing and the user client, not timing: QEMU's PL011
 ignores the baud rate. A summary line per notable command goes to stdout.
 """
@@ -44,7 +65,38 @@ FAKE_CLASSIC = bytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66])   # display order
 FAKE_LE = bytes([0xc0, 0xff, 0xee, 0x00, 0x00, 0x01])
 FAKE_HID = bytes([0x00, 0x1f, 0x20, 0x4b, 0x1d, 0x01])     # display order
 HID_HANDLE = 0x0001
-CTL_CID, INT_CID = 0x0040, 0x0041                           # the keyboard's channel ids
+HID_PIN = b"1234"
+HID_PASSKEY = 123456
+CTL_CID, INT_CID, SDP_CID = 0x0040, 0x0041, 0x0042         # the keyboard's channel ids
+# the boot keyboard report descriptor (HID 1.11 appendix B.1), as in
+# tools/userland_staging/hid_userdevice_test.c
+KBD_DESC = bytes([0x05, 0x01, 0x09, 0x06, 0xa1, 0x01, 0x05, 0x07, 0x19, 0xe0, 0x29, 0xe7, 0x15, 0x00,
+                  0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02, 0x95, 0x01, 0x75, 0x08, 0x81, 0x01,
+                  0x95, 0x06, 0x75, 0x08, 0x15, 0x00, 0x25, 0x65, 0x05, 0x07, 0x19, 0x00, 0x29, 0x65,
+                  0x81, 0x00, 0xc0])
+
+
+# SDP data elements (Bluetooth Core, SDP: type << 3 | size index; big endian)
+def de_u8(v): return bytes([0x08, v])
+def de_u16(v): return bytes([0x09]) + struct.pack(">H", v)
+def de_uuid16(v): return bytes([0x19]) + struct.pack(">H", v)
+def de_bool(v): return bytes([0x28, 1 if v else 0])
+def de_str(b): return bytes([0x25, len(b)]) + b
+def de_seq(*items):
+    body = b"".join(items)
+    return (bytes([0x35, len(body)]) if len(body) < 256 else bytes([0x36]) + struct.pack(">H", len(body))) + body
+
+
+HID_RECORD = de_seq(
+    de_u16(0x0000), bytes([0x0a]) + struct.pack(">I", 0x00010001),          # ServiceRecordHandle
+    de_u16(0x0001), de_seq(de_uuid16(0x1124)),                               # ServiceClassIDList: HID
+    de_u16(0x0004), de_seq(de_seq(de_uuid16(0x0100), de_u16(0x0011)),       # L2CAP, control PSM
+                           de_seq(de_uuid16(0x0011))),                       # HIDP
+    de_u16(0x000d), de_seq(de_seq(de_seq(de_uuid16(0x0100), de_u16(0x0013)),  # interrupt PSM
+                                  de_seq(de_uuid16(0x0011)))),
+    de_u16(0x0205), de_bool(True),                                           # HIDReconnectInitiate
+    de_u16(0x0206), de_seq(de_seq(de_u8(0x22), de_str(KBD_DESC))),           # HIDDescriptorList
+)
 
 
 def acl(cid, payload, handle=HID_HANDLE):
@@ -106,6 +158,7 @@ def main():
     buf = b""
     write_ram = 0
     scan = [0]
+    pairing = {"key": None, "host_ssp": False}  # link key issued once paired; SSP on?
     hid = {"paging": False, "connected": False, "host_cid": {}, "cfg_done": set(), "reported": False}
 
     def hid_reports():
@@ -125,6 +178,21 @@ def main():
                     time.sleep(0.05)
             time.sleep(1)
         print(f"bt_h4_responder: HID: sent {sent} input reports", flush=True)
+
+    def hid_sdp(payload):
+        """An SDP PDU from the host on the keyboard's SDP channel."""
+        if len(payload) < 5 or SDP_CID not in hid["host_cid"]:
+            return
+        pdu, tid = payload[0], payload[1:3]
+        if pdu != 0x06:                         # only ServiceSearchAttributeRequest
+            body = struct.pack(">H", 0x0003)    # Invalid request syntax
+            send(acl(hid["host_cid"][SDP_CID], bytes([0x01]) + tid + struct.pack(">H", len(body)) + body))
+            return
+        wants_hid = b"\x19\x11\x24" in payload[5:]  # ServiceSearchPattern has UUID 0x1124
+        lists = de_seq(HID_RECORD) if wants_hid else de_seq()
+        body = struct.pack(">H", len(lists)) + lists + b"\x00"   # no continuation
+        send(acl(hid["host_cid"][SDP_CID], bytes([0x07]) + tid + struct.pack(">H", len(body)) + body))
+        print(f"bt_h4_responder: HID: SDP search -> {'HID record' if wants_hid else 'no records'}", flush=True)
 
     def hid_l2cap(payload):
         """L2CAP from the host to the fake keyboard (basic header stripped)."""
@@ -155,7 +223,7 @@ def main():
                 threading.Thread(target=hid_reports, daemon=True).start()
         elif code == 0x02 and len(d) >= 4:    # Connection Request from the host {psm, scid}
             psm, hcid = struct.unpack("<HH", d[:4])
-            ours = {0x0011: CTL_CID, 0x0013: INT_CID}.get(psm)
+            ours = {0x0011: CTL_CID, 0x0013: INT_CID, 0x0001: SDP_CID}.get(psm)
             if ours is None:
                 send(sig(0x03, ident, struct.pack("<HHHH", 0, hcid, 2, 0)))       # PSM not supported
                 return
@@ -196,6 +264,8 @@ def main():
                     llen, cid = struct.unpack("<HH", pkt[:4])
                     if cid == 0x0001:
                         hid_l2cap(pkt[4:4 + llen])
+                    elif cid == SDP_CID:
+                        hid_sdp(pkt[4:4 + llen])
                 continue
             if buf[0] != 0x01:
                 print(f"bt_h4_responder: unexpected byte {buf[0]:#x}, skipping", flush=True)
@@ -273,6 +343,69 @@ def main():
                     print("bt_h4_responder: HID: host connected to the keyboard", flush=True)
                 else:
                     send(event(0x03, bytes([0x04]) + struct.pack("<H", 0) + bytes(p[:6]) + bytes([1, 0])))  # page timeout
+            elif op == 0x0411:   # Authentication_Requested {handle}
+                send(cs(op))
+                send(event(0x17, le_addr(FAKE_HID)))            # Link_Key_Request
+                print("bt_h4_responder: HID: authentication requested, asking for a link key", flush=True)
+            elif op == 0x040b:   # Link_Key_Request_Reply {bdaddr, key[16]}
+                send(cc(op, b"\x00" + bytes(p[:6])))
+                ok = pairing["key"] is not None and bytes(p[6:22]) == pairing["key"]
+                send(event(0x06, bytes([0 if ok else 0x06]) + struct.pack("<H", HID_HANDLE)))
+                print(f"bt_h4_responder: HID: host presented a link key: {'accepted' if ok else 'REJECTED'}", flush=True)
+            elif op == 0x040c:   # Link_Key_Request_Negative_Reply: no key -> SSP or PIN
+                send(cc(op, b"\x00" + bytes(p[:6])))
+                if pairing["host_ssp"]:
+                    send(event(0x31, le_addr(FAKE_HID)))        # IO_Capability_Request
+                    print("bt_h4_responder: HID: host has no key, secure simple pairing", flush=True)
+                else:
+                    send(event(0x16, le_addr(FAKE_HID)))        # PIN_Code_Request
+                    print("bt_h4_responder: HID: host has no key, asking for a PIN", flush=True)
+            elif op == 0x0c56:   # Write_Simple_Pairing_Mode
+                pairing["host_ssp"] = plen >= 1 and p[0] == 1
+                send(cc(op))
+                print(f"bt_h4_responder: Write_Simple_Pairing_Mode {p[0] if plen else 0}", flush=True)
+            elif op == 0x042b:   # IO_Capability_Request_Reply {bdaddr, io_cap, oob, auth}
+                send(cc(op, b"\x00" + bytes(p[:6])))
+                print(f"bt_h4_responder: HID: host IO capability {p[6]}, auth {p[8]:#x}", flush=True)
+                send(event(0x32, le_addr(FAKE_HID) + bytes([0x02, 0x00, 0x05])))   # KeyboardOnly, MITM
+                if p[6] in (0x00, 0x01, 0x04):   # host can display: Passkey Entry on the keyboard
+                    send(event(0x3b, le_addr(FAKE_HID) + struct.pack("<I", HID_PASSKEY)))
+                    import hashlib
+                    pairing["key"] = hashlib.sha256(b"fake hid ssp key").digest()[:16]
+                    later(1.0, event(0x36, bytes([0]) + le_addr(FAKE_HID)))       # Simple_Pairing_Complete
+                    later(1.1, event(0x18, le_addr(FAKE_HID) + pairing["key"] + bytes([0x05])))
+                    later(1.2, event(0x06, bytes([0]) + struct.pack("<H", HID_HANDLE)))
+                    print(f"bt_h4_responder: HID: passkey {HID_PASSKEY:06d} shown to the host, typed, paired (SSP)", flush=True)
+                else:
+                    send(event(0x36, bytes([0x05]) + le_addr(FAKE_HID)))
+                    send(event(0x06, bytes([0x05]) + struct.pack("<H", HID_HANDLE)))
+            elif op == 0x0434:   # IO_Capability_Request_Negative_Reply {bdaddr, reason}
+                send(cc(op, b"\x00" + bytes(p[:6])))
+                send(event(0x36, bytes([p[6] if plen > 6 else 0x18]) + le_addr(FAKE_HID)))
+                send(event(0x06, bytes([0x18]) + struct.pack("<H", HID_HANDLE)))
+                print("bt_h4_responder: HID: host refused to pair (SSP)", flush=True)
+            elif op == 0x040d:   # PIN_Code_Request_Reply {bdaddr, len, pin[16]}
+                send(cc(op, b"\x00" + bytes(p[:6])))
+                pin = bytes(p[7:7 + p[6]]) if plen >= 7 else b""
+                if pin == HID_PIN:
+                    import hashlib
+                    pairing["key"] = hashlib.sha256(b"fake hid link key" + pin).digest()[:16]
+                    send(event(0x18, le_addr(FAKE_HID) + pairing["key"] + bytes([0x00])))   # Link_Key_Notification
+                    send(event(0x06, bytes([0]) + struct.pack("<H", HID_HANDLE)))
+                    print("bt_h4_responder: HID: PIN accepted, paired", flush=True)
+                else:
+                    send(event(0x06, bytes([0x05]) + struct.pack("<H", HID_HANDLE)))
+                    print(f"bt_h4_responder: HID: wrong PIN {pin!r}", flush=True)
+            elif op == 0x040e:   # PIN_Code_Request_Negative_Reply
+                send(cc(op, b"\x00" + bytes(p[:6])))
+                send(event(0x06, bytes([0x18]) + struct.pack("<H", HID_HANDLE)))     # pairing not allowed
+                print("bt_h4_responder: HID: host refused to give a PIN", flush=True)
+            elif op == 0x0413:   # Set_Connection_Encryption {handle, enable}
+                send(cs(op))
+                send(event(0x08, bytes([0]) + p[:2] + bytes([p[2] if plen >= 3 else 1])))   # Encryption_Change
+                print(f"bt_h4_responder: HID: encryption {'on' if plen >= 3 and p[2] else 'off'}", flush=True)
+            elif op == 0x1408:   # Read_Encryption_Key_Size {handle}: netbt waits for >= 7
+                send(cc(op, bytes([0]) + p[:2] + bytes([16])))     # (hci_event.c hci_cmd_read_encryption_key_size)
             elif op == 0x0406:   # Disconnect {handle, reason}
                 send(cs(op))
                 send(event(0x05, bytes([0]) + p[:2] + bytes([0x16])))

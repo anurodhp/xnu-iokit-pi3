@@ -1,8 +1,8 @@
 # Bluetooth host stack (L2CAP and up) for the Pi 3
 
-Status (2026-11-03): classic Bluetooth works end to end on QEMU (S0-S3, S5);
-real-hardware test, legacy-PIN pairing test and Secure Simple Pairing (S4)
-are next. BLE (S8) is deferred.
+Status (2026-11-03): classic Bluetooth works end to end on QEMU (S0-S5):
+pairing (legacy PIN and Secure Simple Pairing), HID keyboards and mice.
+Not yet run on a real Pi. Audio (S6) is next; BLE (S8) is deferred.
 
 - **S0:** fork `anurodhp/netbsd-src`, branch `iokit-port`, made from
   `netbsd-11` at `4198f5370c18` (11.1). It is a sparse checkout, pinned in
@@ -32,6 +32,18 @@ are next. BLE (S8) is deferred.
   - libc gaps are filled by `compat/netbt-user/`.
   - launchd jobs: `sdpd`, `bthcid`, `bthidd`. The `bluetooth` job ends with
     `btconfig bcmbt0 up pscan`.
+- **S4: pairing.**
+  - Legacy PIN pairing is NetBSD's `bthcid`, unchanged.
+  - Secure Simple Pairing is added to the fork:
+    - `btconfig <dev> ssp` enables it and unmasks the SSP events.
+    - `bthcid` is the agent: DisplayYesNo with general bonding, so a keyboard
+      pairs by Passkey Entry (the passkey is printed on the console) and a
+      mouse by Just Works.
+    - Pairing is authorized by `btpin` for the device, as with PIN pairing.
+  - The boot job turns SSP on.
+  - The fork also fixes NetBSD's `HCI_CMD_IO_CAPABILITY_REP` opcode
+    (0x042a → 0x042B).
+  - Non-root HCI sockets follow netbt's own policy (`hci_device_cb`).
 - **S5: `bthidd`.**
   - L2CAP control and interrupt channels, then an `IOHIDUserDevice` per
     device that `btdevctl -A` attached (its cache, `/var/db/btdevctl.plist`).
@@ -44,12 +56,46 @@ are next. BLE (S8) is deferred.
     closes both channels (DisconnReq) and the link expires; attach connects
     from the host; its "h"/"i" keys arrive at `IOHIDEventService`
     (`hid_event_smoketest` PASS).
+  - `tools/bt_pair_qemu_test.sh`: the real workflow, legacy PIN, no
+    fixtures.
+    - `btpin`, then `btdevctl -A`, which queries the keyboard over SDP (the
+      responder serves an SDP HID record).
+    - netbt authenticates (no key → PIN → key stored by `bthcid`) and
+      encrypts; the keys arrive.
+    - Detach and attach again: the stored key is accepted, with no PIN.
+  - `tools/bt_ssp_qemu_test.sh`: the same with SSP. An unauthorized attempt is
+    refused; an authorized one does Passkey Entry, then the keys arrive and
+    reconnect works.
 - **Lessons:**
   - xnu calls `pru_control` with the socket (= domain) lock held, but
     NetBSD's `hci_ioctl` takes `bt_lock` itself. That deadlocked `btconfig`
     until the wrapper dropped the lock around the call.
   - The image keeps `/var/log` and `/var/db` between test runs, so stale logs
     read as fresh evidence. Tests truncate what they read.
+
+## Using it on the Pi
+
+With `bt=1` (the real-hardware image's default), the `org.puredarwin.bluetooth`
+job loads the patch and runs `btconfig bcmbt0 up pscan ssp`. `bthcid`, `sdpd`
+and `bthidd` run as launchd jobs. As root:
+
+```
+btconfig bcmbt0 inquiry                  # find the device (put it in pairing mode)
+btpin -d bcmbt0 -a <addr> -p 0000        # authorize pairing (and the PIN, for a
+                                         # device without SSP: -r -l 6 makes a
+                                         # random one for keyboards)
+btdevctl -A -d bcmbt0 -a <addr> -s HID   # read its HID record, attach it
+```
+
+- **Keyboard with SSP:** `bthcid` prints the passkey on the console
+  (`bthcid: passkey for <addr>: NNNNNN`). Type it on the keyboard and press
+  Enter.
+- **Afterwards:** the key is in `/var/db/bthcid.keys` (`btkey -l -d bcmbt0`)
+  and the device in `/var/db/btdevctl.plist`. It reconnects by itself after a
+  reboot.
+- **Detach:** `btdevctl -D …`.
+- **Logs:** `/var/log/bthcid.log` and `/var/log/bthidd.log`. Boot-arg
+  `netbt-debug=1` (to 3) prints netbt's own trace on the console.
 
 ## What exists today, and what does not
 
