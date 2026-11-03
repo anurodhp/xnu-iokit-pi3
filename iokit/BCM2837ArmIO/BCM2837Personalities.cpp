@@ -334,6 +334,14 @@ addIOGraphicsPersonalities(OSArray *personalities)
  *                        what keyboards report). It SetConfiguration()s the
  *                        device, which is what creates the IOUSBInterface nubs
  *                        below. Nothing else does that for a generic device.
+ *   IOHIDResource        Info-IOHIDFamily-Embedded.plist "IOHIDResource"
+ *                        (IOResources / IOResourceMatch IOBSD, user client
+ *                        IOHIDResourceDeviceUserClient). Userland HID devices
+ *                        (IOHIDUserDevice): the Bluetooth HID host
+ *                        (docs/bluetooth-stack-plan.md S5) creates one per
+ *                        connected keyboard or mouse. Its user client needs
+ *                        the com.apple.hid.manager.user-access-device
+ *                        entitlement (IOHIDResourceUserClient.cpp:101-131).
  *   IOUSBHIDDriver x2    IOUSBFamily-560.4.2 IOUSBHIDDriverSafeBoot.plist
  *                        "IOUSBHIDDriver0"/"IOUSBHIDDriver1": any
  *                        IOUSBInterface with bInterfaceClass 3 and subclass 0
@@ -472,7 +480,12 @@ static const char kIOHIDPersonalitiesXML[] =
     "<dict><key>IOClass</key><string>IOUSBCompositeDriver</string>"
     "<key>IOProviderClass</key><string>IOUSBDevice</string>"
     "<key>bDeviceClass</key><integer>0</integer>"
-    "<key>bDeviceSubClass</key><integer>0</integer></dict></array>";
+    "<key>bDeviceSubClass</key><integer>0</integer></dict>"
+    "<dict><key>IOClass</key><string>IOHIDResource</string>"
+    "<key>IOMatchCategory</key><string>IOHIDResource</string>"
+    "<key>IOProviderClass</key><string>IOResources</string>"
+    "<key>IOResourceMatch</key><string>IOBSD</string>"
+    "<key>IOUserClientClass</key><string>IOHIDResourceDeviceUserClient</string></dict></array>";
 
 static void
 addIOHIDPersonalities(OSArray *personalities)

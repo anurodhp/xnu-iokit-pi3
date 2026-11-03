@@ -1480,6 +1480,9 @@ install_smoketest tools/userland_staging/libc_build/fb_cache_test.macho "usr/loc
 install_smoketest tools/userland_staging/libc_build/hid_event_smoketest.macho "usr/local/bin/hid_event_smoketest" \
     "= hid_event_smoketest.macho not built -- run tools/userland_staging/build_hid_event_smoketest.sh first if wanted, skipping" \
     "  (DAR-391 keyboard/pointer events from IOHIDEventServiceUserClient)"
+install_smoketest tools/userland_staging/libc_build/hid_userdevice_test.macho "usr/local/bin/hid_userdevice_test" \
+    "= hid_userdevice_test.macho not built -- run tools/userland_staging/build_hid_userdevice_test.sh first if wanted, skipping" \
+    "  (bluetooth-stack-plan H0: userland keyboard/mouse through IOHIDResource)"
 # Audio test tools are installed on real-hardware images too (SKIP_SMOKETESTS does not apply): they are the only way to test audio on the Pi.
 if [ -f tools/userland_staging/libc_build/audio_play.macho ]; then
     mkdir -p "$MNT/usr/local/bin"

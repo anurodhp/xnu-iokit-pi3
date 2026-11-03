@@ -1143,6 +1143,42 @@ if [ -n "$PUREDARWIN_DEST" ]; then
     git -C "$PUREDARWIN_DEST" remote add upstream https://github.com/PureDarwin/PureDarwin.git
 fi
 
+# netbsd-src: NetBSD's Bluetooth host stack (docs/bluetooth-stack-plan.md).
+# Apple never published IOBluetoothFamily or bluetoothd; NetBSD's netbt is
+# a plain BSD socket domain (AF_BLUETOOTH: HCI, L2CAP, RFCOMM, SCO) that
+# xnu can load as an old-style domain, and its tools (btconfig, bthcid,
+# sdpd, sdpquery, rfcomm_sppd, bta2dpd, libbluetooth) use those sockets.
+# FreeBSD's stack needs netgraph. Our fork anurodhp/netbsd-src, branch
+# iokit-port, made from upstream's netbsd-11 branch at 4198f5370c18 ("Welcome
+# to 11.1!"; the GitHub mirror carries release branches, not release tags).
+# Sparse: only the Bluetooth kernel code, its drivers (logic reference) and
+# its userland. The fork's trunk and netbsd-11 stay clean mirrors; the
+# `upstream` remote is added for syncing.
+NETBSD_REF="iokit-port"
+NETBSD_DEST="third_party/netbsd-src"
+if [ -d "$NETBSD_DEST" ]; then
+    if [ "$FORCE" = "1" ]; then
+        echo "+ removing existing $NETBSD_DEST (--force)"
+        rm -rf "$NETBSD_DEST"
+    else
+        echo "= $NETBSD_DEST already exists, skipping (use --force to re-clone)"
+        NETBSD_DEST=""
+    fi
+fi
+if [ -n "$NETBSD_DEST" ]; then
+    echo "+ sparse-cloning netbsd-src @ $NETBSD_REF (own fork; sys/netbt, sys/dev/bluetooth, Bluetooth userland)"
+    git clone --filter=blob:none --no-checkout --depth 1 --branch "$NETBSD_REF" \
+        git@github.com:anurodhp/netbsd-src.git "$NETBSD_DEST"
+    git -C "$NETBSD_DEST" sparse-checkout init --cone
+    git -C "$NETBSD_DEST" sparse-checkout set sys/netbt sys/dev/bluetooth \
+        usr.sbin/btattach usr.sbin/btconfig usr.sbin/btdevctl usr.sbin/bthcid \
+        usr.sbin/btpand usr.sbin/bta2dpd usr.sbin/sdpd \
+        usr.bin/btkey usr.bin/btpin usr.bin/bthset usr.bin/rfcomm_sppd usr.bin/sdpquery \
+        lib/libbluetooth
+    git -C "$NETBSD_DEST" checkout "$NETBSD_REF"
+    git -C "$NETBSD_DEST" remote add upstream https://github.com/NetBSD/src.git
+fi
+
 # CoreFoundation: real Apple source, but NOT from
 # apple-oss-distributions/CF -- that repo's own last real tag
 # (CF-855.17) is from 2014 (OS X Yosemite), 6 years stale relative to
