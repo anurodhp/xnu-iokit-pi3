@@ -1151,8 +1151,8 @@ fi
 # FreeBSD's stack needs netgraph. Our fork anurodhp/netbsd-src, branch
 # iokit-port, made from upstream's netbsd-11 branch at 4198f5370c18 ("Welcome
 # to 11.1!"; the GitHub mirror carries release branches, not release tags).
-# Sparse: only the Bluetooth kernel code, its drivers (logic reference) and
-# its userland. The fork's trunk and netbsd-11 stay clean mirrors; the
+# Sparse: only the Bluetooth kernel code, its drivers (logic reference),
+# its userland and the libraries that userland links (list below). The fork's trunk and netbsd-11 stay clean mirrors; the
 # `upstream` remote is added for syncing.
 NETBSD_REF="iokit-port"
 NETBSD_DEST="third_party/netbsd-src"
@@ -1170,11 +1170,21 @@ if [ -n "$NETBSD_DEST" ]; then
     git clone --filter=blob:none --no-checkout --depth 1 --branch "$NETBSD_REF" \
         git@github.com:anurodhp/netbsd-src.git "$NETBSD_DEST"
     git -C "$NETBSD_DEST" sparse-checkout init --cone
+    # Kernel: sys/netbt; the headers the userland needs (sys/dev/bluetooth,
+    # sys/dev/usb + sys/dev/hid for btdevctl/libusbhid, sys/sys for
+    # rbtree.h -- cone mode takes its parent's files via sys/sys/proplib.h).
+    # Userland: the Bluetooth commands and libbluetooth, plus what bthcid and
+    # btdevctl link: libevent (external/bsd/libevent), proplib
+    # (common/lib/libprop, common/include/prop, lib/libprop, and its rb tree
+    # in common/lib/libc/gen) and libusbhid.
     git -C "$NETBSD_DEST" sparse-checkout set sys/netbt sys/dev/bluetooth \
+        sys/dev/usb sys/dev/hid sys/sys/proplib.h \
         usr.sbin/btattach usr.sbin/btconfig usr.sbin/btdevctl usr.sbin/bthcid \
         usr.sbin/btpand usr.sbin/bta2dpd usr.sbin/sdpd \
         usr.bin/btkey usr.bin/btpin usr.bin/bthset usr.bin/rfcomm_sppd usr.bin/sdpquery \
-        lib/libbluetooth
+        lib/libbluetooth lib/libprop lib/libusbhid \
+        common/include/prop common/lib/libprop common/lib/libc/gen \
+        external/bsd/libevent
     git -C "$NETBSD_DEST" checkout "$NETBSD_REF"
     git -C "$NETBSD_DEST" remote add upstream https://github.com/NetBSD/src.git
 fi

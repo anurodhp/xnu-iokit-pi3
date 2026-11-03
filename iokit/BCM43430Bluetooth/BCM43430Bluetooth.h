@@ -24,6 +24,21 @@
  *   - fEventLock (IOLock) covers the command handoff and the event queue.
  *   - fCmdLock serializes commands (one in flight); fOpLock serializes
  *     user-client operations (upload, up).
+ *
+ * netbt (docs/bluetooth-stack-plan.md S1): after the first successful up()
+ * the driver attaches as HCI unit "bcmbt0" of NetBSD's netbt through
+ * netbt_bridge.h. Once userland enables the unit (btconfig bcmbt0 up),
+ * netbt owns the controller:
+ *   - every received packet goes to netbt (the worker calls
+ *     netbt_bridge_input; fWantOpcode matching and the user event queue are
+ *     bypassed), and the user client's raw command/event methods refuse;
+ *   - netbt's packets go out through fTxRing, an interrupt-driven TX ring
+ *     under fTxLock (a spin lock taken with interrupts off in thread
+ *     context, plain at interrupt level). bridgeTransmit() copies a packet
+ *     in and fills the FIFO itself, then unmasks the TX interrupt only while
+ *     bytes remain (Linux pl011_start_tx primes the FIFO the same way, since
+ *     TXIS only fires on crossing the trigger level).
+ * Before that, commands use the polled uartWrite() path as before.
  */
 #ifndef _BCM43430BLUETOOTH_H
 #define _BCM43430BLUETOOTH_H
@@ -33,6 +48,8 @@
 #include <kern/thread.h>
 
 #include "BCM43430BluetoothShared.h"
+
+struct netbt_bridge;
 
 class BCM43430Bluetooth : public IOService
 {
@@ -52,6 +69,7 @@ public:
 	IOReturn userCommand(const bt_command *cmd, bt_packet *out);
 	IOReturn readEvent(uint32_t timeoutMs, bt_packet *out);
 	void     getStatus(bt_status *out);
+	bool     netbtOwns(void) const { return fNetbtEnabled; }
 	bool     claimReader(void *owner);
 	void     releaseReader(void *owner);
 
@@ -105,6 +123,16 @@ private:
 	uint32_t fEvqHead, fEvqTail;
 	void *fReader;                   // the one user client allowed to read events
 
+	// netbt (see the header comment).
+	struct netbt_bridge *fBridge;
+	volatile bool fNetbtEnabled;
+	enum { kTxRingSize = 16 * 1024 };
+	uint8_t *fTxRing;
+	uint32_t fTxHead, fTxTail;       // under fTxLock
+	IOSimpleLock *fTxLock;
+	uint32_t fImsc;                  // shadow of IMSC, under fTxLock once netbt runs
+	volatile uint32_t fTxDrops;
+
 	// Controller identity, from up().
 	uint8_t fBdaddr[6];              // display order
 	uint8_t fHciVersion, fLmpVersion;
@@ -149,6 +177,11 @@ private:
 	    bt_packet *resp, uint32_t timeoutMs = 2000);
 	IOReturn bringUp(void);
 	IOReturn downloadPatch(void);
+
+	void txFillLocked(void);
+	static int bridgeEnable(void *ctx);
+	static void bridgeDisable(void *ctx);
+	static int bridgeTransmit(void *ctx, const uint8_t *pkt, size_t len);
 
 	void deframe(void);
 	void dispatchPacket(uint32_t type, const uint8_t *p, uint32_t len);

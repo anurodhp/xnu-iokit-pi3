@@ -1,26 +1,55 @@
 # Bluetooth host stack (L2CAP and up) for the Pi 3
 
-Status (2026-11-03): S0 and H0 done. BLE (S8) is deferred.
+Status (2026-11-03): classic Bluetooth works end to end on QEMU (S0-S3, S5);
+real-hardware test, legacy-PIN pairing test and Secure Simple Pairing (S4)
+are next. BLE (S8) is deferred.
+
 - **S0:** fork `anurodhp/netbsd-src`, branch `iokit-port`, made from
-  `netbsd-11` at `4198f5370c18` (11.1). It is sparse and pinned in
+  `netbsd-11` at `4198f5370c18` (11.1). It is a sparse checkout, pinned in
   `setup_third_party.sh`.
-- **H0 passes on QEMU** (`tools/hid_userdevice_qemu_test.sh`). An
-  `IOHIDResource` personality was added to `BCM2837Personalities.cpp`.
-  `hid_userdevice_test` then creates a userland keyboard and mouse, and
-  `hid_event_smoketest` receives their key and pointer events through
-  `IOHIDEventService` (84 events, 150/150 reports accepted). X's iohid driver
-  reads that same user client, and it already handles services that appear
-  after X starts (`kIOFirstMatchNotification`, `iohid_drv.c:51`). Follows `docs/bluetooth-plan.md`,
-which built the controller half (B1-B6, verified on a real Pi 3B):
-
-- the `BCM43430Bluetooth` PL011 H4 transport;
-- the patchram load and the baud switch to 921600;
-- a raw-HCI user client;
-- the `bt` tool (`up`, `info`, `scan`, `hci`).
-
-What is missing is everything above HCI: connections, L2CAP, SDP, pairing,
-and the profiles people actually want (keyboard and mouse, headphones,
-serial).
+  - H0: an `IOHIDResource` personality, and `hid_userdevice_test`
+    (`tools/hid_userdevice_qemu_test.sh`).
+- **S2: netbt in the kernel.**
+  - `tools/vendor_netbt_into_xnu.sh` copies `sys/netbt` unchanged to
+    `bsd/netbt`, with this repo's glue (`compat/netbt/`):
+    - `netbt_compat.h`: the NetBSD API on xnu, cited per mapping;
+    - `netbt_xnu.c`: the domain and protosw table, callouts, softints,
+      sockopts and kauth;
+    - `netbt_bridge.c`: the `hci_if`.
+  - The xnu fork adds `AF_BLUETOOTH` = 41 and attaches the domain in
+    `domaininit`.
+  - Boot-arg `netbt-debug=N` turns on netbt's own `DPRINTF`s.
+- **S1: the driver is netbt HCI unit `bcmbt0`.**
+  - `BCM43430Bluetooth` attaches after `bt up`.
+  - Packets go to netbt once `btconfig bcmbt0 up` enables the unit.
+  - TX is an interrupt-driven ring.
+- **S3: NetBSD userland ported.**
+  - Scripts: `build_libbluetooth.sh`, `build_netbt_tools.sh`,
+    `build_libevent.sh`, `build_libprop.sh`, `build_libusbhid.sh`.
+  - Commands: `btconfig`, `btpin`, `btkey`, `btdevctl`, `sdpquery`,
+    `rfcomm_sppd`, `sdpd`, `bthcid`.
+  - Libraries: libbluetooth, libevent, libprop, libusbhid.
+  - libc gaps are filled by `compat/netbt-user/`.
+  - launchd jobs: `sdpd`, `bthcid`, `bthidd`. The `bluetooth` job ends with
+    `btconfig bcmbt0 up pscan`.
+- **S5: `bthidd`.**
+  - L2CAP control and interrupt channels, then an `IOHIDUserDevice` per
+    device that `btdevctl -A` attached (its cache, `/var/db/btdevctl.plist`).
+  - Output reports (keyboard LEDs) are not forwarded yet.
+- **QEMU tests:** `tools/bt_h4_responder.py` now also plays a Bluetooth
+  keyboard.
+  - `tools/bt_netbt_qemu_test.sh`: the unit comes up, an inquiry runs through
+    netbt, and a local SDP browse works.
+  - `tools/bt_hid_qemu_test.sh`: the keyboard reconnects on page scan; detach
+    closes both channels (DisconnReq) and the link expires; attach connects
+    from the host; its "h"/"i" keys arrive at `IOHIDEventService`
+    (`hid_event_smoketest` PASS).
+- **Lessons:**
+  - xnu calls `pru_control` with the socket (= domain) lock held, but
+    NetBSD's `hci_ioctl` takes `bt_lock` itself. That deadlocked `btconfig`
+    until the wrapper dropped the lock around the call.
+  - The image keeps `/var/log` and `/var/db` between test runs, so stale logs
+    read as fresh evidence. Tests truncate what they read.
 
 ## What exists today, and what does not
 

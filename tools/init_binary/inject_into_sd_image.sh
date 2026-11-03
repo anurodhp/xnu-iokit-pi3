@@ -2624,6 +2624,18 @@ if [ -f "$MNT/etc/group" ] && ! grep -q '^sshd:' "$MNT/etc/group"; then
     printf 'sshd:*:75:\n' >> "$MNT/etc/group"
     echo "+ added the sshd group to $MNT/etc/group (gid 75)"
 fi
+# The "_sdpd" account: NetBSD's sdpd drops to user and group _sdpd after
+# binding its sockets (usr.sbin/sdpd/main.c:67) and exits with "No passwd
+# entry for user _sdpd" without it. uid/gid 79 is a project choice (unused
+# here; NetBSD assigns its own in etc/master.passwd).
+if [ -f "$MNT/etc/master.passwd" ] && ! grep -q '^_sdpd:' "$MNT/etc/master.passwd"; then
+    printf '_sdpd:*:79:79::0:0:Bluetooth SDP daemon:/var/empty:/usr/bin/false\n' >> "$MNT/etc/master.passwd"
+    echo "+ added the _sdpd account to $MNT/etc/master.passwd (uid/gid 79, no password)"
+fi
+if [ -f "$MNT/etc/group" ] && ! grep -q '^_sdpd:' "$MNT/etc/group"; then
+    printf '_sdpd:*:79:\n' >> "$MNT/etc/group"
+    echo "+ added the _sdpd group to $MNT/etc/group (gid 79)"
+fi
 
 if [ ! -f "$MNT/etc/hostname" ]; then
     echo "strudel" > "$MNT/etc/hostname"
@@ -2839,6 +2851,53 @@ if [ -f tools/userland_staging/libc_build/bt.macho ]; then
     echo "+ wrote /usr/sbin/bt, /usr/share/firmware/bluetooth/ and org.puredarwin.bluetooth.plist"
 else
     echo "= tools/userland_staging/libc_build/bt.macho not built -- run build_bt.sh first if wanted, skipping"
+fi
+# The Bluetooth host stack's userland (docs/bluetooth-stack-plan.md S3):
+# NetBSD's libbluetooth (build_libbluetooth.sh) and commands
+# (build_netbt_tools.sh) over the kernel's AF_BLUETOOTH sockets (netbt).
+NBT=tools/userland_staging/libc_build/netbt_tools
+if [ -f tools/userland_staging/libc_build/system/libbluetooth.dylib ] && [ -d "$NBT" ]; then
+    mkdir -p "$MNT/usr/lib" "$MNT/usr/sbin" "$MNT/usr/bin"
+    cp tools/userland_staging/libc_build/system/libbluetooth.dylib "$MNT/usr/lib/libbluetooth.dylib"
+    chmod 755 "$MNT/usr/lib/libbluetooth.dylib"
+    for d in libevent libprop libusbhid; do
+        if [ -f "tools/userland_staging/libc_build/system/$d.dylib" ]; then
+            cp "tools/userland_staging/libc_build/system/$d.dylib" "$MNT/usr/lib/$d.dylib"
+            chmod 755 "$MNT/usr/lib/$d.dylib"
+        fi
+    done
+    for t in btconfig:usr/sbin sdpd:usr/sbin bthcid:usr/sbin btdevctl:usr/sbin btpin:usr/bin btkey:usr/bin sdpquery:usr/bin rfcomm_sppd:usr/bin; do
+        n=${t%%:*}; d=${t#*:}
+        if [ -f "$NBT/$n.macho" ]; then
+            cp "$NBT/$n.macho" "$MNT/$d/$n"
+            chmod 755 "$MNT/$d/$n"
+        else
+            echo "= $NBT/$n.macho not built -- run build_netbt_tools.sh"
+        fi
+    done
+    mkdir -p "$MNT/Library/LaunchDaemons" "$MNT/var/db"
+    for j in sdpd bthcid; do
+        if [ -f "$NBT/$j.macho" ]; then
+            cp "tools/userland_staging/org.netbsd.$j.plist" "$MNT/Library/LaunchDaemons/org.netbsd.$j.plist"
+            chmod 644 "$MNT/Library/LaunchDaemons/org.netbsd.$j.plist"
+        fi
+    done
+    # libusbhid's usage names (btdevctl prints HID descriptors with them).
+    mkdir -p "$MNT/usr/share/misc"
+    cp third_party/netbsd-src/lib/libusbhid/usb_hid_usages "$MNT/usr/share/misc/usb_hid_usages"
+    chmod 644 "$MNT/usr/share/misc/usb_hid_usages"
+    # The HID host (build_bthidd.sh).
+    if [ -f tools/userland_staging/libc_build/bthidd.macho ]; then
+        cp tools/userland_staging/libc_build/bthidd.macho "$MNT/usr/sbin/bthidd"
+        chmod 755 "$MNT/usr/sbin/bthidd"
+        cp tools/userland_staging/org.puredarwin.bthidd.plist "$MNT/Library/LaunchDaemons/org.puredarwin.bthidd.plist"
+        chmod 644 "$MNT/Library/LaunchDaemons/org.puredarwin.bthidd.plist"
+    else
+        echo "= tools/userland_staging/libc_build/bthidd.macho not built -- run build_bthidd.sh"
+    fi
+    echo "+ wrote libbluetooth/libevent/libprop/libusbhid, btconfig, sdpd, bthcid, btdevctl, bthidd (+ jobs), btpin, btkey, sdpquery, rfcomm_sppd"
+else
+    echo "= libbluetooth.dylib / netbt tools not built -- run build_libbluetooth.sh and build_netbt_tools.sh if wanted, skipping"
 fi
 
 # /etc/login.conf: pw(8) wants a login class (else "setting crypt(3) format:

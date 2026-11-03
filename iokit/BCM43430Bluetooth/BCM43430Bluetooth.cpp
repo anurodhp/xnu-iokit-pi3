@@ -3,10 +3,15 @@
 #include <libkern/OSAtomic.h>
 #include <pexpert/pexpert.h>
 #include <stdarg.h>
+#include <sys/errno.h>
 
 #include "BCM43430Bluetooth.h"
 #include "BCM2837Mailbox.h"
 #include "BCM2837GPIO.h"
+// netbt's driver interface (compat/netbt/netbt_bridge.h in the iokit repo,
+// vendored to bsd/netbt/xnu/ by tools/vendor_netbt_into_xnu.sh; this file is
+// compiled from iokit/Drivers/BCM2837/ in the xnu tree).
+#include "../../../bsd/netbt/xnu/netbt_bridge.h"
 
 #define super IOService
 OSDefineMetaClassAndStructors(BCM43430Bluetooth, IOService)
@@ -93,6 +98,11 @@ BCM43430Bluetooth::init(OSDictionary *properties)
 	fCmdCredits = 1;
 	fEvqHead = fEvqTail = 0;
 	fReader = NULL;
+	fBridge = NULL;
+	fNetbtEnabled = false;
+	fTxHead = fTxTail = 0;
+	fImsc = 0;
+	fTxDrops = 0;
 	bzero(fBdaddr, sizeof(fBdaddr));
 	fHciVersion = fLmpVersion = 0;
 	fHciRevision = fLmpSubversion = 0;
@@ -103,7 +113,9 @@ BCM43430Bluetooth::init(OSDictionary *properties)
 	fOpLock = IOLockAlloc();
 	fRing = (uint8_t *)IOMalloc(kRingSize);
 	fEvq = (bt_packet *)IOMalloc(sizeof(bt_packet) * kEvqSlots);
-	return fEventLock && fCmdLock && fOpLock && fRing && fEvq;
+	fTxRing = (uint8_t *)IOMalloc(kTxRingSize);
+	fTxLock = IOSimpleLockAlloc();
+	return fEventLock && fCmdLock && fOpLock && fRing && fEvq && fTxRing && fTxLock;
 }
 
 void
@@ -116,6 +128,8 @@ BCM43430Bluetooth::free(void)
 	if (fRing) IOFree(fRing, kRingSize);
 	if (fEvq) IOFree(fEvq, sizeof(bt_packet) * kEvqSlots);
 	if (fPatch) IOFree(fPatch, kBtPatchMax);
+	if (fTxRing) IOFree(fTxRing, kTxRingSize);
+	if (fTxLock) IOSimpleLockFree(fTxLock);
 	super::free();
 }
 
@@ -225,7 +239,8 @@ BCM43430Bluetooth::uartInit(uint32_t baud)
 	// RX + RT as Linux (pl011_startup), plus the error interrupts so an
 	// overrun is counted even when it arrives with no data to drain
 	// (project choice: they only count and are cleared through ICR).
-	writeReg(kRegIMSC, kIntRX | kIntRT | kIntErrors);
+	fImsc = kIntRX | kIntRT | kIntErrors;
+	writeReg(kRegIMSC, fImsc);
 }
 
 void
@@ -261,6 +276,11 @@ BCM43430Bluetooth::interruptOccurred(OSObject *target, void *, IOService *, int)
 				self->fRxOverruns++;
 			}
 			self->writeReg(kRegICR, mis & kIntErrors);
+		}
+		if (mis & kIntTX) {
+			IOSimpleLockLock(self->fTxLock);
+			self->txFillLocked();
+			IOSimpleLockUnlock(self->fTxLock);
 		}
 		while (!(self->readReg(kRegFR) & kFrRXFE)) {
 			uint32_t d = self->readReg(kRegDR);
@@ -400,6 +420,18 @@ BCM43430Bluetooth::deframe(void)
 void
 BCM43430Bluetooth::dispatchPacket(uint32_t type, const uint8_t *p, uint32_t len)
 {
+	if (fNetbtEnabled && fBridge != NULL) {
+		// netbt owns the controller: hand it the packet in H4 framing.
+		uint8_t h4[1 + kBtPacketMax];
+		if (len <= sizeof(h4) - 1) {
+			h4[0] = (uint8_t)type;
+			memcpy(h4 + 1, p, len);
+			if (netbt_bridge_input(fBridge, h4, len + 1) != 0) {
+				fEventDrops++;
+			}
+		}
+		return;
+	}
 	IOLockLock(fEventLock);
 	if (type == kBtH4Event && len >= 2) {
 		uint8_t code = p[0];
@@ -735,6 +767,7 @@ BCM43430Bluetooth::bringUp(void)
 out:
 	if (r != kIOReturnSuccess) {
 		// Leave it off, as Linux does when setup fails.
+		fImsc = 0;
 		writeReg(kRegIMSC, 0);
 		writeReg(kRegCR, 0);
 		BCM2837Mailbox::setExpGPIO(kExpGpioBtOn, false);
@@ -781,11 +814,97 @@ BCM43430Bluetooth::up(void)
 	if (fPatch == NULL || fPatchLen == 0) {
 		return kIOReturnBadArgument;
 	}
+	if (fNetbtEnabled) {
+		// netbt is using the controller (btconfig bcmbt0 down first).
+		return kIOReturnBusy;
+	}
 	fState = kBtStateLoading;
 	fLastError[0] = 0;
 	IOReturn r = bringUp();
 	fState = r == kIOReturnSuccess ? kBtStateUp : kBtStateFailed;
+	if (r == kIOReturnSuccess && fBridge == NULL) {
+		static const struct netbt_bridge_ops ops = {
+			&BCM43430Bluetooth::bridgeEnable,
+			&BCM43430Bluetooth::bridgeDisable,
+			&BCM43430Bluetooth::bridgeTransmit,
+		};
+		fBridge = netbt_bridge_attach("bcmbt0", &ops, this);
+		if (fBridge == NULL) {
+			IOLog("BCM43430Bluetooth: could not attach to netbt\n");
+		}
+	}
 	return r;
+}
+
+// ------------------------------------------------------------------ netbt
+
+int
+BCM43430Bluetooth::bridgeEnable(void *ctx)
+{
+	BCM43430Bluetooth *self = (BCM43430Bluetooth *)ctx;
+	if (self->fState != kBtStateUp) {
+		return ENXIO;           // run `bt up` (patch and speed) first
+	}
+	IOInterruptState is = IOSimpleLockLockDisableInterrupt(self->fTxLock);
+	self->fTxHead = self->fTxTail = 0;
+	IOSimpleLockUnlockEnableInterrupt(self->fTxLock, is);
+	self->fNetbtEnabled = true;
+	IOLog("BCM43430Bluetooth: netbt enabled bcmbt0\n");
+	return 0;
+}
+
+void
+BCM43430Bluetooth::bridgeDisable(void *ctx)
+{
+	BCM43430Bluetooth *self = (BCM43430Bluetooth *)ctx;
+	self->fNetbtEnabled = false;
+	IOInterruptState is = IOSimpleLockLockDisableInterrupt(self->fTxLock);
+	self->fTxHead = self->fTxTail = 0;
+	self->fImsc &= ~kIntTX;
+	self->writeReg(kRegIMSC, self->fImsc);
+	IOSimpleLockUnlockEnableInterrupt(self->fTxLock, is);
+	IOLog("BCM43430Bluetooth: netbt disabled bcmbt0\n");
+}
+
+// Fill the TX FIFO from fTxRing; mask the TX interrupt once the ring is
+// empty, unmask it while bytes remain. Called with fTxLock held
+// (interrupts off).
+void
+BCM43430Bluetooth::txFillLocked(void)
+{
+	while (fTxTail != fTxHead && !(readReg(kRegFR) & kFrTXFF)) {
+		writeReg(kRegDR, fTxRing[fTxTail % kTxRingSize]);
+		fTxTail++;
+		fTxBytes++;
+	}
+	uint32_t want = fTxTail != fTxHead ? (fImsc | kIntTX) : (fImsc & ~kIntTX);
+	if (want != fImsc) {
+		fImsc = want;
+		writeReg(kRegIMSC, fImsc);
+	}
+}
+
+// netbt output (bt_lock held, thread context): queue and start sending.
+int
+BCM43430Bluetooth::bridgeTransmit(void *ctx, const uint8_t *pkt, size_t len)
+{
+	BCM43430Bluetooth *self = (BCM43430Bluetooth *)ctx;
+	if (!self->fNetbtEnabled || len == 0) {
+		return EIO;
+	}
+	IOInterruptState is = IOSimpleLockLockDisableInterrupt(self->fTxLock);
+	if (kTxRingSize - (self->fTxHead - self->fTxTail) < len) {
+		IOSimpleLockUnlockEnableInterrupt(self->fTxLock, is);
+		self->fTxDrops++;
+		return ENOBUFS;
+	}
+	for (size_t i = 0; i < len; i++) {
+		self->fTxRing[(self->fTxHead + i) % kTxRingSize] = pkt[i];
+	}
+	self->fTxHead += (uint32_t)len;
+	self->txFillLocked();
+	IOSimpleLockUnlockEnableInterrupt(self->fTxLock, is);
+	return 0;
 }
 
 IOReturn
@@ -793,6 +912,9 @@ BCM43430Bluetooth::userCommand(const bt_command *cmd, bt_packet *out)
 {
 	if (fState != kBtStateUp) {
 		return kIOReturnNotReady;
+	}
+	if (fNetbtEnabled) {
+		return kIOReturnBusy;   // netbt owns the controller; use its HCI socket
 	}
 	switch (cmd->opcode) {
 	case kOpReset:
@@ -836,6 +958,9 @@ BCM43430Bluetooth::readEvent(uint32_t timeoutMs, bt_packet *out)
 {
 	if (fState != kBtStateUp) {
 		return kIOReturnNotReady;
+	}
+	if (fNetbtEnabled) {
+		return kIOReturnBusy;
 	}
 	IOLockLock(fEventLock);
 	uint64_t deadline;

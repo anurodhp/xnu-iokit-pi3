@@ -52,6 +52,7 @@ BUILD_ROOT="$(cd -P build && pwd)/xnu-latest-build"
 "$REPO_ROOT/tools/vendor_iographics_into_xnu.sh"
 "$REPO_ROOT/tools/vendor_iohid_into_xnu.sh"
 "$REPO_ROOT/tools/vendor_ioaudio_into_xnu.sh"
+"$REPO_ROOT/tools/vendor_netbt_into_xnu.sh"
 
 unset DEVELOPER_DIR
 export SDKROOT_RESOLVED="$BUILD_ROOT/sdk-7195-ios/iPhoneOS.sdk"

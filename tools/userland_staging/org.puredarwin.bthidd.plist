@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+	The Bluetooth HID host (bthidd.c, build_bthidd.sh;
+	docs/bluetooth-stack-plan.md S5): serves every HID device that
+	`btdevctl -A` attached in /var/db/btdevctl.plist as an IOHIDUserDevice,
+	so Bluetooth keyboards and mice reach X like USB ones. SIGHUP (sent by
+	btdevctl) rereads the device list.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>org.puredarwin.bthidd</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/sbin/bthidd</string>
+		<string>-d</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/var/log/bthidd.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/bthidd.log</string>
+</dict>
+</plist>

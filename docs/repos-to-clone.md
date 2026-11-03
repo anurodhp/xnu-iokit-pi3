@@ -52,7 +52,7 @@ The main repo itself is `anurodhp/xnu-iokit-pi3`.
 | `chrony` | `anurodhp/chrony` | `iokit-port` | mlichvar/chrony |
 | `curl` | `anurodhp/curl` | `iokit-port` | apple-oss-distributions (off `curl-166.0.0.0.1`; upstream b679efc, ssl_setup after conf_rng for Mbed TLS 3.6) |
 | `PureDarwin` | `anurodhp/PureDarwin` | `iokit-launchd-port` | PureDarwin/PureDarwin |
-| `netbsd-src` | `anurodhp/netbsd-src` | `iokit-port` | NetBSD/src (off `netbsd-11` at `4198f5370c18`, 11.1; sparse: `sys/netbt`, `sys/dev/bluetooth`, Bluetooth userland; docs/bluetooth-stack-plan.md) |
+| `netbsd-src` | `anurodhp/netbsd-src` | `iokit-port` | NetBSD/src (off `netbsd-11` at `4198f5370c18`, 11.1; sparse: `sys/netbt` (vendored into xnu), Bluetooth userland and the libraries it links -- libbluetooth, libevent, proplib, libusbhid; xnu/Darwin build guards in netbt, sdpd, btdevctl; docs/bluetooth-stack-plan.md) |
 | `swift-corelibs-foundation` | `anurodhp/swift-corelibs-foundation` | `corefoundation-port` | apple/swift-corelibs-foundation |
 | `gnustep-base` | `anurodhp/libs-base` | `iokit-port` | gnustep/libs-base (off `base-1_31_1`; objc4 port DAR-388, NSProxy weak methods + BOOL decode DAR-450, gdnc stdio / getpw*_r / NSNumber BOOL DAR-451) |
 | `gnustep-make` | `anurodhp/tools-make` | `iokit-port` | gnustep/tools-make (off `make-2_9_3`; extract objc4 class names on Darwin, DAR-451) |

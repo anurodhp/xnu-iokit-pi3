@@ -2,7 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
 	Bring up the on-board Bluetooth controller at boot
-	(docs/bluetooth-plan.md): power, patch, speed switch.
+	(docs/bluetooth-plan.md): power, patch, speed switch; then hand it to
+	the kernel's Bluetooth stack (netbt, docs/bluetooth-stack-plan.md):
+	`btconfig bcmbt0 up pscan` enables HCI unit bcmbt0, which the driver
+	attached after `bt up`, and makes it connectable (page scan), so paired
+	keyboards and mice can reconnect to it.
 
 	Does nothing unless the kernel was booted with bt=1 (otherwise there is
 	no BCM43430Bluetooth service and `bt info` fails), and skips `bt up`
@@ -20,7 +24,7 @@
 	<array>
 		<string>/bin/sh</string>
 		<string>-c</string>
-		<string>/usr/sbin/bt info >/dev/null 2>&amp;1 || exit 0; /usr/sbin/bt info | grep -q '^state: *up$' &amp;&amp; exit 0; exec /usr/sbin/bt up</string>
+		<string>/usr/sbin/bt info >/dev/null 2>&amp;1 || exit 0; /usr/sbin/bt info | grep -q '^state: *up$' || /usr/sbin/bt up || exit 1; [ -x /usr/sbin/btconfig ] || exit 0; exec /usr/sbin/btconfig bcmbt0 up pscan</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>

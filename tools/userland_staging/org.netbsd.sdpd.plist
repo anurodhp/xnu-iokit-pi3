@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+	NetBSD's Bluetooth Service Discovery Protocol server (sdpd(8), from
+	anurodhp/netbsd-src, build_netbt_tools.sh; docs/bluetooth-stack-plan.md
+	S3). Serves remote SDP queries on L2CAP PSM 1 and local record
+	registration on /var/run/sdp. -d keeps it in the foreground for launchd.
+	It drops to user _sdpd (inject_into_sd_image.sh adds the account).
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>org.netbsd.sdpd</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/sbin/sdpd</string>
+		<string>-d</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/var/log/sdpd.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/sdpd.log</string>
+</dict>
+</plist>

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+	NetBSD's Bluetooth link-key and PIN agent (bthcid(8), from
+	anurodhp/netbsd-src, build_netbt_tools.sh; docs/bluetooth-stack-plan.md
+	S4). Answers the controller's Link_Key_Request from /var/db/bthcid.keys
+	(and stores new keys there), and PIN_Code_Request with a PIN handed to it
+	by btpin(1) over /var/run/bthcid. -f keeps it in the foreground for
+	launchd.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>org.netbsd.bthcid</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/sbin/bthcid</string>
+		<string>-f</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/var/log/bthcid.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/bthcid.log</string>
+</dict>
+</plist>
