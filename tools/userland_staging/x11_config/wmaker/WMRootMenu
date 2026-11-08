@@ -4,6 +4,7 @@
  ("Rome", EXEC, "/Applications/Rome.app/Rome"),
  ("Ink", EXEC, "/Applications/Ink.app/Ink"),
  ("Florence", EXEC, "/Applications/Florence.app/Florence"),
+ ("Mail2", EXEC, "/Applications/Mail2.app/Mail2"),
  ("Settings", EXEC, "/Applications/Settings.app/Settings"),
  ("X Events", EXEC, "/usr/X11/bin/xev"),
  ("Commands",

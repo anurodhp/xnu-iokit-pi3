@@ -766,10 +766,17 @@ mkdir -p third_party
 #     small fast Finder-style GNUstep file manager (build_milan.sh). Not a
 #     fork: there is no upstream. v0.6 draws the desktop (-MilanDesktop), which
 #     the session autostart uses.
-#     naples: anurodhp/naples (this project's own repo), tag v0.9: Naples.app,
-#     the dock (apps, running programs, minimized windows, Trash), the global
-#     menu bar (Hexley, the frontmost app's menu, clock) and the menu server for
-#     the Eau theme (build_naples.sh). Not a fork: there is no upstream.
+#     naples: anurodhp/naples (this project's own repo), tag v0.10: Naples.app,
+#     the dock (apps, running programs, minimized windows, Trash; v0.10: badges
+#     an app sets with the NaplesBadgeChanged notification, Mail2's unread
+#     count), the global menu bar (Hexley, the frontmost app's menu, clock) and
+#     the menu server for the Eau theme (build_naples.sh). Not a fork: there is
+#     no upstream.
+#     mail2: anurodhp/mail2 (this project's own repo), tag v0.2: Mail2.app, an
+#     IMAP mail client laid out like Apple Mail -- three panes, conversations,
+#     search, drafts, attachments, HTML mail through Florence's libFloWeb when
+#     installed (build_mail2.sh; libetpan, SQLite and Mbed TLS above). Not a
+#     fork: there is no upstream.
 #     turin: anurodhp/Turin (this project's own repo), tag v0.2: Settings.app,
 #     the system settings -- Wi-Fi, Network, Date & Time, Milan's desktop
 #     background and user accounts (build_turin.sh). Not a fork: there is no
@@ -979,7 +986,8 @@ libtiff|https://gitlab.com/libtiff/libtiff.git|v4.7.1|
 libjpeg-turbo|https://github.com/libjpeg-turbo/libjpeg-turbo.git|3.0.4|
 rome|git@github.com:anurodhp/rome.git|v0.2|
 milan|git@github.com:anurodhp/milan.git|v0.10|
-naples|git@github.com:anurodhp/naples.git|v0.9|
+naples|git@github.com:anurodhp/naples.git|v0.10|
+mail2|git@github.com:anurodhp/mail2.git|v0.2|
 turin|git@github.com:anurodhp/Turin.git|v0.2|
 darwin-util|git@github.com:anurodhp/darwin-util.git|v0.3|
 libvterm|https://github.com/neovim/libvterm.git|v0.3.3|
@@ -1067,6 +1075,10 @@ fi
 
 # The media stack (see the header comment above): one tag each, shallow,
 # with the submodules the builds need.
+#     libetpan 1.9.4 (github.com/dinhvh/libetpan tag 1.9.4, BSD-3-Clause): IMAP,
+#       SMTP, RFC 5322 and MIME for Mail2.app (build_libetpan.sh). Unmodified;
+#       built without OpenSSL/GnuTLS/SASL/DB -- Mail2 hands it an Mbed TLS
+#       stream of its own. Apple ships no mail protocol library.
 MEDIA_REPOS='
 ffmpeg|https://github.com/FFmpeg/FFmpeg.git|n7.1.1|
 mpv|git@github.com:anurodhp/mpv.git|iokit-port|
@@ -1075,6 +1087,7 @@ libass|https://github.com/libass/libass.git|0.17.4|
 harfbuzz|https://github.com/harfbuzz/harfbuzz.git|11.2.1|
 fribidi|https://github.com/fribidi/fribidi.git|v1.0.16|
 mbedtls|https://github.com/Mbed-TLS/mbedtls.git|v3.6.4|framework
+libetpan|https://github.com/dinhvh/libetpan.git|1.9.4|
 '
 echo "$MEDIA_REPOS" | while IFS='|' read -r name url ref subs; do
     [ -z "$name" ] && continue
@@ -1702,6 +1715,30 @@ if [ -n "$SMI_DEST" ]; then
     fi
     tar -xzf "$SMI_TMP/smi.tar.gz" -C third_party
     rm -rf "$SMI_TMP"
+fi
+
+# SQLite 3.44.0 amalgamation (public domain), verified by SHA-256: libsqlite3.dylib
+# (build_sqlite.sh) for Mail2.app's message index. Apple's own libsqlite3 is not
+# published as buildable source; the amalgamation is upstream's release form.
+SQLITE_VER="3440000"
+SQLITE_SHA256="b9cd386e7cd22af6e0d2a0f06d0404951e1bef109e42ea06cc0450e10cd15550"
+SQLITE_DEST="third_party/sqlite"
+if [ -f "$SQLITE_DEST/sqlite3.c" ] && [ "$FORCE" != "1" ]; then
+    echo "= $SQLITE_DEST already exists, skipping (use --force to re-fetch)"
+else
+    echo "+ fetching sqlite-autoconf-$SQLITE_VER.tar.gz"
+    SQLITE_TMP="$(mktemp -d)"
+    curl -fsSL -o "$SQLITE_TMP/sqlite.tar.gz" "https://www.sqlite.org/2023/sqlite-autoconf-$SQLITE_VER.tar.gz"
+    got="$(shasum -a 256 "$SQLITE_TMP/sqlite.tar.gz" | awk '{print $1}')"
+    if [ "$got" != "$SQLITE_SHA256" ]; then
+        echo "error: sqlite-autoconf-$SQLITE_VER.tar.gz SHA-256 is $got, expected $SQLITE_SHA256" >&2
+        rm -rf "$SQLITE_TMP"
+        exit 1
+    fi
+    rm -rf "$SQLITE_DEST"
+    tar -xzf "$SQLITE_TMP/sqlite.tar.gz" -C "$SQLITE_TMP"
+    mv "$SQLITE_TMP/sqlite-autoconf-$SQLITE_VER" "$SQLITE_DEST"
+    rm -rf "$SQLITE_TMP"
 fi
 
 # Mozilla's CA certificates as curl.se publishes them (https://curl.se/docs/caextract.html; MPL-2.0),
