@@ -729,6 +729,11 @@ if [ -f "$GS_STAGE/usr/GNUstep/System/Library/Libraries/libgnustep-base.dylib" ]
     [ -x "$GS_STAGE/usr/GNUstep/System/Library/CoreServices/LoginWindow.app/LoginWindow" ] &&
     [ -f tools/userland_staging/libc_build/gsdm/root/etc/gsdm/gsdm.conf ] ||
         tools/userland_staging/build_gsdm.sh || exit 1
+    # gdnc, gnustep-base's distributed notification server: the session's autostart starts it (x11_config/session/
+    # autostart) and the desktop's apps talk through it -- Mail2's unread count to Naples' dock badge, Turin's
+    # background to Milan. It is built with gnustep-base; without it they fail silently, so its absence stops here.
+    [ -x "$GS_STAGE/usr/GNUstep/System/Tools/gdnc" ] || {
+        echo "error: gdnc is missing from $GS_STAGE/usr/GNUstep/System/Tools (rebuild with build_gnustep_base.sh)" >&2; exit 1; }
 fi
 if [ -f "$GS_STAGE/usr/GNUstep/System/Library/Libraries/libgnustep-base.dylib" ]; then
     GS_MAC=$(mktemp -d "${TMPDIR:-/tmp}/gnustep-mac.XXXXXX")
@@ -763,6 +768,8 @@ if [ -f "$GS_STAGE/usr/GNUstep/System/Library/Libraries/libgnustep-base.dylib" ]
     done
     [ -x "$MNT/usr/GNUstep/System/Library/Libraries/libgnustep-base.dylib" ] ||
         { echo "error: libgnustep-base does not resolve at its install name on $MNT" >&2; exit 1; }
+    [ -x "$MNT/usr/local/bin/gdnc" ] ||
+        { echo "error: $MNT/usr/local/bin/gdnc is missing: the session's autostart starts it (see above)" >&2; exit 1; }
     echo "+ wrote GNUstep tree ($need_kb KB: /Applications, /System/Library, /Library/Documentation, /usr/local/bin, /etc/GNUstep/GNUstep.conf; /usr/GNUstep/System/{Applications,Library,Tools} symlinks)"
 else
     echo "= $GS_STAGE not built -- run tools/userland_staging/build_gnustep_base.sh first if wanted, skipping"
