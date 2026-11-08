@@ -772,7 +772,7 @@ mkdir -p third_party
 #     count), the global menu bar (Hexley, the frontmost app's menu, clock) and
 #     the menu server for the Eau theme (build_naples.sh). Not a fork: there is
 #     no upstream.
-#     mail2: anurodhp/mail2 (this project's own repo), tag v0.9: Mail2.app, an
+#     mail2: anurodhp/mail2 (this project's own repo), tag v0.10: Mail2.app, an
 #     IMAP mail client laid out like Apple Mail -- three panes, conversations,
 #     search, drafts, attachments, several accounts with All Inboxes, OAuth for
 #     Google and Microsoft, HTML mail through Florence's libFloWeb when
@@ -989,7 +989,7 @@ libjpeg-turbo|https://github.com/libjpeg-turbo/libjpeg-turbo.git|3.0.4|
 rome|git@github.com:anurodhp/rome.git|v0.2|
 milan|git@github.com:anurodhp/milan.git|v0.10|
 naples|git@github.com:anurodhp/naples.git|v0.10|
-mail2|git@github.com:anurodhp/mail2.git|v0.9|
+mail2|git@github.com:anurodhp/mail2.git|v0.10|
 turin|git@github.com:anurodhp/Turin.git|v0.2|
 darwin-util|git@github.com:anurodhp/darwin-util.git|v0.3|
 libvterm|https://github.com/neovim/libvterm.git|v0.3.3|
