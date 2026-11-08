@@ -1076,6 +1076,10 @@ fi
 
 # The media stack (see the header comment above): one tag each, shallow,
 # with the submodules the builds need.
+#     hunspell 1.7.6 (github.com/hunspell/hunspell tag v1.7.6, tri-licensed
+#       MPL-1.1/GPL-2+/LGPL-2.1+, used under the MPL 1.1): Mail2.app's spell
+#       checking (build_hunspell.sh). Unmodified. Apple's spelling server is
+#       closed, and GNUstep's needs one this system does not have.
 #     libetpan 1.9.4 (github.com/dinhvh/libetpan tag 1.9.4, BSD-3-Clause): IMAP,
 #       SMTP, RFC 5322 and MIME for Mail2.app (build_libetpan.sh). Unmodified;
 #       built without OpenSSL/GnuTLS/SASL/DB -- Mail2 hands it an Mbed TLS
@@ -1089,6 +1093,7 @@ harfbuzz|https://github.com/harfbuzz/harfbuzz.git|11.2.1|
 fribidi|https://github.com/fribidi/fribidi.git|v1.0.16|
 mbedtls|https://github.com/Mbed-TLS/mbedtls.git|v3.6.4|framework
 libetpan|https://github.com/dinhvh/libetpan.git|1.9.4|
+hunspell|https://github.com/hunspell/hunspell.git|v1.7.6|
 '
 echo "$MEDIA_REPOS" | while IFS='|' read -r name url ref subs; do
     [ -z "$name" ] && continue
