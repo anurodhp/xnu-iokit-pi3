@@ -766,10 +766,11 @@ mkdir -p third_party
 #     small fast Finder-style GNUstep file manager (build_milan.sh). Not a
 #     fork: there is no upstream. v0.6 draws the desktop (-MilanDesktop), which
 #     the session autostart uses.
-#     naples: anurodhp/naples (this project's own repo), tag v0.10: Naples.app,
+#     naples: anurodhp/naples (this project's own repo), tag v0.11: Naples.app,
 #     the dock (apps, running programs, minimized windows, Trash; v0.10: badges
 #     an app sets with the NaplesBadgeChanged notification, Mail2's unread
-#     count), the global menu bar (Hexley, the frontmost app's menu, clock) and
+#     count), the global menu bar (Hexley, the frontmost app's menu, clock;
+#     v0.11: Bluetooth, through btsetup) and
 #     the menu server for the Eau theme (build_naples.sh). Not a fork: there is
 #     no upstream.
 #     mail2: anurodhp/mail2 (this project's own repo), tag v0.10: Mail2.app, an
@@ -779,8 +780,8 @@ mkdir -p third_party
 #     installed, rich text, spelling, Undo Send and Send Later, rules and
 #     Sieve, snooze (build_mail2.sh; libetpan, SQLite, Mbed TLS, libxml2 and
 #     Hunspell above). Not a fork: there is no upstream.
-#     turin: anurodhp/Turin (this project's own repo), tag v0.2: Settings.app,
-#     the system settings -- Wi-Fi, Network, Date & Time, Milan's desktop
+#     turin: anurodhp/Turin (this project's own repo), tag v0.3: Settings.app,
+#     the system settings -- Wi-Fi, Bluetooth (v0.3), Network, Date & Time, Milan's desktop
 #     background and user accounts (build_turin.sh). Not a fork: there is no
 #     upstream.
 #     darwin-util: anurodhp/darwin-util (this project's own repo), tag v0.3:
@@ -988,9 +989,9 @@ libtiff|https://gitlab.com/libtiff/libtiff.git|v4.7.1|
 libjpeg-turbo|https://github.com/libjpeg-turbo/libjpeg-turbo.git|3.0.4|
 rome|git@github.com:anurodhp/rome.git|v0.2|
 milan|git@github.com:anurodhp/milan.git|v0.10|
-naples|git@github.com:anurodhp/naples.git|v0.10|
+naples|git@github.com:anurodhp/naples.git|v0.11|
 mail2|git@github.com:anurodhp/mail2.git|v0.10|
-turin|git@github.com:anurodhp/Turin.git|v0.2|
+turin|git@github.com:anurodhp/Turin.git|v0.3|
 darwin-util|git@github.com:anurodhp/darwin-util.git|v0.3|
 libvterm|https://github.com/neovim/libvterm.git|v0.3.3|
 optimized-routines|https://github.com/ARM-software/optimized-routines.git|v26.07|
