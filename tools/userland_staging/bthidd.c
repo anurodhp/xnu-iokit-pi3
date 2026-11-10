@@ -31,6 +31,10 @@
  *              Output reports (keyboard LEDs) are not forwarded yet.
  *   reconnect  bthidev_timeout: a host-reconnect device that dropped is
  *              connected again after a delay.
+ *   status     /var/run/bthidd.status, rewritten (atomically) whenever it
+ *              changes: one line per attached device, "<bdaddr> <state>",
+ *              state connected (the HID device is up), connecting or
+ *              disconnected. btsetup(8) reads it for the Bluetooth UIs.
  *
  * The IOHIDUserDevice user client needs the
  * com.apple.hid.manager.user-access-device entitlement
@@ -68,6 +72,7 @@
 
 #define BTDEVCTL_PLIST  "/var/db/btdevctl.plist"        /* btdevctl db.c */
 #define PIDFILE         "/var/run/bthidd.pid"           /* btdevctl.c, Darwin path */
+#define STATUSFILE      "/var/run/bthidd.status"        /* for btsetup(8) */
 #define RECONNECT_SECS  5
 #define MAXDEV          16
 
@@ -117,6 +122,40 @@ addr(const bdaddr_t *b)
 	static int n;
 	n = (n + 1) % 4;
 	return bt_ntoa(b, buf[n]);
+}
+
+/* The devices and their states, written only when they change. */
+static void
+write_status(void)
+{
+	static char last[MAXDEV * 40 + 1];
+	static bool written;
+	char cur[sizeof(last)];
+	size_t len = 0;
+	FILE *f;
+	int i;
+
+	cur[0] = 0;
+	for (i = 0; i < MAXDEV; i++) {
+		struct hiddev *d = &dev[i];
+		const char *st;
+		if (!d->used)
+			continue;
+		st = d->hid != MACH_PORT_NULL ? "connected"
+		    : d->ctl >= 0 || d->intr >= 0 ? "connecting" : "disconnected";
+		len += (size_t)snprintf(cur + len, sizeof(cur) - len, "%s %s\n", addr(&d->raddr), st);
+		if (len >= sizeof(cur))
+			break;
+	}
+	if (written && strcmp(cur, last) == 0)
+		return;
+	if ((f = fopen(STATUSFILE ".new", "w")) == NULL)
+		return;
+	fputs(cur, f);
+	if (fclose(f) == 0 && rename(STATUSFILE ".new", STATUSFILE) == 0) {
+		strlcpy(last, cur, sizeof(last));
+		written = true;
+	}
 }
 
 /* ---------------------------------------------------------------- IOKit */
@@ -561,6 +600,7 @@ main(int argc, char **argv)
 		int n = 0, i, timeout = 1000;
 		time_t now = time(NULL);
 
+		write_status();
 		for (i = 0; i < MAXDEV; i++) {
 			struct hiddev *d = &dev[i];
 			if (d->used && d->ctl < 0 && d->retry_at != 0 && now >= d->retry_at) {
@@ -608,6 +648,7 @@ main(int argc, char **argv)
 							if (dev[j].used)
 								dev_close(&dev[j], "exiting");
 						unlink(PIDFILE);
+						unlink(STATUSFILE);
 						return 0;
 					}
 				}

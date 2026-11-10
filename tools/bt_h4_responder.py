@@ -64,9 +64,12 @@ NAME = b"BCM43430A1 (h4 responder)"
 FAKE_CLASSIC = bytes([0x11, 0x22, 0x33, 0x44, 0x55, 0x66])   # display order
 FAKE_LE = bytes([0xc0, 0xff, 0xee, 0x00, 0x00, 0x01])
 FAKE_HID = bytes([0x00, 0x1f, 0x20, 0x4b, 0x1d, 0x01])     # display order
+REMOTE_NAMES = {FAKE_CLASSIC: b"Fake Classic", FAKE_HID: b"Fake Keyboard"}   # Remote_Name_Request
 HID_HANDLE = 0x0001
 HID_PIN = b"1234"
 HID_PASSKEY = 123456
+# seconds the keyboard takes to "type" the passkey (BT_TYPING_DELAY; screenshots of the pairing dialog want longer)
+TYPING_DELAY = float(os.environ.get("BT_TYPING_DELAY", "1.0"))
 CTL_CID, INT_CID, SDP_CID = 0x0040, 0x0041, 0x0042         # the keyboard's channel ids
 # the boot keyboard report descriptor (HID 1.11 appendix B.1), as in
 # tools/userland_staging/hid_userdevice_test.c
@@ -305,8 +308,18 @@ def main():
                 eir = eir_name(b"Fake Classic").ljust(240, b"\x00")
                 res = bytes([1]) + le_addr(FAKE_CLASSIC) + bytes([1, 0]) + b"\x0c\x02\x5a" + b"\x00\x00" + bytes([0xc4]) + eir
                 later(0.5, event(0x2f, res))
+                # the keyboard too (Class of Device 0x002540: peripheral, keyboard), for btsetup scan
+                eir = eir_name(REMOTE_NAMES[FAKE_HID]).ljust(240, b"\x00")
+                res = bytes([1]) + le_addr(FAKE_HID) + bytes([1, 0]) + b"\x40\x25\x00" + b"\x00\x00" + bytes([0xc8]) + eir
+                later(0.7, event(0x2f, res))
                 later(1.0, event(0x01, b"\x00"))
                 print("bt_h4_responder: inquiry", flush=True)
+            elif op == 0x0419 and plen >= 6:   # Remote_Name_Request: Command Status, then the name
+                send(cs(op))
+                a = bytes(reversed(p[:6]))
+                name = REMOTE_NAMES.get(a, b"")
+                later(0.2, event(0x07, bytes([0 if name else 0x04]) + bytes(p[:6]) + name.ljust(248, b"\x00")))
+                print("bt_h4_responder: Remote_Name_Request " + ":".join(f"{b:02x}" for b in a), flush=True)
             elif op == 0x1005:   # Read_Buffer_Size (netbt init, hci_event.c hci_cmd_read_buffer_size)
                 send(cc(op, b"\x00" + struct.pack("<HBHH", 1021, 64, 8, 1)))
             elif op == 0x1003:   # Read_Local_Features: a BT 4.x set, page 1 present (byte 7 bit 7)
@@ -372,9 +385,10 @@ def main():
                     send(event(0x3b, le_addr(FAKE_HID) + struct.pack("<I", HID_PASSKEY)))
                     import hashlib
                     pairing["key"] = hashlib.sha256(b"fake hid ssp key").digest()[:16]
-                    later(1.0, event(0x36, bytes([0]) + le_addr(FAKE_HID)))       # Simple_Pairing_Complete
-                    later(1.1, event(0x18, le_addr(FAKE_HID) + pairing["key"] + bytes([0x05])))
-                    later(1.2, event(0x06, bytes([0]) + struct.pack("<H", HID_HANDLE)))
+                    t = TYPING_DELAY   # the user typing the passkey on the keyboard
+                    later(t, event(0x36, bytes([0]) + le_addr(FAKE_HID)))       # Simple_Pairing_Complete
+                    later(t + 0.1, event(0x18, le_addr(FAKE_HID) + pairing["key"] + bytes([0x05])))
+                    later(t + 0.2, event(0x06, bytes([0]) + struct.pack("<H", HID_HANDLE)))
                     print(f"bt_h4_responder: HID: passkey {HID_PASSKEY:06d} shown to the host, typed, paired (SSP)", flush=True)
                 else:
                     send(event(0x36, bytes([0x05]) + le_addr(FAKE_HID)))
@@ -406,6 +420,11 @@ def main():
                 print(f"bt_h4_responder: HID: encryption {'on' if plen >= 3 and p[2] else 'off'}", flush=True)
             elif op == 0x1408:   # Read_Encryption_Key_Size {handle}: netbt waits for >= 7
                 send(cc(op, bytes([0]) + p[:2] + bytes([16])))     # (hci_event.c hci_cmd_read_encryption_key_size)
+            elif op == 0x0c03:   # HCI_Reset: a real controller drops every link (netbt resets at `btconfig up`)
+                send(cc(op))
+                if hid["connected"] or hid["paging"]:
+                    print("bt_h4_responder: HID: HCI_Reset drops the keyboard's link", flush=True)
+                hid.update(paging=False, connected=False, host_cid={}, cfg_done=set(), reported=False)
             elif op == 0x0406:   # Disconnect {handle, reason}
                 send(cs(op))
                 send(event(0x05, bytes([0]) + p[:2] + bytes([0x16])))

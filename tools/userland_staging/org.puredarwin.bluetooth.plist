@@ -9,6 +9,10 @@
 	keyboards and mice can reconnect to it, and turns on Secure Simple
 	Pairing (bthcid is the agent; devices without SSP still pair with a PIN).
 
+	With /etc/bluetooth.off (Bluetooth turned off in the menu bar or
+	Settings, btsetup(8)) the controller is brought up but the unit is left
+	down.
+
 	Does nothing unless the kernel was booted with bt=1 (otherwise there is
 	no BCM43430Bluetooth service and `bt info` fails), and skips `bt up`
 	when the controller is already up (the job was re-run).
@@ -25,7 +29,7 @@
 	<array>
 		<string>/bin/sh</string>
 		<string>-c</string>
-		<string>/usr/sbin/bt info >/dev/null 2>&amp;1 || exit 0; /usr/sbin/bt info | grep -q '^state: *up$' || /usr/sbin/bt up || exit 1; [ -x /usr/sbin/btconfig ] || exit 0; exec /usr/sbin/btconfig bcmbt0 up pscan ssp</string>
+		<string>/usr/sbin/bt info >/dev/null 2>&amp;1 || exit 0; /usr/sbin/bt info | grep -q '^state: *up$' || /usr/sbin/bt up || exit 1; [ -x /usr/sbin/btconfig ] || exit 0; [ -f /etc/bluetooth.off ] &amp;&amp; exit 0; exec /usr/sbin/btconfig bcmbt0 up pscan ssp</string>
 	</array>
 	<key>RunAtLoad</key>
 	<true/>

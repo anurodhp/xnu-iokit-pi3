@@ -86,7 +86,7 @@ partition as `extra_bootargs=...` (`tools/make_realhw_sd_image.sh` writes
 | USB keyboard and mouse | Works | Always | Through IOHIDFamily. The desktop, the text console and X all take input. |
 | Ethernet (LAN9514, 10/100) | Works | Always | `en0`, with a DHCP lease from IPConfiguration (configd). |
 | Wi-Fi (CYW43438 / BCM43430, 802.11 b/g/n, 2.4 GHz) | Works | `wifi=1` (in the real-hardware image's default boot-args) | `en1`. Scans and joins WPA2-PSK networks through the firmware supplicant. Gets a DHCP lease at boot. About 1 MB/s down and 0.7 MB/s up. The Naples menu bar and Settings both have a Wi-Fi panel. `docs/wifi-plan.md` |
-| Bluetooth (BCM43430A1, HCI over PL011) | Works, partly | `bt=1` (in the default boot-args) | The controller comes up at 921600 baud, and `bt scan` finds classic and LE devices. No L2CAP or profiles yet, so no keyboards, mice or audio. `docs/bluetooth-plan.md` |
+| Bluetooth (BCM43430A1, HCI over PL011) | Works, partly | `bt=1` (in the default boot-args) | The controller comes up at 921600 baud with its patch (shipped in the image, with its licence, in `/usr/share/firmware/bluetooth/`). The controller is verified on the real Pi (2026-10-12). The host stack on top of it (NetBSD's netbt in the kernel, pairing, HID keyboards and mice) works on QEMU and has not yet run on the Pi; pairing is done from the Bluetooth menu in the Naples menu bar or Settings' Bluetooth pane. No audio or BLE yet. `docs/bluetooth-plan.md`, `docs/bluetooth-stack-plan.md` |
 | HDMI display | Works | Always | The framebuffer the firmware sets up, at the mode `config.txt` picks. Carries the text console and the X server (Xorg with the `puredarwingop` driver). `docs/framebuffer-mapping.md` |
 | 3D GPU (VideoCore IV V3D) | Works | Always | OpenGL 2.1 / OpenGL ES 2.0 through Mesa. Florence's web rendering and Venice's video use it. `docs/v3d-bringup.md`, `docs/gpu-opengl-plan.md` |
 | Hardware video decode (H.264, MPEG-4) | Works | Always (`vchiq=0` turns it off) | On the VideoCore through VCHIQ and MMAL. Venice uses it through FFmpeg's mmal decoder. Known issue: the last frames before end-of-stream are dropped. `docs/video-decode.md` |
@@ -99,7 +99,7 @@ partition as `extra_bootargs=...` (`tools/make_realhw_sd_image.sh` writes
 |---|---|---|
 | HDMI audio | Not supported | A separate effort from the 3.5 mm jack (DARW-311), not started. |
 | USB mass storage (flash drives, disks) | Not supported | No USB mass-storage driver is built. |
-| Bluetooth devices (keyboards, mice, headphones) | Not supported | Needs L2CAP and the HID and audio profiles on top of the working HCI layer. |
+| Bluetooth headphones and speakers, BLE devices | Not supported | Classic keyboards and mice are in the Bluetooth row above. Audio needs A2DP (step S6 of `docs/bluetooth-stack-plan.md`), and BLE (S8) needs an LE host. |
 | GPIO header pins for user programs, I2C, SPI | Not supported | No drivers. The kernel uses GPIO pins only for its own devices (SD, audio, Wi-Fi, Bluetooth). |
 | Camera (CSI) | Not supported | No driver. |
 | DSI display (the official touchscreen) | Not supported | No driver. |
@@ -117,7 +117,7 @@ SoC but not all of its board.
 |---|---|
 | CPU, SD card, USB host, USB keyboard, serial console | Emulated, used by every boot test (`tools/boot_test.py`). |
 | Ethernet | QEMU has never emulated the LAN9514. Tests use QEMU's `usb-net` device instead. |
-| Wi-Fi, Bluetooth | Not emulated. Real hardware only. |
+| Wi-Fi, Bluetooth | Not emulated. Bluetooth's host stack is tested against `tools/bt_h4_responder.py`, which plays the controller (and a keyboard) on the Pi's UART: `tools/bt_netbt_qemu_test.sh`, `bt_hid_qemu_test.sh`, `bt_pair_qemu_test.sh`, `bt_ssp_qemu_test.sh`. Wi-Fi and the real controller's patch load are real hardware only. |
 | HDMI framebuffer | Shown by `./runvm_hdmi.sh`, but X does not draw correctly on it (DAR-443). GUI tests run X on Xvfb instead, for example `tools/darwin_util_screenshots_qemu.sh`. |
 | V3D GPU, video decode | Not emulated. OpenGL falls back to Mesa's softpipe; video decode is real hardware only. |
 | Audio | Simulated with `pwm-sim=1`, without sound. |

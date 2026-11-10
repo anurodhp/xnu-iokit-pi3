@@ -2804,25 +2804,51 @@ else
 fi
 
 # On-board WiFi (docs/wifi-plan.md): the wifi(8) control tool
-# (build_wifi.sh), the CYW43438 firmware (fetch_wifi_firmware.sh;
-# gitignored, never committed) and the boot job. The job is a no-op
+# (build_wifi.sh), the CYW43438 firmware and its licence
+# (fetch_wifi_firmware.sh; gitignored, never committed) and the boot job. The job is a no-op
 # unless /etc/wifi.conf exists and the kernel runs with wifi=1, so it is
 # safe on every image. WIFI_CONF=<local file> (ssid=... / psk=... lines)
 # is copied to /etc/wifi.conf mode 600; it holds a passphrase, so it only
 # ever comes from the caller, never from the repo.
+#
+# The firmware is fetched here (pinned and checksummed, with its licence,
+# which the image carries beside it) because build_everything.sh wipes
+# libc_build/ and nothing else would fetch it again. Without network the
+# image is still written, without firmware, unless REQUIRE_FIRMWARE=1
+# (make_realhw_sd_image.sh sets it: there a missing file is an error).
+fetch_firmware() { # script-name
+    if bash "tools/userland_staging/$1"; then
+        return 0
+    fi
+    if [ "${REQUIRE_FIRMWARE:-0}" = "1" ]; then
+        echo "error: tools/userland_staging/$1 failed and REQUIRE_FIRMWARE=1" >&2
+        exit 1
+    fi
+    echo "= tools/userland_staging/$1 failed -- the image gets no firmware for it"
+}
+install_firmware() { # dir dest-dir file...
+    local src="$1" dst="$2" f
+    shift 2
+    for f in "$@"; do
+        if [ -f "$src/$f" ]; then
+            cp "$src/$f" "$dst/$f"
+            chmod 644 "$dst/$f"
+        elif [ "${REQUIRE_FIRMWARE:-0}" = "1" ]; then
+            echo "error: $src/$f missing and REQUIRE_FIRMWARE=1" >&2
+            exit 1
+        else
+            echo "= $src/$f missing"
+        fi
+    done
+}
 WIFI_FW=tools/userland_staging/libc_build/wifi_firmware
 if [ -f tools/userland_staging/libc_build/wifi.macho ]; then
     mkdir -p "$MNT/usr/sbin" "$MNT/usr/share/firmware/wifi" "$MNT/Library/LaunchDaemons"
     cp tools/userland_staging/libc_build/wifi.macho "$MNT/usr/sbin/wifi"
     chmod 755 "$MNT/usr/sbin/wifi"
-    for f in brcmfmac43430-sdio.bin brcmfmac43430-sdio.txt brcmfmac43430-sdio.clm_blob; do
-        if [ -f "$WIFI_FW/$f" ]; then
-            cp "$WIFI_FW/$f" "$MNT/usr/share/firmware/wifi/$f"
-            chmod 644 "$MNT/usr/share/firmware/wifi/$f"
-        else
-            echo "= $WIFI_FW/$f missing -- run tools/userland_staging/fetch_wifi_firmware.sh"
-        fi
-    done
+    fetch_firmware fetch_wifi_firmware.sh
+    install_firmware "$WIFI_FW" "$MNT/usr/share/firmware/wifi" \
+        brcmfmac43430-sdio.bin brcmfmac43430-sdio.txt brcmfmac43430-sdio.clm_blob copyright
     cp tools/userland_staging/org.puredarwin.wifi.plist "$MNT/Library/LaunchDaemons/org.puredarwin.wifi.plist"
     chmod 644 "$MNT/Library/LaunchDaemons/org.puredarwin.wifi.plist"
     echo "+ wrote /usr/sbin/wifi, /usr/share/firmware/wifi/ and org.puredarwin.wifi.plist"
@@ -2836,27 +2862,32 @@ if [ -f tools/userland_staging/libc_build/wifi.macho ]; then
         fi
     fi
 else
+    if [ "${REQUIRE_FIRMWARE:-0}" = "1" ]; then
+        echo "error: tools/userland_staging/libc_build/wifi.macho not built and REQUIRE_FIRMWARE=1 -- run build_wifi.sh" >&2
+        exit 1
+    fi
     echo "= tools/userland_staging/libc_build/wifi.macho not built -- run build_wifi.sh first if wanted, skipping"
 fi
 
 # On-board Bluetooth (docs/bluetooth-plan.md): the bt(8) tool (build_bt.sh),
-# the BCM43430A1 patch (fetch_bt_firmware.sh; gitignored, never committed)
+# the BCM43430A1 patch and its licence (fetch_bt_firmware.sh, run here as
+# for WiFi; gitignored, never committed)
 # and the boot job, a no-op unless the kernel runs with bt=1.
-BT_FW=tools/userland_staging/libc_build/bt_firmware/BCM43430A1.hcd
+BT_FW=tools/userland_staging/libc_build/bt_firmware
 if [ -f tools/userland_staging/libc_build/bt.macho ]; then
     mkdir -p "$MNT/usr/sbin" "$MNT/usr/share/firmware/bluetooth" "$MNT/Library/LaunchDaemons"
     cp tools/userland_staging/libc_build/bt.macho "$MNT/usr/sbin/bt"
     chmod 755 "$MNT/usr/sbin/bt"
-    if [ -f "$BT_FW" ]; then
-        cp "$BT_FW" "$MNT/usr/share/firmware/bluetooth/BCM43430A1.hcd"
-        chmod 644 "$MNT/usr/share/firmware/bluetooth/BCM43430A1.hcd"
-    else
-        echo "= $BT_FW missing -- run tools/userland_staging/fetch_bt_firmware.sh"
-    fi
+    fetch_firmware fetch_bt_firmware.sh
+    install_firmware "$BT_FW" "$MNT/usr/share/firmware/bluetooth" BCM43430A1.hcd copyright
     cp tools/userland_staging/org.puredarwin.bluetooth.plist "$MNT/Library/LaunchDaemons/org.puredarwin.bluetooth.plist"
     chmod 644 "$MNT/Library/LaunchDaemons/org.puredarwin.bluetooth.plist"
     echo "+ wrote /usr/sbin/bt, /usr/share/firmware/bluetooth/ and org.puredarwin.bluetooth.plist"
 else
+    if [ "${REQUIRE_FIRMWARE:-0}" = "1" ]; then
+        echo "error: tools/userland_staging/libc_build/bt.macho not built and REQUIRE_FIRMWARE=1 -- run build_bt.sh" >&2
+        exit 1
+    fi
     echo "= tools/userland_staging/libc_build/bt.macho not built -- run build_bt.sh first if wanted, skipping"
 fi
 # The Bluetooth host stack's userland (docs/bluetooth-stack-plan.md S3):
@@ -2893,6 +2924,9 @@ if [ -f tools/userland_staging/libc_build/system/libbluetooth.dylib ] && [ -d "$
     mkdir -p "$MNT/usr/share/misc"
     cp third_party/netbsd-src/lib/libusbhid/usb_hid_usages "$MNT/usr/share/misc/usb_hid_usages"
     chmod 644 "$MNT/usr/share/misc/usb_hid_usages"
+    # btsetup(8): the Bluetooth UIs' helper (status, scan, pair, forget).
+    cp tools/userland_staging/btsetup.sh "$MNT/usr/sbin/btsetup"
+    chmod 755 "$MNT/usr/sbin/btsetup"
     # The HID host (build_bthidd.sh).
     if [ -f tools/userland_staging/libc_build/bthidd.macho ]; then
         cp tools/userland_staging/libc_build/bthidd.macho "$MNT/usr/sbin/bthidd"
@@ -2902,7 +2936,7 @@ if [ -f tools/userland_staging/libc_build/system/libbluetooth.dylib ] && [ -d "$
     else
         echo "= tools/userland_staging/libc_build/bthidd.macho not built -- run build_bthidd.sh"
     fi
-    echo "+ wrote libbluetooth/libevent/libprop/libusbhid, btconfig, sdpd, bthcid, btdevctl, bthidd (+ jobs), btpin, btkey, sdpquery, rfcomm_sppd"
+    echo "+ wrote libbluetooth/libevent/libprop/libusbhid, btconfig, sdpd, bthcid, btdevctl, bthidd (+ jobs), btsetup, btpin, btkey, sdpquery, rfcomm_sppd"
 else
     echo "= libbluetooth.dylib / netbt tools not built -- run build_libbluetooth.sh and build_netbt_tools.sh if wanted, skipping"
 fi

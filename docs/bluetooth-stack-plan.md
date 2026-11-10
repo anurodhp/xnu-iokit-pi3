@@ -75,9 +75,41 @@ Not yet run on a real Pi. Audio (S6) is next; BLE (S8) is deferred.
 
 ## Using it on the Pi
 
+Build the image with `tools/make_realhw_sd_image.sh`. It sets
+`REQUIRE_FIRMWARE=1`, so `inject_into_sd_image.sh` fetches the BCM43430A1
+patch and the Wi-Fi firmware (pinned and checksummed), installs them with
+their licence (`copyright`, from the same commit of the RPi-Distro repo),
+and fails if any of them, or `bt`/`wifi`, is missing.
+
 With `bt=1` (the real-hardware image's default), the `org.puredarwin.bluetooth`
 job loads the patch and runs `btconfig bcmbt0 up pscan ssp`. `bthcid`, `sdpd`
-and `bthidd` run as launchd jobs. As root:
+and `bthidd` run as launchd jobs. First check that the stack is up:
+
+```
+cat /var/log/bluetooth.log               # the boot job: bt up, then btconfig
+btconfig bcmbt0                          # UP RUNNING PSCAN, and the Pi's address
+```
+
+**From the desktop:** click the Bluetooth rune in the Naples menu bar (left of
+Wi-Fi). Put the keyboard or mouse in pairing mode; it appears under Nearby
+Devices within about 10 s. Click it. For a keyboard, a dialog shows the code
+to type on it, then Return; a mouse pairs without one. The device then shows
+under My Devices as Connected. Settings has the same controls in its Bluetooth
+pane. Both run `/usr/sbin/btsetup` (`tools/userland_staging/btsetup.sh`):
+
+| `btsetup …` | does |
+|---|---|
+| `status` | `power on\|off\|none`, then `device <addr> <connected\|connecting\|disconnected> <name>` per paired device (from bthidd's `/var/run/bthidd.status`) |
+| `power on\|off` | `btconfig bcmbt0 up pscan ssp` / `down`; off is kept in `/etc/bluetooth.off`, which the boot job honours |
+| `scan` | `found <addr> <kind> <name>`: inquiry, Class of Device, Remote Name Request |
+| `pair <addr> <kind> [name]` | btpin, then `btdevctl -A`, then waits for bthidd to connect. Prints `pin`/`passkey` lines from bthcid's log, then `paired`, or `error <message>` |
+| `forget <addr>` | `btdevctl -D`, removes the link key and the name |
+
+`tools/bt_setup_qemu_test.sh` tests it against the fake keyboard.
+`tools/bluetooth_ui_screenshots_qemu.sh` drives both UIs on the QEMU desktop
+and saves screenshots.
+
+**From a root shell:**
 
 ```
 btconfig bcmbt0 inquiry                  # find the device (put it in pairing mode)
@@ -88,8 +120,9 @@ btdevctl -A -d bcmbt0 -a <addr> -s HID   # read its HID record, attach it
 ```
 
 - **Keyboard with SSP:** `bthcid` prints the passkey on the console
-  (`bthcid: passkey for <addr>: NNNNNN`). Type it on the keyboard and press
-  Enter.
+  (`bthcid: passkey for <addr>: NNNNNN`) and in `/var/log/bthcid.log`; with
+  X on the screen, read it there (`tail -f /var/log/bthcid.log` in a second
+  terminal). Type it on the keyboard and press Enter.
 - **Afterwards:** the key is in `/var/db/bthcid.keys` (`btkey -l -d bcmbt0`)
   and the device in `/var/db/btdevctl.plist`. It reconnects by itself after a
   reboot.
@@ -97,7 +130,10 @@ btdevctl -A -d bcmbt0 -a <addr> -s HID   # read its HID record, attach it
 - **Logs:** `/var/log/bthcid.log` and `/var/log/bthidd.log`. Boot-arg
   `netbt-debug=1` (to 3) prints netbt's own trace on the console.
 
-## What exists today, and what does not
+## Before the port: what existed, and what did not
+
+This table is the state before S0-S5 (kept for the plan's reasoning); the
+status at the top of this file is current.
 
 | Layer | State |
 |---|---|

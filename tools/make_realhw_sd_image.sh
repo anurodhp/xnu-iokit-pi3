@@ -175,7 +175,9 @@ echo "+ base image ready: $OUT (disk0s1 = FAT32 boot, disk0s2 = HFS+ root)"
 echo "+ provisioning userland (launchd/pwtool/bin/*, timezone data, root account)"
 echo "  (SKIP_SMOKETESTS=1: real hardware doesn't get the *_smoketest.macho"
 echo "  QEMU dev-diagnostic binaries -- see inject_into_sd_image.sh's own header)"
-SKIP_SMOKETESTS=1 tools/init_binary/inject_into_sd_image.sh "$OUT" 2
+echo "  (REQUIRE_FIRMWARE=1: the WiFi and Bluetooth firmware, with their licence,"
+echo "  must be in the image; inject_into_sd_image.sh fetches them)"
+SKIP_SMOKETESTS=1 REQUIRE_FIRMWARE=1 tools/init_binary/inject_into_sd_image.sh "$OUT" 2
 
 echo "done -- $OUT is a fresh, fully provisioned, real-hardware-bootable SD image"
 echo ""
