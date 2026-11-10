@@ -1048,7 +1048,7 @@ fi
 # (rather than through the generic per-command CFLAGS extra-file loop
 # below, which assumes C sources) since assembly needs neither this
 # tier's C defines nor -include libc_build_prototypes.h.
-if [ ! -f "$OUT/ed_setjmp_raw.o" ]; then
+if [ ! -f "$OUT/ed_setjmp_raw.o" ] || [ ed_setjmp_raw.s -nt "$OUT/ed_setjmp_raw.o" ]; then
     "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -c \
         ed_setjmp_raw.s -o "$OUT/ed_setjmp_raw.o"
 fi

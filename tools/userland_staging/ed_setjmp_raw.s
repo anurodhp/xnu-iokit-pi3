@@ -44,9 +44,22 @@
  *   0x60 sp   0x68 d8   0x70 d9   0x78 d10  0x80 d11  0x88 d12
  *   0x90 d13  0x98 d14  0xA0 d15
  */
+/*
+ * setjmp(3)/_setjmp(3)/sigsetjmp(3) are entry points HERE, not C wrappers
+ * in ed_setjmp_compat.c: a C wrapper's call to ___ed_setjmp_raw saves the
+ * wrapper's own sp/fp/lr, and once the wrapper returns that frame is dead,
+ * so a later longjmp "returns" through whatever has overwritten it (awk's
+ * `exit`, a longjmp from deep in run.c, crashed every time).
+ * sigsetjmp saves the signal mask through C (___ed_sigsetjmp_save) and
+ * then tail-branches, so the raw save still sees the caller's registers.
+ */
 	.text
 	.align 2
+	.globl _setjmp
+	.globl __setjmp
 	.globl ___ed_setjmp_raw
+_setjmp:
+__setjmp:
 ___ed_setjmp_raw:
 	mov	x9, sp
 	str	x19, [x0, #0x00]
@@ -72,6 +85,18 @@ ___ed_setjmp_raw:
 	str	d15, [x0, #0xA0]
 	mov	w0, #0
 	ret
+
+	.text
+	.align 2
+	.globl _sigsetjmp
+_sigsetjmp:
+	stp	x29, x30, [sp, #-32]!
+	mov	x29, sp
+	str	x0, [sp, #16]
+	bl	___ed_sigsetjmp_save
+	ldr	x0, [sp, #16]
+	ldp	x29, x30, [sp], #32
+	b	___ed_setjmp_raw
 
 	.text
 	.align 2

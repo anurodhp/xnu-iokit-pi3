@@ -97,22 +97,10 @@ extern void __ed_longjmp_raw(void *buf, int val) __attribute__((noreturn));
 #define ED_JMP_SIGMASK_OFF 168
 #define ED_JMP_SIGFLAG_OFF 176
 
-int
-_setjmp(int env[])
-{
-	return __ed_setjmp_raw(env);
-}
-
 void
 _longjmp(int env[], int val)
 {
 	__ed_longjmp_raw(env, val);
-}
-
-int
-setjmp(int env[])
-{
-	return __ed_setjmp_raw(env);
 }
 
 void
@@ -121,11 +109,13 @@ longjmp(int env[], int val)
 	__ed_longjmp_raw(env, val);
 }
 
-int
-sigsetjmp(int env[], int savemask)
+/* setjmp/_setjmp/sigsetjmp are in ed_setjmp_raw.s (a C wrapper would save
+ * its own, soon dead, frame). sigsetjmp calls this for the mask, then
+ * branches to the raw save. */
+void
+__ed_sigsetjmp_save(int env[], int savemask)
 {
 	unsigned char *buf = (unsigned char *)env;
-	int r;
 
 	if (savemask) {
 		sigset_t oldmask;
@@ -135,9 +125,6 @@ sigsetjmp(int env[], int savemask)
 	} else {
 		*(int *)(buf + ED_JMP_SIGFLAG_OFF) = 0;
 	}
-
-	r = __ed_setjmp_raw(env);
-	return r;
 }
 
 void

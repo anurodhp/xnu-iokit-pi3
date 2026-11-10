@@ -465,7 +465,7 @@ cp "$LE/unexports" "$UNEXPORTS"
 # define -- re-derive it with, and keep it equal to:
 #   nm -m libc_build/libedit_extra/*.o | grep '(__' | grep -v non-external \
 #       | awk '{print $NF}' | sort -u
-# (13 names -- was 27 before DAR-292 removed the exec()/waitpid()/fork()
+# (14 names -- was 27 before DAR-292 removed the exec()/waitpid()/fork()
 # family: those are no longer defined anywhere in this dylib at all, so
 # there is nothing left of them to narrow. _fork/___fork were never in
 # this list even before DAR-292 -- no fork object was ever linked into
@@ -474,6 +474,7 @@ cp "$LE/unexports" "$UNEXPORTS"
 cat >> "$UNEXPORTS" <<'EOF'
 ___ed_longjmp_raw
 ___ed_setjmp_raw
+___ed_sigsetjmp_save
 __longjmp
 __setjmp
 _longjmp
