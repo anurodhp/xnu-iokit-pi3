@@ -381,3 +381,30 @@ above disagree, this section wins.
     having started.
   - User client precedent is `BCM2837V3DUserClient` (`clientHasPrivilege`,
     `externalMethod`), not audio_play's entitlement scheme.
+
+## Pi 3 Model B+ (CYW43455), 2026-11-15
+
+Branch `pi3bplus`. The 3B+ has a CYW43455 (chip id 0x4345 rev 6, ARM CR4,
+802.11ac, 2.4 + 5 GHz) on the same SDIO wiring as the 3B's CYW43438.
+BCM43430Wifi keeps its class name (user-client ABI) and takes the chip's
+path from the id it reads at probe. What differs, and where it comes from:
+
+| | 43430 (3B) | 43455 (3B+) | Source |
+|---|---|---|---|
+| ARM core | CM3, held by `sbdisable` | CR4, held by `sbreset(armctl, CPUHALT, CPUHALT)` | ether4330 sbinit(); brcmfmac chip.c |
+| RAM | SOCRAM core banks, base 0 | CR4 CAP/BANKINFO banks (TCM), base 0x198000 | ether4330 ramscan(); chip.c brcmf_chip_tcm_rambase() |
+| Start | `sbreset(armctl, 0, 0)` | clear SDIO intstatus, firmware word 0 -> address 0, `sbreset(armctl, CPUHALT, 0)` | ether4330 fwload(); chip.c brcmf_chip_cr4_set_active() |
+| F2 watermark | 8 | 0x60 + DEVCTL F2WM_ENAB, MESBUSYCTRL 0x50\|0x80 | brcmfmac sdio.c brcmf_sdio_bus_preinit() |
+| Scan | 14 hard-coded d11n 2.4 GHz chanspecs | channel count 0 = every CLM channel (d11ac chanspecs differ) | cfg80211.c brcmf_escan_prep() |
+| Firmware | brcmfmac43430-sdio.* | brcmfmac43455-sdio.* (cyfmac43455-sdio-standard.bin, Raspberry Pi OS's default alternative) | fetch_wifi_firmware.sh |
+
+Scan results and `wifi status` report `ctl_ch` (brcmf_bss_info_le offset
+88) as the channel, falling back to the chanspec's low byte, since that is
+the centre channel of a 40/80 MHz BSS. `/usr/sbin/wifi up` asks the kernel
+for the chip id and loads the matching set; every image carries both.
+References: Circle addon/wlan/ether4330.c (master), Linux v6.6
+drivers/net/wireless/broadcom/brcm80211/brcmfmac/{sdio.c,sdio.h,chip.c}.
+
+Not verified on a real 3B+ yet (no board on the bench at the time of
+writing); kernel and `wifi` build clean, and the 3B path is unchanged
+except that scan/status channel now prefers `ctl_ch`.

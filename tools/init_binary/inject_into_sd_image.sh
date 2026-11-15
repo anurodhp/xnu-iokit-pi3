@@ -2804,7 +2804,7 @@ else
 fi
 
 # On-board WiFi (docs/wifi-plan.md): the wifi(8) control tool
-# (build_wifi.sh), the CYW43438 firmware and its licence
+# (build_wifi.sh), the CYW43438 (Pi 3B) and CYW43455 (Pi 3B+) firmware and its licence
 # (fetch_wifi_firmware.sh; gitignored, never committed) and the boot job. The job is a no-op
 # unless /etc/wifi.conf exists and the kernel runs with wifi=1, so it is
 # safe on every image. WIFI_CONF=<local file> (ssid=... / psk=... lines)
@@ -2848,7 +2848,8 @@ if [ -f tools/userland_staging/libc_build/wifi.macho ]; then
     chmod 755 "$MNT/usr/sbin/wifi"
     fetch_firmware fetch_wifi_firmware.sh
     install_firmware "$WIFI_FW" "$MNT/usr/share/firmware/wifi" \
-        brcmfmac43430-sdio.bin brcmfmac43430-sdio.txt brcmfmac43430-sdio.clm_blob copyright
+        brcmfmac43430-sdio.bin brcmfmac43430-sdio.txt brcmfmac43430-sdio.clm_blob \
+        brcmfmac43455-sdio.bin brcmfmac43455-sdio.txt brcmfmac43455-sdio.clm_blob copyright
     cp tools/userland_staging/org.puredarwin.wifi.plist "$MNT/Library/LaunchDaemons/org.puredarwin.wifi.plist"
     chmod 644 "$MNT/Library/LaunchDaemons/org.puredarwin.wifi.plist"
     echo "+ wrote /usr/sbin/wifi, /usr/share/firmware/wifi/ and org.puredarwin.wifi.plist"

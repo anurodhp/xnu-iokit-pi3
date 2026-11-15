@@ -1,6 +1,6 @@
 #!/bin/bash
 # Creates a fresh 2-partition (FAT32 boot + HFS+ root) SD card image for
-# REAL RASPBERRY PI 3 HARDWARE, using the CURRENT from-source kernel
+# REAL RASPBERRY PI 3 HARDWARE (Model B, or Model B+ with BOARD=rpi3bplus), using the CURRENT from-source kernel
 # (build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped)
 # instead of the frozen pre-session snapshot in sdcard/. Otherwise
 # byte-for-byte the same recipe as tools/make_sd_image.sh (which builds
@@ -35,8 +35,18 @@
 # real-hardware-only risks QEMU cannot exercise -- this image is what
 # finally puts them in scope for real, not something already verified.
 #
-# Usage: tools/make_realhw_sd_image.sh [OUTPUT_IMAGE] [SIZE_MB]
-#   OUTPUT_IMAGE: defaults to qemu/realhw_root.img
+# Usage: [BOARD=rpi3b|rpi3bplus] tools/make_realhw_sd_image.sh [OUTPUT_IMAGE] [SIZE_MB]
+#   BOARD:        rpi3b (default, Pi 3 Model B, devicetrees/rpi3-realhw.dts)
+#                 or rpi3bplus (Pi 3 Model B+, devicetrees/rpi3bplus-realhw.dts).
+#                 Only the device tree differs: the userland, and the WiFi
+#                 firmware for both chips, are the same on both images, and
+#                 BCM43430Wifi identifies its chip at probe. So a wrong
+#                 BOARD does not leave WiFi dead; it only mislabels the
+#                 board in the IODeviceTree root's `compatible`. The output
+#                 name defaults per board so the two cannot overwrite or be
+#                 mistaken for one another.
+#   OUTPUT_IMAGE: defaults to qemu/realhw_root.img (rpi3b) or
+#                 qemu/realhw_rpi3bplus_root.img (rpi3bplus)
 #   SIZE_MB:      defaults to 3072 (3 GB) -- room for the
 #                 provisioned root (commands, GNUstep, X, Florence) while clearing the 1024 MiB SDHC/SDSC
 #                 threshold with a safe margin, and small enough to write
@@ -54,7 +64,14 @@ set -e
 cd "$(dirname "$0")/.."
 mkdir -p qemu
 
-OUT="${1:-qemu/realhw_root.img}"
+BOARD="${BOARD:-rpi3b}"
+case "$BOARD" in
+    rpi3b)     DTS_NAME=rpi3-realhw;      DEFAULT_OUT=qemu/realhw_root.img ;;
+    rpi3bplus) DTS_NAME=rpi3bplus-realhw; DEFAULT_OUT=qemu/realhw_rpi3bplus_root.img ;;
+    *) echo "error: BOARD=$BOARD -- expected rpi3b or rpi3bplus" >&2; exit 1 ;;
+esac
+echo "+ board: $BOARD (devicetrees/$DTS_NAME.dts)"
+OUT="${1:-$DEFAULT_OUT}"
 SIZE_MB="${2:-3072}"
 
 KERNEL_SRC="build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped"
@@ -72,9 +89,9 @@ fi
 # devicetrees/rpi3-realhw.dtb to already be up to date, for the same
 # reason: a stale committed .dtb is a silent mistake, a freshly regenerated
 # one cannot be.
-DTB_SRC="devicetrees/rpi3-realhw.dtb"
+DTB_SRC="devicetrees/$DTS_NAME.dtb"
 echo "+ regenerating $DTB_SRC from current devicetrees/ source"
-make -C devicetrees rpi3-realhw.dtb
+make -C devicetrees "$DTS_NAME.dtb"
 if [ ! -f "$DTB_SRC" ]; then
     echo "error: $DTB_SRC not found after 'make -C devicetrees'" >&2
     exit 1

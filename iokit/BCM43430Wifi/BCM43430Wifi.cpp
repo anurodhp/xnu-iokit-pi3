@@ -38,6 +38,10 @@ enum {
 	// Function 1 backplane registers (ether4330 enum; brcmfmac sdio.h SBSDIO_*)
 	kSbAddr     = 0x1000a,
 	kWatermark  = 0x10008,
+	kDeviceCtl  = 0x10009,   // sdio.h SBSDIO_DEVICE_CTL
+	kMesBusyCtl = 0x1001d,   // sdio.h SBSDIO_FUNC1_MESBUSYCTRL
+	kF2WmEnab   = 0x10,      // sdio.c SBSDIO_DEVCTL_F2WM_ENAB
+	kMesBusyEnab = 0x80,     // sdio.h SBSDIO_MESBUSYCTRL_ENAB
 	kFrameCtl   = 0x1000d,
 	kClkCsr     = 0x1000e,
 	kPullups    = 0x1000f,
@@ -66,6 +70,14 @@ enum {
 	kBankIdx    = 0x10,
 	kBankInfo   = 0x40,
 	kBankPda    = 0x44,
+
+	// ARM CR4 core registers (ether4330 "armcr4 regs"; brcmfmac chip.c
+	// ARMCR4_CAP, ARMCR4_BCMA_IOCTL_CPUHALT). The CYW43455 (Pi 3B+) has a
+	// CR4 with its RAM as TCM behind the ARM core, not a SOCRAM core.
+	kCr4Cap      = 0x04,
+	kCr4BankIdx  = 0x40,
+	kCr4BankInfo = 0x44,
+	kCr4CpuHalt  = 0x20,
 
 	// chipcommon
 	kGpioPullup   = 0x58,
@@ -117,6 +129,10 @@ enum {
 	kSupKeyed       = 6,     // BRCMF_E_STATUS_FWSUP_COMPLETED
 	kSupTimeout     = 7,
 	kStatusPartial  = 8,     // BRCMF_E_STATUS_PARTIAL (escan in progress)
+
+	// Chip ids (brcm_hw_ids.h BRCM_CC_43430_CHIP_ID, BRCM_CC_4345_CHIP_ID).
+	kChip43430 = 43430,      // CYW43438, Pi 3B
+	kChip4345  = 0x4345,     // CYW43455 (rev 6), Pi 3B+
 
 	kSdpcmHdr = 12,
 	kCdcHdr   = 16,
@@ -530,11 +546,24 @@ BCM43430Wifi::coreScan(uint32_t erom)
 bool
 BCM43430Wifi::ramScan(void)
 {
-	// ether4330 ramscan(), the SOCRAM (ARM CM3) branch: the 43430 has no CR4.
 	if (fArmCore == kARMcr4) {
-		setError("ARM CR4 chips are not supported by this driver");
-		return false;
+		// ether4330 ramscan() CR4 branch: banks = ROM banks + RAM banks
+		// from CR4 CAP, each 8 KB * (bankinfo[5:0] + 1). RAM is at
+		// 0x198000 on the 4345 (brcmfmac chip.c brcmf_chip_tcm_rambase()).
+		sbwindow(fArmRegs);
+		uint32_t n = 0;
+		cfgreadl(fArmRegs + kCr4Cap, &n);
+		uint32_t banks = ((n >> 4) & 0xF) + (n & 0xF), size = 0;
+		for (uint32_t i = 0; i < banks; i++) {
+			cfgwritel(fArmRegs + kCr4BankIdx, i);
+			cfgreadl(fArmRegs + kCr4BankInfo, &n);
+			size += 8192 * ((n & 0x3F) + 1);
+		}
+		fSocramSize = size;
+		fRamBase = 0x198000;
+		return fSocramSize != 0;
 	}
+	// ether4330 ramscan(), the SOCRAM (ARM CM3) branch: the 43430.
 	if (fSocramRev <= 7 || fSocramRev == 12) {
 		setError("SOCRAM rev %u not supported", fSocramRev);
 		return false;
@@ -551,7 +580,7 @@ BCM43430Wifi::ramScan(void)
 	}
 	fSocramSize = size;
 	fRamBase = 0;
-	if (fChipId == 43430) {
+	if (fChipId == kChip43430) {
 		// ether4330: bank 3 power-down-array off (brcmfmac chip.c
 		// brcmf_chip_socram_ramsize() does the same for 43430).
 		cfgwritel(fSocramRegs + kBankIdx, 3);
@@ -574,8 +603,10 @@ BCM43430Wifi::sbInit(void)
 	fChipId = r & 0xFFFF;
 	fChipRev = (r >> 16) & 0xF;
 	IOLog("BCM43430Wifi: chip %u rev %u type %u\n", fChipId, fChipRev, (r >> 28) & 0xF);
-	if (fChipId != 43430) {
-		setError("chip id %u (%#x) is not the 43430 this driver supports", fChipId, fChipId);
+	// ether4330 sbinit()'s chip list, cut to the two Pi 3 chips. A 4345 at
+	// rev 9 is the 43456 (Pi 400 / CM4), which needs other firmware.
+	if (!(fChipId == kChip43430 || (fChipId == kChip4345 && fChipRev == 6))) {
+		setError("chip id %u (%#x) rev %u is not a 43430 or 43455", fChipId, fChipId, fChipRev);
 		return false;
 	}
 	uint32_t erom = 0;
@@ -583,18 +614,24 @@ BCM43430Wifi::sbInit(void)
 		setError("EROM core scan failed");
 		return false;
 	}
-	if (fArmCtl == 0 || fD11Ctl == 0 || fSocramCtl == 0 || fSocramRegs == 0 || fSdRegs == 0) {
+	// ether4330: the SOCRAM core is essential only for a CM3 chip.
+	if (fArmCtl == 0 || fD11Ctl == 0 || fSdRegs == 0 ||
+	    (fArmCore == kARMcr4 ? fArmRegs == 0 : (fSocramCtl == 0 || fSocramRegs == 0))) {
 		setError("core scan missing cores (arm %#x d11 %#x socram %#x/%#x sdio %#x)",
 		    fArmCtl, fD11Ctl, fSocramCtl, fSocramRegs, fSdRegs);
 		return false;
 	}
-	sbdisable(fArmCtl, 0, 0);
+	if (fArmCore == kARMcr4) {
+		sbreset(fArmCtl, kCr4CpuHalt, kCr4CpuHalt);   // reset, held halted
+	} else {
+		sbdisable(fArmCtl, 0, 0);
+	}
 	sbreset(fD11Ctl, 8 | 4, 4);
 	if (!ramScan()) {
 		return false;
 	}
-	IOLog("BCM43430Wifi: ARM %#x (core %#x) D11 %#x SOCRAM %#x/%#x rev %u SDIO %#x rev %u, RAM %u bytes\n",
-	    fArmCtl, fArmCore, fD11Ctl, fSocramCtl, fSocramRegs, fSocramRev, fSdRegs, fSdioRev, fSocramSize);
+	IOLog("BCM43430Wifi: ARM %#x (core %#x) D11 %#x SOCRAM %#x/%#x rev %u SDIO %#x rev %u, RAM %u bytes at %#x\n",
+	    fArmCtl, fArmCore, fD11Ctl, fSocramCtl, fSocramRegs, fSocramRev, fSdRegs, fSdioRev, fSocramSize, fRamBase);
 
 	cfgw(kClkCsr, 0);
 	IODelay(10);
@@ -665,7 +702,15 @@ BCM43430Wifi::sbEnable(void)
 		IOSleep(100);
 	}
 	fSDIO->writeDirect(Fn0, kCccrIntEnable, (1 << Fn1) | (1 << Fn2) | 1);
-	cfgw(kWatermark, 8);
+	if (fChipId == kChip4345) {
+		// brcmfmac sdio.c brcmf_sdio_bus_preinit(), SDIO_DEVICE_ID_BROADCOM_43455:
+		// F2 watermark 0x60 words with F2WM_ENAB, F1 MES busy control 0x50.
+		cfgw(kWatermark, 0x60);
+		cfgw(kDeviceCtl, cfgr8(kDeviceCtl) | kF2WmEnab);
+		cfgw(kMesBusyCtl, 0x50 | kMesBusyEnab);
+	} else {
+		cfgw(kWatermark, 8);
+	}
 	return true;
 }
 
@@ -701,6 +746,7 @@ BCM43430Wifi::uploadBegin(void)
 	}
 	IOLockUnlock(fBusLock);
 	fFwBytes = fNvramLen = fClmLen = 0;
+	bzero(fResetVec, sizeof(fResetVec));
 	fState = ok ? kWifiStateLoading : kWifiStateFailed;
 	return ok ? kIOReturnSuccess : kIOReturnIOError;
 }
@@ -743,6 +789,11 @@ BCM43430Wifi::uploadChunk(uint32_t type, uint32_t offset, const void *data, uint
 		if (!ok) {
 			fState = kWifiStateFailed;
 			return kIOReturnIOError;
+		}
+		if (offset == 0 && len >= 4) {
+			// ether4330 upload(): a CR4 starts at the vector in the
+			// image's first word, copied to address 0 at boot.
+			memcpy(fResetVec, data, 4);
 		}
 		if (offset + len > fFwBytes) {
 			fFwBytes = offset + len;
@@ -815,8 +866,20 @@ BCM43430Wifi::boot(void)
 	put4(tok, (words & 0xFFFF) | (~words << 16));
 	ok = ok && sbmem(true, tok, 4, fRamBase + fSocramSize - 4);
 	if (ok) {
-		sbreset(fArmCtl, 0, 0);       // CM3: release the ARM, firmware starts
-		ok = sbEnable();
+		if (fArmCore == kARMcr4) {
+			// ether4330 fwload() CR4 branch (brcmfmac chip.c
+			// brcmf_chip_cr4_set_active()): clear the SDIO core's
+			// interrupts, write the reset vector to 0, release CPUHALT.
+			sbwindow(fSdRegs);
+			cfgwritel(fSdRegs + kIntStatus, ~0U);
+			if (get4(fResetVec) != 0) {
+				ok = sbmem(true, fResetVec, 4, 0);
+			}
+			sbreset(fArmCtl, kCr4CpuHalt, 0);
+		} else {
+			sbreset(fArmCtl, 0, 0);   // CM3: release the ARM, firmware starts
+		}
+		ok = ok && sbEnable();
 	}
 	if (ok) {
 		// brcmfmac brcmf_sdio_ulp_reinit_fw() (sdio.c:2638-2643: "on FMAC side
@@ -1102,7 +1165,10 @@ BCM43430Wifi::handleScanResult(const uint8_t *p, uint32_t len, uint32_t status)
 			memcpy(s->bssid, bssid, 6);
 			uint32_t sl = b[18] > 32 ? 32 : b[18];
 			memcpy(s->ssid, b + 19, sl);
-			s->channel = get2(b + 72) & 0xFF;
+			// ctl_ch (brcmf_bss_info_le, offset 88) is the control
+			// channel; chanspec's low byte is the centre channel, which
+			// differs for a 40/80 MHz BSS (5 GHz on the 43455).
+			s->channel = b[88] ? b[88] : (get2(b + 72) & 0xFF);
 			s->rssi = (int16_t)get2(b + 78);
 			uint32_t cap = get2(b + 16);
 			if (cap & 0x10) {
@@ -1536,9 +1602,16 @@ BCM43430Wifi::scan(wifi_scan_results *out)
 	put4(p, ~0U); p += 4;          // active time
 	put4(p, ~0U); p += 4;          // passive time
 	put4(p, ~0U); p += 4;          // home time
-	put2(p, 14); p += 2;           // channel count
+	// The table above is d11n chanspec encoding (the 43430's). The 43455
+	// speaks d11ac encoding and is dual-band, so it gets no list: a
+	// channel count of 0 scans every channel the CLM allows, 2.4 and
+	// 5 GHz (brcmfmac cfg80211.c brcmf_escan_prep(), n_channels == 0).
+	bool all = fChipId == kChip4345;
+	put2(p, all ? 0 : 14); p += 2; // channel count
 	put2(p, 1); p += 2;            // ssid count
-	memcpy(p, chanspecs, sizeof(chanspecs)); p += sizeof(chanspecs);
+	if (!all) {
+		memcpy(p, chanspecs, sizeof(chanspecs)); p += sizeof(chanspecs);
+	}
 	p += 4 + 32;                   // ssids[0] wildcard
 
 	wlcmdint(WLC_SET_PASSIVE_SCAN, 0);
@@ -1779,7 +1852,8 @@ BCM43430Wifi::getStatus(wifi_status *out)
 			put4(bi, kBssBuf);
 			if (wlcmd(WLC_GET_BSS_INFO, false, bi, kBssBuf, bi, kBssBuf) == kIOReturnSuccess) {
 				const uint8_t *b = bi + 4;
-				out->channel = get2(b + 72) & 0xFF;   // chanspec's channel; the 43430 runs HT20
+				// ctl_ch (88), else chanspec's channel (the 43430 runs HT20).
+				out->channel = b[88] ? b[88] : (get2(b + 72) & 0xFF);
 				out->noise = (int8_t)b[80];
 				out->ht = b[81] ? 1 : 0;
 			}

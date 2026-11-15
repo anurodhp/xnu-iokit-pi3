@@ -1,6 +1,9 @@
 /*
- * BCM43430Wifi - driver for the Raspberry Pi 3's on-board CYW43438 /
- * BCM43430A1 WiFi (FullMAC, SDIO), as an IOEthernetController (en1).
+ * BCM43430Wifi - driver for the Raspberry Pi 3's on-board WiFi (FullMAC,
+ * SDIO), as an IOEthernetController (en1): the Pi 3B's CYW43438 /
+ * BCM43430A1 (ARM CM3 + SOCRAM, 2.4 GHz) and the Pi 3B+'s CYW43455 /
+ * BCM4345 rev 6 (ARM CR4 + TCM at 0x198000, 2.4 + 5 GHz). The chip id
+ * read at probe picks the path; the class keeps its name for the ABI.
  * docs/wifi-plan.md, steps W3/W4.
  *
  * Chip side is a port of Plan 9's ether4330.c (R. Miller, as carried in
@@ -93,6 +96,7 @@ private:
 	uint32_t fFwBytes;
 	uint8_t *fNvram; uint32_t fNvramLen;
 	uint8_t *fClm;   uint32_t fClmLen;
+	uint8_t fResetVec[4];        // CR4 (43455): first word of the firmware image
 	uint8_t fMAC[6];
 	char fFwVersion[128];
 	char fLastError[96];

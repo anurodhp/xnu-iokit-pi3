@@ -62,6 +62,19 @@
 	 * this synthetic device tree was simply missing a property real
 	 * hardware's firmware-provided DT always carries. */
 	model = "BCM2837";
+#ifdef RPI3_COMPATIBLE
+	/*
+	 * Which board: the Linux/firmware board compatibles
+	 * (bcm2837-rpi-3-b.dts, bcm2837-rpi-3-b-plus.dts), set by the
+	 * real-hardware variants (rpi3-realhw.dts, rpi3bplus-realhw.dts).
+	 * Informational, published on the IODeviceTree root: the root
+	 * personality matches by IONameMatch "/" (BCM2837Personalities.cpp),
+	 * and the board-specific hardware (the WiFi chip) is identified by
+	 * its driver at probe, not from here. `model` stays "BCM2837" on
+	 * both boards: uname's HW_MACHINE reads it (see above).
+	 */
+	compatible = RPI3_COMPATIBLE;
+#endif
 
 	cpus {
 		#address-cells = <1>;

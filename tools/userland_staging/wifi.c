@@ -1,5 +1,5 @@
 /*
- * wifi - control the Pi 3's on-board WiFi through BCM43430WifiUserClient
+ * wifi - control the Pi 3 / 3B+'s on-board WiFi through BCM43430WifiUserClient
  * (docs/wifi-plan.md; ABI in iokit/BCM43430Wifi/BCM43430WifiShared.h).
  *
  *   wifi up [firmware-dir]         load firmware (default /usr/share/firmware/wifi)
@@ -27,9 +27,13 @@
 #include "BCM43430WifiShared.h"
 
 #define FW_DIR  "/usr/share/firmware/wifi"
-#define FW_BIN  "brcmfmac43430-sdio.bin"
-#define FW_TXT  "brcmfmac43430-sdio.txt"
-#define FW_CLM  "brcmfmac43430-sdio.clm_blob"
+/*
+ * Firmware base name by chip, as Raspberry Pi OS / brcmfmac name them
+ * (sdio.c brcmf_sdio_fwnames: 43430 -> brcmfmac43430-sdio, 4345 rev 6 ->
+ * brcmfmac43455-sdio). The kernel reports the chip id once it has probed.
+ */
+#define FW_43430 "brcmfmac43430-sdio"   /* Pi 3B, CYW43438 */
+#define FW_43455 "brcmfmac43455-sdio"   /* Pi 3B+, CYW43455 */
 
 static io_connect_t conn;
 
@@ -129,10 +133,23 @@ upload(uint32_t type, const uint8_t *buf, size_t len)
 static int
 cmdUp(const char *dir)
 {
+	wifi_status st;
+	size_t ssz = sizeof(st);
+	memset(&st, 0, sizeof(st));
+	if (IOConnectCallStructMethod(conn, kWifiMethodStatus, NULL, 0, &st, &ssz) != KERN_SUCCESS) {
+		st.chipid = 0;
+	}
+	/* 0 = not probed yet: the 43430 names, this tool's behaviour before the 43455. */
+	const char *base = st.chipid == 0x4345 ? FW_43455 : FW_43430;
+	char fbin[64], ftxt[64], fclm[64];
+	snprintf(fbin, sizeof(fbin), "%s.bin", base);
+	snprintf(ftxt, sizeof(ftxt), "%s.txt", base);
+	snprintf(fclm, sizeof(fclm), "%s.clm_blob", base);
+	printf("wifi: chip %u (%#x) rev %u, firmware %s.*\n", st.chipid, st.chipid, st.chiprev, base);
 	size_t blen = 0, tlen = 0, clen = 0;
-	uint8_t *bin = readFile(dir, FW_BIN, &blen);
-	uint8_t *txt = readFile(dir, FW_TXT, &tlen);
-	uint8_t *clm = readFile(dir, FW_CLM, &clen);
+	uint8_t *bin = readFile(dir, fbin, &blen);
+	uint8_t *txt = readFile(dir, ftxt, &tlen);
+	uint8_t *clm = readFile(dir, fclm, &clen);
 	if (!bin || !txt || !clm) {
 		return 1;
 	}
