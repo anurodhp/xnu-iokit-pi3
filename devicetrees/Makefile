@@ -18,18 +18,17 @@
 # the build rather than shipping an unbootable blob.
 #
 # rpi3-realhw.dts is not a copy of rpi3.dts - it #includes it and
-# overrides one property (see its header), and rpi3bplus-realhw.dts
-# #includes rpi3-realhw.dts the same way, so the C preprocessor pass is
+# overrides one property (see its header), so the C preprocessor pass is
 # load-bearing. `-I.` lets that #include resolve when make is invoked from
 # outside this directory.
 
 DTC := ../third_party/dtc-AppleDeviceTree/dtc
-DTS := rpi3 rpi3-realhw rpi3bplus-realhw rpi3-v3dtest rpi3-pwmtest
+DTS := rpi3 rpi3-realhw rpi3-v3dtest rpi3-pwmtest
 DTBS := $(addsuffix .dtb,$(DTS))
 
 all: $(DTBS)
 
-%.dtb: %.dts rpi3.dts rpi3-realhw.dts
+%.dtb: %.dts rpi3.dts
 	@test -x $(DTC) || { \
 		echo "error: $(DTC) not found - run ./setup_third_party.sh" >&2; \
 		exit 1; }

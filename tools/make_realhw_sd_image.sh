@@ -36,15 +36,17 @@
 # finally puts them in scope for real, not something already verified.
 #
 # Usage: [BOARD=rpi3b|rpi3bplus] tools/make_realhw_sd_image.sh [OUTPUT_IMAGE] [SIZE_MB]
-#   BOARD:        rpi3b (default, Pi 3 Model B, devicetrees/rpi3-realhw.dts)
-#                 or rpi3bplus (Pi 3 Model B+, devicetrees/rpi3bplus-realhw.dts).
-#                 Only the device tree differs: the userland, and the WiFi
-#                 firmware for both chips, are the same on both images, and
-#                 BCM43430Wifi identifies its chip at probe. So a wrong
-#                 BOARD does not leave WiFi dead; it only mislabels the
-#                 board in the IODeviceTree root's `compatible`. The output
-#                 name defaults per board so the two cannot overwrite or be
-#                 mistaken for one another.
+#   BOARD:        rpi3b (default, Pi 3 Model B) or rpi3bplus (Pi 3 Model B+).
+#                 It only names the output file, so each board has an image
+#                 that says which it is for. The contents are the same: one
+#                 device tree (devicetrees/rpi3-realhw.dts; the boards share
+#                 the BCM2837's SoC map) and one kernel and userland whose
+#                 drivers pick the board's chips at run time - BCM43430Wifi
+#                 by chip id (CYW43438 / CYW43455), BCM43430Bluetooth by LMP
+#                 subversion (BCM43430A1 / BCM4345C0), and the Ethernet by
+#                 USB id (SMSC9514USBDriver 0424:ec00 / LAN7800USBDriver
+#                 0424:7800) - with both boards' firmware in the image. So
+#                 either image boots either board.
 #   OUTPUT_IMAGE: defaults to qemu/realhw_root.img (rpi3b) or
 #                 qemu/realhw_rpi3bplus_root.img (rpi3bplus)
 #   SIZE_MB:      defaults to 3072 (3 GB) -- room for the
@@ -66,11 +68,11 @@ mkdir -p qemu
 
 BOARD="${BOARD:-rpi3b}"
 case "$BOARD" in
-    rpi3b)     DTS_NAME=rpi3-realhw;      DEFAULT_OUT=qemu/realhw_root.img ;;
-    rpi3bplus) DTS_NAME=rpi3bplus-realhw; DEFAULT_OUT=qemu/realhw_rpi3bplus_root.img ;;
+    rpi3b)     DEFAULT_OUT=qemu/realhw_root.img ;;
+    rpi3bplus) DEFAULT_OUT=qemu/realhw_rpi3bplus_root.img ;;
     *) echo "error: BOARD=$BOARD -- expected rpi3b or rpi3bplus" >&2; exit 1 ;;
 esac
-echo "+ board: $BOARD (devicetrees/$DTS_NAME.dts)"
+echo "+ board: $BOARD (image name only; the image boots a 3B or a 3B+)"
 OUT="${1:-$DEFAULT_OUT}"
 SIZE_MB="${2:-3072}"
 
@@ -89,9 +91,9 @@ fi
 # devicetrees/rpi3-realhw.dtb to already be up to date, for the same
 # reason: a stale committed .dtb is a silent mistake, a freshly regenerated
 # one cannot be.
-DTB_SRC="devicetrees/$DTS_NAME.dtb"
+DTB_SRC="devicetrees/rpi3-realhw.dtb"
 echo "+ regenerating $DTB_SRC from current devicetrees/ source"
-make -C devicetrees "$DTS_NAME.dtb"
+make -C devicetrees rpi3-realhw.dtb
 if [ ! -f "$DTB_SRC" ]; then
     echo "error: $DTB_SRC not found after 'make -C devicetrees'" >&2
     exit 1

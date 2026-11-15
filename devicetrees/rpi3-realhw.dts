@@ -46,13 +46,4 @@
 /* The VPU firmware is there to talk to over VCHIQ; not on QEMU. */
 #define RPI3_HAVE_VCHIQ 1
 
-/*
- * The board. rpi3bplus-realhw.dts #includes this file with its own value
- * pre-defined, the same way this file pre-defines RPI3_DRAM_SIZE for
- * rpi3.dts, so the 3B+ tree cannot drift from this one either.
- */
-#ifndef RPI3_COMPATIBLE
-#define RPI3_COMPATIBLE "raspberrypi,3-model-b", "brcm,bcm2837"
-#endif
-
 #include "rpi3.dts"

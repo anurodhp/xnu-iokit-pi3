@@ -384,7 +384,7 @@ above disagree, this section wins.
 
 ## Pi 3 Model B+ (CYW43455), 2026-11-15
 
-Branch `pi3bplus`. The 3B+ has a CYW43455 (chip id 0x4345 rev 6, ARM CR4,
+Added 2026-11-15. The 3B+ has a CYW43455 (chip id 0x4345 rev 6, ARM CR4,
 802.11ac, 2.4 + 5 GHz) on the same SDIO wiring as the 3B's CYW43438.
 BCM43430Wifi keeps its class name (user-client ABI) and takes the chip's
 path from the id it reads at probe. What differs, and where it comes from:
