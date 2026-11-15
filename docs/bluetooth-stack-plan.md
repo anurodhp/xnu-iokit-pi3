@@ -362,6 +362,26 @@ LE-only. There are two candidate routes:
 connection-handle ownership. Decide after S5, and consider LE Secure
 Connections crypto (P-256, AES-CMAC) when deciding.
 
+**S8a. LE scanning: done 2026-11-15, real Pi 3B.** `btconfig <unit> lescan`
+(our netbsd-src fork) runs a 6 s active LE scan over the raw HCI socket. It
+sends LE Set Event Mask, LE Set Scan Parameters (60 ms interval, 30 ms window)
+and LE Set Scan Enable, then reads LE Advertising Reports. LE Meta events
+already reach the host, because `btconfig ssp` sets event-mask bit 61. For
+each device it merges the advertisement and the scan response, and prints:
+
+- the name
+- the Appearance, by name (keyboard, mouse, ...)
+- the HID service (0x1812)
+- whether it accepts connections
+
+`btsetup scan` runs it after the inquiry. It lists the LE devices that accept
+connections and give a name or HID, with a fifth field, `le`. Those addresses
+are kept in `/var/run/btsetup.le`, and `btsetup pair` refuses them until LE
+pairing exists. On the Pi 3B it found a Microsoft Bluetooth Mouse
+(appearance 0x03c2, HID, random address). A busy room returned 32+
+advertisers, most of them beacons with no name. No netbt change was needed
+for scanning; connecting (route a or b above) is the next step.
+
 ## Testing strategy
 
 - **QEMU:** the H4 responder (`tools/bt_h4_responder.py`) covers init, the

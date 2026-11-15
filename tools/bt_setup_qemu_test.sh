@@ -7,7 +7,8 @@
 #   1. clean: no keys, no devices (the image keeps /var/db).
 #   2. status: power on, no devices.
 #   3. scan: the keyboard is found with its kind and name (inquiry, Class of
-#      Device, Remote Name Request).
+#      Device, Remote Name Request), and the responder's "Fake LE"
+#      advertiser as "found <addr> other Fake LE le" (btconfig lescan).
 #   4. pair: btpin, SDP + attach, bthidd connects, SSP: the passkey line
 #      comes from bthcid's log, then "paired"; status lists the keyboard
 #      as connected, with its name.

@@ -16,6 +16,12 @@
 #       found<TAB>addr<TAB>kind<TAB>name       per device in range (10 s);
 #                                    kind: keyboard, mouse, combo, phone,
 #                                    computer, audio, other
+#       found<TAB>addr<TAB>kind<TAB>name<TAB>le   per Bluetooth LE device
+#                                    that accepts connections and says what
+#                                    it is (a name or the HID service), from
+#                                    a 6 s LE scan after the inquiry. Their
+#                                    addresses are kept in /var/run/btsetup.le;
+#                                    pair refuses them until LE pairing exists.
 #   btsetup pair addr kind [name]
 #       Authorizes pairing (btpin), reads the device's HID record over SDP
 #       and attaches it (btdevctl -A; bthidd connects, which pairs), then
@@ -34,6 +40,7 @@ PATH=/usr/sbin:/usr/bin:/sbin:/bin
 DEV=bcmbt0
 NAMES=/var/db/bluetooth-names
 STATUS=/var/run/bthidd.status
+LEFILE=/var/run/btsetup.le
 OFF=/etc/bluetooth.off
 HCIDLOG=/var/log/bthcid.log
 TAB=$(printf '\t')
@@ -123,12 +130,41 @@ cmd_scan() {
 	while IFS="$TAB" read -r a c n; do
 		printf 'found\t%s\t%s\t%s\n' "$a" "$(kind_of "${c:-0}")" "$n"
 	done
+	# Bluetooth LE (btconfig lescan). Most advertisers nearby are beacons,
+	# phones' rotating addresses and the like: keep the devices that accept
+	# a connection and give a name or the HID service. The kind comes from
+	# the advertised Appearance, which btconfig prints by name.
+	btconfig "$DEV" lescan 2>/dev/null | awk '
+		function flush() {
+			if (a != "" && conn && (n != "" || hid)) {
+				if (k == "") k = "other"
+				print a "\t" k "\t" n
+			}
+		}
+		/^ *[0-9]+: bdaddr / { flush(); a = $3; n = ""; k = ""; hid = 0; conn = 0 }
+		/^   : name "/ { n = $0; sub(/^   : name "/, "", n); sub(/"$/, "", n) }
+		/^   : appearance / {
+			k = $0; sub(/^   : appearance \[[^]]*\] */, "", k)
+			if (k != "keyboard" && k != "mouse" && k != "phone" && k != "computer") k = "other"
+		}
+		/^   : service HID/ { hid = 1 }
+		/^   : connectable/ { conn = 1 }
+		END { flush() }' > "$LEFILE.new"
+	mv "$LEFILE.new" "$LEFILE"
+	while IFS="$TAB" read -r a k n; do
+		printf 'found\t%s\t%s\t%s\tle\n' "$a" "$k" "$n"
+	done < "$LEFILE"
+}
+
+is_le() {
+	[ -f "$LEFILE" ] && awk -F "$TAB" -v a="$1" 'tolower($1) == tolower(a) { f = 1 } END { exit !f }' "$LEFILE"
 }
 
 cmd_pair() { # addr kind name
 	a=$1 kind=$2 name=$3
 	valid_addr "$a" || die "usage: btsetup pair addr kind [name]"
 	unit_up || die "Bluetooth is off."
+	is_le "$a" && die "Bluetooth LE devices cannot be paired yet."
 	[ -n "$name" ] && set_name "$a" "$name"
 	# bthcid answers only devices btpin authorized. A keyboard without SSP
 	# needs a PIN typed on it; other devices without SSP mostly use 0000.
