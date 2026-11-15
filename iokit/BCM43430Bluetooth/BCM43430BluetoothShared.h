@@ -17,6 +17,8 @@ enum {
 	kBtMethodCommand     = 3,  // struct in: bt_command; struct out: bt_packet (the matching event)
 	kBtMethodReadEvent   = 4,  // scalar in: timeout ms; struct out: bt_packet
 	kBtMethodStatus      = 5,  // struct out: bt_status (no HCI traffic; not root-only)
+	kBtMethodIdentify    = 6,  // no args: power on, read the ROM's version, power off; then Status's
+	                           // lmp_subversion says which patch: 0x2209 BCM43430A1 (3B), 0x6119 BCM4345C0 (3B+)
 	kBtMethodCount
 };
 

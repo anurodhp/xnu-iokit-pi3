@@ -19,8 +19,9 @@ OSDefineMetaClassAndStructors(BCM43430Bluetooth, IOService)
 // Mailbox clock id of the PL011's UARTCLK (Linux raspberrypi-firmware.h
 // RPI_FIRMWARE_UART_CLK_ID = 2).
 static const uint32_t kClockIdUart = 2;
-// Firmware expander line of BT_ON on the Pi 3B (bcm2837-rpi-3-b.dts:26,
-// shutdown-gpios = <&expgpio 0 ...>).
+// Firmware expander line of BT_ON on the Pi 3B and 3B+ (bcm2837-rpi-3-b.dts:26,
+// shutdown-gpios = <&expgpio 0 ...>; the 3B+'s expgpio line names keep
+// "BT_ON" at 0, bcm2837-rpi-3-b-plus.dts).
 static const unsigned kExpGpioBtOn = 0;
 // Controller power-on speed (hci_bcm.c:1303, init_speed = 115200).
 static const uint32_t kInitBaud = 115200;
@@ -28,8 +29,11 @@ static const uint32_t kInitBaud = 115200;
 // the 3B, which has no flow control (bcm2710-rpi-3-b.dts:202-204,
 // max-speed 921600). Boot-arg bt-baud= overrides it.
 static const uint32_t kDefaultOperBaud = 921600;
-// LMP subversion of the BCM43430A1 ROM (btbcm.c:512).
+// LMP subversions of the ROMs this driver patches (Linux v6.6 btbcm.c:505-506,
+// bcm_uart_subver_table): the Pi 3B's BCM43430A1 (CYW43438) and the Pi 3B+'s
+// BCM4345C0 (CYW43455). /usr/sbin/bt picks the patch file by this (identify()).
 static const uint16_t kSubverBCM43430A1 = 0x2209;
+static const uint16_t kSubverBCM4345C0  = 0x6119;
 
 // HCI opcodes used here.
 enum : uint16_t {
@@ -80,6 +84,7 @@ BCM43430Bluetooth::init(OSDictionary *properties)
 	fUartClockHz = 0;
 	fBaud = 0;
 	fOperBaud = kDefaultOperBaud;
+	fFlowControl = true;
 	fThread = NULL;
 	fWake = false;
 	fState = kBtStateDown;
@@ -153,6 +158,10 @@ BCM43430Bluetooth::start(IOService *provider)
 	if (!BCM2837Mailbox::getClockRateHz(kClockIdUart, &fUartClockHz) || fUartClockHz == 0) {
 		IOLog("BCM43430Bluetooth: firmware did not report the UART clock\n");
 		return false;
+	}
+	uint32_t flow = 1;
+	if (PE_parse_boot_argn("bt-flow", &flow, sizeof(flow))) {
+		fFlowControl = flow != 0;
 	}
 	uint32_t baud = 0;
 	if (PE_parse_boot_argn("bt-baud", &baud, sizeof(baud)) && baud >= 9600 && baud <= 3000000) {
@@ -599,15 +608,14 @@ BCM43430Bluetooth::downloadPatch(void)
 }
 
 IOReturn
-BCM43430Bluetooth::bringUp(void)
+BCM43430Bluetooth::powerUpAndIdentify(bt_packet *resp, uint16_t *subver)
 {
-	// docs/bluetooth-plan.md B3. Patch at 115200, then one speed switch:
-	// the `no_early_set_baudrate` variant of hci_bcm.c's order.
-	bt_packet *resp = (bt_packet *)IOMalloc(sizeof(bt_packet));
-	if (resp == NULL) {
-		return kIOReturnNoMemory;
-	}
-	IOReturn r = kIOReturnError;
+	// The part of bringUp() before the patch, shared with identify():
+	// pins, UART at the power-on speed, BT_ON cycle, HCI_Reset, and
+	// Read_Local_Version (btbcm_initialize(), btbcm.c:589-634). On failure
+	// the controller is left powered; callers turn it off.
+	IOReturn r;
+	*subver = 0;
 
 	// GPIO32/33 ALT3, pulls OFF/UP (bcm283x.dtsi uart0_gpio32).
 	BCM2837GPIO::setFunction(32, 2, BCM2837GPIO::kFSelAlt3);
@@ -619,13 +627,12 @@ BCM43430Bluetooth::bringUp(void)
 	// power-on (hci_bcm.c:301).
 	if (!BCM2837Mailbox::setExpGPIO(kExpGpioBtOn, false)) {
 		setError("firmware refused BT_ON (expander GPIO %u)", kExpGpioBtOn);
-		goto out;
+		return kIOReturnError;
 	}
 	IOSleep(10);    // project choice: Linux's power-off path has no fixed wait
 	if (!BCM2837Mailbox::setExpGPIO(kExpGpioBtOn, true)) {
 		setError("firmware refused BT_ON high");
-		r = kIOReturnError;
-		goto out;
+		return kIOReturnError;
 	}
 	IOSleep(120);
 	flushRx();
@@ -634,19 +641,96 @@ BCM43430Bluetooth::bringUp(void)
 	IOLockUnlock(fEventLock);
 
 	if ((r = cmdStatusByte(kOpReset, NULL, 0, resp)) != kIOReturnSuccess) {
-		goto out;
+		return r;
 	}
 	IOSleep(100);   // btbcm_reset(), btbcm.c:294
 
-	// btbcm_initialize() reads the version before patching (btbcm.c:589-634).
 	if ((r = cmdStatusByte(kOpReadLocalVersion, NULL, 0, resp)) != kIOReturnSuccess) {
+		return r;
+	}
+	if (resp->len < 14) {
+		setError("short Read_Local_Version reply (%u bytes)", resp->len);
+		return kIOReturnError;
+	}
+	*subver = get2(resp->data + 12);
+	fHciVersion = resp->data[6];
+	fHciRevision = get2(resp->data + 7);
+	fLmpVersion = resp->data[9];
+	fLmpSubversion = *subver;    // the ROM's, until the patched one replaces it
+	return kIOReturnSuccess;
+}
+
+void
+BCM43430Bluetooth::powerOff(void)
+{
+	// Leave it off, as Linux does when setup fails.
+	fImsc = 0;
+	writeReg(kRegIMSC, 0);
+	writeReg(kRegCR, 0);
+	BCM2837Mailbox::setExpGPIO(kExpGpioBtOn, false);
+}
+
+IOReturn
+BCM43430Bluetooth::identify(void)
+{
+	// Read the ROM's LMP subversion without patching, so /usr/sbin/bt can
+	// choose the .hcd for the chip on this board (status lmp_subversion).
+	// Leaves the controller off; up() power-cycles it anyway.
+	if (fNetbtEnabled) {
+		return kIOReturnBusy;
+	}
+	if (fState == kBtStateUp) {
+		return kIOReturnSuccess;     // already patched; status has the version
+	}
+	bt_packet *resp = (bt_packet *)IOMalloc(sizeof(bt_packet));
+	if (resp == NULL) {
+		return kIOReturnNoMemory;
+	}
+	fState = kBtStateLoading;
+	fLastError[0] = 0;
+	uint16_t subver = 0;
+	IOReturn r = powerUpAndIdentify(resp, &subver);
+	powerOff();
+	fState = kBtStateDown;
+	if (r == kIOReturnSuccess) {
+		IOLog("BCM43430Bluetooth: controller LMP subversion %#x (%s)\n", subver,
+		    subver == kSubverBCM43430A1 ? "BCM43430A1" :
+		    subver == kSubverBCM4345C0 ? "BCM4345C0" : "unknown");
+	}
+	IOFree(resp, sizeof(bt_packet));
+	return r;
+}
+
+IOReturn
+BCM43430Bluetooth::bringUp(void)
+{
+	// docs/bluetooth-plan.md B3. Patch at 115200, then one speed switch:
+	// the `no_early_set_baudrate` variant of hci_bcm.c's order.
+	bt_packet *resp = (bt_packet *)IOMalloc(sizeof(bt_packet));
+	if (resp == NULL) {
+		return kIOReturnNoMemory;
+	}
+	uint16_t subver = 0;
+	IOReturn r = powerUpAndIdentify(resp, &subver);
+	if (r != kIOReturnSuccess) {
 		goto out;
 	}
-	if (resp->len < 14 || get2(resp->data + 12) != kSubverBCM43430A1) {
-		setError("controller is not a BCM43430A1 (LMP subversion %#x); not patching",
-		    resp->len >= 14 ? get2(resp->data + 12) : 0);
+	if (subver != kSubverBCM43430A1 && subver != kSubverBCM4345C0) {
+		setError("controller is not a BCM43430A1 or BCM4345C0 (LMP subversion %#x); not patching", subver);
 		r = kIOReturnUnsupported;
 		goto out;
+	}
+	if (subver == kSubverBCM4345C0 && fFlowControl) {
+		// The 3B+ wires the CYW43455's RTS/CTS to GPIO30/31 (Linux v6.6
+		// bcm2837-rpi-3-b-plus.dts: uart0 pinctrl uart0_ctsrts_gpio30;
+		// bcm283x.dtsi: ALT3, pulls UP/OFF); the 3B wires none. PL011
+		// CTSEN/RTSEN as amba-pl011.c sets them for CRTSCTS. Boot-arg
+		// bt-flow=0 leaves them off.
+		BCM2837GPIO::setFunction(30, 2, BCM2837GPIO::kFSelAlt3);
+		BCM2837GPIO::setPull(30, 1, BCM2837GPIO::kPullUp);
+		BCM2837GPIO::setPull(31, 1, BCM2837GPIO::kPullOff);
+		writeReg(kRegCR, readReg(kRegCR) | kCrCTSEN | kCrRTSEN);
+		IOLog("BCM43430Bluetooth: RTS/CTS flow control on (GPIO30/31)\n");
 	}
 
 	if ((r = downloadPatch()) != kIOReturnSuccess) {
@@ -717,8 +801,11 @@ BCM43430Bluetooth::bringUp(void)
 		// with the last byte + 1.
 		static const uint8_t def1[6] = { 0x43, 0x43, 0xa1, 0x12, 0x1f, 0xac };
 		static const uint8_t def2[6] = { 0xaa, 0xaa, 0xaa, 0xaa, 0xaa, 0xaa };
+		// BDADDR_BCM4345C5 (btbcm.c:31), the 4345 family's unset address.
+		static const uint8_t def3[6] = { 0x43, 0x45, 0xc5, 0x00, 0x1f, 0xac };
 		uint8_t mac[6];
-		if ((memcmp(fBdaddr, def1, 6) == 0 || memcmp(fBdaddr, def2, 6) == 0) &&
+		if ((memcmp(fBdaddr, def1, 6) == 0 || memcmp(fBdaddr, def2, 6) == 0 ||
+		     memcmp(fBdaddr, def3, 6) == 0) &&
 		    BCM2837Mailbox::getBoardMACAddress(mac)) {
 			for (int i = 5; i >= 3 && ++mac[i] == 0; i--) {
 			}
@@ -766,11 +853,7 @@ BCM43430Bluetooth::bringUp(void)
 	r = kIOReturnSuccess;
 out:
 	if (r != kIOReturnSuccess) {
-		// Leave it off, as Linux does when setup fails.
-		fImsc = 0;
-		writeReg(kRegIMSC, 0);
-		writeReg(kRegCR, 0);
-		BCM2837Mailbox::setExpGPIO(kExpGpioBtOn, false);
+		powerOff();
 	}
 	IOFree(resp, sizeof(bt_packet));
 	return r;

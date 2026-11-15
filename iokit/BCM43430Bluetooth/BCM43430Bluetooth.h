@@ -66,6 +66,7 @@ public:
 	IOReturn uploadBegin(void);
 	IOReturn uploadChunk(uint32_t offset, const void *data, uint32_t len);
 	IOReturn up(void);
+	IOReturn identify(void);
 	IOReturn userCommand(const bt_command *cmd, bt_packet *out);
 	IOReturn readEvent(uint32_t timeoutMs, bt_packet *out);
 	void     getStatus(bt_status *out);
@@ -88,6 +89,7 @@ private:
 	volatile bool fWake;
 
 	uint32_t fState;
+	bool     fFlowControl;          // RTS/CTS on the 43455 (3B+); boot-arg bt-flow=0 turns it off
 	char fLastError[96];
 
 	// Patch upload (under fOpLock).
@@ -156,6 +158,7 @@ private:
 		kDrOE = 1U << 11, kDrBE = 1U << 10, kDrPE = 1U << 9, kDrFE = 1U << 8,
 		kFrTXFE = 1U << 7, kFrRXFF = 1U << 6, kFrTXFF = 1U << 5, kFrRXFE = 1U << 4, kFrBUSY = 1U << 3,
 		kLcrhWlen8 = 3U << 5, kLcrhFEN = 1U << 4,
+		kCrCTSEN = 1U << 15, kCrRTSEN = 1U << 14,   // amba-pl011.c UART011_CR_CTSEN/RTSEN
 		kCrRXE = 1U << 9, kCrTXE = 1U << 8, kCrUARTEN = 1U << 0,
 		kIntOE = 1U << 10, kIntBE = 1U << 9, kIntPE = 1U << 8, kIntFE = 1U << 7,
 		kIntRT = 1U << 6, kIntTX = 1U << 5, kIntRX = 1U << 4,
@@ -176,6 +179,8 @@ private:
 	IOReturn cmdStatusByte(uint16_t opcode, const void *params, uint8_t plen,
 	    bt_packet *resp, uint32_t timeoutMs = 2000);
 	IOReturn bringUp(void);
+	IOReturn powerUpAndIdentify(bt_packet *resp, uint16_t *subver);
+	void     powerOff(void);
 	IOReturn downloadPatch(void);
 
 	void txFillLocked(void);

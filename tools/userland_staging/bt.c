@@ -1,9 +1,10 @@
 /*
- * bt - control the Pi 3's on-board Bluetooth controller through
+ * bt - control the Pi 3 / 3B+'s on-board Bluetooth controller through
  * BCM43430BluetoothUserClient (docs/bluetooth-plan.md; ABI in
  * iokit/BCM43430Bluetooth/BCM43430BluetoothShared.h).
  *
- *   bt up [file]          load the patch (default /usr/share/firmware/bluetooth/BCM43430A1.hcd)
+ *   bt up [file]          load the patch (default: by chip, /usr/share/firmware/bluetooth/
+ *                         BCM43430A1.hcd on the 3B, BCM4345C0.hcd on the 3B+)
  *   bt info               state, address, versions, counters
  *   bt scan [secs]        classic inquiry + LE scan (default 10 s)
  *   bt hci <opcode> [hex bytes...]
@@ -26,7 +27,8 @@
 
 #include "BCM43430BluetoothShared.h"
 
-#define BT_FW "/usr/share/firmware/bluetooth/BCM43430A1.hcd"
+#define BT_FW_DIR "/usr/share/firmware/bluetooth"
+
 
 static io_connect_t conn;
 
@@ -79,6 +81,46 @@ openDriver(void)
 		return -1;
 	}
 	return 0;
+}
+
+/*
+ * The patch for the controller's ROM, by LMP subversion (Linux v6.6
+ * btbcm.c bcm_uart_subver_table, the "<name>.hcd" btbcm_initialize()
+ * asks for): BCM43430A1 on the Pi 3B, BCM4345C0 on the Pi 3B+. The kernel
+ * reads the subversion (kBtMethodIdentify) before anything is uploaded.
+ */
+static const char *
+patchFor(uint16_t subver)
+{
+	switch (subver) {
+	case 0x2209: return BT_FW_DIR "/BCM43430A1.hcd";
+	case 0x6119: return BT_FW_DIR "/BCM4345C0.hcd";
+	}
+	return NULL;
+}
+
+/* Asks the kernel which ROM it is. A kernel without Identify gets the 3B's patch, as before. */
+static const char *
+defaultPatch(void)
+{
+	kern_return_t kr = IOConnectCallScalarMethod(conn, kBtMethodIdentify, NULL, 0, NULL, NULL);
+	if (kr != KERN_SUCCESS) {
+		fprintf(stderr, "bt: identify: %#x; assuming BCM43430A1\n", kr);
+		return BT_FW_DIR "/BCM43430A1.hcd";
+	}
+	bt_status st;
+	size_t sz = sizeof(st);
+	memset(&st, 0, sizeof(st));
+	if (IOConnectCallStructMethod(conn, kBtMethodStatus, NULL, 0, &st, &sz) != KERN_SUCCESS) {
+		return BT_FW_DIR "/BCM43430A1.hcd";
+	}
+	const char *p = patchFor(st.lmp_subversion);
+	if (p == NULL) {
+		fprintf(stderr, "bt: controller LMP subversion %#x has no known patch\n", st.lmp_subversion);
+		return NULL;
+	}
+	printf("bt: controller LMP subversion %#x, patch %s\n", st.lmp_subversion, p);
+	return p;
 }
 
 static int
@@ -433,7 +475,8 @@ main(int argc, char **argv)
 	const char *c = argv[1];
 	int rc;
 	if (strcmp(c, "up") == 0) {
-		rc = cmdUp(argc > 2 ? argv[2] : BT_FW);
+		const char *f = argc > 2 ? argv[2] : defaultPatch();
+		rc = f ? cmdUp(f) : 1;
 	} else if (strcmp(c, "info") == 0) {
 		rc = cmdInfo();
 	} else if (strcmp(c, "scan") == 0) {

@@ -75,6 +75,11 @@ BCM43430BluetoothUserClient::externalMethod(uint32_t selector, IOExternalMethodA
 		r = fDriver->up();
 		IOLockUnlock(fDriver->fOpLock);
 		return r;
+	case kBtMethodIdentify:
+		IOLockLock(fDriver->fOpLock);
+		r = fDriver->identify();
+		IOLockUnlock(fDriver->fOpLock);
+		return r;
 	case kBtMethodCommand: {
 		NEED_IN(bt_command);
 		NEED_OUT(bt_packet);

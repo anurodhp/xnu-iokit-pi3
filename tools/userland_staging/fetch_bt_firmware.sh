@@ -1,10 +1,13 @@
 #!/bin/bash
-# Downloads the BCM43430A1 Bluetooth patch (patchram .hcd) the Pi 3 Model B
-# needs (docs/bluetooth-plan.md) into libc_build/bt_firmware/, at a pinned
+# Downloads the Bluetooth patches (patchram .hcd) for both Pi 3 boards
+# (docs/bluetooth-plan.md): BCM43430A1 (Pi 3 Model B, CYW43438) and
+# BCM4345C0 (Pi 3 Model B+, CYW43455; /usr/sbin/bt picks it by the ROM's
+# LMP subversion, 0x6119) into libc_build/bt_firmware/, at a pinned
 # commit of RPi-Distro/bluez-firmware (what Raspberry Pi OS ships), and
 # checks its SHA-256. It is a Cypress binary under the Cypress Wireless
 # Connectivity Devices Driver EULA, which allows distributing it in object
-# code form for use with Cypress chips (the Pi 3B's CYW43438), so the image
+# code form for use with Cypress chips (the Pi 3B's CYW43438 and the 3B+'s
+# CYW43455), so the image
 # ships it, with that licence beside it: the repo's debian/copyright, at the
 # same commit, which names debian/firmware/broadcom/* under it. Neither is
 # committed here (libc_build/ is gitignored). inject_into_sd_image.sh runs
@@ -27,5 +30,6 @@ fetch() { # url dest sha256
 }
 
 fetch "$BASE/firmware/broadcom/BCM43430A1.hcd" BCM43430A1.hcd c096ad4a5c3f06ed7d69eba246bf89ada9acba64a5b6f51b1e9c12f99bb1e1a7
+fetch "$BASE/firmware/broadcom/BCM4345C0.hcd" BCM4345C0.hcd  51c45e77ddad91a19e96dc8fb75295b2087c279940df2634b23baf71b6dea42c
 fetch "$BASE/copyright"                        copyright      5f6acad870790f7e23150a30cab85c643f926266bf16e6a63acbde4257b957d4
 echo "bluetooth firmware in $OUT"

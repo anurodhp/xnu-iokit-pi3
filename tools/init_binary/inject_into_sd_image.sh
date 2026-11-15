@@ -2871,7 +2871,7 @@ else
 fi
 
 # On-board Bluetooth (docs/bluetooth-plan.md): the bt(8) tool (build_bt.sh),
-# the BCM43430A1 patch and its licence (fetch_bt_firmware.sh, run here as
+# the BCM43430A1 (3B) and BCM4345C0 (3B+) patches and their licence (fetch_bt_firmware.sh, run here as
 # for WiFi; gitignored, never committed)
 # and the boot job, a no-op unless the kernel runs with bt=1.
 BT_FW=tools/userland_staging/libc_build/bt_firmware
@@ -2880,7 +2880,7 @@ if [ -f tools/userland_staging/libc_build/bt.macho ]; then
     cp tools/userland_staging/libc_build/bt.macho "$MNT/usr/sbin/bt"
     chmod 755 "$MNT/usr/sbin/bt"
     fetch_firmware fetch_bt_firmware.sh
-    install_firmware "$BT_FW" "$MNT/usr/share/firmware/bluetooth" BCM43430A1.hcd copyright
+    install_firmware "$BT_FW" "$MNT/usr/share/firmware/bluetooth" BCM43430A1.hcd BCM4345C0.hcd copyright
     cp tools/userland_staging/org.puredarwin.bluetooth.plist "$MNT/Library/LaunchDaemons/org.puredarwin.bluetooth.plist"
     chmod 644 "$MNT/Library/LaunchDaemons/org.puredarwin.bluetooth.plist"
     echo "+ wrote /usr/sbin/bt, /usr/share/firmware/bluetooth/ and org.puredarwin.bluetooth.plist"
