@@ -29,7 +29,9 @@ static const UInt32 kTxCompletionTimeoutMS = 2000;
 #pragma mark - SMSC9514FamilyTransport
 
 SMSC9514FamilyTransport::SMSC9514FamilyTransport()
-	: fDevice(NULL), fBulkIn(NULL), fBulkOut(NULL), fRxMD(NULL), fTxMD(NULL),
+	: fDevice(NULL), fBulkIn(NULL), fBulkOut(NULL),
+	  fRxBufferSize(kRxBufferSize), fTxBufferSize(kTxBufferSize), fSmscFraming(true),
+	  fRxMD(NULL), fTxMD(NULL),
 	  fLock(NULL), fTxLock(NULL), fRxQueued(false), fRxDone(false), fRxLen(0),
 	  fStopping(false), fRxStalled(false), fRxErrors(0),
 	  fTxStallEvents(0), fTxFailures(0), fTxZlps(0)
@@ -49,18 +51,23 @@ SMSC9514FamilyTransport::~SMSC9514FamilyTransport()
 }
 
 bool
-SMSC9514FamilyTransport::init(IOUSBDevice *device, IOUSBPipe *bulkIn, IOUSBPipe *bulkOut)
+SMSC9514FamilyTransport::init(IOUSBDevice *device, IOUSBPipe *bulkIn, IOUSBPipe *bulkOut,
+    uint32_t rxBufferSize, uint32_t txBufferSize, bool smscFraming)
 {
-	if (device == NULL || bulkIn == NULL || bulkOut == NULL) {
+	if (device == NULL || bulkIn == NULL || bulkOut == NULL ||
+	    rxBufferSize == 0 || txBufferSize == 0) {
 		return false;
 	}
+	fRxBufferSize = rxBufferSize;
+	fTxBufferSize = txBufferSize;
+	fSmscFraming = smscFraming;
 	fDevice = device;
 	fBulkIn = bulkIn;
 	fBulkOut = bulkOut;
 	fLock = IOLockAlloc();
 	fTxLock = IOLockAlloc();
-	fRxMD = IOBufferMemoryDescriptor::withCapacity(kRxBufferSize, kIODirectionIn);
-	fTxMD = IOBufferMemoryDescriptor::withCapacity(kTxBufferSize, kIODirectionOut);
+	fRxMD = IOBufferMemoryDescriptor::withCapacity(fRxBufferSize, kIODirectionIn);
+	fTxMD = IOBufferMemoryDescriptor::withCapacity(fTxBufferSize, kIODirectionOut);
 	if (fLock == NULL || fTxLock == NULL || fRxMD == NULL || fTxMD == NULL ||
 	    fRxMD->prepare() != kIOReturnSuccess || fTxMD->prepare() != kIOReturnSuccess) {
 		return false;
@@ -170,7 +177,7 @@ SMSC9514FamilyTransport::queueRead(void)
 	completion.parameter = NULL;
 	fRxQueued = true;
 	// No timeouts: an idle link simply leaves the read outstanding.
-	IOReturn ret = fBulkIn->Read(fRxMD, 0, 0, kRxBufferSize, &completion);
+	IOReturn ret = fBulkIn->Read(fRxMD, 0, 0, fRxBufferSize, &completion);
 	if (ret != kIOReturnSuccess) {
 		fRxQueued = false;
 		if (fRxErrors++ < 10) {
@@ -188,7 +195,7 @@ SMSC9514FamilyTransport::readComplete(void *target, void *parameter, IOReturn st
 	IOLockLock(me->fLock);
 	me->fRxQueued = false;
 	if (status == kIOReturnSuccess) {
-		me->fRxLen = kRxBufferSize - bufferSizeRemaining;
+		me->fRxLen = me->fRxBufferSize - bufferSizeRemaining;
 		me->fRxDone = (me->fRxLen != 0);
 	} else if (status != kIOReturnAborted) {
 		if (me->fRxErrors++ < 10) {
@@ -235,7 +242,7 @@ SMSC9514FamilyTransport::bulkIn(void *buf, uint32_t maxLen)
 uint32_t
 SMSC9514FamilyTransport::bulkOut(const void *buf, uint32_t len)
 {
-	if (fBulkOut == NULL || buf == NULL || len == 0 || len > kTxBufferSize) {
+	if (fBulkOut == NULL || buf == NULL || len == 0 || len > fTxBufferSize) {
 		return 0;
 	}
 	IOLockLock(fTxLock);
@@ -287,8 +294,8 @@ SMSC9514FamilyTransport::bulkOut(const void *buf, uint32_t len)
 			    ((uint32_t)tx[2] << 16) | ((uint32_t)tx[3] << 24);
 			uint32_t cmdB = (uint32_t)tx[4] | ((uint32_t)tx[5] << 8) |
 			    ((uint32_t)tx[6] << 16) | ((uint32_t)tx[7] << 24);
-			bool hdrOK = len >= 8 && (cmdA & 0x7FF) == len - 8 &&
-			    (cmdB & 0x7FF) == len - 8 && (cmdA & 0x3000) == 0x3000;
+			bool hdrOK = !fSmscFraming || (len >= 8 && (cmdA & 0x7FF) == len - 8 &&
+			    (cmdB & 0x7FF) == len - 8 && (cmdA & 0x3000) == 0x3000);
 			bool same = (memcmp(tx, buf, len) == 0);
 			IOLog("SMSC9514FamilyTransport: bulk OUT %s %#x (event #%u, %u bytes): "
 			    "ClearPipeStall(true) %#x, %s %#x; TX_CMD_A=%#x TX_CMD_B=%#x%s, "

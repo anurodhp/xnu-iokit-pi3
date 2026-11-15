@@ -833,6 +833,21 @@ BCM2837RegisterBuiltinPersonalities(void)
 		smscUSB->release();
 	}
 
+	/*
+	 * LAN7800USBDriver: the Pi 3B+'s LAN7515 Ethernet function, matched the
+	 * same way. 0x0424/0x7800: Linux bcm283x-rpi-lan7515.dtsi
+	 * (compatible "usb424,7800") and lan78xx.c's LAN7800_USB_PRODUCT_ID.
+	 * Like SMSC9514USBDriver it is reached only through AppleUSBHub.
+	 */
+	OSDictionary *lan78xxUSB = makePersonality("IOUSBDevice", "LAN7800USBDriver", NULL, -1);
+	if (lan78xxUSB != NULL) {
+		if (addNumberProperty(lan78xxUSB, "idVendor", 0x0424) &&
+		    addNumberProperty(lan78xxUSB, "idProduct", 0x7800)) {
+			personalities->setObject(lan78xxUSB);
+		}
+		lan78xxUSB->release();
+	}
+
 	// Default on, as BCM2837DWC2::start(); usb-apple-hub=0 turns it off.
 	uint32_t appleHub = 1;
 	PE_parse_boot_argn("usb-apple-hub", &appleHub, sizeof(appleHub));

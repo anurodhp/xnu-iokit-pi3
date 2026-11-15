@@ -46,6 +46,7 @@
 // SMSC's USB vendor ID; both halves of the LAN9514 (hub and Ethernet)
 // report it, which is why findEthernetFunction() also requires a bulk pair.
 #define kSMSCVendorID            0x0424
+#define kSMSCEthernetProductID   0xec00
 
 bool
 SMSC9514USBTransport::init(BCM2837DWC2 *controller, const DWC2USBDevice *device)
@@ -94,6 +95,14 @@ SMSC9514USBTransport::findEthernetFunction(const BCM2837DWC2 *controller)
 			continue;
 		}
 		if (dev->idVendor != kSMSCVendorID) {
+			continue;
+		}
+		// Only the LAN9514's Ethernet function (smsc95xx.c USB_DEVICE(0x0424,
+		// 0xec00)). The Pi 3B+'s LAN7515 is also vendor 0x0424 - its USB2514
+		// hubs and a LAN7800 Ethernet (0424:7800, bcm283x-rpi-lan7515.dtsi) -
+		// and the LAN7800 has a bulk pair too, but a different register map;
+		// LAN7800USBDriver drives it, through AppleUSBHub.
+		if (dev->idProduct != kSMSCEthernetProductID) {
 			continue;
 		}
 		if (dev->bulkInEp == 0 || dev->bulkOutEp == 0) {

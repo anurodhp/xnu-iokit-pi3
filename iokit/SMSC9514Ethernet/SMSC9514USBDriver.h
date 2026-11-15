@@ -34,7 +34,15 @@ public:
 	SMSC9514FamilyTransport();
 	virtual ~SMSC9514FamilyTransport();
 
-	bool init(IOUSBDevice *device, IOUSBPipe *bulkIn, IOUSBPipe *bulkOut);
+	// The default sizes are SMSC9514Ethernet's. LAN7800USBDriver (the Pi
+	// 3B+'s LAN7515) reuses this transport - same vendor register requests
+	// (bRequest 0xA0/0xA1: Linux lan78xx.c USB_VENDOR_REQUEST_*, FreeBSD
+	// if_mugereg.h UVR_*), same bulk pipes - with a bigger RX buffer to hold
+	// one BURST_CAP-sized transfer, and smscFraming = false so the stall log
+	// does not decode its TX header as SMSC TX_CMD_A/B.
+	bool init(IOUSBDevice *device, IOUSBPipe *bulkIn, IOUSBPipe *bulkOut,
+	    uint32_t rxBufferSize = kRxBufferSize, uint32_t txBufferSize = kTxBufferSize,
+	    bool smscFraming = true);
 	// Abort the outstanding read and wait for its completion. Must run
 	// before the pipes go away.
 	void shutdown(void);
@@ -45,10 +53,12 @@ public:
 	virtual uint32_t bulkOut(const void *buf, uint32_t len) APPLE_KEXT_OVERRIDE;
 
 private:
+public:
 	enum {
 		kRxBufferSize = 4096,   // SMSC9514Ethernet's own kRxBufferSize
 		kTxBufferSize = 2048,   // one frame + TX_CMD_A/B (SMSC9514Ethernet::outputPacket)
 	};
+private:
 
 	static void readComplete(void *target, void *parameter, IOReturn status,
 	    UInt32 bufferSizeRemaining);
@@ -57,6 +67,9 @@ private:
 	IOUSBDevice              *fDevice;
 	IOUSBPipe                *fBulkIn;
 	IOUSBPipe                *fBulkOut;
+	uint32_t                  fRxBufferSize;
+	uint32_t                  fTxBufferSize;
+	bool                      fSmscFraming;
 	IOBufferMemoryDescriptor *fRxMD;
 	IOBufferMemoryDescriptor *fTxMD;
 	IOLock                   *fLock;       // fRx* state, shared with readComplete()
