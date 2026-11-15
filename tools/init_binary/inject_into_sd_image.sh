@@ -2520,15 +2520,8 @@ echo "  _PATH_SYSLOGD_LOG target + real asl.conf.osx's aslmanager Logs dir)"
 mkdir -p "$MNT/var/db/timezone/zoneinfo"
 cp tools/userland_staging/zoneinfo_minimal/UTC "$MNT/var/db/timezone/zoneinfo/UTC"
 cp tools/userland_staging/zoneinfo_minimal/GMT "$MNT/var/db/timezone/zoneinfo/GMT"
-# The default zone only on a fresh image: Turin's Time Zone pane replaces it
-# with a symlink into zoneinfo/, and cp through that link would overwrite the
-# chosen zone's own file with UTC.
-if [ ! -e "$MNT/var/db/timezone/localtime" ] && [ ! -L "$MNT/var/db/timezone/localtime" ]; then
-    cp tools/userland_staging/zoneinfo_minimal/UTC "$MNT/var/db/timezone/localtime"
-fi
 echo "+ wrote real Apple UTC/GMT zoneinfo to $MNT/var/db/timezone/zoneinfo/"
-echo "  and $MNT/var/db/timezone/localtime (default TZ, real data, this host's"
-echo "  own /usr/share/zoneinfo -- see docs/roadmap.md Phase 4.6)"
+echo "  (real data, this host's own /usr/share/zoneinfo -- see docs/roadmap.md Phase 4.6)"
 # The rest of the database, for Turin's Time Zone pane (build_turin.sh), which
 # lists the zones of zone.tab: the same real Apple-shipped TZif files as UTC/GMT
 # above, from this host Mac's /usr/share/zoneinfo (a symlink to
@@ -2541,6 +2534,24 @@ if [ -f /usr/share/zoneinfo/zone.tab ]; then
     echo "  zone.tab included) to $MNT/var/db/timezone/zoneinfo/ (Turin's Time Zone pane)"
 else
     echo "= no /usr/share/zoneinfo/zone.tab on this host -- the image keeps UTC/GMT only"
+fi
+# The default zone, America/New_York (UTC when the image has only UTC/GMT),
+# only on a fresh image: once set, the zone is the user's (Turin's Time Zone
+# pane). Written as that pane writes it (TurinDateTimePane.m relink): a
+# symlink into zoneinfo/ at the libc's TZDEFAULT, /var/db/timezone/localtime
+# (tzfile.h, embedded), and at /etc/localtime, which gnustep-base reads
+# (NSTimeZone.m SYSTEM_TIME_FILE). The pane reads the zone's name back from
+# the link, so a copied file would show as no zone. An image made before this
+# carries a copy of UTC there; that is the user's zone too and stays.
+DEFAULT_TZ=America/New_York
+[ -f "$MNT/var/db/timezone/zoneinfo/$DEFAULT_TZ" ] || DEFAULT_TZ=UTC
+if [ ! -e "$MNT/var/db/timezone/localtime" ] && [ ! -L "$MNT/var/db/timezone/localtime" ]; then
+    ln -s "/var/db/timezone/zoneinfo/$DEFAULT_TZ" "$MNT/var/db/timezone/localtime"
+    echo "+ default time zone $DEFAULT_TZ (/var/db/timezone/localtime)"
+fi
+if [ ! -e "$MNT/etc/localtime" ] && [ ! -L "$MNT/etc/localtime" ]; then
+    ln -s "/var/db/timezone/zoneinfo/$DEFAULT_TZ" "$MNT/etc/localtime"
+    echo "+ default time zone $DEFAULT_TZ (/etc/localtime)"
 fi
 mkdir -p "$MNT/usr/share"
 if [ ! -e "$MNT/usr/share/zoneinfo" ] && [ ! -L "$MNT/usr/share/zoneinfo" ]; then
