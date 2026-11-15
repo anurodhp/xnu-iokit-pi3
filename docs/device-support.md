@@ -5,8 +5,9 @@ Which Raspberry Pi boards this XNU port runs on, and what works on them.
 **Short version:** the port targets one board, the **Raspberry Pi 3 Model B**
 (BCM2837). It is the only board it has been run on, and everything marked
 "Works" below was verified on a real one. Other boards with the same SoC family
-are untested. Some will probably boot, but their network chips have no drivers
-here. The Pi 4 and Pi 5 families use different SoCs and are not supported.
+are untested. Some will probably boot. The **Pi 3 Model B+** has its own device
+tree and image (`BOARD=rpi3bplus`) and a Wi-Fi driver for its chip, not yet run
+on a real board; the other boards' network chips have no drivers here. The Pi 4 and Pi 5 families use different SoCs and are not supported.
 
 Status words used here:
 
@@ -25,8 +26,8 @@ listed.
 | Board | SoC | RAM | Status | Notes |
 |---|---|---|---|---|
 | **Pi 3 Model B** | BCM2837 | 1 GB | **Works** | The target board. See [Pi 3 Model B](#pi-3-model-b) below. |
-| Pi 3 Model B+ | BCM2837B0 | 1 GB | Untested | Same SoC family, so boot, SD, USB, HDMI, GPU and audio should carry over. Not expected to work: Ethernet (LAN7515, gigabit; the driver here is for the 3B's LAN9514) and Wi-Fi/Bluetooth (CYW43455; the drivers here are for the 3B's CYW43438/BCM43430). |
-| Pi 3 Model A+ | BCM2837B0 | 512 MB | Untested | No Ethernet. Wi-Fi/Bluetooth are CYW43455 (no driver, as on the 3B+). Its single USB port is wired to the SoC without a hub, a path not exercised on real hardware. 512 MB is tight for the X/GNUstep desktop. |
+| Pi 3 Model B+ | BCM2837B0 | 1 GB | Untested | Own device tree (`devicetrees/rpi3bplus-realhw.dts`) and image (`BOARD=rpi3bplus tools/make_realhw_sd_image.sh`), branch `pi3bplus`. Same SoC family, so boot, SD, USB, HDMI, GPU and audio should carry over. Wi-Fi (CYW43455, 2.4 + 5 GHz): `BCM43430Wifi` now drives it, firmware in the image; builds, not yet run on the board. Not expected to work: Ethernet (LAN7515, gigabit; the driver here is for the 3B's LAN9514) and Bluetooth (the 43455's BT needs its own patch, and `BCM43430Bluetooth` accepts only the BCM43430A1). See [Pi 3 Model B+](#pi-3-model-b-1). |
+| Pi 3 Model A+ | BCM2837B0 | 512 MB | Untested | No Ethernet. Wi-Fi/Bluetooth are CYW43455, as on the 3B+: the Wi-Fi driver handles that chip (untested), Bluetooth has no driver. Its single USB port is wired to the SoC without a hub, a path not exercised on real hardware. 512 MB is tight for the X/GNUstep desktop. |
 | Pi 2 Model B v1.2 | BCM2837 | 1 GB | Untested | The Pi 3B's SoC, with the same LAN9514 USB hub and Ethernet, so nearly everything should work with the 3B image as it is. Wi-Fi and Bluetooth stay off unless `wifi=1`/`bt=1` are set, and the 2B has neither. One known difference: its 3.5 mm jack's right channel is PWM1 on GPIO45, where the 3B uses GPIO41 (`BCM2837PWM.cpp` sets GPIO40/41), so audio would play on the left channel only. |
 | Zero 2 W | RP3A0 (BCM2710A1) | 512 MB | Untested | The BCM2837 die in a package with its RAM. No Ethernet. The Wi-Fi/Bluetooth module is a CYW43436, not the CYW43438 the drivers here were written and tested against. The USB port connects to the SoC with no hub. 512 MB is tight for the desktop. |
 | Compute Module 3 | BCM2837 | 1 GB | Untested | Same SoC as the 3B. Has no Ethernet, Wi-Fi or Bluetooth on the module. Storage is on-module eMMC (or an SD card on CM3 Lite) on the same controller the 3B's SD card uses. Needs its own device tree for the carrier board's wiring. |
@@ -45,7 +46,9 @@ test. This is what was found, 2026-11-01, about what each would take, so the
 work can start from here.
 
 **No new device tree is needed just to boot.** The current real-hardware image
-should already boot on any BCM2837 board:
+should already boot on any BCM2837 board (the 3B+ has its own tree anyway,
+2026-11-15, so the IODeviceTree root names the board; it differs from the 3B's
+only in the root `compatible`):
 
 - `devicetrees/rpi3.dts` describes the SoC, which is the same chip on all of
   these boards. Nothing in it is specific to the 3B's board layout except the
@@ -63,7 +66,7 @@ work rather than a device tree:
 | Board | Expected with today's image | What is missing | Work needed |
 |---|---|---|---|
 | Pi 2 Model B v1.2 | Nearly everything, including Ethernet (the same LAN9514) | The right audio channel: the 2B wires PWM1 to GPIO45, where the 3B uses GPIO41 | Small. `BCM2837PWM` would read the PWM1 pin from the device tree instead of hard-coding GPIO41 (`BCM2837PWM.cpp`, the GPIO40/41 ALT0 setup), and a new `devicetrees/rpi2-realhw.dts` would set 45. |
-| Pi 3 Model B+ | Boot, USB, HDMI, GPU, video decode, audio (the same GPIO40/41) | Ethernet (LAN7515); Wi-Fi and Bluetooth (CYW43455) | Large. A new USB Ethernet driver for the LAN7515. Wi-Fi for the 43455: the driver accepts only chip ID 43430 (`BCM43430Wifi.cpp`), and the 43455 needs its own firmware, NVRAM and CLM blob. Bluetooth: `BCM43430Bluetooth` checks the BCM43430A1's LMP subversion before loading its patch, and the 43455 has its own patch. |
+| Pi 3 Model B+ | Boot, USB, HDMI, GPU, video decode, audio (the same GPIO40/41), Wi-Fi (driver done, untested) | Ethernet (LAN7515); Bluetooth (CYW43455) | Wi-Fi: done 2026-11-15 (below). Still large: a new USB Ethernet driver for the LAN7515 (LAN7800 MAC). Bluetooth: `BCM43430Bluetooth` checks the BCM43430A1's LMP subversion before loading its patch; the 43455 needs its own patch (`BCM4345C0.hcd`) and that check widened. |
 | Pi 3 Model A+ | Boot, HDMI, GPU, audio. USB untested: its one port has no hub | Wi-Fi and Bluetooth (CYW43455); no Ethernet at all | As for the 3B+ (without Ethernet). Until then it has no network. |
 | Compute Module 3 / 3+ | Boot from the on-module eMMC, HDMI, GPU | Nothing on the module; audio, USB and any network depend on the carrier board | A device tree per carrier board, if its wiring differs. |
 | Zero 2 W | Probably boots | Wi-Fi (CYW43436), the board's only network | Unknown without hardware. If the 43436 reports chip ID 43430 with a different revision, it may need only its own firmware and NVRAM files and a revision check. Not confirmed. |
@@ -106,6 +109,26 @@ partition as `extra_bootargs=...` (`tools/make_realhw_sd_image.sh` writes
 | Hardware video encode | Not supported | Only decode is wired up. |
 | CPU frequency scaling, thermal management | Not supported | No driver asks the firmware for clock changes. The cores run at a fixed 1.2 GHz (`force_turbo=1`); the firmware's own thermal throttling still applies. |
 | Changing the display mode at run time | Not supported | The mode is fixed at boot by the firmware (`config.txt`). |
+
+## Pi 3 Model B+
+
+Branch `pi3bplus`, 2026-11-15. Nothing on this board has been run on real
+hardware yet; every row is **Untested** until it has.
+
+- **Image:** `BOARD=rpi3bplus tools/make_realhw_sd_image.sh` writes
+  `qemu/realhw_rpi3bplus_root.img` with `devicetrees/rpi3bplus-realhw.dtb`.
+  The boot firmware (`start.elf` 2026-08-06) and U-Boot both know the 3B+.
+  The userland, boot-args and firmware files are the same as the 3B image's.
+- **Wi-Fi (CYW43455, 802.11ac, 2.4 + 5 GHz):** `BCM43430Wifi` reads the chip id
+  at probe and takes the 43455's path: ARM CR4 reset and reset vector, RAM at
+  0x198000, its SDIO watermarks, and a scan over every channel the regulatory
+  blob allows (5 GHz included). `wifi up` loads `brcmfmac43455-sdio.*`
+  (Raspberry Pi OS's default "standard" firmware). Same `wifi=1`, `en1`,
+  `/etc/wifi.conf` and Naples panel as on the 3B. Built from Circle's
+  `ether4330.c` and Linux's brcmfmac; details in `docs/wifi-plan.md`.
+- **Ethernet (LAN7515):** not supported. The hub half enumerates through the
+  same USB stack; the gigabit LAN7800 MAC behind it has no driver.
+- **Bluetooth (CYW43455):** not supported yet, see the table above.
 
 ## QEMU
 
