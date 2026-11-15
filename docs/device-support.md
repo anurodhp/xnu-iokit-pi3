@@ -2,20 +2,21 @@
 
 Which Raspberry Pi boards this XNU port runs on, and what works on them.
 
-**Short version:** the port targets one board, the **Raspberry Pi 3 Model B**
-(BCM2837). It is the only board it has been run on, and everything marked
-"Works" below was verified on a real one. Other boards with the same SoC family
-are untested. Some will probably boot. The **Pi 3 Model B+** runs the same image, whose kernel
-also has drivers for the B+'s Wi-Fi, Bluetooth and Ethernet chips, not yet run
-on a real board; the other boards' network chips have no drivers here. The Pi 4 and Pi 5 families use different SoCs and are not supported.
+**Short version:** the port supports two boards, the **Raspberry Pi 3 Model B**
+and the **Raspberry Pi 3 Model B+**, from one SD card image. The 3B is
+verified on real hardware; the B+ has drivers for its different Wi-Fi,
+Bluetooth and Ethernet chips that have not yet run on a real board. Other
+boards are not supported (decided 2026-11-15), including the other BCM2837
+boards; the notes below record what each would take, in case that changes.
 
 Status words used here:
 
 - **Works**: verified on a real Pi 3 Model B.
 - **Untested**: no one has run the port on it. The notes say what is expected
   to differ.
-- **Not supported**: known not to work, because the hardware is different or no
-  driver exists.
+- **Not supported**: outside what the port supports: the hardware is different,
+  no driver exists, or the board is not a target (every board other than the
+  3B and 3B+).
 
 ## Boards
 
@@ -27,11 +28,11 @@ listed.
 |---|---|---|---|---|
 | **Pi 3 Model B** | BCM2837 | 1 GB | **Works** | The target board. See [Pi 3 Model B](#pi-3-model-b) below. Re-checked on the combined 3B/3B+ image (kernel of 2026-11-15) on a real 3B: Wi-Fi joined and scanned (`wifi` chose the 43430 firmware by chip id), Bluetooth patched at 921600 and scanned (`bt` identified the 0x2209 ROM first), the LAN9514 driver attached `en0` (no cable, so no link test). |
 | Pi 3 Model B+ | BCM2837B0 | 1 GB | Untested | Same image as the 3B (`tools/make_realhw_sd_image.sh`). Same SoC family, so boot, SD, USB, HDMI, GPU and audio should carry over. Drivers for everything that differs from the 3B: Wi-Fi (CYW43455, 2.4 + 5 GHz) in `BCM43430Wifi`, Bluetooth (BCM4345C0) in `BCM43430Bluetooth`, Ethernet (LAN7515 / LAN7800, gigabit) in the new `LAN7800Ethernet`. All build; none has run on the board yet. See [Pi 3 Model B+](#pi-3-model-b-1). |
-| Pi 3 Model A+ | BCM2837B0 | 512 MB | Untested | No Ethernet. Wi-Fi/Bluetooth are CYW43455, as on the 3B+, whose drivers handle it (untested). Its single USB port is wired to the SoC without a hub, a path not exercised on real hardware. 512 MB is tight for the X/GNUstep desktop. |
-| Pi 2 Model B v1.2 | BCM2837 | 1 GB | Untested | The Pi 3B's SoC, with the same LAN9514 USB hub and Ethernet, so nearly everything should work with the 3B image as it is. Wi-Fi and Bluetooth stay off unless `wifi=1`/`bt=1` are set, and the 2B has neither. One known difference: its 3.5 mm jack's right channel is PWM1 on GPIO45, where the 3B uses GPIO41 (`BCM2837PWM.cpp` sets GPIO40/41), so audio would play on the left channel only. |
-| Zero 2 W | RP3A0 (BCM2710A1) | 512 MB | Untested | The BCM2837 die in a package with its RAM. No Ethernet. The Wi-Fi/Bluetooth module is a CYW43436, not the CYW43438 the drivers here were written and tested against. The USB port connects to the SoC with no hub. 512 MB is tight for the desktop. |
-| Compute Module 3 | BCM2837 | 1 GB | Untested | Same SoC as the 3B. Has no Ethernet, Wi-Fi or Bluetooth on the module. Storage is on-module eMMC (or an SD card on CM3 Lite) on the same controller the 3B's SD card uses. Needs its own device tree for the carrier board's wiring. |
-| Compute Module 3+ | BCM2837B0 | 1 GB | Untested | As the CM3. |
+| Pi 3 Model A+ | BCM2837B0 | 512 MB | Not supported | Not a target board. No Ethernet. Wi-Fi/Bluetooth are CYW43455, as on the 3B+, whose drivers handle it (untested). Its single USB port is wired to the SoC without a hub, a path not exercised on real hardware. 512 MB is tight for the X/GNUstep desktop. |
+| Pi 2 Model B v1.2 | BCM2837 | 1 GB | Not supported | Not a target board. The Pi 3B's SoC, with the same LAN9514 USB hub and Ethernet, so nearly everything should work with the 3B image as it is. Wi-Fi and Bluetooth stay off unless `wifi=1`/`bt=1` are set, and the 2B has neither. One known difference: its 3.5 mm jack's right channel is PWM1 on GPIO45, where the 3B uses GPIO41 (`BCM2837PWM.cpp` sets GPIO40/41), so audio would play on the left channel only. |
+| Zero 2 W | RP3A0 (BCM2710A1) | 512 MB | Not supported | Not a target board. The BCM2837 die in a package with its RAM. No Ethernet. The Wi-Fi/Bluetooth module is a CYW43436, not the CYW43438 the drivers here were written and tested against. The USB port connects to the SoC with no hub. 512 MB is tight for the desktop. |
+| Compute Module 3 | BCM2837 | 1 GB | Not supported | Not a target board. Same SoC as the 3B. Has no Ethernet, Wi-Fi or Bluetooth on the module. Storage is on-module eMMC (or an SD card on CM3 Lite) on the same controller the 3B's SD card uses. Needs its own device tree for the carrier board's wiring. |
+| Compute Module 3+ | BCM2837B0 | 1 GB | Not supported | Not a target board. As the CM3. |
 | Pi 4 Model B | BCM2711 | 1-8 GB | Not supported | Different SoC: a GIC-400 interrupt controller in place of the BCM2836/2837 local and ARM controllers, peripherals at a different address, USB 3 through a VL805 controller on PCIe, GENET Ethernet, a newer V3D GPU and the EMMC2 controller. The port has no drivers for any of these. |
 | Pi 400 | BCM2711 | 4 GB | Not supported | As the Pi 4. |
 | Compute Module 4 | BCM2711 | 1-8 GB | Not supported | As the Pi 4. |
@@ -41,8 +42,8 @@ listed.
 
 ## Adding another BCM2837 board
 
-The other Pi 3-class boards have not been worked on yet; none is available to
-test. This is what was found, 2026-11-01, about what each would take, so the
+Not planned: only the 3B and 3B+ are supported. Kept as a record. The other
+Pi 3-class boards have not been worked on; none is available to test. This is what was found, 2026-11-01, about what each would take, so the
 work can start from here.
 
 **No new device tree is needed just to boot.** The current real-hardware image
