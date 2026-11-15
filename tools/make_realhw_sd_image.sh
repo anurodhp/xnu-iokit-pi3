@@ -1,6 +1,10 @@
 #!/bin/bash
 # Creates a fresh 2-partition (FAT32 boot + HFS+ root) SD card image for
-# REAL RASPBERRY PI 3 HARDWARE (Model B, or Model B+ with BOARD=rpi3bplus), using the CURRENT from-source kernel
+# REAL RASPBERRY PI 3 HARDWARE - Model B or B+, the same image for both: one
+# device tree (the boards share the BCM2837's SoC map), with drivers that
+# identify each board's own chips at run time (BCM43430Wifi by chip id,
+# BCM43430Bluetooth by LMP subversion, SMSC9514USBDriver/LAN7800USBDriver by
+# USB id) and both boards' Wi-Fi/Bluetooth firmware installed - using the CURRENT from-source kernel
 # (build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped)
 # instead of the frozen pre-session snapshot in sdcard/. Otherwise
 # byte-for-byte the same recipe as tools/make_sd_image.sh (which builds
@@ -35,20 +39,8 @@
 # real-hardware-only risks QEMU cannot exercise -- this image is what
 # finally puts them in scope for real, not something already verified.
 #
-# Usage: [BOARD=rpi3b|rpi3bplus] tools/make_realhw_sd_image.sh [OUTPUT_IMAGE] [SIZE_MB]
-#   BOARD:        rpi3b (default, Pi 3 Model B) or rpi3bplus (Pi 3 Model B+).
-#                 It only names the output file, so each board has an image
-#                 that says which it is for. The contents are the same: one
-#                 device tree (devicetrees/rpi3-realhw.dts; the boards share
-#                 the BCM2837's SoC map) and one kernel and userland whose
-#                 drivers pick the board's chips at run time - BCM43430Wifi
-#                 by chip id (CYW43438 / CYW43455), BCM43430Bluetooth by LMP
-#                 subversion (BCM43430A1 / BCM4345C0), and the Ethernet by
-#                 USB id (SMSC9514USBDriver 0424:ec00 / LAN7800USBDriver
-#                 0424:7800) - with both boards' firmware in the image. So
-#                 either image boots either board.
-#   OUTPUT_IMAGE: defaults to qemu/realhw_root.img (rpi3b) or
-#                 qemu/realhw_rpi3bplus_root.img (rpi3bplus)
+# Usage: tools/make_realhw_sd_image.sh [OUTPUT_IMAGE] [SIZE_MB]
+#   OUTPUT_IMAGE: defaults to qemu/realhw_root.img
 #   SIZE_MB:      defaults to 3072 (3 GB) -- room for the
 #                 provisioned root (commands, GNUstep, X, Florence) while clearing the 1024 MiB SDHC/SDSC
 #                 threshold with a safe margin, and small enough to write
@@ -66,14 +58,7 @@ set -e
 cd "$(dirname "$0")/.."
 mkdir -p qemu
 
-BOARD="${BOARD:-rpi3b}"
-case "$BOARD" in
-    rpi3b)     DEFAULT_OUT=qemu/realhw_root.img ;;
-    rpi3bplus) DEFAULT_OUT=qemu/realhw_rpi3bplus_root.img ;;
-    *) echo "error: BOARD=$BOARD -- expected rpi3b or rpi3bplus" >&2; exit 1 ;;
-esac
-echo "+ board: $BOARD (image name only; the image boots a 3B or a 3B+)"
-OUT="${1:-$DEFAULT_OUT}"
+OUT="${1:-qemu/realhw_root.img}"
 SIZE_MB="${2:-3072}"
 
 KERNEL_SRC="build/xnu-latest-build/out/kernel.development.bcm2837-7195.unstripped"

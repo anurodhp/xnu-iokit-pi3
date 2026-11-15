@@ -16,5 +16,5 @@ Trees: `rpi3.dts` (QEMU), `rpi3-realhw.dts` (real hardware, includes
 `rpi3.dts`), plus the `rpi3-v3dtest`/`rpi3-pwmtest` QEMU test variants. The
 real-hardware tree serves the Pi 3 Model B and B+ alike: they share the SoC,
 and the drivers identify the boards' different Wi-Fi, Bluetooth and Ethernet
-chips themselves. `tools/make_realhw_sd_image.sh` writes the image
-(`BOARD=rpi3bplus` only names it for the B+).
+chips themselves. `tools/make_realhw_sd_image.sh` writes the one image for
+both.
