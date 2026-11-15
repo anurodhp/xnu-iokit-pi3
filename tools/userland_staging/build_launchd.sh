@@ -270,14 +270,18 @@ done
 # force-fixed: the real fix is giving libsystem_kernel.dylib its own real
 # getpid/fork tier, tracked as a follow-up, not attempted here to avoid
 # touching a file another concurrent session owns this pass.
-if [ ! -f "$OUT/sys_getpid.o" ]; then
-    echo "error: $OUT/sys_getpid.o not found -- run build_libmalloc.sh first" >&2
-    exit 1
-fi
+# DAR-425 (2026-09-29): the private sys_getpid_current_pid_only.o that used
+# to be built here is GONE. libsystem_kernel.dylib now exports the real
+# _getpid, ___fork and __current_pid as one pair (DAR-423; arm64
+# third_party/xnu-7195/libsyscall/custom/__getpid.s + __fork.s are
+# compiled into the same image on purpose), so launchd's fork() clears the
+# SAME pid cache every dylib getpid() reads. The old private copy left a
+# forked child's dylib getpid() (libxpc/libdispatch/asl/libsystem_c)
+# returning the parent's pid (1) between fork and exec. The matching
+# sys____fork.o/sys____getpid.o members are stripped from the
+# liblaunchd_syscalls archive copy below so ___fork/_getpid bind to
+# libsystem_kernel instead. Run bind_target_audit.sh after relinking.
 rm -f "$OUT/sys_getpid_current_pid_only.o"
-"$LD" -r -arch arm64 -keep_private_externs \
-    -unexported_symbol ___getpid -unexported_symbol _getpid \
-    "$OUT/sys_getpid.o" -o "$OUT/sys_getpid_current_pid_only.o"
 
 # Real gap found continuing the DAR-23/DAR-131/DAR-162 sweep after the
 # malloc removal above: libc_locale_for_stdio.a's own pthread_tsd_shim.o
@@ -656,6 +660,12 @@ ar d "$OUT/liblaunchd_syscalls_no_dup.a" \
 # guessed safe.
 ar d "$OUT/liblaunchd_syscalls_no_dup.a" \
     sys__getgid.o uuid_clear.o
+# DAR-425: private __fork/__getpid pair retired -- libsystem_kernel owns it.
+for m in sys____fork.o sys____getpid.o; do
+    if ar t "$OUT/liblaunchd_syscalls_no_dup.a" | grep -qx "$m"; then
+        ar d "$OUT/liblaunchd_syscalls_no_dup.a" "$m"
+    fi
+done
 
 rm -f "$OUT/launchd_libc_extras_no_dup.a"
 cp "$OUT/launchd_libc_extras.a" "$OUT/launchd_libc_extras_no_dup.a"
@@ -908,7 +918,6 @@ rm -f "$OUT/launchd.macho"
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib -DCRT_DYNAMIC_LINKING \
     -B"$NEWLD_BINDIR" \
     -Wl,-fixup_chains \
-    -Wl,-u,__current_pid \
     -o "$OUT/launchd.macho" \
     ../../third_party/Csu/start.s ../../third_party/Csu/crt.c \
     -Wl,-force_load,"$OUT/liblaunchd_core_no_dup.a" \
@@ -945,7 +954,7 @@ rm -f "$OUT/launchd.macho"
     `# (os_unfair_lock/os_once) primitives are real exports of` \
     `# libsystem_blocks.dylib/libsystem_platform.dylib, reached here via` \
     `# libSystem.B.dylib's own reexport chain.` \
-    "$OUT/chk_fail.o" "$OUT/sys_getpid_current_pid_only.o" \
+    "$OUT/chk_fail.o" \
     `# libpthread_no_dup_pthread_create.a REMOVED 2026-08-30 (docs/` \
     `# daemon-roadmap.md Phase 6.8 continued item 1): launchd.macho must` \
     `# NOT carry its own static copy of the pthread implementation` \

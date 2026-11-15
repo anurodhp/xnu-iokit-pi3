@@ -199,7 +199,7 @@ for a in liblaunchd_syscalls liblaunchd_mig libmach_ipc; do
 done
 for o in chk_fail.o; do
     if [ ! -f "$OUT/$o" ]; then
-        echo "error: $OUT/$o not found -- run build_libmalloc.sh then build_launchd.sh first (the latter produces sys_getpid_current_pid_only.o)" >&2
+        echo "error: $OUT/$o not found -- run build_libmalloc.sh then build_launchd.sh first" >&2
         exit 1
     fi
 done
@@ -380,6 +380,15 @@ echo "wrote $OUT/libchronyd.a ($(ls "$OUT"/chrony_obj/*.o | wc -l | tr -d ' ') o
 # forward) plus chrony's own real USE_PTHREAD_ASYNCDNS/libdispatch-free
 # design has no static-linking requirement pulling the other way (unlike
 # tools/pwtool/build.py's real pre-dyld requirement).
+# DAR-425: strip the private ___fork/__current_pid pair so both bind to
+# libsystem_kernel.dylib's (one shared pid cache); see build_launchd.sh.
+rm -f "$OUT/liblaunchd_syscalls_no_fork.a"
+cp "$OUT/liblaunchd_syscalls.a" "$OUT/liblaunchd_syscalls_no_fork.a"
+for m in sys____fork.o sys____getpid.o; do
+    if ar t "$OUT/liblaunchd_syscalls_no_fork.a" | grep -qx "$m"; then
+        ar d "$OUT/liblaunchd_syscalls_no_fork.a" "$m"
+    fi
+done
 rm -f chronyd.macho
 "$CLANG" -isysroot "$SDK" -target arm64-apple-ios14.4 -nostdlib \
     -B"$NEWLD_BINDIR" \

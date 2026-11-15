@@ -510,14 +510,18 @@ mkdir -p "$OUT/launchctl_copyfile_extract"
 # for every actual getpid() call -- same narrowing precedent, same
 # output filename as build_launchd.sh's own (deterministic, identical
 # recipe; either script may (re)produce it).
-if [ ! -f "$OUT/sys_getpid.o" ]; then
-    echo "error: $OUT/sys_getpid.o not found -- run build_libmalloc.sh first" >&2
-    exit 1
-fi
+# DAR-425 (2026-09-29): the private sys_getpid_current_pid_only.o that used
+# to be built here is GONE. libsystem_kernel.dylib now exports the real
+# _getpid, ___fork and __current_pid as one pair (DAR-423; arm64
+# third_party/xnu-7195/libsyscall/custom/__getpid.s + __fork.s are
+# compiled into the same image on purpose), so launchd's fork() clears the
+# SAME pid cache every dylib getpid() reads. The old private copy left a
+# forked child's dylib getpid() (libxpc/libdispatch/asl/libsystem_c)
+# returning the parent's pid (1) between fork and exec. The matching
+# sys____fork.o/sys____getpid.o members are stripped from the
+# liblaunchd_syscalls archive copy below so ___fork/_getpid bind to
+# libsystem_kernel instead. Run bind_target_audit.sh after relinking.
 rm -f "$OUT/sys_getpid_current_pid_only.o"
-"$LD" -r -arch arm64 -keep_private_externs \
-    -unexported_symbol ___getpid -unexported_symbol _getpid \
-    "$OUT/sys_getpid.o" -o "$OUT/sys_getpid_current_pid_only.o"
 
 # DAR-233 dedup pass (2026-09-14): liblaunchd_syscalls.a members already
 # proven redundant for launchd.macho (DAR-23, same archive, same real
