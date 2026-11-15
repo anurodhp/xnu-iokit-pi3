@@ -19,9 +19,9 @@
 #       found<TAB>addr<TAB>kind<TAB>name<TAB>le   per Bluetooth LE device
 #                                    that accepts connections and says what
 #                                    it is (a name or the HID service), from
-#                                    a 6 s LE scan after the inquiry. Their
-#                                    addresses are kept in /var/run/btsetup.le;
-#                                    pair refuses them until LE pairing exists.
+#                                    a 6 s LE scan after the inquiry. They are
+#                                    kept in /var/run/btsetup.le (addr, address
+#                                    type, kind, name) for pair.
 #   btsetup pair addr kind [name]
 #       Authorizes pairing (btpin), reads the device's HID record over SDP
 #       and attaches it (btdevctl -A; bthidd connects, which pairs), then
@@ -31,8 +31,14 @@
 #       passkey<TAB>NNNNNN a keyboard with SSP: type it on the keyboard
 #       paired             connected
 #       error<TAB>message  and exits 1
+#       An LE device from the last scan is paired by blehidd(8) instead
+#       (/var/run/blehidd.pair, then SIGHUP): Just Works, so only paired or
+#       error is printed.
 #   btsetup forget addr
-#       Detaches the device and removes its link key and name.
+#       Detaches the device and removes its link key and name (an LE device:
+#       its line in /var/db/blehidd.db, then SIGHUP to blehidd).
+#
+# status lists blehidd's devices (/var/run/blehidd.status) after bthidd's.
 #
 # Names are kept in /var/db/bluetooth-names (addr<TAB>name), not in
 # /etc/bluetooth/hosts, whose names end at the first space.
@@ -41,6 +47,10 @@ DEV=bcmbt0
 NAMES=/var/db/bluetooth-names
 STATUS=/var/run/bthidd.status
 LEFILE=/var/run/btsetup.le
+LESTATUS=/var/run/blehidd.status
+LEDB=/var/db/blehidd.db
+LEPAIR=/var/run/blehidd.pair
+LEPID=/var/run/blehidd.pid
 OFF=/etc/bluetooth.off
 HCIDLOG=/var/log/bthcid.log
 TAB=$(printf '\t')
@@ -78,11 +88,14 @@ cmd_status() {
 		return 0
 	fi
 	if unit_up; then printf 'power\ton\n'; else printf 'power\toff\n'; fi
-	[ -f "$STATUS" ] || return 0
-	while read -r a st; do
-		[ -n "$a" ] || continue
-		printf 'device\t%s\t%s\t%s\n' "$a" "$st" "$(name_of "$a")"
-	done < "$STATUS"
+	for f in "$STATUS" "$LESTATUS"; do
+		[ -f "$f" ] || continue
+		while read -r a st; do
+			[ -n "$a" ] || continue
+			[ "$st" = failed ] && st=disconnected
+			printf 'device\t%s\t%s\t%s\n' "$a" "$st" "$(name_of "$a")"
+		done < "$f"
+	done
 }
 
 cmd_power() {
@@ -138,10 +151,11 @@ cmd_scan() {
 		function flush() {
 			if (a != "" && conn && (n != "" || hid)) {
 				if (k == "") k = "other"
-				print a "\t" k "\t" n
+				print a "\t" t "\t" k "\t" n
 			}
 		}
-		/^ *[0-9]+: bdaddr / { flush(); a = $3; n = ""; k = ""; hid = 0; conn = 0 }
+		/^ *[0-9]+: bdaddr / { flush(); a = $3; t = 0; n = ""; k = ""; hid = 0; conn = 0 }
+		/^   : address random/ { t = 1 }
 		/^   : name "/ { n = $0; sub(/^   : name "/, "", n); sub(/"$/, "", n) }
 		/^   : appearance / {
 			k = $0; sub(/^   : appearance \[[^]]*\] */, "", k)
@@ -151,7 +165,7 @@ cmd_scan() {
 		/^   : connectable/ { conn = 1 }
 		END { flush() }' > "$LEFILE.new"
 	mv "$LEFILE.new" "$LEFILE"
-	while IFS="$TAB" read -r a k n; do
+	while IFS="$TAB" read -r a t k n; do
 		printf 'found\t%s\t%s\t%s\tle\n' "$a" "$k" "$n"
 	done < "$LEFILE"
 }
@@ -160,11 +174,49 @@ is_le() {
 	[ -f "$LEFILE" ] && awk -F "$TAB" -v a="$1" 'tolower($1) == tolower(a) { f = 1 } END { exit !f }' "$LEFILE"
 }
 
+le_type() { # 0 public, 1 random, from the last scan
+	awk -F "$TAB" -v a="$1" 'tolower($1) == tolower(a) { t = $2 } END { print t + 0 }' "$LEFILE"
+}
+
+le_bonded() {
+	[ -f "$LEDB" ] && awk -v a="$1" 'tolower($1) == tolower(a) { f = 1 } END { exit !f }' "$LEDB"
+}
+
+blehidd_hup() {
+	[ -f "$LEPID" ] && kill -HUP "$(cat "$LEPID")" 2>/dev/null
+}
+
+# LE pairing is blehidd's: it connects when the device advertises, pairs
+# (Just Works), reads its HID service and reports "connected".
+pair_le() { # addr name
+	a=$1
+	[ -f "$LEPID" ] && kill -0 "$(cat "$LEPID")" 2>/dev/null ||
+	    die "Bluetooth LE devices cannot be paired: blehidd is not running."
+	[ -n "$2" ] && set_name "$a" "$2"
+	printf '%s %s\n' "$a" "$(le_type "$a")" > "$LEPAIR.new" && mv "$LEPAIR.new" "$LEPAIR"
+	blehidd_hup
+	sleep 2         # blehidd marks it connecting
+	i=0
+	while [ $i -lt 90 ]; do
+		if [ -f "$LESTATUS" ]; then
+			grep -qi "^$a connected" "$LESTATUS" && { printf 'paired\n'; return 0; }
+			grep -qi "^$a failed" "$LESTATUS" &&
+			    die "Pairing failed. Put the device in pairing mode and try again."
+		fi
+		sleep 1
+		i=$((i + 1))
+	done
+	die "Pairing did not finish. Put the device in pairing mode and try again."
+}
+
 cmd_pair() { # addr kind name
 	a=$1 kind=$2 name=$3
 	valid_addr "$a" || die "usage: btsetup pair addr kind [name]"
 	unit_up || die "Bluetooth is off."
-	is_le "$a" && die "Bluetooth LE devices cannot be paired yet."
+	if is_le "$a"; then
+		pair_le "$a" "$name"
+		return
+	fi
 	[ -n "$name" ] && set_name "$a" "$name"
 	# bthcid answers only devices btpin authorized. A keyboard without SSP
 	# needs a PIN typed on it; other devices without SSP mostly use 0000.
@@ -218,6 +270,15 @@ cmd_pair() { # addr kind name
 cmd_forget() {
 	a=$1
 	valid_addr "$a" || die "usage: btsetup forget addr"
+	if le_bonded "$a" || { [ -f "$LESTATUS" ] && grep -qi "^$a " "$LESTATUS"; }; then
+		if [ -f "$LEDB" ]; then
+			awk -v a="$a" 'tolower($1) != tolower(a)' "$LEDB" > "$LEDB.new.$$" &&
+			    chmod 600 "$LEDB.new.$$" && mv "$LEDB.new.$$" "$LEDB"
+		fi
+		blehidd_hup
+		set_name "$a" ""
+		return 0
+	fi
 	btconfig "$DEV" >/dev/null 2>&1 || die "Bluetooth is not available."
 	# The tools find the unit only while it is up (libbluetooth bt_devaddr):
 	# with Bluetooth off, bring it up for this without page scan, so nothing

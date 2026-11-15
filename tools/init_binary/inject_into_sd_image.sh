@@ -2937,7 +2937,16 @@ if [ -f tools/userland_staging/libc_build/system/libbluetooth.dylib ] && [ -d "$
     else
         echo "= tools/userland_staging/libc_build/bthidd.macho not built -- run build_bthidd.sh"
     fi
-    echo "+ wrote libbluetooth/libevent/libprop/libusbhid, btconfig, sdpd, bthcid, btdevctl, bthidd (+ jobs), btsetup, btpin, btkey, sdpquery, rfcomm_sppd"
+    # The LE HID host (build_blehidd.sh).
+    if [ -f tools/userland_staging/libc_build/blehidd.macho ]; then
+        cp tools/userland_staging/libc_build/blehidd.macho "$MNT/usr/sbin/blehidd"
+        chmod 755 "$MNT/usr/sbin/blehidd"
+        cp tools/userland_staging/org.puredarwin.blehidd.plist "$MNT/Library/LaunchDaemons/org.puredarwin.blehidd.plist"
+        chmod 644 "$MNT/Library/LaunchDaemons/org.puredarwin.blehidd.plist"
+    else
+        echo "= tools/userland_staging/libc_build/blehidd.macho not built -- run build_blehidd.sh"
+    fi
+    echo "+ wrote libbluetooth/libevent/libprop/libusbhid, btconfig, sdpd, bthcid, btdevctl, bthidd, blehidd (+ jobs), btsetup, btpin, btkey, sdpquery, rfcomm_sppd"
 else
     echo "= libbluetooth.dylib / netbt tools not built -- run build_libbluetooth.sh and build_netbt_tools.sh if wanted, skipping"
 fi

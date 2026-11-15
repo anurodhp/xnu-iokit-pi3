@@ -2,7 +2,8 @@
 
 Status (2026-11-03): classic Bluetooth works end to end on QEMU (S0-S5):
 pairing (legacy PIN and Secure Simple Pairing), HID keyboards and mice.
-Not yet run on a real Pi. Audio (S6) is next; BLE (S8) is deferred.
+Not yet run on a real Pi. Audio (S6) is next. BLE HID (S8) works on a real
+Pi 3B since 2026-11-15 (S8b below).
 
 - **S0:** fork `anurodhp/netbsd-src`, branch `iokit-port`, made from
   `netbsd-11` at `4198f5370c18` (11.1). It is a sparse checkout, pinned in
@@ -381,6 +382,49 @@ pairing exists. On the Pi 3B it found a Microsoft Bluetooth Mouse
 (appearance 0x03c2, HID, random address). A busy room returned 32+
 advertisers, most of them beacons with no name. No netbt change was needed
 for scanning; connecting (route a or b above) is the next step.
+
+**S8b. LE HID: done 2026-11-15, real Pi 3B.** Route (b), without NimBLE.
+Mouse used: Microsoft Bluetooth Mouse, 045e:082f.
+
+- **netbt** (our fork's `sys/netbt`): a root raw HCI socket owns LE links.
+  - `hci_event_le_meta` notes each handle from LE Connection Complete;
+    Disconnection Complete drops it.
+  - `hci_acl_recv` no longer disconnects those handles as unknown. Their
+    data reaches the raw sockets through `hci_mtap`.
+  - `hci_send` accepts ACL packets from root for them (`hci_le_output`).
+    They are queued against the shared ACL buffer count, with at most one
+    LE packet held by the controller (`HCI_LE_MAX_UNACKED`). Number Of
+    Completed Packets and disconnection credit them back.
+- **`blehidd`** (`tools/userland_staging/blehidd.c`) does the rest over
+  that socket:
+  - connecting: LE Create Connection, to the device being paired or through
+    the White List to every bonded device;
+  - L2CAP fixed channels 4, 5 and 6;
+  - pairing: SMP LE legacy, Just Works, with c1 and s1 computed by HCI LE
+    Encrypt;
+  - reconnecting: LE Enable Encryption with the stored LTK;
+  - HID over GATT: GATT discovery, the HID service, Report Map, input
+    Reports with notifications on, and PnP ID;
+  - input: an IOHIDUserDevice, as bthidd.
+- **btsetup:**
+  - `btsetup pair` hands LE devices from the last scan to blehidd, through
+    `/var/run/blehidd.pair` and SIGHUP;
+  - `btsetup status` lists `/var/run/blehidd.status`;
+  - `btsetup forget` removes the device's line from `/var/db/blehidd.db`.
+- **Verified:**
+  - pairing;
+  - pointer, clicks and scroll in X;
+  - reconnecting with the stored key after blehidd restarts;
+  - QEMU `bt_setup_qemu_test.sh` (classic path) passes on the new kernel.
+- **Not done:**
+  - LE Secure Connections pairing, only needed by devices that refuse
+    legacy pairing;
+  - passkey entry for LE keyboards (Just Works only);
+  - resolvable private addresses (no IRK is requested);
+  - output reports (keyboard LEDs).
+- **Untested:** an LE scan from the panels while blehidd waits for a
+  disconnected bonded device. Pairing failed once while scans ran back to
+  back during it.
 
 ## Testing strategy
 

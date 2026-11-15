@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+	The Bluetooth LE HID host (blehidd.c, build_blehidd.sh;
+	docs/bluetooth-stack-plan.md S8): pairs LE keyboards and mice when
+	btsetup(8) asks (/var/run/blehidd.pair), reconnects the bonded ones
+	(/var/db/blehidd.db) and serves each as an IOHIDUserDevice, as bthidd
+	does for classic Bluetooth. SIGHUP rereads both files.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>org.puredarwin.blehidd</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/sbin/blehidd</string>
+		<string>-d</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/var/log/blehidd.log</string>
+	<key>StandardErrorPath</key>
+	<string>/var/log/blehidd.log</string>
+</dict>
+</plist>
